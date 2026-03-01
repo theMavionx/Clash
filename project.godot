@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="last_try"
-run/main_scene="uid://cq7gq17j1x2st"
+run/main_scene="uid://ch3wrg714dfwu"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
