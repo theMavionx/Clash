@@ -1,0 +1,32 @@
+[gd_scene format=3 uid="uid://cq7gq17j1x2st"]
+
+[node name="main" type="Control" unique_id=1993957103]
+layout_mode = 3
+anchors_preset = 0
+
+[node name="Button1" type="Button" parent="." unique_id=834926311]
+layout_mode = 0
+offset_left = 376.0
+offset_top = 150.0
+offset_right = 776.0
+offset_bottom = 250.0
+theme_override_font_sizes/font_size = 40
+text = "Simulate Profitable Close"
+
+[node name="Button2" type="Button" parent="." unique_id=1761130595]
+layout_mode = 0
+offset_left = 376.0
+offset_top = 275.0
+offset_right = 776.0
+offset_bottom = 375.0
+theme_override_font_sizes/font_size = 40
+text = "Simulate Long Hold"
+
+[node name="Button3" type="Button" parent="." unique_id=230249100]
+layout_mode = 0
+offset_left = 376.0
+offset_top = 400.0
+offset_right = 776.0
+offset_bottom = 500.0
+theme_override_font_sizes/font_size = 40
+text = "Simulate Liquidation"

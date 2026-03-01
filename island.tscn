@@ -1,0 +1,44 @@
+[gd_scene format=3 uid="uid://ch3wrg714dfwu"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_is1nd"]
+albedo_color = Color(0.823529, 0.847059, 0.470588, 1)
+roughness = 0.9
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_g2eve"]
+albedo_color = Color(0.6313726, 0.49411765, 0.42352942, 1)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_0iamf"]
+transparency = 1
+albedo_color = Color(0.62352943, 0.70980394, 0.7529412, 0.85)
+roughness = 0.1
+
+[node name="IslandMap" type="Node3D" unique_id=1415997490]
+
+[node name="MainGrass" type="CSGPolygon3D" parent="." unique_id=871384478]
+transform = Transform3D(0.99861735, 0, 0, 0, -4.365095e-08, 0.99861735, 0, -0.99861735, -4.365095e-08, 0, 0, 0)
+polygon = PackedVector2Array(-140, -170, -60, -180, 20, -165, 90, -170, 140, -140, 150, -90, 110, -80, 30, -75, -10, -50, -15, 0, 0, 50, 50, 60, 110, 50, 180, 80, 260, 160, 250, 250, 180, 290, 60, 300, -80, 280, -180, 210, -220, 120, -210, -50, -180, -120)
+depth = 2.0
+material = SubResource("StandardMaterial3D_is1nd")
+
+[node name="MainDirt" type="CSGPolygon3D" parent="." unique_id=1091751884]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 0, -2, 0)
+polygon = PackedVector2Array(-58.91963, -189.9717, 20.5746, -175.06651, 90.82497, -180.0844, 93.82326, -179.36795, 146.95691, -147.48775, 149.3914, -144.0332, 160.59094, -88.03546, 156.30927, -81.26955, 111.98228, -70.1878, 111.07961, -70.04796, 33.15192, -65.17747, -0.53799, -44.12127, -4.85251, -0.97607, 7.85201, 41.37236, 50.16391, 49.83474, 109.77132, 39.90018, 112.62038, 40.24334, 184.8162, 71.18441, 186.39638, 72.25425, 268.68213, 154.54, 270.19043, 158.83987, 259.67416, 253.48653, 257.04245, 257.49326, 184.01123, 299.22537, 181.92102, 299.87457, 60.26921, 310.01224, 59.14332, 309.97913, -82.57985, 289.73297, -84.77, 288.86755, -186.85121, 217.4107, -188.58456, 215.30688, -229.62473, 122.96652, -230.0531, 120.60885, -219.9318, -51.45323, -219.53317, -53.14183, -188.9253, -124.56021, -188.23076, -125.71936, -146.58832, -177.77242, -143.1788, -179.68047, -60.47053, -190.01901)
+depth = 2.0
+material = SubResource("StandardMaterial3D_g2eve")
+
+[node name="SmallGrass" type="CSGPolygon3D" parent="." unique_id=810451604]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 34.186943, 0, -113.37059)
+polygon = PackedVector2Array(190, -210, 220, -200, 260, -215, 290, -180, 310, -140, 290, -90, 260, -70, 210, -80, 180, -120, 170, -160)
+depth = 2.0
+material = SubResource("StandardMaterial3D_is1nd")
+
+[node name="SmallDirt" type="CSGPolygon3D" parent="." unique_id=449328043]
+transform = Transform3D(1, 0, 0, 0, -4.371139e-08, 1, 0, -1, -4.371139e-08, 34.186943, -2, -113.37059)
+polygon = PackedVector2Array(265.54205, -223.90019, 297.99164, -186.04233, 298.67004, -185.02061, 319.90234, -142.55602, 320.08038, -138.27515, 298.72128, -84.87741, 296.8094, -82.52109, 263.89194, -60.57613, 259.98932, -59.80409, 206.2294, -70.55608, 203.10716, -72.52378, 171.40022, -114.79969, 170.54102, -116.60487, 159.9162, -159.10416, 160.1297, -162.25009, 182.19005, -217.40096, 189.39499, -220.7426, 219.80365, -210.60637, 259.43896, -225.46962)
+depth = 2.0
+material = SubResource("StandardMaterial3D_g2eve")
+
+[node name="WaterLayer" type="CSGBox3D" parent="." unique_id=993009170]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.24525452, -4.203583, -0.3369751)
+size = Vector3(5000, 2, 5000)
+material = SubResource("StandardMaterial3D_0iamf")
