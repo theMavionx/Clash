@@ -1,10 +1,6 @@
 [gd_scene format=3 uid="uid://ch3wrg714dfwu"]
 
 [ext_resource type="PackedScene" uid="uid://uduc4g0vil7p" path="res://TownHall.tscn" id="3_townhall"]
-[ext_resource type="PackedScene" uid="uid://b40dpp82rc3tt" path="res://Objects/Pine Trees/Resource_PineTree_Group.fbx" id="4_pinetrees"]
-[ext_resource type="PackedScene" uid="uid://c16s8wyshyr0k" path="res://Objects/Trees/Resource_Tree_Group.fbx" id="5_trees"]
-[ext_resource type="PackedScene" uid="uid://bsl88hf7qsx7n" path="res://Objects/Rock/Rock.fbx" id="6_rock"]
-[ext_resource type="PackedScene" uid="uid://ii1f81pfxgu3" path="res://Objects/Rocks/Resource_Rock_3.fbx" id="7_rocks"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_is1nd"]
 albedo_color = Color(0.823529, 0.847059, 0.470588, 1)
@@ -56,48 +52,3 @@ current = true
 [node name="TownHall" parent="." unique_id=96601021 instance=ExtResource("3_townhall")]
 transform = Transform3D(65, 0, 0, 0, 65, 0, 0, 0, 65, -565.71265, 10.5, 24.271515)
 script = null
-
-[node name="PineTrees_1" parent="." unique_id=286853803 instance=ExtResource("4_pinetrees")]
-transform = Transform3D(55, 0, 0, 0, 55, 0, 0, 0, 55, -400, 10.5, -480)
-
-[node name="PineTrees_2" parent="." unique_id=730332780 instance=ExtResource("4_pinetrees")]
-transform = Transform3D(50, 0, 0, 0, 50, 0, 0, 0, 50, 200, 10.5, -550)
-
-[node name="PineTrees_3" parent="." unique_id=196366505 instance=ExtResource("4_pinetrees")]
-transform = Transform3D(52, 0, 0, 0, 52, 0, 0, 0, 52, -650, 10.5, 450)
-
-[node name="PineTrees_4" parent="." unique_id=1339173874 instance=ExtResource("4_pinetrees")]
-transform = Transform3D(48, 0, 0, 0, 48, 0, 0, 0, 48, 800, 10.5, 600)
-
-[node name="Trees_1" parent="." unique_id=1451839248 instance=ExtResource("5_trees")]
-transform = Transform3D(48.68709, 0, -35.065174, 0, 59.999996, 0, 35.065174, 0, 48.68709, -550, 10.5, -240.37366)
-
-[node name="Trees_2" parent="." unique_id=1341992143 instance=ExtResource("5_trees")]
-transform = Transform3D(58, 0, 0, 0, 58, 0, 0, 0, 58, 400, 10.5, 1000)
-
-[node name="Trees_3" parent="." unique_id=1789120496 instance=ExtResource("5_trees")]
-transform = Transform3D(65, 0, 0, 0, 65, 0, 0, 0, 65, -550, 10.5, 700)
-
-[node name="Trees_4" parent="." unique_id=1591697627 instance=ExtResource("5_trees")]
-transform = Transform3D(55, 0, 0, 0, 55, 0, 0, 0, 55, 850, 10.5, 800)
-
-[node name="Rock_1" parent="." unique_id=1816069312 instance=ExtResource("6_rock")]
-transform = Transform3D(30, 0, 0, 0, 30, 0, 0, 0, 30, -300, 10.5, -600)
-
-[node name="Rock_2" parent="." unique_id=1208117652 instance=ExtResource("6_rock")]
-transform = Transform3D(28, 0, 0, 0, 28, 0, 0, 0, 28, 700, 10.5, 500)
-
-[node name="Rock_3" parent="." unique_id=1813432442 instance=ExtResource("6_rock")]
-transform = Transform3D(26, 0, 0, 0, 26, 0, 0, 0, 26, -650, 10.5, 800)
-
-[node name="Rock_4" parent="." unique_id=302008340 instance=ExtResource("6_rock")]
-transform = Transform3D(28, 0, 0, 0, 28, 0, 0, 0, 28, 500, 10.5, 900)
-
-[node name="Rocks_1" parent="." unique_id=245050279 instance=ExtResource("7_rocks")]
-transform = Transform3D(35, 0, 0, 0, 35, 0, 0, 0, 35, 200, 10.5, 1100)
-
-[node name="Rocks_2" parent="." unique_id=930098182 instance=ExtResource("7_rocks")]
-transform = Transform3D(32, 0, 0, 0, 32, 0, 0, 0, 32, 700, 10.5, 750)
-
-[node name="Rocks_3" parent="." unique_id=795966797 instance=ExtResource("7_rocks")]
-transform = Transform3D(30, 0, 0, 0, 30, 0, 0, 0, 30, -400, 10.5, 950)
