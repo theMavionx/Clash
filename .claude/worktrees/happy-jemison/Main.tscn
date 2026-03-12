@@ -1,0 +1,27 @@
+[gd_scene format=3 uid="uid://dpilt66cufmgi"]
+
+[ext_resource type="PackedScene" uid="uid://bt2voohr3otgb" path="res://Model/Island/Isl.glb" id="1_uu6xs"]
+[ext_resource type="Script" uid="uid://vikmob2bagbn" path="res://scripts/camera_rig.gd" id="2_cam"]
+
+[node name="IslandScene" type="Node3D" unique_id=876129500]
+
+[node name="Island" parent="." unique_id=1497323444 instance=ExtResource("1_uu6xs")]
+transform = Transform3D(2.9235096, 0, 2.730035, 0, 4, 0, -2.730035, 0, 2.9235096, 0, 0, 0)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1039932902]
+transform = Transform3D(1, 0, 0, 0, 0.707107, 0.707107, 0, -0.707107, 0.707107, 0, 10, 0)
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=588358049]
+
+[node name="CameraRig" type="Node3D" parent="." unique_id=56277757]
+script = ExtResource("2_cam")
+pan_limit_min = Vector3(-2, 0, -2)
+pan_limit_max = Vector3(2, 0, 2)
+
+[node name="PitchPivot" type="Node3D" parent="CameraRig" unique_id=1993174817]
+transform = Transform3D(1, 0, 0, 0, 0.7071069, 0.70710665, 0, -0.70710665, 0.7071069, 0, 0, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig/PitchPivot" unique_id=138786099]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -5.9604645e-08, 4.852085)
+current = true

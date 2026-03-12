@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__godot-mcp__open_scene",
+      "mcp__godot-mcp__update_node_property",
+      "mcp__godot-mcp__save_scene"
+    ]
+  }
+}
