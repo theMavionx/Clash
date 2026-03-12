@@ -70,6 +70,11 @@ visible = false
 mesh = SubResource("BoxMesh_r0du0")
 metadata/_edit_lock_ = true
 
+[node name="gridPlane2" type="MeshInstance3D" parent="Island" unique_id=120704184]
+transform = Transform3D(0.5499543, 0, 0.000788, 0, 0.01666667, 0, -0.0070937276, 0, 0.061106, -0.19726524, 0.07670069, 0.51994365)
+visible = false
+mesh = SubResource("BoxMesh_r0du0")
+
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1039932902]
 transform = Transform3D(0.8660254, 0.3830223, -0.3213939, 0, 0.6427878, 0.7660446, 0.5, -0.6634141, 0.55667055, 0, 10, 0)
 light_color = Color(1, 0.95, 0.85, 1)
@@ -110,3 +115,10 @@ metadata/_edit_lock_ = true
 [node name="BuildingSystem" type="Node3D" parent="." unique_id=1299042875]
 script = ExtResource("4_cm0pq")
 grid_plane_path = NodePath("../Island/gridPlane")
+
+[node name="BuildingSystem2" type="Node3D" parent="." unique_id=988755368]
+script = ExtResource("4_cm0pq")
+grid_height = 3
+grid_plane_path = NodePath("../Island/gridPlane2")
+create_ui = false
+always_show_grid = true

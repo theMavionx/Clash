@@ -1,0 +1,541 @@
+[gd_scene format=3 uid="uid://cf7162wre3f6m"]
+
+[ext_resource type="Script" uid="uid://b3w2qh77m6n3g" path="res://scripts/world_map_camera.gd" id="1_oru6e"]
+[ext_resource type="Shader" uid="uid://cvne08a46xhgs" path="res://shaders/water_map.gdshader" id="1_qqero"]
+[ext_resource type="Shader" uid="uid://dqn8eacreeg62" path="res://shaders/halo_outer.gdshader" id="4_c7uu0"]
+[ext_resource type="Script" uid="uid://b6nwhtqffjigx" path="res://scripts/cloud_transition.gd" id="5_qj3iy"]
+[ext_resource type="Shader" uid="uid://wrima8hwwm5a" path="res://shaders/shadow.gdshader" id="6_c7uu0"]
+[ext_resource type="Shader" uid="uid://bj55gxoe1bxne" path="res://shaders/halo_inner.gdshader" id="6_fsuak"]
+[ext_resource type="Script" uid="uid://bbd3gqv5665fl" path="res://scripts/hud.gd" id="hud_script"]
+[ext_resource type="Shader" uid="uid://b4w2db25qc5n2" path="res://shaders/shoreline.gdshader" id="shader_shore"]
+[ext_resource type="Texture2D" uid="uid://ybquxuepb6gd" path="res://Model/Islands/model_1.png" id="tex_m1"]
+[ext_resource type="Texture2D" uid="uid://xvwk6fq43tot" path="res://Model/Islands/model_2.png" id="tex_m2"]
+[ext_resource type="Texture2D" uid="uid://b7hydwog7oqm0" path="res://Model/Islands/model_3.png" id="tex_m3"]
+[ext_resource type="Texture2D" uid="uid://ddbfe8vc34pvc" path="res://Model/Islands/model_4.png" id="tex_m4"]
+[ext_resource type="Texture2D" uid="uid://b68c01t56737s" path="res://textures/water/water_noise.tres" id="tex_wnoise"]
+[ext_resource type="Texture2D" uid="uid://cnycus4va3qhc" path="res://textures/water/water_noise2.tres" id="tex_wnoise2"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_water"]
+shader = ExtResource("1_qqero")
+shader_parameter/waterNoise1 = ExtResource("tex_wnoise")
+shader_parameter/waterNoise2 = ExtResource("tex_wnoise2")
+shader_parameter/waterColor = Color(0.05, 0.25, 0.5, 1)
+shader_parameter/colorMix = 0.5
+shader_parameter/time_scale = 2.0
+shader_parameter/uv_scale = 8.0
+shader_parameter/distortion = 0.008
+shader_parameter/brightness = 0.25
+shader_parameter/wave_low = 0.55
+shader_parameter/wave_high = 0.75
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_xdla5"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_gsxuc"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="Mat_shadow"]
+shader = ExtResource("6_c7uu0")
+shader_parameter/color = Color(0, 0, 0.05, 0.18)
+shader_parameter/blur_size = 0.025
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="Mat_island"]
+shader = ExtResource("shader_shore")
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_d3p07"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_d8vbv"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_1ra3e"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_hbiaa"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_qwkcd"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_3v1tn"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_a1fuh"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_wl71g"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_qeq5b"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_yj2db"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_c8vak"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_ojuhd"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_o77pg"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_t82kb"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_h33lm"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_8fygl"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_0bjbu"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_mqlt1"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_vsl5p"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_c5up0"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_oj5pu"]
+shader = ExtResource("4_c7uu0")
+shader_parameter/color = Color(0.06, 0.28, 0.5, 0.22)
+shader_parameter/blur_size = 0.055
+shader_parameter/alpha_cutoff = 0.1
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_4gnoo"]
+shader = ExtResource("6_fsuak")
+shader_parameter/color = Color(0.14, 0.62, 0.6, 0.3)
+shader_parameter/blur_size = 0.035
+shader_parameter/alpha_cutoff = 0.1
+
+[node name="world_map" type="Node2D" unique_id=1323476175]
+
+[node name="WaterBackground" type="ColorRect" parent="." unique_id=1314084749]
+material = SubResource("ShaderMaterial_water")
+offset_left = -1027.0
+offset_top = -1377.0
+offset_right = 5473.0
+offset_bottom = 3623.0
+mouse_filter = 2
+
+[node name="MapIslands" type="Node2D" parent="." unique_id=1420259962]
+y_sort_enabled = true
+
+[node name="Island1" type="Node2D" parent="MapIslands" unique_id=1613490965]
+position = Vector2(600, 400)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island1" unique_id=370670388]
+z_index = 1
+material = SubResource("ShaderMaterial_xdla5")
+scale = Vector2(0.484, 0.484)
+texture = ExtResource("tex_m1")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island1" unique_id=1324631177]
+z_index = 2
+material = SubResource("ShaderMaterial_gsxuc")
+scale = Vector2(0.33, 0.33)
+texture = ExtResource("tex_m1")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island1" unique_id=733252413]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.27, 0.27)
+texture = ExtResource("tex_m1")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island1" unique_id=1237130859]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.22, 0.22)
+texture = ExtResource("tex_m1")
+
+[node name="Island2" type="Node2D" parent="MapIslands" unique_id=209605749]
+position = Vector2(1050, 700)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island2" unique_id=1178545843]
+z_index = 1
+material = SubResource("ShaderMaterial_d3p07")
+scale = Vector2(0.506, 0.506)
+texture = ExtResource("tex_m3")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island2" unique_id=1699933366]
+z_index = 2
+material = SubResource("ShaderMaterial_d8vbv")
+scale = Vector2(0.345, 0.345)
+texture = ExtResource("tex_m3")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island2" unique_id=475032149]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.28, 0.28)
+texture = ExtResource("tex_m3")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island2" unique_id=1993904172]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.23, 0.23)
+texture = ExtResource("tex_m3")
+
+[node name="Island3" type="Node2D" parent="MapIslands" unique_id=1943421751]
+position = Vector2(350, 1100)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island3" unique_id=919989712]
+z_index = 1
+material = SubResource("ShaderMaterial_1ra3e")
+scale = Vector2(0.462, 0.462)
+texture = ExtResource("tex_m4")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island3" unique_id=125393727]
+z_index = 2
+material = SubResource("ShaderMaterial_hbiaa")
+scale = Vector2(0.315, 0.315)
+texture = ExtResource("tex_m4")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island3" unique_id=534520120]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.26, 0.26)
+texture = ExtResource("tex_m4")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island3" unique_id=1206721512]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.21, 0.21)
+texture = ExtResource("tex_m4")
+
+[node name="Island4" type="Node2D" parent="MapIslands" unique_id=103619184]
+position = Vector2(1800, 280)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island4" unique_id=1392874205]
+z_index = 1
+material = SubResource("ShaderMaterial_qwkcd")
+scale = Vector2(0.44, 0.44)
+texture = ExtResource("tex_m4")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island4" unique_id=573864293]
+z_index = 2
+material = SubResource("ShaderMaterial_3v1tn")
+scale = Vector2(0.3, 0.3)
+texture = ExtResource("tex_m4")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island4" unique_id=535935838]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.25, 0.25)
+texture = ExtResource("tex_m4")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island4" unique_id=711665764]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.2, 0.2)
+texture = ExtResource("tex_m4")
+
+[node name="Island5" type="Node2D" parent="MapIslands" unique_id=200254800]
+position = Vector2(2900, 420)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island5" unique_id=1927017938]
+z_index = 1
+material = SubResource("ShaderMaterial_a1fuh")
+scale = Vector2(0.506, 0.506)
+texture = ExtResource("tex_m2")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island5" unique_id=1211386505]
+z_index = 2
+material = SubResource("ShaderMaterial_wl71g")
+scale = Vector2(0.345, 0.345)
+texture = ExtResource("tex_m2")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island5" unique_id=1816794864]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.28, 0.28)
+texture = ExtResource("tex_m2")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island5" unique_id=1001449634]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.23, 0.23)
+texture = ExtResource("tex_m2")
+
+[node name="Island6" type="Node2D" parent="MapIslands" unique_id=1631059364]
+position = Vector2(3500, 750)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island6" unique_id=938747644]
+z_index = 1
+material = SubResource("ShaderMaterial_qeq5b")
+scale = Vector2(0.462, 0.462)
+texture = ExtResource("tex_m1")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island6" unique_id=2026923494]
+z_index = 2
+material = SubResource("ShaderMaterial_yj2db")
+scale = Vector2(0.315, 0.315)
+texture = ExtResource("tex_m1")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island6" unique_id=1929895816]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.26, 0.26)
+texture = ExtResource("tex_m1")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island6" unique_id=1744548966]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.21, 0.21)
+texture = ExtResource("tex_m1")
+
+[node name="Island7" type="Node2D" parent="MapIslands" unique_id=1882825816]
+position = Vector2(2650, 900)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island7" unique_id=64761958]
+z_index = 1
+material = SubResource("ShaderMaterial_c8vak")
+scale = Vector2(0.484, 0.484)
+texture = ExtResource("tex_m3")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island7" unique_id=1846993599]
+z_index = 2
+material = SubResource("ShaderMaterial_ojuhd")
+scale = Vector2(0.33, 0.33)
+texture = ExtResource("tex_m3")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island7" unique_id=1723013845]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.27, 0.27)
+texture = ExtResource("tex_m3")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island7" unique_id=295993253]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.22, 0.22)
+texture = ExtResource("tex_m3")
+
+[node name="Island8" type="Node2D" parent="MapIslands" unique_id=1102579201]
+position = Vector2(1500, 1350)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island8" unique_id=1652175703]
+z_index = 1
+material = SubResource("ShaderMaterial_o77pg")
+scale = Vector2(0.528, 0.528)
+texture = ExtResource("tex_m2")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island8" unique_id=1525683794]
+z_index = 2
+material = SubResource("ShaderMaterial_t82kb")
+scale = Vector2(0.36, 0.36)
+texture = ExtResource("tex_m2")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island8" unique_id=882897367]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.29, 0.29)
+texture = ExtResource("tex_m2")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island8" unique_id=397654488]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.24, 0.24)
+texture = ExtResource("tex_m2")
+
+[node name="Island9" type="Node2D" parent="MapIslands" unique_id=557442558]
+position = Vector2(4100, 1400)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island9" unique_id=1555033093]
+z_index = 1
+material = SubResource("ShaderMaterial_h33lm")
+scale = Vector2(0.484, 0.484)
+texture = ExtResource("tex_m1")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island9" unique_id=2047291267]
+z_index = 2
+material = SubResource("ShaderMaterial_8fygl")
+scale = Vector2(0.33, 0.33)
+texture = ExtResource("tex_m1")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island9" unique_id=1774022590]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.27, 0.27)
+texture = ExtResource("tex_m1")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island9" unique_id=1023171883]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.22, 0.22)
+texture = ExtResource("tex_m1")
+
+[node name="Island10" type="Node2D" parent="MapIslands" unique_id=1803496884]
+position = Vector2(700, 1950)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island10" unique_id=1418348348]
+z_index = 1
+material = SubResource("ShaderMaterial_0bjbu")
+scale = Vector2(0.506, 0.506)
+texture = ExtResource("tex_m3")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island10" unique_id=1868496636]
+z_index = 2
+material = SubResource("ShaderMaterial_mqlt1")
+scale = Vector2(0.345, 0.345)
+texture = ExtResource("tex_m3")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island10" unique_id=1704179791]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.28, 0.28)
+texture = ExtResource("tex_m3")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island10" unique_id=941469428]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.23, 0.23)
+texture = ExtResource("tex_m3")
+
+[node name="Island11" type="Node2D" parent="MapIslands" unique_id=974619128]
+position = Vector2(2200, 2150)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island11" unique_id=1258152358]
+z_index = 1
+material = SubResource("ShaderMaterial_vsl5p")
+scale = Vector2(0.44, 0.44)
+texture = ExtResource("tex_m1")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island11" unique_id=1377765950]
+z_index = 2
+material = SubResource("ShaderMaterial_c5up0")
+scale = Vector2(0.3, 0.3)
+texture = ExtResource("tex_m1")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island11" unique_id=59902810]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.25, 0.25)
+texture = ExtResource("tex_m1")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island11" unique_id=1109437891]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.2, 0.2)
+texture = ExtResource("tex_m1")
+
+[node name="Island12" type="Node2D" parent="MapIslands" unique_id=2039044154]
+position = Vector2(3400, 1900)
+
+[node name="HaloOuter" type="Sprite2D" parent="MapIslands/Island12" unique_id=940975250]
+z_index = 1
+material = SubResource("ShaderMaterial_oj5pu")
+scale = Vector2(0.484, 0.484)
+texture = ExtResource("tex_m2")
+
+[node name="HaloInner" type="Sprite2D" parent="MapIslands/Island12" unique_id=952850423]
+z_index = 2
+material = SubResource("ShaderMaterial_4gnoo")
+scale = Vector2(0.33, 0.33)
+texture = ExtResource("tex_m2")
+
+[node name="Shadow" type="Sprite2D" parent="MapIslands/Island12" unique_id=550895873]
+z_index = 3
+material = SubResource("Mat_shadow")
+position = Vector2(2, 6)
+scale = Vector2(0.27, 0.27)
+texture = ExtResource("tex_m2")
+
+[node name="Island" type="Sprite2D" parent="MapIslands/Island12" unique_id=798578815]
+z_index = 6
+material = SubResource("Mat_island")
+scale = Vector2(0.22, 0.22)
+texture = ExtResource("tex_m2")
+
+[node name="Camera2D" type="Camera2D" parent="." unique_id=2093343386]
+zoom = Vector2(0.45, 0.45)
+script = ExtResource("1_oru6e")
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=883548175]
+script = ExtResource("hud_script")
+
+[node name="CloudTransition" type="CanvasLayer" parent="." unique_id=1261821901]
+script = ExtResource("5_qj3iy")

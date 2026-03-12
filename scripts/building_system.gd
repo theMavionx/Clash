@@ -4,8 +4,11 @@ extends Node3D
 ## Grid is aligned to the gridPlane node in the scene
 
 # ── Grid Settings ─────────────────────────────────────────────
-@export var grid_size: int = 27
+@export var grid_width: int = 27
+@export var grid_height: int = 27
 @export var grid_plane_path: NodePath = "../gridPlane"
+@export var create_ui: bool = true
+@export var always_show_grid: bool = false
 
 # ── Building Definitions ──────────────────────────────────────
 var building_defs: Dictionary = {
@@ -32,6 +35,7 @@ var building_defs: Dictionary = {
 		"color": Color(0.2, 0.45, 0.7, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Port/1.glb",
+		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.2,
 	},
 	"sawmill": {
@@ -73,7 +77,8 @@ var cell_size: float = 0.0
 var grid_center: Vector3 = Vector3.ZERO
 var grid_y: float = 0.0
 var grid_rotation: float = 0.0
-var grid_extent: float = 0.0
+var grid_extent_x: float = 0.0
+var grid_extent_z: float = 0.0
 
 # ── Grid State ────────────────────────────────────────────────
 var grid: Array[bool] = []
@@ -103,10 +108,14 @@ var building_panel_title: Label
 
 
 func _ready() -> void:
-	grid.resize(grid_size * grid_size)
+	add_to_group("building_systems")
+	grid.resize(grid_width * grid_height)
 	grid.fill(false)
 	_setup_from_grid_plane()
-	_create_ui()
+	if create_ui:
+		_create_ui()
+	if always_show_grid:
+		_show_grid()
 
 
 func _setup_from_grid_plane() -> void:
@@ -118,8 +127,9 @@ func _setup_from_grid_plane() -> void:
 	grid_center = plane.global_position
 	grid_y = grid_center.y + 0.05
 	grid_rotation = plane.global_rotation.y
-	grid_extent = plane.global_transform.basis.x.length()
-	cell_size = grid_extent / float(grid_size)
+	grid_extent_x = plane.global_transform.basis.x.length()
+	grid_extent_z = plane.global_transform.basis.z.length()
+	cell_size = grid_extent_x / float(grid_width)
 
 	global_position = Vector3(grid_center.x, grid_y, grid_center.z)
 	global_rotation.y = grid_rotation
@@ -355,16 +365,26 @@ func _update_resource_ui() -> void:
 
 
 func _toggle_shop() -> void:
+	if not shop_panel:
+		return
 	is_shop_open = !is_shop_open
 	shop_panel.visible = is_shop_open
 
 
 func _start_placement(building_id: String) -> void:
 	is_shop_open = false
-	shop_panel.visible = false
+	if shop_panel:
+		shop_panel.visible = false
+	# Start placement on all building systems
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs._begin_placement(building_id)
+
+
+func _begin_placement(building_id: String) -> void:
 	is_placing = true
 	current_building_id = building_id
-	build_button.visible = false
+	if build_button:
+		build_button.visible = false
 	_create_ghost()
 	_show_grid()
 
@@ -434,14 +454,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if is_placing:
 		if event is InputEventMouseMotion:
 			_update_ghost()
-			get_viewport().set_input_as_handled()
 
 		if event is InputEventMouseButton and event.pressed:
 			if event.button_index == MOUSE_BUTTON_LEFT:
-				_place_building()
-				get_viewport().set_input_as_handled()
+				if _try_place_building():
+					get_viewport().set_input_as_handled()
+					_cancel_all_placement()
 			elif event.button_index == MOUSE_BUTTON_RIGHT:
-				_cancel_placement()
+				_cancel_all_placement()
 				get_viewport().set_input_as_handled()
 		return
 
@@ -477,19 +497,27 @@ func _get_mouse_local() -> Vector3:
 
 
 func _local_to_grid(local_pos: Vector3) -> Vector2i:
-	var half = grid_extent / 2.0
-	var lx = (local_pos.x + half) / cell_size
-	var lz = (local_pos.z + half) / cell_size
+	var half_x = grid_extent_x / 2.0
+	var half_z = grid_extent_z / 2.0
+	var lx = (local_pos.x + half_x) / cell_size
+	var lz = (local_pos.z + half_z) / cell_size
 	return Vector2i(int(floor(lx)), int(floor(lz)))
 
 
 func _grid_to_local(grid_pos: Vector2i) -> Vector3:
-	var half = grid_extent / 2.0
+	var half_x = grid_extent_x / 2.0
+	var half_z = grid_extent_z / 2.0
 	return Vector3(
-		-half + grid_pos.x * cell_size,
+		-half_x + grid_pos.x * cell_size,
 		0,
-		-half + grid_pos.y * cell_size
+		-half_z + grid_pos.y * cell_size
 	)
+
+
+func _is_in_grid(local_pos: Vector3) -> bool:
+	var half_x = grid_extent_x / 2.0
+	var half_z = grid_extent_z / 2.0
+	return local_pos.x >= -half_x and local_pos.x <= half_x and local_pos.z >= -half_z and local_pos.z <= half_z
 
 
 func _update_ghost() -> void:
@@ -498,13 +526,19 @@ func _update_ghost() -> void:
 
 	var local_hit = _get_mouse_local()
 	if local_hit == Vector3.INF:
+		ghost.visible = false
 		return
 
+	if not _is_in_grid(local_hit):
+		ghost.visible = false
+		return
+
+	ghost.visible = true
 	var gp = _local_to_grid(local_hit)
 	var def = building_defs[current_building_id]
 
-	gp.x = clampi(gp.x, 0, grid_size - def.cells.x)
-	gp.y = clampi(gp.y, 0, grid_size - def.cells.y)
+	gp.x = clampi(gp.x, 0, grid_width - def.cells.x)
+	gp.y = clampi(gp.y, 0, grid_height - def.cells.y)
 	current_grid_pos = gp
 
 	var local_pos = _grid_to_local(gp)
@@ -524,22 +558,24 @@ func _can_place(pos: Vector2i, size: Vector2i) -> bool:
 		for z in range(size.y):
 			var cx = pos.x + x
 			var cz = pos.y + z
-			if cx < 0 or cx >= grid_size or cz < 0 or cz >= grid_size:
+			if cx < 0 or cx >= grid_width or cz < 0 or cz >= grid_height:
 				return false
-			if grid[cz * grid_size + cx]:
+			if grid[cz * grid_width + cx]:
 				return false
 	return true
 
 
-func _place_building() -> void:
+func _try_place_building() -> bool:
+	if not ghost or not ghost.visible:
+		return false
 	var def = building_defs[current_building_id]
 
 	if not _can_place(current_grid_pos, def.cells):
-		return
+		return false
 
 	for x in range(def.cells.x):
 		for z in range(def.cells.y):
-			var idx = (current_grid_pos.y + z) * grid_size + (current_grid_pos.x + x)
+			var idx = (current_grid_pos.y + z) * grid_width + (current_grid_pos.x + x)
 			grid[idx] = true
 
 	var building = _create_placed_building(def)
@@ -560,14 +596,21 @@ func _place_building() -> void:
 		"level": 1,
 	})
 
-	_cancel_placement()
+	return true
+
+
+func _cancel_all_placement() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs._cancel_placement()
 
 
 func _cancel_placement() -> void:
 	is_placing = false
 	current_building_id = ""
-	build_button.visible = true
-	_hide_grid()
+	if build_button:
+		build_button.visible = true
+	if not always_show_grid:
+		_hide_grid()
 	if ghost:
 		ghost.queue_free()
 		ghost = null
@@ -596,17 +639,20 @@ func _show_grid() -> void:
 	mat.no_depth_test = false
 	grid_visual.material_override = mat
 
-	var half = grid_extent / 2.0
+	var half_x = grid_extent_x / 2.0
+	var half_z = grid_extent_z / 2.0
 
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	for i in range(grid_size + 1):
-		var offset = -half + i * cell_size
-		# Horizontal line
-		im.surface_add_vertex(Vector3(-half, 0.01, offset))
-		im.surface_add_vertex(Vector3(half, 0.01, offset))
-		# Vertical line
-		im.surface_add_vertex(Vector3(offset, 0.01, -half))
-		im.surface_add_vertex(Vector3(offset, 0.01, half))
+	# Lines along X (for each Z row)
+	for i in range(grid_height + 1):
+		var offset = -half_z + i * cell_size
+		im.surface_add_vertex(Vector3(-half_x, 0.01, offset))
+		im.surface_add_vertex(Vector3(half_x, 0.01, offset))
+	# Lines along Z (for each X column)
+	for i in range(grid_width + 1):
+		var offset = -half_x + i * cell_size
+		im.surface_add_vertex(Vector3(offset, 0.01, -half_z))
+		im.surface_add_vertex(Vector3(offset, 0.01, half_z))
 	im.surface_end()
 
 	add_child(grid_visual)
@@ -631,13 +677,16 @@ func _select_building(b: Dictionary) -> void:
 	selected_building = b
 	var def = building_defs[b.id]
 	var level = b.get("level", 1)
-	building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
-	building_panel.visible = true
+	if building_panel_title:
+		building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
+	if building_panel:
+		building_panel.visible = true
 
 
 func _deselect_building() -> void:
 	selected_building = {}
-	building_panel.visible = false
+	if building_panel:
+		building_panel.visible = false
 
 
 func _upgrade_selected() -> void:
@@ -649,7 +698,8 @@ func _upgrade_selected() -> void:
 	if def.has("scenes") and level >= def.scenes.size():
 		return
 	selected_building["level"] = level + 1
-	building_panel_title.text = "%s (Lv. %d)" % [def.name, selected_building.level]
+	if building_panel_title:
+		building_panel_title.text = "%s (Lv. %d)" % [def.name, selected_building.level]
 	# Swap model if scenes array exists
 	if def.has("scenes"):
 		var new_level = selected_building.level
