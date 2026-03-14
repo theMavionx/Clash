@@ -66,6 +66,7 @@ metadata/_edit_lock_ = true
 
 [node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=2081397116]
 transform = Transform3D(0.5499543, 0, 0.0070937276, 0, 0.01666667, 0, -0.0070937276, 0, 0.5499543, -0.20163433, 0.07670069, 0.20906071)
+visible = false
 mesh = SubResource("BoxMesh_r0du0")
 metadata/_edit_lock_ = true
 
