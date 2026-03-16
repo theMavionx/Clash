@@ -11,17 +11,25 @@ var _projectiles: Array = []
 var _shot_this_cycle: bool = false
 
 
+const LEVEL_STATS = {
+	1: {"hp": 680, "damage": 110, "atk_speed": 1.0},
+	2: {"hp": 900, "damage": 148, "atk_speed": 0.909},
+	3: {"hp": 1150, "damage": 192, "atk_speed": 0.833},
+}
+
 func _init_stats() -> void:
+	var s = LEVEL_STATS[level]
 	move_speed = 0.55
 	attack_range = 0.40
-	hp = 680
-	damage = 110
-	atk_speed = 1.0
+	hp = s.hp
+	damage = s.damage
+	atk_speed = s.atk_speed
 	attack_anim = "Ranged_1H_Shoot"
 	anim_files = [
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
+		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	]
 
 

@@ -117,6 +117,55 @@ var building_panel_title: Label
 var building_panel_hp: Label
 var building_panel_hp_bar: ProgressBar
 
+# ── Barracks ──────────────────────────────────────────────────
+var barracks_panel: PanelContainer
+var barracks_vbox: VBoxContainer
+var troop_levels: Dictionary = {
+	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1,
+}
+var troop_defs: Dictionary = {
+	"Knight": {
+		"display": "Knight (Tank)",
+		"costs": {
+			1: {"gold": 150, "metal": 80},
+			2: {"gold": 400, "metal": 250},
+			3: {"gold": 900, "metal": 600},
+		}
+	},
+	"Mage": {
+		"display": "Wizard (Burst Mage)",
+		"costs": {
+			1: {"gold": 250, "metal": 150},
+			2: {"gold": 600, "metal": 400},
+			3: {"gold": 1400, "metal": 900},
+		}
+	},
+	"Barbarian": {
+		"display": "Berserker (Fast Brawler)",
+		"costs": {
+			1: {"gold": 200, "metal": 120},
+			2: {"gold": 500, "metal": 350},
+			3: {"gold": 1100, "metal": 750},
+		}
+	},
+	"Archer": {
+		"display": "Archer (Sniper)",
+		"costs": {
+			1: {"gold": 180, "wood": 100},
+			2: {"gold": 450, "wood": 300},
+			3: {"gold": 1000, "wood": 700},
+		}
+	},
+	"Ranger": {
+		"display": "Ranger (Balanced DPS)",
+		"costs": {
+			1: {"gold": 120, "wood": 60},
+			2: {"gold": 350, "wood": 200},
+			3: {"gold": 800, "wood": 500},
+		}
+	},
+}
+
 
 func _ready() -> void:
 	add_to_group("building_systems")
@@ -126,6 +175,8 @@ func _ready() -> void:
 	if create_ui:
 		_create_ui()
 	_create_building_panel()
+	if create_ui:
+		_create_barracks_panel()
 	if always_show_grid:
 		_show_grid()
 
@@ -774,6 +825,18 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 func _select_building(b: Dictionary) -> void:
 	selected_building = b
 	var def = building_defs[b.id]
+
+	# Sawmill = barracks
+	if b.id == "sawmill" and barracks_panel:
+		_refresh_barracks_panel()
+		barracks_panel.visible = true
+		if building_panel:
+			building_panel.visible = false
+		var cam = get_node_or_null("/root/IslandScene/CameraRig")
+		if cam:
+			cam.zoom_blocked = true
+		return
+
 	var level = b.get("level", 1)
 	var hp = b.get("hp", _get_hp_for(def, level))
 	var max_hp = b.get("max_hp", hp)
@@ -792,6 +855,11 @@ func _deselect_building() -> void:
 	selected_building = {}
 	if building_panel:
 		building_panel.visible = false
+	if barracks_panel:
+		barracks_panel.visible = false
+	var cam = get_node_or_null("/root/IslandScene/CameraRig")
+	if cam:
+		cam.zoom_blocked = false
 
 
 func _upgrade_selected() -> void:
@@ -852,6 +920,208 @@ func _get_hp_for(def: Dictionary, level: int) -> int:
 		var idx = clampi(level - 1, 0, def.hp_levels.size() - 1)
 		return def.hp_levels[idx]
 	return 1000
+
+
+func _create_barracks_panel() -> void:
+	if not canvas:
+		return
+	barracks_panel = PanelContainer.new()
+	barracks_panel.visible = false
+	barracks_panel.custom_minimum_size = Vector2(550, 750)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.12, 0.18, 1.0)
+	style.corner_radius_top_left = 14
+	style.corner_radius_top_right = 14
+	style.corner_radius_bottom_left = 14
+	style.corner_radius_bottom_right = 14
+	style.border_width_left = 2
+	style.border_width_right = 2
+	style.border_width_top = 2
+	style.border_width_bottom = 2
+	style.border_color = Color(0.4, 0.35, 0.2, 1.0)
+	barracks_panel.add_theme_stylebox_override("panel", style)
+	barracks_panel.anchor_left = 0.5
+	barracks_panel.anchor_right = 0.5
+	barracks_panel.anchor_top = 0.5
+	barracks_panel.anchor_bottom = 0.5
+	barracks_panel.offset_left = -275
+	barracks_panel.offset_right = 275
+	barracks_panel.offset_top = -375
+	barracks_panel.offset_bottom = 375
+	canvas.add_child(barracks_panel)
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_top", 14)
+	margin.add_theme_constant_override("margin_bottom", 14)
+	barracks_panel.add_child(margin)
+
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(scroll)
+
+	barracks_vbox = VBoxContainer.new()
+	barracks_vbox.add_theme_constant_override("separation", 10)
+	barracks_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(barracks_vbox)
+
+
+func _refresh_barracks_panel() -> void:
+	if not barracks_vbox:
+		return
+	for child in barracks_vbox.get_children():
+		child.queue_free()
+
+	# Building info
+	var bld_level = selected_building.get("level", 1)
+	var def = building_defs.get(selected_building.get("id", ""), {})
+	var bhp = selected_building.get("hp", 0)
+	var bmax_hp = selected_building.get("max_hp", 1)
+
+	var title = Label.new()
+	title.text = "Barracks (Lv. %d)" % bld_level
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	barracks_vbox.add_child(title)
+
+	var hp_label = Label.new()
+	hp_label.text = "HP: %d / %d" % [bhp, bmax_hp]
+	hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hp_label.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	barracks_vbox.add_child(hp_label)
+
+	var max_bld_level = def.hp_levels.size() if def.has("hp_levels") else 3
+	if bld_level < max_bld_level:
+		var upgrade_bld_btn = Button.new()
+		upgrade_bld_btn.text = "Upgrade Building"
+		upgrade_bld_btn.custom_minimum_size = Vector2(0, 50)
+		_style_button(upgrade_bld_btn, Color(0.2, 0.45, 0.6), Color(0.25, 0.5, 0.65))
+		upgrade_bld_btn.pressed.connect(func():
+			_upgrade_selected()
+			_refresh_barracks_panel()
+		)
+		barracks_vbox.add_child(upgrade_bld_btn)
+
+	var sep = HSeparator.new()
+	barracks_vbox.add_child(sep)
+
+	var troops_title = Label.new()
+	troops_title.text = "Troops"
+	troops_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	troops_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	barracks_vbox.add_child(troops_title)
+
+	for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+		var tdef = troop_defs[troop_name]
+		var lvl = troop_levels[troop_name]
+
+		var card = PanelContainer.new()
+		var card_style = StyleBoxFlat.new()
+		card_style.bg_color = Color(0.15, 0.17, 0.25, 1.0)
+		card_style.corner_radius_top_left = 8
+		card_style.corner_radius_top_right = 8
+		card_style.corner_radius_bottom_left = 8
+		card_style.corner_radius_bottom_right = 8
+		card.add_theme_stylebox_override("panel", card_style)
+		barracks_vbox.add_child(card)
+
+		var card_margin = MarginContainer.new()
+		card_margin.add_theme_constant_override("margin_left", 10)
+		card_margin.add_theme_constant_override("margin_right", 10)
+		card_margin.add_theme_constant_override("margin_top", 8)
+		card_margin.add_theme_constant_override("margin_bottom", 8)
+		card.add_child(card_margin)
+
+		var vb = VBoxContainer.new()
+		vb.add_theme_constant_override("separation", 6)
+		card_margin.add_child(vb)
+
+		# Name + level
+		var name_label = Label.new()
+		name_label.text = "%s  [LVL %d]" % [tdef.display, lvl]
+		name_label.add_theme_color_override("font_color", Color.WHITE)
+		vb.add_child(name_label)
+
+		if lvl >= 3:
+			var max_label = Label.new()
+			max_label.text = "MAX LEVEL"
+			max_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))
+			max_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			vb.add_child(max_label)
+		else:
+			var next_lvl = lvl + 1
+			var costs = tdef.costs[next_lvl]
+			var cost_text = ""
+			for res_name in costs:
+				var res_display = res_name.capitalize()
+				if res_name == "metal":
+					res_display = "Ore"
+				cost_text += "%s: %d  " % [res_display, costs[res_name]]
+
+			var cost_label = Label.new()
+			cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+			if lvl == 0:
+				cost_label.text = "Train (LVL 1): %s" % cost_text
+			else:
+				cost_label.text = "Upgrade to LVL %d: %s" % [next_lvl, cost_text]
+			vb.add_child(cost_label)
+
+			var can_afford = _can_afford(costs)
+			var btn = Button.new()
+			if lvl == 0:
+				btn.text = "Train"
+			else:
+				btn.text = "Upgrade"
+			btn.custom_minimum_size = Vector2(0, 50)
+			if can_afford:
+				_style_button(btn, Color(0.2, 0.5, 0.3), Color(0.25, 0.6, 0.35))
+			else:
+				_style_button(btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+				btn.disabled = true
+			var tn = troop_name
+			btn.pressed.connect(func(): _upgrade_troop(tn))
+			vb.add_child(btn)
+
+	# Close button
+	var close_btn = Button.new()
+	close_btn.text = "Close"
+	close_btn.custom_minimum_size = Vector2(0, 60)
+	_style_button(close_btn, Color(0.5, 0.2, 0.2), Color(0.6, 0.25, 0.25))
+	close_btn.pressed.connect(func():
+		barracks_panel.visible = false
+		var cam = get_tree().current_scene.find_child("CameraRig", true, false)
+		if cam:
+			cam.zoom_blocked = false
+	)
+	barracks_vbox.add_child(close_btn)
+
+
+func _can_afford(costs: Dictionary) -> bool:
+	for res_name in costs:
+		if resources.get(res_name, 0) < costs[res_name]:
+			return false
+	return true
+
+
+func _upgrade_troop(troop_name: String) -> void:
+	var lvl = troop_levels[troop_name]
+	if lvl >= 3:
+		return
+	var next_lvl = lvl + 1
+	var costs = troop_defs[troop_name].costs[next_lvl]
+	if not _can_afford(costs):
+		return
+	# Deduct resources
+	for res_name in costs:
+		resources[res_name] -= costs[res_name]
+	troop_levels[troop_name] = next_lvl
+	# Apply to troop node
+	var troop = get_tree().current_scene.find_child(troop_name, true, false)
+	if troop and troop.has_method("upgrade_to"):
+		troop.upgrade_to(next_lvl)
+	_update_resource_ui()
+	_refresh_barracks_panel()
 
 
 func _on_attack_pressed() -> void:

@@ -72,7 +72,8 @@ subdivide_depth = 64
 metadata/_edit_lock_ = true
 
 [node name="Island" parent="." unique_id=1497323444 instance=ExtResource("1_uu6xs")]
-transform = Transform3D(4.3852644, 0, 4.0950527, 0, 6, 0, -4.0950527, 0, 4.3852644, 0, -0.43224883, 0)
+transform = Transform3D(4.3852644, 0, 4.0950527, 0, 6, 0, -4.0950527, 0, 4.3852644, 0.03855443, -0.43582493, 0.014738083)
+metadata/_edit_lock_ = true
 
 [node name="gridPlane" type="MeshInstance3D" parent="Island" unique_id=2081397116]
 transform = Transform3D(0.5499543, 0, 0.0070937276, 0, 0.01666667, 0, -0.0070937276, 0, 0.5499543, -0.20163433, 0.07670069, 0.20906071)
@@ -142,20 +143,25 @@ script = ExtResource("5_vcsgt")
 
 [node name="Knight" parent="." unique_id=469445581 instance=ExtResource("6_nxtc6")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -1.2608033, 0.067779854, 2.6073277)
+visible = false
 script = ExtResource("7_nxtc6")
 
 [node name="Mage" parent="." unique_id=1680472230 instance=ExtResource("8_q8u5g")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.96080333, 0.068, 2.6073277)
+visible = false
 script = ExtResource("9_lhr70")
 
 [node name="Barbarian" parent="." unique_id=42929744 instance=ExtResource("10_barb")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.66, 0.068, 2.6073277)
+visible = false
 script = ExtResource("11_barb")
 
 [node name="Archer" parent="." unique_id=1915992681 instance=ExtResource("12_arch")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.36, 0.068, 2.6073277)
+visible = false
 script = ExtResource("13_arch")
 
-[node name="Ranger" type="Node3D" parent="." unique_id=1009135085 instance=ExtResource("14_cvmbd")]
+[node name="Ranger" parent="." unique_id=1009135085 instance=ExtResource("14_cvmbd")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.06, 0.068, 2.6073277)
+visible = false
 script = ExtResource("15_ft6cd")

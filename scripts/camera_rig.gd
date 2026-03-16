@@ -35,6 +35,7 @@ var _target_zoom: float = 15.0
 var _target_position: Vector3 = Vector3.ZERO
 
 var _is_panning: bool = false
+var zoom_blocked: bool = false
 
 
 func _ready() -> void:
@@ -64,7 +65,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			_is_panning = mb.pressed
 
 		# Scroll wheel → zoom in/out
-		if mb.pressed:
+		if mb.pressed and not zoom_blocked:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_zoom = maxf(_target_zoom - zoom_speed, min_zoom)
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:

@@ -9,17 +9,25 @@ var _axe_attachment: BoneAttachment3D
 var _hit_this_swing: bool = false
 
 
+const LEVEL_STATS = {
+	1: {"hp": 520, "damage": 90, "atk_speed": 0.625},
+	2: {"hp": 690, "damage": 120, "atk_speed": 0.571},
+	3: {"hp": 880, "damage": 158, "atk_speed": 0.526},
+}
+
 func _init_stats() -> void:
+	var s = LEVEL_STATS[level]
 	move_speed = 0.4
 	attack_range = 0.24
-	hp = 520
-	damage = 90
-	atk_speed = 0.625
+	hp = s.hp
+	damage = s.damage
+	atk_speed = s.atk_speed
 	attack_anim = "Melee_1H_Attack_Chop"
 	anim_files = [
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
+		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	]
 
 

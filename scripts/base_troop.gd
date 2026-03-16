@@ -5,12 +5,15 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
+@export var separation_radius: float = 0.25
+@export var separation_force: float = 1.5
 
+var level: int = 1
 var hp: int = 100
 var damage: int = 10
 var atk_speed: float = 1.0
 
-enum State { INACTIVE, IDLE, RUNNING, ATTACKING }
+enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
 var target_building: Dictionary = {}
 var target_bs = null
@@ -32,6 +35,11 @@ func _init_stats() -> void:
 	pass
 
 
+func upgrade_to(lvl: int) -> void:
+	level = lvl
+	_init_stats()
+
+
 ## Override to attach weapons via _attach_to_bone()
 func _setup_weapons() -> void:
 	pass
@@ -42,11 +50,12 @@ func activate() -> void:
 		return
 	visible = true
 	state = State.IDLE
+	add_to_group("troops")
 	_find_next_target()
 
 
 func _process(delta: float) -> void:
-	if state == State.INACTIVE:
+	if state == State.INACTIVE or state == State.VICTORY:
 		return
 	match state:
 		State.RUNNING:
@@ -79,7 +88,7 @@ func _setup_animations() -> void:
 				var anim = src.get_animation(anim_name)
 				if anim and not lib.has_animation(anim_name):
 					var dup = anim.duplicate()
-					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle"):
+					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
 						dup.loop_mode = Animation.LOOP_LINEAR
 					lib.add_animation(anim_name, dup)
 		instance.free()
@@ -118,9 +127,24 @@ func _find_next_target() -> void:
 	else:
 		target_building = {}
 		target_bs = null
-		state = State.IDLE
-		if anim_player.has_animation("Idle_A"):
-			anim_player.play("Idle_A")
+		# No buildings left — victory!
+		_trigger_victory_all()
+
+
+func _trigger_victory_all() -> void:
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if is_instance_valid(troop) and troop.state != State.VICTORY:
+			troop._play_victory()
+
+
+func _play_victory() -> void:
+	state = State.VICTORY
+	target_building = {}
+	target_bs = null
+	if anim_player.has_animation("Cheering"):
+		anim_player.play("Cheering")
+	elif anim_player.has_animation("Idle_A"):
+		anim_player.play("Idle_A")
 
 
 func _move_to_target(delta: float) -> void:
@@ -138,10 +162,15 @@ func _move_to_target(delta: float) -> void:
 		look_at(global_position + dir, Vector3.UP)
 		rotate_y(PI)
 
-	global_position = global_position.move_toward(
-		Vector3(target_pos.x, global_position.y, target_pos.z),
-		move_speed * delta
-	)
+	# Move toward target
+	var move_vec = (Vector3(target_pos.x, global_position.y, target_pos.z) - global_position).normalized() * move_speed * delta
+
+	# Push away from nearby troops so they don't stack
+	var sep = _get_separation()
+	move_vec += sep * separation_force * delta
+
+	global_position += move_vec
+	global_position.y = target_pos.y
 
 	if dist <= attack_range:
 		state = State.ATTACKING
@@ -150,10 +179,28 @@ func _move_to_target(delta: float) -> void:
 			anim_player.play(attack_anim)
 
 
+func _get_separation() -> Vector3:
+	var push = Vector3.ZERO
+	for other in get_tree().get_nodes_in_group("troops"):
+		if other == self or not is_instance_valid(other):
+			continue
+		var to_me = global_position - other.global_position
+		to_me.y = 0
+		var d = to_me.length()
+		if d > 0.001 and d < separation_radius:
+			push += to_me.normalized() * (separation_radius - d) / separation_radius
+	return push
+
+
 func _do_attack(delta: float) -> void:
 	if target_building.size() == 0 or not is_instance_valid(target_building.get("node")):
 		_find_next_target()
 		return
+
+	# Keep pushing apart even while attacking
+	var sep = _get_separation()
+	if sep.length() > 0.001:
+		global_position += sep * separation_force * delta
 
 	attack_timer += delta
 	if attack_timer >= atk_speed:

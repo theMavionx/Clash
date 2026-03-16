@@ -9,17 +9,25 @@ extends BaseTroop
 var _projectiles: Array = []
 
 
+const LEVEL_STATS = {
+	1: {"hp": 580, "damage": 130, "atk_speed": 1.111},
+	2: {"hp": 760, "damage": 175, "atk_speed": 1.0},
+	3: {"hp": 970, "damage": 228, "atk_speed": 0.909},
+}
+
 func _init_stats() -> void:
+	var s = LEVEL_STATS[level]
 	move_speed = 0.45
 	attack_range = 0.49
-	hp = 580
-	damage = 130
-	atk_speed = 1.111
+	hp = s.hp
+	damage = s.damage
+	atk_speed = s.atk_speed
 	attack_anim = "Ranged_Bow_Release"
 	anim_files = [
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
+		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	]
 
 

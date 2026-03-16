@@ -7,8 +7,21 @@ extends Node3D
 @export var sail_duration: float = 6.0
 @export var spawn_distance: float = 8.0
 @export var water_node_path: NodePath = "../Water"
+@export var max_ships: int = 5
+@export var troops_per_ship: int = 3
+@export var troop_spawn_delay: float = 0.4
+@export var troop_scale: float = 0.1
+
+const SHIP_TROOPS = [
+	{"model": "res://Model/Characters/Model/Knight.glb", "script": "res://scripts/knight.gd"},
+	{"model": "res://Model/Characters/Model/Mage.glb", "script": "res://scripts/mage.gd"},
+	{"model": "res://Model/Characters/Model/Barbarian.glb", "script": "res://scripts/barbarian.gd"},
+	{"model": "res://Model/Characters/Model/Ranger.glb", "script": "res://scripts/archer.gd"},
+	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb", "script": "res://scripts/ranger.gd"},
+]
 
 var is_attack_mode: bool = false
+var _ships_placed: int = 0
 var ship_plane: MeshInstance3D
 var plane_y: float = 0.0
 var water_y: float = 0.0
@@ -34,12 +47,8 @@ func _ready() -> void:
 
 func enter_attack_mode() -> void:
 	is_attack_mode = true
-	# Activate all troops
-	for troop_name in ["Ranger"]:
-		var troop = get_tree().current_scene.find_child(troop_name, true, false)
-		if troop and troop.has_method("activate"):
-			troop.activate()
-	print("Attack mode ON - click on shipPlane!")
+	_ships_placed = 0
+	print("Attack mode ON - place up to %d ships!" % max_ships)
 
 
 func exit_attack_mode() -> void:
@@ -54,9 +63,11 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			var hit = _get_mouse_hit()
 			if hit != Vector3.INF:
-				_spawn_ship(hit)
+				_spawn_single_ship(hit)
+				_ships_placed += 1
 				get_viewport().set_input_as_handled()
-				exit_attack_mode()
+				if _ships_placed >= max_ships:
+					exit_attack_mode()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			exit_attack_mode()
 			get_viewport().set_input_as_handled()
@@ -92,7 +103,7 @@ func _get_mouse_hit() -> Vector3:
 	return Vector3.INF
 
 
-func _spawn_ship(target: Vector3) -> void:
+func _spawn_single_ship(target: Vector3) -> void:
 	var ship_res = load(ship_scene_path)
 	if ship_res == null:
 		push_warning("AttackSystem: Could not load ship: " + ship_scene_path)
@@ -101,18 +112,17 @@ func _spawn_ship(target: Vector3) -> void:
 	var ship = ship_res.instantiate()
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
 
-	# Perpendicular to shipPlane (its Z axis)
-	var perp = ship_plane.global_transform.basis.z.normalized()
-	perp.y = 0
-	perp = perp.normalized()
-	# Make sure it points outward (away from island)
+	# Sailing direction — perpendicular to shipPlane, pointing outward
+	var sail_dir = ship_plane.global_transform.basis.z.normalized()
+	sail_dir.y = 0
+	sail_dir = sail_dir.normalized()
 	var to_plane = (plane_center - ship_plane.get_parent().global_position).normalized()
-	if perp.dot(to_plane) < 0:
-		perp = -perp
-	# Stop at the edge, spawn far out
+	if sail_dir.dot(to_plane) < 0:
+		sail_dir = -sail_dir
+
 	var stop_pos = target
 	stop_pos.y = plane_y
-	var spawn_pos = stop_pos + perp * spawn_distance
+	var spawn_pos = stop_pos + sail_dir * spawn_distance
 	spawn_pos.y = plane_y
 
 	# Wrap ship in a pivot so we can rock independently of movement
@@ -124,30 +134,69 @@ func _spawn_ship(target: Vector3) -> void:
 	pivot.look_at(stop_pos, Vector3.UP)
 	pivot.rotate_y(PI)
 
-	# Main movement — slow start, ease into stop
-	var tween = create_tween()
-	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
-
-	# Wave rocking — tilt side to side
+	# Start rocking immediately (even during delay)
 	var rock_tween = create_tween().set_loops()
 	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(3.0), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(-3.0), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
-	# Bobbing up and down
 	var bob_tween = create_tween().set_loops()
 	bob_tween.tween_property(ship, "position:y", 0.05, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	bob_tween.tween_property(ship, "position:y", -0.05, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
-	# Slight pitch forward
 	var pitch_tween = create_tween().set_loops()
 	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(2.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(-1.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
-	# Stop rocking when arrived
+	# Main movement
+	var tween = create_tween()
+	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+
+	# When ship arrives → stop rocking, spawn troops
+	var arrived_pos = stop_pos
+	var s_dir = sail_dir
+	var ship_idx = _ships_placed
 	tween.finished.connect(func():
 		rock_tween.kill()
 		bob_tween.kill()
 		pitch_tween.kill()
 		ship.rotation = Vector3.ZERO
+		_deploy_troops_from_ship(arrived_pos, s_dir, ship_idx)
 	)
-	print("Ship sailing to: ", stop_pos)
+	print("Ship %d/%d sailing to: %s" % [_ships_placed + 1, max_ships, stop_pos])
+
+
+func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
+	var troop_def = SHIP_TROOPS[ship_idx % SHIP_TROOPS.size()]
+	var model_res = load(troop_def.model)
+	var script_res = load(troop_def.script)
+	if model_res == null or script_res == null:
+		push_warning("AttackSystem: could not load troop: %s" % troop_def.model)
+		return
+
+	# Lateral direction (perpendicular to sail direction) for side offset
+	var lateral = Vector3.UP.cross(sail_dir).normalized()
+
+	for i in troops_per_ship:
+		# Stagger spawning with a timer
+		var timer = get_tree().create_timer(troop_spawn_delay * i)
+		var idx = i
+		timer.timeout.connect(func():
+			var troop = model_res.instantiate()
+			troop.set_script(script_res)
+			troop.name = "Troop_%d" % (randi() % 99999)
+			var s = troop_scale
+			troop.scale = Vector3(s, s, s)
+
+			get_tree().current_scene.add_child(troop)
+
+			# Spawn spread out: lateral offset + forward offset so they don't stack
+			var side_offset = lateral * (float(idx) - 2.0) * 0.2
+			var forward_offset = sail_dir * float(idx) * -0.15
+			troop.global_position = ship_pos + side_offset + forward_offset
+			troop.global_position.y = ship_pos.y
+
+			# Activate immediately — troop finds nearest building
+			troop.visible = true
+			if troop.has_method("activate"):
+				troop.activate()
+		)
