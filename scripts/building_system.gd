@@ -22,6 +22,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.gltf",
 		"model_scale": 0.2,
 		"hp_levels": [1200, 2200, 3800],
+		"cost": {"gold": 400, "wood": 150},
 	},
 	"barn": {
 		"name": "Barn",
@@ -32,6 +33,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.2,
 		"hp_levels": [2000, 3500, 6000],
+		"cost": {"gold": 200, "wood": 200, "ore": 100},
 	},
 	"port": {
 		"name": "Port",
@@ -42,6 +44,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.2,
 		"hp_levels": [1800, 3200, 5500],
+		"cost": {"gold": 800, "wood": 300, "ore": 200},
 	},
 	"sawmill": {
 		"name": "Sawmill",
@@ -51,6 +54,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800],
+		"cost": {"gold": 300},
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -62,6 +66,8 @@ var building_defs: Dictionary = {
 		"model_scale": 0.2,
 		"hp_levels": [3500, 6000, 10000],
 		"is_main": true,
+		"max_count": 1,
+		"cost": {},
 	},
 	"turret": {
 		"name": "Turret",
@@ -71,6 +77,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.2,
 		"hp_levels": [900, 1600, 2800],
+		"cost": {"gold": 600, "wood": 350, "ore": 200},
 	},
 }
 
@@ -78,7 +85,7 @@ var building_defs: Dictionary = {
 var resources: Dictionary = {
 	"wood": 1000,
 	"gold": 1000,
-	"metal": 1000,
+	"ore": 1000,
 }
 
 # ── Calculated from gridPlane ─────────────────────────────────
@@ -114,11 +121,13 @@ var shop_panel: PanelContainer
 var is_shop_open: bool = false
 var wood_label: Label
 var gold_label: Label
-var metal_label: Label
+var ore_label: Label
+
 var building_panel: PanelContainer
 var building_panel_title: Label
 var building_panel_hp: Label
 var building_panel_hp_bar: ProgressBar
+var building_panel_cost: Label
 
 # ── Barracks ──────────────────────────────────────────────────
 var barracks_panel: PanelContainer
@@ -130,25 +139,25 @@ var troop_defs: Dictionary = {
 	"Knight": {
 		"display": "Knight (Tank)",
 		"costs": {
-			1: {"gold": 150, "metal": 80},
-			2: {"gold": 400, "metal": 250},
-			3: {"gold": 900, "metal": 600},
+			1: {"gold": 150, "ore": 80},
+			2: {"gold": 400, "ore": 250},
+			3: {"gold": 900, "ore": 600},
 		}
 	},
 	"Mage": {
 		"display": "Wizard (Burst Mage)",
 		"costs": {
-			1: {"gold": 250, "metal": 150},
-			2: {"gold": 600, "metal": 400},
-			3: {"gold": 1400, "metal": 900},
+			1: {"gold": 250, "ore": 150},
+			2: {"gold": 600, "ore": 400},
+			3: {"gold": 1400, "ore": 900},
 		}
 	},
 	"Barbarian": {
 		"display": "Berserker (Fast Brawler)",
 		"costs": {
-			1: {"gold": 200, "metal": 120},
-			2: {"gold": 500, "metal": 350},
-			3: {"gold": 1100, "metal": 750},
+			1: {"gold": 200, "ore": 120},
+			2: {"gold": 500, "ore": 350},
+			3: {"gold": 1100, "ore": 750},
 		}
 	},
 	"Archer": {
@@ -218,26 +227,47 @@ func _create_ui() -> void:
 	add_child(canvas)
 
 	# ── Resource bar (top center) ──────────────────────────────
+	var res_wrapper = PanelContainer.new()
+	res_wrapper.anchor_left = 0.5
+	res_wrapper.anchor_right = 0.5
+	res_wrapper.anchor_top = 0.0
+	res_wrapper.anchor_bottom = 0.0
+	res_wrapper.offset_left = -350
+	res_wrapper.offset_right = 350
+	res_wrapper.offset_top = 10
+	res_wrapper.offset_bottom = 95
+	var wrapper_style = StyleBoxFlat.new()
+	wrapper_style.bg_color = Color(0.05, 0.06, 0.1, 0.85)
+	wrapper_style.corner_radius_top_left = 16
+	wrapper_style.corner_radius_top_right = 16
+	wrapper_style.corner_radius_bottom_left = 16
+	wrapper_style.corner_radius_bottom_right = 16
+	wrapper_style.border_width_left = 2
+	wrapper_style.border_width_right = 2
+	wrapper_style.border_width_top = 2
+	wrapper_style.border_width_bottom = 2
+	wrapper_style.border_color = Color(0.3, 0.32, 0.4, 0.6)
+	wrapper_style.shadow_color = Color(0, 0, 0, 0.5)
+	wrapper_style.shadow_size = 6
+	wrapper_style.content_margin_left = 16
+	wrapper_style.content_margin_right = 16
+	wrapper_style.content_margin_top = 8
+	wrapper_style.content_margin_bottom = 8
+	res_wrapper.add_theme_stylebox_override("panel", wrapper_style)
+	canvas.add_child(res_wrapper)
+
 	var res_bar = HBoxContainer.new()
-	res_bar.anchor_left = 0.5
-	res_bar.anchor_right = 0.5
-	res_bar.anchor_top = 0.0
-	res_bar.anchor_bottom = 0.0
-	res_bar.offset_left = -360
-	res_bar.offset_right = 360
-	res_bar.offset_top = 15
-	res_bar.offset_bottom = 85
-	res_bar.add_theme_constant_override("separation", 30)
+	res_bar.add_theme_constant_override("separation", 40)
 	res_bar.alignment = BoxContainer.ALIGNMENT_CENTER
-	canvas.add_child(res_bar)
+	res_wrapper.add_child(res_bar)
 
 	wood_label = _create_resource_label(res_bar, "Wood", resources.wood, Color(0.45, 0.7, 0.3))
 	gold_label = _create_resource_label(res_bar, "Gold", resources.gold, Color(0.9, 0.75, 0.2))
-	metal_label = _create_resource_label(res_bar, "Metal", resources.metal, Color(0.6, 0.65, 0.7))
+	ore_label = _create_resource_label(res_bar, "Ore", resources.ore, Color(0.6, 0.65, 0.7))
 
 	# ── Find button (bottom right, above Attack) ─────────────────
 	var find_button = Button.new()
-	find_button.text = "Find"
+	find_button.text = "Find Enemy"
 	find_button.custom_minimum_size = Vector2(300, 120)
 	find_button.anchor_left = 1.0
 	find_button.anchor_right = 1.0
@@ -283,37 +313,6 @@ func _create_ui() -> void:
 	build_button.pressed.connect(_toggle_shop)
 	canvas.add_child(build_button)
 
-	# ── Destroy All button (bottom left) ──────────────────────
-	var destroy_button = Button.new()
-	destroy_button.text = "Destroy All"
-	destroy_button.custom_minimum_size = Vector2(300, 120)
-	destroy_button.anchor_left = 0.0
-	destroy_button.anchor_right = 0.0
-	destroy_button.anchor_top = 1.0
-	destroy_button.anchor_bottom = 1.0
-	destroy_button.offset_left = 20
-	destroy_button.offset_right = 320
-	destroy_button.offset_top = -140
-	destroy_button.offset_bottom = -20
-	_style_button(destroy_button, Color(0.6, 0.15, 0.15), Color(0.7, 0.2, 0.2))
-	destroy_button.pressed.connect(_destroy_all_buildings)
-	canvas.add_child(destroy_button)
-
-	# ── Map button (bottom left, above Destroy All) ───────────
-	var map_button = Button.new()
-	map_button.text = "Map"
-	map_button.custom_minimum_size = Vector2(300, 120)
-	map_button.anchor_left = 0.0
-	map_button.anchor_right = 0.0
-	map_button.anchor_top = 1.0
-	map_button.anchor_bottom = 1.0
-	map_button.offset_left = 20
-	map_button.offset_right = 320
-	map_button.offset_top = -280
-	map_button.offset_bottom = -160
-	_style_button(map_button, Color(0.2, 0.35, 0.55), Color(0.25, 0.4, 0.6))
-	map_button.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
-	canvas.add_child(map_button)
 
 	# ── Shop panel (center) ────────────────────────────────────
 	shop_panel = PanelContainer.new()
@@ -362,8 +361,17 @@ func _create_ui() -> void:
 
 	for id in building_defs:
 		var def = building_defs[id]
+		var cost = def.get("cost", {})
+		var cost_parts: Array = []
+		if cost.has("gold"):
+			cost_parts.append("Gold: %d" % cost.gold)
+		if cost.has("wood"):
+			cost_parts.append("Wood: %d" % cost.wood)
+		if cost.has("ore"):
+			cost_parts.append("Ore: %d" % cost.ore)
+		var cost_text = "  ".join(cost_parts) if cost_parts.size() > 0 else "Free"
 		var btn = Button.new()
-		btn.text = "%s (%dx%d)" % [def.name, def.cells.x, def.cells.y]
+		btn.text = "%s (%dx%d)\n%s" % [def.name, def.cells.x, def.cells.y, cost_text]
 		btn.custom_minimum_size = Vector2(0, 100)
 		_style_button(btn, Color(0.18, 0.22, 0.35), Color(0.25, 0.3, 0.45))
 		var building_id = id
@@ -448,6 +456,13 @@ func _create_building_panel() -> void:
 	building_panel_hp.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
 	bp_vbox.add_child(building_panel_hp)
 
+	# Upgrade cost label
+	building_panel_cost = Label.new()
+	building_panel_cost.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	building_panel_cost.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	building_panel_cost.add_theme_font_size_override("font_size", 13)
+	bp_vbox.add_child(building_panel_cost)
+
 	var upgrade_btn = Button.new()
 	upgrade_btn.text = "Upgrade"
 	upgrade_btn.custom_minimum_size = Vector2(0, 80)
@@ -488,35 +503,55 @@ func _style_button(btn: Button, normal_color: Color, hover_color: Color) -> void
 
 func _create_resource_label(parent: Control, res_name: String, amount: int, color: Color) -> Label:
 	var panel = PanelContainer.new()
-	panel.custom_minimum_size = Vector2(200, 60)
-	var res_style = StyleBoxFlat.new()
-	res_style.bg_color = Color(0.1, 0.12, 0.18, 1.0)
-	res_style.corner_radius_top_left = 8
-	res_style.corner_radius_top_right = 8
-	res_style.corner_radius_bottom_left = 8
-	res_style.corner_radius_bottom_right = 8
-	res_style.border_width_left = 1
-	res_style.border_width_right = 1
-	res_style.border_width_top = 1
-	res_style.border_width_bottom = 1
-	res_style.border_color = color.darkened(0.3)
-	panel.add_theme_stylebox_override("panel", res_style)
+	panel.custom_minimum_size = Vector2(160, 60)
+	var pstyle = StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.15, 0.16, 0.22, 0.95)
+	pstyle.border_width_left = 2
+	pstyle.border_width_right = 2
+	pstyle.border_width_top = 2
+	pstyle.border_width_bottom = 2
+	pstyle.border_color = Color(0.35, 0.37, 0.45, 0.8)
+	pstyle.corner_radius_top_left = 10
+	pstyle.corner_radius_top_right = 10
+	pstyle.corner_radius_bottom_left = 10
+	pstyle.corner_radius_bottom_right = 10
+	pstyle.content_margin_left = 8
+	pstyle.content_margin_right = 8
+	pstyle.content_margin_top = 4
+	pstyle.content_margin_bottom = 4
+	panel.add_theme_stylebox_override("panel", pstyle)
 	parent.add_child(panel)
 
-	var lbl = Label.new()
-	lbl.text = "%s: %d" % [res_name, amount]
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_color_override("font_color", color)
-	panel.add_child(lbl)
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 0)
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	panel.add_child(vbox)
 
-	return lbl
+	var name_lbl = Label.new()
+	name_lbl.text = res_name.to_upper()
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_lbl.add_theme_color_override("font_color", color.darkened(0.1))
+	name_lbl.add_theme_font_size_override("font_size", 13)
+	vbox.add_child(name_lbl)
+
+	var amount_lbl = Label.new()
+	amount_lbl.text = str(amount)
+	amount_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	amount_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	amount_lbl.add_theme_color_override("font_color", Color.WHITE)
+	amount_lbl.add_theme_font_size_override("font_size", 28)
+	vbox.add_child(amount_lbl)
+
+	return amount_lbl
 
 
 func _update_resource_ui() -> void:
-	wood_label.text = "Wood: %d" % resources.wood
-	gold_label.text = "Gold: %d" % resources.gold
-	metal_label.text = "Metal: %d" % resources.metal
+	if wood_label:
+		wood_label.text = str(resources.wood)
+	if gold_label:
+		gold_label.text = str(resources.gold)
+	if ore_label:
+		ore_label.text = str(resources.ore)
 
 
 func _toggle_shop() -> void:
@@ -743,6 +778,28 @@ func _try_place_building() -> bool:
 	if not _can_place(current_grid_pos, def.cells):
 		return false
 
+	# Check max_count limit (e.g. Town Hall = 1)
+	if def.has("max_count"):
+		var count = 0
+		for b in placed_buildings:
+			if b.id == current_building_id:
+				count += 1
+		if count >= def.max_count:
+			print("Max %s limit reached (%d)" % [def.name, def.max_count])
+			return false
+
+	# Check and deduct building cost
+	var cost: Dictionary = def.get("cost", {})
+	print("Placing %s, cost: %s, resources before: %s" % [def.name, cost, resources])
+	for res_name in cost:
+		if resources.get(res_name, 0) < cost[res_name]:
+			print("Not enough %s! Need %d, have %d" % [res_name, cost[res_name], resources.get(res_name, 0)])
+			return false
+	for res_name in cost:
+		resources[res_name] -= cost[res_name]
+	print("Resources after: %s" % [resources])
+	_update_resource_ui()
+
 	for x in range(def.cells.x):
 		for z in range(def.cells.y):
 			var idx = (current_grid_pos.y + z) * grid_width + (current_grid_pos.x + x)
@@ -871,6 +928,7 @@ func _select_building(b: Dictionary) -> void:
 	if building_panel_hp_bar:
 		building_panel_hp_bar.max_value = max_hp
 		building_panel_hp_bar.value = hp
+	_update_upgrade_cost_label(def, level)
 	if building_panel:
 		building_panel.visible = true
 
@@ -894,6 +952,17 @@ func _upgrade_selected() -> void:
 	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	if level >= max_level:
 		return
+	# Check and deduct upgrade cost (same as build cost per level)
+	var cost: Dictionary = def.get("cost", {})
+	var multiplier = level + 1
+	for res_name in cost:
+		var needed = cost[res_name] * multiplier
+		if resources.get(res_name, 0) < needed:
+			print("Not enough %s for upgrade! Need %d, have %d" % [res_name, needed, resources.get(res_name, 0)])
+			return
+	for res_name in cost:
+		resources[res_name] -= cost[res_name] * multiplier
+	_update_resource_ui()
 	selected_building["level"] = level + 1
 	var new_max_hp = _get_hp_for(def, selected_building.level)
 	selected_building["max_hp"] = new_max_hp
@@ -905,6 +974,7 @@ func _upgrade_selected() -> void:
 	if building_panel_hp_bar:
 		building_panel_hp_bar.max_value = new_max_hp
 		building_panel_hp_bar.value = new_max_hp
+	_update_upgrade_cost_label(def, selected_building.level)
 	# Swap model if scenes array exists
 	if def.has("scenes"):
 		var new_level = selected_building.level
@@ -920,6 +990,28 @@ func _upgrade_selected() -> void:
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
 			selected_building.node.add_child(model)
+
+
+func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
+	if not building_panel_cost:
+		return
+	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
+	if current_level >= max_level:
+		building_panel_cost.text = "MAX LEVEL"
+		return
+	var cost: Dictionary = def.get("cost", {})
+	if cost.size() == 0:
+		building_panel_cost.text = "Free"
+		return
+	var multiplier = current_level + 1
+	var parts: Array = []
+	if cost.has("gold"):
+		parts.append("Gold: %d" % (cost.gold * multiplier))
+	if cost.has("wood"):
+		parts.append("Wood: %d" % (cost.wood * multiplier))
+	if cost.has("ore"):
+		parts.append("Ore: %d" % (cost.ore * multiplier))
+	building_panel_cost.text = "Upgrade: " + "  ".join(parts)
 
 
 func remove_building(b: Dictionary) -> void:
@@ -1017,6 +1109,23 @@ func _refresh_barracks_panel() -> void:
 
 	var max_bld_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	if bld_level < max_bld_level:
+		# Upgrade cost label
+		var cost: Dictionary = def.get("cost", {})
+		var multiplier = bld_level + 1
+		var cost_parts: Array = []
+		if cost.has("gold"):
+			cost_parts.append("Gold: %d" % (cost.gold * multiplier))
+		if cost.has("wood"):
+			cost_parts.append("Wood: %d" % (cost.wood * multiplier))
+		if cost.has("ore"):
+			cost_parts.append("Ore: %d" % (cost.ore * multiplier))
+		var cost_lbl = Label.new()
+		cost_lbl.text = "  ".join(cost_parts) if cost_parts.size() > 0 else "Free"
+		cost_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+		cost_lbl.add_theme_font_size_override("font_size", 13)
+		barracks_vbox.add_child(cost_lbl)
+
 		var upgrade_bld_btn = Button.new()
 		upgrade_bld_btn.text = "Upgrade Building"
 		upgrade_bld_btn.custom_minimum_size = Vector2(0, 50)
@@ -1026,6 +1135,12 @@ func _refresh_barracks_panel() -> void:
 			_refresh_barracks_panel()
 		)
 		barracks_vbox.add_child(upgrade_bld_btn)
+	elif bld_level >= max_bld_level:
+		var max_lbl = Label.new()
+		max_lbl.text = "MAX LEVEL"
+		max_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		max_lbl.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+		barracks_vbox.add_child(max_lbl)
 
 	var sep = HSeparator.new()
 	barracks_vbox.add_child(sep)
@@ -1079,7 +1194,7 @@ func _refresh_barracks_panel() -> void:
 			var cost_text = ""
 			for res_name in costs:
 				var res_display = res_name.capitalize()
-				if res_name == "metal":
+				if res_name == "ore":
 					res_display = "Ore"
 				cost_text += "%s: %d  " % [res_display, costs[res_name]]
 

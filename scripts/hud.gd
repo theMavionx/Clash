@@ -11,8 +11,8 @@ var _trophy_lbl: Label
 var _res_labels := {}          # "gold" → Label, etc.
 
 # ── color palette ──
-const C_PANEL_BG     := Color(0.06, 0.10, 0.04, 0.88)
-const C_PANEL_BORDER := Color(0.23, 0.17, 0.04, 0.95)
+const C_PANEL_BG     := Color(0.06, 0.06, 0.06, 0.80)
+const C_PANEL_BORDER := Color(0.2, 0.2, 0.2, 0.6)
 const C_GOLD_ACCENT  := Color(0.83, 0.63, 0.09, 1.0)
 const C_GOLD_LIGHT   := Color(1.0, 0.85, 0.3, 1.0)
 const C_TEXT_WARM     := Color(1.0, 0.97, 0.91, 1.0)
@@ -28,7 +28,7 @@ func _ready() -> void:
 	_build_hud()
 	# demo / placeholder data
 	set_player("Player", 33)
-	set_resources(55242, 37630)
+	set_resources(55242, 37630, 15000)
 	set_trophies(232)
 
 # ══════════════════════════════════════
@@ -41,9 +41,10 @@ func set_player(pname: String, level: int) -> void:
 	if _level_lbl:
 		_level_lbl.text = str(level)
 
-func set_resources(gold: int, wood: int) -> void:
+func set_resources(gold: int, wood: int, metal: int = 0) -> void:
 	_set_res("gold", gold)
 	_set_res("wood", wood)
+	_set_res("metal", metal)
 
 func set_trophies(count: int) -> void:
 	if _trophy_lbl:
@@ -152,45 +153,64 @@ func _build_player_panel(parent: Control) -> void:
 
 func _build_resources_panel(parent: Control) -> void:
 	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 8)
+	hbox.add_theme_constant_override("separation", 12)
 	parent.add_child(hbox)
 
+	# Minimalist pill-shaped resource counters
 	_add_res(hbox, "gold",
-		Color(0.16, 0.12, 0.04, 0.88),
-		Color(0.35, 0.27, 0.06, 0.95),
-		Color(1.0, 0.82, 0.1, 1.0),
-		Color(0.50, 0.40, 0.08, 0.7))
+		Color(0.06, 0.06, 0.06, 0.75),   # Dark, slightly transparent bg
+		Color(1.0, 0.85, 0.1, 0.8),      # Subtle gold border
+		Color(1.0, 0.82, 0.1, 1.0),      # Bright gold icon
+		Color(1.0, 0.9, 0.3, 0.2),       # Gold highlight glow
+		"\u25CF" )                       # Circle icon
 	_add_res(hbox, "wood",
-		Color(0.10, 0.08, 0.03, 0.88),
-		Color(0.28, 0.18, 0.06, 0.95),
+		Color(0.06, 0.06, 0.06, 0.75),
+		Color(0.65, 0.40, 0.15, 0.8),
 		Color(0.72, 0.45, 0.14, 1.0),
-		Color(0.42, 0.30, 0.10, 0.7))
+		Color(0.8, 0.5, 0.2, 0.2),
+		"\u25A0" )                       # Square/log icon
+	_add_res(hbox, "metal",
+		Color(0.06, 0.06, 0.06, 0.75),
+		Color(0.6, 0.65, 0.7, 0.8),      # Steel/silver border
+		Color(0.7, 0.75, 0.85, 1.0),     # Silver icon
+		Color(0.8, 0.85, 1.0, 0.2),
+		"\u2B22" )                       # Hexagon icon for Metal
 
 func _add_res(parent: Control, key: String, bg: Color, border: Color,
-		icon_col: Color, highlight: Color) -> void:
+		icon_col: Color, highlight: Color, icon_char: String) -> void:
 	var item := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.border_color = border
-	sb.set_border_width_all(2)
-	sb.border_width_top = 1
-	sb.set_corner_radius_all(14)
-	sb.content_margin_left = 10
-	sb.content_margin_right = 12
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.set_border_width_all(1)       # Thinner, minimal border
+	sb.set_corner_radius_all(16)     # Pill shape (more rounded)
+	sb.content_margin_left = 12
+	sb.content_margin_right = 16
+	sb.content_margin_top = 4
+	sb.content_margin_bottom = 4
+	# Optional subtle shadow
+	sb.shadow_color = Color(0, 0, 0, 0.3)
+	sb.shadow_size = 2
+	sb.shadow_offset = Vector2(0, 2)
 	item.add_theme_stylebox_override("panel", sb)
 	parent.add_child(item)
 
 	var h := HBoxContainer.new()
-	h.add_theme_constant_override("separation", 6)
+	h.add_theme_constant_override("separation", 8)
 	item.add_child(h)
 
-	var icon_lbl := _make_label("\u25CF", 20, icon_col)
+	var icon_lbl := _make_label(icon_char, 20, icon_col)
+	icon_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	# A bit of glow for the icon
+	icon_lbl.add_theme_color_override("font_shadow_color", highlight)
+	icon_lbl.add_theme_constant_override("shadow_offset_x", 0)
+	icon_lbl.add_theme_constant_override("shadow_offset_y", 0)
+	icon_lbl.add_theme_constant_override("shadow_outline_size", 4)
 	h.add_child(icon_lbl)
 
-	var val := _make_label("0", 19, C_TEXT_WARM)
-	val.custom_minimum_size.x = 56
+	var val := _make_label("0", 18, Color(1.0, 1.0, 1.0, 0.95)) # Clean white text
+	val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	val.custom_minimum_size.x = 60
 	h.add_child(val)
 
 	_res_labels[key] = val
