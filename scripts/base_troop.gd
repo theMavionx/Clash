@@ -5,8 +5,8 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
-@export var separation_radius: float = 0.10
-@export var separation_force: float = 1.5
+@export var separation_radius: float = 0.2
+@export var separation_force: float = 0.5
 
 var level: int = 1
 var hp: int = 100
@@ -171,11 +171,33 @@ func _move_to_target(delta: float) -> void:
 		rotate_y(PI)
 
 	# Move toward target
-	var move_vec = (Vector3(target_pos.x, global_position.y, target_pos.z) - global_position).normalized() * move_speed * delta
+	var dir = (Vector3(target_pos.x, global_position.y, target_pos.z) - global_position).normalized()
+	var move_vec = dir * move_speed * delta
 
 	# Push away from nearby troops so they don't stack
 	var sep = _get_separation()
 	move_vec += sep * separation_force * delta
+
+	# Gently steer around troops that block the path to target
+	var steer = Vector3.ZERO
+	var avoidance_range = separation_radius * 2.0
+	for other in get_tree().get_nodes_in_group("troops"):
+		if other == self or not is_instance_valid(other):
+			continue
+		var to_other = other.global_position - global_position
+		to_other.y = 0
+		var d = to_other.length()
+		if d < avoidance_range and d > 0.001:
+			var dot = to_other.normalized().dot(dir)
+			if dot > 0.3:
+				var lateral = Vector3.UP.cross(dir).normalized()
+				var side = to_other.normalized().dot(lateral)
+				var strength = (1.0 - d / avoidance_range) * 0.3 * delta
+				if side >= 0:
+					steer -= lateral * strength
+				else:
+					steer += lateral * strength
+	move_vec += steer
 
 	global_position += move_vec
 	global_position.y = target_building.node.global_position.y

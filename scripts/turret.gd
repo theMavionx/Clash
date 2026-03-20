@@ -21,6 +21,9 @@ var _anim_player: AnimationPlayer
 var _is_attacking: bool = false
 var _bullets: Array = []
 var _model: Node3D = null
+var _aim_node: Node3D = null   # RootNode — rotate Y for aiming
+var _stand: Node3D = null      # Stand — counter-rotate to keep base fixed
+var _stand_base_rot_y: float = 0.0
 
 
 func _ready() -> void:
@@ -31,9 +34,17 @@ func _ready() -> void:
 		if child is Node3D and not (child is AnimationPlayer):
 			_model = child
 			break
+	if _model:
+		_aim_node = _find_node_by_name(_model, "RootNode")
+		_stand = _find_node_by_name(_model, "Stand")
+		if _stand:
+			_stand_base_rot_y = _stand.rotation.y
 	_anim_player = _find_anim_player(self)
-	if _anim_player and _anim_player.has_animation("idle"):
-		_anim_player.play("idle")
+	if _anim_player:
+		if _anim_player.has_animation("idle"):
+			var idle_anim = _anim_player.get_animation("idle")
+			idle_anim.loop_mode = Animation.LOOP_LINEAR
+			_anim_player.play("idle")
 
 
 func _apply_stats() -> void:
@@ -52,14 +63,18 @@ func _process(delta: float) -> void:
 	_find_target()
 
 	if _target and is_instance_valid(_target):
-		# Aim model at target (rotate the model child, not the wrapper)
-		if _model:
-			var target_pos = _target.global_position
-			target_pos.y = _model.global_position.y
-			var diff = target_pos - _model.global_position
+		# Rotate RootNode Y to aim, but counter-rotate Stand so base stays fixed
+		if _aim_node:
+			var diff = _target.global_position - global_position
+			diff.y = 0
 			if diff.length() > 0.01:
-				_model.look_at(_model.global_position + diff.normalized(), Vector3.UP)
-				_model.rotate_y(PI)
+				var parent_basis_inv = _aim_node.get_parent().global_transform.basis.inverse()
+				var local_dir = parent_basis_inv * diff.normalized()
+				var y_angle = atan2(local_dir.x, local_dir.z)
+				_aim_node.rotation.y = y_angle
+				# Keep stand fixed by cancelling the parent rotation
+				if _stand:
+					_stand.rotation.y = _stand_base_rot_y - y_angle
 
 		# Play attack animation
 		if not _is_attacking:
@@ -84,16 +99,20 @@ func _process(delta: float) -> void:
 
 
 func _find_target() -> void:
+	# Keep current target until it dies or leaves range
+	if _target and is_instance_valid(_target):
+		if global_position.distance_to(_target.global_position) <= detect_range:
+			return
+	# Find new nearest enemy
+	_target = null
 	var nearest_dist = detect_range
-	var nearest: Node3D = null
 	for troop in get_tree().get_nodes_in_group("troops"):
 		if not is_instance_valid(troop):
 			continue
 		var d = global_position.distance_to(troop.global_position)
 		if d < nearest_dist:
 			nearest_dist = d
-			nearest = troop
-	_target = nearest
+			_target = troop
 
 
 func _spawn_bullet() -> void:
@@ -151,6 +170,16 @@ func _update_bullets(delta: float) -> void:
 			b.node.queue_free()
 			_bullets.remove_at(i)
 		i -= 1
+
+
+func _find_node_by_name(node: Node, target_name: String) -> Node3D:
+	if node.name == target_name and node is Node3D:
+		return node
+	for child in node.get_children():
+		var result = _find_node_by_name(child, target_name)
+		if result:
+			return result
+	return null
 
 
 func _find_anim_player(node: Node) -> AnimationPlayer:

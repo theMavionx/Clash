@@ -8,8 +8,8 @@ extends Node3D
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
 @export var max_ships: int = 5
-@export var troops_per_ship: int = 1
-@export var troop_spawn_delay: float = 0.4
+@export var troops_per_ship: int = 3
+@export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.05
 
 const SHIP_TROOPS = [
@@ -51,6 +51,11 @@ func enter_attack_mode() -> void:
 	_ships_placed = 0
 	if ship_plane:
 		ship_plane.visible = true
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color(0.8, 0.1, 0.1, 0.35)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ship_plane.material_override = mat
 	print("Attack mode ON - place up to %d ships!" % max_ships)
 
 
@@ -58,6 +63,7 @@ func exit_attack_mode() -> void:
 	is_attack_mode = false
 	if ship_plane:
 		ship_plane.visible = false
+		ship_plane.material_override = null
 
 
 func _input(event: InputEvent) -> void:
@@ -186,7 +192,9 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		return
 
 	# Spawn position: right at inner edge of ShipPlane
-	var spawn_pos = ship_pos - sail_dir * (plane_extent_z * 0.8)
+	var pb2 = ship_plane.global_transform.basis
+	var lat_dir = pb2.x.normalized()
+	var spawn_pos = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	spawn_pos.y = ship_pos.y
 
 	# Get building Y level so troops can reach buildings
@@ -207,7 +215,8 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 
 			get_tree().current_scene.add_child(troop)
 
-			troop.global_position = spawn_pos
+			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
+			troop.global_position = spawn_pos + offset
 			troop.global_position.y = building_y
 
 			troop.visible = true

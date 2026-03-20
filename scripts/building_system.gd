@@ -83,9 +83,9 @@ var building_defs: Dictionary = {
 
 # ── Resources ─────────────────────────────────────────────────
 var resources: Dictionary = {
-	"wood": 1000,
-	"gold": 1000,
-	"ore": 1000,
+	"wood": 10000,
+	"gold": 10000,
+	"ore": 10000,
 }
 
 # ── Calculated from gridPlane ─────────────────────────────────
