@@ -904,6 +904,28 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 	_update_player_name_label()
 
 
+func _show_error(msg: String) -> void:
+	if not canvas:
+		return
+	var lbl = Label.new()
+	lbl.text = msg
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.anchor_left = 0.5
+	lbl.anchor_right = 0.5
+	lbl.anchor_top = 0.0
+	lbl.offset_left = -250
+	lbl.offset_right = 250
+	lbl.offset_top = 110
+	lbl.add_theme_font_size_override("font_size", 20)
+	lbl.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+	canvas.add_child(lbl)
+	# Fade out and remove after 2s
+	var tw = create_tween()
+	tw.tween_interval(1.5)
+	tw.tween_property(lbl, "modulate:a", 0.0, 0.5)
+	tw.tween_callback(lbl.queue_free)
+
+
 func _get_grid_index() -> int:
 	var plane = get_node_or_null(grid_plane_path)
 	if plane and plane.name == "gridPlane2":
@@ -917,7 +939,9 @@ func _sync_place_building(building_data: Dictionary, building_id: String, grid_p
 		return
 	var result = await net.place_building(building_id, grid_pos.x, grid_pos.y, _get_grid_index())
 	if result.has("error"):
-		print("Server rejected building: ", result.error)
+		_show_error(str(result.error))
+		# Rollback local placement
+		remove_building(building_data)
 		return
 	if result.has("id"):
 		building_data["server_id"] = result["id"]
@@ -941,7 +965,7 @@ func _sync_upgrade_building(building_data: Dictionary) -> void:
 		return
 	var result = await net.upgrade_building(sid)
 	if result.has("error"):
-		print("Server rejected upgrade: ", result.error)
+		_show_error(str(result.error))
 		return
 	if result.has("trophies"):
 		net.trophies = result["trophies"]
@@ -973,7 +997,7 @@ func _sync_upgrade_troop(troop_name: String) -> void:
 		return
 	var result = await net.upgrade_troop(troop_name)
 	if result.has("error"):
-		print("Server rejected troop upgrade: ", result.error)
+		_show_error(str(result.error))
 		return
 	if result.has("trophies"):
 		net.trophies = result["trophies"]
@@ -1795,8 +1819,27 @@ func _on_find_pressed() -> void:
 	_switch_to_enemy_island()
 
 
+func _get_or_create_cloud() -> Node:
+	# Reuse existing or create new CloudTransition
+	var existing = get_node_or_null("/root/BattleCloudTransition")
+	if existing:
+		return existing
+	var cloud_script = load("res://scripts/cloud_transition.gd")
+	var cloud = CanvasLayer.new()
+	cloud.name = "BattleCloudTransition"
+	cloud.set_script(cloud_script)
+	cloud.auto_reveal = false
+	get_tree().root.add_child(cloud)
+	return cloud
+
+
 func _switch_to_enemy_island() -> void:
 	is_viewing_enemy = true
+
+	# Cloud close animation
+	var cloud = _get_or_create_cloud()
+	cloud.close()
+	await cloud.close_finished
 
 	# Backup home state
 	home_buildings_backup = placed_buildings.duplicate(true)
@@ -1856,6 +1899,10 @@ func _switch_to_enemy_island() -> void:
 	return_button.pressed.connect(_return_home)
 	canvas.add_child(return_button)
 
+	# Cloud reveal animation
+	cloud.reveal()
+	await cloud.reveal_finished
+
 	# Auto enter attack mode
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
@@ -1877,6 +1924,11 @@ func _return_home() -> void:
 	if attack_system and attack_system.has_method("exit_attack_mode"):
 		attack_system.exit_attack_mode()
 
+	# Cloud close animation
+	var cloud = _get_or_create_cloud()
+	cloud.close()
+	await cloud.close_finished
+
 	# Clear enemy buildings
 	for b in placed_buildings:
 		if b.has("hp_bar") and is_instance_valid(b.hp_bar):
@@ -1886,8 +1938,7 @@ func _return_home() -> void:
 	placed_buildings.clear()
 	grid.fill(false)
 
-	# Restore home buildings
-	# We need to reload from server since backup has freed nodes
+	# Restore home buildings from server
 	var net = get_node_or_null("/root/Net")
 	if net and net.has_token():
 		var state = await net.login()
@@ -1921,3 +1972,7 @@ func _return_home() -> void:
 		return_button = null
 
 	enemy_info = {}
+
+	# Cloud reveal animation
+	cloud.reveal()
+	await cloud.reveal_finished
