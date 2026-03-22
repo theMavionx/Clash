@@ -12,7 +12,7 @@ signal building_placed(data: Dictionary)
 signal building_upgraded(data: Dictionary)
 signal building_removed(data: Dictionary)
 
-const SERVER_URL := "http://localhost:4000/api"
+const SERVER_URL := "http://62.72.35.202:4000/api"
 
 var token: String = ""
 var player_id: String = ""
