@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { colors } from '../styles/theme';
+import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 export default function RegisterPanel({ sendToGodot }) {
   const [name, setName] = useState('');
@@ -14,16 +14,19 @@ export default function RegisterPanel({ sendToGodot }) {
   return (
     <div style={styles.overlay}>
       <form style={styles.panel} onSubmit={handleSubmit}>
+        <div style={styles.icon}>⚔️</div>
         <h2 style={styles.title}>Enter Your Name</h2>
         <input
           style={styles.input}
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="Player name..."
+          placeholder="Commander name..."
           maxLength={20}
           autoFocus
         />
-        <button type="submit" style={styles.btn}>PLAY</button>
+        <button type="submit" style={cartoonBtn('#43A047', '#2E7D32')}>
+          ▶️ PLAY
+        </button>
       </form>
     </div>
   );
@@ -41,39 +44,34 @@ const styles = {
     pointerEvents: 'all',
   },
   panel: {
-    background: 'rgba(15, 16, 30, 0.95)',
-    border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: 16,
-    padding: '28px 32px',
-    width: 340,
+    ...cartoonPanel,
+    width: 320,
     display: 'flex',
     flexDirection: 'column',
-    gap: 16,
+    gap: 14,
+    alignItems: 'center',
+    padding: 28,
+  },
+  icon: {
+    fontSize: 48,
   },
   title: {
     margin: 0,
-    textAlign: 'center',
     fontSize: 24,
-    color: colors.accent,
+    fontWeight: 900,
+    color: colors.gold,
+    textShadow: '0 2px 0 rgba(0,0,0,0.4)',
   },
   input: {
+    width: '100%',
     padding: '12px 16px',
-    borderRadius: 10,
-    border: '1px solid rgba(255,255,255,0.2)',
-    background: 'rgba(30,32,55,0.9)',
+    borderRadius: 14,
+    border: '3px solid #6D4C2A',
+    background: '#1a1008',
     color: '#fff',
     fontSize: 18,
+    fontWeight: 700,
     textAlign: 'center',
     outline: 'none',
-  },
-  btn: {
-    padding: '14px 0',
-    borderRadius: 12,
-    border: 'none',
-    background: colors.green,
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 700,
-    cursor: 'pointer',
   },
 };

@@ -1,4 +1,4 @@
-import { colors, panel } from '../styles/theme';
+import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
   const buildings = buildingDefs?.buildings || {};
@@ -7,7 +7,7 @@ export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.panel} onClick={e => e.stopPropagation()}>
         <div style={styles.header}>
-          <h2 style={styles.title}>Build</h2>
+          <span style={styles.title}>🔨 Build</span>
           <button style={styles.closeBtn} onClick={onClose}>✕</button>
         </div>
         <div style={styles.list}>
@@ -17,20 +17,20 @@ export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
               style={styles.item}
               onClick={() => sendToGodot('start_placement', { building_id: id })}
             >
-              <div style={styles.itemHeader}>
+              <div style={styles.itemTop}>
                 <span style={styles.itemName}>{def.name}</span>
                 <span style={styles.itemSize}>{def.cells[0]}×{def.cells[1]}</span>
               </div>
               <div style={styles.costRow}>
                 {Object.entries(def.cost || {}).map(([res, amount]) => (
                   amount > 0 && (
-                    <span key={res} style={{ color: colors[res] || '#fff', fontSize: 13 }}>
-                      {res}: {amount}
+                    <span key={res} style={{ ...styles.costItem, color: colors[res] || '#fff' }}>
+                      {res === 'gold' ? '💰' : res === 'wood' ? '🪵' : '💎'} {amount}
                     </span>
                   )
                 ))}
                 {Object.keys(def.cost || {}).length === 0 && (
-                  <span style={{ color: colors.green, fontSize: 13 }}>Free</span>
+                  <span style={{ color: colors.green, fontWeight: 700 }}>FREE</span>
                 )}
               </div>
             </button>
@@ -45,7 +45,7 @@ const styles = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.5)',
+    background: 'rgba(0,0,0,0.55)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -53,8 +53,8 @@ const styles = {
     pointerEvents: 'all',
   },
   panel: {
-    ...panel,
-    width: 340,
+    ...cartoonPanel,
+    width: 320,
     maxHeight: '70vh',
     display: 'flex',
     flexDirection: 'column',
@@ -64,18 +64,26 @@ const styles = {
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+    borderBottom: '2px solid #6D4C2A',
+    paddingBottom: 10,
   },
   title: {
-    margin: 0,
     fontSize: 22,
-    color: colors.accent,
+    fontWeight: 900,
+    color: colors.gold,
+    textShadow: '0 2px 0 rgba(0,0,0,0.4)',
   },
   closeBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#999',
-    fontSize: 20,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    background: '#C62828',
+    border: '2px solid #E53935',
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 900,
     cursor: 'pointer',
+    boxShadow: '0 2px 0 #8E0000',
   },
   list: {
     display: 'flex',
@@ -84,16 +92,17 @@ const styles = {
     overflowY: 'auto',
   },
   item: {
-    padding: '12px 14px',
-    borderRadius: 10,
-    border: '1px solid rgba(255,255,255,0.08)',
-    background: 'rgba(30, 32, 55, 0.9)',
+    padding: '10px 14px',
+    borderRadius: 14,
+    border: '2px solid #5D4037',
+    background: 'linear-gradient(180deg, #4E342E, #3E2723)',
     cursor: 'pointer',
     textAlign: 'left',
     color: '#fff',
-    transition: 'background 0.15s',
+    boxShadow: '0 2px 0 #2C1B0E',
+    transition: 'transform 0.1s',
   },
-  itemHeader: {
+  itemTop: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -101,14 +110,21 @@ const styles = {
   },
   itemName: {
     fontSize: 16,
-    fontWeight: 600,
+    fontWeight: 800,
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
   },
   itemSize: {
     fontSize: 12,
-    color: '#999',
+    color: '#A1887F',
+    fontWeight: 700,
   },
   costRow: {
     display: 'flex',
     gap: 12,
+  },
+  costItem: {
+    fontSize: 14,
+    fontWeight: 700,
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
   },
 };

@@ -1,14 +1,17 @@
-import { colors } from '../styles/theme';
+import { colors, cartoonBtn } from '../styles/theme';
 
 export default function ActionButtons({ enemyMode, sendToGodot }) {
   if (enemyMode.active) {
     return (
       <div style={styles.wrap}>
-        <div style={styles.enemyInfo}>
-          Attacking: {enemyMode.name} [{enemyMode.trophies} 🏆]
+        <div style={styles.enemyBadge}>
+          ⚔️ {enemyMode.name} • {enemyMode.trophies} 🏆
         </div>
-        <button style={{ ...styles.btn, background: '#8b5e1a' }} onClick={() => sendToGodot('return_home')}>
-          Return Home
+        <button
+          style={cartoonBtn('#FF8F00', '#E65100')}
+          onClick={() => sendToGodot('return_home')}
+        >
+          🏠 Return Home
         </button>
       </div>
     );
@@ -16,14 +19,23 @@ export default function ActionButtons({ enemyMode, sendToGodot }) {
 
   return (
     <div style={styles.wrap}>
-      <button style={{ ...styles.btn, background: '#2a5a8a' }} onClick={() => sendToGodot('find_enemy')}>
-        Find Enemy
+      <button
+        style={cartoonBtn('#1565C0', '#0D47A1')}
+        onClick={() => sendToGodot('find_enemy')}
+      >
+        🔍 Find Enemy
       </button>
-      <button style={{ ...styles.btn, background: '#8b2a2a' }} onClick={() => sendToGodot('attack')}>
-        Attack
+      <button
+        style={cartoonBtn('#C62828', '#8E0000')}
+        onClick={() => sendToGodot('attack')}
+      >
+        ⚔️ Attack
       </button>
-      <button style={{ ...styles.btn, background: '#2a6db5' }} onClick={() => sendToGodot('open_shop')}>
-        Build
+      <button
+        style={cartoonBtn('#2E7D32', '#1B5E20')}
+        onClick={() => sendToGodot('open_shop')}
+      >
+        🔨 Build
       </button>
     </div>
   );
@@ -36,28 +48,20 @@ const styles = {
     right: 16,
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
+    gap: 10,
     pointerEvents: 'all',
     zIndex: 10,
   },
-  btn: {
-    padding: '14px 32px',
-    borderRadius: 12,
-    border: 'none',
+  enemyBadge: {
+    background: 'linear-gradient(180deg, #B71C1C, #7F0000)',
+    border: '3px solid #E53935',
+    borderRadius: 16,
+    padding: '8px 16px',
     color: '#fff',
-    fontSize: 16,
-    fontWeight: 700,
-    cursor: 'pointer',
-    minWidth: 160,
+    fontSize: 15,
+    fontWeight: 800,
     textAlign: 'center',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-  },
-  enemyInfo: {
-    color: colors.danger,
-    fontSize: 16,
-    fontWeight: 700,
-    textAlign: 'center',
-    padding: '8px 0',
-    textShadow: '0 1px 4px rgba(0,0,0,0.6)',
+    textShadow: '0 1px 2px rgba(0,0,0,0.4)',
+    boxShadow: '0 3px 10px rgba(0,0,0,0.4)',
   },
 };

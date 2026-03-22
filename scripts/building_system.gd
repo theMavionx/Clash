@@ -1540,8 +1540,9 @@ func remove_building(b: Dictionary) -> void:
 	var idx = placed_buildings.find(b)
 	if idx < 0:
 		return
-	# Sync to server
-	_sync_remove_building(b)
+	# Only sync removal of OWN buildings, not enemy's during attack
+	if not is_viewing_enemy:
+		_sync_remove_building(b)
 	var def = building_defs[b.id]
 	var gp = b.grid_pos as Vector2i
 	for x in range(def.cells.x):

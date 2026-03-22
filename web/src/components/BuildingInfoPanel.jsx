@@ -1,44 +1,45 @@
-import { colors } from '../styles/theme';
+import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 export default function BuildingInfoPanel({ building, sendToGodot }) {
   if (!building || building.is_sawmill) return null;
 
   const ratio = building.max_hp > 0 ? building.hp / building.max_hp : 1;
   const isMaxLevel = building.level >= building.max_level;
-  const barColor = ratio > 0.5 ? colors.green : ratio > 0.25 ? colors.gold : colors.danger;
+  const barColor = ratio > 0.5 ? '#4CAF50' : ratio > 0.25 ? '#FF9800' : '#F44336';
 
   return (
     <div style={styles.wrap}>
       <div style={styles.panel}>
+        <button style={styles.closeBtn} onClick={() => sendToGodot('deselect_building')}>✕</button>
+
         <div style={styles.title}>{building.name} (Lv. {building.level})</div>
 
         <div style={styles.barBg}>
           <div style={{ ...styles.barFill, width: `${ratio * 100}%`, background: barColor }} />
         </div>
-        <div style={styles.hpText}>HP: {building.hp} / {building.max_hp}</div>
+        <div style={styles.hpText}>❤️ {building.hp} / {building.max_hp}</div>
 
         {!building.is_enemy && (
-          <>
-            {isMaxLevel ? (
-              <div style={styles.maxLevel}>MAX LEVEL</div>
-            ) : (
-              <>
-                <div style={styles.cost}>
-                  {Object.entries(building.upgrade_cost || {}).map(([res, amount]) => (
-                    <span key={res} style={{ color: colors[res] || '#fff' }}>
-                      {res}: {amount}
-                    </span>
-                  ))}
-                </div>
-                <button style={styles.upgradeBtn} onClick={() => sendToGodot('upgrade_building')}>
-                  Upgrade
-                </button>
-              </>
-            )}
-          </>
+          isMaxLevel ? (
+            <div style={styles.maxLevel}>⭐ MAX LEVEL</div>
+          ) : (
+            <>
+              <div style={styles.cost}>
+                {Object.entries(building.upgrade_cost || {}).map(([res, amount]) => (
+                  <span key={res} style={{ color: colors[res] || '#fff', fontWeight: 700 }}>
+                    {res === 'gold' ? '💰' : res === 'wood' ? '🪵' : '💎'} {amount}
+                  </span>
+                ))}
+              </div>
+              <button
+                style={cartoonBtn('#43A047', '#2E7D32')}
+                onClick={() => sendToGodot('upgrade_building')}
+              >
+                ⬆️ Upgrade
+              </button>
+            </>
+          )
         )}
-
-        <button style={styles.closeBtn} onClick={() => sendToGodot('deselect_building')}>✕</button>
       </div>
     </div>
   );
@@ -54,69 +55,65 @@ const styles = {
     zIndex: 10,
   },
   panel: {
-    background: 'rgba(15, 16, 30, 0.92)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 14,
-    padding: '14px 20px',
-    color: '#fff',
+    ...cartoonPanel,
     minWidth: 260,
     position: 'relative',
-    backdropFilter: 'blur(8px)',
+    textAlign: 'center',
+  },
+  closeBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    background: '#C62828',
+    border: '2px solid #E53935',
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 900,
+    cursor: 'pointer',
+    boxShadow: '0 2px 0 #8E0000',
   },
   title: {
     fontSize: 18,
-    fontWeight: 700,
-    color: colors.accent,
-    marginBottom: 8,
+    fontWeight: 900,
+    color: colors.gold,
+    textShadow: '0 2px 0 rgba(0,0,0,0.4)',
+    marginBottom: 10,
   },
   barBg: {
-    height: 8,
-    borderRadius: 4,
-    background: 'rgba(255,255,255,0.1)',
+    height: 14,
+    borderRadius: 7,
+    background: '#1a1a1a',
+    border: '2px solid #444',
     overflow: 'hidden',
     marginBottom: 4,
   },
   barFill: {
     height: '100%',
-    borderRadius: 4,
+    borderRadius: 5,
     transition: 'width 0.3s',
+    boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.2)',
   },
   hpText: {
     fontSize: 13,
-    color: '#aaa',
-    marginBottom: 8,
+    color: '#BCAAA4',
+    fontWeight: 700,
+    marginBottom: 10,
   },
   cost: {
     display: 'flex',
-    gap: 12,
-    fontSize: 13,
-    marginBottom: 8,
+    justifyContent: 'center',
+    gap: 14,
+    fontSize: 14,
+    marginBottom: 10,
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
   },
   maxLevel: {
-    color: colors.green,
-    fontSize: 14,
-    fontWeight: 600,
-    marginBottom: 4,
-  },
-  upgradeBtn: {
-    width: '100%',
-    padding: '10px 0',
-    borderRadius: 10,
-    border: 'none',
-    background: colors.green,
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: 700,
-    cursor: 'pointer',
-  },
-  closeBtn: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    background: 'none',
-    border: 'none',
-    color: '#666',
+    color: colors.gold,
     fontSize: 16,
-    cursor: 'pointer',
+    fontWeight: 900,
+    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
   },
 };
