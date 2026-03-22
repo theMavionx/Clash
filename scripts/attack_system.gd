@@ -61,6 +61,7 @@ func enter_attack_mode() -> void:
 
 func exit_attack_mode() -> void:
 	is_attack_mode = false
+	_ships_placed = 0
 	if ship_plane:
 		ship_plane.visible = false
 		ship_plane.material_override = null
@@ -145,6 +146,7 @@ func _spawn_single_ship(target: Vector3) -> void:
 
 	# Wrap ship in a pivot so we can rock independently of movement
 	var pivot = Node3D.new()
+	pivot.add_to_group("ships")
 	get_tree().current_scene.add_child(pivot)
 	pivot.global_position = spawn_pos
 	ship.position = Vector3.ZERO

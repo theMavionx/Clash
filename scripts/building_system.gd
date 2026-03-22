@@ -128,6 +128,7 @@ var building_panel_title: Label
 var building_panel_hp: Label
 var building_panel_hp_bar: ProgressBar
 var building_panel_cost: Label
+var building_panel_upgrade_btn: Button
 
 # ── Registration UI ──────────────────────────────────────────
 var register_panel: PanelContainer
@@ -522,12 +523,12 @@ func _create_building_panel() -> void:
 	building_panel_cost.add_theme_font_size_override("font_size", 13)
 	bp_vbox.add_child(building_panel_cost)
 
-	var upgrade_btn = Button.new()
-	upgrade_btn.text = "Upgrade"
-	upgrade_btn.custom_minimum_size = Vector2(0, 80)
-	_style_button(upgrade_btn, Color(0.2, 0.5, 0.3), Color(0.25, 0.6, 0.35))
-	upgrade_btn.pressed.connect(_upgrade_selected)
-	bp_vbox.add_child(upgrade_btn)
+	building_panel_upgrade_btn = Button.new()
+	building_panel_upgrade_btn.text = "Upgrade"
+	building_panel_upgrade_btn.custom_minimum_size = Vector2(0, 80)
+	_style_button(building_panel_upgrade_btn, Color(0.2, 0.5, 0.3), Color(0.25, 0.6, 0.35))
+	building_panel_upgrade_btn.pressed.connect(_upgrade_selected)
+	bp_vbox.add_child(building_panel_upgrade_btn)
 
 
 func _style_button(btn: Button, normal_color: Color, hover_color: Color) -> void:
@@ -1336,6 +1337,26 @@ func _select_building(b: Dictionary) -> void:
 	selected_building = b
 	var def = building_defs[b.id]
 
+	# When viewing enemy — only show HP info, no upgrade/barracks
+	if is_viewing_enemy:
+		var level = b.get("level", 1)
+		var hp = b.get("hp", _get_hp_for(def, level))
+		var max_hp = b.get("max_hp", hp)
+		if building_panel_title:
+			building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
+		if building_panel_hp:
+			building_panel_hp.text = "HP: %d / %d" % [hp, max_hp]
+		if building_panel_hp_bar:
+			building_panel_hp_bar.max_value = max_hp
+			building_panel_hp_bar.value = hp
+		if building_panel_cost:
+			building_panel_cost.visible = false
+		if building_panel_upgrade_btn:
+			building_panel_upgrade_btn.visible = false
+		if building_panel:
+			building_panel.visible = true
+		return
+
 	# Sawmill = barracks
 	if b.id == "sawmill" and barracks_panel:
 		_refresh_barracks_panel()
@@ -1357,6 +1378,10 @@ func _select_building(b: Dictionary) -> void:
 	if building_panel_hp_bar:
 		building_panel_hp_bar.max_value = max_hp
 		building_panel_hp_bar.value = hp
+	if building_panel_cost:
+		building_panel_cost.visible = true
+	if building_panel_upgrade_btn:
+		building_panel_upgrade_btn.visible = true
 	_update_upgrade_cost_label(def, level)
 	if building_panel:
 		building_panel.visible = true
@@ -1924,10 +1949,13 @@ func _return_home() -> void:
 		return
 	is_viewing_enemy = false
 
-	# Kill all spawned troops
+	# Kill all spawned troops and ships
 	for troop in get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop):
 			troop.queue_free()
+	for ship in get_tree().get_nodes_in_group("ships"):
+		if is_instance_valid(ship):
+			ship.queue_free()
 
 	# Exit attack mode
 	var attack_system = get_node_or_null("../AttackSystem")
