@@ -148,10 +148,15 @@ func _create_hp_bar() -> void:
 	_hp_fill.material_override = _make_hp_shader_mat(Color(0.1, 0.85, 0.1, 0.9), Vector2(HP_BAR_W, HP_BAR_H), 11)
 	_hp_fill.position.z = -0.001
 	_hp_bar.add_child(_hp_fill)
+	_hp_bar.visible = false
 
 
 func _update_hp_bar() -> void:
 	if not _hp_bar or not _hp_fill:
+		return
+	var ratio = clamp(float(hp) / float(max_hp), 0.0, 1.0)
+	_hp_bar.visible = ratio < 1.0
+	if not _hp_bar.visible:
 		return
 	_hp_bar.global_position = global_position + Vector3(0, 0.25, 0)
 	var cam = get_viewport().get_camera_3d()
@@ -161,7 +166,6 @@ func _update_hp_bar() -> void:
 		var dir = Vector3(cam_pos.x - bar_pos.x, 0, cam_pos.z - bar_pos.z).normalized()
 		if dir.length_squared() > 0.001:
 			_hp_bar.global_transform.basis = Basis.looking_at(-dir, Vector3.UP)
-	var ratio = clamp(float(hp) / float(max_hp), 0.0, 1.0)
 	var fill_w = HP_BAR_W * ratio
 	(_hp_fill.mesh as QuadMesh).size.x = fill_w
 	_hp_fill.position.x = -(HP_BAR_W - fill_w) * 0.5

@@ -1554,6 +1554,7 @@ func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
 	var model_scale = def.get("model_scale", 0.2)
 	var bar_height = model_scale * 1.5 + 0.05
 	bar.global_position = building.global_position + Vector3(0, bar_height, 0)
+	bar.visible = false
 	return {"bar": bar, "fill": fill}
 
 
@@ -1574,6 +1575,10 @@ func _update_building_hp_bars() -> void:
 			var dir = Vector3(cam_pos.x - bar_pos.x, 0, cam_pos.z - bar_pos.z).normalized()
 			b.hp_bar.global_transform.basis = Basis.looking_at(-dir, Vector3.UP)
 		var ratio = clamp(float(b.hp) / float(b.max_hp), 0.0, 1.0)
+		# Show HP bar only when damaged
+		b.hp_bar.visible = ratio < 1.0
+		if not b.hp_bar.visible:
+			continue
 		var fill_w = BLDG_BAR_W * ratio
 		(b.hp_fill.mesh as QuadMesh).size.x = fill_w
 		b.hp_fill.position.x = -(BLDG_BAR_W - fill_w) * 0.5
