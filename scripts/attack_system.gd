@@ -82,6 +82,8 @@ func _separate_ships(delta: float) -> void:
 func enter_attack_mode() -> void:
 	is_attack_mode = true
 	_ships_placed = 0
+	_ship_stop_positions.clear()
+	_ship_markers.clear()
 	if ship_plane:
 		ship_plane.visible = true
 		var mat = StandardMaterial3D.new()
@@ -98,12 +100,6 @@ func exit_attack_mode() -> void:
 	if ship_plane:
 		ship_plane.visible = false
 		ship_plane.material_override = null
-	# Remove all X markers and reset tracking arrays
-	for m in _ship_markers:
-		if is_instance_valid(m):
-			m.queue_free()
-	_ship_markers.clear()
-	_ship_stop_positions.clear()
 
 
 func _input(event: InputEvent) -> void:
@@ -188,6 +184,7 @@ func _create_x_marker(pos: Vector3) -> Node3D:
 	var anim_player = _find_child_anim_player(flag)
 	if anim_player and anim_player.has_animation("flag|Action"):
 		anim_player.get_animation("flag|Action").loop_mode = Animation.LOOP_LINEAR
+		anim_player.speed_scale = 0.4
 		anim_player.play("flag|Action")
 
 	return flag
