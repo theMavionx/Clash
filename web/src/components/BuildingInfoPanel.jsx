@@ -1,7 +1,7 @@
 import { memo, useCallback } from 'react';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
-export default memo(function BuildingInfoPanel({ building, sendToGodot, onOpenTroops }) {
+function BuildingInfoPanel({ building, sendToGodot, onOpenTroops }) {
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => sendToGodot('upgrade_building'), [sendToGodot]);
 
@@ -56,7 +56,9 @@ export default memo(function BuildingInfoPanel({ building, sendToGodot, onOpenTr
       </div>
     </div>
   );
-});
+}
+
+export default memo(BuildingInfoPanel);
 
 const styles = {
   wrap: {

@@ -118,13 +118,16 @@ const TAB_CONTENT_INACTIVE = {
 
 const stopPropagation = (e) => e.stopPropagation();
 
-const WoodIcon = memo(() => (
-  <div style={woodIconStyles.wrap}>
-    <div style={woodIconStyles.log1} />
-    <div style={woodIconStyles.log2} />
-    <div style={woodIconStyles.log3} />
-  </div>
-));
+function WoodIcon() {
+  return (
+    <div style={woodIconStyles.wrap}>
+      <div style={woodIconStyles.log1} />
+      <div style={woodIconStyles.log2} />
+      <div style={woodIconStyles.log3} />
+    </div>
+  );
+}
+const MemoWoodIcon = memo(WoodIcon);
 
 const woodIconStyles = {
   wrap: { position: 'relative', width: 28, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' },
@@ -133,7 +136,7 @@ const woodIconStyles = {
   log3: { position: 'absolute', width: 24, height: 6, background: '#c97a3f', borderRadius: 2, border: '1.5px solid #5c3012', zIndex: 10 },
 };
 
-export default memo(function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
+function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
 
@@ -178,7 +181,7 @@ export default memo(function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
                       {Object.entries(def.cost || {}).map(([res, amount]) => (
                         amount > 0 && (
                           <div key={res} style={styles.costPill}>
-                            {res === 'wood' ? <WoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
+                            {res === 'wood' ? <MemoWoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
                             <span style={styles.costValue}>{amount.toLocaleString()}</span>
                           </div>
                         )
@@ -219,7 +222,9 @@ export default memo(function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
       </div>
     </div>
   );
-});
+}
+
+export default memo(ShopPanel);
 
 const styles = {
   overlay: {

@@ -3,7 +3,7 @@ import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 const stopPropagation = (e) => e.stopPropagation();
 
-export default memo(function BarracksPanel({ building, buildingDefs, troopLevels, sendToGodot, onClose }) {
+function BarracksPanel({ building, buildingDefs, troopLevels, sendToGodot, onClose }) {
   const handleUpgradeBuilding = useCallback(() => sendToGodot('upgrade_building'), [sendToGodot]);
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
 
@@ -67,7 +67,9 @@ export default memo(function BarracksPanel({ building, buildingDefs, troopLevels
       </div>
     </div>
   );
-});
+}
+
+export default memo(BarracksPanel);
 
 const styles = {
   overlay: {

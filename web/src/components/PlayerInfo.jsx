@@ -4,7 +4,7 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-export default memo(function PlayerInfo({ playerState }) {
+function PlayerInfo({ playerState }) {
   if (!playerState) return null;
 
   const townHallLevel = playerState.buildings?.town_hall?.level || 1;
@@ -41,7 +41,9 @@ export default memo(function PlayerInfo({ playerState }) {
       </div>
     </div>
   );
-});
+}
+
+export default memo(PlayerInfo);
 
 const styles = {
   wrap: {

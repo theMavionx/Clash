@@ -3,7 +3,7 @@ import { cartoonBtn } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/Gemini_Generated_Image_qgf6o5qgf6o5qgf6-removebg-preview.png';
 
-export default memo(function ActionButtons({ enemyMode, sendToGodot }) {
+function ActionButtons({ enemyMode, sendToGodot }) {
   const handleReturnHome = useCallback(() => sendToGodot('return_home'), [sendToGodot]);
   const handleFindEnemy = useCallback(() => sendToGodot('find_enemy'), [sendToGodot]);
   const handleOpenShop = useCallback(() => sendToGodot('open_shop'), [sendToGodot]);
@@ -46,7 +46,9 @@ export default memo(function ActionButtons({ enemyMode, sendToGodot }) {
       </div>
     </>
   );
-});
+}
+
+export default memo(ActionButtons);
 
 const base = {
   position: 'fixed',

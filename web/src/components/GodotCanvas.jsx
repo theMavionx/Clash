@@ -9,7 +9,7 @@ const canvasStyle = {
   outline: 'none',
 };
 
-export default memo(function GodotCanvas({ onEngineReady }) {
+function GodotCanvas({ onEngineReady }) {
   const canvasRef = useRef(null);
   const loadedRef = useRef(false);
 
@@ -49,4 +49,6 @@ export default memo(function GodotCanvas({ onEngineReady }) {
       style={canvasStyle}
     />
   );
-});
+}
+
+export default memo(GodotCanvas);

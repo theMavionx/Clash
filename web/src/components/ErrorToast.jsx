@@ -1,12 +1,14 @@
 import { memo } from 'react';
 
-export default memo(function ErrorToast({ message }) {
+function ErrorToast({ message }) {
   if (!message) return null;
 
   return (
     <div style={styles.toast}>⚠️ {message}</div>
   );
-});
+}
+
+export default memo(ErrorToast);
 
 const styles = {
   toast: {

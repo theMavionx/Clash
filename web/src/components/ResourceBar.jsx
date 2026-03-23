@@ -13,7 +13,7 @@ const ITEMS = [
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-export default memo(function ResourceBar({ resources, sendToGodot }) {
+function ResourceBar({ resources, sendToGodot }) {
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
   }, [sendToGodot]);
@@ -36,7 +36,9 @@ export default memo(function ResourceBar({ resources, sendToGodot }) {
       ))}
     </div>
   );
-});
+}
+
+export default memo(ResourceBar);
 
 const styles = {
   bar: {
