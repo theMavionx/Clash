@@ -1142,7 +1142,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if found.size() > 0:
 				for bs in get_tree().get_nodes_in_group("building_systems"):
 					if bs != self:
-						bs.selected_building = {}
+						bs._deselect_building()
 				# Second click on already-selected building → start move
 				if selected_building.size() > 0 and found.get("node") == selected_building.get("node") and not is_viewing_enemy:
 					_start_move(selected_building)
