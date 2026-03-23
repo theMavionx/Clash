@@ -26,12 +26,48 @@ var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
 
+## Cached troop list — shared across all BaseTroop instances via static
+static var _cached_troops: Array = []
+static var _troops_cache_frame: int = -1
+
+## Cached camera ref — refreshed once per frame globally
+static var _cached_camera: Camera3D = null
+static var _camera_cache_frame: int = -1
+
+## Throttle separation — not every troop needs it every frame
+var _sep_counter: int = 0
+var _last_separation: Vector3 = Vector3.ZERO
+
+
+static func _get_troops_cached() -> Array:
+	var frame = Engine.get_process_frames()
+	if frame != _troops_cache_frame:
+		var tree = Engine.get_main_loop() as SceneTree
+		if tree:
+			_cached_troops = tree.get_nodes_in_group("troops")
+		_troops_cache_frame = frame
+	return _cached_troops
+
+
+static func _get_camera_cached() -> Camera3D:
+	var frame = Engine.get_process_frames()
+	if frame != _camera_cache_frame:
+		var tree = Engine.get_main_loop() as SceneTree
+		if tree and tree.root:
+			var vp = tree.root.get_viewport()
+			if vp:
+				_cached_camera = vp.get_camera_3d()
+		_camera_cache_frame = frame
+	return _cached_camera
+
 
 func _ready() -> void:
 	_init_stats()
 	max_hp = hp
 	_setup_animations()
 	_setup_weapons()
+	# Stagger separation checks across troops to spread load
+	_sep_counter = randi() % 3
 
 
 ## Override to set hp, damage, atk_speed, move_speed, attack_range, attack_anim, anim_files
@@ -159,7 +195,7 @@ func _update_hp_bar() -> void:
 	if not _hp_bar.visible:
 		return
 	_hp_bar.global_position = global_position + Vector3(0, 0.25, 0)
-	var cam = get_viewport().get_camera_3d()
+	var cam = _get_camera_cached()
 	if cam:
 		var cam_pos = cam.global_position
 		var bar_pos = _hp_bar.global_position
@@ -214,7 +250,7 @@ func _find_next_target() -> void:
 
 
 func _trigger_victory_all() -> void:
-	for troop in get_tree().get_nodes_in_group("troops"):
+	for troop in _get_troops_cached():
 		if is_instance_valid(troop) and troop.state != State.VICTORY:
 			troop._play_victory()
 
@@ -256,31 +292,37 @@ func _move_to_target(delta: float) -> void:
 	var dir = (Vector3(target_pos.x, global_position.y, target_pos.z) - global_position).normalized()
 	var move_vec = dir * move_speed * delta
 
-	# Push away from nearby troops so they don't stack
-	var sep = _get_separation()
-	move_vec += sep * separation_force * delta
-
-	# Gently steer around troops that block the path to target
-	var steer = Vector3.ZERO
-	var avoidance_range = separation_radius * 2.0
-	for other in get_tree().get_nodes_in_group("troops"):
-		if other == self or not is_instance_valid(other):
-			continue
-		var to_other = other.global_position - global_position
-		to_other.y = 0
-		var d = to_other.length()
-		if d < avoidance_range and d > 0.001:
+	# Separation + avoidance: run every 3rd frame per troop (staggered)
+	_sep_counter += 1
+	if _sep_counter % 3 == 0:
+		var sep = Vector3.ZERO
+		var steer = Vector3.ZERO
+		var avoidance_range = separation_radius * 2.0
+		var troops = _get_troops_cached()
+		for other in troops:
+			if other == self or not is_instance_valid(other):
+				continue
+			var to_other = other.global_position - global_position
+			to_other.y = 0
+			var d = to_other.length()
+			if d > avoidance_range or d < 0.001:
+				continue
+			# Separation push
+			if d < separation_radius:
+				sep += (global_position - other.global_position).normalized() * (separation_radius - d) / separation_radius
+			# Avoidance steering
 			var dot = to_other.normalized().dot(dir)
 			if dot > 0.3:
 				var lateral = Vector3.UP.cross(dir).normalized()
 				var side = to_other.normalized().dot(lateral)
-				var strength = (1.0 - d / avoidance_range) * 0.3 * delta
+				var strength = (1.0 - d / avoidance_range) * 0.3 * delta * 3.0
 				if side >= 0:
 					steer -= lateral * strength
 				else:
 					steer += lateral * strength
-	move_vec += steer
+		_last_separation = sep * separation_force * delta * 3.0 + steer
 
+	move_vec += _last_separation
 	global_position += move_vec
 	global_position.y = target_building.node.global_position.y
 
@@ -292,8 +334,14 @@ func _move_to_target(delta: float) -> void:
 
 
 func _get_separation() -> Vector3:
+	# Use cached result from move (updated every 3rd frame)
+	_sep_counter += 1
+	if _sep_counter % 3 != 0:
+		return _last_separation
+
 	var push = Vector3.ZERO
-	for other in get_tree().get_nodes_in_group("troops"):
+	var troops = _get_troops_cached()
+	for other in troops:
 		if other == self or not is_instance_valid(other):
 			continue
 		var to_me = global_position - other.global_position
@@ -301,6 +349,7 @@ func _get_separation() -> Vector3:
 		var d = to_me.length()
 		if d > 0.001 and d < separation_radius:
 			push += to_me.normalized() * (separation_radius - d) / separation_radius
+	_last_separation = push
 	return push
 
 

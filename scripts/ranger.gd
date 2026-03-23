@@ -8,6 +8,7 @@ extends BaseTroop
 @export var shoot_threshold: float = 0.4
 
 var _projectiles: Array = []
+var _bolt_res: Resource = null
 var _shot_this_cycle: bool = false
 
 
@@ -79,9 +80,11 @@ func _do_attack(delta: float) -> void:
 
 
 func _spawn_bolt() -> void:
-	var bolt_res = load(bolt_scene)
-	if bolt_res == null:
+	if _bolt_res == null:
+		_bolt_res = load(bolt_scene)
+	if _bolt_res == null:
 		return
+	var bolt_res = _bolt_res
 
 	var projectile = Node3D.new()
 	var bolt = bolt_res.instantiate()

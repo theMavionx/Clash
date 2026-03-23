@@ -7,6 +7,7 @@ extends BaseTroop
 @export var hit_distance: float = 0.05
 
 var _projectiles: Array = []
+var _arrow_res: Resource = null
 
 
 const LEVEL_STATS = {
@@ -70,9 +71,11 @@ func _do_attack(delta: float) -> void:
 
 
 func _spawn_arrow() -> void:
-	var arrow_res = load(arrow_scene)
-	if arrow_res == null:
+	if _arrow_res == null:
+		_arrow_res = load(arrow_scene)
+	if _arrow_res == null:
 		return
+	var arrow_res = _arrow_res
 
 	var projectile = Node3D.new()
 	var arrow = arrow_res.instantiate()
