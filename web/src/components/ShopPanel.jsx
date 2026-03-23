@@ -1,41 +1,44 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
+import imgMine from '../assets/buildings/mine.png';
+import imgBarn from '../assets/buildings/barn.png';
+import imgPort from '../assets/buildings/port.png';
+import imgSawmill from '../assets/buildings/sawmill.png';
+import imgBarracks from '../assets/buildings/barracks.png';
+import imgTownHall from '../assets/buildings/town_hall.png';
+import imgTurret from '../assets/buildings/turret.png';
+
 const TABS = [
-  { id: 'Economy', label: 'Economy', color: '#FFD600', badge: 3 },
-  { id: 'Defense', label: 'Defense', color: '#D50000' },
-  { id: 'Support', label: 'Support', color: '#01579B', badge: 1 },
+  { id: 'Economy', label: 'Economy' },
+  { id: 'Defense', label: 'Defense' },
+  { id: 'Support', label: 'Support' },
 ];
 
 const CATEGORY_MAP = {
-  gold_mine: 'Economy',
+  mine: 'Economy',
   sawmill: 'Economy',
-  quarry: 'Economy',
-  storage_gold: 'Economy',
-  storage_wood: 'Economy',
-  storage_stone: 'Economy',
-  vault: 'Economy',
-  cannon: 'Defense',
-  sniper_tower: 'Defense',
-  mortar: 'Defense',
-  machine_gun: 'Defense',
-  rocket_launcher: 'Defense',
-  headquarters: 'Support',
-  hq: 'Support',
-  landing_craft: 'Support',
-  radar: 'Support',
-  armory: 'Support',
+  barn: 'Economy',
+  turret: 'Defense',
+  port: 'Support',
+  barracks: 'Support',
+  town_hall: 'Support',
 };
 
-const getCategory = (id) => {
-  if (CATEGORY_MAP[id]) return CATEGORY_MAP[id];
-  if (id.includes('mine') || id.includes('storage') || id.includes('quarry') || id.includes('sawmill')) return 'Economy';
-  if (id.includes('tower') || id.includes('cannon') || id.includes('mortar') || id.includes('gun')) return 'Defense';
-  return 'Support';
+const THUMBNAIL_MAP = {
+  mine: imgMine,
+  barn: imgBarn,
+  port: imgPort,
+  sawmill: imgSawmill,
+  barracks: imgBarracks,
+  town_hall: imgTownHall,
+  turret: imgTurret,
 };
+
+const getCategory = (id) => CATEGORY_MAP[id] || 'Support';
 
 const RES_ICONS = {
   gold: goldIcon,
@@ -63,68 +66,41 @@ export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
         {/* Buildings Grid / Scroll Area */}
         <div style={styles.cardArea}>
           <div style={styles.cardScroll}>
-            {filteredBuildings.map(([id, def]) => {
-              const isLocked = false; 
-              return (
-                <div 
-                  key={id} 
-                  style={styles.card} 
-                  onClick={() => !isLocked && sendToGodot('start_placement', { building_id: id })}
-                >
-                  <div style={styles.cardImgTop}>
-                    <div style={styles.iconHighlight}></div>
-                    <div style={styles.placeholderBox}>
-                      {id.includes('cannon') ? '💣' : id.includes('mine') ? '⛏️' : '🏠'}
-                    </div>
+            {filteredBuildings.map(([id, def]) => (
+              <div
+                key={id}
+                style={styles.card}
+                onClick={() => sendToGodot('start_placement', { building_id: id })}
+              >
+                <div style={styles.cardImgTop}>
+                  <div style={styles.iconHighlight}></div>
+                  {THUMBNAIL_MAP[id] ? (
+                    <img src={THUMBNAIL_MAP[id]} style={styles.thumbnail} alt={def.name} />
+                  ) : (
+                    <div style={styles.placeholderBox}>🏠</div>
+                  )}
+                </div>
+
+                <div style={styles.cardInfo}>
+                  <div style={styles.cardName}>{def.name}</div>
+                  <div style={styles.cardDesc}>
+                    {def.description || ''}
                   </div>
 
-                  <div style={styles.cardInfo}>
-                    <div style={styles.cardName}>{def.name}</div>
-                    <div style={styles.cardDesc}>
-                      {def.description || (id.includes('mine') ? 'Produces resources' : 'Essential building')}
+                  <div style={styles.costContainer}>
+                    <div style={styles.costRow}>
+                      {Object.entries(def.cost || {}).map(([res, amount]) => (
+                        amount > 0 && (
+                          <div key={res} style={styles.costPill}>
+                            {res === 'wood' ? <WoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
+                            <span style={styles.costValue}>{amount.toLocaleString()}</span>
+                          </div>
+                        )
+                      ))}
+                      {Object.keys(def.cost || {}).length === 0 && (
+                        <span style={styles.freeText}>FREE</span>
+                      )}
                     </div>
-                    
-                    <div style={styles.costContainer}>
-                      <div style={styles.costRow}>
-                        {Object.entries(def.cost || {}).map(([res, amount]) => (
-                          amount > 0 && (
-                            <div key={res} style={styles.costPill}>
-                              {res === 'wood' ? <WoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
-                              <span style={styles.costValue}>{amount.toLocaleString()}</span>
-                            </div>
-                          )
-                        ))}
-                        {Object.keys(def.cost || {}).length === 0 && (
-                          <span style={styles.freeText}>FREE</span>
-                        )}
-                      </div>
-                      
-                      <div style={styles.cardFooter}>
-                        <div style={styles.cardStat}>
-                          <div style={styles.statLabel}>Build time:</div>
-                          <div style={styles.statVal}>3s</div>
-                        </div>
-                        <div style={{ ...styles.cardStat, textAlign: 'right' }}>
-                          <div style={styles.statLabel}>Built:</div>
-                          <div style={styles.statVal}>0/1</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            
-            {activeTab === 'Economy' && filteredBuildings.length < 5 && [3, 4].map(level => (
-              <div key={`locked-${level}`} style={styles.lockedCard}>
-                <div style={{ ...styles.cardImgTop, opacity: 0.5, filter: 'grayscale(1)' }}>
-                  <div style={styles.placeholderBox}>🔒</div>
-                </div>
-                <div style={styles.cardInfo}>
-                  <div style={{ ...styles.cardName, color: '#757575', WebkitTextStroke: '0.5px #999' }}>Locked</div>
-                  <div style={{ ...styles.cardDesc, color: '#9E9E9E' }}>Upgrade HQ level {level} to unlock more!</div>
-                  <div style={styles.lockMessage}>
-                    Upgrade Headquarters to level {level} to build more!
                   </div>
                 </div>
               </div>
@@ -156,15 +132,12 @@ export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
                   }}
                   onClick={() => setActiveTab(tab.id)}
                 >
-                  <div style={{ 
+                  <div style={{
                     ...styles.tabContent,
                     textShadow: isActive ? 'none' : '0px 1px 2px rgba(0,0,0,0.6)',
                     WebkitTextStroke: isActive ? 'none' : '0.5px #455A64',
                   }}>
                     {tab.label}
-                    {tab.badge && (
-                      <div style={styles.tabBadge}>{tab.badge}</div>
-                    )}
                   </div>
                 </button>
               );
@@ -193,7 +166,7 @@ const styles = {
   container: {
     width: '100%',
     maxWidth: 1200,
-    background: 'transparent', // NO BACKGROUND for container
+    background: 'transparent',
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
@@ -232,17 +205,6 @@ const styles = {
     boxShadow: '0 4px 6px rgba(0,0,0,0.2)',
     transition: 'transform 0.1s',
   },
-  lockedCard: {
-    width: 170,
-    height: 250,
-    background: '#e6e1d6',
-    borderRadius: 12,
-    border: '3px solid #a39e93',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
-  },
   cardImgTop: {
     height: 110,
     display: 'flex',
@@ -257,6 +219,13 @@ const styles = {
     height: '100%',
     background: 'radial-gradient(circle at center, rgba(255,255,255,0.6) 0%, transparent 60%)',
     zIndex: 0,
+  },
+  thumbnail: {
+    width: 100,
+    height: 100,
+    objectFit: 'contain',
+    zIndex: 1,
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.4))',
   },
   placeholderBox: {
     fontSize: 56,
@@ -323,50 +292,14 @@ const styles = {
     color: '#4CAF50',
     textShadow: '0 1px 1px #fff',
   },
-  cardFooter: {
-    borderTop: 'none',
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '0 4px',
-  },
-  cardStat: {
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  statLabel: {
-    fontSize: 8,
-    fontWeight: 800,
-    color: '#666',
-    textTransform: 'uppercase',
-  },
-  statVal: {
-    fontSize: 10,
-    fontWeight: 900,
-    color: '#333',
-  },
-  lockMessage: {
-    background: '#8b8276',
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 700,
-    padding: '8px 4px',
-    height: 70,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: 'inset 0 3px 5px rgba(0,0,0,0.15)',
-    borderTop: '3px solid #7a7266',
-    marginTop: 'auto',
-    margin: '0 -8px -8px -8px',
-  },
   tabArea: {
-    background: 'transparent', // Transparent background
+    background: 'transparent',
     display: 'flex',
     justifyContent: 'center',
     marginTop: -4,
     position: 'relative',
     zIndex: 20,
-    paddingBottom: 0, // NO PADDING at all
+    paddingBottom: 0,
   },
   tabContainer: {
     display: 'flex',
@@ -388,19 +321,6 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: 6,
-  },
-  tabBadge: {
-    background: '#e33b2e',
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 900,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: '1px solid #8a1c14',
   },
   closeBtn: {
     position: 'absolute',
