@@ -26,16 +26,9 @@ func _ready() -> void:
 	# Connect Home button from world map HUD
 	_connect_home_button()
 
-	# Keep clouds covering until warmup is done
+	# Cloud reveal to start
 	cloud._set_clouds_covering()
-	if Warmup.is_done:
-		await get_tree().process_frame
-		cloud.reveal()
-	else:
-		Warmup.warmup_done.connect(_on_warmup_done, CONNECT_ONE_SHOT)
-
-
-func _on_warmup_done() -> void:
+	await get_tree().process_frame
 	cloud.reveal()
 
 

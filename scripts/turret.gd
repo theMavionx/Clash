@@ -1,5 +1,6 @@
 extends Node3D
 ## Turret — defensive building that shoots at enemy troops within range.
+## Uses object pooling to avoid per-shot allocations and first-fire lag.
 
 const LEVEL_STATS = {
 	1: {"damage": 80, "fire_rate": 0.5},
@@ -9,10 +10,11 @@ const LEVEL_STATS = {
 
 const MUZZLE_FLASH_SCENE = preload("res://assets/BinbunVFX/muzzle_flash/effects/short_flash/short_flash_05.tscn")
 
-const TRAIL_LENGTH: float   = 0.18   # world-units tail behind bullet
-const TRAIL_RADIUS: float   = 0.004  # thickness of tracer line
+const TRAIL_LENGTH: float   = 0.18
+const TRAIL_RADIUS: float   = 0.004
 const TRAIL_COLOR: Color    = Color(1.0, 0.88, 0.15, 1.0)
 const TRAIL_EMISSION: float = 6.0
+const POOL_SIZE: int        = 14
 
 @export var detect_range: float = 1.0
 @export var bullet_speed: float = 4.0
@@ -24,17 +26,21 @@ var _fire_timer: float = 0.0
 var _target: Node3D = null
 var _anim_player: AnimationPlayer
 var _is_attacking: bool = false
-var _bullets: Array = []
 var _model: Node3D = null
 var _aim_node: Node3D = null
 var _stand: Node3D = null
 var _stand_base_rot_y: float = 0.0
-var _barrel: Node3D = null     # "Turret" node in model — barrel pivot
+var _barrel: Node3D = null
 var _target_search_timer: float = 0.0
-const TARGET_SEARCH_INTERVAL: float = 0.15  # search every 150ms instead of every frame
+const TARGET_SEARCH_INTERVAL: float = 0.15
 
-## Shared trail material — created once, reused by all bullets
+## Shared trail material — one for all turrets
 static var _shared_trail_mat: StandardMaterial3D = null
+
+## Object pool
+var _bullet_pool: Array = []   # pre-created {node, trail, flash} dicts
+var _active_bullets: Array = [] # currently flying
+var _pool_ready: bool = false
 
 
 func _ready() -> void:
@@ -68,6 +74,56 @@ func _ready() -> void:
 		_shared_trail_mat.no_depth_test              = false
 
 
+func _build_pool() -> void:
+	if _pool_ready:
+		return
+	_pool_ready = true
+	var scene_root = get_tree().current_scene
+	for i in POOL_SIZE:
+		# Bullet node (invisible position tracker)
+		var bullet = Node3D.new()
+		bullet.visible = false
+		scene_root.add_child(bullet)
+
+		# Trail mesh
+		var trail_mesh = CylinderMesh.new()
+		trail_mesh.top_radius    = TRAIL_RADIUS
+		trail_mesh.bottom_radius = TRAIL_RADIUS
+		trail_mesh.height        = 1.0
+		var trail = MeshInstance3D.new()
+		trail.mesh              = trail_mesh
+		trail.material_override = _shared_trail_mat
+		trail.visible           = false
+		scene_root.add_child(trail)
+
+		# Muzzle flash VFX (pre-instantiated, reused from pool)
+		var flash = MUZZLE_FLASH_SCENE.instantiate()
+		flash.autoplay = false
+		flash.scale = Vector3(0.075, 0.294, 0.294)
+		flash.light_energy = 0.05
+		flash.speed_scale = 2.5
+		flash.visible = false
+		scene_root.add_child(flash)
+
+		_bullet_pool.append({
+			"node": bullet,
+			"trail": trail,
+			"flash": flash,
+			"active": false,
+			"target": null,
+			"spawn_pos": Vector3.ZERO,
+			"flash_timer": 0.0,
+		})
+
+
+func _get_pooled_bullet() -> Dictionary:
+	for b in _bullet_pool:
+		if not b.active:
+			return b
+	# Pool exhausted — skip this shot
+	return {}
+
+
 func _apply_stats() -> void:
 	var s = LEVEL_STATS.get(level, LEVEL_STATS[1])
 	damage   = s.damage
@@ -80,7 +136,7 @@ func set_level(lvl: int) -> void:
 
 
 func _process(delta: float) -> void:
-	# Lazy init — only once, not every frame
+	# Lazy init barrel
 	if not _barrel:
 		for child in get_children():
 			if child is Node3D and not (child is AnimationPlayer):
@@ -97,11 +153,14 @@ func _process(delta: float) -> void:
 				var idle_anim = _anim_player.get_animation("idle")
 				idle_anim.loop_mode = Animation.LOOP_LINEAR
 				_anim_player.play("idle")
-		return  # wait until barrel is found
+		return
+
+	# Build pool on first frame with barrel ready
+	if not _pool_ready:
+		_build_pool()
 
 	_update_bullets(delta)
 
-	# Throttle target searching
 	_target_search_timer += delta
 	if _target_search_timer >= TARGET_SEARCH_INTERVAL:
 		_target_search_timer = 0.0
@@ -121,7 +180,7 @@ func _process(delta: float) -> void:
 
 		if not _is_attacking:
 			_is_attacking = true
-			_fire_timer = fire_rate  # fire first bullet on same frame target is detected
+			_fire_timer = fire_rate
 
 		_fire_timer += delta
 		if _fire_timer >= fire_rate:
@@ -144,7 +203,6 @@ func _find_target() -> void:
 			return
 	_target = null
 	var nearest_dist = detect_range
-	# Use cached troops list from BaseTroop
 	var troops = BaseTroop._get_troops_cached()
 	for troop in troops:
 		if not is_instance_valid(troop):
@@ -166,122 +224,114 @@ func _spawn_bullet() -> void:
 	if not _target or not is_instance_valid(_target):
 		return
 
+	var b = _get_pooled_bullet()
+	if b.is_empty():
+		return
+
 	var spawn_pos = _get_muzzle_pos()
 
-	# Invisible bullet (just a position tracker)
-	var bullet = Node3D.new()
-	get_tree().current_scene.add_child(bullet)
-	bullet.global_position = spawn_pos
+	b.active = true
+	b.target = _target
+	b.spawn_pos = spawn_pos
+	b.flash_timer = 0.12
 
-	# Tracer trail (CylinderMesh updated each frame) — shared material
-	var trail_mesh = CylinderMesh.new()
-	trail_mesh.top_radius    = TRAIL_RADIUS
-	trail_mesh.bottom_radius = TRAIL_RADIUS
-	trail_mesh.height        = 1.0
+	# Activate bullet node
+	b.node.global_position = spawn_pos
+	b.node.visible = true
 
-	var trail = MeshInstance3D.new()
-	trail.mesh              = trail_mesh
-	trail.material_override = _shared_trail_mat
-	trail.visible           = false
-	get_tree().current_scene.add_child(trail)
+	# Reset trail
+	b.trail.visible = false
 
-	# Muzzle flash (VFX scene)
-	var flash = MUZZLE_FLASH_SCENE.instantiate()
-	flash.autoplay = false
-	get_tree().current_scene.add_child(flash)
-	flash.global_position = spawn_pos + Vector3(0, -0.01, 0)
+	# Muzzle flash VFX
+	b.flash.global_position = spawn_pos + Vector3(0, -0.01, 0)
 	if _aim_node:
-		flash.global_rotation = _aim_node.global_rotation
-		flash.rotate_y(-PI / 2)
-	flash.scale = Vector3(0.075, 0.294, 0.294)
-	flash.light_energy = 0.05
-	flash.speed_scale = 2.5
-	flash.play()
-	var tween = flash.create_tween()
-	tween.tween_interval(0.15)
-	tween.tween_callback(flash.queue_free)
+		b.flash.global_rotation = _aim_node.global_rotation
+		b.flash.rotate_y(-PI / 2)
+	b.flash.visible = true
+	b.flash.play()
 
-	_bullets.append({
-		"node":      bullet,
-		"target":    _target,
-		"spawn_pos": spawn_pos,
-		"trail":     trail,
-	})
+	_active_bullets.append(b)
 
 
 func _update_bullets(delta: float) -> void:
-	var i = _bullets.size() - 1
+	var i = _active_bullets.size() - 1
 	while i >= 0:
-		var b = _bullets[i]
-		var trail = b["trail"] as MeshInstance3D
+		var b = _active_bullets[i]
 
-		if not is_instance_valid(b["node"]):
-			if trail and is_instance_valid(trail):
-				trail.queue_free()
-			_bullets.remove_at(i)
-			i -= 1
-			continue
-		if not is_instance_valid(b["target"]):
-			b["node"].queue_free()
-			if trail and is_instance_valid(trail):
-				trail.queue_free()
-			_bullets.remove_at(i)
+		# Hide muzzle flash after timer
+		if b.flash_timer > 0:
+			b.flash_timer -= delta
+			if b.flash_timer <= 0:
+				b.flash.visible = false
+
+		# Target died — return to pool
+		if not is_instance_valid(b.target):
+			_return_to_pool(b)
+			_active_bullets.remove_at(i)
 			i -= 1
 			continue
 
-		var target_pos = b["target"].global_position + Vector3(0, 0.2, 0)
-		var dir = target_pos - b["node"].global_position
+		var target_pos = b.target.global_position + Vector3(0, 0.2, 0)
+		var dir = target_pos - b.node.global_position
 		if dir.length() > 0.001:
-			b["node"].look_at(target_pos, Vector3.UP)
-		b["node"].global_position = b["node"].global_position.move_toward(target_pos, bullet_speed * delta)
+			b.node.look_at(target_pos, Vector3.UP)
+		b.node.global_position = b.node.global_position.move_toward(target_pos, bullet_speed * delta)
 
 		# Update tracer trail
-		if trail and is_instance_valid(trail):
-			var cur  = b["node"].global_position
-			var from = b["spawn_pos"]
-			var full_dir = cur - from
-			var full_len = full_dir.length()
-			if full_len > 0.002:
-				var unit = full_dir / full_len
-				var tail = cur - unit * min(full_len, TRAIL_LENGTH)
-				var dist = tail.distance_to(cur)
-				var mid  = (tail + cur) * 0.5
-				trail.visible = true
-				trail.global_position = mid
-				var look_dir = cur - trail.global_position
-				if look_dir.length() > 0.001:
-					if abs(look_dir.normalized().dot(Vector3.UP)) < 0.99:
-						trail.look_at(cur, Vector3.UP)
-					else:
-						trail.look_at(cur, Vector3.RIGHT)
-					trail.rotate_object_local(Vector3.RIGHT, PI * 0.5)
-				trail.scale = Vector3(1.0, dist, 1.0)
-			else:
-				trail.visible = false
+		var trail = b.trail
+		var cur  = b.node.global_position
+		var from = b.spawn_pos
+		var full_dir = cur - from
+		var full_len = full_dir.length()
+		if full_len > 0.002:
+			var unit = full_dir / full_len
+			var tail = cur - unit * min(full_len, TRAIL_LENGTH)
+			var dist = tail.distance_to(cur)
+			var mid  = (tail + cur) * 0.5
+			trail.visible = true
+			trail.global_position = mid
+			var look_dir = cur - trail.global_position
+			if look_dir.length() > 0.001:
+				if abs(look_dir.normalized().dot(Vector3.UP)) < 0.99:
+					trail.look_at(cur, Vector3.UP)
+				else:
+					trail.look_at(cur, Vector3.RIGHT)
+				trail.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+			trail.scale = Vector3(1.0, dist, 1.0)
+		else:
+			trail.visible = false
 
 		# Hit detection
-		if b["node"].global_position.distance_to(target_pos) < 0.03:
-			if b["target"].has_method("take_damage"):
-				b["target"].take_damage(damage)
-			elif "hp" in b["target"]:
-				b["target"].hp -= damage
-				if b["target"].hp <= 0:
-					b["target"].queue_free()
-			b["node"].queue_free()
-			if trail and is_instance_valid(trail):
-				trail.queue_free()
-			_bullets.remove_at(i)
+		if b.node.global_position.distance_to(target_pos) < 0.03:
+			if b.target.has_method("take_damage"):
+				b.target.take_damage(damage)
+			elif "hp" in b.target:
+				b.target.hp -= damage
+				if b.target.hp <= 0:
+					b.target.queue_free()
+			_return_to_pool(b)
+			_active_bullets.remove_at(i)
 		i -= 1
 
 
+func _return_to_pool(b: Dictionary) -> void:
+	b.active = false
+	b.target = null
+	b.node.visible = false
+	b.trail.visible = false
+	b.flash.visible = false
+
+
 func _exit_tree() -> void:
-	for b in _bullets:
-		if is_instance_valid(b["node"]):
-			b["node"].queue_free()
-		var t = b["trail"]
-		if t and is_instance_valid(t):
-			t.queue_free()
-	_bullets.clear()
+	for b in _bullet_pool:
+		if is_instance_valid(b.node):
+			b.node.queue_free()
+		if is_instance_valid(b.trail):
+			b.trail.queue_free()
+		if is_instance_valid(b.flash):
+			b.flash.queue_free()
+	_bullet_pool.clear()
+	_active_bullets.clear()
 
 
 func _find_node_by_name(node: Node, target_name: String) -> Node3D:
