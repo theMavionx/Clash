@@ -26,7 +26,7 @@ var building_defs: Dictionary = {
 	},
 	"barn": {
 		"name": "Barn",
-		"cells": Vector2i(2, 3),
+		"cells": Vector2i(4, 3),
 		"color": Color(0.6, 0.25, 0.2, 0.5),
 		"height": 0.4,
 		"scene": "res://Model/Barn/1.glb",
@@ -52,7 +52,7 @@ var building_defs: Dictionary = {
 		"color": Color(0.45, 0.65, 0.25, 0.5),
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
-		"model_scale": 0.15,
+		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800],
 		"cost": {"gold": 300},
 	},
@@ -131,6 +131,32 @@ var grid_visual: MeshInstance3D = null
 
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
+var _outline_material: ShaderMaterial
+var _cel_shader: Shader
+
+# ── Outline Shader ───────────────────────────────────────────
+const OUTLINE_SHADER_CODE = """
+shader_type spatial;
+render_mode cull_front, unshaded;
+
+uniform vec4 outline_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float outline_width = 1.0;
+
+void vertex() {
+	vec4 clip_position = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(VERTEX, 1.0));
+	vec3 clip_normal = mat3(PROJECTION_MATRIX) * (mat3(MODELVIEW_MATRIX) * NORMAL);
+	vec2 offset = normalize(clip_normal.xy) / VIEWPORT_SIZE * clip_position.w * outline_width * 2.0;
+	clip_position.xy += offset;
+	POSITION = clip_position;
+}
+
+void fragment() {
+	ALBEDO = outline_color.rgb;
+	if (outline_color.a < 1.0) {
+		ALPHA = outline_color.a;
+	}
+}
+"""
 
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
@@ -142,6 +168,7 @@ var shop_panel: PanelContainer
 var is_shop_open: bool = false
 var wood_label: Label
 var gold_label: Label
+var _fps_lbl: Label
 var ore_label: Label
 
 var building_panel: PanelContainer
@@ -167,6 +194,14 @@ var enemy_info: Dictionary = {}
 var return_button: Button
 var enemy_label: Label
 var find_button: Button
+
+# ── Port / Ships ─────────────────────────────────────────────
+var port_panel: PanelContainer
+var port_ship_count_label: Label
+var owned_ships: int = 0
+const SHIP_COST_WOOD: int = 500
+const SHIP_MODEL_PATH: String = "res://Model/Ship/Sail Ship.glb"
+const SHIP_DISPLAY_SCALE: float = 0.1
 
 # ── Barracks ──────────────────────────────────────────────────
 var barracks_panel: PanelContainer
@@ -238,9 +273,18 @@ func _ready() -> void:
 		_create_ui()
 		_create_building_panel()
 		_create_barracks_panel()
+		_create_port_panel()
+		_create_fps_label()
 		# In web builds — hide Godot UI, React renders its own
 		if OS.has_feature("web") and canvas:
 			canvas.visible = false
+	else:
+		# Non-UI grid (e.g. port grid) — borrow canvas from main BuildingSystem
+		for bs in get_tree().get_nodes_in_group("building_systems"):
+			if bs != self and bs.canvas:
+				canvas = bs.canvas
+				_create_port_panel()
+				break
 	if always_show_grid:
 		_show_grid()
 	# Listen for server auth to load buildings (works for all grids)
@@ -253,6 +297,8 @@ func _ready() -> void:
 
 
 func _process(_delta: float) -> void:
+	if _fps_lbl:
+		_fps_lbl.text = "FPS: %d" % Engine.get_frames_per_second()
 	if selected_building.size() > 0 and building_panel and building_panel.visible:
 		var hp = selected_building.get("hp", 0)
 		var max_hp = selected_building.get("max_hp", 1)
@@ -262,6 +308,99 @@ func _process(_delta: float) -> void:
 			building_panel_hp_bar.max_value = max_hp
 			building_panel_hp_bar.value = hp
 	_update_building_hp_bars()
+
+
+func _apply_outline(b: Dictionary) -> void:
+	var node = b.get("node", null)
+	if not is_instance_valid(node):
+		return
+	if _outline_material == null:
+		var shader = Shader.new()
+		shader.code = OUTLINE_SHADER_CODE
+		_outline_material = ShaderMaterial.new()
+		_outline_material.shader = shader
+		_outline_material.set_shader_parameter("outline_color", Color(1.0, 1.0, 1.0, 1.0))
+		_outline_material.set_shader_parameter("outline_width", 3.0)
+	# Apply outline via surface_override with unique material copies
+	for mesh in _get_all_mesh_instances(node):
+		var surface_count = mesh.mesh.get_surface_count() if mesh.mesh else 0
+		for s in surface_count:
+			var mat = mesh.get_active_material(s)
+			if mat:
+				# Duplicate so we don't affect other buildings sharing same material
+				var unique_mat = mat.duplicate()
+				unique_mat.next_pass = _outline_material
+				mesh.set_surface_override_material(s, unique_mat)
+			else:
+				var base_mat = StandardMaterial3D.new()
+				base_mat.next_pass = _outline_material
+				mesh.set_surface_override_material(s, base_mat)
+
+
+func _remove_outline(node: Node3D = null) -> void:
+	if node == null:
+		node = selected_building.get("node", null)
+	if not is_instance_valid(node):
+		return
+	for mesh in _get_all_mesh_instances(node):
+		var surface_count = mesh.mesh.get_surface_count() if mesh.mesh else 0
+		for s in surface_count:
+			# Clear the override to restore original shared material
+			mesh.set_surface_override_material(s, null)
+
+
+## Remove outline from ALL buildings across all building systems
+static func _remove_all_outlines() -> void:
+	for bs in Engine.get_main_loop().root.get_tree().get_nodes_in_group("building_systems"):
+		var old_node = bs.selected_building.get("node", null)
+		if is_instance_valid(old_node):
+			bs._remove_outline(old_node)
+
+
+func _get_all_mesh_instances(node: Node) -> Array:
+	var result := []
+	if node is MeshInstance3D:
+		result.append(node)
+	for child in node.get_children():
+		result.append_array(_get_all_mesh_instances(child))
+	return result
+
+
+func _apply_cel_shader(node: Node) -> void:
+	if _cel_shader == null:
+		_cel_shader = load("res://shaders/cel.gdshader")
+	if _cel_shader == null:
+		return
+	for mesh in _get_all_mesh_instances(node):
+		var surface_count = mesh.mesh.get_surface_count() if mesh.mesh else 0
+		for s in surface_count:
+			var mat = mesh.get_active_material(s)
+			var tex: Texture2D = null
+			var albedo := Color(1, 1, 1, 1)
+			if mat is StandardMaterial3D:
+				tex = mat.albedo_texture
+				albedo = mat.albedo_color
+			var cel_mat = ShaderMaterial.new()
+			cel_mat.shader = _cel_shader
+			cel_mat.set_shader_parameter("color", albedo)
+			if tex:
+				cel_mat.set_shader_parameter("base_texture", tex)
+			mesh.set_surface_override_material(s, cel_mat)
+
+
+func _create_fps_label() -> void:
+	if not canvas:
+		return
+	_fps_lbl = Label.new()
+	_fps_lbl.text = "FPS: 0"
+	_fps_lbl.add_theme_font_size_override("font_size", 28)
+	_fps_lbl.add_theme_color_override("font_color", Color(0.0, 0.0, 0.0, 1.0))
+	_fps_lbl.add_theme_color_override("font_shadow_color", Color(1, 1, 1, 0.5))
+	_fps_lbl.add_theme_constant_override("shadow_offset_x", 1)
+	_fps_lbl.add_theme_constant_override("shadow_offset_y", 1)
+	_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	_fps_lbl.offset_left = 14
+	canvas.add_child(_fps_lbl)
 
 
 func _setup_from_grid_plane() -> void:
@@ -899,6 +1038,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var s = def.get("model_scale", 0.2)
 				model.scale = Vector3(s, s, s)
 				node.add_child(model)
+				_apply_cel_shader(model)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -1057,6 +1197,7 @@ func _create_ghost() -> void:
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
 			ghost.add_child(model)
+			_apply_cel_shader(model)
 	add_child(ghost)
 
 
@@ -1088,6 +1229,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
 			node.add_child(model)
+			_apply_cel_shader(model)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -1149,8 +1291,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				else:
 					_select_building(found)
 				get_viewport().set_input_as_handled()
-			elif _is_in_grid(local_hit):
+			else:
 				_deselect_building()
+		else:
+			_deselect_building()
 
 
 func _get_mouse_local() -> Vector3:
@@ -1374,18 +1518,27 @@ func _show_grid() -> void:
 
 	var half_x = grid_extent_x / 2.0
 	var half_z = grid_extent_z / 2.0
+	var line_w = cell_size * 0.03  # Line thickness
 
-	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
 	# Lines along X (for each Z row)
 	for i in range(grid_height + 1):
-		var offset = -half_z + i * cell_size
-		im.surface_add_vertex(Vector3(-half_x, 0.01, offset))
-		im.surface_add_vertex(Vector3(half_x, 0.01, offset))
+		var z = -half_z + i * cell_size
+		var a = Vector3(-half_x, 0.01, z - line_w)
+		var b = Vector3( half_x, 0.01, z - line_w)
+		var c = Vector3( half_x, 0.01, z + line_w)
+		var d = Vector3(-half_x, 0.01, z + line_w)
+		im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
+		im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
 	# Lines along Z (for each X column)
 	for i in range(grid_width + 1):
-		var offset = -half_x + i * cell_size
-		im.surface_add_vertex(Vector3(offset, 0.01, -half_z))
-		im.surface_add_vertex(Vector3(offset, 0.01, half_z))
+		var x = -half_x + i * cell_size
+		var a = Vector3(x - line_w, 0.01, -half_z)
+		var b = Vector3(x + line_w, 0.01, -half_z)
+		var c = Vector3(x + line_w, 0.01,  half_z)
+		var d = Vector3(x - line_w, 0.01,  half_z)
+		im.surface_add_vertex(a); im.surface_add_vertex(b); im.surface_add_vertex(c)
+		im.surface_add_vertex(a); im.surface_add_vertex(c); im.surface_add_vertex(d)
 	im.surface_end()
 
 	add_child(grid_visual)
@@ -1407,7 +1560,14 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 
 
 func _select_building(b: Dictionary) -> void:
+	# Remove outline from ALL buildings (across all grids)
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		var old_node = bs.selected_building.get("node", null)
+		if is_instance_valid(old_node):
+			bs._remove_outline(old_node)
 	selected_building = b
+	# Add outline to new selection
+	_apply_outline(b)
 	var def = building_defs[b.id]
 	var level = b.get("level", 1)
 	var hp = b.get("hp", _get_hp_for(def, level))
@@ -1462,6 +1622,17 @@ func _select_building(b: Dictionary) -> void:
 			building_panel.visible = true
 		return
 
+	# Port = ship purchase panel
+	if b.id == "port" and port_panel and not is_viewing_enemy:
+		_refresh_port_panel()
+		port_panel.visible = true
+		if building_panel:
+			building_panel.visible = false
+		var cam = get_node_or_null("/root/IslandScene/CameraRig")
+		if cam:
+			cam.zoom_blocked = true
+		return
+
 	# Barracks = troop upgrade panel
 	if b.id == "barracks" and barracks_panel:
 		_refresh_barracks_panel()
@@ -1492,6 +1663,7 @@ func _select_building(b: Dictionary) -> void:
 func _deselect_building() -> void:
 	if _is_moving:
 		_cancel_move(false)
+	_remove_outline()
 	selected_building = {}
 	_hide_range_indicator()
 	_hide_move_arrows()
@@ -1502,6 +1674,8 @@ func _deselect_building() -> void:
 		building_panel.visible = false
 	if barracks_panel:
 		barracks_panel.visible = false
+	if port_panel:
+		port_panel.visible = false
 	var cam = get_node_or_null("/root/IslandScene/CameraRig")
 	if cam:
 		cam.zoom_blocked = false
@@ -1570,6 +1744,7 @@ func _upgrade_selected() -> void:
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
 			b.node.add_child(model)
+			_apply_cel_shader(model)
 	# Notify React with updated building data
 	_select_building(b)
 
@@ -1709,6 +1884,134 @@ func _get_hp_for(def: Dictionary, level: int) -> int:
 		var idx = clampi(level - 1, 0, def.hp_levels.size() - 1)
 		return def.hp_levels[idx]
 	return 1000
+
+
+func _create_port_panel() -> void:
+	if not canvas:
+		return
+	port_panel = PanelContainer.new()
+	port_panel.visible = false
+	port_panel.custom_minimum_size = Vector2(320, 200)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.14, 0.22, 1.0)
+	style.set_corner_radius_all(14)
+	style.set_border_width_all(2)
+	style.border_color = Color(0.2, 0.45, 0.7, 1.0)
+	port_panel.add_theme_stylebox_override("panel", style)
+	port_panel.anchor_left = 0.5
+	port_panel.anchor_right = 0.5
+	port_panel.anchor_top = 0.5
+	port_panel.anchor_bottom = 0.5
+	port_panel.offset_left = -160
+	port_panel.offset_right = 160
+	port_panel.offset_top = -100
+	port_panel.offset_bottom = 100
+	canvas.add_child(port_panel)
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_top", 14)
+	margin.add_theme_constant_override("margin_bottom", 14)
+	port_panel.add_child(margin)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	margin.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "Port"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0))
+	vbox.add_child(title)
+
+	port_ship_count_label = Label.new()
+	port_ship_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	port_ship_count_label.add_theme_font_size_override("font_size", 16)
+	port_ship_count_label.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
+	vbox.add_child(port_ship_count_label)
+
+	var buy_btn = Button.new()
+	buy_btn.text = "Buy Ship (500 Wood)"
+	buy_btn.custom_minimum_size = Vector2(0, 44)
+	buy_btn.add_theme_font_size_override("font_size", 16)
+	buy_btn.add_theme_color_override("font_color", Color.WHITE)
+	var btn_style = StyleBoxFlat.new()
+	btn_style.bg_color = Color(0.15, 0.35, 0.55, 1.0)
+	btn_style.set_corner_radius_all(10)
+	btn_style.set_border_width_all(1)
+	btn_style.border_color = Color(0.3, 0.5, 0.7, 1.0)
+	btn_style.content_margin_left = 12
+	btn_style.content_margin_right = 12
+	buy_btn.add_theme_stylebox_override("normal", btn_style)
+	var btn_hover = btn_style.duplicate()
+	btn_hover.bg_color = Color(0.2, 0.45, 0.65, 1.0)
+	buy_btn.add_theme_stylebox_override("hover", btn_hover)
+	var btn_pressed = btn_style.duplicate()
+	btn_pressed.bg_color = Color(0.1, 0.25, 0.4, 1.0)
+	buy_btn.add_theme_stylebox_override("pressed", btn_pressed)
+	buy_btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	buy_btn.pressed.connect(_buy_ship)
+	vbox.add_child(buy_btn)
+
+
+func _refresh_port_panel() -> void:
+	if not port_ship_count_label:
+		return
+	var port_node = selected_building.get("node", null)
+	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
+	if has_ship:
+		port_ship_count_label.text = "This port has a ship"
+	else:
+		port_ship_count_label.text = "No ship at this port"
+
+
+func _buy_ship() -> void:
+	if resources["wood"] < SHIP_COST_WOOD:
+		return
+	# Check if this port already has a ship
+	var port_node = selected_building.get("node", null)
+	if is_instance_valid(port_node) and port_node.has_meta("has_ship"):
+		return
+	resources["wood"] -= SHIP_COST_WOOD
+	_update_resource_ui()
+	owned_ships += 1
+	_refresh_port_panel()
+	_spawn_port_ship()
+
+
+func _spawn_port_ship() -> void:
+	if selected_building.size() == 0:
+		return
+	var port_node = selected_building.get("node", null)
+	if not is_instance_valid(port_node):
+		return
+	var ship_res = load(SHIP_MODEL_PATH)
+	if ship_res == null:
+		return
+	var ship = ship_res.instantiate()
+	var s = SHIP_DISPLAY_SCALE
+	ship.scale = Vector3(s, s, s)
+	get_tree().current_scene.add_child(ship)
+	# Mark this port as having a ship
+	port_node.set_meta("has_ship", true)
+	# Place ship in front of the port at shipPlane Y level
+	var ship_plane = get_node_or_null("/root/IslandScene/Island/shipPlane")
+	var ship_y = ship_plane.global_position.y if ship_plane else port_node.global_position.y
+	var port_pos = port_node.global_position
+	var port_rot_y = port_node.global_rotation.y
+	var forward = Vector3(sin(port_rot_y), 0, cos(port_rot_y))
+	ship.global_position = port_pos + forward * 0.35
+	ship.global_position.y = ship_y
+	ship.global_rotation.y = port_rot_y + PI * 0.5
+	# Rock animation
+	var rock = create_tween().set_loops()
+	rock.tween_property(ship, "rotation:z", deg_to_rad(2.0), 0.9).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	rock.tween_property(ship, "rotation:z", deg_to_rad(-2.0), 0.9).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	var bob = create_tween().set_loops()
+	bob.tween_property(ship, "position:y", ship.position.y + 0.03, 0.7).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(ship, "position:y", ship.position.y - 0.03, 0.7).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 
 func _create_barracks_panel() -> void:

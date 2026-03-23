@@ -9,6 +9,7 @@ var _name_lbl: Label
 var _level_lbl: Label
 var _trophy_lbl: Label
 var _res_labels := {}          # "gold" → Label, etc.
+var _fps_lbl: Label
 
 # ── color palette ──
 const C_PANEL_BG     := Color(0.06, 0.06, 0.06, 0.80)
@@ -30,6 +31,10 @@ func _ready() -> void:
 	set_player("Player", 33)
 	set_resources(55242, 37630, 15000)
 	set_trophies(232)
+
+func _process(_delta: float) -> void:
+	if _fps_lbl:
+		_fps_lbl.text = "FPS: %d" % Engine.get_frames_per_second()
 
 # ══════════════════════════════════════
 #  PUBLIC API
@@ -64,6 +69,7 @@ func _build_hud() -> void:
 	_build_top_bar(root)
 	_build_menu_btn(root)
 	_build_home_btn(root)
+	_build_fps_label(root)
 
 # ── Top Bar ──────────────────────────
 
@@ -260,6 +266,20 @@ func _build_home_btn(parent: Control) -> void:
 		get_tree().change_scene_to_file("res://scenes/Main.tscn")
 	)
 	parent.add_child(btn)
+
+# ── FPS Label (bottom-left) ─────────
+
+func _build_fps_label(parent: Control) -> void:
+	_fps_lbl = Label.new()
+	_fps_lbl.text = "FPS: 0"
+	_fps_lbl.add_theme_font_size_override("font_size", 28)
+	_fps_lbl.add_theme_color_override("font_color", Color(0.0, 0.0, 0.0, 1.0))
+	_fps_lbl.add_theme_color_override("font_shadow_color", Color(1, 1, 1, 0.5))
+	_fps_lbl.add_theme_constant_override("shadow_offset_x", 1)
+	_fps_lbl.add_theme_constant_override("shadow_offset_y", 1)
+	_fps_lbl.set_anchors_preset(Control.PRESET_CENTER_LEFT)
+	_fps_lbl.offset_left = 14
+	parent.add_child(_fps_lbl)
 
 # ══════════════════════════════════════
 #  HELPERS
