@@ -2320,6 +2320,8 @@ func _switch_to_enemy_island() -> void:
 	cloud.close()
 	await cloud.close_finished
 
+
+
 	# Clear ALL building systems (including port grid)
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		bs._destroy_all_buildings()
