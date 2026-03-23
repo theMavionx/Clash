@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import ResourceBar from './ResourceBar';
 import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
@@ -12,11 +13,22 @@ export default function GameUI({
   selectedBuilding, shopOpen, enemyMode, error, showRegister,
   sendToGodot, setShopOpen,
 }) {
+  const [showTroops, setShowTroops] = useState(false);
+
+  // Reset troops panel when building is deselected
+  useEffect(() => {
+    if (!selectedBuilding) setShowTroops(false);
+  }, [selectedBuilding]);
+
   if (!ready) return null;
 
   if (showRegister) {
     return <RegisterPanel sendToGodot={sendToGodot} />;
   }
+
+  const barnAsTroops = showTroops && selectedBuilding?.id === 'barn'
+    ? { ...selectedBuilding, is_barracks: true }
+    : null;
 
   return (
     <div style={styles.overlay}>
@@ -36,7 +48,15 @@ export default function GameUI({
         />
       )}
 
-      {selectedBuilding && selectedBuilding.is_sawmill && !selectedBuilding.is_enemy ? (
+      {barnAsTroops ? (
+        <BarracksPanel
+          building={barnAsTroops}
+          buildingDefs={buildingDefs}
+          troopLevels={troopLevels}
+          sendToGodot={sendToGodot}
+          onClose={() => setShowTroops(false)}
+        />
+      ) : selectedBuilding && selectedBuilding.is_barracks && !selectedBuilding.is_enemy ? (
         <BarracksPanel
           building={selectedBuilding}
           buildingDefs={buildingDefs}
@@ -45,7 +65,11 @@ export default function GameUI({
           onClose={() => sendToGodot('deselect_building')}
         />
       ) : (
-        <BuildingInfoPanel building={selectedBuilding} sendToGodot={sendToGodot} />
+        <BuildingInfoPanel
+          building={selectedBuilding}
+          sendToGodot={sendToGodot}
+          onOpenTroops={() => setShowTroops(true)}
+        />
       )}
     </div>
   );

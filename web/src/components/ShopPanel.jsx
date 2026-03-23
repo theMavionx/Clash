@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { colors } from '../styles/theme';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -44,6 +43,14 @@ const RES_ICONS = {
   ore: stoneIcon,
 };
 
+const WoodIcon = () => (
+  <div style={{ position: 'relative', width: 28, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' }}>
+    <div style={{ position: 'absolute', width: 24, height: 6, background: '#a05a2c', borderRadius: 2, transform: 'rotate(-15deg) translateY(-4px)', border: '1.5px solid #5c3012' }}></div>
+    <div style={{ position: 'absolute', width: 24, height: 6, background: '#b86b35', borderRadius: 2, transform: 'rotate(10deg) translateY(2px)', border: '1.5px solid #5c3012' }}></div>
+    <div style={{ position: 'absolute', width: 24, height: 6, background: '#c97a3f', borderRadius: 2, border: '1.5px solid #5c3012', zIndex: 10 }}></div>
+  </div>
+);
+
 export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
@@ -56,93 +63,116 @@ export default function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
         {/* Buildings Grid / Scroll Area */}
         <div style={styles.cardArea}>
           <div style={styles.cardScroll}>
-            {filteredBuildings.map(([id, def]) => (
-              <div key={id} style={styles.card} onClick={() => sendToGodot('start_placement', { building_id: id })}>
-                {/* Image Placeholder */}
-                <div style={styles.cardImgPlaceholder}>
-                  <div style={styles.placeholderBox}>
-                    {id.includes('cannon') ? '💣' : id.includes('mine') ? '⛏️' : '🏠'}
+            {filteredBuildings.map(([id, def]) => {
+              const isLocked = false; 
+              return (
+                <div 
+                  key={id} 
+                  style={styles.card} 
+                  onClick={() => !isLocked && sendToGodot('start_placement', { building_id: id })}
+                >
+                  <div style={styles.cardImgTop}>
+                    <div style={styles.iconHighlight}></div>
+                    <div style={styles.placeholderBox}>
+                      {id.includes('cannon') ? '💣' : id.includes('mine') ? '⛏️' : '🏠'}
+                    </div>
                   </div>
-                </div>
 
-                {/* Info Area */}
-                <div style={styles.cardInfo}>
-                  <div style={styles.cardName}>{def.name}</div>
-                  <div style={styles.cardDesc}>
-                    {def.description || (id.includes('mine') ? 'Produces resources' : 'Essential building')}
-                  </div>
-                  
-                  {/* Cost */}
-                  <div style={styles.costRow}>
-                    {Object.entries(def.cost || {}).map(([res, amount]) => (
-                      amount > 0 && (
-                        <div key={res} style={styles.costPill}>
-                          <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />
-                          <span style={styles.costValue}>{amount.toLocaleString()}</span>
+                  <div style={styles.cardInfo}>
+                    <div style={styles.cardName}>{def.name}</div>
+                    <div style={styles.cardDesc}>
+                      {def.description || (id.includes('mine') ? 'Produces resources' : 'Essential building')}
+                    </div>
+                    
+                    <div style={styles.costContainer}>
+                      <div style={styles.costRow}>
+                        {Object.entries(def.cost || {}).map(([res, amount]) => (
+                          amount > 0 && (
+                            <div key={res} style={styles.costPill}>
+                              {res === 'wood' ? <WoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
+                              <span style={styles.costValue}>{amount.toLocaleString()}</span>
+                            </div>
+                          )
+                        ))}
+                        {Object.keys(def.cost || {}).length === 0 && (
+                          <span style={styles.freeText}>FREE</span>
+                        )}
+                      </div>
+                      
+                      <div style={styles.cardFooter}>
+                        <div style={styles.cardStat}>
+                          <div style={styles.statLabel}>Build time:</div>
+                          <div style={styles.statVal}>3s</div>
                         </div>
-                      )
-                    ))}
-                    {Object.keys(def.cost || {}).length === 0 && (
-                      <span style={{ color: '#4CAF50', fontWeight: 900, textShadow: '0 1px 0 #fff' }}>FREE</span>
-                    )}
-                  </div>
-
-                  {/* Footer stats */}
-                  <div style={styles.cardFooter}>
-                    <div style={styles.cardStat}>Build time: <span>3s</span></div>
-                    <div style={styles.cardStat}>Built: <span>0 / 1</span></div>
+                        <div style={{ ...styles.cardStat, textAlign: 'right' }}>
+                          <div style={styles.statLabel}>Built:</div>
+                          <div style={styles.statVal}>0/1</div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             
-            {/* Locked Placeholders to match reference style */}
             {activeTab === 'Economy' && filteredBuildings.length < 5 && [3, 4].map(level => (
-              <div key={`locked-${level}`} style={{ ...styles.card, opacity: 0.8, filter: 'grayscale(0.4)', background: '#E0E0E0' }}>
-                <div style={{ ...styles.cardImgPlaceholder, filter: 'grayscale(1)' }}>
-                  <div style={{ ...styles.placeholderBox, opacity: 0.2 }}>🔒</div>
+              <div key={`locked-${level}`} style={styles.lockedCard}>
+                <div style={{ ...styles.cardImgTop, opacity: 0.5, filter: 'grayscale(1)' }}>
+                  <div style={styles.placeholderBox}>🔒</div>
                 </div>
                 <div style={styles.cardInfo}>
-                  <div style={{ ...styles.cardName, color: '#757575' }}>Locked</div>
-                  <div style={{ ...styles.cardDesc, color: '#9E9E9E' }}>Upgrade Headquarters to unlock more!</div>
-                  <div style={styles.lockedHint}>Upgrade HQ to Level {level}</div>
+                  <div style={{ ...styles.cardName, color: '#757575', WebkitTextStroke: '0.5px #999' }}>Locked</div>
+                  <div style={{ ...styles.cardDesc, color: '#9E9E9E' }}>Upgrade HQ level {level} to unlock more!</div>
+                  <div style={styles.lockMessage}>
+                    Upgrade Headquarters to level {level} to build more!
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Category Tabs at the Bottom */}
-        <div style={styles.tabBar}>
-          {TABS.map(tab => {
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                style={{
-                  ...styles.tab,
-                  background: isActive 
-                    ? 'linear-gradient(180deg, #64B5F6 0%, #1E88E5 100%)' 
-                    : 'linear-gradient(180deg, #78909C 0%, #546E7A 100%)',
-                  boxShadow: isActive 
-                    ? 'inset 0 4px 0 rgba(255,255,255,0.2), inset 0 -4px 0 rgba(0,0,0,0.2), 0 4px 0 #0D47A1' 
-                    : 'inset 0 4px 0 rgba(255,255,255,0.1), inset 0 -4px 0 rgba(0,0,0,0.1), 0 4px 0 #263238',
-                  zIndex: isActive ? 2 : 1,
-                }}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <div style={{ ...styles.tabLabel, textShadow: isActive ? '0 2px 2px rgba(0,0,0,0.6)' : '0 1px 2px rgba(0,0,0,0.4)' }}>
-                  {tab.label}
-                </div>
-                {tab.badge && (
-                  <div style={styles.tabBadge}>{tab.badge}</div>
-                )}
-              </button>
-            );
-          })}
+        {/* Category Tabs area */}
+        <div style={styles.tabArea}>
+          <div style={styles.tabContainer}>
+            {TABS.map(tab => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  style={{
+                    ...styles.tab,
+                    background: isActive ? '#fdf8e7' : '#78909C',
+                    color: isActive ? '#333' : '#fff',
+                    marginTop: isActive ? -4 : 0,
+                    height: isActive ? 56 : 52,
+                    zIndex: isActive ? 20 : 10,
+                    borderBottom: 'none',
+                    boxShadow: isActive ? '0 4px 4px rgba(0,0,0,0.2)' : 'none',
+                    borderRadius: '0 0 12px 12px',
+                    borderColor: '#d4c8b0',
+                    borderLeft: '2px solid',
+                    borderRight: '2px solid',
+                  }}
+                  onClick={() => setActiveTab(tab.id)}
+                >
+                  <div style={{ 
+                    ...styles.tabContent,
+                    textShadow: isActive ? 'none' : '0px 1px 2px rgba(0,0,0,0.6)',
+                    WebkitTextStroke: isActive ? 'none' : '0.5px #455A64',
+                  }}>
+                    {tab.label}
+                    {tab.badge && (
+                      <div style={styles.tabBadge}>{tab.badge}</div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        {/* Close Button on top right of container */}
+        {/* Close Button */}
         <button style={styles.closeBtn} onClick={onClose}>✕</button>
       </div>
     </div>
@@ -153,205 +183,242 @@ const styles = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.45)', // Slightly darker
+    background: 'rgba(0,0,0,0.5)',
     display: 'flex',
-    alignItems: 'flex-end', // Anchor to bottom
+    alignItems: 'flex-end',
     justifyContent: 'center',
-    zIndex: 100,
+    zIndex: 1000,
     pointerEvents: 'all',
   },
   container: {
-    width: '98vw',
+    width: '100%',
     maxWidth: 1200,
-    background: '#F2F2F2', // Clean off-white
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
-    border: '4px solid #DFDFDF',
-    borderBottom: 'none',
+    background: 'transparent', // NO BACKGROUND for container
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
-    boxShadow: '0 -15px 50px rgba(0,0,0,0.3)',
-    marginBottom: 0,
     overflow: 'visible',
+    borderRadius: '24px 24px 0 0',
   },
   cardArea: {
-    padding: '40px 30px 50px 30px',
-    minHeight: 340,
+    background: '#e8dfc8',
+    borderTop: '6px solid #d4c8b0',
+    padding: '30px 20px 10px 20px',
+    minHeight: 350,
     overflowX: 'auto',
     display: 'flex',
+    position: 'relative',
+    zIndex: 10,
+    boxShadow: '0 -10px 30px rgba(0,0,0,0.3)',
+    borderRadius: '24px 24px 0 0',
   },
   cardScroll: {
     display: 'flex',
-    gap: 20,
-    paddingRight: 50,
+    gap: 12,
+    paddingBottom: 20,
+    position: 'relative',
+    zIndex: 10,
   },
   card: {
-    minWidth: 210,
-    width: 210,
-    background: '#FFFEEF', // Warm white
-    borderRadius: 20,
-    border: '3px solid #E0DBC5',
+    width: 170,
+    height: 250,
+    background: '#fdf8e7',
+    borderRadius: 12,
+    border: '3px solid #d4c8b0',
     display: 'flex',
     flexDirection: 'column',
     cursor: 'pointer',
     overflow: 'hidden',
-    boxShadow: '0 8px 16px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.05)',
-    transition: 'transform 0.1s, box-shadow 0.1s',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.2)',
+    transition: 'transform 0.1s',
   },
-  cardImgPlaceholder: {
-    height: 130,
+  lockedCard: {
+    width: 170,
+    height: 250,
+    background: '#e6e1d6',
+    borderRadius: 12,
+    border: '3px solid #a39e93',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+  },
+  cardImgTop: {
+    height: 110,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: 'linear-gradient(180deg, rgba(0,0,0,0.02), rgba(0,0,0,0.05))',
+    position: 'relative',
+    marginTop: 8,
+  },
+  iconHighlight: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    background: 'radial-gradient(circle at center, rgba(255,255,255,0.6) 0%, transparent 60%)',
+    zIndex: 0,
   },
   placeholderBox: {
-    width: 90,
-    height: 90,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 48,
-    filter: 'drop-shadow(0 6px 6px rgba(0,0,0,0.15))',
+    fontSize: 56,
+    zIndex: 1,
+    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.3))',
   },
   cardInfo: {
-    padding: '16px 12px',
+    padding: '4px 8px 8px 8px',
     display: 'flex',
     flexDirection: 'column',
     flex: 1,
+    textAlign: 'center',
   },
   cardName: {
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: 900,
-    textAlign: 'center',
-    color: '#3E2723',
-    marginBottom: 6,
-    letterSpacing: '-0.3px',
+    color: '#333',
+    WebkitTextStroke: '1px white',
+    textShadow: '0px 2px 2px rgba(0,0,0,0.2)',
+    fontFamily: '"Arial Black", Impact, sans-serif',
+    marginBottom: 2,
+    lineHeight: 1.1,
   },
   cardDesc: {
-    fontSize: 14,
-    color: '#6D4C41',
-    textAlign: 'center',
-    minHeight: 36,
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#444',
+    lineHeight: 1.1,
+    marginBottom: 8,
+    minHeight: 24,
+  },
+  costContainer: {
+    marginTop: 'auto',
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    lineHeight: 1.15,
-    marginBottom: 16,
-    fontWeight: 600,
+    flexDirection: 'column',
+    gap: 6,
   },
   costRow: {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 16,
+    gap: 8,
+    marginBottom: 4,
   },
   costPill: {
     display: 'flex',
     alignItems: 'center',
-    gap: 6,
-    background: '#FFF9C4', // Pill background like reference
-    padding: '4px 12px',
-    borderRadius: 20,
-    border: '1px solid #FFF176',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+    gap: 4,
   },
   resIconSmall: {
-    width: 22,
-    height: 22,
+    width: 24,
+    height: 18,
     objectFit: 'contain',
   },
   costValue: {
-    fontSize: 15,
-    fontWeight: 800,
-    color: '#3E2723',
+    fontSize: 22,
+    fontWeight: 900,
+    color: '#333',
+    textShadow: '0 1px 1px rgba(255,255,255,0.8)',
+  },
+  freeText: {
+    fontSize: 20,
+    fontWeight: 900,
+    color: '#4CAF50',
+    textShadow: '0 1px 1px #fff',
   },
   cardFooter: {
-    marginTop: 'auto',
-    borderTop: '1.5px solid rgba(0,0,0,0.06)',
-    paddingTop: 10,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-  },
-  cardStat: {
-    fontSize: 12,
-    color: '#8D6E63',
+    borderTop: 'none',
     display: 'flex',
     justifyContent: 'space-between',
-    fontWeight: 700,
+    padding: '0 4px',
   },
-  lockedHint: {
-    marginTop: 'auto',
-    background: 'rgba(0,0,0,0.1)',
-    padding: '8px',
-    borderRadius: 12,
-    fontSize: 12,
-    textAlign: 'center',
+  cardStat: {
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  statLabel: {
+    fontSize: 8,
     fontWeight: 800,
-    color: '#757575',
+    color: '#666',
+    textTransform: 'uppercase',
   },
-  tabBar: {
+  statVal: {
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#333',
+  },
+  lockMessage: {
+    background: '#8b8276',
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 700,
+    padding: '8px 4px',
+    height: 70,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: 'inset 0 3px 5px rgba(0,0,0,0.15)',
+    borderTop: '3px solid #7a7266',
+    marginTop: 'auto',
+    margin: '0 -8px -8px -8px',
+  },
+  tabArea: {
+    background: 'transparent', // Transparent background
     display: 'flex',
     justifyContent: 'center',
-    gap: 2,
-    background: '#455A64',
-    height: 64,
+    marginTop: -4,
+    position: 'relative',
+    zIndex: 20,
+    paddingBottom: 0, // NO PADDING at all
+  },
+  tabContainer: {
+    display: 'flex',
+    gap: 4,
   },
   tab: {
-    flex: 1,
-    maxWidth: 220,
-    border: 'none',
+    padding: '0 24px',
+    fontSize: 15,
+    fontWeight: 900,
+    cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
-    cursor: 'pointer',
-    color: '#fff',
-    transition: 'transform 0.1s',
+    transition: 'all 0.1s',
     outline: 'none',
+    border: 'none',
   },
-  tabLabel: {
-    fontSize: 17,
-    fontWeight: 900,
-    letterSpacing: '0.5px',
+  tabContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
   },
   tabBadge: {
-    position: 'absolute',
-    top: 12,
-    right: '15%',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    background: '#F44336',
-    border: '2px solid #fff',
+    background: '#e33b2e',
     color: '#fff',
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: 900,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 3px 6px rgba(0,0,0,0.4)',
+    border: '1px solid #8a1c14',
   },
   closeBtn: {
     position: 'absolute',
     top: -24,
-    right: 12,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    background: 'linear-gradient(180deg, #F06292 0%, #D81B60 100%)',
+    right: 30,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    background: 'linear-gradient(180deg, #EC407A 0%, #D81B60 100%)',
     border: '4px solid #fff',
     color: '#fff',
-    fontSize: 26,
+    fontSize: 28,
     fontWeight: 900,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 6px 20px rgba(0,0,0,0.3)',
-    zIndex: 110,
+    boxShadow: '0 5px 15px rgba(0,0,0,0.5)',
+    zIndex: 100,
   },
 };

@@ -1,6 +1,6 @@
 import { cartoonBtn } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
-import attackIcon from '../assets/resources/—Pngtree—double sword stroke icon_6942721.png';
+import attackIcon from '../assets/resources/Gemini_Generated_Image_qgf6o5qgf6o5qgf6-removebg-preview.png';
 
 export default function ActionButtons({ enemyMode, sendToGodot }) {
   if (enemyMode.active) {
@@ -60,14 +60,14 @@ const styles = {
     width: 120, 
     height: 110,
     borderRadius: 24,
-    border: '4px solid #0D47A1',
+    border: '4px solid #fff',
     background: 'linear-gradient(180deg, #1976D2 0%, #0D47A1 100%)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    boxShadow: '0 6px 0 #0D47A1, 0 10px 20px rgba(0,0,0,0.5)',
+    boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
     transition: 'transform 0.1s, box-shadow 0.1s',
     userSelect: 'none',
     padding: 0, 
@@ -78,14 +78,14 @@ const styles = {
     width: 120, 
     height: 110,
     borderRadius: 24,
-    border: '4px solid #0D47A1', 
+    border: '4px solid #fff', 
     background: 'linear-gradient(180deg, #1976D2 0%, #0D47A1 100%)', 
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
     cursor: 'pointer',
-    boxShadow: '0 6px 0 #0D47A1, 0 10px 20px rgba(0,0,0,0.5)',
+    boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
     transition: 'transform 0.1s, box-shadow 0.1s',
     userSelect: 'none',
     padding: 0, 

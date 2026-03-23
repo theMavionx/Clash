@@ -56,6 +56,17 @@ var building_defs: Dictionary = {
 		"hp_levels": [1200, 2200, 3800],
 		"cost": {"gold": 300},
 	},
+	"barracks": {
+		"name": "Barracks",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.6, 0.35, 0.15, 0.5),
+		"height": 0.4,
+		"scene": "res://Model/Barn/1.glb",
+		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
+		"model_scale": 0.25,
+		"hp_levels": [1500, 2800, 4500],
+		"cost": {"gold": 500, "wood": 300},
+	},
 	"town_hall": {
 		"name": "Town Hall",
 		"cells": Vector2i(4, 4),
@@ -102,6 +113,13 @@ var placed_buildings: Array[Dictionary] = []
 
 # ── Range Indicator ───────────────────────────────────────────
 var _range_indicator: MeshInstance3D = null
+
+# ── Move State ────────────────────────────────────────────────
+var _move_arrows: Node3D = null
+var _is_moving: bool = false
+var _move_source_gp: Vector2i = Vector2i.ZERO
+var _move_source_pos: Vector3 = Vector3.ZERO
+var _move_indicator: MeshInstance3D = null
 
 # ── Placement State ───────────────────────────────────────────
 var is_placing: bool = false
@@ -1088,6 +1106,19 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# Move mode
+	if _is_moving:
+		if event is InputEventMouseMotion:
+			_update_move_building()
+		if event is InputEventMouseButton and event.pressed:
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				_confirm_move()
+				get_viewport().set_input_as_handled()
+			elif event.button_index == MOUSE_BUTTON_RIGHT:
+				_cancel_move()
+				get_viewport().set_input_as_handled()
+		return
+
 	if is_placing:
 		if event is InputEventMouseMotion:
 			_update_ghost()
@@ -1109,11 +1140,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			var gp = _local_to_grid(local_hit)
 			var found = _find_building_at(gp)
 			if found.size() > 0:
-				# Deselect on all other building systems first
 				for bs in get_tree().get_nodes_in_group("building_systems"):
 					if bs != self:
 						bs.selected_building = {}
-				_select_building(found)
+				# Second click on already-selected building → start move
+				if selected_building.size() > 0 and found.get("node") == selected_building.get("node") and not is_viewing_enemy:
+					_start_move(selected_building)
+				else:
+					_select_building(found)
 				get_viewport().set_input_as_handled()
 			elif _is_in_grid(local_hit):
 				_deselect_building()
@@ -1302,6 +1336,8 @@ func _cancel_all_placement() -> void:
 
 
 func _cancel_placement() -> void:
+	if _is_moving:
+		_cancel_move(false)
 	is_placing = false
 	current_building_id = ""
 	if build_button:
@@ -1391,7 +1427,7 @@ func _select_building(b: Dictionary) -> void:
 			"hp": hp, "max_hp": max_hp, "max_level": max_level,
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
-			"is_sawmill": b.id == "sawmill",
+			"is_barracks": b.id == "barracks",
 		})
 
 	# Range indicator for turrets
@@ -1402,6 +1438,12 @@ func _select_building(b: Dictionary) -> void:
 		if turret_node.get_script() and turret_node.get("detect_range") != null:
 			r = turret_node.detect_range
 		_show_range_indicator(turret_node.global_position, r)
+
+	# Move arrows (own island only)
+	if not is_viewing_enemy:
+		_show_move_arrows(b)
+	else:
+		_hide_move_arrows()
 
 	# When viewing enemy — only show HP info, no upgrade/barracks
 	if is_viewing_enemy:
@@ -1420,8 +1462,8 @@ func _select_building(b: Dictionary) -> void:
 			building_panel.visible = true
 		return
 
-	# Sawmill = barracks
-	if b.id == "sawmill" and barracks_panel:
+	# Barracks = troop upgrade panel
+	if b.id == "barracks" and barracks_panel:
 		_refresh_barracks_panel()
 		barracks_panel.visible = true
 		if building_panel:
@@ -1448,8 +1490,11 @@ func _select_building(b: Dictionary) -> void:
 
 
 func _deselect_building() -> void:
+	if _is_moving:
+		_cancel_move(false)
 	selected_building = {}
 	_hide_range_indicator()
+	_hide_move_arrows()
 	var bridge = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("building_deselected", {})
@@ -2095,6 +2140,189 @@ func _return_home() -> void:
 	# Cloud reveal animation
 	cloud.reveal()
 	await cloud.reveal_finished
+
+
+func _show_move_arrows(b: Dictionary) -> void:
+	_hide_move_arrows()
+	var node = b.get("node")
+	if not is_instance_valid(node):
+		return
+	var def = building_defs[b.id]
+	var hx = def.cells.x * cell_size * 0.5
+	var hz = def.cells.y * cell_size * 0.5
+	var pad = cell_size * maxf(def.cells.x, def.cells.y) * 0.45
+	var y = 0.06
+
+	# Child of BuildingSystem so it inherits grid_rotation automatically
+	_move_arrows = Node3D.new()
+	_move_arrows.position = node.position  # local to BuildingSystem
+	add_child(_move_arrows)
+
+	var arrow_mesh = _make_arrow_mesh()
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.1, 0.95, 0.2, 1.0)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	# Port can only move along the shore (X axis only)
+	var all_configs = [
+		[Vector3(0, y, -(hz + pad)), 0.0],        # North
+		[Vector3(0, y,  (hz + pad)), PI],           # South
+		[Vector3( (hx + pad), y, 0), -PI * 0.5],   # East
+		[Vector3(-(hx + pad), y, 0),  PI * 0.5],   # West
+	]
+	var configs = all_configs.slice(2, 4) if b.id == "port" else all_configs
+
+	for cfg in configs:
+		var inst = MeshInstance3D.new()
+		inst.mesh = arrow_mesh
+		inst.material_override = mat
+		inst.position = cfg[0]
+		inst.rotation.y = cfg[1]
+		_move_arrows.add_child(inst)
+
+
+func _hide_move_arrows() -> void:
+	if _move_arrows and is_instance_valid(_move_arrows):
+		_move_arrows.queue_free()
+	_move_arrows = null
+
+
+func _make_arrow_mesh() -> ImmediateMesh:
+	var im = ImmediateMesh.new()
+	var sw: float = 0.022   # shaft half-width
+	var sl: float = 0.055   # shaft length
+	var hw: float = 0.052   # head half-width
+	var hl: float = 0.045   # head length
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Shaft (rectangle = 2 triangles), points toward -Z
+	im.surface_add_vertex(Vector3(-sw, 0,  0))
+	im.surface_add_vertex(Vector3( sw, 0,  0))
+	im.surface_add_vertex(Vector3(-sw, 0, -sl))
+	im.surface_add_vertex(Vector3( sw, 0,  0))
+	im.surface_add_vertex(Vector3( sw, 0, -sl))
+	im.surface_add_vertex(Vector3(-sw, 0, -sl))
+	# Head triangle
+	im.surface_add_vertex(Vector3(-hw, 0, -sl))
+	im.surface_add_vertex(Vector3( hw, 0, -sl))
+	im.surface_add_vertex(Vector3(  0, 0, -sl - hl))
+	im.surface_end()
+	return im
+
+
+func _start_move(b: Dictionary) -> void:
+	if is_viewing_enemy or _server_busy or _is_moving:
+		return
+	# Cancel any ongoing move on other building systems
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if bs != self and bs._is_moving:
+			bs._cancel_move(false)
+	_is_moving = true
+	_move_source_gp = b.grid_pos
+	_move_source_pos = b["node"].position
+	var def = building_defs[b.id]
+	# Free grid cells temporarily so validity check works while dragging
+	for x in range(def.cells.x):
+		for z in range(def.cells.y):
+			var idx = (b.grid_pos.y + z) * grid_width + (b.grid_pos.x + x)
+			grid[idx] = false
+	_hide_move_arrows()
+	_hide_range_indicator()
+	current_building_id = b.id
+	_show_grid()
+	_update_move_building()
+
+
+func _update_move_building() -> void:
+	var b = selected_building
+	if b.size() == 0 or not is_instance_valid(b.get("node", null)):
+		return
+	var def = building_defs[b.id]
+	var local_hit = _get_mouse_local()
+	if local_hit == Vector3.INF:
+		return
+	var gp = _local_to_grid(local_hit)
+	gp.x = clampi(gp.x, 0, grid_width - def.cells.x)
+	gp.y = clampi(gp.y, 0, grid_height - def.cells.y)
+	current_grid_pos = gp
+	var sx = def.cells.x * cell_size
+	var sz = def.cells.y * cell_size
+	var local_pos = _grid_to_local(gp)
+	local_pos.x += sx / 2.0
+	local_pos.z += sz / 2.0
+	local_pos.y = 0
+	b["node"].position = local_pos
+	# Validity indicator under the building
+	var valid = _can_place(gp, def.cells)
+	_update_move_indicator(local_pos, sx, sz, valid)
+
+
+func _update_move_indicator(center: Vector3, sx: float, sz: float, valid: bool) -> void:
+	if not _move_indicator or not is_instance_valid(_move_indicator):
+		var qm = QuadMesh.new()
+		_move_indicator = MeshInstance3D.new()
+		_move_indicator.mesh = qm
+		var mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mat.render_priority = 3
+		_move_indicator.material_override = mat
+		add_child(_move_indicator)
+	(_move_indicator.mesh as QuadMesh).size = Vector2(sx, sz)
+	_move_indicator.rotation.x = -PI * 0.5
+	_move_indicator.position = center + Vector3(0, 0.03, 0)
+	var mat = _move_indicator.material_override as StandardMaterial3D
+	mat.albedo_color = Color(0.1, 0.9, 0.1, 0.35) if valid else Color(0.9, 0.1, 0.1, 0.35)
+
+
+func _confirm_move() -> void:
+	var b = selected_building
+	if b.size() == 0:
+		return
+	var def = building_defs[b.id]
+	if not _can_place(current_grid_pos, def.cells):
+		return
+	# Occupy new grid cells
+	for x in range(def.cells.x):
+		for z in range(def.cells.y):
+			var idx = (current_grid_pos.y + z) * grid_width + (current_grid_pos.x + x)
+			grid[idx] = true
+	b["grid_pos"] = current_grid_pos
+	# b.node is already at the new position (moved by _update_move_building)
+	# Sync with server
+	var net = get_node_or_null("/root/Net")
+	if net and net.has_token() and b.get("server_id", -1) >= 0:
+		net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
+	_end_move()
+	_select_building(b)
+
+
+func _cancel_move(reselect: bool = true) -> void:
+	var b = selected_building
+	if b.size() > 0:
+		# Restore original grid cells
+		var def = building_defs[b.id]
+		for x in range(def.cells.x):
+			for z in range(def.cells.y):
+				var idx = (_move_source_gp.y + z) * grid_width + (_move_source_gp.x + x)
+				grid[idx] = true
+		# Move building back to original position
+		if is_instance_valid(b.get("node", null)):
+			b["node"].position = _move_source_pos
+	_end_move()
+	if reselect and b.size() > 0:
+		_select_building(b)
+
+
+func _end_move() -> void:
+	_is_moving = false
+	current_building_id = ""
+	if not always_show_grid:
+		_hide_grid()
+	if _move_indicator and is_instance_valid(_move_indicator):
+		_move_indicator.queue_free()
+	_move_indicator = null
 
 
 func _show_range_indicator(center: Vector3, radius: float) -> void:

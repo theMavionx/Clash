@@ -114,6 +114,9 @@ func upgrade_building(building_id: int) -> Dictionary:
 		building_upgraded.emit(response)
 	return response
 
+func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
+	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})
+
 func remove_building(building_id: int) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)

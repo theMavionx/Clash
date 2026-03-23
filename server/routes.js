@@ -119,6 +119,19 @@ router.post('/buildings/:id/upgrade', auth, (req, res) => {
   res.json(result);
 });
 
+// Move a building to a new grid position
+router.post('/buildings/:id/move', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const { grid_x, grid_z } = req.body;
+  if (grid_x === undefined || grid_z === undefined) return res.status(400).json({ error: 'grid_x and grid_z required' });
+  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+  if (!building) return res.status(404).json({ error: 'Building not found' });
+  db.db.prepare('UPDATE buildings SET grid_x = ?, grid_z = ? WHERE id = ?').run(grid_x, grid_z, buildingId);
+  const resources = db.stmts.getResources.get(req.player.id);
+  res.json({ success: true, resources });
+});
+
 // Remove a building
 router.delete('/buildings/:id', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);

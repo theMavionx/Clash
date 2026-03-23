@@ -1,7 +1,7 @@
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
-export default function BuildingInfoPanel({ building, sendToGodot }) {
-  if (!building || building.is_sawmill) return null;
+export default function BuildingInfoPanel({ building, sendToGodot, onOpenTroops }) {
+  if (!building || building.is_barracks) return null;
 
   const ratio = building.max_hp > 0 ? building.hp / building.max_hp : 1;
   const isMaxLevel = building.level >= building.max_level;
@@ -39,6 +39,15 @@ export default function BuildingInfoPanel({ building, sendToGodot }) {
               </button>
             </>
           )
+        )}
+
+        {building.id === 'barn' && !building.is_enemy && (
+          <button
+            style={{ ...cartoonBtn('#7B1FA2', '#4A148C'), marginTop: 8 }}
+            onClick={onOpenTroops}
+          >
+            ⚔️ Troops
+          </button>
         )}
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 export default function BarracksPanel({ building, buildingDefs, troopLevels, sendToGodot, onClose }) {
-  if (!building || !building.is_sawmill) return null;
+  if (!building || !building.is_barracks) return null;
   const troops = buildingDefs?.troops || {};
 
   return (
