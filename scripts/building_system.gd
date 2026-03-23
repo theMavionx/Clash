@@ -100,6 +100,9 @@ var grid_extent_z: float = 0.0
 var grid: Array[bool] = []
 var placed_buildings: Array[Dictionary] = []
 
+# ── Range Indicator ───────────────────────────────────────────
+var _range_indicator: MeshInstance3D = null
+
 # ── Placement State ───────────────────────────────────────────
 var is_placing: bool = false
 var current_building_id: String = ""
@@ -1391,6 +1394,15 @@ func _select_building(b: Dictionary) -> void:
 			"is_sawmill": b.id == "sawmill",
 		})
 
+	# Range indicator for turrets
+	_hide_range_indicator()
+	if b.id == "turret" and is_instance_valid(b.get("node", null)):
+		var turret_node = b["node"]
+		var r: float = 1.0
+		if turret_node.get_script() and turret_node.get("detect_range") != null:
+			r = turret_node.detect_range
+		_show_range_indicator(turret_node.global_position, r)
+
 	# When viewing enemy — only show HP info, no upgrade/barracks
 	if is_viewing_enemy:
 		if building_panel_title:
@@ -1437,6 +1449,7 @@ func _select_building(b: Dictionary) -> void:
 
 func _deselect_building() -> void:
 	selected_building = {}
+	_hide_range_indicator()
 	var bridge = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("building_deselected", {})
@@ -2082,3 +2095,51 @@ func _return_home() -> void:
 	# Cloud reveal animation
 	cloud.reveal()
 	await cloud.reveal_finished
+
+
+func _show_range_indicator(center: Vector3, radius: float) -> void:
+	_hide_range_indicator()
+	var y = center.y + 0.025
+	var segments: int = 80
+	var im = ImmediateMesh.new()
+
+	# Surface 0 — filled disc (triangle fan)
+	im.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(segments):
+		var a0 = (float(i) / float(segments)) * TAU
+		var a1 = (float(i + 1) / float(segments)) * TAU
+		im.surface_add_vertex(Vector3(center.x, y, center.z))
+		im.surface_add_vertex(Vector3(center.x + cos(a0) * radius, y, center.z + sin(a0) * radius))
+		im.surface_add_vertex(Vector3(center.x + cos(a1) * radius, y, center.z + sin(a1) * radius))
+	im.surface_end()
+
+	# Surface 1 — edge ring (line strip)
+	im.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+	for i in range(segments + 1):
+		var a = (float(i) / float(segments)) * TAU
+		im.surface_add_vertex(Vector3(center.x + cos(a) * radius, y, center.z + sin(a) * radius))
+	im.surface_end()
+
+	var fill_mat = StandardMaterial3D.new()
+	fill_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
+	fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	fill_mat.render_priority = 4
+
+	var ring_mat = StandardMaterial3D.new()
+	ring_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.render_priority = 5
+
+	_range_indicator = MeshInstance3D.new()
+	_range_indicator.mesh = im
+	_range_indicator.set_surface_override_material(0, fill_mat)
+	_range_indicator.set_surface_override_material(1, ring_mat)
+	get_tree().current_scene.add_child(_range_indicator)
+
+
+func _hide_range_indicator() -> void:
+	if _range_indicator and is_instance_valid(_range_indicator):
+		_range_indicator.queue_free()
+	_range_indicator = null

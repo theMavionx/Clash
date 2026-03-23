@@ -1,5 +1,6 @@
 import { cartoonBtn } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
+import attackIcon from '../assets/resources/—Pngtree—double sword stroke icon_6942721.png';
 
 export default function ActionButtons({ enemyMode, sendToGodot }) {
   if (enemyMode.active) {
@@ -22,10 +23,11 @@ export default function ActionButtons({ enemyMode, sendToGodot }) {
     <>
       <div style={styles.wrapLeft}>
         <button
-          style={cartoonBtn('#1565C0', '#0D47A1')}
+          style={styles.attackBtn}
           onClick={() => sendToGodot('find_enemy')}
         >
-          🔍 Find Enemy
+          <img src={attackIcon} alt="attack" style={styles.attackIconImg} />
+          <span style={styles.btnText}>ATTACK</span>
         </button>
       </div>
       <div style={styles.wrapRight}>
@@ -34,7 +36,7 @@ export default function ActionButtons({ enemyMode, sendToGodot }) {
           onClick={() => sendToGodot('open_shop')}
         >
           <img src={buildIcon} alt="build" style={styles.buildIconImg} />
-          <span style={styles.buildText}>BUILD</span>
+          <span style={styles.btnText}>BUILD</span>
         </button>
       </div>
     </>
@@ -72,6 +74,24 @@ const styles = {
     outline: 'none',
     overflow: 'hidden',
   },
+  attackBtn: {
+    width: 120, 
+    height: 110,
+    borderRadius: 24,
+    border: '4px solid #0D47A1', 
+    background: 'linear-gradient(180deg, #1976D2 0%, #0D47A1 100%)', 
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxShadow: '0 6px 0 #0D47A1, 0 10px 20px rgba(0,0,0,0.5)',
+    transition: 'transform 0.1s, box-shadow 0.1s',
+    userSelect: 'none',
+    padding: 0, 
+    outline: 'none',
+    overflow: 'hidden',
+  },
   buildIconImg: {
     width: 115, 
     height: 115,
@@ -82,7 +102,15 @@ const styles = {
     marginLeft: -10, 
     transform: 'translate(-4px, -6px)', 
   },
-  buildText: {
+  attackIconImg: {
+    width: 85, 
+    height: 85,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.4))',
+    marginBottom: -10,
+    marginTop: 0,
+  },
+  btnText: {
     color: '#fff',
     fontSize: 14, 
     fontWeight: 900,
