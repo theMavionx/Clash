@@ -1,9 +1,13 @@
 import { memo, useCallback } from 'react';
+import { useSend, useUI } from '../hooks/useGodot';
 import { cartoonBtn } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/Gemini_Generated_Image_qgf6o5qgf6o5qgf6-removebg-preview.png';
 
-function ActionButtons({ enemyMode, sendToGodot }) {
+function ActionButtons() {
+  const { sendToGodot } = useSend();
+  const { enemyMode } = useUI();
+
   const handleReturnHome = useCallback(() => sendToGodot('return_home'), [sendToGodot]);
   const handleFindEnemy = useCallback(() => sendToGodot('find_enemy'), [sendToGodot]);
   const handleOpenShop = useCallback(() => sendToGodot('open_shop'), [sendToGodot]);

@@ -1,9 +1,13 @@
 import { memo, useCallback } from 'react';
+import { useSend, useBuilding } from '../hooks/useGodot';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 const stopPropagation = (e) => e.stopPropagation();
 
-function BarracksPanel({ building, buildingDefs, troopLevels, sendToGodot, onClose }) {
+function BarracksPanel({ building, onClose }) {
+  const { sendToGodot } = useSend();
+  const { buildingDefs, troopLevels } = useBuilding();
+
   const handleUpgradeBuilding = useCallback(() => sendToGodot('upgrade_building'), [sendToGodot]);
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
 

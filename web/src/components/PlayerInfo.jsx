@@ -1,10 +1,12 @@
 import { memo } from 'react';
+import { usePlayer } from '../hooks/useGodot';
 import { colors } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function PlayerInfo({ playerState }) {
+function PlayerInfo() {
+  const playerState = usePlayer();
   if (!playerState) return null;
 
   const townHallLevel = playerState.buildings?.town_hall?.level || 1;
@@ -25,13 +27,8 @@ function PlayerInfo({ playerState }) {
 
         <div style={styles.trophyContainer}>
           <div style={styles.trophyBox}>
-            <img
-              src={trophyIcon}
-              alt="trophy"
-              style={styles.trophyImg}
-            />
+            <img src={trophyIcon} alt="trophy" style={styles.trophyImg} />
           </div>
-
           <div style={styles.trophyBar}>
             <span style={styles.trophiesText}>
               {formatNumber(playerState.trophies)}

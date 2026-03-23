@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react';
-import { colors } from '../styles/theme';
+import { useResources, useSend } from '../hooks/useGodot';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -13,7 +13,10 @@ const ITEMS = [
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function ResourceBar({ resources, sendToGodot }) {
+function ResourceBar() {
+  const resources = useResources();
+  const { sendToGodot } = useSend();
+
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
   }, [sendToGodot]);

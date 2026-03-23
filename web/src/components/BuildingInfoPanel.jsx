@@ -1,7 +1,11 @@
 import { memo, useCallback } from 'react';
+import { useSend, useBuilding } from '../hooks/useGodot';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
-function BuildingInfoPanel({ building, sendToGodot, onOpenTroops }) {
+function BuildingInfoPanel({ onOpenTroops }) {
+  const { sendToGodot } = useSend();
+  const { selectedBuilding: building } = useBuilding();
+
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => sendToGodot('upgrade_building'), [sendToGodot]);
 

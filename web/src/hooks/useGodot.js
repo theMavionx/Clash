@@ -1,6 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, createContext, useContext, useMemo, createElement } from 'react';
 
-export function useGodot() {
+// Separate contexts so components only re-render when their slice changes
+const SendContext = createContext(null);
+const ResourcesContext = createContext(null);
+const PlayerContext = createContext(null);
+const BuildingContext = createContext(null);
+const UIContext = createContext(null);
+
+export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [playerState, setPlayerState] = useState(null);
   const [resources, setResources] = useState({ gold: 0, wood: 0, ore: 0 });
@@ -73,9 +80,34 @@ export function useGodot() {
     }
   }, []);
 
-  return {
-    ready, playerState, resources, buildingDefs, troopLevels,
-    selectedBuilding, shopOpen, enemyMode, error, showRegister,
-    sendToGodot, setShopOpen, setSelectedBuilding,
-  };
+  // Stable context objects — only re-created when their specific values change
+  const sendCtx = useMemo(() => ({ sendToGodot, setShopOpen }), [sendToGodot, setShopOpen]);
+  const playerCtx = useMemo(() => playerState, [playerState]);
+  const resourcesCtx = useMemo(() => resources, [resources]);
+  const buildingCtx = useMemo(() => ({
+    buildingDefs, troopLevels, selectedBuilding,
+  }), [buildingDefs, troopLevels, selectedBuilding]);
+  const uiCtx = useMemo(() => ({
+    ready, shopOpen, enemyMode, error, showRegister,
+  }), [ready, shopOpen, enemyMode, error, showRegister]);
+
+  // Nested providers using createElement (no JSX needed in .js file)
+  return createElement(SendContext.Provider, { value: sendCtx },
+    createElement(UIContext.Provider, { value: uiCtx },
+      createElement(ResourcesContext.Provider, { value: resourcesCtx },
+        createElement(PlayerContext.Provider, { value: playerCtx },
+          createElement(BuildingContext.Provider, { value: buildingCtx },
+            children
+          )
+        )
+      )
+    )
+  );
 }
+
+// Granular hooks — components subscribe to exactly what they need
+export function useSend() { return useContext(SendContext); }
+export function useResources() { return useContext(ResourcesContext); }
+export function usePlayer() { return useContext(PlayerContext); }
+export function useBuilding() { return useContext(BuildingContext); }
+export function useUI() { return useContext(UIContext); }

@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
+import { useSend } from '../hooks/useGodot';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
-export default function RegisterPanel({ sendToGodot }) {
+function RegisterPanel() {
+  const { sendToGodot } = useSend();
   const [name, setName] = useState('');
 
   const handleSubmit = (e) => {
@@ -31,6 +33,8 @@ export default function RegisterPanel({ sendToGodot }) {
     </div>
   );
 }
+
+export default memo(RegisterPanel);
 
 const styles = {
   overlay: {

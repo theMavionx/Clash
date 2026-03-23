@@ -7,15 +7,15 @@ import BuildingInfoPanel from './BuildingInfoPanel';
 import BarracksPanel from './BarracksPanel';
 import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
+import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
-export default function GameUI({
-  ready, playerState, resources, buildingDefs, troopLevels,
-  selectedBuilding, shopOpen, enemyMode, error, showRegister,
-  sendToGodot, setShopOpen,
-}) {
+export default function GameUI() {
+  const { sendToGodot, setShopOpen } = useSend();
+  const { ready, shopOpen, error, showRegister } = useUI();
+  const { selectedBuilding } = useBuilding();
+
   const [showTroops, setShowTroops] = useState(false);
 
-  // Reset troops panel when building is deselected
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
   }, [selectedBuilding]);
@@ -39,46 +39,32 @@ export default function GameUI({
   if (!ready) return null;
 
   if (showRegister) {
-    return <RegisterPanel sendToGodot={sendToGodot} />;
+    return <RegisterPanel />;
   }
 
   return (
     <div style={styles.overlay}>
-      <ResourceBar resources={resources} sendToGodot={sendToGodot} />
-      <PlayerInfo playerState={playerState} />
-      <ActionButtons enemyMode={enemyMode} sendToGodot={sendToGodot} />
+      <ResourceBar />
+      <PlayerInfo />
+      <ActionButtons />
       <ErrorToast message={error} />
 
       {shopOpen && (
-        <ShopPanel
-          buildingDefs={buildingDefs}
-          sendToGodot={sendToGodot}
-          onClose={handleCloseShop}
-        />
+        <ShopPanel onClose={handleCloseShop} />
       )}
 
       {barnAsTroops ? (
         <BarracksPanel
           building={barnAsTroops}
-          buildingDefs={buildingDefs}
-          troopLevels={troopLevels}
-          sendToGodot={sendToGodot}
           onClose={handleCloseTroops}
         />
       ) : selectedBuilding && selectedBuilding.is_barracks && !selectedBuilding.is_enemy ? (
         <BarracksPanel
           building={selectedBuilding}
-          buildingDefs={buildingDefs}
-          troopLevels={troopLevels}
-          sendToGodot={sendToGodot}
           onClose={handleDeselectBuilding}
         />
       ) : (
-        <BuildingInfoPanel
-          building={selectedBuilding}
-          sendToGodot={sendToGodot}
-          onOpenTroops={handleOpenTroops}
-        />
+        <BuildingInfoPanel onOpenTroops={handleOpenTroops} />
       )}
     </div>
   );

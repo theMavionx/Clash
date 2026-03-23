@@ -1,4 +1,5 @@
 import { useState, memo, useCallback, useMemo } from 'react';
+import { useSend, useBuilding } from '../hooks/useGodot';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -46,37 +47,7 @@ const RES_ICONS = {
   ore: stoneIcon,
 };
 
-// Pre-computed tab styles to avoid recreating objects every render
-const TAB_STYLE_ACTIVE = {
-  ...(() => {
-    const s = {
-      padding: '0 24px',
-      fontSize: 15,
-      fontWeight: 900,
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      transition: 'all 0.1s',
-      outline: 'none',
-      border: 'none',
-    };
-    return s;
-  })(),
-  background: '#fdf8e7',
-  color: '#333',
-  marginTop: -4,
-  height: 56,
-  zIndex: 20,
-  borderBottom: 'none',
-  boxShadow: '0 4px 4px rgba(0,0,0,0.2)',
-  borderRadius: '0 0 12px 12px',
-  borderColor: '#d4c8b0',
-  borderLeft: '2px solid',
-  borderRight: '2px solid',
-};
-
-const TAB_STYLE_INACTIVE = {
+const tabBase = {
   padding: '0 24px',
   fontSize: 15,
   fontWeight: 900,
@@ -87,17 +58,31 @@ const TAB_STYLE_INACTIVE = {
   transition: 'all 0.1s',
   outline: 'none',
   border: 'none',
+  borderBottom: 'none',
+  borderRadius: '0 0 12px 12px',
+  borderColor: '#d4c8b0',
+  borderLeft: '2px solid',
+  borderRight: '2px solid',
+};
+
+const TAB_STYLE_ACTIVE = {
+  ...tabBase,
+  background: '#fdf8e7',
+  color: '#333',
+  marginTop: -4,
+  height: 56,
+  zIndex: 20,
+  boxShadow: '0 4px 4px rgba(0,0,0,0.2)',
+};
+
+const TAB_STYLE_INACTIVE = {
+  ...tabBase,
   background: '#78909C',
   color: '#fff',
   marginTop: 0,
   height: 52,
   zIndex: 10,
-  borderBottom: 'none',
   boxShadow: 'none',
-  borderRadius: '0 0 12px 12px',
-  borderColor: '#d4c8b0',
-  borderLeft: '2px solid',
-  borderRight: '2px solid',
 };
 
 const TAB_CONTENT_ACTIVE = {
@@ -136,7 +121,10 @@ const woodIconStyles = {
   log3: { position: 'absolute', width: 24, height: 6, background: '#c97a3f', borderRadius: 2, border: '1.5px solid #5c3012', zIndex: 10 },
 };
 
-function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
+function ShopPanel({ onClose }) {
+  const { sendToGodot } = useSend();
+  const { buildingDefs } = useBuilding();
+
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
 
@@ -152,7 +140,6 @@ function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.container} onClick={stopPropagation}>
-        {/* Buildings Grid / Scroll Area */}
         <div style={styles.cardArea}>
           <div style={styles.cardScroll}>
             {filteredBuildings.map(([id, def]) => (
@@ -172,9 +159,7 @@ function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
 
                 <div style={styles.cardInfo}>
                   <div style={styles.cardName}>{def.name}</div>
-                  <div style={styles.cardDesc}>
-                    {def.description || ''}
-                  </div>
+                  <div style={styles.cardDesc}>{def.description || ''}</div>
 
                   <div style={styles.costContainer}>
                     <div style={styles.costRow}>
@@ -197,7 +182,6 @@ function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
           </div>
         </div>
 
-        {/* Category Tabs area */}
         <div style={styles.tabArea}>
           <div style={styles.tabContainer}>
             {TABS.map(tab => {
@@ -217,7 +201,6 @@ function ShopPanel({ buildingDefs, sendToGodot, onClose }) {
           </div>
         </div>
 
-        {/* Close Button */}
         <button style={styles.closeBtn} onClick={onClose}>✕</button>
       </div>
     </div>

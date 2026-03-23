@@ -1,16 +1,16 @@
 import GodotCanvas from './components/GodotCanvas';
 import GameUI from './components/GameUI';
-import { useGodot } from './hooks/useGodot';
+import { GodotProvider } from './hooks/useGodot';
 import './index.css';
 
 export default function App() {
-  const godot = useGodot();
-
   return (
-    <div style={styles.container}>
-      <GodotCanvas />
-      <GameUI {...godot} />
-    </div>
+    <GodotProvider>
+      <div style={styles.container}>
+        <GodotCanvas />
+        <GameUI />
+      </div>
+    </GodotProvider>
   );
 }
 
