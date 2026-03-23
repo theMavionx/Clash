@@ -137,7 +137,7 @@ func _get_muzzle_pos() -> Vector3:
 	# Muzzle tip is +0.100 along barrel dir (AABB.end.z * scale.z * 0.001 = 0.1004).
 	if _barrel and _aim_node:
 		var barrel_dir: Vector3 = _aim_node.global_transform.basis.z
-		return _barrel.global_position + Vector3(0, 0.05, 0) + barrel_dir * 185.0
+		return _barrel.global_position + Vector3(0, 0.05, 0) + barrel_dir * 205.0
 	return global_position + Vector3(0, 0.18, 0)
 
 

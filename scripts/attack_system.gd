@@ -20,6 +20,11 @@ const SHIP_TROOPS = [
 	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb", "script": "res://scripts/ranger.gd"},
 ]
 
+## Minimum lateral distance between ship landing positions (world units)
+const SHIP_MIN_SEPARATION: float = 0.21
+## Radius within which ships push each other apart while sailing
+const SHIP_PUSH_RADIUS: float = 0.4
+
 var is_attack_mode: bool = false
 var _ships_placed: int = 0
 var ship_plane: MeshInstance3D
@@ -28,6 +33,10 @@ var water_y: float = 0.0
 var plane_center: Vector3 = Vector3.ZERO
 var plane_extent_x: float = 0.0
 var plane_extent_z: float = 0.0
+## Tracks stop positions of ships currently sailing / waiting to depart
+var _ship_stop_positions: Array = []
+## X marker nodes shown at each ship's landing spot
+var _ship_markers: Array = []
 
 
 func _ready() -> void:
@@ -44,6 +53,30 @@ func _ready() -> void:
 	if water:
 		water_y = water.global_position.y
 	print("AttackSystem ready. shipPlane center: ", plane_center, " water_y: ", water_y)
+
+
+func _process(delta: float) -> void:
+	_separate_ships(delta)
+
+
+## Push overlapping ships apart so they never clip through each other.
+func _separate_ships(delta: float) -> void:
+	var ships = get_tree().get_nodes_in_group("ships")
+	for i in ships.size():
+		var a = ships[i]
+		if not is_instance_valid(a):
+			continue
+		for j in range(i + 1, ships.size()):
+			var b = ships[j]
+			if not is_instance_valid(b):
+				continue
+			var diff = a.global_position - b.global_position
+			diff.y = 0
+			var dist = diff.length()
+			if dist < SHIP_PUSH_RADIUS and dist > 0.001:
+				var push = diff.normalized() * (SHIP_PUSH_RADIUS - dist) * delta * 4.0
+				a.global_position += push
+				b.global_position -= push
 
 
 func enter_attack_mode() -> void:
@@ -65,6 +98,12 @@ func exit_attack_mode() -> void:
 	if ship_plane:
 		ship_plane.visible = false
 		ship_plane.material_override = null
+	# Remove all X markers and reset tracking arrays
+	for m in _ship_markers:
+		if is_instance_valid(m):
+			m.queue_free()
+	_ship_markers.clear()
+	_ship_stop_positions.clear()
 
 
 func _input(event: InputEvent) -> void:
@@ -115,6 +154,55 @@ func _get_mouse_hit() -> Vector3:
 	return Vector3.INF
 
 
+## Returns a stop position offset laterally so it doesn't overlap existing ships.
+func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
+	var pos = desired
+	for attempt in range(10):
+		var overlap = false
+		for existing in _ship_stop_positions:
+			if pos.distance_to(existing) < SHIP_MIN_SEPARATION:
+				overlap = true
+				break
+		if not overlap:
+			return pos
+		# Alternate left / right, increasing distance each round
+		var side = 1 if (attempt % 2 == 0) else -1
+		var dist = ceil((attempt + 1) / 2.0) * SHIP_MIN_SEPARATION
+		pos = desired + lateral_dir * dist * side
+	return pos
+
+
+## Creates a pirate flag marker at the ship's landing position.
+func _create_x_marker(pos: Vector3) -> Node3D:
+	var flag_res = load("res://Model/flag/pirate_flag_animated.glb")
+	if flag_res == null:
+		push_warning("AttackSystem: flag model not found")
+		return Node3D.new()
+
+	var flag = flag_res.instantiate()
+	flag.scale = Vector3(0.000625, 0.000625, 0.000625)
+	get_tree().current_scene.add_child(flag)
+	flag.global_position = pos + Vector3(0, -0.08, 0)
+
+	# Play the waving animation on loop
+	var anim_player = _find_child_anim_player(flag)
+	if anim_player and anim_player.has_animation("flag|Action"):
+		anim_player.get_animation("flag|Action").loop_mode = Animation.LOOP_LINEAR
+		anim_player.play("flag|Action")
+
+	return flag
+
+
+func _find_child_anim_player(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node
+	for child in node.get_children():
+		var result = _find_child_anim_player(child)
+		if result:
+			return result
+	return null
+
+
 func _spawn_single_ship(target: Vector3) -> void:
 	var ship_res = load(ship_scene_path)
 	if ship_res == null:
@@ -132,8 +220,7 @@ func _spawn_single_ship(target: Vector3) -> void:
 	if sail_dir.dot(to_plane) < 0:
 		sail_dir = -sail_dir
 
-	# Ship always stops at inner edge of ShipPlane (closest to island)
-	# but lateral position matches where the player clicked
+	# Ship stops at inner edge of ShipPlane matching player's lateral click
 	var pb = ship_plane.global_transform.basis
 	var lateral_dir = pb.x.normalized()
 	var offset = target - plane_center
@@ -141,8 +228,17 @@ func _spawn_single_ship(target: Vector3) -> void:
 	lateral = clampf(lateral, -plane_extent_x, plane_extent_x)
 	var stop_pos = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
 	stop_pos.y = plane_y
+
+	# Offset laterally so this ship doesn't land on top of an existing one
+	stop_pos = _get_adjusted_stop_pos(stop_pos, lateral_dir)
+	_ship_stop_positions.append(stop_pos)
+
 	var spawn_pos = stop_pos + sail_dir * spawn_distance
 	spawn_pos.y = plane_y
+
+	# X marker at the landing spot
+	var marker = _create_x_marker(stop_pos)
+	_ship_markers.append(marker)
 
 	# Wrap ship in a pivot so we can rock independently of movement
 	var pivot = Node3D.new()
@@ -171,7 +267,7 @@ func _spawn_single_ship(target: Vector3) -> void:
 	var tween = create_tween()
 	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_trans(Tween.TRANS_LINEAR)
 
-	# When ship arrives → stop rocking, spawn troops
+	# When ship arrives → remove X marker, free stop slot, deploy troops
 	var arrived_pos = stop_pos
 	var s_dir = sail_dir
 	var ship_idx = _ships_placed
@@ -180,6 +276,9 @@ func _spawn_single_ship(target: Vector3) -> void:
 		bob_tween.kill()
 		pitch_tween.kill()
 		ship.rotation = Vector3.ZERO
+		if is_instance_valid(marker):
+			marker.queue_free()
+		_ship_markers.erase(marker)
 		_deploy_troops_from_ship(arrived_pos, s_dir, ship_idx)
 	)
 	print("Ship %d/%d sailing to: %s" % [_ships_placed + 1, max_ships, stop_pos])

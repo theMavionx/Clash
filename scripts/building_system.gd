@@ -2002,7 +2002,8 @@ func _get_or_create_cloud() -> Node:
 
 
 func _switch_to_enemy_island() -> void:
-	is_viewing_enemy = true
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs.is_viewing_enemy = true
 	var bridge = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("enemy_mode", {
@@ -2080,7 +2081,8 @@ func _switch_to_enemy_island() -> void:
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
-	is_viewing_enemy = false
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs.is_viewing_enemy = false
 	var bridge = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("enemy_mode", {"active": false})
