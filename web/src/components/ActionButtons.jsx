@@ -1,9 +1,10 @@
-import { colors, cartoonBtn } from '../styles/theme';
+import { cartoonBtn } from '../styles/theme';
+import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 
 export default function ActionButtons({ enemyMode, sendToGodot }) {
   if (enemyMode.active) {
     return (
-      <div style={styles.wrap}>
+      <div style={styles.wrapRight}>
         <div style={styles.enemyBadge}>
           ⚔️ {enemyMode.name} • {enemyMode.trophies} 🏆
         </div>
@@ -18,39 +19,79 @@ export default function ActionButtons({ enemyMode, sendToGodot }) {
   }
 
   return (
-    <div style={styles.wrap}>
-      <button
-        style={cartoonBtn('#1565C0', '#0D47A1')}
-        onClick={() => sendToGodot('find_enemy')}
-      >
-        🔍 Find Enemy
-      </button>
-      <button
-        style={cartoonBtn('#C62828', '#8E0000')}
-        onClick={() => sendToGodot('attack')}
-      >
-        ⚔️ Attack
-      </button>
-      <button
-        style={cartoonBtn('#2E7D32', '#1B5E20')}
-        onClick={() => sendToGodot('open_shop')}
-      >
-        🔨 Build
-      </button>
-    </div>
+    <>
+      <div style={styles.wrapLeft}>
+        <button
+          style={cartoonBtn('#1565C0', '#0D47A1')}
+          onClick={() => sendToGodot('find_enemy')}
+        >
+          🔍 Find Enemy
+        </button>
+      </div>
+      <div style={styles.wrapRight}>
+        <button
+          style={styles.buildBtn}
+          onClick={() => sendToGodot('open_shop')}
+        >
+          <img src={buildIcon} alt="build" style={styles.buildIconImg} />
+          <span style={styles.buildText}>BUILD</span>
+        </button>
+      </div>
+    </>
   );
 }
 
+const base = {
+  position: 'fixed',
+  bottom: 20, 
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  pointerEvents: 'all',
+  zIndex: 10,
+};
+
 const styles = {
-  wrap: {
-    position: 'fixed',
-    bottom: 16,
-    right: 16,
+  wrapLeft: { ...base, left: 20 },
+  wrapRight: { ...base, right: 20 },
+  buildBtn: {
+    width: 120, 
+    height: 110,
+    borderRadius: 24,
+    border: '4px solid #0D47A1',
+    background: 'linear-gradient(180deg, #1976D2 0%, #0D47A1 100%)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
-    pointerEvents: 'all',
-    zIndex: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxShadow: '0 6px 0 #0D47A1, 0 10px 20px rgba(0,0,0,0.5)',
+    transition: 'transform 0.1s, box-shadow 0.1s',
+    userSelect: 'none',
+    padding: 0, 
+    outline: 'none',
+    overflow: 'hidden',
+  },
+  buildIconImg: {
+    width: 115, 
+    height: 115,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.4))',
+    marginBottom: -25, 
+    marginTop: -10, 
+    marginLeft: -10, 
+    transform: 'translate(-4px, -6px)', 
+  },
+  buildText: {
+    color: '#fff',
+    fontSize: 14, 
+    fontWeight: 900,
+    WebkitTextStroke: '1px #000',
+    textShadow: '0 2px 0 rgba(0,0,0,0.5)',
+    letterSpacing: '0.5px',
+    zIndex: 2,
+    position: 'relative',
+    pointerEvents: 'none',
   },
   enemyBadge: {
     background: 'linear-gradient(180deg, #B71C1C, #7F0000)',

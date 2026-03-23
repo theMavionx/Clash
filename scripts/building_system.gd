@@ -1512,6 +1512,8 @@ func _upgrade_selected() -> void:
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
 			b.node.add_child(model)
+	# Notify React with updated building data
+	_select_building(b)
 
 
 func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:

@@ -108,8 +108,9 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			if bs:
 				bs._return_home()
 		"upgrade_building":
-			if bs:
-				bs._upgrade_selected()
+			var active = _get_active_building_system()
+			if active:
+				active._upgrade_selected()
 		"upgrade_troop":
 			if bs:
 				var tn = data.get("troop_name", "")
@@ -117,8 +118,9 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"register":
 			_do_register(data.get("name", ""))
 		"deselect_building":
-			if bs:
-				bs._deselect_building()
+			var active = _get_active_building_system()
+			if active:
+				active._deselect_building()
 
 
 func _do_register(player_name: String) -> void:
@@ -172,3 +174,12 @@ func _get_building_system() -> Node:
 	if systems.size() > 0:
 		return systems[0]
 	return null
+
+
+func _get_active_building_system() -> Node:
+	# Return whichever system currently has a building selected
+	var systems = get_tree().get_nodes_in_group("building_systems")
+	for s in systems:
+		if s.selected_building.size() > 0:
+			return s
+	return _get_building_system()
