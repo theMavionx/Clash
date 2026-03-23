@@ -110,6 +110,15 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			var hit = _get_mouse_hit()
 			if hit != Vector3.INF:
+				# Ignore click if too close to an existing ship landing spot
+				var too_close = false
+				for existing in _ship_stop_positions:
+					if hit.distance_to(existing) < SHIP_MIN_SEPARATION:
+						too_close = true
+						break
+				if too_close:
+					get_viewport().set_input_as_handled()
+					return
 				_spawn_single_ship(hit)
 				_ships_placed += 1
 				get_viewport().set_input_as_handled()
