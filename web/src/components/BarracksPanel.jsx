@@ -487,6 +487,8 @@ const styles = {
     flexDirection: 'column',
     gap: 20,
     marginTop: 20,
+    position: 'relative',
+    zIndex: 10,
   },
   sectionTitle: {
     margin: 0,
@@ -658,6 +660,8 @@ const styles = {
     flexDirection: 'column',
     gap: 20,
     marginTop: 20,
+    position: 'relative',
+    zIndex: 10,
   },
   reqGrid: {
     display: 'flex',
