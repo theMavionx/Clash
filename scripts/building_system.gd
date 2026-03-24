@@ -90,6 +90,17 @@ var building_defs: Dictionary = {
 		"hp_levels": [900, 1600, 2800],
 		"cost": {"gold": 600, "wood": 350, "ore": 200},
 	},
+	"tombstone": {
+		"name": "Tombstone",
+		"cells": Vector2i(1, 1),
+		"color": Color(0.4, 0.4, 0.45, 0.5),
+		"height": 0.3,
+		"scene": "res://Model/Tombstone/GLB format/1.glb",
+		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb"],
+		"model_scale": 0.2,
+		"hp_levels": [1000, 1500, 2000],
+		"cost": {"gold": 100},
+	},
 }
 
 # ── Resources ─────────────────────────────────────────────────

@@ -131,6 +131,11 @@ const BUILDING_DEFS = {
     hp_levels: [900, 1600, 2800],
     cost: { gold: 600, wood: 350, ore: 200 },
   },
+  tombstone: {
+    size: [1, 1], max_level: 3,
+    hp_levels: [1000, 1500, 2000],
+    cost: { gold: 100, wood: 0, ore: 0 },
+  },
 };
 
 // ---------- Troop Definitions ----------
@@ -152,6 +157,7 @@ const TROPHY_TABLE = {
   port:      [15, 35, 70],
   sawmill:   [10, 25, 50],
   turret:    [20, 45, 90],
+  tombstone: [5, 10, 20],
 };
 
 // ---------- Helper Functions ----------

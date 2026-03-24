@@ -3,7 +3,7 @@
     "godot": {
       "command": "node",
       "args": [
-        "C:/Users/Admin/Godot-MCP/server/dist/index.js"
+        "C:/Users/Tima/Desktop/Godot-MCP-main/server/dist/index.js"
       ],
       "env": {
         "GODOT_PORT": "9080"
