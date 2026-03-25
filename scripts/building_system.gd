@@ -1926,6 +1926,8 @@ func _deselect_building() -> void:
 func _upgrade_selected() -> void:
 	if selected_building.size() == 0 or _server_busy:
 		return
+	if selected_building.get("is_upgrading", false):
+		return
 	var def = building_defs[selected_building.id]
 	var level = selected_building.get("level", 1)
 	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
