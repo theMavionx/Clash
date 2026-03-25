@@ -1676,7 +1676,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	up_lbl.render_priority = 10
 	up_lbl.outline_modulate = Color(0, 0, 0, 1)
 	up_lbl.outline_size = 4
-	up_lbl.font_size = 50
+	up_lbl.font_size = 17
 	up_lbl.position = Vector3(0, 1.2, 0)
 	model.add_child(up_lbl)
 
@@ -1763,7 +1763,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	lbl.outline_modulate = Color(0, 0, 0, 1)
 	lbl.outline_size = 4
 	lbl.modulate = Color(0.1, 0.9, 1.0, 0.0)
-	lbl.font_size = 60
+	lbl.font_size = 20
 	lbl.position = Vector3(0, 0.8, 0)
 	model.add_child(lbl)
 	

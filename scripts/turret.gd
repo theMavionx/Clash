@@ -8,7 +8,12 @@ const LEVEL_STATS = {
 	3: {"damage": 320, "fire_rate": 0.166},
 }
 
-const MUZZLE_FLASH_SCENE = preload("res://assets/BinbunVFX/muzzle_flash/effects/short_flash/short_flash_05.tscn")
+const MUZZLE_FLASH_FRAMES: Array[String] = [
+	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png",
+	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png",
+]
+const FLASH_DURATION: float = 0.1   # total flash time
+const FLASH_SCALE: float   = 0.15  # world-space size of flash sprite
 
 const TRAIL_LENGTH: float   = 0.18
 const TRAIL_RADIUS: float   = 0.004
@@ -37,7 +42,7 @@ const TARGET_SEARCH_INTERVAL: float = 0.15
 
 ## Shared materials — one for all turrets
 static var _shared_trail_mat: StandardMaterial3D = null
-static var _shared_flash_mat: StandardMaterial3D = null
+static var _flash_textures: Array = []  # loaded Texture2D frames
 
 ## Object pool
 var _bullet_pool: Array = []   # pre-created {node, trail, flash} dicts
@@ -80,16 +85,12 @@ func _ready() -> void:
 func _build_pool() -> void:
 	if _pool_ready:
 		return
-	# Init shared flash material once
-	if _shared_flash_mat == null:
-		_shared_flash_mat = StandardMaterial3D.new()
-		_shared_flash_mat.albedo_color = Color(1.0, 0.95, 0.4, 1.0)
-		_shared_flash_mat.emission_enabled = true
-		_shared_flash_mat.emission = Color(1.0, 0.85, 0.2, 1.0)
-		_shared_flash_mat.emission_energy_multiplier = 16.0
-		_shared_flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_shared_flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_shared_flash_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	# Load flash textures once
+	if _flash_textures.is_empty():
+		for path in MUZZLE_FLASH_FRAMES:
+			var tex = load(path)
+			if tex:
+				_flash_textures.append(tex)
 
 	# Build POOL_BATCH entries per frame to spread load
 	var scene_root = get_tree().current_scene
@@ -109,13 +110,23 @@ func _build_pool() -> void:
 		trail.visible           = false
 		scene_root.add_child(trail)
 
-		var flash_mesh = SphereMesh.new()
-		flash_mesh.radius = 0.06
-		flash_mesh.height = 0.12
-		# Each flash needs its own material instance for alpha fade
-		var flash_mat = _shared_flash_mat.duplicate()
+		# Muzzle flash — QuadMesh with ADD blend (black bg becomes invisible)
 		var flash = MeshInstance3D.new()
-		flash.mesh = flash_mesh
+		var quad = QuadMesh.new()
+		quad.size = Vector2(FLASH_SCALE, FLASH_SCALE)
+		# Flash in PNG is off-center (left side) — shift quad so flash aligns with muzzle
+		quad.center_offset = Vector3(FLASH_SCALE * 0.2, 0.0, 0.0)
+		flash.mesh = quad
+		var flash_mat = StandardMaterial3D.new()
+		flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		flash_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		flash_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		flash_mat.no_depth_test = true
+		flash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		if _flash_textures.size() > 0:
+			flash_mat.albedo_texture = _flash_textures[0]
+		flash_mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
 		flash.material_override = flash_mat
 		flash.visible = false
 		scene_root.add_child(flash)
@@ -124,11 +135,11 @@ func _build_pool() -> void:
 			"node": bullet,
 			"trail": trail,
 			"flash": flash,
-			"flash_mat": flash_mat,
 			"active": false,
 			"target": null,
 			"spawn_pos": Vector3.ZERO,
 			"flash_timer": 0.0,
+			"flash_frame": 0,
 		})
 		_pool_built += 1
 		built_this_frame += 1
@@ -255,7 +266,7 @@ func _spawn_bullet() -> void:
 	b.active = true
 	b.target = _target
 	b.spawn_pos = spawn_pos
-	b.flash_timer = 0.08
+	b.flash_timer = FLASH_DURATION
 
 	# Activate bullet node
 	b.node.global_position = spawn_pos
@@ -264,10 +275,14 @@ func _spawn_bullet() -> void:
 	# Reset trail
 	b.trail.visible = false
 
-	# Muzzle flash sphere
+	# Muzzle flash quad
 	b.flash.global_position = spawn_pos
 	b.flash.visible = true
-	b.flash_mat.albedo_color.a = 1.0
+	b.flash_frame = 0
+	var fmat = b.flash.material_override as StandardMaterial3D
+	fmat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
+	if _flash_textures.size() > 0:
+		fmat.albedo_texture = _flash_textures[0]
 
 	_active_bullets.append(b)
 
@@ -277,10 +292,22 @@ func _update_bullets(delta: float) -> void:
 	while i >= 0:
 		var b = _active_bullets[i]
 
-		# Fade muzzle flash
+		# Animate muzzle flash — swap frames then fade out
 		if b.flash_timer > 0:
 			b.flash_timer -= delta
-			b.flash_mat.albedo_color.a = clampf(b.flash_timer / 0.08, 0.0, 1.0)
+			var progress = 1.0 - clampf(b.flash_timer / FLASH_DURATION, 0.0, 1.0)
+			# Switch texture frame based on progress
+			var frame_idx = int(progress * _flash_textures.size())
+			frame_idx = clampi(frame_idx, 0, _flash_textures.size() - 1)
+			if frame_idx != b.flash_frame and frame_idx < _flash_textures.size():
+				var fmat = b.flash.material_override as StandardMaterial3D
+				fmat.albedo_texture = _flash_textures[frame_idx]
+				b.flash_frame = frame_idx
+			# Fade out in last 40%
+			if progress > 0.6:
+				var fmat = b.flash.material_override as StandardMaterial3D
+				var fade = (1.0 - progress) / 0.4
+				fmat.albedo_color = Color(1.5 * fade, 1.2 * fade, 0.8 * fade, fade)
 			if b.flash_timer <= 0:
 				b.flash.visible = false
 
