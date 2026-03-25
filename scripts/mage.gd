@@ -4,7 +4,7 @@ extends BaseTroop
 
 @export var staff_scene: String = "res://Model/Characters/Assets/staff.gltf"
 @export var projectile_fly_speed: float = 1.5
-@export var projectile_color: Color = Color(0.55, 0.2, 1.0)
+@export var projectile_color: Color = Color(0.65, 0.1, 1.0)
 @export var hit_distance: float = 0.05
 
 const POOL_SIZE: int = 6
@@ -29,7 +29,7 @@ const LEVEL_STATS = {
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.4
-	attack_range = 0.74
+	attack_range = 0.95
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed
@@ -91,8 +91,8 @@ func _build_pool() -> void:
 
 	if _shared_mesh == null:
 		_shared_mesh = SphereMesh.new()
-		_shared_mesh.radius = 0.054
-		_shared_mesh.height = 0.108
+		_shared_mesh.radius = 0.038
+		_shared_mesh.height = 0.076
 		_shared_mesh.radial_segments = 8
 		_shared_mesh.rings = 4
 

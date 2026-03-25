@@ -26,7 +26,7 @@ const LEVEL_STATS = {
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.55
-	attack_range = 0.80
+	attack_range = 0.95
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed
