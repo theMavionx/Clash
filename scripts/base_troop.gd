@@ -5,8 +5,8 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
-@export var separation_radius: float = 0.15
-@export var separation_force: float = 0.4
+@export var separation_radius: float = 0.22
+@export var separation_force: float = 0.6
 
 var level: int = 1
 var hp: int = 100
@@ -410,33 +410,47 @@ func _move_to_target(delta: float) -> void:
 	var dir = diff / dist
 
 	var lateral = Vector3(-dir.z, 0, dir.x)
-	var look_ahead = 0.8  # scan distance ahead
+	var look_ahead = 1.2  # scan distance ahead
 
-	# ── Proactive pathfinding: scan ahead for obstacles ──
+	# ── Proactive pathfinding: scan ahead, predict other troop movement ──
 	var best_dir = dir
 	var best_score = -INF
 	var all_troops = _get_troops_cached()
-	var angles = [0.0, 0.4, -0.4, 0.8, -0.8, 1.3, -1.3, 1.8, -1.8]
+
+	# Pre-compute predicted positions of other troops (where they'll be in ~0.3s)
+	var other_positions: Array = []
+	for other in all_troops:
+		if other == self or not is_instance_valid(other):
+			continue
+		var opos = other.global_position
+		opos.y = 0
+		# Predict: if running, extrapolate forward
+		if other is BaseTroop and other.state == State.RUNNING and other.target_building.size() > 0:
+			var other_target = other.target_building.get("node")
+			if is_instance_valid(other_target):
+				var other_dir = (other_target.global_position - opos).normalized()
+				opos += other_dir * other.move_speed * 0.3
+		other_positions.append(opos)
+
+	var angles = [0.0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6, 2.2, -2.2]
 	for angle_offset in angles:
 		var test_dir = (dir + lateral * angle_offset).normalized()
 		var test_pos = global_position + test_dir * look_ahead
-		# Prefer target direction (small bonus so obstacles can override)
+		# Prefer target direction
 		var score = test_dir.dot(dir) * 3.0
 
-		# Penalize troops blocking this path
-		for other in all_troops:
-			if other == self or not is_instance_valid(other):
-				continue
-			var to_other = other.global_position - global_position
-			to_other.y = 0
+		# Penalize predicted troop positions blocking this path
+		for opos in other_positions:
+			var to_other = opos - global_position
 			var od = to_other.length()
 			if od > look_ahead or od < 0.001:
 				continue
 			var threat = test_dir.dot(to_other / od)
-			if threat > 0.2:
-				score -= (1.0 - od / look_ahead) * threat * 15.0
+			if threat > 0.1:
+				var proximity = 1.0 - od / look_ahead
+				score -= proximity * proximity * threat * 20.0
 
-		# Penalize non-target buildings blocking this path
+		# Penalize non-target buildings
 		var target_node = target_building.get("node")
 		for entry in _get_buildings_cached():
 			if entry.b.get("node") == target_node:
@@ -447,33 +461,41 @@ func _move_to_target(delta: float) -> void:
 			if bd > look_ahead or bd < 0.001:
 				continue
 			var threat = test_dir.dot(to_bldg / bd)
-			if threat > 0.3:
-				score -= (1.0 - bd / look_ahead) * threat * 12.0
+			if threat > 0.2:
+				score -= (1.0 - bd / look_ahead) * threat * 15.0
 
-		# Heavy penalty if direction leads to water (island edge)
+		# Heavy penalty for water
 		var clamped = _clamp_to_island(test_pos)
-		var clamp_dist = test_pos.distance_to(clamped)
-		if clamp_dist > 0.01:
-			score -= 30.0
+		if test_pos.distance_to(clamped) > 0.01:
+			score -= 40.0
 
 		if score > best_score:
 			best_score = score
 			best_dir = test_dir
 
-	# Responsive steering — follow best direction quickly
-	dir = (dir * 0.3 + best_dir * 0.7).normalized()
+	# Responsive steering
+	dir = (dir * 0.25 + best_dir * 0.75).normalized()
 
-	# Stuck detection — retarget if truly stuck
+	# Stuck detection — if not moving, walk along island edge toward target
 	_stuck_timer += delta
-	if _stuck_timer >= 0.8:
+	if _stuck_timer >= 0.5:
 		var moved = global_position.distance_to(_last_pos)
 		if moved < move_speed * 0.05:
 			_orbit_angle += 1.0
-			if _orbit_angle > 4.0:
+			# Walk along edge: use lateral direction that gets closer to target
+			var left_pos = _clamp_to_island(global_position + lateral * 0.3)
+			var right_pos = _clamp_to_island(global_position - lateral * 0.3)
+			var left_to_target = left_pos.distance_to(target_pos)
+			var right_to_target = right_pos.distance_to(target_pos)
+			if left_to_target < right_to_target:
+				dir = (lateral * 0.8 + dir * 0.2).normalized()
+			else:
+				dir = (-lateral * 0.8 + dir * 0.2).normalized()
+			if _orbit_angle > 6.0:
 				_orbit_angle = 0.0
 				_find_alternative_target()
 		else:
-			_orbit_angle = 0.0
+			_orbit_angle = maxf(_orbit_angle - 0.5, 0.0)
 		_last_pos = global_position
 		_stuck_timer = 0.0
 
