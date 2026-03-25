@@ -47,12 +47,8 @@ func _ready() -> void:
 	ship_plane.visible = false
 	plane_center = ship_plane.global_position
 	plane_y = plane_center.y
-	# BoxMesh default size is 1x1x1, vertices from -0.5 to 0.5
-	# basis.length() gives the half-size in world space for default mesh
-	# But shipPlane is child of Island which has large scale, so basis is already scaled
-	# We need half the basis length since the mesh goes from -0.5 to 0.5
-	plane_extent_x = ship_plane.global_transform.basis.x.length() * 0.5
-	plane_extent_z = ship_plane.global_transform.basis.z.length() * 0.5
+	plane_extent_x = ship_plane.global_transform.basis.x.length()
+	plane_extent_z = ship_plane.global_transform.basis.z.length()
 	var water = get_node_or_null(water_node_path)
 	if water:
 		water_y = water.global_position.y
