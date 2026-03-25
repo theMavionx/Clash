@@ -108,6 +108,12 @@ func place_building(type: String, grid_x: int, grid_z: int, grid_index: int = 0)
 		building_placed.emit(response)
 	return response
 
+func collect_resources(building_id: int) -> Dictionary:
+	return await _http_post("/buildings/%d/collect" % building_id, {})
+
+func get_production_status() -> Variant:
+	return await _http_get("/buildings/production")
+
 func upgrade_building(building_id: int) -> Dictionary:
 	var response = await _http_post("/buildings/%d/upgrade" % building_id, {})
 	if not response.has("error"):

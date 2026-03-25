@@ -110,6 +110,20 @@ router.post('/buildings/place', auth, (req, res) => {
   res.json(result);
 });
 
+// Collect resources from a production building
+router.post('/buildings/:id/collect', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const result = db.collectResources(req.player.id, buildingId);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
+// Get production status for all resource buildings
+router.get('/buildings/production', auth, (req, res) => {
+  res.json(db.getProductionStatus(req.player.id));
+});
+
 // Upgrade a building
 router.post('/buildings/:id/upgrade', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);

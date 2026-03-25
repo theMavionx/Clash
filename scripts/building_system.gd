@@ -165,6 +165,7 @@ var _cel_shader: Shader
 
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
+var world_ui_canvas: CanvasLayer
 var build_button: Button
 var attack_button: Button
 var _search_tween: Tween
@@ -288,6 +289,7 @@ func _ready() -> void:
 		for bs in get_tree().get_nodes_in_group("building_systems"):
 			if bs != self and bs.canvas:
 				canvas = bs.canvas
+				world_ui_canvas = bs.world_ui_canvas
 				_create_port_panel()
 				break
 	if always_show_grid:
@@ -328,6 +330,8 @@ func _process(_delta: float) -> void:
 		if _produce_timer >= PRODUCE_TICK:
 			_produce_timer -= PRODUCE_TICK
 			_tick_production()
+		# Update collect icons above production buildings
+		_update_collect_icons()
 
 
 func _tick_production() -> void:
@@ -348,77 +352,229 @@ func _tick_production() -> void:
 		b["stored"] = stored
 		if stored >= 1.0:
 			any_ready = true
-	if any_ready:
-		_send_collectible_buildings()
+	# positions updated in _process every 3rd frame
 
 
-func _send_collectible_buildings() -> void:
-	var bridge = get_node_or_null("/root/Bridge")
-	if not bridge:
+func _update_collect_icons() -> void:
+	var cam = get_viewport().get_camera_3d()
+	if not cam:
 		return
-	var collectibles = []
+		
 	for b in placed_buildings:
 		var def = building_defs.get(b.id, {})
 		if not def.has("produces"):
 			continue
 		var stored = b.get("stored", 0.0)
-		if stored < 1.0:
-			continue
 		var node = b.get("node")
 		if not is_instance_valid(node):
 			continue
-		collectibles.append({
-			"server_id": b.get("server_id", -1),
-			"building_id": b.id,
-			"resource": def.produces,
-			"amount": int(stored),
-			"position": _get_screen_pos(node),
-		})
-	if collectibles.size() > 0:
-		bridge.send_to_react("collectible_resources", {"buildings": collectibles})
+		var icon = b.get("_collect_icon") as Control
+		if stored >= 1.0:
+			if not icon:
+				icon = _create_collect_icon(b, node, def)
+				b["_collect_icon"] = icon
+			icon.visible = true
+			
+			# Project to 2D
+			var base_pos = node.global_position
+			var def_height = def.get("height", 0.4)
+			var target_3d = base_pos + Vector3(0, def_height + 0.1, 0)
+			
+			if cam.is_position_behind(target_3d):
+				icon.visible = false
+			else:
+				var pos2d = cam.unproject_position(target_3d)
+				
+				var anim_scale = icon.get_meta("anim_scale", 1.0)
+				icon.scale = Vector2.ONE * anim_scale
+				
+				var scaled_size = icon.size * icon.scale
+				icon.position = pos2d - scaled_size / 2.0
+				
+				# Floating bounce effect
+				icon.position.y += sin(Time.get_ticks_msec() * 0.003) * 6.0
+		else:
+			if icon and is_instance_valid(icon):
+				icon.visible = false
 
 
-func _get_screen_pos(node: Node3D) -> Dictionary:
-	var cam = BaseTroop._get_camera_cached()
-	if not cam:
-		return {"x": 0, "y": 0}
-	var pos3d = node.global_position + Vector3(0, 0.3, 0)
-	if not cam.is_position_behind(pos3d):
-		var pos2d = cam.unproject_position(pos3d)
-		return {"x": int(pos2d.x), "y": int(pos2d.y)}
-	return {"x": -100, "y": -100}
+const COLLECT_ICON_TEXTURES = {
+	"ore": "res://web/src/assets/resources/stone_bar.png",
+	"wood": "res://web/src/assets/resources/wood_bar.png",
+	"gold": "res://web/src/assets/resources/gold_bar.png",
+}
+
+func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary) -> Control:
+	var btn = TextureButton.new()
+	btn.custom_minimum_size = Vector2(56, 56)
+	btn.size = Vector2(56, 56)
+	
+	var bg = Panel.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(1.0, 1.0, 1.0, 0.95)
+	style.corner_radius_top_left = 28
+	style.corner_radius_top_right = 28
+	style.corner_radius_bottom_left = 28
+	style.corner_radius_bottom_right = 28
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 3
+	
+	# Determine border color based on resource type
+	var res_type = def.get("produces", "gold")
+	if res_type == "gold":
+		style.border_color = Color(0.9, 0.75, 0.2)
+	elif res_type == "wood":
+		style.border_color = Color(0.45, 0.7, 0.3)
+	elif res_type == "ore":
+		style.border_color = Color(0.6, 0.65, 0.7)
+	else:
+		style.border_color = Color(0.5, 0.5, 0.5)
+		
+	style.shadow_color = Color(0, 0, 0, 0.2)
+	style.shadow_size = 4
+	style.shadow_offset = Vector2(0, 3)
+	bg.add_theme_stylebox_override("panel", style)
+	btn.add_child(bg)
+	
+	# Resource Icon inside
+	var tex_rect = TextureRect.new()
+	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tex_rect.offset_left = 10
+	tex_rect.offset_top = 10
+	tex_rect.offset_right = -10
+	tex_rect.offset_bottom = -10
+	tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	
+	var tex_path = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
+	var tex = load(tex_path)
+	if tex:
+		tex_rect.texture = tex
+	btn.add_child(tex_rect)
+	
+	btn.pressed.connect(func(): _click_collect_icon(btn, b, res_type))
+	
+	if world_ui_canvas:
+		world_ui_canvas.add_child(btn)
+	else:
+		push_warning("world_ui_canvas not valid")
+		
+	# Spawn pop-up animation
+	btn.pivot_offset = Vector2(28, 28)
+	btn.set_meta("anim_scale", 0.0)
+	var tw = btn.create_tween().set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_method(func(v): btn.set_meta("anim_scale", v), 0.0, 1.0, 0.4)
+	
+	return btn
 
 
-func _collect_building_resource(server_id: int) -> void:
-	# Find building by server_id
-	for b in placed_buildings:
-		if b.get("server_id", -1) != server_id:
-			continue
-		var def = building_defs.get(b.id, {})
-		if not def.has("produces"):
-			return
-		var amount = int(b.get("stored", 0.0))
-		if amount <= 0:
-			return
-		b["stored"] = 0.0
-		var res_type = def.produces
-		resources[res_type] = resources.get(res_type, 0) + amount
+func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
+	var start_pos = btn.global_position + btn.size / 2.0
+	btn.visible = false
+	btn.set_meta("anim_scale", 0.0) # Hide completely until refilled
+	
+	_spawn_collection_flying_icon(start_pos, res_type)
+	_collect_and_animate(b, res_type)
+
+func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void:
+	var tex_path = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
+	var tex = load(tex_path)
+	if not tex: return
+
+	# Determine target UI element: React ResourceBar is at the Top Right.
+	# The gap is 16px, pill width is ~120px, icon offset is -12px.
+	# Gold is first (leftmost), Wood is middle, Ore is rightmost.
+	var screen_w = get_viewport().get_visible_rect().size.x
+	var target_pos = Vector2(screen_w - 360.0, 40.0) # default (Gold)
+	if res_type == "wood":
+		target_pos = Vector2(screen_w - 220.0, 40.0)
+	elif res_type == "ore":
+		target_pos = Vector2(screen_w - 80.0, 40.0)
+		
+	# Fallback if Godot UI is actually visible and we want to target it instead? We just assume React UI positions.
+	if !OS.has_feature("web") and is_instance_valid(gold_label) and gold_label.is_visible_in_tree():
+		# Use Godot UI positions if playing inside editor/standalone
+		if res_type == "gold" and is_instance_valid(gold_label): target_pos = gold_label.get_global_rect().get_center()
+		elif res_type == "wood" and is_instance_valid(wood_label): target_pos = wood_label.get_global_rect().get_center()
+		elif res_type == "ore" and is_instance_valid(ore_label): target_pos = ore_label.get_global_rect().get_center()
+
+	var amount = 10
+	for i in range(amount):
+		var flying = TextureRect.new()
+		flying.texture = tex
+		flying.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		flying.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		flying.size = Vector2(56, 56)
+		flying.pivot_offset = Vector2(28, 28)
+		flying.global_position = start_pos - flying.size / 2.0
+		flying.scale = Vector2.ZERO # Hide initially
+		
+		# Prevent interactions
+		flying.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		
+		if world_ui_canvas:
+			world_ui_canvas.add_child(flying)
+		else:
+			add_child(flying)
+			
+		var tw = flying.create_tween()
+		var delay = i * 0.04 # 40ms stagger between each icon
+		
+		# Stage 1: Burst outwards
+		var random_offset = Vector2(randf_range(-90, 90), randf_range(-50, -110))
+		var peak_pos = start_pos + random_offset
+		var pop_dur = 0.25 + randf() * 0.1
+		
+		tw.parallel().tween_property(flying, "global_position", peak_pos, pop_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
+		tw.parallel().tween_property(flying, "scale", Vector2(1.5, 1.5), pop_dur * 0.5).set_delay(delay)
+		tw.parallel().tween_property(flying, "scale", Vector2(1.0, 1.0), pop_dur * 0.5).set_delay(delay + pop_dur * 0.5)
+		
+		# Stage 2: Fly to target
+		var fly_dur = 0.5 + randf() * 0.2
+		tw.chain().parallel().tween_property(flying, "global_position", target_pos, fly_dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+		tw.parallel().tween_property(flying, "scale", Vector2(1.0, 1.0), fly_dur)
+		tw.parallel().tween_property(flying, "modulate:a", 0.0, fly_dur * 0.2).set_delay(fly_dur * 0.8)
+		
+		tw.chain().tween_callback(flying.queue_free)
+
+
+func _collect_and_animate(b: Dictionary, res_type: String) -> void:
+	var server_id = b.get("server_id", -1)
+	var local_amount = int(b.get("stored", 0.0))
+	if local_amount <= 0: return # Already zero
+	b["stored"] = 0.0 # reset locally immediately
+	
+	var old_val = int(resources.get(res_type, 0))
+	var target_val = old_val + local_amount
+	var net = get_node_or_null("/root/Net")
+	
+	# Fetch exact value from server
+	if net and net.has_token():
+		var result = await net.collect_resources(server_id)
+		if result.has("error"): return
+		if result.has("resources"):
+			target_val = int(result.resources.get(res_type, target_val))
+			# Instantly sync other resources to avoid bugs
+			for k in ["gold", "wood", "ore"]:
+				if k != res_type and result.resources.has(k):
+					resources[k] = result.resources[k]
+	else:
+		# Offline fallback
+		target_val = old_val + local_amount
+		
+	# Tween the visual resource value over 1.2s to match the flight duration of all 10 items
+	var tw = create_tween().set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(func(v: int):
+		resources[res_type] = v
 		_update_resource_ui()
-		# Send to server
-		var net = get_node_or_null("/root/Net")
-		if net and net.has_token():
-			var add_dict = {"gold": 0, "wood": 0, "ore": 0}
-			add_dict[res_type] = amount
-			net.add_resources(add_dict.gold, add_dict.wood, add_dict.ore)
-		# Update React
 		var bridge = get_node_or_null("/root/Bridge")
-		if bridge:
-			bridge.send_to_react("resources", {
-				"gold": resources.gold,
-				"wood": resources.wood,
-				"ore": resources.ore,
-			})
-		return
+		if bridge: bridge.send_to_react("resources", resources)
+	, old_val, target_val, 1.2)
 
 
 
@@ -473,6 +629,9 @@ func _setup_from_grid_plane() -> void:
 func _create_ui() -> void:
 	canvas = CanvasLayer.new()
 	add_child(canvas)
+
+	world_ui_canvas = CanvasLayer.new()
+	add_child(world_ui_canvas)
 
 	# ── Resource bar (top center) ──────────────────────────────
 	var res_wrapper = PanelContainer.new()
@@ -1651,7 +1810,6 @@ func _find_building_at(gp: Vector2i) -> Dictionary:
 		if gp.x >= bp.x and gp.x < bp.x + def.cells.x and gp.y >= bp.y and gp.y < bp.y + def.cells.y:
 			return b
 	return {}
-
 
 func _select_building(b: Dictionary) -> void:
 	selected_building = b

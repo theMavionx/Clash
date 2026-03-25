@@ -47,6 +47,20 @@ db.exec(`
   );
 `);
 
+// Safe migration: add last_collected_at to buildings if not present
+try {
+  db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`);
+} catch (e) {
+  // Column already exists — ignore
+}
+
+// ---------- Resource Production Definitions ----------
+
+const PRODUCTION_DEFS = {
+  mine:    { resource: 'ore',  rate: [10, 18, 30], max: [200, 400, 800] },   // per minute
+  sawmill: { resource: 'wood', rate: [12, 22, 35], max: [250, 500, 1000] },
+};
+
 // ---------- Prepared Statements ----------
 
 const stmts = {
@@ -95,6 +109,9 @@ const stmts = {
   // Trophies
   updateTrophies: db.prepare(`UPDATE players SET trophies = ? WHERE id = ?`),
   getTrophies: db.prepare(`SELECT trophies FROM players WHERE id = ?`),
+
+  // Production
+  updateLastCollected: db.prepare(`UPDATE buildings SET last_collected_at = ? WHERE id = ? AND player_id = ?`),
 };
 
 // ---------- Building Definitions (mirroring Godot) ----------
@@ -321,6 +338,67 @@ function getTroopLevels(playerId) {
   return stmts.getTroopLevels.all(playerId);
 }
 
+function collectResources(playerId, buildingId) {
+  const building = stmts.getBuildingById.get(buildingId, playerId);
+  if (!building) return { error: 'Building not found' };
+
+  const prod = PRODUCTION_DEFS[building.type];
+  if (!prod) return { error: 'This building does not produce resources' };
+
+  const now = new Date();
+  const lastCollected = building.last_collected_at ? new Date(building.last_collected_at + 'Z') : new Date(building.created_at + 'Z');
+  const elapsedMinutes = (now - lastCollected) / 60000;
+
+  if (elapsedMinutes < 0.1) return { error: 'Nothing to collect yet' };
+
+  const lvlIdx = Math.min(building.level - 1, prod.rate.length - 1);
+  const ratePerMin = prod.rate[lvlIdx];
+  const maxStored = prod.max[lvlIdx];
+  const produced = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
+
+  if (produced <= 0) return { error: 'Nothing to collect yet' };
+
+  // Add resources
+  const addObj = { gold: 0, wood: 0, ore: 0 };
+  addObj[prod.resource] = produced;
+  addResources(playerId, addObj.gold, addObj.wood, addObj.ore);
+
+  // Update last_collected_at
+  stmts.updateLastCollected.run(now.toISOString().replace('T', ' ').split('.')[0], buildingId, playerId);
+
+  return {
+    collected: produced,
+    resource: prod.resource,
+    building_id: buildingId,
+    resources: getResources(playerId),
+  };
+}
+
+function getProductionStatus(playerId) {
+  const buildings = stmts.getBuildings.all(playerId);
+  const now = new Date();
+  const result = [];
+  for (const b of buildings) {
+    const prod = PRODUCTION_DEFS[b.type];
+    if (!prod) continue;
+    const lastCollected = b.last_collected_at ? new Date(b.last_collected_at + 'Z') : new Date(b.created_at + 'Z');
+    const elapsedMinutes = (now - lastCollected) / 60000;
+    const lvlIdx = Math.min(b.level - 1, prod.rate.length - 1);
+    const ratePerMin = prod.rate[lvlIdx];
+    const maxStored = prod.max[lvlIdx];
+    const stored = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
+    result.push({
+      building_id: b.id,
+      type: b.type,
+      resource: prod.resource,
+      stored,
+      max: maxStored,
+      rate_per_min: ratePerMin,
+    });
+  }
+  return result;
+}
+
 function findEnemy(playerId) {
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return { error: 'Player not found' };
@@ -388,6 +466,8 @@ module.exports = {
   upgradeTroop,
   getTroopLevels,
   findEnemy,
+  collectResources,
+  getProductionStatus,
   recalculateTrophies,
   getTrophies,
   getFullPlayerState,
