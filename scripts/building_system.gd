@@ -1016,8 +1016,24 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		if building_type == "tombstone":
 			_spawn_tombstone_skeletons(b_data, level)
 	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
+	_sync_react_buildings()
 
 
+func _sync_react_buildings() -> void:
+	var bridge = get_node_or_null("/root/Bridge")
+	if bridge and bridge.has_method("send_to_react"):
+		var arr = []
+		var counts := {}
+		for b in placed_buildings:
+			var bid = b.get("id", "")
+			arr.append({
+				"id": bid,
+				"level": b.get("level", 1),
+				"server_id": b.get("server_id", "")
+			})
+			counts[bid] = counts.get(bid, 0) + 1
+		bridge.send_to_react("state", {"buildings": arr})
+		bridge.send_to_react("placed_counts", counts)
 func _load_troop_levels_from_server(server_troops: Array) -> void:
 	for t in server_troops:
 		var troop_type: String = t.get("troop_type", "")
@@ -1432,6 +1448,8 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 		"server_id": server_id,
 	}
 	placed_buildings.append(b_data)
+	_sync_react_buildings()
+	
 	# Tombstone → spawn skeleton guards
 	if building_id == "tombstone":
 		_spawn_tombstone_skeletons(b_data, 1)

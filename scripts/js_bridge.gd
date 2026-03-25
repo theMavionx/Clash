@@ -115,7 +115,12 @@ func _send_initial_state() -> void:
 			troop_defs[key] = {"display": td.display, "costs": {}}
 			for lvl in td.costs:
 				troop_defs[key].costs[str(lvl)] = td.costs[lvl]
-		send_to_react("building_defs", {"buildings": defs, "troops": troop_defs})
+		# Count how many of each type are already placed
+		var placed_counts := {}
+		for b in bs.placed_buildings:
+			var bid = b.get("id", "")
+			placed_counts[bid] = placed_counts.get(bid, 0) + 1
+		send_to_react("building_defs", {"buildings": defs, "troops": troop_defs, "placed_counts": placed_counts})
 		send_to_react("resources", {
 			"gold": bs.resources.gold,
 			"wood": bs.resources.wood,

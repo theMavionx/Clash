@@ -19,6 +19,19 @@ const TABS = [
   { id: 'Defense', label: 'Defense' },
 ];
 
+const DESC_MAP = {
+  mine: 'Produces ore',
+  sawmill: 'Produces wood',
+  barn: 'Trains troops',
+  port: 'Deploy ships to attack',
+  town_hall: 'Main building',
+  turret: 'Shoots enemies',
+  tombstone: 'Spawns skeletons',
+  archtower: 'Ranged defense',
+  archer_tower: 'Ranged defense',
+  archertower: 'Ranged defense',
+};
+
 const CATEGORY_MAP = {
   mine: 'Economy',
   sawmill: 'Economy',
@@ -124,19 +137,17 @@ function ShopPanel({ onClose }) {
 
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
-  
-  const hasTownHall = useMemo(() => {
-    const built = playerState?.buildings || [];
-    return built.some(b => b.id === 'town_hall');
-  }, [playerState]);
+  const placedCounts = buildingDefs?.placed_counts || {};
 
   const filteredBuildings = useMemo(
-    () => Object.entries(buildings).filter(([id]) => {
+    () => Object.entries(buildings).filter(([id, def]) => {
       if (id === 'barracks') return false;
-      if (id === 'town_hall' && hasTownHall) return false;
+      // Hide buildings that reached max_count (e.g. town_hall max 1)
+      const maxCount = def.max_count || 0;
+      if (maxCount > 0 && (placedCounts[id] || 0) >= maxCount) return false;
       return getCategory(id) === activeTab;
     }),
-    [buildings, activeTab, hasTownHall]
+    [buildings, activeTab, placedCounts]
   );
 
   const handlePlacement = useCallback((id) => {
@@ -191,7 +202,7 @@ function ShopPanel({ onClose }) {
 
                 <div style={styles.cardInfo}>
                   <div style={styles.cardName}>{def.name}</div>
-                  <div style={styles.cardDesc}>{def.description || ''}</div>
+                  <div style={styles.cardDesc}>{DESC_MAP[id] || ''}</div>
 
                   <div style={styles.costContainer}>
                     <div style={styles.costRow}>
@@ -269,7 +280,7 @@ const styles = {
   },
   card: {
     width: 160,
-    height: 210,
+    height: 240,
     background: '#fdf8e7',
     borderRadius: 12,
     border: '3px solid #d4c8b0',
@@ -323,7 +334,10 @@ const styles = {
     lineHeight: 1.1,
   },
   cardDesc: {
-    display: 'none',
+    fontSize: 11,
+    color: '#777',
+    fontWeight: 600,
+    lineHeight: 1.2,
   },
   costContainer: {
     marginTop: 'auto',

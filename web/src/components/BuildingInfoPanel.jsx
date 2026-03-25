@@ -51,33 +51,38 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   </div>
                 ))}
               </div>
-              {isUpgrading ? (
+              {isUpgrading && (
                 <div style={styles.upgradeProgressWrap}>
                   <div style={styles.upgradeProgressTitle}>Upgrading...</div>
                   <div style={styles.barBgSmall}>
                     <div style={{ ...styles.barFill, background: '#FFC107', animation: 'fillUp 3s linear forwards' }} />
                   </div>
                 </div>
-              ) : (
-                <button
-                  style={styles.upgradeBtn}
-                  onClick={handleUpgrade}
-                >
-                  Upgrade
-                </button>
               )}
             </>
           )
         )}
 
-        {building.id === 'barn' && !building.is_enemy && (
-          <button
-            style={{ ...styles.upgradeBtn, background: '#4A148C', boxShadow: '0 8px 20px rgba(74, 20, 140, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)', marginTop: 16 }}
-            onClick={onOpenTroops}
-          >
-            Troops
-          </button>
-        )}
+        {/* --- ACTIONS ROW --- */}
+        <div style={styles.actionRow}>
+          {!building.is_enemy && building.level < building.max_level && !isUpgrading && (
+            <button
+              style={styles.upgradeBtn}
+              onClick={handleUpgrade}
+            >
+              Upgrade
+            </button>
+          )}
+
+          {building.id === 'barn' && !building.is_enemy && (
+            <button
+              style={styles.troopsBtn}
+              onClick={onOpenTroops}
+            >
+              Troops
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -186,6 +191,7 @@ const styles = {
     textShadow: '0 2px 2px rgba(0,0,0,0.5)',
   },
   upgradeBtn: {
+    flex: 1,
     background: '#F57F17',
     border: 'none',
     boxShadow: '0 6px 14px rgba(245, 127, 23, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)',
@@ -195,11 +201,30 @@ const styles = {
     fontSize: 13,
     fontWeight: 900,
     cursor: 'pointer',
-    width: '100%',
     textAlign: 'center',
     textTransform: 'uppercase',
     letterSpacing: 1.0,
     transition: 'transform 0.1s',
+  },
+  troopsBtn: {
+    flex: 1,
+    background: '#1976D2', // Blue
+    border: 'none',
+    boxShadow: '0 6px 14px rgba(25, 118, 210, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)',
+    borderRadius: 14,
+    padding: '10px 16px',
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 900,
+    cursor: 'pointer',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 1.0,
+    transition: 'transform 0.1s',
+  },
+  actionRow: {
+    display: 'flex',
+    gap: 12,
   },
   upgradeProgressWrap: {
     marginTop: 16,

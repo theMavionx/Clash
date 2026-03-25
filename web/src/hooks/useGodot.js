@@ -28,13 +28,16 @@ export function GodotProvider({ children }) {
           setReady(true);
           break;
         case 'state':
-          setPlayerState(data);
+          setPlayerState(prev => ({ ...(prev || {}), ...data }));
           break;
         case 'resources':
           setResources(data);
           break;
         case 'building_defs':
           setBuildingDefs(data);
+          break;
+        case 'placed_counts':
+          setBuildingDefs(prev => ({ ...prev, placed_counts: data }));
           break;
         case 'troop_levels':
           setTroopLevels(data);
