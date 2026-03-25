@@ -2620,6 +2620,40 @@ func _can_afford(costs: Dictionary) -> bool:
 	return true
 
 
+func _refresh_troop_levels_from_server() -> void:
+	var net = get_node_or_null("/root/Net")
+	if not net or not net.has_token():
+		# No server — just send local levels
+		var bridge = get_node_or_null("/root/Bridge")
+		if bridge:
+			bridge.send_to_react("troop_levels", troop_levels)
+		return
+	var server_troops = await net.get_troops()
+	if server_troops is Array:
+		for t in server_troops:
+			var troop_type = str(t.get("troop_type", ""))
+			var level = int(t.get("level", 1))
+			var local_name = troop_type.capitalize()
+			if troop_levels.has(local_name):
+				troop_levels[local_name] = level
+	var bridge = get_node_or_null("/root/Bridge")
+	if bridge:
+		bridge.send_to_react("troop_levels", troop_levels)
+		# Also refresh resources to stay in sync
+		if net:
+			var res = await net.get_resources()
+			if not res.has("error"):
+				resources.gold = res.gold
+				resources.wood = res.wood
+				resources.ore = res.ore
+				_update_resource_ui()
+				bridge.send_to_react("resources", {
+					"gold": resources.gold,
+					"wood": resources.wood,
+					"ore": resources.ore,
+				})
+
+
 func _upgrade_troop(troop_name: String) -> void:
 	if _server_busy:
 		return
@@ -2647,20 +2681,14 @@ func _upgrade_troop(troop_name: String) -> void:
 			resources.ore = res.ore
 			_update_resource_ui()
 
-	# Server OK — apply locally
+	# Server OK — apply locally and refetch to stay in sync
 	troop_levels[troop_name] = next_lvl
 	var troop = get_tree().current_scene.find_child(troop_name, true, false)
 	if troop and troop.has_method("upgrade_to"):
 		troop.upgrade_to(next_lvl)
 	_refresh_barracks_panel()
-	var bridge = get_node_or_null("/root/Bridge")
-	if bridge:
-		bridge.send_to_react("troop_levels", troop_levels)
-		bridge.send_to_react("resources", {
-			"gold": resources.gold,
-			"wood": resources.wood,
-			"ore": resources.ore,
-		})
+	# Refetch from server to ensure React shows authoritative data
+	_refresh_troop_levels_from_server()
 
 
 func _on_attack_pressed() -> void:

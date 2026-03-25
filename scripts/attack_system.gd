@@ -336,7 +336,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 			get_tree().current_scene.add_child(troop)
 
 			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-			troop.global_position = spawn_pos + offset
+			troop.global_position = BaseTroop._clamp_to_island(spawn_pos + offset)
 			troop.global_position.y = building_y
 
 			troop.visible = true

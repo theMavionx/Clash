@@ -96,6 +96,11 @@ function BarracksPanel({ building, onClose }) {
   
   const [currentIndex, setCurrentIndex] = useState(0);
 
+  // Fetch authoritative troop levels from server when panel opens
+  useEffect(() => {
+    sendToGodot('refresh_troops');
+  }, [sendToGodot]);
+
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
 
   if (!building || !building.is_barracks) return null;
@@ -116,7 +121,8 @@ function BarracksPanel({ building, onClose }) {
   const tdef = troops[currentTroopName];
   const lvl = troopLevels[currentTroopName] || 1;
   const isMax = lvl >= 3;
-  const nextCost = !isMax && tdef?.costs?.[String(lvl + 1)];
+  // costs key = current level (cost to upgrade FROM that level)
+  const nextCost = !isMax && tdef?.costs?.[String(lvl)];
   const stats = TROOP_STATS[currentTroopName]?.stats?.[lvl];
   const maxStats = TROOP_STATS[currentTroopName]?.maxStats;
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
@@ -248,26 +254,12 @@ function BarracksPanel({ building, onClose }) {
             <div style={styles.characterWrapper}>
               
               {/* Upgrade Badge floating like the reference img */}
-              {!isMax && !building.is_enemy && (
-                <div 
-                  style={styles.upgradeBadge} 
-                  onClick={() => handleUpgradeTroop(currentTroopName)}
-                  title="Click to Upgrade!"
-                >
-                  <div style={styles.badgeBigPart}>
-                    <span style={styles.badgeLvlText}>Lvl</span>
-                    <span style={styles.badgeLvlNumber}>{lvl + 1}</span>
-                  </div>
+              <div style={styles.upgradeBadge}>
+                <div style={styles.badgeBigPart}>
+                  <span style={styles.badgeLvlText}>Lvl</span>
+                  <span style={styles.badgeLvlNumber}>{lvl}</span>
                 </div>
-              )}
-              {isMax && (
-                <div style={styles.upgradeBadge}>
-                  <div style={styles.badgeBigPart}>
-                    <span style={styles.badgeLvlText}>Lvl</span>
-                    <span style={styles.badgeLvlNumber}>3</span>
-                  </div>
-                </div>
-              )}
+              </div>
 
               {/* Character specific placement */}
               <div style={styles.characterSphere}>
