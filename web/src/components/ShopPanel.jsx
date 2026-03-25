@@ -1,5 +1,5 @@
 import { useState, memo, useCallback, useMemo } from 'react';
-import { useSend, useBuilding } from '../hooks/useGodot';
+import { useSend, useBuilding, usePlayer } from '../hooks/useGodot';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -9,14 +9,14 @@ import imgMine from '../assets/buildings/mine.png';
 import imgBarn from '../assets/buildings/barn.png';
 import imgPort from '../assets/buildings/port.png';
 import imgSawmill from '../assets/buildings/sawmill.png';
-import imgBarracks from '../assets/buildings/barracks.png';
-import imgTownHall from '../assets/buildings/town_hall.png';
+import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
+import imgTombstone from '../assets/buildings/tombstone.png';
+import imgArcherTower from '../assets/buildings/archertower.png';
 
 const TABS = [
   { id: 'Economy', label: 'Economy' },
   { id: 'Defense', label: 'Defense' },
-  { id: 'Support', label: 'Support' },
 ];
 
 const CATEGORY_MAP = {
@@ -24,9 +24,12 @@ const CATEGORY_MAP = {
   sawmill: 'Economy',
   barn: 'Economy',
   turret: 'Defense',
-  port: 'Support',
-  barracks: 'Support',
-  town_hall: 'Support',
+  tombstone: 'Defense',
+  archtower: 'Defense',
+  archer_tower: 'Defense',
+  archertower: 'Defense',
+  port: 'Economy',
+  town_hall: 'Economy',
 };
 
 const THUMBNAIL_MAP = {
@@ -34,12 +37,23 @@ const THUMBNAIL_MAP = {
   barn: imgBarn,
   port: imgPort,
   sawmill: imgSawmill,
-  barracks: imgBarracks,
   town_hall: imgTownHall,
   turret: imgTurret,
+  tombstone: imgTombstone,
+  archtower: imgArcherTower,
+  archer_tower: imgArcherTower,
+  archertower: imgArcherTower,
 };
 
-const getCategory = (id) => CATEGORY_MAP[id] || 'Support';
+const THUMBNAIL_SCALE_MAP = {
+  port: 1.5,
+  tombstone: 1.4,
+  archtower: 1.4,
+  archer_tower: 1.4,
+  archertower: 1.4,
+};
+
+const getCategory = (id) => CATEGORY_MAP[id] || 'Economy';
 
 const RES_ICONS = {
   gold: goldIcon,
@@ -49,8 +63,9 @@ const RES_ICONS = {
 
 const tabBase = {
   padding: '0 24px',
-  fontSize: 15,
-  fontWeight: 900,
+  fontSize: 16,
+  fontWeight: 800,
+  fontFamily: '"Inter", "Segoe UI", sans-serif',
   cursor: 'pointer',
   display: 'flex',
   alignItems: 'center',
@@ -59,78 +74,69 @@ const tabBase = {
   outline: 'none',
   border: 'none',
   borderBottom: 'none',
-  borderRadius: '0 0 12px 12px',
-  borderColor: '#d4c8b0',
-  borderLeft: '2px solid',
-  borderRight: '2px solid',
+  borderRadius: '12px 12px 0 0',
+  borderLeft: '2px solid transparent',
+  borderRight: '2px solid transparent',
+  borderTop: '2px solid transparent',
 };
 
 const TAB_STYLE_ACTIVE = {
   ...tabBase,
-  background: '#fdf8e7',
-  color: '#333',
-  marginTop: -4,
+  background: '#e8dfc8',
+  color: '#222',
+  borderColor: '#d4c8b0',
+  marginBottom: -6,
   height: 56,
   zIndex: 20,
-  boxShadow: '0 4px 4px rgba(0,0,0,0.2)',
 };
 
 const TAB_STYLE_INACTIVE = {
   ...tabBase,
-  background: '#78909C',
+  background: '#a2b4bd',
   color: '#fff',
-  marginTop: 0,
+  borderColor: '#8a9ea8',
+  marginBottom: 0,
   height: 52,
   zIndex: 10,
-  boxShadow: 'none',
+  boxShadow: 'inset 0 -4px 10px rgba(0,0,0,0.05)',
 };
 
 const TAB_CONTENT_ACTIVE = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  textShadow: 'none',
-  WebkitTextStroke: 'none',
+  textShadow: '0 1px 0 rgba(255,255,255,0.5)',
 };
 
 const TAB_CONTENT_INACTIVE = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
-  textShadow: '0px 1px 2px rgba(0,0,0,0.6)',
-  WebkitTextStroke: '0.5px #455A64',
+  textShadow: '0 1px 2px rgba(0,0,0,0.3)',
 };
 
 const stopPropagation = (e) => e.stopPropagation();
 
-function WoodIcon() {
-  return (
-    <div style={woodIconStyles.wrap}>
-      <div style={woodIconStyles.log1} />
-      <div style={woodIconStyles.log2} />
-      <div style={woodIconStyles.log3} />
-    </div>
-  );
-}
-const MemoWoodIcon = memo(WoodIcon);
-
-const woodIconStyles = {
-  wrap: { position: 'relative', width: 28, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.1))' },
-  log1: { position: 'absolute', width: 24, height: 6, background: '#a05a2c', borderRadius: 2, transform: 'rotate(-15deg) translateY(-4px)', border: '1.5px solid #5c3012' },
-  log2: { position: 'absolute', width: 24, height: 6, background: '#b86b35', borderRadius: 2, transform: 'rotate(10deg) translateY(2px)', border: '1.5px solid #5c3012' },
-  log3: { position: 'absolute', width: 24, height: 6, background: '#c97a3f', borderRadius: 2, border: '1.5px solid #5c3012', zIndex: 10 },
-};
-
 function ShopPanel({ onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs } = useBuilding();
+  const { playerState } = usePlayer();
 
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
+  
+  const hasTownHall = useMemo(() => {
+    const built = playerState?.buildings || [];
+    return built.some(b => b.id === 'town_hall');
+  }, [playerState]);
 
   const filteredBuildings = useMemo(
-    () => Object.entries(buildings).filter(([id]) => getCategory(id) === activeTab),
-    [buildings, activeTab]
+    () => Object.entries(buildings).filter(([id]) => {
+      if (id === 'barracks') return false;
+      if (id === 'town_hall' && hasTownHall) return false;
+      return getCategory(id) === activeTab;
+    }),
+    [buildings, activeTab, hasTownHall]
   );
 
   const handlePlacement = useCallback((id) => {
@@ -140,48 +146,6 @@ function ShopPanel({ onClose }) {
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.container} onClick={stopPropagation}>
-        <div style={styles.cardArea}>
-          <div style={styles.cardScroll}>
-            {filteredBuildings.map(([id, def]) => (
-              <div
-                key={id}
-                style={styles.card}
-                onClick={() => handlePlacement(id)}
-              >
-                <div style={styles.cardImgTop}>
-                  <div style={styles.iconHighlight} />
-                  {THUMBNAIL_MAP[id] ? (
-                    <img src={THUMBNAIL_MAP[id]} style={styles.thumbnail} alt={def.name} />
-                  ) : (
-                    <div style={styles.placeholderBox}>🏠</div>
-                  )}
-                </div>
-
-                <div style={styles.cardInfo}>
-                  <div style={styles.cardName}>{def.name}</div>
-                  <div style={styles.cardDesc}>{def.description || ''}</div>
-
-                  <div style={styles.costContainer}>
-                    <div style={styles.costRow}>
-                      {Object.entries(def.cost || {}).map(([res, amount]) => (
-                        amount > 0 && (
-                          <div key={res} style={styles.costPill}>
-                            {res === 'wood' ? <MemoWoodIcon /> : <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />}
-                            <span style={styles.costValue}>{amount.toLocaleString()}</span>
-                          </div>
-                        )
-                      ))}
-                      {Object.keys(def.cost || {}).length === 0 && (
-                        <span style={styles.freeText}>FREE</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
         <div style={styles.tabArea}>
           <div style={styles.tabContainer}>
             {TABS.map(tab => {
@@ -201,7 +165,58 @@ function ShopPanel({ onClose }) {
           </div>
         </div>
 
-        <button style={styles.closeBtn} onClick={onClose}>✕</button>
+        <div style={styles.cardArea}>
+          <div style={styles.cardScroll}>
+            {filteredBuildings.map(([id, def]) => (
+              <div
+                key={id}
+                style={styles.card}
+                onClick={() => handlePlacement(id)}
+              >
+                <div style={styles.cardImgTop}>
+                  <div style={styles.iconHighlight} />
+                  {THUMBNAIL_MAP[id] ? (
+                    <img 
+                      src={THUMBNAIL_MAP[id]} 
+                      style={{
+                        ...styles.thumbnail,
+                        transform: `scale(${THUMBNAIL_SCALE_MAP[id] || 1})`
+                      }} 
+                      alt={def.name} 
+                    />
+                  ) : (
+                    <div style={styles.placeholderBox}>🏠</div>
+                  )}
+                </div>
+
+                <div style={styles.cardInfo}>
+                  <div style={styles.cardName}>{def.name}</div>
+                  <div style={styles.cardDesc}>{def.description || ''}</div>
+
+                  <div style={styles.costContainer}>
+                    <div style={styles.costRow}>
+                      {Object.entries(def.cost || {}).map(([res, amount]) => (
+                        amount > 0 && (
+                          <div key={res} style={styles.costPill}>
+                            <span style={styles.costValue}>{amount.toLocaleString()}</span>
+                            <img src={RES_ICONS[res] || goldIcon} style={styles.resIconSmall} alt={res} />
+                          </div>
+                        )
+                      ))}
+                      {Object.keys(def.cost || {}).length === 0 && (
+                        <span style={styles.freeText}>FREE</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button style={styles.closeBtn} onClick={onClose}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
       </div>
     </div>
   );
@@ -222,7 +237,7 @@ const styles = {
   },
   container: {
     width: '100%',
-    maxWidth: 1200,
+    maxWidth: 750,
     background: 'transparent',
     display: 'flex',
     flexDirection: 'column',
@@ -233,8 +248,8 @@ const styles = {
   cardArea: {
     background: '#e8dfc8',
     borderTop: '6px solid #d4c8b0',
-    padding: '30px 20px 10px 20px',
-    minHeight: 350,
+    padding: '20px 20px 10px 20px',
+    minHeight: 'auto',
     overflowX: 'auto',
     display: 'flex',
     position: 'relative',
@@ -244,14 +259,17 @@ const styles = {
   },
   cardScroll: {
     display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: '0 auto',
     gap: 12,
     paddingBottom: 20,
     position: 'relative',
     zIndex: 10,
   },
   card: {
-    width: 170,
-    height: 250,
+    width: 160,
+    height: 210,
     background: '#fdf8e7',
     borderRadius: 12,
     border: '3px solid #d4c8b0',
@@ -278,14 +296,14 @@ const styles = {
     zIndex: 0,
   },
   thumbnail: {
-    width: 100,
-    height: 100,
+    width: 110,
+    height: 110,
     objectFit: 'contain',
     zIndex: 1,
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.4))',
   },
   placeholderBox: {
-    fontSize: 56,
+    fontSize: 44,
     zIndex: 1,
     filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.3))',
   },
@@ -297,22 +315,15 @@ const styles = {
     textAlign: 'center',
   },
   cardName: {
-    fontSize: 18,
-    fontWeight: 900,
+    fontSize: 15,
+    fontWeight: 800,
     color: '#333',
-    WebkitTextStroke: '1px white',
-    textShadow: '0px 2px 2px rgba(0,0,0,0.2)',
-    fontFamily: '"Arial Black", Impact, sans-serif',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
     marginBottom: 2,
     lineHeight: 1.1,
   },
   cardDesc: {
-    fontSize: 11,
-    fontWeight: 700,
-    color: '#444',
-    lineHeight: 1.1,
-    marginBottom: 8,
-    minHeight: 24,
+    display: 'none',
   },
   costContainer: {
     marginTop: 'auto',
@@ -323,25 +334,27 @@ const styles = {
   costRow: {
     display: 'flex',
     justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
+    alignItems: 'flex-end',
+    gap: 12,
     marginBottom: 4,
   },
   costPill: {
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
   },
   resIconSmall: {
-    width: 24,
-    height: 18,
+    width: 32,
+    height: 32,
     objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.3))',
   },
   costValue: {
-    fontSize: 22,
-    fontWeight: 900,
+    fontSize: 16,
+    fontWeight: 800,
     color: '#333',
-    textShadow: '0 1px 1px rgba(255,255,255,0.8)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
   freeText: {
     fontSize: 20,
@@ -353,10 +366,11 @@ const styles = {
     background: 'transparent',
     display: 'flex',
     justifyContent: 'center',
-    marginTop: -4,
+    marginBottom: 0,
     position: 'relative',
     zIndex: 20,
     paddingBottom: 0,
+    paddingTop: 16,
   },
   tabContainer: {
     display: 'flex',
@@ -364,21 +378,20 @@ const styles = {
   },
   closeBtn: {
     position: 'absolute',
-    top: -24,
-    right: 30,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    background: 'linear-gradient(180deg, #EC407A 0%, #D81B60 100%)',
-    border: '4px solid #fff',
+    top: -14,
+    right: -14,
+    width: 36,
+    height: 36,
+    borderRadius: '50%',
+    background: '#E53935',
+    border: '3px solid #fff',
     color: '#fff',
-    fontSize: 28,
-    fontWeight: 900,
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 5px 15px rgba(0,0,0,0.5)',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
     zIndex: 100,
+    padding: 0,
   },
 };

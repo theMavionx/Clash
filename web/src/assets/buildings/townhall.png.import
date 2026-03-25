@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ckpxrxv07b13e"
-path="res://.godot/imported/barracks.png-14ac7aee558d1b9e4c268331c6f0efc0.ctex"
+uid="uid://d2j8ajkv5ervm"
+path="res://.godot/imported/townhall.png-ccb58eb9713df0c30ca2205eab611a01.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://web/src/assets/buildings/barracks.png"
-dest_files=["res://.godot/imported/barracks.png-14ac7aee558d1b9e4c268331c6f0efc0.ctex"]
+source_file="res://web/src/assets/buildings/townhall.png"
+dest_files=["res://.godot/imported/townhall.png-ccb58eb9713df0c30ca2205eab611a01.ctex"]
 
 [params]
 

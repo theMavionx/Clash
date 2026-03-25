@@ -38,9 +38,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <div style={styles.hpText}>❤️ {building.hp} / {building.max_hp}</div>
 
         {!building.is_enemy && (
-          isMaxLevel ? (
-            <div style={styles.maxLevel}>⭐ MAX LEVEL</div>
-          ) : (
+          building.level >= building.max_level ? null : (
             <>
               <h3 style={styles.sectionTitle}>Upgrade Resources</h3>
               <div style={styles.costsContainer}>
@@ -154,15 +152,6 @@ const styles = {
     fontSize: 12,
     fontWeight: 800,
     marginBottom: 8,
-  },
-  maxLevel: {
-    color: '#FFB300',
-    fontSize: 14,
-    fontWeight: 900,
-    background: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 6,
-    padding: '8px',
-    marginTop: 12,
   },
   costsContainer: {
     display: 'flex',
