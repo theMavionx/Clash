@@ -5,8 +5,8 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
-@export var separation_radius: float = 0.15
-@export var separation_force: float = 0.4
+@export var separation_radius: float = 0.18
+@export var separation_force: float = 0.5
 
 var level: int = 1
 var hp: int = 100
@@ -40,12 +40,65 @@ var _sep_counter: int = 0
 var _last_separation: Vector3 = Vector3.ZERO
 var _hp_bar_frame: int = 0  # throttle HP bar billboard rotation
 
+## Stuck detection — if troop barely moves for too long, orbit around target
+var _stuck_timer: float = 0.0
+var _last_pos: Vector3 = Vector3.ZERO
+var _orbit_angle: float = 0.0  # radians offset to orbit around blocked target
+
 ## Shared animation libraries — one per anim_files key, reused by all troops of same type
 static var _anim_lib_cache: Dictionary = {}  # key(String) -> AnimationLibrary
 
 ## Cached building data — refreshed once per frame, used by _find_next_target and avoidance
 static var _cached_building_list: Array = []  # [{dict, bs, pos}]
 static var _buildings_cache_frame: int = -1
+
+## Cached island bounds — center, extents, rotation (from main BuildingSystem)
+static var _island_center: Vector3 = Vector3.ZERO
+static var _island_extent_x: float = 10.0
+static var _island_extent_z: float = 10.0
+static var _island_rot: float = 0.0
+static var _island_bounds_ready: bool = false
+
+static func _ensure_island_bounds() -> void:
+	if _island_bounds_ready:
+		return
+	var tree = Engine.get_main_loop() as SceneTree
+	if not tree:
+		return
+	# Use main grid (largest) with slight padding for walking around edges
+	var best_area: float = 0.0
+	for bs in tree.get_nodes_in_group("building_systems"):
+		var area = bs.grid_extent_x * bs.grid_extent_z
+		if area > best_area:
+			best_area = area
+			_island_center = bs.grid_center
+			_island_extent_x = bs.grid_extent_x * 1.05
+			_island_extent_z = bs.grid_extent_z * 1.05
+			_island_rot = bs.grid_rotation
+	if best_area > 0.01:
+		_island_bounds_ready = true
+
+
+static func _clamp_to_island(pos: Vector3) -> Vector3:
+	if not _island_bounds_ready:
+		_ensure_island_bounds()
+	# Transform to local island space (rotated grid)
+	var dx = pos.x - _island_center.x
+	var dz = pos.z - _island_center.z
+	var cos_r = cos(-_island_rot)
+	var sin_r = sin(-_island_rot)
+	var local_x = dx * cos_r - dz * sin_r
+	var local_z = dx * sin_r + dz * cos_r
+	# Clamp to island extents
+	local_x = clampf(local_x, -_island_extent_x * 0.5, _island_extent_x * 0.5)
+	local_z = clampf(local_z, -_island_extent_z * 0.5, _island_extent_z * 0.5)
+	# Transform back to world space
+	var cos_r2 = cos(_island_rot)
+	var sin_r2 = sin(_island_rot)
+	pos.x = _island_center.x + local_x * cos_r2 - local_z * sin_r2
+	pos.z = _island_center.z + local_x * sin_r2 + local_z * cos_r2
+	return pos
+
 
 static func _get_buildings_cached() -> Array:
 	var frame = Engine.get_process_frames()
@@ -271,6 +324,36 @@ func _update_hp_bar() -> void:
 	mat.set_shader_parameter("albedo", color)
 
 
+func _find_alternative_target() -> void:
+	# Find a different building than the current one
+	var second_dist_sq: float = INF
+	var second_b: Dictionary = {}
+	var second_bs = null
+	var my_pos = global_position
+	var current_node = target_building.get("node")
+
+	for entry in _get_buildings_cached():
+		var b = entry.b
+		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
+			continue
+		if is_instance_valid(current_node) and b.node == current_node:
+			continue  # skip current target
+		var dx = my_pos.x - entry.pos.x
+		var dz = my_pos.z - entry.pos.z
+		var d_sq = dx * dx + dz * dz
+		if d_sq < second_dist_sq:
+			second_dist_sq = d_sq
+			second_b = b
+			second_bs = entry.bs
+
+	if second_b.size() > 0:
+		target_building = second_b
+		target_bs = second_bs
+		state = State.RUNNING
+		if anim_player.has_animation("Running_A"):
+			anim_player.play("Running_A")
+
+
 func _find_next_target() -> void:
 	var nearest_dist_sq: float = INF
 	var nearest_b: Dictionary = {}
@@ -386,63 +469,108 @@ func _move_to_target(delta: float) -> void:
 	var target_pos = _get_target_position()
 	var diff = Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
 	var dist_sq = diff.length_squared()
-
 	if dist_sq < 0.0001:
 		return
 	var dist = sqrt(dist_sq)
-	var dir = diff / dist
+	var dir_to_target = diff / dist
 
-	look_at(global_position + dir, Vector3.UP)
+	# ── Find attack slot around building (like CoC) ──
+	# Each troop picks a point on a circle around the building at attack_range distance
+	# Slot is based on angle from building to troop — keeps current angle, avoids taken slots
+	var my_angle = atan2(global_position.x - target_pos.x, global_position.z - target_pos.z)
+	# Adjust angle to avoid other troops attacking same building
+	_sep_counter += 1
+	if _sep_counter % 6 == 0:
+		var best_angle = my_angle
+		var best_min_dist = 0.0
+		for test_offset in [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]:
+			var test_angle = my_angle + test_offset
+			var min_other_dist = 999.0
+			for other in _get_troops_cached():
+				if other == self or not is_instance_valid(other):
+					continue
+				if not (other is BaseTroop):
+					continue
+				# Only check troops targeting same building
+				if other.target_building.get("node") != target_building.get("node"):
+					continue
+				var other_angle = atan2(other.global_position.x - target_pos.x, other.global_position.z - target_pos.z)
+				var angle_diff = absf(fmod(test_angle - other_angle + PI, TAU) - PI)
+				min_other_dist = minf(min_other_dist, angle_diff)
+			if min_other_dist > best_min_dist:
+				best_min_dist = min_other_dist
+				best_angle = test_angle
+		_orbit_angle = best_angle
+
+	# Move toward slot position on circle around building
+	var slot_pos = target_pos + Vector3(sin(_orbit_angle), 0, cos(_orbit_angle)) * attack_range * 0.95
+	var to_slot = slot_pos - global_position
+	to_slot.y = 0
+	var slot_dist = to_slot.length()
+	var dir: Vector3
+	if slot_dist > 0.01:
+		dir = to_slot / slot_dist
+	else:
+		dir = dir_to_target
+
+	look_at(global_position + dir_to_target, Vector3.UP)
 	rotate_y(PI)
 
 	var move_vec = dir * move_speed * delta
 
-	# Separation + avoidance: run every 3rd frame per troop (staggered)
-	_sep_counter += 1
-	if _sep_counter % 3 == 0:
-		var sep = Vector3.ZERO
-		var steer = Vector3.ZERO
-		var avoidance_range = separation_radius * 2.0
-		var avoidance_range_sq = avoidance_range * avoidance_range
-		var sep_radius_sq = separation_radius * separation_radius
-		var troops = _get_troops_cached()
-		var lateral = Vector3.UP.cross(dir).normalized()
-		for other in troops:
-			if other == self or not is_instance_valid(other):
-				continue
-			var to_other = other.global_position - global_position
-			to_other.y = 0
-			var d_sq = to_other.length_squared()
-			if d_sq > avoidance_range_sq or d_sq < 0.000001:
-				continue
-			var d = sqrt(d_sq)
-			var to_other_n = to_other / d
-			# Separation push
-			if d < separation_radius:
-				sep -= to_other_n * (separation_radius - d) / separation_radius
-			# Avoidance steering
-			var dot = to_other_n.dot(dir)
-			if dot > 0.3:
-				var side = to_other_n.dot(lateral)
-				var strength = (1.0 - d / avoidance_range) * 0.3 * delta * 3.0
-				if side >= 0:
-					steer -= lateral * strength
-				else:
-					steer += lateral * strength
-		_last_separation = sep * separation_force * delta * 3.0 + steer
+	# ── Separation: smooth push away from nearby troops ──
+	var sep = Vector3.ZERO
+	var sep_range_sq = separation_radius * separation_radius * 4.0
+	for other in _get_troops_cached():
+		if other == self or not is_instance_valid(other):
+			continue
+		var to_other = other.global_position - global_position
+		to_other.y = 0
+		var d_sq = to_other.length_squared()
+		if d_sq > sep_range_sq or d_sq < 0.000001:
+			continue
+		var d = sqrt(d_sq)
+		if d < separation_radius:
+			sep -= (to_other / d) * (separation_radius - d) / separation_radius
 
-	move_vec += _last_separation
+	move_vec += sep * separation_force * delta * 3.0
 	global_position += move_vec
+
+	# Push out of non-target buildings
+	var target_node = target_building.get("node")
+	for entry in _get_buildings_cached():
+		if entry.b.get("node") == target_node:
+			continue
+		var to_me = global_position - entry.pos
+		to_me.y = 0
+		var bd = to_me.length()
+		if bd > 0.001 and bd < 0.12:
+			global_position += (to_me / bd) * (0.12 - bd)
+
+	global_position = _clamp_to_island(global_position)
 	global_position.y = target_pos.y
 
-	if dist <= attack_range:
+	# ── Enter attack when close to slot or close to building ──
+	if slot_dist < 0.05 or dist <= attack_range:
 		state = State.ATTACKING
 		attack_timer = 0.0
-		# Face target once when entering attack state
-		look_at(global_position + dir, Vector3.UP)
+		look_at(global_position + dir_to_target, Vector3.UP)
 		rotate_y(PI)
 		if attack_anim != "" and anim_player.has_animation(attack_anim):
 			anim_player.play(attack_anim)
+		return
+
+	# ── Stuck detection — retarget if not moving for 3s ──
+	_stuck_timer += delta
+	if _stuck_timer >= 1.0:
+		var moved = global_position.distance_to(_last_pos)
+		if moved < move_speed * 0.03:
+			_orbit_angle += 1.5  # try different slot
+			if _orbit_angle > my_angle + PI:
+				_find_alternative_target()
+				_orbit_angle = 0.0
+		_last_pos = global_position
+		_stuck_timer = 0.0
 
 
 func _get_separation() -> Vector3:
@@ -477,6 +605,7 @@ func _do_attack(delta: float) -> void:
 	var sep = _get_separation()
 	if sep.length() > 0.001:
 		global_position += sep * separation_force * delta
+		global_position = _clamp_to_island(global_position)
 
 	attack_timer += delta
 	if attack_timer >= atk_speed:

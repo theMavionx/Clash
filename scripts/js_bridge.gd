@@ -183,6 +183,9 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active = _get_active_building_system()
 			if active:
 				active._upgrade_selected()
+		"refresh_troops":
+			if bs:
+				bs._refresh_troop_levels_from_server()
 		"upgrade_troop":
 			if bs:
 				var tn = data.get("troop_name", "")

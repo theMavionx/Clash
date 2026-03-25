@@ -47,12 +47,16 @@ func _ready() -> void:
 	ship_plane.visible = false
 	plane_center = ship_plane.global_position
 	plane_y = plane_center.y
-	plane_extent_x = ship_plane.global_transform.basis.x.length()
-	plane_extent_z = ship_plane.global_transform.basis.z.length()
+	# BoxMesh default size is 1x1x1, vertices from -0.5 to 0.5
+	# basis.length() gives the half-size in world space for default mesh
+	# But shipPlane is child of Island which has large scale, so basis is already scaled
+	# We need half the basis length since the mesh goes from -0.5 to 0.5
+	plane_extent_x = ship_plane.global_transform.basis.x.length() * 0.5
+	plane_extent_z = ship_plane.global_transform.basis.z.length() * 0.5
 	var water = get_node_or_null(water_node_path)
 	if water:
 		water_y = water.global_position.y
-	print("AttackSystem ready. shipPlane center: ", plane_center, " water_y: ", water_y)
+	print("AttackSystem ready. center: ", plane_center, " extent_x: ", plane_extent_x, " extent_z: ", plane_extent_z)
 
 
 func _process(delta: float) -> void:
@@ -336,7 +340,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 			get_tree().current_scene.add_child(troop)
 
 			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-			troop.global_position = spawn_pos + offset
+			troop.global_position = BaseTroop._clamp_to_island(spawn_pos + offset)
 			troop.global_position.y = building_y
 
 			troop.visible = true

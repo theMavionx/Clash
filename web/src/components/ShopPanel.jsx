@@ -392,8 +392,8 @@ const styles = {
   },
   closeBtn: {
     position: 'absolute',
-    top: -14,
-    right: -14,
+    top: 8,
+    right: 8,
     width: 36,
     height: 36,
     borderRadius: '50%',
