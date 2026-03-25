@@ -203,9 +203,10 @@ func _process(delta: float) -> void:
 		if _aim_node:
 			var diff = _target.global_position - global_position
 			diff.y = 0
-			if diff.length() > 0.01:
+			var d_sq = diff.length_squared()
+			if d_sq > 0.0001:
 				var parent_basis_inv = _aim_node.get_parent().global_transform.basis.inverse()
-				var local_dir = parent_basis_inv * diff.normalized()
+				var local_dir = parent_basis_inv * (diff / sqrt(d_sq))
 				var y_angle = atan2(local_dir.x, local_dir.z)
 				_aim_node.rotation.y = y_angle
 				if _stand:
@@ -231,18 +232,23 @@ func _process(delta: float) -> void:
 
 
 func _find_target() -> void:
+	var detect_sq = detect_range * detect_range
 	if _target and is_instance_valid(_target):
-		if global_position.distance_to(_target.global_position) <= detect_range:
+		var dx = global_position.x - _target.global_position.x
+		var dz = global_position.z - _target.global_position.z
+		if dx * dx + dz * dz <= detect_sq:
 			return
 	_target = null
-	var nearest_dist = detect_range
-	var troops = BaseTroop._get_troops_cached()
-	for troop in troops:
+	var nearest_dist_sq = detect_sq
+	var my_pos = global_position
+	for troop in BaseTroop._get_troops_cached():
 		if not is_instance_valid(troop):
 			continue
-		var d = global_position.distance_to(troop.global_position)
-		if d < nearest_dist:
-			nearest_dist = d
+		var dx = my_pos.x - troop.global_position.x
+		var dz = my_pos.z - troop.global_position.z
+		var d_sq = dx * dx + dz * dz
+		if d_sq < nearest_dist_sq:
+			nearest_dist_sq = d_sq
 			_target = troop
 
 
@@ -319,37 +325,34 @@ func _update_bullets(delta: float) -> void:
 			continue
 
 		var target_pos = b.target.global_position + Vector3(0, 0.2, 0)
-		var dir = target_pos - b.node.global_position
-		if dir.length() > 0.001:
-			b.node.look_at(target_pos, Vector3.UP)
 		b.node.global_position = b.node.global_position.move_toward(target_pos, bullet_speed * delta)
 
 		# Update tracer trail
-		var trail = b.trail
-		var cur  = b.node.global_position
-		var from = b.spawn_pos
-		var full_dir = cur - from
-		var full_len = full_dir.length()
-		if full_len > 0.002:
+		var cur = b.node.global_position
+		var full_dir = cur - b.spawn_pos
+		var full_len_sq = full_dir.length_squared()
+		if full_len_sq > 0.000004:  # 0.002²
+			var full_len = sqrt(full_len_sq)
 			var unit = full_dir / full_len
-			var tail = cur - unit * min(full_len, TRAIL_LENGTH)
-			var dist = tail.distance_to(cur)
-			var mid  = (tail + cur) * 0.5
+			var trail_len = minf(full_len, TRAIL_LENGTH)
+			var tail = cur - unit * trail_len
+			var mid = (tail + cur) * 0.5
+			var trail = b.trail
 			trail.visible = true
 			trail.global_position = mid
-			var look_dir = cur - trail.global_position
-			if look_dir.length() > 0.001:
-				if abs(look_dir.normalized().dot(Vector3.UP)) < 0.99:
-					trail.look_at(cur, Vector3.UP)
-				else:
-					trail.look_at(cur, Vector3.RIGHT)
-				trail.rotate_object_local(Vector3.RIGHT, PI * 0.5)
-			trail.scale = Vector3(1.0, dist, 1.0)
+			# Orient cylinder along bullet direction
+			if absf(unit.y) < 0.99:
+				trail.look_at(cur, Vector3.UP)
+			else:
+				trail.look_at(cur, Vector3.RIGHT)
+			trail.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+			trail.scale = Vector3(1.0, trail_len, 1.0)
 		else:
-			trail.visible = false
+			b.trail.visible = false
 
 		# Hit detection
-		if b.node.global_position.distance_to(target_pos) < 0.03:
+		var hit_diff = b.node.global_position - target_pos
+		if hit_diff.length_squared() < 0.0009:  # 0.03²
 			if b.target.has_method("take_damage"):
 				b.target.take_damage(damage)
 			elif "hp" in b.target:

@@ -33,28 +33,28 @@ func _process(delta: float) -> void:
 
 
 func _send_perf_data() -> void:
-	var fps = Engine.get_frames_per_second()
-	var troops = get_tree().get_nodes_in_group("troops").size()
+	var troop_list = BaseTroop._get_troops_cached()
+	var troops = troop_list.size()
 	var guards = get_tree().get_nodes_in_group("skeleton_guards").size()
+
+	# Count projectiles from cached troop list (no extra group query)
+	var troop_projectiles = 0
+	for troop in troop_list:
+		if "_active" in troop:
+			troop_projectiles += troop._active.size()
+
+	# Buildings count from cached data
+	var buildings = BaseTroop._get_buildings_cached().size()
+
+	# Turret bullets — count from turret nodes directly
 	var turrets = 0
 	var active_bullets = 0
-	var buildings = 0
 	for bs in get_tree().get_nodes_in_group("building_systems"):
-		buildings += bs.placed_buildings.size()
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "turret" and is_instance_valid(b.get("node")):
-				var turret_node = b.node.get_node_or_null("Turret")
-				if turret_node == null:
-					turret_node = b.node
-				if turret_node and turret_node.has_method("_update_bullets"):
+				if "_active_bullets" in b.node:
 					turrets += 1
-					active_bullets += turret_node._active_bullets.size()
-
-	# Count active projectiles from troops
-	var troop_projectiles = 0
-	for troop in get_tree().get_nodes_in_group("troops"):
-		if troop.has_method("_update_projectiles") and "_active" in troop:
-			troop_projectiles += troop._active.size()
+					active_bullets += b.node._active_bullets.size()
 
 	var ships = 0
 	var attack_sys = get_tree().current_scene.get_node_or_null("IslandView/AttackSystem")
@@ -70,7 +70,7 @@ func _send_perf_data() -> void:
 	var payload = JSON.stringify({
 		"action": "perf",
 		"data": {
-			"fps": fps,
+			"fps": Engine.get_frames_per_second(),
 			"troops": troops,
 			"guards": guards,
 			"turrets": turrets,

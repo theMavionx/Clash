@@ -1,16 +1,19 @@
 extends BaseTroop
 ## Mage — ranged caster. Damage when magic sphere touches the building.
-## Uses object pooling with shared material. No dynamic lights.
+## Uses object pooling with shared lightning shader material. No dynamic lights.
 
 @export var staff_scene: String = "res://Model/Characters/Assets/staff.gltf"
 @export var projectile_fly_speed: float = 1.5
-@export var projectile_color: Color = Color(0.4, 0.6, 1.0)
+@export var projectile_color: Color = Color(0.3, 0.4, 1.0)
 @export var hit_distance: float = 0.05
 
 const POOL_SIZE: int = 6
+const HIT_DIST_SQ: float = 0.05 * 0.05
 
-## Shared material — one for all mage projectiles across all mages
-static var _shared_proj_mat: StandardMaterial3D = null
+## Shared across all mages — shader, material, mesh, noise textures
+static var _shared_shader: Shader = null
+static var _shared_mat: ShaderMaterial = null
+static var _shared_mesh: SphereMesh = null
 
 var _pool: Array = []
 var _active: Array = []
@@ -51,33 +54,58 @@ func _process(delta: float) -> void:
 	_update_projectiles(delta)
 
 
+static func _create_noise(seed_val: int, freq: float) -> NoiseTexture2D:
+	var tex = NoiseTexture2D.new()
+	tex.width = 32
+	tex.height = 32
+	tex.seamless = true
+	tex.generate_mipmaps = false
+	var n = FastNoiseLite.new()
+	n.seed = seed_val
+	n.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	n.frequency = freq
+	n.fractal_type = FastNoiseLite.FRACTAL_FBM
+	n.fractal_octaves = 2
+	n.fractal_lacunarity = 2.0
+	n.fractal_gain = 0.5
+	tex.noise = n
+	return tex
+
+
 func _build_pool() -> void:
 	if _pool_ready:
 		return
 	_pool_ready = true
 
-	if _shared_proj_mat == null:
-		_shared_proj_mat = StandardMaterial3D.new()
-		_shared_proj_mat.albedo_color = projectile_color
-		_shared_proj_mat.emission_enabled = true
-		_shared_proj_mat.emission = projectile_color
-		_shared_proj_mat.emission_energy_multiplier = 4.0
-		_shared_proj_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	# Build shared resources once
+	if _shared_shader == null:
+		_shared_shader = load("res://shaders/magic_orb.gdshader")
 
+	if _shared_mat == null:
+		_shared_mat = ShaderMaterial.new()
+		_shared_mat.shader = _shared_shader
+		_shared_mat.set_shader_parameter("tint", Vector3(projectile_color.r, projectile_color.g, projectile_color.b))
+		_shared_mat.set_shader_parameter("intensity", 2.0)
+		_shared_mat.set_shader_parameter("noise1", _create_noise(17, 0.04))
+		_shared_mat.set_shader_parameter("noise2", _create_noise(53, 0.06))
+
+	if _shared_mesh == null:
+		_shared_mesh = SphereMesh.new()
+		_shared_mesh.radius = 0.018
+		_shared_mesh.height = 0.036
+		_shared_mesh.radial_segments = 8
+		_shared_mesh.rings = 4
+
+	# Pool — projectiles are just MeshInstance3D directly (no wrapper Node3D)
 	var scene_root = get_tree().current_scene
 	for i in POOL_SIZE:
-		var projectile = Node3D.new()
 		var mesh_inst = MeshInstance3D.new()
-		var sphere = SphereMesh.new()
-		sphere.radius = 0.035
-		sphere.height = 0.07
-		mesh_inst.mesh = sphere
-		mesh_inst.material_override = _shared_proj_mat
-		projectile.add_child(mesh_inst)
-		projectile.visible = false
-		scene_root.add_child(projectile)
+		mesh_inst.mesh = _shared_mesh
+		mesh_inst.material_override = _shared_mat
+		mesh_inst.visible = false
+		scene_root.add_child(mesh_inst)
 		_pool.append({
-			"node": projectile,
+			"node": mesh_inst,
 			"active": false,
 			"target_ref": {},
 			"target_bs_ref": null,
@@ -154,8 +182,11 @@ func _update_projectiles(delta: float) -> void:
 		var target_pos = target_ref.node.global_position + Vector3(0, 0.05, 0)
 		p.node.global_position = p.node.global_position.move_toward(target_pos, projectile_fly_speed * delta)
 
-		# Hit check — sphere touches building
-		if p.node.global_position.distance_to(target_pos) < hit_distance:
+		# Hit check — squared distance
+		var dx = p.node.global_position.x - target_pos.x
+		var dy = p.node.global_position.y - target_pos.y
+		var dz = p.node.global_position.z - target_pos.z
+		if dx * dx + dy * dy + dz * dz < HIT_DIST_SQ:
 			target_ref["hp"] = target_ref.hp - damage
 			if target_ref.hp <= 0:
 				var bs_ref = p.target_bs_ref

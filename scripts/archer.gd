@@ -101,14 +101,6 @@ func _do_attack(delta: float) -> void:
 		_find_next_target()
 		return
 
-	# Face target while attacking
-	var target_pos = target_building.node.global_position
-	target_pos.y = global_position.y
-	var diff = target_pos - global_position
-	if diff.length() > 0.01:
-		look_at(global_position + diff.normalized(), Vector3.UP)
-		rotate_y(PI)
-
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed

@@ -258,17 +258,20 @@ func _update_hp_bar() -> void:
 
 
 func _find_next_target() -> void:
-	var nearest_dist: float = INF
+	var nearest_dist_sq: float = INF
 	var nearest_b: Dictionary = {}
 	var nearest_bs_ref = null
+	var my_pos = global_position
 
 	for entry in _get_buildings_cached():
 		var b = entry.b
 		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
 			continue
-		var dist = global_position.distance_to(entry.pos)
-		if dist < nearest_dist:
-			nearest_dist = dist
+		var dx = my_pos.x - entry.pos.x
+		var dz = my_pos.z - entry.pos.z
+		var d_sq = dx * dx + dz * dz
+		if d_sq < nearest_dist_sq:
+			nearest_dist_sq = d_sq
 			nearest_b = b
 			nearest_bs_ref = entry.bs
 
@@ -315,17 +318,17 @@ func _move_to_target(delta: float) -> void:
 		return
 
 	var target_pos = target_building.node.global_position
-	target_pos.y = global_position.y
-	var diff = target_pos - global_position
-	var dist = diff.length()
+	var diff = Vector3(target_pos.x - global_position.x, 0, target_pos.z - global_position.z)
+	var dist_sq = diff.length_squared()
 
-	if dist > 0.01:
-		var dir = diff.normalized()
-		look_at(global_position + dir, Vector3.UP)
-		rotate_y(PI)
+	if dist_sq < 0.0001:
+		return
+	var dist = sqrt(dist_sq)
+	var dir = diff / dist
 
-	# Move toward target
-	var dir = (Vector3(target_pos.x, global_position.y, target_pos.z) - global_position).normalized()
+	look_at(global_position + dir, Vector3.UP)
+	rotate_y(PI)
+
 	var move_vec = dir * move_speed * delta
 
 	# Separation + avoidance: run every 3rd frame per troop (staggered)
@@ -369,6 +372,9 @@ func _move_to_target(delta: float) -> void:
 	if dist <= attack_range:
 		state = State.ATTACKING
 		attack_timer = 0.0
+		# Face target once when entering attack state
+		look_at(global_position + dir, Vector3.UP)
+		rotate_y(PI)
 		if attack_anim != "" and anim_player.has_animation(attack_anim):
 			anim_player.play(attack_anim)
 

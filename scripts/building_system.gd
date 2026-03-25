@@ -282,17 +282,23 @@ func _ready() -> void:
 		_auto_login()
 
 
+var _bs_frame: int = 0
+
 func _process(_delta: float) -> void:
-	if _fps_lbl:
+	_bs_frame += 1
+	# FPS label — update every 15th frame to avoid string alloc every frame
+	if _fps_lbl and _bs_frame % 15 == 0:
 		_fps_lbl.text = "FPS: %d" % Engine.get_frames_per_second()
+	# Selected building panel — only update when visible
 	if selected_building.size() > 0 and building_panel and building_panel.visible:
-		var hp = selected_building.get("hp", 0)
-		var max_hp = selected_building.get("max_hp", 1)
-		if building_panel_hp:
-			building_panel_hp.text = "HP: %d / %d" % [hp, max_hp]
-		if building_panel_hp_bar:
-			building_panel_hp_bar.max_value = max_hp
-			building_panel_hp_bar.value = hp
+		if _bs_frame % 5 == 0:
+			var bhp = selected_building.get("hp", 0)
+			var bmax = selected_building.get("max_hp", 1)
+			if building_panel_hp:
+				building_panel_hp.text = "HP: %d / %d" % [bhp, bmax]
+			if building_panel_hp_bar:
+				building_panel_hp_bar.max_value = bmax
+				building_panel_hp_bar.value = bhp
 	_update_building_hp_bars()
 
 
@@ -1527,6 +1533,7 @@ func _select_building(b: Dictionary) -> void:
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
 			"is_barracks": b.id == "barracks",
+			"is_upgrading": b.get("is_upgrading", false),
 		})
 
 	# Range indicator for turrets
@@ -1668,6 +1675,9 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		
 	var model = b.node
 	
+	if current_building_id == b.id:
+		_select_building(b)
+	
 	# Spawn Upgrading text
 	var up_lbl = Label3D.new()
 	up_lbl.text = "Upgrading..."
@@ -1677,7 +1687,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	up_lbl.outline_modulate = Color(0, 0, 0, 1)
 	up_lbl.outline_size = 4
 	up_lbl.font_size = 17
-	up_lbl.position = Vector3(0, 1.2, 0)
+	up_lbl.position = Vector3(0, 0.2, 0)
 	model.add_child(up_lbl)
 
 	# Start Glow on CURRENT model
@@ -1764,12 +1774,12 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	lbl.outline_size = 4
 	lbl.modulate = Color(0.1, 0.9, 1.0, 0.0)
 	lbl.font_size = 20
-	lbl.position = Vector3(0, 0.8, 0)
+	lbl.position = Vector3(0, 0.12, 0)
 	model.add_child(lbl)
 	
 	var tw_pos = create_tween()
 	tw_pos.set_parallel(true)
-	tw_pos.tween_property(lbl, "position", Vector3(0, 1.8, 0), 2.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw_pos.tween_property(lbl, "position", Vector3(0, 0.24, 0), 2.0).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tw_pos.tween_property(lbl, "modulate:a", 1.0, 0.5)
 	
 	var tw_fade = create_tween()

@@ -1,6 +1,12 @@
 import { memo, useCallback } from 'react';
 import { useSend, useBuilding } from '../hooks/useGodot';
-import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
+import { colors } from '../styles/theme';
+
+import goldIcon from '../assets/resources/gold_bar.png';
+import woodIcon from '../assets/resources/wood_bar.png';
+import stoneIcon from '../assets/resources/stone_bar.png';
+
+const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
 
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
@@ -14,9 +20,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const ratio = building.max_hp > 0 ? building.hp / building.max_hp : 1;
   const isMaxLevel = building.level >= building.max_level;
   const barColor = ratio > 0.5 ? '#4CAF50' : ratio > 0.25 ? '#FF9800' : '#F44336';
+  const isUpgrading = building.is_upgrading;
 
   return (
     <div style={styles.wrap}>
+      <style>{`
+        @keyframes fillUp { from { width: 0%; } to { width: 100%; } }
+      `}</style>
       <div style={styles.panel}>
         <button style={styles.closeBtn} onClick={handleDeselect}>✕</button>
 
@@ -32,29 +42,42 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <div style={styles.maxLevel}>⭐ MAX LEVEL</div>
           ) : (
             <>
-              <div style={styles.cost}>
+              <h3 style={styles.sectionTitle}>Upgrade Resources</h3>
+              <div style={styles.costsContainer}>
                 {Object.entries(building.upgrade_cost || {}).map(([res, amount]) => (
-                  <span key={res} style={{ color: colors[res] || '#fff', fontWeight: 700 }}>
-                    {res === 'gold' ? '💰' : res === 'wood' ? '🪵' : '💎'} {amount}
-                  </span>
+                  <div key={res} style={styles.costItem}>
+                    <img src={ICONS[res]} alt={res} style={styles.costIcon} />
+                    <span style={styles.costAmount}>
+                      {amount}
+                    </span>
+                  </div>
                 ))}
               </div>
-              <button
-                style={cartoonBtn('#43A047', '#2E7D32')}
-                onClick={handleUpgrade}
-              >
-                ⬆️ Upgrade
-              </button>
+              {isUpgrading ? (
+                <div style={styles.upgradeProgressWrap}>
+                  <div style={styles.upgradeProgressTitle}>Upgrading...</div>
+                  <div style={styles.barBgSmall}>
+                    <div style={{ ...styles.barFill, background: '#FFC107', animation: 'fillUp 3s linear forwards' }} />
+                  </div>
+                </div>
+              ) : (
+                <button
+                  style={styles.upgradeBtn}
+                  onClick={handleUpgrade}
+                >
+                  Upgrade
+                </button>
+              )}
             </>
           )
         )}
 
         {building.id === 'barn' && !building.is_enemy && (
           <button
-            style={{ ...cartoonBtn('#7B1FA2', '#4A148C'), marginTop: 8 }}
+            style={{ ...styles.upgradeBtn, background: '#4A148C', boxShadow: '0 8px 20px rgba(74, 20, 140, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)', marginTop: 16 }}
             onClick={onOpenTroops}
           >
-            ⚔️ Troops
+            Troops
           </button>
         )}
       </div>
@@ -74,10 +97,15 @@ const styles = {
     zIndex: 10,
   },
   panel: {
-    ...cartoonPanel,
-    minWidth: 260,
+    background: '#0B1121',
+    border: '1px solid rgba(255, 255, 255, 0.05)',
+    borderRadius: 32,
+    boxShadow: '0 20px 40px rgba(0,0,0,0.8), inset 0 2px 0 rgba(255,255,255,0.05)',
+    padding: '30px 24px',
+    minWidth: 320,
     position: 'relative',
     textAlign: 'center',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
   closeBtn: {
     position: 'absolute',
@@ -116,23 +144,90 @@ const styles = {
     boxShadow: 'inset 0 -2px 0 rgba(0,0,0,0.2)',
   },
   hpText: {
-    fontSize: 13,
-    color: '#BCAAA4',
-    fontWeight: 700,
-    marginBottom: 10,
-  },
-  cost: {
-    display: 'flex',
-    justifyContent: 'center',
-    gap: 14,
     fontSize: 14,
-    marginBottom: 10,
-    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+    color: '#94a3b8',
+    fontWeight: 700,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    color: '#f8fafc',
+    fontSize: 16,
+    fontWeight: 800,
+    marginBottom: 12,
   },
   maxLevel: {
-    color: colors.gold,
+    color: '#FFB300',
+    fontSize: 18,
+    fontWeight: 900,
+    background: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 8,
+    padding: '12px',
+    marginTop: 20,
+  },
+  costsContainer: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: 16,
+    margin: '12px 0 20px',
+  },
+  costItem: {
+    background: 'rgba(255, 255, 255, 0.03)',
+    border: '1px solid rgba(255, 255, 255, 0.05)',
+    borderRadius: 20,
+    width: 90,
+    height: 90,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    boxShadow: '0 8px 16px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.02)',
+  },
+  costIcon: {
+    width: 44,
+    height: 44,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.5))',
+    marginBottom: 2,
+  },
+  costAmount: {
+    fontSize: 18,
+    fontWeight: 900,
+    color: '#f8fafc',
+    textShadow: '0 2px 2px rgba(0,0,0,0.5)',
+  },
+  upgradeBtn: {
+    background: '#F57F17',
+    border: 'none',
+    boxShadow: '0 8px 20px rgba(245, 127, 23, 0.3), inset 0 2px 0 rgba(255,255,255,0.4)',
+    borderRadius: 20,
+    padding: '16px 24px',
+    color: '#fff',
     fontSize: 16,
     fontWeight: 900,
-    textShadow: '0 2px 0 rgba(0,0,0,0.3)',
+    cursor: 'pointer',
+    width: '100%',
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    transition: 'transform 0.1s',
   },
+  upgradeProgressWrap: {
+    marginTop: 20,
+  },
+  upgradeProgressTitle: {
+    color: '#FFEB3B',
+    fontSize: 14,
+    fontWeight: 900,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: '1px',
+    WebkitTextStroke: '1px #000',
+  },
+  barBgSmall: {
+    height: 10,
+    borderRadius: 5,
+    background: 'rgba(0,0,0,0.5)',
+    overflow: 'hidden',
+  }
 };
