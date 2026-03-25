@@ -1675,7 +1675,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		
 	var model = b.node
 	
-	if current_building_id == b.id:
+	if typeof(selected_building) == TYPE_DICTIONARY and selected_building == b:
 		_select_building(b)
 	
 	# Spawn Upgrading text
@@ -1761,7 +1761,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		_spawn_tombstone_skeletons(b, b.level)
 
 	# Update React UI globally
-	if current_building_id == b.id:
+	if typeof(selected_building) == TYPE_DICTIONARY and selected_building == b:
 		_select_building(b)
 
 	# Show leveled up text
