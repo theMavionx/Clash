@@ -111,7 +111,7 @@ var building_defs: Dictionary = {
 	},
 	"storage": {
 		"name": "Storage",
-		"cells": Vector2i(3, 3),
+		"cells": Vector2i(4, 4),
 		"color": Color(0.5, 0.4, 0.3, 0.5),
 		"height": 0.35,
 		"scene": "res://Model/Storage/Storage shed_1.glb",
