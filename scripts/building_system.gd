@@ -109,6 +109,17 @@ var building_defs: Dictionary = {
 		"hp_levels": [800, 1500, 2500],
 		"cost": {"gold": 500, "wood": 400},
 	},
+	"storage": {
+		"name": "Storage",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.5, 0.4, 0.3, 0.5),
+		"height": 0.35,
+		"scene": "res://Model/Storage/Storage shed_1.glb",
+		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
+		"model_scale": 0.3,
+		"hp_levels": [1400, 2500, 4200],
+		"cost": {"gold": 350, "wood": 200},
+	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(2, 2),
