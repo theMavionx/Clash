@@ -100,18 +100,31 @@ var building_defs: Dictionary = {
 	},
 	"storage": {
 		"name": "Storage",
-		"cells": Vector2i(4, 4),
+		"cells": Vector2i(4, 5),
 		"color": Color(0.5, 0.4, 0.3, 0.5),
 		"height": 0.35,
 		"scene": "res://Model/Storage/Storage shed_1.glb",
 		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
+		"model_offset": Vector3(0, 0, -0.04),
 		"hp_levels": [1400, 2500, 4200],
 		"cost": {"gold": 350, "wood": 200},
 	},
+	"archer_tower": {
+		"name": "Archer Tower",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.5, 0.45, 0.55, 0.5),
+		"height": 0.45,
+		"scene": "res://Model/Archer_towers/tower_1.glb",
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb"],
+		"model_scale": 0.03,
+		"model_offset": Vector3(0, 0, 0),
+		"hp_levels": [800, 1500, 2500],
+		"cost": {"gold": 500, "wood": 400},
+	},
 	"tombstone": {
 		"name": "Tombstone",
-		"cells": Vector2i(2, 2),
+		"cells": Vector2i(3, 3),
 		"color": Color(0.4, 0.4, 0.45, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Tombstone/GLB format/1.glb",
@@ -203,6 +216,7 @@ var find_button: Button
 
 # ── Port / Ships ─────────────────────────────────────────────
 var port_panel: PanelContainer
+var port_vbox: VBoxContainer
 var port_ship_count_label: Label
 var owned_ships: int = 0
 const SHIP_COST_WOOD: int = 500
@@ -1248,7 +1262,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var model = scene_res.instantiate()
 				var s = def.get("model_scale", 0.2)
 				model.scale = Vector3(s, s, s)
-				model.rotation_degrees.y = def.get("model_rotation_y", 90.0)
+				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 				model.position = def.get("model_offset", Vector3.ZERO)
 				node.add_child(model)
 				_apply_cel_shader(model)
@@ -1431,7 +1445,7 @@ func _create_ghost() -> void:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
-			model.rotation_degrees.y = def.get("model_rotation_y", 90.0)
+			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			ghost.add_child(model)
 			_apply_cel_shader(model)
 	add_child(ghost)
@@ -1464,7 +1478,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
 			model.scale = Vector3(s, s, s)
-			model.rotation_degrees.y = def.get("model_rotation_y", 90.0)
+			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			model.position = def.get("model_offset", Vector3.ZERO)
 			node.add_child(model)
 			_apply_cel_shader(model)
@@ -2051,7 +2065,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var new_model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
 			new_model.scale = Vector3(s, s, s)
-			new_model.rotation_degrees.y = def.get("model_rotation_y", 90.0)
+			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			# Recreate HP bar (old one was freed with model children)
@@ -2103,6 +2117,14 @@ func _get_all_meshes(node: Node, arr: Array[MeshInstance3D]) -> void:
 		arr.append(node as MeshInstance3D)
 	for c in node.get_children():
 		_get_all_meshes(c, arr)
+
+func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
+	var cost: Dictionary = def.get("cost", {})
+	var result := {}
+	for res_name in cost:
+		result[res_name] = cost[res_name] * next_level
+	return result
+
 
 func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 	if not building_panel_cost:
@@ -2172,7 +2194,7 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
 		# Place around tombstone with slight offset
 		var angle = (float(i) / float(target_count)) * TAU
-		var offset = Vector3(cos(angle) * 0.08, 0, sin(angle) * 0.08)
+		var offset = Vector3(cos(angle) * 0.18, 0, sin(angle) * 0.18)
 		get_tree().current_scene.add_child(skel)
 		skel.global_position = tomb_pos + offset
 		skel.tombstone_pos = tomb_pos
@@ -2299,7 +2321,7 @@ func _create_port_panel() -> void:
 		return
 	port_panel = PanelContainer.new()
 	port_panel.visible = false
-	port_panel.custom_minimum_size = Vector2(320, 200)
+	port_panel.custom_minimum_size = Vector2(340, 280)
 	var style = StyleBoxFlat.new()
 	style.bg_color = Color(0.08, 0.14, 0.22, 1.0)
 	style.set_corner_radius_all(14)
@@ -2310,10 +2332,10 @@ func _create_port_panel() -> void:
 	port_panel.anchor_right = 0.5
 	port_panel.anchor_top = 0.5
 	port_panel.anchor_bottom = 0.5
-	port_panel.offset_left = -160
-	port_panel.offset_right = 160
-	port_panel.offset_top = -100
-	port_panel.offset_bottom = 100
+	port_panel.offset_left = -170
+	port_panel.offset_right = 170
+	port_panel.offset_top = -140
+	port_panel.offset_bottom = 140
 	canvas.add_child(port_panel)
 
 	var margin = MarginContainer.new()
@@ -2323,56 +2345,102 @@ func _create_port_panel() -> void:
 	margin.add_theme_constant_override("margin_bottom", 14)
 	port_panel.add_child(margin)
 
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	margin.add_child(vbox)
+	port_vbox = VBoxContainer.new()
+	port_vbox.add_theme_constant_override("separation", 10)
+	margin.add_child(port_vbox)
 
+
+func _refresh_port_panel() -> void:
+	if not port_vbox:
+		return
+	for child in port_vbox.get_children():
+		child.queue_free()
+
+	var b = selected_building
+	var def = building_defs.get(b.get("id", ""), {})
+	var level = b.get("level", 1)
+	var bhp = b.get("hp", 0)
+	var bmax_hp = b.get("max_hp", 1)
+
+	# Title with level
 	var title = Label.new()
-	title.text = "Port"
+	title.text = "Port (Lv. %d)" % level
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0))
-	vbox.add_child(title)
+	port_vbox.add_child(title)
 
+	# HP
+	var hp_label = Label.new()
+	hp_label.text = "HP: %d / %d" % [bhp, bmax_hp]
+	hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hp_label.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	port_vbox.add_child(hp_label)
+
+	# Upgrade building button
+	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
+	if level < max_level:
+		var upgrade_cost = _get_upgrade_cost(def, level + 1)
+		var cost_parts: Array = []
+		if upgrade_cost.get("gold", 0) > 0:
+			cost_parts.append("%d Gold" % upgrade_cost.gold)
+		if upgrade_cost.get("wood", 0) > 0:
+			cost_parts.append("%d Wood" % upgrade_cost.wood)
+		if upgrade_cost.get("ore", 0) > 0:
+			cost_parts.append("%d Ore" % upgrade_cost.ore)
+
+		var upgrade_btn = Button.new()
+		upgrade_btn.text = "Upgrade to Lv. %d (%s)" % [level + 1, ", ".join(cost_parts)]
+		upgrade_btn.custom_minimum_size = Vector2(0, 44)
+		if not _can_afford(upgrade_cost):
+			_style_button(upgrade_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+		else:
+			_style_button(upgrade_btn, Color(0.2, 0.45, 0.6), Color(0.25, 0.5, 0.65))
+		upgrade_btn.pressed.connect(func():
+			_upgrade_selected()
+			_refresh_port_panel()
+		)
+		port_vbox.add_child(upgrade_btn)
+	else:
+		var max_lbl = Label.new()
+		max_lbl.text = "MAX LEVEL"
+		max_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		max_lbl.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+		port_vbox.add_child(max_lbl)
+
+	var sep = HSeparator.new()
+	port_vbox.add_child(sep)
+
+	# Ship status
 	port_ship_count_label = Label.new()
 	port_ship_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	port_ship_count_label.add_theme_font_size_override("font_size", 16)
 	port_ship_count_label.add_theme_color_override("font_color", Color(0.7, 0.8, 0.9))
-	vbox.add_child(port_ship_count_label)
+	var port_node = b.get("node", null)
+	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
+	port_ship_count_label.text = "This port has a ship" if has_ship else "No ship at this port"
+	port_vbox.add_child(port_ship_count_label)
 
+	# Buy ship button
 	var buy_btn = Button.new()
 	buy_btn.text = "Buy Ship (500 Wood)"
 	buy_btn.custom_minimum_size = Vector2(0, 44)
-	buy_btn.add_theme_font_size_override("font_size", 16)
-	buy_btn.add_theme_color_override("font_color", Color.WHITE)
-	var btn_style = StyleBoxFlat.new()
-	btn_style.bg_color = Color(0.15, 0.35, 0.55, 1.0)
-	btn_style.set_corner_radius_all(10)
-	btn_style.set_border_width_all(1)
-	btn_style.border_color = Color(0.3, 0.5, 0.7, 1.0)
-	btn_style.content_margin_left = 12
-	btn_style.content_margin_right = 12
-	buy_btn.add_theme_stylebox_override("normal", btn_style)
-	var btn_hover = btn_style.duplicate()
-	btn_hover.bg_color = Color(0.2, 0.45, 0.65, 1.0)
-	buy_btn.add_theme_stylebox_override("hover", btn_hover)
-	var btn_pressed = btn_style.duplicate()
-	btn_pressed.bg_color = Color(0.1, 0.25, 0.4, 1.0)
-	buy_btn.add_theme_stylebox_override("pressed", btn_pressed)
-	buy_btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	_style_button(buy_btn, Color(0.15, 0.35, 0.55), Color(0.2, 0.45, 0.65))
 	buy_btn.pressed.connect(_buy_ship)
-	vbox.add_child(buy_btn)
+	port_vbox.add_child(buy_btn)
 
-
-func _refresh_port_panel() -> void:
-	if not port_ship_count_label:
-		return
-	var port_node = selected_building.get("node", null)
-	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
-	if has_ship:
-		port_ship_count_label.text = "This port has a ship"
-	else:
-		port_ship_count_label.text = "No ship at this port"
+	# Close button
+	var close_btn = Button.new()
+	close_btn.text = "Close"
+	close_btn.custom_minimum_size = Vector2(0, 40)
+	_style_button(close_btn, Color(0.5, 0.2, 0.2), Color(0.6, 0.25, 0.25))
+	close_btn.pressed.connect(func():
+		port_panel.visible = false
+		var cam = get_tree().current_scene.find_child("CameraRig", true, false)
+		if cam:
+			cam.zoom_blocked = false
+	)
+	port_vbox.add_child(close_btn)
 
 
 func _buy_ship() -> void:
@@ -3000,6 +3068,14 @@ func _update_move_building() -> void:
 	local_pos.z += sz / 2.0
 	local_pos.y = 0
 	b["node"].position = local_pos
+	# Move skeletons with tombstone
+	if b.id == "tombstone" and b.has("skeletons"):
+		var tomb_world = b["node"].global_position
+		for skel in b["skeletons"]:
+			if is_instance_valid(skel):
+				var offset = skel.global_position - skel.tombstone_pos
+				skel.tombstone_pos = tomb_world
+				skel.global_position = tomb_world + offset
 	# Validity indicator under the building
 	var valid = _can_place(gp, def.cells)
 	_update_move_indicator(local_pos, sx, sz, valid)
@@ -3058,6 +3134,14 @@ func _cancel_move(reselect: bool = true) -> void:
 		# Move building back to original position
 		if is_instance_valid(b.get("node", null)):
 			b["node"].position = _move_source_pos
+			# Move skeletons back with tombstone
+			if b.id == "tombstone" and b.has("skeletons"):
+				var tomb_world = b["node"].global_position
+				for skel in b["skeletons"]:
+					if is_instance_valid(skel):
+						var offset = skel.global_position - skel.tombstone_pos
+						skel.tombstone_pos = tomb_world
+						skel.global_position = tomb_world + offset
 	_end_move()
 	if reselect and b.size() > 0:
 		_select_building(b)
