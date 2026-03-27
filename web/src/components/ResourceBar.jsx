@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useEffect } from 'react';
+import { memo, useCallback } from 'react';
 import { useResources, useSend } from '../hooks/useGodot';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -16,31 +16,9 @@ const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 function ResourceBar() {
   const resources = useResources();
   const { sendToGodot } = useSend();
-  const iconRefs = useRef({});
-  const sentRef = useRef(false);
 
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
-  }, [sendToGodot]);
-
-  // Send icon positions to Godot so flying icons land correctly
-  useEffect(() => {
-    if (sentRef.current) return;
-    const timer = setTimeout(() => {
-      const positions = {};
-      for (const key of ['gold', 'wood', 'ore']) {
-        const el = iconRefs.current[key];
-        if (el) {
-          const rect = el.getBoundingClientRect();
-          positions[key] = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        }
-      }
-      if (Object.keys(positions).length === 3) {
-        sendToGodot('resource_bar_positions', positions);
-        sentRef.current = true;
-      }
-    }, 1000);
-    return () => clearTimeout(timer);
   }, [sendToGodot]);
 
   return (
@@ -56,7 +34,7 @@ function ResourceBar() {
               title={`Add ${key}`}
             />
           </div>
-          <img ref={el => iconRefs.current[key] = el} src={icon} alt={key} style={styles.icon} />
+          <img src={icon} alt={key} style={styles.icon} />
         </div>
       ))}
     </div>

@@ -498,13 +498,13 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 	var tex = load(tex_path)
 	if not tex: return
 
-	# Target position — from React resource bar positions (sent at startup)
-	var target_pos = Vector2(get_viewport().get_visible_rect().size.x - 200.0, 40.0)
-	if _react_resource_positions.has(res_type):
-		var rp = _react_resource_positions[res_type]
-		target_pos = Vector2(rp.x, rp.y)
-	elif not OS.has_feature("web"):
-		# Fallback: Godot UI positions in editor
+	var screen_w = get_viewport().get_visible_rect().size.x
+	var target_pos = Vector2(screen_w - 360.0, 40.0)
+	if res_type == "wood":
+		target_pos = Vector2(screen_w - 220.0, 40.0)
+	elif res_type == "ore":
+		target_pos = Vector2(screen_w - 80.0, 40.0)
+	if not OS.has_feature("web") and is_instance_valid(gold_label) and gold_label.is_visible_in_tree():
 		if res_type == "gold" and is_instance_valid(gold_label): target_pos = gold_label.get_global_rect().get_center()
 		elif res_type == "wood" and is_instance_valid(wood_label): target_pos = wood_label.get_global_rect().get_center()
 		elif res_type == "ore" and is_instance_valid(ore_label): target_pos = ore_label.get_global_rect().get_center()
@@ -2911,10 +2911,17 @@ func _return_home() -> void:
 	if bridge:
 		bridge.send_to_react("enemy_mode", {"active": false})
 
-	# Kill all spawned troops and ships
+	# Kill all spawned troops, ships, and skeleton guards immediately
 	for troop in get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop):
+			troop.remove_from_group("troops")
+			troop.set_process(false)
 			troop.queue_free()
+	for guard in get_tree().get_nodes_in_group("skeleton_guards"):
+		if is_instance_valid(guard):
+			guard.remove_from_group("skeleton_guards")
+			guard.set_process(false)
+			guard.queue_free()
 	for ship in get_tree().get_nodes_in_group("ships"):
 		if is_instance_valid(ship):
 			ship.queue_free()
@@ -2923,6 +2930,9 @@ func _return_home() -> void:
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("exit_attack_mode"):
 		attack_system.exit_attack_mode()
+
+	# Wait one frame so queue_free takes effect before loading home buildings
+	await get_tree().process_frame
 
 	# Cloud close animation — hide React UI
 	if bridge:
