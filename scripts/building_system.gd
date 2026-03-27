@@ -179,6 +179,7 @@ var _cel_shader: Shader
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
 var world_ui_canvas: CanvasLayer
+var _react_resource_positions: Dictionary = {}  # {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 var build_button: Button
 var attack_button: Button
 var _search_tween: Tween
@@ -497,19 +498,13 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 	var tex = load(tex_path)
 	if not tex: return
 
-	# Determine target UI element: React ResourceBar is at the Top Right.
-	# The gap is 16px, pill width is ~120px, icon offset is -12px.
-	# Gold is first (leftmost), Wood is middle, Ore is rightmost.
-	var screen_w = get_viewport().get_visible_rect().size.x
-	var target_pos = Vector2(screen_w - 360.0, 40.0) # default (Gold)
-	if res_type == "wood":
-		target_pos = Vector2(screen_w - 220.0, 40.0)
-	elif res_type == "ore":
-		target_pos = Vector2(screen_w - 80.0, 40.0)
-		
-	# Fallback if Godot UI is actually visible and we want to target it instead? We just assume React UI positions.
-	if !OS.has_feature("web") and is_instance_valid(gold_label) and gold_label.is_visible_in_tree():
-		# Use Godot UI positions if playing inside editor/standalone
+	# Target position — from React resource bar positions (sent at startup)
+	var target_pos = Vector2(get_viewport().get_visible_rect().size.x - 200.0, 40.0)
+	if _react_resource_positions.has(res_type):
+		var rp = _react_resource_positions[res_type]
+		target_pos = Vector2(rp.x, rp.y)
+	elif not OS.has_feature("web"):
+		# Fallback: Godot UI positions in editor
 		if res_type == "gold" and is_instance_valid(gold_label): target_pos = gold_label.get_global_rect().get_center()
 		elif res_type == "wood" and is_instance_valid(wood_label): target_pos = wood_label.get_global_rect().get_center()
 		elif res_type == "ore" and is_instance_valid(ore_label): target_pos = ore_label.get_global_rect().get_center()

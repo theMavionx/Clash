@@ -200,6 +200,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var sid = data.get("server_id", -1)
 			for bsys in get_tree().get_nodes_in_group("building_systems"):
 				bsys._collect_building_resource(sid)
+		"resource_bar_positions":
+			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
+			for bsys in get_tree().get_nodes_in_group("building_systems"):
+				bsys._react_resource_positions = data
 
 
 func _do_register(player_name: String) -> void:
