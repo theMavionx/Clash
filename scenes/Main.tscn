@@ -15,7 +15,6 @@
 [ext_resource type="Script" uid="uid://dawh2co3wdfbk" path="res://scripts/archer.gd" id="13_arch"]
 [ext_resource type="PackedScene" uid="uid://dtm3f0osbuidh" path="res://Model/Characters/Model/Rogue_Hooded.glb" id="14_cvmbd"]
 [ext_resource type="Script" uid="uid://gawcw5hava2g" path="res://scripts/ranger.gd" id="15_ft6cd"]
-[ext_resource type="PackedScene" uid="uid://0qmmldlmqece" path="res://Model/Archer_towers/tower2plus_3.glb" id="16_cvmbd"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
@@ -159,7 +158,3 @@ script = ExtResource("13_arch")
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.06, 0.068, 2.6073277)
 visible = false
 script = ExtResource("15_ft6cd")
-
-[node name="tower2plus_3" parent="." unique_id=872762260 instance=ExtResource("16_cvmbd")]
-transform = Transform3D(0.03, 0, 0, 0, 0.03, 0, 0, 0, 0.03, 0.48736, 1.1920929e-07, 1.7582853)
-visible = false
