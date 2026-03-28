@@ -1,26 +1,37 @@
-import { memo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { usePlayer } from '../hooks/useGodot';
+import { usePlayer, useResources } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
 import { cartoonBtn } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 function ProfileModal({ onClose }) {
   const player = usePlayer();
+  const resources = useResources();
   const { publicKey, connected, disconnect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { account } = usePacifica();
+  const [tradingStats, setTradingStats] = useState(null);
 
   const townHallLevel = player?.buildings?.town_hall?.level || 1;
   const pacBalance = parseFloat(account?.balance || 0);
   const pacEquity = parseFloat(account?.account_equity || 0);
 
+  // Fetch trading reward stats
+  useEffect(() => {
+    const token = window._playerToken;
+    if (!token) return;
+    fetch('/api/trading/stats', { headers: { 'x-token': token } })
+      .then(r => r.json())
+      .then(d => setTradingStats(d))
+      .catch(() => {});
+  }, []);
+
   return (
     <>
       <div style={S.backdrop} onClick={onClose} />
       <div style={S.modal}>
-        {/* Header */}
         <div style={S.header}>
           <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
             <div style={S.levelBadge}><span style={S.levelNum}>{townHallLevel}</span></div>
@@ -38,7 +49,7 @@ function ProfileModal({ onClose }) {
         </div>
 
         <div style={S.body}>
-          {/* Wallet connect */}
+          {/* Wallet */}
           {connected ? (
             <div style={S.connectedBox}>
               <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
@@ -56,21 +67,86 @@ function ProfileModal({ onClose }) {
             >CONNECT WALLET</button>
           )}
 
-          {/* Stats */}
+          {/* Game resources */}
+          <div style={S.sectionTitle}>Game Resources</div>
+          <div style={{display: 'flex', gap: 6}}>
+            <div style={S.resCard}><span style={{...S.resVal, color: '#e8b830'}}>{resources?.gold || 0}</span><span style={S.resLabel}>Gold</span></div>
+            <div style={S.resCard}><span style={{...S.resVal, color: '#6ab344'}}>{resources?.wood || 0}</span><span style={S.resLabel}>Wood</span></div>
+            <div style={S.resCard}><span style={{...S.resVal, color: '#8a9aaa'}}>{resources?.ore || 0}</span><span style={S.resLabel}>Ore</span></div>
+          </div>
+
+          {/* Game stats */}
           {[
             ['Player Level', townHallLevel],
             ['Trophies', (player?.trophies || 0).toLocaleString()],
-            connected && ['Trading Balance', `$${pacBalance.toFixed(2)}`],
-            connected && ['Equity', `$${pacEquity.toFixed(2)}`],
-            connected && ['Positions', account?.positions_count || 0],
-            connected && ['Orders', account?.orders_count || 0],
-            connected && ['Fee Tier', account?.fee_level ?? '—'],
-          ].filter(Boolean).map(([label, val]) => (
+          ].map(([label, val]) => (
             <div key={label} style={S.statRow}>
-              <span style={{fontSize: 13, fontWeight: 700, color: '#77573d'}}>{label}</span>
-              <span style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>{val}</span>
+              <span style={S.statLabel}>{label}</span>
+              <span style={S.statVal}>{val}</span>
             </div>
           ))}
+
+          {/* Trading stats */}
+          {connected && (
+            <>
+              <div style={S.sectionTitle}>Trading</div>
+              {[
+                ['Trading Balance', `$${pacBalance.toFixed(2)}`],
+                ['Equity', `$${pacEquity.toFixed(2)}`],
+                ['Positions', account?.positions_count || 0],
+                ['Orders', account?.orders_count || 0],
+              ].map(([label, val]) => (
+                <div key={label} style={S.statRow}>
+                  <span style={S.statLabel}>{label}</span>
+                  <span style={S.statVal}>{val}</span>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Gold rewards */}
+          {tradingStats && tradingStats.total_gold > 0 && (
+            <>
+              <div style={S.sectionTitle}>Gold from Trading</div>
+              <div style={S.goldCard}>
+                <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                  <span style={{fontSize: 28}}>🪙</span>
+                  <div>
+                    <div style={{fontSize: 22, fontWeight: 900, color: '#5C3A21'}}>{tradingStats.total_gold.toLocaleString()} Gold</div>
+                    <div style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>Volume: ${parseFloat(tradingStats.total_volume || 0).toFixed(0)}</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Gold history */}
+              {tradingStats.gold_history?.length > 0 && (
+                <>
+                  <div style={S.sectionTitle}>Gold History</div>
+                  {tradingStats.gold_history.map((h, i) => (
+                    <div key={i} style={S.historyRow}>
+                      <span style={{fontSize: 14, fontWeight: 900, color: '#4CAF50'}}>+{h.amount}</span>
+                      <span style={{fontSize: 12, fontWeight: 700, color: '#77573d', flex: 1}}>{h.reason}</span>
+                      <span style={{fontSize: 10, color: '#a3906a'}}>{h.created_at?.split(' ')[0]}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </>
+          )}
+
+          {/* Trade history */}
+          {tradingStats?.trades?.length > 0 && (
+            <>
+              <div style={S.sectionTitle}>Trade History</div>
+              {tradingStats.trades.slice(0, 20).map((t, i) => (
+                <div key={i} style={S.historyRow}>
+                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', minWidth: 40}}>{t.symbol}</span>
+                  <span style={{fontSize: 12, fontWeight: 700, color: '#77573d', flex: 1}}>{t.amount} @ ${parseFloat(t.price).toLocaleString()}</span>
+                  <span style={{fontSize: 10, color: '#a3906a'}}>{t.created_at?.split(' ')[0] || '—'}</span>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </>
@@ -83,7 +159,7 @@ const S = {
   backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 370, maxHeight: '80vh', background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 24,
+    width: 370, maxHeight: '85vh', background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 24,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column',
     zIndex: 201, pointerEvents: 'auto', overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -102,7 +178,7 @@ const S = {
     width: 30, height: 30, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
-  body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto' },
+  body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', scrollbarWidth: 'none' },
   connectedBox: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 14px',
@@ -112,8 +188,32 @@ const S = {
     padding: '5px 12px', background: '#E53935', border: '2px solid #B71C1C',
     borderRadius: 8, color: '#fff', fontWeight: 800, fontSize: 11, cursor: 'pointer',
   },
+  sectionTitle: {
+    fontSize: 12, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase',
+    marginTop: 6, paddingBottom: 2, borderBottom: '2px solid #e8dfc8',
+  },
   statRow: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '10px 14px', background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    padding: '8px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10,
+  },
+  statLabel: { fontSize: 13, fontWeight: 700, color: '#77573d' },
+  statVal: { fontSize: 15, fontWeight: 900, color: '#5C3A21' },
+  resCard: {
+    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+    background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
+  },
+  resVal: { fontSize: 16, fontWeight: 900 },
+  resLabel: { fontSize: 10, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase' },
+  goldCard: {
+    background: 'linear-gradient(135deg, #FFF8E1 0%, #FFE082 100%)',
+    border: '3px solid #FFB300', borderRadius: 14, padding: 14,
+  },
+  goldStat: {
+    flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+    background: 'rgba(255,255,255,0.5)', borderRadius: 8, padding: 6,
+  },
+  historyRow: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '7px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
   },
 };

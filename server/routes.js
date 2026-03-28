@@ -303,9 +303,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reasons.push('Daily bonus');
     }
 
+    // Save all new trades to DB
+    const insertTrade = db.db.prepare('INSERT OR IGNORE INTO player_trades (player_id, history_id, symbol, price, amount, fee) VALUES (?, ?, ?, ?, ?, ?)');
+    for (const t of newTrades) {
+      insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
+    }
+
     if (totalGold > 0) {
       // Add gold to player resources
       db.addResources(req.player.id, totalGold, 0, 0);
+
+      // Log to gold history
+      const reason = reasons.join(' + ') || 'Trading reward';
+      db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
 
       // Update reward tracking
       db.db.prepare(`
@@ -328,10 +338,40 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
 });
 
-// Get trading reward stats
-router.get('/trading/stats', auth, (req, res) => {
+// Gold & trade history tables
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS gold_history (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id  TEXT NOT NULL,
+      amount     INTEGER NOT NULL,
+      reason     TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS player_trades (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id    TEXT NOT NULL,
+      history_id   INTEGER UNIQUE,
+      symbol       TEXT NOT NULL,
+      price        TEXT NOT NULL,
+      amount       TEXT NOT NULL,
+      fee          TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch {}
+
+// Get trading reward stats + gold history + trade history from Pacifica
+router.get('/trading/stats', auth, async (req, res) => {
   const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
-  res.json(reward || { total_volume: 0, total_gold: 0 });
+  const goldHistory = db.db.prepare('SELECT amount, reason, created_at FROM gold_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
+  const trades = db.db.prepare('SELECT symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
+
+  res.json({
+    ...(reward || { total_volume: 0, total_gold: 0 }),
+    gold_history: goldHistory,
+    trades,
+  });
 });
 
 // ==================== FULL STATE ====================

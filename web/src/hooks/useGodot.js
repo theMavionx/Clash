@@ -37,6 +37,13 @@ export function GodotProvider({ children }) {
         case 'resources':
           setResources(data);
           break;
+        case 'resources_add':
+          setResources(prev => ({
+            gold: (prev.gold || 0) + (data.gold || 0),
+            wood: (prev.wood || 0) + (data.wood || 0),
+            ore: (prev.ore || 0) + (data.ore || 0),
+          }));
+          break;
         case 'building_defs':
           setBuildingDefs(data);
           break;

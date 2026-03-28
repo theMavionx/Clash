@@ -96,10 +96,9 @@ export function usePacifica() {
       const data = await res.json();
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
-        setTimeout(() => setGoldEarned(null), 4000);
-        // Refresh Godot resources
-        if (window.godotBridge) {
-          window.godotBridge(JSON.stringify({ action: 'get_state', data: {} }));
+        // Update React resource bar immediately
+        if (window.onGodotMessage) {
+          window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
       }
       return data;
