@@ -136,6 +136,7 @@ func _send_initial_state() -> void:
 			"player_name": net.display_name,
 			"trophies": net.trophies,
 			"player_id": net.player_id,
+			"token": net.token,
 		})
 
 
@@ -223,6 +224,7 @@ func _do_register(player_name: String) -> void:
 		"player_name": net.display_name,
 		"trophies": net.trophies,
 		"player_id": net.player_id,
+		"token": net.token,
 	})
 
 
@@ -233,6 +235,7 @@ func _send_full_state() -> void:
 			"player_name": net.display_name,
 			"trophies": net.trophies,
 			"player_id": net.player_id,
+			"token": net.token,
 		})
 	var bs = _get_building_system()
 	if bs:

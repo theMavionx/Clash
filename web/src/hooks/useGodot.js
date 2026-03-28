@@ -32,6 +32,7 @@ export function GodotProvider({ children }) {
           break;
         case 'state':
           setPlayerState(prev => ({ ...(prev || {}), ...data }));
+          if (data.token) window._playerToken = data.token;
           break;
         case 'resources':
           setResources(data);

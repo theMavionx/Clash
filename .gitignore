@@ -8,6 +8,16 @@ server/*.db
 server/*.db-wal
 server/*.db-shm
 
+# Futures Server
+server-futures/node_modules/
+server-futures/*.db
+server-futures/*.db-wal
+server-futures/*.db-shm
+server-futures/server.log
+
+# Web
+web/node_modules/
+
 # MCP
 .mcp.json
 addons/godot_mcp/

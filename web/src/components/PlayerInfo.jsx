@@ -5,14 +5,14 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function PlayerInfo() {
+function PlayerInfo({ onOpenProfile }) {
   const playerState = usePlayer();
   if (!playerState) return null;
 
   const townHallLevel = playerState.buildings?.town_hall?.level || 1;
 
   return (
-    <div style={styles.wrap}>
+    <div style={styles.wrap} onClick={onOpenProfile}>
       <div style={styles.levelCircleContainer}>
         <div style={styles.levelCircle}>
           <div style={styles.innerCircle}>
@@ -50,7 +50,8 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: 12,
-    pointerEvents: 'none',
+    pointerEvents: 'auto',
+    cursor: 'pointer',
     zIndex: 10,
     fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   },

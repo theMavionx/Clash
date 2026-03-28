@@ -1,0 +1,5 @@
+Clash server running on http://0.0.0.0:4000
+WebSocket available at ws://0.0.0.0:4000/ws
+[32mGET[0m / [90m200 11ms[0m
+[32mPOST[0m /api/trading/claim-gold [90m200 539ms[0m
+[32mPOST[0m /api/trading/claim-gold [90m200 881ms[0m

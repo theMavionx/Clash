@@ -1,7 +1,11 @@
 const express = require('express');
+const crypto = require('crypto');
 const db = require('./db');
 
 const router = express.Router();
+
+// HMAC secret for trading reward verification
+const REWARD_SECRET = process.env.REWARD_SECRET || crypto.randomBytes(32).toString('hex');
 
 // ---------- Auth Middleware ----------
 
@@ -195,6 +199,135 @@ router.post('/trophies/recalculate', auth, (req, res) => {
 // Get trophy table (what each building is worth)
 router.get('/trophies/table', (req, res) => {
   res.json(db.TROPHY_TABLE);
+});
+
+// ==================== TRADING REWARDS ====================
+
+const GOLD_PER_USD_VOLUME = 5;
+const GOLD_FIRST_DEPOSIT = 500;
+const GOLD_FIRST_TRADE = 300;
+const GOLD_DAILY_TRADE = 200;
+const GOLD_PROFIT_RATE = 0.10; // 10% of PnL → gold (×1000)
+
+// Trading rewards table
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS trading_rewards (
+      player_id    TEXT PRIMARY KEY,
+      wallet       TEXT NOT NULL,
+      last_trade_id INTEGER NOT NULL DEFAULT 0,
+      total_volume REAL NOT NULL DEFAULT 0,
+      total_gold   INTEGER NOT NULL DEFAULT 0,
+      first_deposit INTEGER NOT NULL DEFAULT 0,
+      first_trade  INTEGER NOT NULL DEFAULT 0,
+      last_daily   TEXT,
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+} catch {}
+
+// Rate limiter for claim-gold (max 1 per 5 seconds per player)
+const claimCooldowns = new Map();
+
+// Claim gold — server verifies trades via Pacifica API
+router.post('/trading/claim-gold', auth, async (req, res) => {
+  // Rate limit
+  const lastClaim = claimCooldowns.get(req.player.id);
+  if (lastClaim && Date.now() - lastClaim < 5000) {
+    return res.status(429).json({ gold: 0, reason: 'Please wait before claiming again' });
+  }
+  claimCooldowns.set(req.player.id, Date.now());
+  const { wallet } = req.body;
+  if (!wallet) return res.status(400).json({ error: 'wallet required' });
+
+  try {
+    // Get or create reward record
+    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    if (!reward) {
+      db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet);
+      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    }
+
+    // Fetch trades from Pacifica (verified source of truth)
+    const tradesRes = await fetch(
+      `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
+    );
+    const tradesData = await tradesRes.json();
+    if (!tradesData.success || !tradesData.data) {
+      return res.json({ gold: 0, reason: 'No trades found' });
+    }
+
+    // Filter only new trades (after last_trade_id)
+    const newTrades = tradesData.data.filter(t => t.history_id > reward.last_trade_id);
+    if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      return res.json({ gold: 0, reason: 'No new trades' });
+    }
+
+    let totalGold = 0;
+    const reasons = [];
+    let maxTradeId = reward.last_trade_id;
+
+    // Volume rewards
+    for (const t of newTrades) {
+      const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
+      totalGold += Math.floor(volume * GOLD_PER_USD_VOLUME);
+
+      // Profit reward (from builder_fee we can estimate, but PnL not in this endpoint)
+      if (t.history_id > maxTradeId) maxTradeId = t.history_id;
+    }
+
+    if (newTrades.length > 0) {
+      reasons.push(`${newTrades.length} trades`);
+    }
+
+    // First deposit bonus
+    if (!reward.first_deposit) {
+      totalGold += GOLD_FIRST_DEPOSIT;
+      reasons.push('First deposit!');
+    }
+
+    // First trade bonus
+    if (!reward.first_trade && newTrades.length > 0) {
+      totalGold += GOLD_FIRST_TRADE;
+      reasons.push('First trade!');
+    }
+
+    // Daily bonus
+    const today = new Date().toISOString().split('T')[0];
+    if (reward.last_daily !== today && newTrades.length > 0) {
+      totalGold += GOLD_DAILY_TRADE;
+      reasons.push('Daily bonus');
+    }
+
+    if (totalGold > 0) {
+      // Add gold to player resources
+      db.addResources(req.player.id, totalGold, 0, 0);
+
+      // Update reward tracking
+      db.db.prepare(`
+        UPDATE trading_rewards SET
+          last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+          last_daily = ?, updated_at = datetime('now')
+        WHERE player_id = ?
+      `).run(maxTradeId, newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0), totalGold, newTrades.length, today, req.player.id);
+    }
+
+    res.json({
+      gold: totalGold,
+      reason: reasons.join(' + ') || 'No new rewards',
+      total_gold_earned: (reward.total_gold || 0) + totalGold,
+    });
+  } catch (e) {
+    console.error('Claim gold error:', e);
+    res.status(500).json({ error: 'Failed to claim rewards' });
+  }
+});
+
+// Get trading reward stats
+router.get('/trading/stats', auth, (req, res) => {
+  const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+  res.json(reward || { total_volume: 0, total_gold: 0 });
 });
 
 // ==================== FULL STATE ====================
