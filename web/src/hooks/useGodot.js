@@ -20,6 +20,7 @@ export function GodotProvider({ children }) {
   const [showRegister, setShowRegister] = useState(false);
   const [collectibles, setCollectibles] = useState([]);
   const [cloudVisible, setCloudVisible] = useState(false);
+  const [futuresOpen, setFuturesOpen] = useState(false);
   const errorTimerRef = useRef(null);
 
   useEffect(() => {
@@ -96,15 +97,15 @@ export function GodotProvider({ children }) {
   }, []);
 
   // Stable context objects — only re-created when their specific values change
-  const sendCtx = useMemo(() => ({ sendToGodot, setShopOpen }), [sendToGodot, setShopOpen]);
+  const sendCtx = useMemo(() => ({ sendToGodot, setShopOpen, setFuturesOpen }), [sendToGodot, setShopOpen, setFuturesOpen]);
   const playerCtx = useMemo(() => playerState, [playerState]);
   const resourcesCtx = useMemo(() => resources, [resources]);
   const buildingCtx = useMemo(() => ({
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible,
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },

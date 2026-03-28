@@ -8,11 +8,12 @@ import BarracksPanel from './BarracksPanel';
 import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
+import FuturesPanel from './FuturesPanel';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
-  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode } = useUI();
+  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen } = useUI();
   const { selectedBuilding } = useBuilding();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -56,6 +57,10 @@ export default function GameUI() {
 
       {shopOpen && (
         <ShopPanel onClose={handleCloseShop} />
+      )}
+
+      {futuresOpen && (
+        <FuturesPanel />
       )}
 
       {barnAsTroops ? (

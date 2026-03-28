@@ -5,12 +5,13 @@ import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl
 import attackIcon from '../assets/resources/Gemini_Generated_Image_qgf6o5qgf6o5qgf6-removebg-preview.png';
 
 function ActionButtons() {
-  const { sendToGodot } = useSend();
+  const { sendToGodot, setFuturesOpen } = useSend();
   const { enemyMode } = useUI();
 
   const handleReturnHome = useCallback(() => sendToGodot('return_home'), [sendToGodot]);
   const handleFindEnemy = useCallback(() => sendToGodot('find_enemy'), [sendToGodot]);
   const handleOpenShop = useCallback(() => sendToGodot('open_shop'), [sendToGodot]);
+  const handleOpenTrade = useCallback(() => setFuturesOpen(true), [setFuturesOpen]);
 
   if (enemyMode.active) {
     return (
@@ -31,6 +32,13 @@ function ActionButtons() {
   return (
     <>
       <div style={styles.wrapLeft}>
+        <button
+          style={styles.tradeBtn}
+          onClick={handleOpenTrade}
+        >
+          <div style={{ fontSize: 45, marginBottom: -5, marginTop: 0, filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.4))' }}>📈</div>
+          <span style={styles.btnText}>TRADE</span>
+        </button>
         <button
           style={styles.attackBtn}
           onClick={handleFindEnemy}
@@ -91,6 +99,24 @@ const styles = {
     borderRadius: 24,
     border: '4px solid #fff',
     background: 'linear-gradient(180deg, #1976D2 0%, #0D47A1 100%)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+    transition: 'transform 0.1s, box-shadow 0.1s',
+    userSelect: 'none',
+    padding: 0,
+    outline: 'none',
+    overflow: 'hidden',
+  },
+  tradeBtn: {
+    width: 120,
+    height: 110,
+    borderRadius: 24,
+    border: '4px solid #fff',
+    background: 'linear-gradient(180deg, #9C27B0 0%, #4A148C 100%)',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
