@@ -1,6 +1,7 @@
 extends BaseTroop
 ## Ranger — ranged fighter with crossbow. Shoots bolt projectiles.
 ## Uses object pooling to avoid per-shot allocations.
+## Implements the Ranger troop spec (design/gdd/troops.md).
 
 @export var crossbow_scene: String = "res://Model/Characters/Assets/crossbow_1handed.gltf"
 @export var bolt_scene: String = "res://Model/Characters/Assets/arrow_crossbow.gltf"
@@ -9,6 +10,8 @@ extends BaseTroop
 @export var shoot_threshold: float = 0.4
 
 const POOL_SIZE: int = 8
+## Squared hit threshold — avoids sqrt each projectile tick.
+const HIT_DIST_SQ: float = 0.05 * 0.05
 
 var _bolt_res: Resource = null
 var _pool: Array = []
@@ -23,6 +26,8 @@ const LEVEL_STATS = {
 	3: {"hp": 1150, "damage": 192, "atk_speed": 0.833},
 }
 
+## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
+## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.55
@@ -31,18 +36,16 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Ranged_1H_Shoot"
-	anim_files = [
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-	]
+	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
+## Attaches the crossbow model to the right hand bone, rotated 90 degrees.
 func _setup_weapons() -> void:
 	_attach_to_bone("handslot.r", "CrossbowAttachment", crossbow_scene, "Crossbow", Vector3(0, 90, 0))
 
 
+## Builds the bolt pool on first activation, then delegates to super and
+## advances all in-flight projectiles each frame.
 func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	super(delta)
@@ -77,10 +80,13 @@ func _build_pool() -> void:
 		})
 
 
+## Returns the first inactive pool slot, or an empty dict if all slots are busy.
+## Emits a warning when the pool is exhausted so tuning is easier.
 func _get_pooled() -> Dictionary:
 	for b in _pool:
 		if not b.active:
 			return b
+	push_warning("Ranger: projectile pool exhausted (POOL_SIZE=%d). Consider increasing it." % POOL_SIZE)
 	return {}
 
 
@@ -100,6 +106,7 @@ func _exit_tree() -> void:
 	_active.clear()
 
 
+## Advances the attack timer and fires a bolt at shoot_threshold into the animation.
 func _do_attack(delta: float) -> void:
 	if not _has_valid_target():
 		_find_next_target()
@@ -130,16 +137,18 @@ func _spawn_bolt() -> void:
 	b.target_ref = target_building
 	b.target_bs_ref = target_bs
 	b.target_guard_ref = target_guard
-	b.node.global_position = global_position + Vector3(0, 0.08, 0)
+	b.node.global_position = global_position + Vector3(0, BaseTroop.PROJECTILE_SPAWN_Y, 0)
 	b.node.visible = true
 
 	# Point bolt toward target
-	var t_pos = _get_target_position() + Vector3(0, 0.05, 0)
+	var t_pos = _get_target_position() + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 	b.node.look_at(t_pos, Vector3.UP)
 
 	_active.append(b)
 
 
+## Moves all in-flight bolts toward their targets and applies damage on hit.
+## Uses squared distance to avoid per-tick sqrt calls.
 func _update_projectiles(delta: float) -> void:
 	var i = _active.size() - 1
 	while i >= 0:
@@ -155,10 +164,10 @@ func _update_projectiles(delta: float) -> void:
 		var has_target: bool = false
 
 		if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.is_inside_tree():
-			target_pos = guard_ref.global_position + Vector3(0, 0.05, 0)
+			target_pos = guard_ref.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
 		elif target_ref.size() > 0 and is_instance_valid(target_ref.get("node")):
-			target_pos = target_ref.node.global_position + Vector3(0, 0.05, 0)
+			target_pos = target_ref.node.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
 
 		if not has_target:
@@ -170,7 +179,8 @@ func _update_projectiles(delta: float) -> void:
 		p.node.look_at(target_pos, Vector3.UP)
 		p.node.global_position = p.node.global_position.move_toward(target_pos, projectile_fly_speed * delta)
 
-		if p.node.global_position.distance_to(target_pos) < hit_distance:
+		var dp = p.node.global_position - target_pos
+		if dp.x * dp.x + dp.y * dp.y + dp.z * dp.z < HIT_DIST_SQ:
 			if guard_ref != null and is_instance_valid(guard_ref):
 				guard_ref.take_damage(damage)
 				if not is_instance_valid(guard_ref) or not guard_ref.is_inside_tree():

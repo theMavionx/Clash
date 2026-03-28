@@ -1,8 +1,8 @@
 extends Node3D
 ## Attack system: press Attack → click on shipPlane → ship sails to that point.
+## Implements: design/gdd/attack_system.md
 
 @export var grid_plane_path: NodePath = "../Island/shipPlane"
-@export var ship_scene_path: String = "res://Model/Ship/Sail Ship.glb"
 @export var ship_scale: float = 0.15
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
@@ -12,19 +12,80 @@ extends Node3D
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 
-const SHIP_TROOPS = [
-	{"model": "res://Model/Characters/Model/Knight.glb", "script": "res://scripts/knight.gd"},
-	{"model": "res://Model/Characters/Model/Mage.glb", "script": "res://scripts/mage.gd"},
-	{"model": "res://Model/Characters/Model/Barbarian.glb", "script": "res://scripts/barbarian.gd"},
-	{"model": "res://Model/Characters/Model/Ranger.glb", "script": "res://scripts/archer.gd"},
-	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb", "script": "res://scripts/ranger.gd"},
-]
+# ---------------------------------------------------------------------------
+# Ship rocking / bobbing animation constants
+# ---------------------------------------------------------------------------
+const SHIP_ROCK_ANGLE_POS: float = 3.0   ## Roll right (degrees)
+const SHIP_ROCK_ANGLE_NEG: float = -3.0  ## Roll left  (degrees)
+const SHIP_BOB_AMPLITUDE: float  = 0.05  ## Vertical bob distance (metres)
+const SHIP_PITCH_ANGLE_POS: float = 2.0  ## Pitch forward (degrees)
+const SHIP_PITCH_ANGLE_NEG: float = -1.0 ## Pitch back    (degrees)
 
+# ---------------------------------------------------------------------------
+# Flag marker constants
+# ---------------------------------------------------------------------------
+const FLAG_SCALE: float    = 0.000625 ## Uniform scale applied to flag GLB
+const FLAG_Y_OFFSET: float = -0.08    ## Vertical offset so flag sits on water
+
+# ---------------------------------------------------------------------------
+# Separation constants
+# ---------------------------------------------------------------------------
 ## Minimum lateral distance between ship landing positions (world units)
 const SHIP_MIN_SEPARATION: float = 0.252
 ## Radius within which ships push each other apart while sailing
 const SHIP_PUSH_RADIUS: float = 0.4
 
+# ---------------------------------------------------------------------------
+# Preloaded resources — loaded once at startup, never at runtime
+# ---------------------------------------------------------------------------
+var _ship_scene_res   = load("res://Model/Ship/Sail Ship.glb")
+var _flag_scene_res   = load("res://Model/flag/pirate_flag_animated.glb")
+
+## Preloaded troop model PackedScenes, indexed to match SHIP_TROOPS
+var _troop_model_res: Array = [
+	load("res://Model/Characters/Model/Knight.glb"),
+	load("res://Model/Characters/Model/Mage.glb"),
+	load("res://Model/Characters/Model/Barbarian.glb"),
+	load("res://Model/Characters/Model/Ranger.glb"),
+	load("res://Model/Characters/Model/Rogue_Hooded.glb"),
+]
+
+## Preloaded troop GDScripts, indexed to match SHIP_TROOPS
+var _troop_script_res: Array = [
+	load("res://scripts/knight.gd"),
+	load("res://scripts/mage.gd"),
+	load("res://scripts/barbarian.gd"),
+	load("res://scripts/archer.gd"),
+	load("res://scripts/ranger.gd"),
+]
+
+const SHIP_TROOPS = [
+	{"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
+	{"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	{"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
+	{"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	{"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
+]
+
+# ---------------------------------------------------------------------------
+# Per-frame ships group cache — matches BaseTroop caching pattern
+# ---------------------------------------------------------------------------
+static var _cached_ships: Array = []
+static var _ships_cache_frame: int = -1
+
+## Returns the "ships" group, refreshed at most once per process frame.
+static func _get_ships_cached() -> Array:
+	var frame = Engine.get_process_frames()
+	if frame != _ships_cache_frame:
+		var tree = Engine.get_main_loop() as SceneTree
+		if tree:
+			_cached_ships = tree.get_nodes_in_group("ships")
+		_ships_cache_frame = frame
+	return _cached_ships
+
+# ---------------------------------------------------------------------------
+# State
+# ---------------------------------------------------------------------------
 var is_attack_mode: bool = false
 var _ships_placed: int = 0
 var ship_plane: MeshInstance3D
@@ -62,7 +123,9 @@ func _process(delta: float) -> void:
 
 ## Push overlapping ships apart so they never clip through each other.
 func _separate_ships(delta: float) -> void:
-	var ships = get_tree().get_nodes_in_group("ships")
+	var ships = _get_ships_cached()
+	if ships.is_empty():
+		return
 	for i in ships.size():
 		var a = ships[i]
 		if not is_instance_valid(a):
@@ -80,6 +143,8 @@ func _separate_ships(delta: float) -> void:
 				b.global_position -= push
 
 
+## Activates attack mode, showing the placement plane and resetting ship counters.
+## Call this when the player presses the Attack button.
 func enter_attack_mode() -> void:
 	is_attack_mode = true
 	_ships_placed = 0
@@ -95,9 +160,17 @@ func enter_attack_mode() -> void:
 	print("Attack mode ON - place up to %d ships!" % max_ships)
 
 
+## Deactivates attack mode, hides the placement plane, and frees any
+## pending flag markers that were not yet cleaned up by arriving ships.
 func exit_attack_mode() -> void:
 	is_attack_mode = false
 	_ships_placed = 0
+	# Free markers for ships that were cancelled before arriving
+	for marker in _ship_markers:
+		if is_instance_valid(marker):
+			marker.queue_free()
+	_ship_markers.clear()
+	_ship_stop_positions.clear()
 	if ship_plane:
 		ship_plane.visible = false
 		ship_plane.material_override = null
@@ -180,15 +253,14 @@ func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
 
 ## Creates a pirate flag marker at the ship's landing position.
 func _create_x_marker(pos: Vector3) -> Node3D:
-	var flag_res = load("res://Model/flag/pirate_flag_animated.glb")
-	if flag_res == null:
+	if _flag_scene_res == null:
 		push_warning("AttackSystem: flag model not found")
 		return Node3D.new()
 
-	var flag = flag_res.instantiate()
-	flag.scale = Vector3(0.000625, 0.000625, 0.000625)
+	var flag = _flag_scene_res.instantiate()
+	flag.scale = Vector3(FLAG_SCALE, FLAG_SCALE, FLAG_SCALE)
 	get_tree().current_scene.add_child(flag)
-	flag.global_position = pos + Vector3(0, -0.08, 0)
+	flag.global_position = pos + Vector3(0, FLAG_Y_OFFSET, 0)
 
 	# Play the waving animation on loop
 	var anim_player = _find_child_anim_player(flag)
@@ -210,13 +282,15 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 	return null
 
 
+## Spawns a single ship at the edge of the placement zone and sails it to [target].
+## Attaches rocking/bobbing tweens, places a flag marker, and schedules troop
+## deployment when the ship arrives.
 func _spawn_single_ship(target: Vector3) -> void:
-	var ship_res = load(ship_scene_path)
-	if ship_res == null:
-		push_warning("AttackSystem: Could not load ship: " + ship_scene_path)
+	if _ship_scene_res == null:
+		push_warning("AttackSystem: ship scene resource is null")
 		return
 
-	var ship = ship_res.instantiate()
+	var ship = _ship_scene_res.instantiate()
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
 
 	# Sailing direction — perpendicular to shipPlane, pointing outward
@@ -243,7 +317,7 @@ func _spawn_single_ship(target: Vector3) -> void:
 	var spawn_pos = stop_pos + sail_dir * spawn_distance
 	spawn_pos.y = plane_y
 
-	# X marker at the landing spot
+	# Flag marker at the landing spot
 	var marker = _create_x_marker(stop_pos)
 	_ship_markers.append(marker)
 
@@ -259,22 +333,22 @@ func _spawn_single_ship(target: Vector3) -> void:
 
 	# Start rocking immediately (even during delay)
 	var rock_tween = create_tween().set_loops()
-	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(3.0), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(-3.0), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(SHIP_ROCK_ANGLE_POS), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(SHIP_ROCK_ANGLE_NEG), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 	var bob_tween = create_tween().set_loops()
-	bob_tween.tween_property(ship, "position:y", 0.05, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	bob_tween.tween_property(ship, "position:y", -0.05, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	bob_tween.tween_property(ship, "position:y",  SHIP_BOB_AMPLITUDE, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	bob_tween.tween_property(ship, "position:y", -SHIP_BOB_AMPLITUDE, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 	var pitch_tween = create_tween().set_loops()
-	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(2.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(-1.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(SHIP_PITCH_ANGLE_POS), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(SHIP_PITCH_ANGLE_NEG), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 	# Main movement
 	var tween = create_tween()
 	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_trans(Tween.TRANS_LINEAR)
 
-	# When ship arrives → remove X marker, free stop slot, deploy troops
+	# When ship arrives → remove flag marker, free stop slot, deploy troops
 	var arrived_pos = stop_pos
 	var s_dir = sail_dir
 	var ship_idx = _ships_placed
@@ -291,10 +365,14 @@ func _spawn_single_ship(target: Vector3) -> void:
 	print("Ship %d/%d sailing to: %s" % [_ships_placed + 1, max_ships, stop_pos])
 
 
+## Deploys [troops_per_ship] troops from a ship that has arrived at [ship_pos].
+## Troops are staggered by [troop_spawn_delay] seconds and placed on the island
+## at building height so they immediately engage targets.
 func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
-	var troop_def = SHIP_TROOPS[ship_idx % SHIP_TROOPS.size()]
-	var model_res = load(troop_def.model)
-	var script_res = load(troop_def.script)
+	var troop_idx = ship_idx % SHIP_TROOPS.size()
+	var troop_def = SHIP_TROOPS[troop_idx]
+	var model_res  = _troop_model_res[troop_idx]
+	var script_res = _troop_script_res[troop_idx]
 	if model_res == null or script_res == null:
 		push_warning("AttackSystem: could not load troop: %s" % troop_def.model)
 		return
@@ -314,10 +392,8 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 
 	# Get troop levels from building system for this troop type
 	var troop_level = 1
-	var troop_script_name = troop_def.script.get_file().get_basename()
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		if "troop_levels" in bs:
-			# Map script name to troop level key
 			var level_key = _script_to_troop_key(troop_def.script)
 			if bs.troop_levels.has(level_key):
 				troop_level = bs.troop_levels[level_key]
@@ -352,9 +428,9 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 static func _script_to_troop_key(script_path: String) -> String:
 	var file = script_path.get_file().get_basename()
 	match file:
-		"knight": return "Knight"
-		"mage": return "Mage"
+		"knight":    return "Knight"
+		"mage":      return "Mage"
 		"barbarian": return "Barbarian"
-		"archer": return "Archer"
-		"ranger": return "Ranger"
+		"archer":    return "Archer"
+		"ranger":    return "Ranger"
 	return file.capitalize()

@@ -1,5 +1,6 @@
 extends BaseTroop
 ## Knight — melee fighter. Damage when sword touches the building mid-swing.
+## Implements the Knight troop spec (design/gdd/troops.md).
 
 @export var sword_scene: String = "res://Model/Characters/Assets/sword_1handed.gltf"
 @export var hit_distance: float = 0.25
@@ -15,6 +16,8 @@ const LEVEL_STATS = {
 	3: {"hp": 1850, "damage": 130, "atk_speed": 1.429},
 }
 
+## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
+## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.5
@@ -23,18 +26,16 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Melee_1H_Attack_Chop"
-	anim_files = [
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-	]
+	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
+## Attaches the sword model to the right hand bone.
 func _setup_weapons() -> void:
 	_sword_attachment = _attach_to_bone("handslot.r", "SwordAttachment", sword_scene, "Sword")
 
 
+## Advances the attack timer and deals damage once the sword animation passes
+## hit_anim_threshold and the weapon is within hit_distance of the target.
 func _do_attack(delta: float) -> void:
 	if not _has_valid_target():
 		_hit_this_swing = false

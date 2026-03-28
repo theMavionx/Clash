@@ -1,5 +1,6 @@
 extends BaseTroop
 ## Barbarian — slow melee tank with axe and shield.
+## Implements the Barbarian troop spec (design/gdd/troops.md).
 
 @export var axe_scene: String = "res://Model/Characters/Assets/axe_1handed.gltf"
 @export var hit_distance: float = 0.25
@@ -15,6 +16,8 @@ const LEVEL_STATS = {
 	3: {"hp": 880, "damage": 158, "atk_speed": 0.526},
 }
 
+## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
+## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.4
@@ -23,18 +26,16 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Melee_1H_Attack_Chop"
-	anim_files = [
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-	]
+	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
+## Attaches the axe model to the right hand bone, rotated 180 degrees to face forward.
 func _setup_weapons() -> void:
 	_axe_attachment = _attach_to_bone("handslot.r", "AxeAttachment", axe_scene, "Axe", Vector3(0, 180, 0))
 
 
+## Advances the attack timer and deals damage once the axe animation passes
+## hit_anim_threshold and the weapon is within hit_distance of the target.
 func _do_attack(delta: float) -> void:
 	if not _has_valid_target():
 		_hit_this_swing = false

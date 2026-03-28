@@ -3,6 +3,9 @@ extends Node3D
 ## Defensive skeleton spawned by Tombstone buildings.
 ## Patrols around tombstone; chases and attacks enemy troops in detection range.
 
+## Emitted just before this guard is freed when its HP reaches zero.
+signal died(guard: Node3D)
+
 const BLADE_SCENE = "res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf"
 const HIT_ANIM_THRESHOLD = 0.4
 const HIT_DISTANCE = 0.2
@@ -12,6 +15,7 @@ const ANIM_FILES = [
 	"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb",
 	"res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb",
+	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 ]
 
 var detection_radius: float = 1.0
@@ -29,7 +33,7 @@ var atk_speed: float = 0.8
 
 var tombstone_pos: Vector3 = Vector3.ZERO
 
-enum State { IDLE, PATROL, CHASE, ATTACK }
+enum State { IDLE, PATROL, CHASE, ATTACK, VICTORY }
 var state: State = State.IDLE
 
 var _patrol_target: Vector3 = Vector3.ZERO
@@ -77,19 +81,6 @@ static func _get_buildings_cached() -> Array:
 
 const HP_BAR_W = 0.12
 const HP_BAR_H = 0.012
-const HP_BAR_SHADER = "shader_type spatial;
-render_mode unshaded, blend_mix, depth_test_disabled, cull_disabled;
-uniform vec4 albedo : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform vec2 bar_size = vec2(0.12, 0.012);
-void fragment() {
-	vec2 pos = (UV - 0.5) * bar_size;
-	float r = bar_size.y * 0.45;
-	vec2 q = abs(pos) - bar_size * 0.5 + r;
-	float d = length(max(q, 0.0)) - r;
-	float aa = fwidth(d);
-	ALBEDO = albedo.rgb;
-	ALPHA = albedo.a * (1.0 - smoothstep(-aa, aa, d));
-}"
 
 
 func _ready() -> void:
@@ -112,6 +103,8 @@ func _process(delta: float) -> void:
 			_do_chase(delta)
 		State.ATTACK:
 			_do_attack(delta)
+		State.VICTORY:
+			pass
 
 
 # ── Idle: stand for a bit, then pick patrol target ────────────
@@ -134,6 +127,9 @@ func _do_idle(delta: float) -> void:
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
 		return
+	# Idle duration elapsed — transition to patrol for livelier behavior
+	if _idle_timer >= _idle_duration:
+		_pick_patrol_target()
 
 
 # ── Patrol: walk to random point near tombstone ───────────────
@@ -179,6 +175,9 @@ func _do_patrol(delta: float) -> void:
 func _do_chase(delta: float) -> void:
 	if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
 		_target_troop = null
+		if _are_all_troops_dead():
+			_trigger_victory_all()
+			return
 		_pick_idle_wait()
 		return
 
@@ -215,6 +214,9 @@ func _do_chase(delta: float) -> void:
 func _do_attack(delta: float) -> void:
 	if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
 		_target_troop = null
+		if _are_all_troops_dead():
+			_trigger_victory_all()
+			return
 		_pick_idle_wait()
 		return
 
@@ -260,19 +262,54 @@ func _do_attack(delta: float) -> void:
 						_target_troop.take_damage(damage)
 					if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
 						_target_troop = null
-						_pick_idle_wait()
+						if _are_all_troops_dead():
+							_trigger_victory_all()
+						else:
+							_pick_idle_wait()
 
 
+## Applies [param dmg] hit points of damage to this guard.
+## Emits [signal died] and frees the node when HP reaches zero.
 func take_damage(dmg: int) -> void:
 	hp -= dmg
 	if hp <= 0:
 		if is_in_group("skeleton_guards"):
 			remove_from_group("skeleton_guards")
+		died.emit(self)
 		queue_free()
+
+
+# ── Victory ───────────────────────────────────────────────────
+
+## Returns true if no living troops remain in the scene.
+func _are_all_troops_dead() -> bool:
+	for troop in BaseTroop._get_troops_cached():
+		if is_instance_valid(troop) and troop.is_inside_tree():
+			return false
+	return true
+
+
+## Triggers victory animation for all living skeleton guards.
+func _trigger_victory_all() -> void:
+	for guard in _get_guards_cached():
+		if is_instance_valid(guard) and guard.state != State.VICTORY:
+			guard._play_victory()
+
+
+## Plays cheering animation and enters VICTORY state.
+func _play_victory() -> void:
+	state = State.VICTORY
+	_target_troop = null
+	if anim_player and anim_player.has_animation("Cheering"):
+		anim_player.play("Cheering")
+	elif anim_player and anim_player.has_animation("Idle_A"):
+		anim_player.play("Idle_A")
 
 
 # ── Enemy detection ───────────────────────────────────────────
 
+## Returns the nearest active troop within [member detection_radius] of the
+## tombstone position, or [code]null[/code] if none is in range.
 func _find_nearest_enemy() -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist: float = detection_radius
@@ -435,6 +472,10 @@ func _make_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMaterial:
 func _update_hp_bar() -> void:
 	if not _hp_bar or not _hp_fill:
 		return
+	if hp >= max_hp:
+		if _hp_bar.visible:
+			_hp_bar.visible = false
+		return
 	var ratio = clamp(float(hp) / float(max_hp), 0.0, 1.0)
 	_hp_bar.visible = true
 	_hp_bar.global_position = global_position + Vector3(0, 0.25, 0)
@@ -461,6 +502,10 @@ func _update_hp_bar() -> void:
 
 
 # ── Helpers ───────────────────────────────────────────────────
+# NOTE: _find_skeleton, _hide_meshes, and _find_anim_player duplicate instance
+# methods of the same name in BaseTroop. They cannot be shared because those
+# methods are non-static and SkeletonGuard extends Node3D, not BaseTroop.
+# If BaseTroop ever exposes static versions, replace these with those calls.
 
 func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:

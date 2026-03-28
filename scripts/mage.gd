@@ -1,6 +1,7 @@
 extends BaseTroop
 ## Mage — ranged caster. Damage when magic sphere touches the building.
 ## Uses object pooling with shared lightning shader material. No dynamic lights.
+## Implements the Mage troop spec (design/gdd/troops.md).
 
 @export var staff_scene: String = "res://Model/Characters/Assets/staff.gltf"
 @export var projectile_fly_speed: float = 1.5
@@ -8,6 +9,7 @@ extends BaseTroop
 @export var hit_distance: float = 0.05
 
 const POOL_SIZE: int = 6
+## Squared hit threshold — avoids sqrt each projectile tick.
 const HIT_DIST_SQ: float = 0.05 * 0.05
 
 ## Shared across all mages — shader, material, mesh, noise textures
@@ -26,6 +28,8 @@ const LEVEL_STATS = {
 	3: {"hp": 720, "damage": 320, "atk_speed": 1.0},
 }
 
+## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
+## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.4
@@ -34,18 +38,16 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Ranged_Magic_Spellcasting"
-	anim_files = [
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
-		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
-	]
+	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
+## Attaches the staff model to the right hand bone.
 func _setup_weapons() -> void:
 	_attach_to_bone("handslot.r", "StaffAttachment", staff_scene, "Staff")
 
 
+## Builds the orb pool on first activation, then delegates to super and
+## advances all in-flight projectiles each frame.
 func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	super(delta)
@@ -113,10 +115,13 @@ func _build_pool() -> void:
 		})
 
 
+## Returns the first inactive pool slot, or an empty dict if all slots are busy.
+## Emits a warning when the pool is exhausted so tuning is easier.
 func _get_pooled() -> Dictionary:
 	for b in _pool:
 		if not b.active:
 			return b
+	push_warning("Mage: projectile pool exhausted (POOL_SIZE=%d). Consider increasing it." % POOL_SIZE)
 	return {}
 
 
@@ -136,6 +141,7 @@ func _exit_tree() -> void:
 	_active.clear()
 
 
+## Advances the attack timer and fires a magic orb when the timer expires.
 func _do_attack(delta: float) -> void:
 	if not _has_valid_target():
 		_find_next_target()
@@ -159,12 +165,14 @@ func _spawn_projectile() -> void:
 	b.target_ref = target_building
 	b.target_bs_ref = target_bs
 	b.target_guard_ref = target_guard
-	b.node.global_position = global_position + Vector3(0, 0.08, 0)
+	b.node.global_position = global_position + Vector3(0, BaseTroop.PROJECTILE_SPAWN_Y, 0)
 	b.node.visible = true
 
 	_active.append(b)
 
 
+## Moves all in-flight orbs toward their targets and applies damage on hit.
+## Uses squared distance to avoid per-tick sqrt calls.
 func _update_projectiles(delta: float) -> void:
 	var i = _active.size() - 1
 	while i >= 0:
@@ -180,10 +188,10 @@ func _update_projectiles(delta: float) -> void:
 		var has_target: bool = false
 
 		if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.is_inside_tree():
-			target_pos = guard_ref.global_position + Vector3(0, 0.05, 0)
+			target_pos = guard_ref.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
 		elif target_ref.size() > 0 and is_instance_valid(target_ref.get("node")):
-			target_pos = target_ref.node.global_position + Vector3(0, 0.05, 0)
+			target_pos = target_ref.node.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
 
 		if not has_target:
