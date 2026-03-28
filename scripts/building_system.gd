@@ -118,9 +118,15 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Archer_towers/tower_1.glb",
 		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb"],
 		"model_scale": 0.03,
-		"model_offset": Vector3(0, 0, 0),
+		"model_offset": Vector3(0.11, 0, -0.02),
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500],
 		"cost": {"gold": 500, "wood": 400},
+		"tower_unit": {
+			"model": "res://Model/Characters/Model/Ranger.glb",
+			"scale": 0.07,
+			"offset_y": 0.3,
+		},
 	},
 	"tombstone": {
 		"name": "Tombstone",
@@ -309,6 +315,9 @@ func _ready() -> void:
 				break
 	if always_show_grid:
 		_show_grid()
+	# Animate MainShip with wave rocking/bobbing
+	if create_ui:
+		_animate_main_ship()
 	# Listen for server auth to load buildings (works for all grids)
 	var net = get_node_or_null("/root/Net")
 	if net:
@@ -1258,7 +1267,11 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var s = def.get("model_scale", 0.2)
 				model.scale = Vector3(s, s, s)
 				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
-				model.position = def.get("model_offset", Vector3.ZERO)
+				var offsets = def.get("model_offsets", [])
+				if offsets.size() >= level:
+					model.position = offsets[level - 1]
+				else:
+					model.position = def.get("model_offset", Vector3.ZERO)
 				node.add_child(model)
 				_apply_cel_shader(model)
 
@@ -1287,6 +1300,9 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"server_id": server_id,
 		}
 		placed_buildings.append(b_data)
+		# Spawn tower unit (archer on top)
+		if def.has("tower_unit"):
+			_spawn_tower_unit(b_data, def)
 		# Tombstone → spawn skeleton guards
 		if building_type == "tombstone":
 			_spawn_tombstone_skeletons(b_data, level)
@@ -1729,7 +1745,10 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 	}
 	placed_buildings.append(b_data)
 	_sync_react_buildings()
-	
+
+	# Spawn tower unit (archer on top)
+	if def.has("tower_unit"):
+		_spawn_tower_unit(b_data, def)
 	# Tombstone → spawn skeleton guards
 	if building_id == "tombstone":
 		_spawn_tombstone_skeletons(b_data, 1)
@@ -2062,17 +2081,25 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var s = def.get("model_scale", 0.2)
 			new_model.scale = Vector3(s, s, s)
 			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
-			new_model.position = def.get("model_offset", Vector3.ZERO)
+			var offsets = def.get("model_offsets", [])
+			if offsets.size() >= b.level:
+				new_model.position = offsets[b.level - 1]
+			else:
+				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar
 			b["hp_fill"] = hp_bar_data.fill
 
+	# Respawn tower unit after model swap
+	if def.has("tower_unit"):
+		_spawn_tower_unit(b, def)
+
 	# Bounce UP (reveal)
 	var tw_up = create_tween()
 	tw_up.tween_property(model, "scale", Vector3.ONE, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	
+
 	# Tombstone → update skeletons
 	if b.id == "tombstone":
 		_spawn_tombstone_skeletons(b, b.level)
@@ -2120,6 +2147,32 @@ func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
 	for res_name in cost:
 		result[res_name] = cost[res_name] * next_level
 	return result
+
+
+func _auto_center_model(model: Node3D) -> void:
+	# Find the first MeshInstance3D and use its local AABB center to offset
+	var queue: Array = [model]
+	var combined_aabb := AABB()
+	var first := true
+	while queue.size() > 0:
+		var node = queue.pop_front()
+		if node is MeshInstance3D:
+			var m_aabb = node.get_aabb()
+			# Account for node's local position relative to model root
+			var local_center = node.position + m_aabb.get_center()
+			if first:
+				combined_aabb = AABB(local_center, Vector3.ZERO)
+				first = false
+			else:
+				combined_aabb = combined_aabb.expand(local_center)
+		for c in node.get_children():
+			queue.push_back(c)
+	if first:
+		return
+	# Shift model so the mesh center aligns with (0, model.y, 0)
+	var center = combined_aabb.get_center()
+	model.position.x -= center.x * model.scale.x
+	model.position.z -= center.z * model.scale.z
 
 
 func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
@@ -2174,6 +2227,35 @@ func remove_building(b: Dictionary) -> void:
 const SKELETON_MODEL = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb"
 const SKELETON_SCRIPT = "res://scripts/skeleton_guard.gd"
 const SKELETON_SCALE = 0.1
+
+func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
+	# Remove existing tower unit if any
+	if b.has("tower_unit_node") and is_instance_valid(b.get("tower_unit_node")):
+		b["tower_unit_node"].queue_free()
+		b["tower_unit_node"] = null
+	var tu = def.get("tower_unit", {})
+	var model_path = tu.get("model", "")
+	var unit_scale = tu.get("scale", 0.07)
+	var offset_y = tu.get("offset_y", 0.3)
+	var model_res = load(model_path)
+	if not model_res:
+		return
+	var unit = model_res.instantiate()
+	# Attach tower_archer script for combat behavior
+	var archer_script = load("res://scripts/tower_archer.gd")
+	if archer_script:
+		unit.set_script(archer_script)
+	var s = unit_scale
+	unit.scale = Vector3(s, s, s)
+	b.get("node").add_child(unit)
+	unit.position = Vector3(0, offset_y, 0)
+	unit.rotation_degrees.y = -90.0
+	_apply_cel_shader(unit)
+	# Set level to match building level
+	if unit.has_method("set_level"):
+		unit.set_level(b.get("level", 1))
+	b["tower_unit_node"] = unit
+
 
 func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 	# Remove existing skeletons first
@@ -2451,6 +2533,23 @@ func _buy_ship() -> void:
 	owned_ships += 1
 	_refresh_port_panel()
 	_spawn_port_ship()
+
+
+func _animate_main_ship() -> void:
+	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
+	if not main_ship:
+		return
+	# Hidden by default — only visible when attacking enemy
+	main_ship.visible = false
+	var rock = create_tween().set_loops()
+	rock.tween_property(main_ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	rock.tween_property(main_ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	var bob = create_tween().set_loops()
+	bob.tween_property(main_ship, "position:y", main_ship.position.y + 0.04, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	bob.tween_property(main_ship, "position:y", main_ship.position.y - 0.04, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	var pitch = create_tween().set_loops()
+	pitch.tween_property(main_ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch.tween_property(main_ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 
 func _spawn_port_ship() -> void:
@@ -2896,6 +2995,11 @@ func _switch_to_enemy_island() -> void:
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 
+	# Show MainShip when attacking enemy
+	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
+	if main_ship:
+		main_ship.visible = true
+
 	# Auto enter attack mode
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
@@ -2905,6 +3009,10 @@ func _switch_to_enemy_island() -> void:
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
+	# Hide MainShip when returning home
+	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
+	if main_ship:
+		main_ship.visible = false
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		bs.is_viewing_enemy = false
 	var bridge = get_node_or_null("/root/Bridge")
