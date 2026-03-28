@@ -161,10 +161,10 @@ echo "[8/9] Starting services..."
 cd "$SERVER_DIR"
 
 # Generate admin key if not exists
-if [ ! -f "$APP_DIR/.env" ]; then
+if [ ! -f "$SERVER_DIR/.env" ]; then
     ADMIN_KEY=$(openssl rand -hex 16)
     REWARD_SECRET=$(openssl rand -hex 32)
-    cat > "$APP_DIR/.env" << EOF
+    cat > "$SERVER_DIR/.env" << EOF
 ADMIN_KEY=$ADMIN_KEY
 REWARD_SECRET=$REWARD_SECRET
 NODE_ENV=production
@@ -173,7 +173,7 @@ EOF
 fi
 
 pm2 delete clash-api 2>/dev/null || true
-pm2 start index.js --name clash-api --env production --node-args="--env-file=$APP_DIR/.env"
+pm2 start index.js --name clash-api --env production --node-args="--env-file=$SERVER_DIR/.env"
 pm2 save
 pm2 startup systemd -u root --hp /root 2>/dev/null || true
 
