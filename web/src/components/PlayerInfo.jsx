@@ -15,8 +15,7 @@ function PlayerInfo({ onOpenProfile }) {
     <div style={styles.wrap} onClick={onOpenProfile}>
       <div style={styles.levelCircleContainer}>
         <div style={styles.levelCircle}>
-          <div style={styles.innerCircle}>
-            <div style={styles.gloss} />
+          <div style={styles.innerSquare}>
             <span style={styles.levelText}>{townHallLevel}</span>
           </div>
         </div>
@@ -62,45 +61,38 @@ const styles = {
   levelCircle: {
     width: 68,
     height: 68,
-    borderRadius: '50%',
-    background: 'conic-gradient(#ffffff 0% 65%, #2c333a 65% 100%)',
-    border: '3.5px solid #1a1a1a',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.6), inset 0 2px 2px rgba(255,255,255,0.2)',
+    borderRadius: 14,
+    background: 'linear-gradient(135deg, #1a1a1a 50%, #fff 50%)',
+    border: '3.5px solid #0a0a0a',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.7)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    padding: 7,
   },
-  innerCircle: {
-    width: '74%',
-    height: '74%',
-    borderRadius: '50%',
-    background: 'radial-gradient(circle at 30% 30%, #7bd9ff 0%, #46b8e8 70%, #2a9ccb 100%)',
+  innerSquare: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 10,
+    background: 'linear-gradient(180deg, #3d86ef 0%, #1a56ab 100%)',
+    border: '2.5px solid #0a0a0a',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    border: '2px solid #1a1a1a',
-    boxShadow: 'inset 0 4px 6px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.2)',
     position: 'relative',
     overflow: 'hidden',
-  },
-  gloss: {
-    position: 'absolute',
-    top: '-30%',
-    left: '-10%',
-    width: '120%',
-    height: '60%',
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    transform: 'rotate(-25deg)',
-    pointerEvents: 'none',
+    boxShadow: 'inset 0 2px 3px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.3)',
   },
   levelText: {
     color: '#fff',
-    fontSize: 30,
+    fontSize: 34,
     fontWeight: 900,
-    WebkitTextStroke: '2px #0a0a0a',
-    textShadow: '0 3px 2px rgba(0,0,0,0.9)',
+    WebkitTextStroke: '2.5px #0a0a0a',
+    textShadow: '0 3px 3px rgba(0,0,0,1)',
     zIndex: 2,
+    transform: 'translateY(-1px)',
+    letterSpacing: '-1px',
   },
   infoStack: {
     display: 'flex',
@@ -148,7 +140,7 @@ const styles = {
     minWidth: 80,
     background: 'rgba(0, 0, 0, 0.35)',
     border: '1.5px solid #1a1a1a',
-    borderRadius: '0 13px 13px 0',
+    borderRadius: '0 6px 6px 0',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

@@ -168,10 +168,12 @@ const S = {
     padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
   },
   levelBadge: {
-    width: 44, height: 44, borderRadius: '50%',
+    width: 44, height: 44, borderRadius: 10,
     background: 'radial-gradient(circle at 30% 30%, #7bd9ff 0%, #46b8e8 70%, #2a9ccb 100%)',
     border: '3px solid #1a1a1a', display: 'flex', alignItems: 'center', justifyContent: 'center',
     boxShadow: '0 3px 6px rgba(0,0,0,0.4)',
+    position: 'relative',
+    overflow: 'hidden',
   },
   levelNum: { color: '#fff', fontSize: 22, fontWeight: 900, WebkitTextStroke: '1.5px #0a0a0a', textShadow: '0 2px 2px rgba(0,0,0,0.8)' },
   closeBtn: {

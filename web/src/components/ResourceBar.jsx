@@ -6,9 +6,9 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
 const ITEMS = [
-  { key: 'gold', icon: goldIcon, bg: '#3e372b', indicator: '#e6a817' },
-  { key: 'wood', icon: woodIcon, bg: '#3e372b', indicator: '#5c4026' },
-  { key: 'ore', icon: stoneIcon, bg: '#3e372b', indicator: '#8a8a8a' },
+  { key: 'gold', icon: goldIcon, bg: '#3e372b', indicator: '#e6a817', offset: { left: -22, top: '48%' } },
+  { key: 'wood', icon: woodIcon, bg: '#3e372b', indicator: '#5c4026', offset: { left: -14, top: '50%' } },
+  { key: 'ore', icon: stoneIcon, bg: '#3e372b', indicator: '#8a8a8a', offset: { left: -14, top: '50%' } },
 ];
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
@@ -23,10 +23,23 @@ function ResourceBar() {
 
   return (
     <div style={styles.bar}>
-      {ITEMS.map(({ key, icon, bg, indicator }) => (
+      {ITEMS.map(({ key, icon, bg, indicator, offset }) => (
         <div key={key} style={styles.container}>
-          <div style={{ ...styles.pill, background: bg }}>
-            <div style={{ ...styles.indicator, background: indicator }} />
+          <img 
+            src={icon} 
+            alt={key} 
+            style={{ 
+              ...styles.icon, 
+              left: offset?.left ?? -10,
+              top: offset?.top ?? '50%'
+            }} 
+          />
+          <div style={{ ...styles.pill, background: 'rgba(0, 0, 0, 0.4)' }}>
+            <div style={{ 
+              ...styles.indicator, 
+              background: indicator,
+              boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.4), inset 0 -1px 3px rgba(0,0,0,0.3)'
+            }} />
             <span style={styles.value}>{formatNumber(resources[key])}</span>
             <button
               style={styles.hiddenButton}
@@ -34,7 +47,6 @@ function ResourceBar() {
               title={`Add ${key}`}
             />
           </div>
-          <img src={icon} alt={key} style={styles.icon} />
         </div>
       ))}
     </div>
@@ -49,7 +61,8 @@ const styles = {
     top: 16,
     right: 20,
     display: 'flex',
-    gap: 16,
+    flexDirection: 'row',
+    gap: 25,
     pointerEvents: 'all',
     zIndex: 10,
     fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
@@ -63,12 +76,13 @@ const styles = {
   pill: {
     display: 'flex',
     alignItems: 'center',
-    padding: '0 20px 0 50px',
-    height: 32,
-    border: '2px solid #1a1a1a',
-    boxShadow: '0 3px 5px rgba(0,0,0,0.5), inset 0 2px 2px rgba(255,255,255,0.06)',
-    minWidth: 120,
-    borderRadius: 16,
+    padding: '0 15px 0 52px',
+    height: 38,
+    border: '2.5px solid #1a1a1a',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.5), inset 0 2px 4px rgba(0,0,0,0.4)',
+    minWidth: 140,
+    borderRadius: 8,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -77,17 +91,17 @@ const styles = {
     left: 0,
     top: 0,
     bottom: 0,
-    width: 35,
+    width: '40%', // We could make this dynamic if we had max values
     opacity: 1,
     borderRight: '1.5px solid #1a1a1a',
+    transition: 'width 0.3s ease-out',
   },
   icon: {
     position: 'absolute',
-    left: -12,
     top: '50%',
     transform: 'translateY(-50%)',
-    width: 56,
-    height: 56,
+    width: 74,
+    height: 74,
     objectFit: 'contain',
     filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.6))',
     pointerEvents: 'none',

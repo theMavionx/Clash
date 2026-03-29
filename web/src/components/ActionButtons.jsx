@@ -1,9 +1,49 @@
 import { memo, useCallback } from 'react';
 import { useSend, useUI } from '../hooks/useGodot';
-import { cartoonBtn } from '../styles/theme';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
+import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
+
+const CustomBtn = ({ children, onClick, width = 140, height = 140, style = {} }) => {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width, height, position: 'relative', background: 'none', border: 'none',
+        padding: 0, cursor: 'pointer', transition: 'transform 0.1s ease-out, filter 0.1s', outline: 'none',
+        ...style
+      }}
+      onMouseOver={(e) => {
+        e.currentTarget.style.transform = 'scale(1.08)';
+        e.currentTarget.style.filter = 'brightness(1.1)';
+      }}
+      onMouseOut={(e) => {
+        e.currentTarget.style.transform = 'scale(1)';
+        e.currentTarget.style.filter = 'none';
+      }}
+      onMouseDown={(e) => e.currentTarget.style.transform = 'scale(0.92)'}
+      onMouseUp={(e) => e.currentTarget.style.transform = 'scale(1.08)'}
+    >
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `url(${buttonBg})`,
+        backgroundSize: '100% 100%',
+        backgroundRepeat: 'no-repeat',
+        filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.4))',
+        zIndex: 0
+      }} />
+      
+      <div style={{
+        position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', zIndex: 3,
+        paddingBottom: 4
+      }}>
+        {children}
+      </div>
+    </button>
+  );
+};
 
 function ActionButtons() {
   const { sendToGodot, setFuturesOpen } = useSend();
@@ -20,12 +60,9 @@ function ActionButtons() {
         <div style={styles.enemyBadge}>
           ⚔️ {enemyMode.name} • {enemyMode.trophies} 🏆
         </div>
-        <button
-          style={cartoonBtn('#FF8F00', '#E65100')}
-          onClick={handleReturnHome}
-        >
-          🏠 Return Home
-        </button>
+        <CustomBtn width={280} height={100} onClick={handleReturnHome}>
+          <span style={styles.btnTextWide}>🏠 Return Home</span>
+        </CustomBtn>
       </div>
     );
   }
@@ -33,31 +70,19 @@ function ActionButtons() {
   return (
     <>
       <div style={styles.wrapLeft}>
-        <button
-          style={styles.attackBtn}
-          onClick={handleFindEnemy}
-        >
+        <CustomBtn onClick={handleFindEnemy}>
           <img src={attackIcon} alt="attack" style={styles.attackIconImg} />
-          <span style={styles.btnText}>ATTACK!</span>
-        </button>
+        </CustomBtn>
+        <CustomBtn onClick={handleOpenShop} width={110} height={110}>
+          <div style={styles.notificationBadgeSmall}>!</div>
+          <img src={buildIcon} alt="build" style={styles.buildIconImgSmall} />
+        </CustomBtn>
       </div>
       <div style={styles.wrapRight}>
-        <button
-          style={styles.tradeBtn}
-          onClick={handleOpenTrade}
-        >
+        <CustomBtn onClick={handleOpenTrade}>
           <div style={styles.notificationBadge}>14</div>
           <img src={chartIcon} alt="trade" style={styles.chartIconImg} />
-          <span style={styles.btnText}>TRADE</span>
-        </button>
-        <button
-          style={styles.buildBtn}
-          onClick={handleOpenShop}
-        >
-          <div style={styles.notificationBadge}>!</div>
-          <img src={buildIcon} alt="build" style={styles.buildIconImg} />
-          <span style={styles.btnText}>BUILD</span>
-        </button>
+        </CustomBtn>
       </div>
     </>
   );
@@ -67,145 +92,70 @@ export default memo(ActionButtons);
 
 const base = {
   position: 'fixed',
-  bottom: 20,
+  bottom: 12,
   display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
   pointerEvents: 'all',
   zIndex: 10,
 };
 
-const clashBtnBase = {
-  borderRadius: 16,
-  border: '1.5px solid #0b1a2e',
-  background: 'linear-gradient(180deg, #5A8BD1 0%, #3465A1 30%, #204C87 75%, #183966 100%)',
-  boxShadow: 'inset 0px 3px 3px 0px rgba(255, 255, 255, 0.5), inset 0px -6px 0px 0px #142F55, inset 0px -8px 12px 1px rgba(0, 0, 0, 0.35), 0px 6px 10px 0px rgba(0, 0, 0, 0.4)',
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-  transition: 'transform 0.1s, filter 0.1s',
-  userSelect: 'none',
-  padding: 0,
-  outline: 'none',
-  position: 'relative',
-};
-
-// Use an active state in standard CSS instead of inline pseudo-classes for scale effect, 
-// but since we are using inline styles throughout, we just rely on standard transition.
-
 const styles = {
-  wrapLeft: { ...base, left: 20 },
-  wrapRight: { ...base, right: 20 },
-  buildBtn: {
-    ...clashBtnBase,
-    width: 120,
-    height: 110,
+  wrapLeft: { 
+    ...base, 
+    left: 12, 
+    flexDirection: 'row', 
+    alignItems: 'flex-end',
+    gap: 8 
   },
-  attackBtn: {
-    ...clashBtnBase,
-    width: 120,
-    height: 110,
+  wrapRight: {
+    ...base,
+    right: 12,
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 12
   },
-  tradeBtn: {
-    ...clashBtnBase,
-    width: 120,
-    height: 110,
-  },
-  buildIconImg: {
-    width: 115,
-    height: 115,
-    objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.4))',
-    marginBottom: -25,
-    marginTop: -10,
-    marginLeft: -10,
-    transform: 'translate(-4px, -6px)',
+  buildIconImgSmall: {
+    width: 95, height: 95, objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transform: 'translate(-4px, -2px)',
   },
   attackIconImg: {
-    width: 140,
-    height: 140,
-    objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.5))',
-    marginBottom: -30,
-    marginTop: -35,
+    width: 160, height: 160, objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
   },
   chartIconImg: {
-    width: 110,
-    height: 110,
-    objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.5))',
-    marginBottom: -20,
-    marginTop: -10,
+    width: 120, height: 120, objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transform: 'translateY(-6px)',
   },
-  btnText: {
-    color: '#ffffff',
-    fontSize: 18,
-    fontWeight: 900,
-    WebkitTextStroke: '2px #0f2342',
-    textShadow: '0px 3px 0px #0b1a2e, 0px 4px 6px rgba(0,0,0,0.6)',
-    letterSpacing: '0.8px',
-    zIndex: 2,
-    position: 'relative',
-    pointerEvents: 'none',
-    textTransform: 'uppercase',
-  },
-  btnTextSmall: {
+  btnTextWide: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: 26,
     fontWeight: 900,
-    WebkitTextStroke: '0.5px #001A3B',
-    textShadow: '0 2px 0 #001A3B',
-    letterSpacing: '0.5px',
-    zIndex: 2,
-    position: 'relative',
-    pointerEvents: 'none',
-    textTransform: 'uppercase',
+    WebkitTextStroke: '1.5px #1a1a1a',
+    textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+    letterSpacing: '1px',
+    zIndex: 2, position: 'relative', pointerEvents: 'none', textTransform: 'uppercase',
   },
   enemyBadge: {
     background: 'linear-gradient(180deg, #B71C1C, #7F0000)',
-    border: '3px solid #E53935',
-    borderRadius: 16,
-    padding: '8px 16px',
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: 800,
-    textAlign: 'center',
-    textShadow: '0 1px 2px rgba(0,0,0,0.4)',
-    boxShadow: '0 3px 10px rgba(0,0,0,0.4)',
+    border: '3.5px solid #1a1a1a', borderRadius: 12, padding: '10px 20px',
+    color: '#fff', fontSize: 18, fontWeight: 900, textAlign: 'center',
+    textShadow: '0 2px 2px rgba(0,0,0,0.5)', boxShadow: '0 4px 8px rgba(0,0,0,0.4)',
+    marginBottom: -4,
   },
   notificationBadge: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    background: '#E63946',
-    color: '#fff',
-    borderRadius: '50%',
-    width: 24,
-    height: 24,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 12,
-    fontWeight: 'bold',
-    border: '2px solid #fff',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.5)',
-    zIndex: 5,
+    position: 'absolute', top: 6, right: 6,
+    background: '#E63946', color: '#fff', borderRadius: '50%',
+    width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 16, fontWeight: 900, border: '3px solid #fff',
+    boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
   },
-  starsContainer: {
-    position: 'absolute',
-    top: -20,
-    left: '50%',
-    transform: 'translateX(-50%)',
-    display: 'flex',
-    gap: 2,
-    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.5))',
-    zIndex: 5,
-  },
-  star: {
-    color: '#FFD700',
-    fontSize: 16,
-    WebkitTextStroke: '1px #B8860B',
+  notificationBadgeSmall: {
+    position: 'absolute', top: 4, right: 4,
+    background: '#E63946', color: '#fff', borderRadius: '50%',
+    width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 12, fontWeight: 900, border: '2px solid #fff',
+    boxShadow: '0 4px 8px rgba(0,0,0,0.5)', zIndex: 5,
   }
 };
+
