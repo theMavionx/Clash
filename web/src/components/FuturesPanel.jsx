@@ -620,10 +620,10 @@ function FuturesPanel() {
             <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
             {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
           </div>
-          <div style={{display: 'flex', gap: 6}}>
+          <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
             <input type="number" placeholder="Min 10 USDC" value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
-              style={{...S.input, flex: 1, padding: '8px 10px', fontSize: 13}} />
-            <button style={S.depositBtn} onClick={async () => {
+              style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+            <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
               if (!depositAmt || parseFloat(depositAmt) < 10) return;
               const r = await depositToPacifica(depositAmt);
               if (!r?.error) setDepositAmt('');
@@ -643,11 +643,11 @@ function FuturesPanel() {
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
               <span style={S.detail}>Max: ${available.toFixed(2)}</span>
             </div>
-            <div style={{display: 'flex', gap: 6}}>
+            <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               <input type="number" placeholder="Amount" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
-                style={{...S.input, flex: 1, padding: '8px 10px', fontSize: 13}} />
-              <button style={S.btnSmall} onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}>MAX</button>
-              <button style={S.btnPurple} onClick={async () => {
+                style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+              <button style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}>MAX</button>
+              <button style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
                 const r = await withdraw(withdrawAmt);
                 if (!r?.error) setWithdrawAmt('');
               }} disabled={loading || !withdrawAmt}>

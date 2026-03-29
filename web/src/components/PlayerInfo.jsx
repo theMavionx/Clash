@@ -75,7 +75,7 @@ const styles = {
     width: '100%',
     height: '100%',
     borderRadius: 10,
-    background: 'linear-gradient(180deg, #3d86ef 0%, #1a56ab 100%)',
+    background: 'linear-gradient(180deg, #5899ff 0%, #3d86ef 100%)',
     border: '2.5px solid #0a0a0a',
     display: 'flex',
     alignItems: 'center',
