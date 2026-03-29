@@ -56,12 +56,9 @@ function ActionButtons() {
 
   if (enemyMode.active) {
     return (
-      <div style={styles.wrapRight}>
-        <div style={styles.enemyBadge}>
-          ⚔️ {enemyMode.name} • {enemyMode.trophies} 🏆
-        </div>
-        <CustomBtn width={280} height={100} onClick={handleReturnHome}>
-          <span style={styles.btnTextWide}>🏠 Return Home</span>
+      <div style={styles.wrapLeft}>
+        <CustomBtn width={110} height={110} onClick={handleReturnHome}>
+          <span style={{ fontSize: 48, filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.5))' }}>🏠</span>
         </CustomBtn>
       </div>
     );
@@ -72,6 +69,7 @@ function ActionButtons() {
       <div style={styles.wrapLeft}>
         <CustomBtn onClick={handleFindEnemy}>
           <img src={attackIcon} alt="attack" style={styles.attackIconImg} />
+          <span style={styles.btnLabel}>ATTACK</span>
         </CustomBtn>
         <CustomBtn onClick={handleOpenShop} width={110} height={110}>
           <div style={styles.notificationBadgeSmall}>!</div>
@@ -82,6 +80,7 @@ function ActionButtons() {
         <CustomBtn onClick={handleOpenTrade}>
           <div style={styles.notificationBadge}>14</div>
           <img src={chartIcon} alt="trade" style={styles.chartIconImg} />
+          <span style={styles.btnLabel}>TRADE</span>
         </CustomBtn>
       </div>
     </>
@@ -119,13 +118,15 @@ const styles = {
     transform: 'translate(-4px, -2px)',
   },
   attackIconImg: {
-    width: 160, height: 160, objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
-  },
-  chartIconImg: {
     width: 120, height: 120, objectFit: 'contain',
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
-    transform: 'translateY(-6px)',
+    marginBottom: 2,
+  },
+  chartIconImg: {
+    width: 110, height: 110, objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transform: 'translateY(-10px)',
+    marginBottom: 2,
   },
   btnTextWide: {
     color: '#fff',
@@ -142,6 +143,21 @@ const styles = {
     color: '#fff', fontSize: 18, fontWeight: 900, textAlign: 'center',
     textShadow: '0 2px 2px rgba(0,0,0,0.5)', boxShadow: '0 4px 8px rgba(0,0,0,0.4)',
     marginBottom: -4,
+  },
+  btnLabel: {
+    position: 'absolute',
+    bottom: 28,
+    left: 0,
+    right: 0,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 900,
+    WebkitTextStroke: '1px #000',
+    textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    textAlign: 'center',
+    zIndex: 10,
   },
   notificationBadge: {
     position: 'absolute', top: 6, right: 6,

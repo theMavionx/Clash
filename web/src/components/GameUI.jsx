@@ -10,6 +10,7 @@ import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
 import FuturesPanel from './FuturesPanel';
 import ProfileModal from './ProfileModal';
+import EnemyHeader from './EnemyHeader';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
@@ -56,6 +57,7 @@ export default function GameUI() {
       <ActionButtons />
       <ErrorToast message={error} />
       <FpsTracker />
+      <EnemyHeader />
 
       {shopOpen && (
         <ShopPanel onClose={handleCloseShop} />
