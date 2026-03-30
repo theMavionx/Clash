@@ -1,16 +1,19 @@
 import GodotCanvas from './components/GodotCanvas';
 import GameUI from './components/GameUI';
 import { GodotProvider } from './hooks/useGodot';
+import WalletProvider from './components/WalletProvider';
 import './index.css';
 
 export default function App() {
   return (
-    <GodotProvider>
-      <div style={styles.container}>
-        <GodotCanvas />
-        <GameUI />
-      </div>
-    </GodotProvider>
+    <WalletProvider>
+      <GodotProvider>
+        <div style={styles.container}>
+          <GodotCanvas />
+          <GameUI />
+        </div>
+      </GodotProvider>
+    </WalletProvider>
   );
 }
 

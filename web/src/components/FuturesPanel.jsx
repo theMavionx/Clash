@@ -1,148 +1,726 @@
-import { useState, memo, useCallback } from 'react';
+import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useSend, useUI } from '../hooks/useGodot';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { usePacifica } from '../hooks/usePacifica';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
+import OrderBook from './OrderBook';
+import TradeHistory from './TradeHistory';
 
 const TABS = [
   { id: 'Trade', icon: '📈', label: 'Trade' },
   { id: 'Positions', icon: '💼', label: 'Positions' },
   { id: 'Orders', icon: '📋', label: 'Orders' },
+  { id: 'Account', icon: '👤', label: 'Account' },
 ];
+
+const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
 
 function FuturesPanel() {
   const { setFuturesOpen } = useSend();
-  const { futuresOpen } = useUI();
+  const { connected } = useWallet();
+  const { setVisible: openWalletModal } = useWalletModal();
+  const {
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes,
+    loading, error, clearError, goldEarned, clearGoldEarned,
+    placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
+    closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
+  } = usePacifica();
+
+  // Drag state
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const draggingRef = useRef(false);
+  const handleMouseDown = useCallback((e) => {
+    if (e.target.closest('[data-nodrag]')) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origX = pos.x;
+    const origY = pos.y;
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      setPos({ x: origX + dx, y: origY + dy });
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [pos]);
+
   const [activeTab, setActiveTab] = useState('Trade');
-  
-  const [leverage, setLeverage] = useState(20);
+  const [symbol, setSymbol] = useState('BTC');
+  const [amount, setAmount] = useState('');
+  const [leverage, setLeverage] = useState(() => leverageSettings[symbol] || 20);
   const [showLeverage, setShowLeverage] = useState(false);
+  const [orderType, setOrderType] = useState('market');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [showSymbolPicker, setShowSymbolPicker] = useState(false);
+  const [amountInUsdc, setAmountInUsdc] = useState(true);
+  const [sizePct, setSizePct] = useState(0);
+  const [expandedPos, setExpandedPos] = useState(null);
+  const [closePct, setClosePct] = useState(100);
+  const [tpPrice, setTpPrice] = useState('');
+  const [slPrice, setSlPrice] = useState('');
+  const [depositAmt, setDepositAmt] = useState('');
+  const [withdrawAmt, setWithdrawAmt] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
+  const [bottomTab, setBottomTab] = useState('positions');
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
 
-  const renderContent = () => {
-    if (activeTab === 'Trade') {
-      return (
-        <>
-          <div style={styles.chartArea}>
-            <TradingViewWidget />
-          </div>
+  // Sync leverage from Pacifica settings when symbol changes or settings load
+  useEffect(() => {
+    if (leverageSettings[symbol]) setLeverage(leverageSettings[symbol]);
+  }, [symbol, leverageSettings]);
 
-          <div style={styles.tradeControl}>
-            <div style={styles.inputGroupRow}>
-              <div style={{...styles.inputGroup, flex: 2}}>
-                <span style={styles.inputLabel}>Amount (USDT)</span>
-                <input type="number" placeholder="100" style={styles.input} />
-              </div>
-              <div style={{...styles.inputGroup, flex: 1}}>
-                <span style={styles.inputLabel}>Leverage</span>
-                <button 
-                  style={styles.leverageToggleBtn}
-                  onClick={() => setShowLeverage(!showLeverage)}
-                >
-                  {leverage}x
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{ transform: showLeverage ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
+  const currentPrice = useMemo(() => {
+    return prices.find(p => p.symbol === symbol)?.mark || null;
+  }, [prices, symbol]);
+
+  const maxLev = useMemo(() => {
+    return markets.find(m => m.symbol === symbol)?.max_leverage || 100;
+  }, [markets, symbol]);
+
+  const pacBalance = parseFloat(account?.balance || 0);
+
+  // Convert USDC amount to token amount, rounded to lot size
+  const lotSize = useMemo(() => {
+    return markets.find(m => m.symbol === symbol)?.lot_size || '0.00001';
+  }, [markets, symbol]);
+
+  const tokenAmount = useMemo(() => {
+    if (!amount || !currentPrice) return '';
+    if (!amountInUsdc) return amount;
+    const raw = parseFloat(amount) / parseFloat(currentPrice);
+    const lot = parseFloat(lotSize);
+    return String(Math.floor(raw / lot) * lot);
+  }, [amount, currentPrice, amountInUsdc, lotSize]);
+
+  const maxUsdc = pacBalance * leverage;
+
+  const handleSizePct = useCallback((pct) => {
+    setSizePct(pct);
+    if (pacBalance > 0 && currentPrice) {
+      const usdcVal = (maxUsdc * pct / 100).toFixed(2);
+      setAmount(amountInUsdc ? usdcVal : String((parseFloat(usdcVal) / parseFloat(currentPrice)).toFixed(6)));
+    }
+  }, [pacBalance, currentPrice, maxUsdc, amountInUsdc]);
+
+  const handleTrade = useCallback(async (side) => {
+    const qty = amountInUsdc ? tokenAmount : amount;
+    if (!qty || parseFloat(qty) <= 0) return;
+    if (orderType === 'market') {
+      await placeMarketOrder(symbol, side, qty, '0.5');
+    } else {
+      if (!limitPrice) return;
+      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC');
+    }
+    setAmount('');
+    setSizePct(0);
+  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder]);
+
+  const levTimerRef = useRef(null);
+  const handleLeverageChange = useCallback((val) => {
+    const v = Math.min(Number(val), maxLev);
+    setLeverage(v);
+    // Debounce — send to API only after 2s of no movement
+    if (levTimerRef.current) clearTimeout(levTimerRef.current);
+    levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
+  }, [maxLev, symbol, setLeverageApi]);
+
+  // ==================== NOT CONNECTED ====================
+  if (!connected) {
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div style={{...(fullscreen ? S.containerFull : S.container), transform: fullscreen ? 'none' : `translate(${pos.x}px, ${pos.y}px)`}}>
+          <div style={S.header} onMouseDown={handleMouseDown}>
+            <span style={S.headerTitle}>Futures Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
+            <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
+            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
+            <button
+              style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+              onClick={() => openWalletModal(true)}
+            >
+              <span>CONNECT WALLET</span>
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== TRADE CONTROLS (reusable) ====================
+  const renderTradeControls = () => (
+    <div style={{display: 'flex', flexDirection: 'column', gap: 8, ...(fullscreen ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'} : {})}}>
+      {/* Symbol + margin mode + balance */}
+      <div style={S.row}>
+        <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)}>
+          <span style={{fontSize: 18, fontWeight: 900}}>{symbol}</span>
+          {currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${parseFloat(currentPrice).toLocaleString()}</span>}
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
+          <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
+            {marginModes[symbol] ? 'Isolated' : 'Cross'}
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
+            <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+            <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+          </svg>
+        </button>
+        <div style={S.balBadge}>
+          <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
+          <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
+        </div>
+      </div>
+
+      {showSymbolPicker && (
+        <div style={S.chips}>
+          {POPULAR_SYMBOLS.map(s => (
+            <button key={s} style={s === symbol ? S.chipActive : S.chip}
+              onClick={() => { setSymbol(s); setShowSymbolPicker(false); }}>{s}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Deposit/Withdraw row */}
+      {pacBalance === 0 && (
+        <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
+          No balance — go to Account tab to deposit USDC
+        </div>
+      )}
+
+      {/* Trade controls */}
+      <div style={S.tradeBox}>
+        <div style={S.row}>
+          <button style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => setOrderType('market')}>Market</button>
+          <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => setOrderType('limit')}>Limit</button>
+        </div>
+
+        <div style={S.row}>
+          <div style={{flex: 2, display: 'flex', flexDirection: 'column', gap: 3}}>
+            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+              <span style={S.label}>Amount</span>
+              <button style={S.unitToggle} onClick={() => setAmountInUsdc(!amountInUsdc)}>
+                {amountInUsdc ? 'USDC' : symbol}
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
+                  <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                </svg>
+              </button>
+            </div>
+            <input type="number" placeholder={amountInUsdc ? '100' : '0.01'} value={amount}
+              onChange={e => { setAmount(e.target.value); setSizePct(0); }} style={S.input} />
+          </div>
+          <div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 3}}>
+            <span style={S.label}>Leverage</span>
+            <button style={S.levBtn} onClick={() => setShowLeverage(!showLeverage)}>
+              {leverage}x
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" style={{transform: showLeverage ? 'rotate(180deg)' : '', transition: '0.2s'}}><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+          </div>
+        </div>
+
+        {/* Size slider — % of max buying power */}
+        <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+          <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+            <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
+              {sizePct}% of ${maxUsdc.toFixed(0)} buying power
+            </span>
+            {amountInUsdc && amount && currentPrice && (
+              <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
+                ≈ {parseFloat(tokenAmount).toFixed(6)} {symbol}
+              </span>
+            )}
+          </div>
+          <input type="range" min="0" max="100" step="5" value={sizePct}
+            onChange={e => handleSizePct(Number(e.target.value))} style={S.slider} />
+          <div style={S.sliderLabels}>
+            <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+          </div>
+        </div>
+
+        {orderType === 'limit' && (
+          <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
+            <span style={S.label}>Limit Price</span>
+            <input type="number" placeholder={currentPrice || '0'} value={limitPrice} onChange={e => setLimitPrice(e.target.value)} style={S.input} />
+          </div>
+        )}
+
+        {/* Leverage modal */}
+        {showLeverage && (
+          <>
+            <div style={S.levBackdrop} onClick={() => setShowLeverage(false)} />
+            <div style={S.levModal}>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                <span style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>Adjust Leverage</span>
+                <button style={S.levCloseBtn} onClick={() => setShowLeverage(false)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
               </div>
+              <div style={{fontSize: 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: '10px 0'}}>{leverage}x</div>
+              <input type="range" min="1" max={maxLev} value={leverage} onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, accentColor: leverage > maxLev * 0.7 ? '#E53935' : '#4CAF50'}} />
+              <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
+              <div style={{display: 'flex', gap: 6, marginTop: 6}}>
+                {[1, 5, 10, 20, 50].filter(v => v <= maxLev).map(v => (
+                  <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
+                    onClick={() => handleLeverageChange(v)}>{v}x</button>
+                ))}
+              </div>
+              {leverage > maxLev * 0.5 && (
+                <div style={{fontSize: 11, color: '#E53935', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
+                  High leverage increases liquidation risk
+                </div>
+              )}
             </div>
+          </>
+        )}
 
-            {showLeverage && (
-              <div style={styles.sliderContainer}>
-                <input 
-                  type="range" 
-                  min="1" 
-                  max="100" 
-                  value={leverage} 
-                  onChange={(e) => setLeverage(e.target.value)}
-                  style={styles.sliderInput} 
-                />
-                <div style={styles.sliderLabels}>
-                  <span>1x</span>
-                  <span>50x</span>
-                  <span>100x</span>
+        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+
+        <div style={S.row}>
+          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={loading}>
+            <span style={S.tradeBtnText}>{loading ? '...' : 'LONG'}</span>
+          </button>
+          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={loading}>
+            <span style={S.tradeBtnText}>{loading ? '...' : 'SHORT'}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ==================== BOTTOM PANEL (fullscreen) ====================
+  const renderBottomPanel = () => {
+    const tabs = [
+      { id: 'positions', label: `Positions (${positions.length})` },
+      { id: 'orders', label: `Orders (${orders.length})` },
+      { id: 'history', label: 'History' },
+    ];
+
+    return (
+      <div style={S.bottomPanel}>
+        <div style={S.bottomTabs}>
+          {tabs.map(t => (
+            <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => setBottomTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={S.bottomContent}>
+          {bottomTab === 'positions' && (
+            positions.length ? (
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
+                  <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
+                  <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
+                </tr></thead>
+                <tbody>{positions.map((p, i) => {
+                  const mark = prices.find(pr => pr.symbol === p.symbol)?.mark;
+                  const entryPrice = parseFloat(p.entry_price);
+                  const markPrice = mark ? parseFloat(mark) : 0;
+                  const pnlVal = markPrice ? (markPrice - entryPrice) * parseFloat(p.amount) * (p.side === 'bid' ? 1 : -1) : 0;
+                  const lev = leverageSettings[p.symbol] || 1;
+                  const pnlPct = entryPrice && markPrice ? ((markPrice - entryPrice) / entryPrice * 100 * (p.side === 'bid' ? 1 : -1) * (typeof lev === 'number' ? lev : 1)) : 0;
+                  const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+                  return (
+                    <tr key={i} style={S.tr}>
+                      <td style={S.td}>{p.symbol}</td>
+                      <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
+                      <td style={S.td}>{p.amount}</td>
+                      <td style={S.td}>${entryPrice.toLocaleString()}</td>
+                      <td style={S.td}>{markPrice ? `$${markPrice.toLocaleString()}` : '—'}</td>
+                      <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
+                      <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                      <td style={S.td}>{lev}x</td>
+                      <td style={S.td}>
+                        <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, p.amount)}>Close</button>
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No open positions</div>
+          )}
+          {bottomTab === 'orders' && (
+            orders.length ? (
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Type</th>
+                  <th style={S.th}>Price</th><th style={S.th}>Amount</th><th style={S.th}></th>
+                </tr></thead>
+                <tbody>{orders.map((o, i) => {
+                  const sym = o.symbol || o.s;
+                  const side = o.side || o.d;
+                  const rawPrice = parseFloat(o.price || o.ip || 0);
+                  const stopPrice = parseFloat(o.stop_price || o.sp || 0);
+                  const price = rawPrice > 0 ? rawPrice : stopPrice;
+                  const rawAmt = o.initial_amount || o.amount || o.a;
+                  const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full';
+                  const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+                  const isTP = type.includes('TAKE') || type.includes('TP');
+                  const isSL = type.includes('STOP LOSS') || type.includes('SL');
+                  const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+                  return (
+                    <tr key={i} style={S.tr}>
+                      <td style={S.td}>{sym}</td>
+                      <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
+                      <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
+                      <td style={S.td}>${price.toLocaleString()}</td>
+                      <td style={S.td}>{amt}</td>
+                      <td style={S.td}>
+                        <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>Cancel</button>
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
+              </table>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No open orders</div>
+          )}
+          {bottomTab === 'history' && (
+            <TradeHistory walletAddr={walletAddr} />
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ==================== TRADE TAB ====================
+  const renderTrade = () => {
+    if (fullscreen) {
+      return (
+        <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
+          {/* Top: chart + orderbook + controls */}
+          <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
+            <div style={{flex: '0 0 55%', maxWidth: '55%', position: 'relative', borderRight: '3px solid #d4c8b0'}}>
+              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
+              <button style={S.fsBtn} onClick={() => setFullscreen(false)}>⊟</button>
+            </div>
+            <div style={{flex: '0 0 160px', borderRight: '3px solid #d4c8b0', overflow: 'hidden'}}>
+              <OrderBook symbol={symbol} />
+            </div>
+            <div style={{flex: 1, minWidth: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
+          </div>
+          {/* Bottom: positions/orders panel */}
+          {renderBottomPanel()}
+        </div>
+      );
+    }
+    // Normal layout: chart top, controls bottom
+    return (
+      <>
+        <div style={{...S.chartArea, position: 'relative'}}>
+          <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
+          <button style={S.fsBtn} onClick={() => setFullscreen(true)}>⊞</button>
+        </div>
+        {renderTradeControls()}
+      </>
+    );
+  };
+
+  // ==================== POSITIONS TAB ====================
+  const renderPositions = () => {
+    if (!positions.length) {
+      return (
+        <div style={S.empty}>
+          <div style={{fontSize: 48, filter: 'grayscale(100%)'}}>💼</div>
+          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Positions</div>
+        </div>
+      );
+    }
+    return (
+      <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
+        {positions.map((pos, i) => {
+          const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
+          const entryP = parseFloat(pos.entry_price);
+          const markP = mark ? parseFloat(mark) : 0;
+          const pnlVal = markP ? (markP - entryP) * parseFloat(pos.amount) * (pos.side === 'bid' ? 1 : -1) : 0;
+          const setLev = leverageSettings[pos.symbol] || 1;
+          const pnlPct = entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0;
+          const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+          const posKey = `${pos.symbol}-${pos.side}`;
+          const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+
+          return (
+            <div key={i} style={S.posCard}>
+              <div style={S.row}>
+                <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+                <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                  <span style={{fontSize: 11, fontWeight: 800, color: '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{setLev}x</span>
+                  <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
+                    {pos.side === 'bid' ? 'LONG' : 'SHORT'}
+                  </span>
                 </div>
               </div>
-            )}
+              <div style={S.row}>
+                <span style={S.detail}>Size: {pos.amount}</span>
+                <span style={S.detail}>Entry: ${parseFloat(pos.entry_price).toLocaleString()}</span>
+              </div>
+              <div style={S.row}>
+                <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
+                <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
+                  {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+                </span>
+              </div>
 
-            <div style={styles.buttons}>
-              <button style={{...cartoonBtn('#4CAF50', '#2E7D32'), ...styles.actionBtn}}>
-                <span style={styles.btnActionText}>LONG</span>
-                <span style={styles.btnActionSub}>Price will rise</span>
-              </button>
-              <button style={{...cartoonBtn('#E53935', '#B71C1C'), ...styles.actionBtn}}>
-                <span style={styles.btnActionText}>SHORT</span>
-                <span style={styles.btnActionSub}>Price will fall</span>
+              {/* Action buttons */}
+              <div style={{display: 'flex', gap: 6, marginTop: 4}}>
+                <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
+                <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+              </div>
+
+              {/* Close slider */}
+              {expanded === 'close' && (
+                <div style={S.expandPanel}>
+                  <div style={S.row}>
+                    <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Close {closePct}%</span>
+                    <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
+                      {(parseFloat(pos.amount) * closePct / 100).toFixed(6)} {pos.symbol}
+                    </span>
+                  </div>
+                  <input type="range" min="5" max="100" step="5" value={closePct} onChange={e => setClosePct(Number(e.target.value))} style={S.slider} />
+                  <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100))} disabled={loading}>
+                    {loading ? 'Closing...' : `Close ${closePct}%`}
+                  </button>
+                </div>
+              )}
+
+              {/* TP/SL */}
+              {expanded === 'tpsl' && (
+                <div style={{...S.expandPanel, ...S.row}}>
+                  <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                  <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                  <button style={S.btnBlue} onClick={async () => {
+                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null);
+                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                  }} disabled={!tpPrice && !slPrice}>Set</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+      </div>
+    );
+  };
+
+  // ==================== ORDERS TAB ====================
+  const renderOrders = () => {
+    if (!orders.length) {
+      return (
+        <div style={S.empty}>
+          <div style={{fontSize: 48, filter: 'grayscale(100%)'}}>📋</div>
+          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Orders</div>
+        </div>
+      );
+    }
+    return (
+      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+        {orders.map((o, i) => {
+          const sym = o.symbol || o.s;
+          const side = o.side || o.d;
+          const rawPrice = parseFloat(o.price || o.ip || 0);
+          const stopPrice = parseFloat(o.stop_price || o.sp || 0);
+          const price = rawPrice > 0 ? rawPrice : stopPrice;
+          const rawAmt = o.initial_amount || o.amount || o.a;
+          const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
+          const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+          const isBid = side === 'bid';
+          const isTP = type.includes('TAKE') || type.includes('TP');
+          const isSL = type.includes('STOP LOSS') || type.includes('SL');
+          const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+          return (
+            <div key={i} style={S.posCard}>
+              <div style={S.row}>
+                <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
+                <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+                <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
+                  {isBid ? 'BUY' : 'SELL'}
+                </span>
+                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>✕</button>
+              </div>
+              <div style={S.row}>
+                <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
+                <span style={S.detail}>Amount: {amt}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // ==================== RENDER ====================
+  // ==================== ACCOUNT TAB ====================
+  const renderAccount = () => {
+    const equity = parseFloat(account?.account_equity || 0);
+    const available = parseFloat(account?.available_to_withdraw || 0);
+    const marginUsed = parseFloat(account?.total_margin_used || 0);
+
+    return (
+      <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+        {/* Wallet address */}
+        <div style={S.fullCard}>
+          <div style={S.row}>
+            <span style={S.label}>Connected Wallet</span>
+            <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
+              {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}
+            </span>
+          </div>
+        </div>
+
+        {/* Wallet USDC */}
+        <div style={S.fullCard}>
+          <div style={S.row}>
+            <span style={S.label}>Wallet USDC</span>
+            <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
+              ${walletUsdc !== null ? walletUsdc.toFixed(2) : '—'}
+            </span>
+          </div>
+        </div>
+
+        {/* Pacifica balances */}
+        <div style={{display: 'flex', gap: 8}}>
+          <div style={S.balCard}>
+            <span style={S.balCardLabel}>Trading Balance</span>
+            <span style={S.balCardValue}>${pacBalance.toFixed(2)}</span>
+          </div>
+          <div style={S.balCard}>
+            <span style={S.balCardLabel}>Equity</span>
+            <span style={S.balCardValue}>${equity.toFixed(2)}</span>
+          </div>
+        </div>
+        <div style={{display: 'flex', gap: 8}}>
+          <div style={S.balCard}>
+            <span style={S.balCardLabel}>Margin Used</span>
+            <span style={S.balCardValue}>${marginUsed.toFixed(2)}</span>
+          </div>
+          <div style={S.balCard}>
+            <span style={S.balCardLabel}>Withdrawable</span>
+            <span style={S.balCardValue}>${available.toFixed(2)}</span>
+          </div>
+        </div>
+
+        {/* Deposit */}
+        <div style={S.fullCard}>
+          <div style={S.row}>
+            <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
+            {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
+          </div>
+          <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+            <input type="number" placeholder="Min 10 USDC" value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
+              style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+            <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
+              if (!depositAmt || parseFloat(depositAmt) < 10) return;
+              const r = await depositToPacifica(depositAmt);
+              if (!r?.error) setDepositAmt('');
+            }} disabled={loading}>
+              {loading ? '...' : 'Deposit'}
+            </button>
+          </div>
+          <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+            Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.
+          </span>
+        </div>
+
+        {/* Withdraw */}
+        {available > 0 && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
+              <span style={S.detail}>Max: ${available.toFixed(2)}</span>
+            </div>
+            <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+              <input type="number" placeholder="Amount" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
+                style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+              <button style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}>MAX</button>
+              <button style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
+                const r = await withdraw(withdrawAmt);
+                if (!r?.error) setWithdrawAmt('');
+              }} disabled={loading || !withdrawAmt}>
+                {loading ? '...' : 'Withdraw'}
               </button>
             </div>
           </div>
-        </>
-      );
-    }
-    
-    if (activeTab === 'Positions') {
-      return (
-        <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>💼</div>
-          <div style={styles.emptyTitle}>No Open Positions</div>
-          <div style={styles.emptyDesc}>You haven't opened any long or short positions yet.</div>
-        </div>
-      );
-    }
+        )}
 
-    if (activeTab === 'Orders') {
-      return (
-        <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>📋</div>
-          <div style={styles.emptyTitle}>No Open Orders</div>
-          <div style={styles.emptyDesc}>Good till cancelled or limit orders will appear here.</div>
+        {/* Account stats */}
+        <div style={S.fullCard}>
+          <span style={S.label}>Account Info</span>
+          {[
+            ['Positions', account?.positions_count || 0],
+            ['Open Orders', account?.orders_count || 0],
+            ['Fee Tier', account?.fee_level ?? '—'],
+            ['Maker Fee', account?.maker_fee ? (parseFloat(account.maker_fee) * 100).toFixed(3) + '%' : '—'],
+            ['Taker Fee', account?.taker_fee ? (parseFloat(account.taker_fee) * 100).toFixed(3) + '%' : '—'],
+          ].map(([k, v]) => (
+            <div key={k} style={{...S.row, padding: '4px 0', borderBottom: '1px solid #d4c8b0'}}>
+              <span style={S.detail}>{k}</span>
+              <span style={{fontSize: 13, fontWeight: 800, color: '#5C3A21'}}>{v}</span>
+            </div>
+          ))}
         </div>
-      );
-    }
+
+        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+      </div>
+    );
+  };
+
+  const renderContent = () => {
+    if (activeTab === 'Trade') return renderTrade();
+    if (activeTab === 'Positions') return renderPositions();
+    if (activeTab === 'Orders') return renderOrders();
+    if (activeTab === 'Account') return renderAccount();
   };
 
   return (
     <>
-      <style>{`
-        .futures-panel-body::-webkit-scrollbar {
-          display: none;
-        }
-        @keyframes slideDown {
-          from { opacity: 0; margin-top: -10px; transform: scaleY(0.95); transform-origin: top; }
-          to { opacity: 1; margin-top: 0; transform: scaleY(1); transform-origin: top; }
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(5px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-      <div style={styles.container}>
-        <div style={styles.header}>
-          <div style={styles.tabsContainer}>
-            {TABS.map(tab => {
-              const isActive = activeTab === tab.id;
+      <style>{animCSS}</style>
+      <div style={{...(fullscreen ? S.containerFull : S.container), transform: fullscreen ? 'none' : `translate(${pos.x}px, ${pos.y}px)`}}>
+        <div style={S.header} onMouseDown={handleMouseDown}>
+          <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
+            {TABS.map(t => {
+              const active = activeTab === t.id;
               return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  style={isActive ? styles.tabActive : styles.tabInactive}
-                >
-                  <span style={styles.tabIcon}>{tab.icon}</span>
-                  {isActive && <span style={styles.tabLabel}>{tab.label}</span>}
+                <button key={t.id} onClick={() => setActiveTab(t.id)} style={active ? S.tabActive : S.tabInactive}>
+                  <span style={{fontSize: 16}}>{t.icon}</span>
+                  {active && <span style={{fontSize: 14, fontWeight: 800}}>{t.label}</span>}
                 </button>
               );
             })}
           </div>
-          <button onClick={handleClose} style={styles.closeBtn}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        
-        <div className="futures-panel-body" style={styles.body}>
-          <div key={activeTab} style={{ animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
+        <div className="futures-panel-body" style={S.body}>
+          <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%'}}>
             {renderContent()}
           </div>
         </div>
+
+        {/* Gold earned notification */}
+        {goldEarned && (
+          <div style={S.goldPopup}>
+            <span style={S.goldIcon}>🪙</span>
+            <span style={S.goldText}>+{goldEarned.amount.toLocaleString()} Gold</span>
+            <span style={S.goldReason}>{goldEarned.reason}</span>
+            <button style={S.goldClose} onClick={() => clearGoldEarned()}>✕</button>
+          </div>
+        )}
       </div>
     </>
   );
@@ -150,246 +728,263 @@ function FuturesPanel() {
 
 export default memo(FuturesPanel);
 
-const styles = {
+const animCSS = `
+  .futures-panel-body::-webkit-scrollbar { display: none; }
+  .futures-panel-body { overflow-x: hidden !important; }
+  .futures-panel-body input[type=number]::-webkit-inner-spin-button,
+  .futures-panel-body input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .futures-panel-body input[type=number] { -moz-appearance: textfield; }
+  @keyframes slideDown { from { opacity:0; transform:scaleY(0.95); } to { opacity:1; transform:scaleY(1); } }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+`;
+
+const S = {
+  containerFull: {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    background: '#e8dfc8', border: 'none', borderRadius: 0,
+    display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
+    boxShadow: 'none', fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
   container: {
-    position: 'absolute',
-    top: 20,
-    right: 20,
-    bottom: 150, 
-    width: 400,
-    background: '#e8dfc8',
-    border: '6px solid #d4c8b0',
-    borderRadius: 24,
-    display: 'flex',
-    flexDirection: 'column',
-    boxShadow: '0 10px 30px rgba(0,0,0,0.4), inset 0 0 10px rgba(0,0,0,0.05)',
-    pointerEvents: 'auto',
-    overflow: 'hidden',
-    zIndex: 100,
-    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    position: 'absolute', top: 20, right: 20, bottom: 150, width: 400,
+    background: '#e8dfc8', border: '6px solid #d4c8b0', borderRadius: 24,
+    display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
+    boxShadow: '0 10px 30px rgba(0,0,0,0.4)', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '8px 12px',
-    background: '#d4c8b0',
-    borderBottom: '4px solid #bba882',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '8px 12px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+    cursor: 'grab', userSelect: 'none',
   },
-  tabsContainer: {
-    display: 'flex',
-    gap: 8,
-    alignItems: 'center',
-    paddingLeft: 4,
-  },
+  headerTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
   tabActive: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-    padding: '8px 14px',
-    background: '#fdf8e7',
-    border: '3px solid #bba882',
-    borderRadius: 12,
-    cursor: 'default',
-    color: '#333',
-    boxShadow: '0 4px 0 #bba882',
-    transform: 'translateY(-2px)',
-    transition: 'all 0.1s',
+    display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px',
+    background: '#fdf8e7', border: '3px solid #bba882', borderRadius: 12,
+    color: '#333', boxShadow: '0 3px 0 #bba882', transform: 'translateY(-1px)', cursor: 'default',
   },
   tabInactive: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 44,
-    height: 44,
-    padding: 0,
-    background: '#bba882',
-    border: '3px solid #a3906a',
-    borderRadius: 12,
-    cursor: 'pointer',
-    color: '#333',
-    boxShadow: '0 4px 0 #a3906a',
-    transition: 'all 0.1s',
-  },
-  tabIcon: {
-    fontSize: 18,
-    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.2))',
-  },
-  tabLabel: {
-    fontSize: 15,
-    fontWeight: 800,
-    textTransform: 'uppercase',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40,
+    background: '#bba882', border: '3px solid #a3906a', borderRadius: 12,
+    color: '#333', boxShadow: '0 3px 0 #a3906a', cursor: 'pointer',
   },
   closeBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: '50%',
-    background: '#E53935',
-    border: '3px solid #fff',
-    color: '#fff',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-    padding: 0,
+    width: 32, height: 32, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
+    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
   },
   body: {
-    flex: 1,
-    padding: '16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16,
-    overflowY: 'auto',
-    background: '#fdf8e7',
-    scrollbarWidth: 'none',
-    msOverflowStyle: 'none',
+    flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
+    overflowY: 'auto', overflowX: 'hidden', background: '#fdf8e7', scrollbarWidth: 'none',
   },
-  chartArea: {
-    width: '100%',
-    flex: 1,
-    minHeight: 250,
-    background: '#fff',
-    borderRadius: 12,
-    border: '4px solid #d4c8b0',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-    boxShadow: 'inset 0 4px 6px rgba(0,0,0,0.1)',
-  },
-  tradeControl: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 16,
-    background: '#e8dfc8',
-    padding: 16,
-    borderRadius: 16,
-    border: '3px solid #d4c8b0',
-  },
-  inputGroupRow: {
-    display: 'flex',
-    gap: 12,
-  },
-  inputGroup: {
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-  },
-  inputLabel: {
-    color: '#5C3A21',
-    fontSize: 13,
-    fontWeight: 800,
-    textTransform: 'uppercase',
-  },
+  // Common
+  row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  label: { color: '#5C3A21', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' },
+  detail: { fontSize: 12, fontWeight: 700, color: '#77573d' },
   input: {
-    background: '#fff',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: '10px 12px',
-    color: '#333',
-    fontSize: 16,
-    fontWeight: 700,
-    outline: 'none',
-    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.05)',
+    background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
+    padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 700, outline: 'none',
   },
-  leverageToggleBtn: {
+  errorBar: {
+    background: '#E5393520', border: '2px solid #E53935', borderRadius: 8,
+    padding: '7px 10px', color: '#B71C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center',
+  },
+  empty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    flex: 1, gap: 12, opacity: 0.5,
+  },
+  // Trade
+  chartArea: {
+    width: '100%', flex: 1, minHeight: 200, background: '#fff', borderRadius: 12,
+    border: '4px solid #d4c8b0', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
+    position: 'relative',
+  },
+  chartFullscreen: {
+    width: '100%', flex: 3, minHeight: 400, background: '#fff', borderRadius: 12,
+    border: '4px solid #d4c8b0', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
+    position: 'relative',
+  },
+  fsBtn: {
+    position: 'absolute', top: 6, right: 6,
+    width: 26, height: 26, borderRadius: 6,
+    background: 'rgba(92,58,33,0.7)', border: 'none', color: '#fff',
+    fontSize: 16, fontWeight: 900, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 2,
+  },
+  symbolBtn: {
+    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
+    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 10, cursor: 'pointer', color: '#333',
+  },
+  balBadge: {
+    display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
+    padding: '3px 10px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+  },
+  chips: {
+    display: 'flex', flexWrap: 'wrap', gap: 5, padding: 8,
+    background: '#e8dfc8', borderRadius: 10, border: '2px solid #d4c8b0', animation: 'slideDown 0.2s',
+  },
+  chip: {
+    padding: '5px 10px', background: '#fdf8e7', border: '2px solid #d4c8b0',
+    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: '#5C3A21',
+  },
+  chipActive: {
+    padding: '5px 10px', background: '#4CAF50', border: '2px solid #2E7D32',
+    borderRadius: 7, cursor: 'pointer', fontWeight: 700, fontSize: 12, color: '#fff',
+  },
+  depositRow: {
+    display: 'flex', gap: 6, background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
+  },
+  depositBtn: {
+    padding: '8px 14px', background: '#4CAF50', border: '2px solid #2E7D32', borderRadius: 8,
+    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer',
+  },
+  tradeBox: {
+    display: 'flex', flexDirection: 'column', gap: 10, background: '#e8dfc8',
+    padding: 12, borderRadius: 14, border: '3px solid #d4c8b0',
+  },
+  typeBtn: {
+    flex: 1, padding: '7px', background: '#d4c8b0', border: '2px solid #bba882',
+    borderRadius: 8, cursor: 'pointer', fontWeight: 800, fontSize: 12, color: '#5C3A21', textTransform: 'uppercase',
+  },
+  typeActive: {
+    flex: 1, padding: '7px', background: '#fdf8e7', border: '2px solid #bba882',
+    borderRadius: 8, fontWeight: 800, fontSize: 12, color: '#333', textTransform: 'uppercase',
+    boxShadow: '0 2px 0 #bba882',
+  },
+  levBackdrop: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 300,
+  },
+  levModal: {
+    position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+    width: 320, background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 20,
+    padding: 20, display: 'flex', flexDirection: 'column', gap: 10,
+    boxShadow: '0 15px 40px rgba(0,0,0,0.4)', zIndex: 301,
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  levCloseBtn: {
+    width: 28, height: 28, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
+    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+  },
+  marginSwapBtn: {
+    padding: '8px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+    fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center',
+    height: '100%', boxSizing: 'border-box',
+  },
+  levPreset: {
+    flex: 1, padding: '8px 0', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
+    fontWeight: 800, fontSize: 13, color: '#5C3A21', cursor: 'pointer', textAlign: 'center',
+  },
+  levPresetActive: {
+    flex: 1, padding: '8px 0', background: '#4CAF50', border: '2px solid #2E7D32', borderRadius: 8,
+    fontWeight: 800, fontSize: 13, color: '#fff', cursor: 'pointer', textAlign: 'center',
+    boxShadow: '0 2px 0 #2E7D32',
+  },
+  unitToggle: {
+    padding: '2px 8px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 6,
+    fontSize: 10, fontWeight: 800, color: '#5C3A21', cursor: 'pointer', textTransform: 'uppercase',
+    display: 'flex', alignItems: 'center',
+  },
+  levBtn: {
+    width: '100%', background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
+    padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  },
+  sliderBox: {
+    background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 10,
+    display: 'flex', flexDirection: 'column', gap: 6, animation: 'slideDown 0.2s',
+  },
+  slider: { width: '100%', cursor: 'pointer', accentColor: '#E53935' },
+  sliderLabels: { display: 'flex', justifyContent: 'space-between', color: '#a3906a', fontSize: 11, fontWeight: 700 },
+  tradeBtn: { flex: 1, padding: '11px 6px', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  tradeBtnText: { color: '#fff', fontSize: 20, fontWeight: 900, textShadow: '0 2px 0 rgba(0,0,0,0.4)' },
+  // Positions
+  posCard: {
+    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
+    flex: '0 1 380px',
+  },
+  fullCard: {
+    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
     width: '100%',
-    background: '#fff',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: '10px 12px',
-    color: '#333',
-    fontSize: 16,
-    fontWeight: 800,
-    outline: 'none',
-    cursor: 'pointer',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    boxShadow: '0 2px 0 #d4c8b0',
   },
-  sliderContainer: {
-    background: '#fdf8e7',
-    border: '3px solid #d4c8b0',
-    borderRadius: 12,
-    padding: '16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    animation: 'slideDown 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
-    transformOrigin: 'top',
+  expandPanel: {
+    display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4,
+    animation: 'slideDown 0.2s ease-out',
   },
-  sliderInput: {
-    width: '100%',
-    cursor: 'pointer',
-    accentColor: '#E53935',
+  btnRed: {
+    flex: 1, padding: '8px', background: '#E53935', border: '2px solid #B71C1C', borderRadius: 8,
+    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #B71C1C', textAlign: 'center',
   },
-  sliderLabels: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    color: '#a3906a',
-    fontSize: 12,
-    fontWeight: 700,
+  btnBlue: {
+    padding: '8px 12px', background: '#1E88E5', border: '2px solid #1565C0', borderRadius: 8,
+    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #1565C0',
   },
-  buttons: {
-    display: 'flex',
-    gap: 12,
+  btnPurple: {
+    padding: '8px 12px', background: '#9945FF', border: '2px solid #7B36CC', borderRadius: 8,
+    color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #7B36CC',
   },
-  actionBtn: {
-    flex: 1,
-    padding: '12px 6px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    minHeight: 64, 
-    borderRadius: 16,
+  btnSmall: {
+    padding: '8px 10px', background: '#d4c8b0', border: '2px solid #bba882', borderRadius: 8,
+    fontWeight: 800, fontSize: 12, color: '#5C3A21', cursor: 'pointer',
   },
-  btnActionText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 900,
-    textShadow: '0 2px 0 rgba(0,0,0,0.4)',
-    lineHeight: 1,
+  noBalanceHint: {
+    padding: '8px 12px', background: '#FFF3E0', border: '2px solid #FF9800', borderRadius: 8,
+    color: '#E65100', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: 'pointer',
   },
-  btnActionSub: {
-    color: 'rgba(255,255,255,0.95)',
-    fontSize: 11,
-    fontWeight: 800,
-    textShadow: '0 1px 1px rgba(0,0,0,0.3)',
-    textAlign: 'center',
-    lineHeight: 1,
+  balCard: {
+    flex: 1, background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
+    padding: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
   },
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    textAlign: 'center',
-    padding: 20,
-    opacity: 0.6,
+  balCardLabel: { fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase' },
+  balCardValue: { fontSize: 18, fontWeight: 900, color: '#5C3A21' },
+  cancelBtn: {
+    width: 26, height: 26, borderRadius: '50%', background: '#E53935', border: '2px solid #fff',
+    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, fontWeight: 900, padding: 0,
   },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: 16,
-    filter: 'grayscale(100%)',
+  goldPopup: {
+    position: 'absolute', bottom: 12, left: 12, right: 12,
+    background: 'linear-gradient(135deg, #FFD700 0%, #FFA000 100%)',
+    border: '3px solid #E65100', borderRadius: 14,
+    padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10,
+    boxShadow: '0 6px 20px rgba(255,160,0,0.4)',
+    animation: 'fadeIn 0.3s ease-out',
   },
-  emptyTitle: {
-    color: '#5C3A21',
-    fontSize: 20,
-    fontWeight: 900,
-    marginBottom: 8,
+  goldIcon: { fontSize: 28 },
+  goldText: { fontSize: 18, fontWeight: 900, color: '#5C3A21', textShadow: '0 1px 0 rgba(255,255,255,0.5)' },
+  goldReason: { fontSize: 11, fontWeight: 700, color: '#7B5B00', flex: 1, textAlign: 'right' },
+  // Bottom panel (fullscreen)
+  bottomPanel: {
+    borderTop: '3px solid #bba882', background: '#e8dfc8',
+    display: 'flex', flexDirection: 'column', height: 160, minHeight: 120,
+    overflow: 'hidden',
   },
-  emptyDesc: {
-    color: '#77573d',
-    fontSize: 14,
-    fontWeight: 600,
-    maxWidth: 250,
-    lineHeight: 1.4,
+  bottomTabs: {
+    display: 'flex', gap: 0, background: '#d4c8b0', flexShrink: 0,
+  },
+  bottomTabBtn: {
+    padding: '6px 20px', background: 'transparent', border: 'none',
+    fontSize: 12, fontWeight: 700, color: '#77573d', cursor: 'pointer',
+    borderBottom: '2px solid transparent',
+  },
+  bottomTabActive: {
+    padding: '6px 20px', background: '#e8dfc8', border: 'none',
+    fontSize: 12, fontWeight: 800, color: '#5C3A21', cursor: 'default',
+    borderBottom: '2px solid #4CAF50',
+  },
+  bottomContent: { flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' },
+  th: { padding: '4px 12px', textAlign: 'left', color: '#a3906a', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: '#e8dfc8' },
+  td: { padding: '4px 12px', color: '#5C3A21', fontSize: 12, borderBottom: '1px solid #d4c8b0' },
+  tr: { background: '#fdf8e7' },
+  tblCloseBtn: {
+    padding: '2px 8px', background: '#E53935', border: 'none', borderRadius: 4,
+    color: '#fff', fontWeight: 800, fontSize: 10, cursor: 'pointer',
+  },
+  goldClose: {
+    width: 22, height: 22, borderRadius: '50%', background: 'rgba(0,0,0,0.15)',
+    border: 'none', color: '#5C3A21', fontWeight: 900, fontSize: 13,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 4,
   },
 };

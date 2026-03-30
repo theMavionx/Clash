@@ -1,7 +1,11 @@
 const express = require('express');
+const crypto = require('crypto');
 const db = require('./db');
 
 const router = express.Router();
+
+// HMAC secret for trading reward verification
+const REWARD_SECRET = process.env.REWARD_SECRET || crypto.randomBytes(32).toString('hex');
 
 // ---------- Auth Middleware ----------
 
@@ -18,12 +22,16 @@ function auth(req, res, next) {
 
 // Register a new player
 router.post('/players/register', (req, res) => {
-  const { name } = req.body;
+  const { name, wallet } = req.body;
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     return res.status(400).json({ error: 'Name must be at least 2 characters' });
   }
   try {
     const result = db.registerPlayer(name.trim());
+    // Save wallet address if provided
+    if (wallet) {
+      db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
+    }
     const state = db.getFullPlayerState(result.id);
     res.json({ ...state, token: result.token });
   } catch (e) {
@@ -197,6 +205,175 @@ router.get('/trophies/table', (req, res) => {
   res.json(db.TROPHY_TABLE);
 });
 
+// ==================== TRADING REWARDS ====================
+
+const GOLD_PER_USD_VOLUME = 0.05;
+const GOLD_FIRST_DEPOSIT = 500;
+const GOLD_FIRST_TRADE = 300;
+const GOLD_DAILY_TRADE = 200;
+const GOLD_PROFIT_RATE = 0.10; // 10% of PnL → gold (×1000)
+
+// Trading rewards table
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS trading_rewards (
+      player_id    TEXT PRIMARY KEY,
+      wallet       TEXT NOT NULL,
+      last_trade_id INTEGER NOT NULL DEFAULT 0,
+      total_volume REAL NOT NULL DEFAULT 0,
+      total_gold   INTEGER NOT NULL DEFAULT 0,
+      first_deposit INTEGER NOT NULL DEFAULT 0,
+      first_trade  INTEGER NOT NULL DEFAULT 0,
+      last_daily   TEXT,
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+} catch {}
+
+// Rate limiter for claim-gold (max 1 per 5 seconds per player)
+const claimCooldowns = new Map();
+
+// Claim gold — server verifies trades via Pacifica API
+router.post('/trading/claim-gold', auth, async (req, res) => {
+  // Rate limit
+  const lastClaim = claimCooldowns.get(req.player.id);
+  if (lastClaim && Date.now() - lastClaim < 5000) {
+    return res.status(429).json({ gold: 0, reason: 'Please wait before claiming again' });
+  }
+  claimCooldowns.set(req.player.id, Date.now());
+  const wallet = req.body.wallet || req.player.wallet;
+  if (!wallet) return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
+
+  try {
+    // Get or create reward record
+    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    if (!reward) {
+      db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet);
+      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    }
+
+    // Fetch trades from Pacifica (verified source of truth)
+    const tradesRes = await fetch(
+      `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
+    );
+    const tradesData = await tradesRes.json();
+    if (!tradesData.success || !tradesData.data) {
+      return res.json({ gold: 0, reason: 'No trades found' });
+    }
+
+    // Filter only new trades (after last_trade_id)
+    const newTrades = tradesData.data.filter(t => t.history_id > reward.last_trade_id);
+    if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      return res.json({ gold: 0, reason: 'No new trades' });
+    }
+
+    let totalGold = 0;
+    const reasons = [];
+    let maxTradeId = reward.last_trade_id;
+
+    // Volume rewards
+    for (const t of newTrades) {
+      const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
+      totalGold += Math.floor(volume * GOLD_PER_USD_VOLUME);
+
+      // Profit reward (from builder_fee we can estimate, but PnL not in this endpoint)
+      if (t.history_id > maxTradeId) maxTradeId = t.history_id;
+    }
+
+    if (newTrades.length > 0) {
+      reasons.push(`${newTrades.length} trades`);
+    }
+
+    // First deposit bonus
+    if (!reward.first_deposit) {
+      totalGold += GOLD_FIRST_DEPOSIT;
+      reasons.push('First deposit!');
+    }
+
+    // First trade bonus
+    if (!reward.first_trade && newTrades.length > 0) {
+      totalGold += GOLD_FIRST_TRADE;
+      reasons.push('First trade!');
+    }
+
+    // Daily bonus
+    const today = new Date().toISOString().split('T')[0];
+    if (reward.last_daily !== today && newTrades.length > 0) {
+      totalGold += GOLD_DAILY_TRADE;
+      reasons.push('Daily bonus');
+    }
+
+    // Save all new trades to DB
+    const insertTrade = db.db.prepare('INSERT OR IGNORE INTO player_trades (player_id, history_id, symbol, price, amount, fee) VALUES (?, ?, ?, ?, ?, ?)');
+    for (const t of newTrades) {
+      insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
+    }
+
+    if (totalGold > 0) {
+      // Add gold to player resources
+      db.addResources(req.player.id, totalGold, 0, 0);
+
+      // Log to gold history
+      const reason = reasons.join(' + ') || 'Trading reward';
+      db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
+
+      // Update reward tracking
+      db.db.prepare(`
+        UPDATE trading_rewards SET
+          last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+          last_daily = ?, updated_at = datetime('now')
+        WHERE player_id = ?
+      `).run(maxTradeId, newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0), totalGold, newTrades.length, today, req.player.id);
+    }
+
+    res.json({
+      gold: totalGold,
+      reason: reasons.join(' + ') || 'No new rewards',
+      total_gold_earned: (reward.total_gold || 0) + totalGold,
+    });
+  } catch (e) {
+    console.error('Claim gold error:', e);
+    res.status(500).json({ error: 'Failed to claim rewards' });
+  }
+});
+
+// Gold & trade history tables
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS gold_history (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id  TEXT NOT NULL,
+      amount     INTEGER NOT NULL,
+      reason     TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS player_trades (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id    TEXT NOT NULL,
+      history_id   INTEGER UNIQUE,
+      symbol       TEXT NOT NULL,
+      price        TEXT NOT NULL,
+      amount       TEXT NOT NULL,
+      fee          TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+} catch {}
+
+// Get trading reward stats + gold history + trade history from Pacifica
+router.get('/trading/stats', auth, async (req, res) => {
+  const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+  const goldHistory = db.db.prepare('SELECT amount, reason, created_at FROM gold_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
+  const trades = db.db.prepare('SELECT symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
+
+  res.json({
+    ...(reward || { total_volume: 0, total_gold: 0 }),
+    gold_history: goldHistory,
+    trades,
+  });
+});
+
 // ==================== FULL STATE ====================
 
 // Get full player state (resources + buildings + troops)
@@ -208,14 +385,22 @@ router.get('/state', auth, (req, res) => {
 
 // ==================== ADMIN ====================
 
+const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me-in-production';
+function adminAuth(req, res, next) {
+  if (req.headers['x-admin-key'] !== ADMIN_KEY) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+}
+
 // List all players
-router.get('/admin/players', (req, res) => {
+router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare('SELECT id, name, trophies, level, gold, wood, ore, created_at FROM players ORDER BY trophies DESC').all();
   res.json(players);
 });
 
 // Delete a player by name
-router.delete('/admin/players/:name', (req, res) => {
+router.delete('/admin/players/:name', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
@@ -225,7 +410,7 @@ router.delete('/admin/players/:name', (req, res) => {
 });
 
 // Reset a player (keep account, clear buildings & reset resources)
-router.post('/admin/players/:name/reset', (req, res) => {
+router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
@@ -235,7 +420,7 @@ router.post('/admin/players/:name/reset', (req, res) => {
 });
 
 // Wipe entire database
-router.post('/admin/wipe', (req, res) => {
+router.post('/admin/wipe', adminAuth, (req, res) => {
   db.db.prepare('DELETE FROM buildings').run();
   db.db.prepare('DELETE FROM troop_levels').run();
   db.db.prepare('DELETE FROM players').run();

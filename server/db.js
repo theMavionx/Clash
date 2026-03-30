@@ -47,12 +47,9 @@ db.exec(`
   );
 `);
 
-// Safe migration: add last_collected_at to buildings if not present
-try {
-  db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`);
-} catch (e) {
-  // Column already exists — ignore
-}
+// Safe migrations
+try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 
 // ---------- Resource Production Definitions ----------
 

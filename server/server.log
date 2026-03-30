@@ -1,0 +1,30 @@
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at node:net:2206:7
+    at process.p[32mGET[0m /api/admin/players [90m200 1ms[0m
+[32mPOST[0m /api/players/register [90m200 38ms[0m
+[31mPOST[0m /api/trading/claim-gold [90m400 5ms[0m
+[32mGET[0m /api/admin/players [90m200 20ms[0m
+[32mPOST[0m /api/admin/wipe [90m200 30ms[0m
+[31mGET[0m /api/trading/stats [90m401 66ms[0m
+[31mGET[0m /api/trading/stats [90m401 1ms[0m
+[31mPOST[0m /api/trading/claim-gold [90m401 56ms[0m
+[31mPOST[0m /api/trading/claim-gold [90m401 59ms[0m
+[31mGET[0m /api/trading/stats [90m401 4ms[0m
+[31mGET[0m /api/trading/stats [90m401 3ms[0m
+[31mPOST[0m /api/trading/claim-gold [90m401 272ms[0m
+[31mGET[0m /api/trading/stats [90m401 1664ms[0m
+[31mGET[0m /api/trading/stats [90m401 24ms[0m
+[31mGET[0m /api/trading/stats [90m401 57ms[0m
+[31mGET[0m /api/trading/stats [90m401 2ms[0m
+[31mGET[0m /api/trading/stats [90m401 69ms[0m
+[31mGET[0m /api/trading/stats [90m401 2ms[0m
+[31mGET[0m /api/trading/stats [90m401 117ms[0m
+[31mGET[0m /api/trading/stats [90m401 1ms[0m
+[31mGET[0m /api/trading/stats [90m401 9ms[0m
+[31mGET[0m /api/trading/stats [90m401 2ms[0m

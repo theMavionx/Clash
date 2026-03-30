@@ -36,11 +36,14 @@ func has_token() -> bool:
 
 # ── Registration ──────────────────────────────────────────────
 
-func register(player_name: String) -> Dictionary:
+func register(player_name: String, wallet: String = "") -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
-	var body = JSON.stringify({"name": player_name})
+	var data = {"name": player_name}
+	if wallet != "":
+		data["wallet"] = wallet
+	var body = JSON.stringify(data)
 	http.request(SERVER_URL + "/players/register", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed
 	http.queue_free()

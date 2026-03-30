@@ -9,6 +9,8 @@ import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
 import FuturesPanel from './FuturesPanel';
+import ProfileModal from './ProfileModal';
+import EnemyHeader from './EnemyHeader';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
@@ -17,6 +19,7 @@ export default function GameUI() {
   const { selectedBuilding } = useBuilding();
 
   const [showTroops, setShowTroops] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
@@ -50,10 +53,11 @@ export default function GameUI() {
   return (
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
-      {!enemyMode?.active && <PlayerInfo />}
+      {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} />}
       <ActionButtons />
       <ErrorToast message={error} />
       <FpsTracker />
+      <EnemyHeader />
 
       {shopOpen && (
         <ShopPanel onClose={handleCloseShop} />
@@ -61,6 +65,10 @@ export default function GameUI() {
 
       {futuresOpen && (
         <FuturesPanel />
+      )}
+
+      {showProfile && (
+        <ProfileModal onClose={() => setShowProfile(false)} />
       )}
 
       {barnAsTroops ? (

@@ -7,35 +7,30 @@ DB_BACKUP="/opt/clash-db-backup"
 
 echo "=== Quick Update ==="
 
-# Backup database before pull
+# Backup databases before pull
 mkdir -p "$DB_BACKUP"
-if [ -f "$APP_DIR/server/clash.db" ]; then
-    cp "$APP_DIR/server/clash.db" "$DB_BACKUP/clash.db"
-    cp "$APP_DIR/server/clash.db-wal" "$DB_BACKUP/clash.db-wal" 2>/dev/null || true
-    cp "$APP_DIR/server/clash.db-shm" "$DB_BACKUP/clash.db-shm" 2>/dev/null || true
-    echo "DB backed up to $DB_BACKUP"
-fi
+for db in "$APP_DIR/server/clash.db" "$APP_DIR/server/clash.db-wal" "$APP_DIR/server/clash.db-shm"; do
+    [ -f "$db" ] && cp "$db" "$DB_BACKUP/" && echo "Backed up $(basename $db)"
+done
 
 # Pull latest (discard local changes to tracked files)
 cd "$APP_DIR"
 git reset --hard HEAD
 git pull origin main
 
-# Restore database after pull
-if [ -f "$DB_BACKUP/clash.db" ]; then
-    cp "$DB_BACKUP/clash.db" "$APP_DIR/server/clash.db"
-    cp "$DB_BACKUP/clash.db-wal" "$APP_DIR/server/clash.db-wal" 2>/dev/null || true
-    cp "$DB_BACKUP/clash.db-shm" "$APP_DIR/server/clash.db-shm" 2>/dev/null || true
-    echo "DB restored"
-fi
+# Restore databases after pull
+for db in "$DB_BACKUP/clash.db" "$DB_BACKUP/clash.db-wal" "$DB_BACKUP/clash.db-shm"; do
+    [ -f "$db" ] && cp "$db" "$APP_DIR/server/"
+done
+echo "DB restored"
 
-# Rebuild frontend
+# Install & rebuild frontend
 echo "Building frontend..."
 cd "$APP_DIR/web"
 npm ci
 npm run build
 
-# Restart backend
+# Install & restart backend
 echo "Restarting backend..."
 cd "$APP_DIR/server"
 npm ci --production
