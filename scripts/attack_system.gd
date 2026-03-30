@@ -94,6 +94,8 @@ var water_y: float = 0.0
 var plane_center: Vector3 = Vector3.ZERO
 var plane_extent_x: float = 0.0
 var plane_extent_z: float = 0.0
+var _click_extent_x: float = 0.0
+var _click_extent_z: float = 0.0
 ## Tracks stop positions of ships currently sailing / waiting to depart
 var _ship_stop_positions: Array = []
 ## X marker nodes shown at each ship's landing spot
@@ -108,8 +110,12 @@ func _ready() -> void:
 	ship_plane.visible = false
 	plane_center = ship_plane.global_position
 	plane_y = plane_center.y
+	# Full basis length for ship positioning math
 	plane_extent_x = ship_plane.global_transform.basis.x.length()
 	plane_extent_z = ship_plane.global_transform.basis.z.length()
+	# Half extent = actual visual bounds of the BoxMesh (default 1x1x1, verts from -0.5 to 0.5)
+	_click_extent_x = plane_extent_x * 0.5
+	_click_extent_z = plane_extent_z * 0.5
 	var water = get_node_or_null(water_node_path)
 	if water:
 		water_y = water.global_position.y
@@ -160,6 +166,16 @@ func enter_attack_mode() -> void:
 	print("Attack mode ON - place up to %d ships!" % max_ships)
 
 
+## Called when all ships are placed — hides plane but keeps markers alive.
+func _finish_attack_mode() -> void:
+	is_attack_mode = false
+	_ships_placed = 0
+	_ship_stop_positions.clear()
+	if ship_plane:
+		ship_plane.visible = false
+		ship_plane.material_override = null
+
+
 ## Deactivates attack mode, hides the placement plane, and frees any
 ## pending flag markers that were not yet cleaned up by arriving ships.
 func exit_attack_mode() -> void:
@@ -184,20 +200,12 @@ func _input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			var hit = _get_mouse_hit()
 			if hit != Vector3.INF:
-				# Ignore click if too close to an existing ship landing spot
-				var too_close = false
-				for existing in _ship_stop_positions:
-					if hit.distance_to(existing) < SHIP_MIN_SEPARATION:
-						too_close = true
-						break
-				if too_close:
+				if _try_place_ship(hit):
 					get_viewport().set_input_as_handled()
-					return
-				_spawn_single_ship(hit)
-				_ships_placed += 1
-				get_viewport().set_input_as_handled()
-				if _ships_placed >= max_ships:
-					exit_attack_mode()
+					if _ships_placed >= max_ships:
+						_finish_attack_mode()
+				else:
+					get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			exit_attack_mode()
 			get_viewport().set_input_as_handled()
@@ -227,13 +235,14 @@ func _get_mouse_hit() -> Vector3:
 	var local_x = offset.dot(pb.x.normalized())
 	var local_z = offset.dot(pb.z.normalized())
 
-	if abs(local_x) <= plane_extent_x and abs(local_z) <= plane_extent_z:
+	if abs(local_x) <= _click_extent_x and abs(local_z) <= _click_extent_z:
 		return world_hit
 
 	return Vector3.INF
 
 
 ## Returns a stop position offset laterally so it doesn't overlap existing ships.
+## Returns Vector3.INF if no valid position found within shipPlane bounds.
 func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
 	var pos = desired
 	for attempt in range(10):
@@ -243,12 +252,38 @@ func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
 				overlap = true
 				break
 		if not overlap:
-			return pos
+			if _is_within_ship_plane(pos):
+				return pos
+			return Vector3.INF
 		# Alternate left / right, increasing distance each round
 		var side = 1 if (attempt % 2 == 0) else -1
 		var dist = ceil((attempt + 1) / 2.0) * SHIP_MIN_SEPARATION
 		pos = desired + lateral_dir * dist * side
-	return pos
+	return Vector3.INF
+
+
+## Checks if a world position is within the shipPlane bounds.
+func _is_within_ship_plane(pos: Vector3) -> bool:
+	var offset = pos - plane_center
+	var pb = ship_plane.global_transform.basis
+	var local_x = offset.dot(pb.x.normalized())
+	var local_z = offset.dot(pb.z.normalized())
+	return abs(local_x) <= _click_extent_x and abs(local_z) <= _click_extent_z
+
+
+## Attempts to place a ship at the clicked position. Returns true if successful.
+func _try_place_ship(hit: Vector3) -> bool:
+	# Check the hit is on shipPlane
+	if not _is_within_ship_plane(hit):
+		return false
+	# Check too close to existing ship
+	for existing in _ship_stop_positions:
+		if hit.distance_to(existing) < SHIP_MIN_SEPARATION:
+			return false
+	if not _spawn_single_ship(hit):
+		return false
+	_ships_placed += 1
+	return true
 
 
 ## Creates a pirate flag marker at the ship's landing position.
@@ -285,10 +320,10 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 ## Spawns a single ship at the edge of the placement zone and sails it to [target].
 ## Attaches rocking/bobbing tweens, places a flag marker, and schedules troop
 ## deployment when the ship arrives.
-func _spawn_single_ship(target: Vector3) -> void:
+func _spawn_single_ship(target: Vector3) -> bool:
 	if _ship_scene_res == null:
 		push_warning("AttackSystem: ship scene resource is null")
-		return
+		return false
 
 	var ship = _ship_scene_res.instantiate()
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
@@ -306,12 +341,14 @@ func _spawn_single_ship(target: Vector3) -> void:
 	var lateral_dir = pb.x.normalized()
 	var offset = target - plane_center
 	var lateral = offset.dot(lateral_dir)
-	lateral = clampf(lateral, -plane_extent_x, plane_extent_x)
+	lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
 	var stop_pos = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
 	stop_pos.y = plane_y
 
 	# Offset laterally so this ship doesn't land on top of an existing one
 	stop_pos = _get_adjusted_stop_pos(stop_pos, lateral_dir)
+	if stop_pos == Vector3.INF:
+		return false
 	_ship_stop_positions.append(stop_pos)
 
 	var spawn_pos = stop_pos + sail_dir * spawn_distance
@@ -363,6 +400,7 @@ func _spawn_single_ship(target: Vector3) -> void:
 		_deploy_troops_from_ship(arrived_pos, s_dir, ship_idx)
 	)
 	print("Ship %d/%d sailing to: %s" % [_ships_placed + 1, max_ships, stop_pos])
+	return true
 
 
 ## Deploys [troops_per_ship] troops from a ship that has arrived at [ship_pos].

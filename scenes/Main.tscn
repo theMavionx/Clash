@@ -135,6 +135,12 @@ create_ui = false
 [node name="AttackSystem" type="Node3D" parent="." unique_id=2124013103]
 script = ExtResource("5_vcsgt")
 
+[node name="BuildingSystem3" type="Node3D" parent="." unique_id=2087156778]
+script = ExtResource("4_cm0pq")
+grid_height = 5
+grid_plane_path = NodePath("../Island/shipPlane")
+create_ui = false
+
 [node name="Knight" parent="." unique_id=469445581 instance=ExtResource("6_nxtc6")]
 transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -1.2608033, 0.067779854, 2.6073277)
 visible = false

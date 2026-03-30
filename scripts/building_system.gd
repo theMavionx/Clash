@@ -139,6 +139,16 @@ var building_defs: Dictionary = {
 		"hp_levels": [1000, 1500, 2000],
 		"cost": {"gold": 100},
 	},
+	"flag": {
+		"name": "Flag",
+		"cells": Vector2i(2, 2),
+		"color": Color(0.3, 0.3, 0.3, 0.5),
+		"height": 0.4,
+		"scene": "res://Model/flag/pirate_flag_animated.glb",
+		"model_scale": 0.15,
+		"hp_levels": [500, 800, 1200],
+		"cost": {"gold": 50},
+	},
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -294,8 +304,11 @@ func _ready() -> void:
 		# Grid 2: only port allowed
 		allowed_buildings = PackedStringArray(["port"])
 	elif plane_name == "gridPlane":
-		# Grid 1: everything except port
-		blocked_buildings = PackedStringArray(["port"])
+		# Grid 1: everything except port and flag
+		blocked_buildings = PackedStringArray(["port", "flag"])
+	elif plane_name == "shipPlane":
+		# Ship plane: only flags allowed
+		allowed_buildings = PackedStringArray(["flag"])
 	if create_ui:
 		_create_ui()
 		_create_building_panel()
@@ -3200,14 +3213,8 @@ func _update_move_building() -> void:
 	local_pos.z += sz / 2.0
 	local_pos.y = 0
 	b["node"].position = local_pos
-	# Move skeletons with tombstone
-	if b.id == "tombstone" and b.has("skeletons"):
-		var tomb_world = b["node"].global_position
-		for skel in b["skeletons"]:
-			if is_instance_valid(skel):
-				var offset = skel.global_position - skel.tombstone_pos
-				skel.tombstone_pos = tomb_world
-				skel.global_position = tomb_world + offset
+	# Tombstone: skeletons stay at old position during drag.
+	# They will run to the new position only after _confirm_move().
 	# Validity indicator under the building
 	var valid = _can_place(gp, def.cells)
 	_update_move_indicator(local_pos, sx, sz, valid)
@@ -3246,6 +3253,12 @@ func _confirm_move() -> void:
 			grid[idx] = true
 	b["grid_pos"] = current_grid_pos
 	# b.node is already at the new position (moved by _update_move_building)
+	# Tombstone: tell skeletons to run to the new position
+	if b.id == "tombstone" and b.has("skeletons"):
+		var tomb_world = b["node"].global_position
+		for skel in b["skeletons"]:
+			if is_instance_valid(skel) and skel.has_method("relocate_to"):
+				skel.relocate_to(tomb_world)
 	# Sync with server
 	var net = get_node_or_null("/root/Net")
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
@@ -3266,14 +3279,12 @@ func _cancel_move(reselect: bool = true) -> void:
 		# Move building back to original position
 		if is_instance_valid(b.get("node", null)):
 			b["node"].position = _move_source_pos
-			# Move skeletons back with tombstone
+			# Tombstone: restore skeletons' tombstone_pos (they stay where they are)
 			if b.id == "tombstone" and b.has("skeletons"):
 				var tomb_world = b["node"].global_position
 				for skel in b["skeletons"]:
 					if is_instance_valid(skel):
-						var offset = skel.global_position - skel.tombstone_pos
 						skel.tombstone_pos = tomb_world
-						skel.global_position = tomb_world + offset
 	_end_move()
 	if reselect and b.size() > 0:
 		_select_building(b)
