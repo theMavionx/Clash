@@ -28,3 +28,7 @@ Error: listen EADDRINUSE: address already in use 0.0.0.0:4000
 [31mGET[0m /api/trading/stats [90m401 1ms[0m
 [31mGET[0m /api/trading/stats [90m401 9ms[0m
 [31mGET[0m /api/trading/stats [90m401 2ms[0m
+[31mGET[0m /api/trading/stats [90m401 67ms[0m
+[31mGET[0m /api/trading/stats [90m401 2ms[0m
+[31mGET[0m /api/trading/stats [90m401 175ms[0m
+[31mGET[0m /api/trading/stats [90m401 1ms[0m

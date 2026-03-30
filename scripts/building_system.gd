@@ -2533,7 +2533,14 @@ func _buy_ship() -> void:
 	owned_ships += 1
 	_refresh_port_panel()
 	_spawn_port_ship()
-
+	
+	var bridge = get_node_or_null("/root/Bridge")
+	if bridge:
+		bridge.send_to_react("resources", {
+			"gold": resources.get("gold", 0),
+			"wood": resources.get("wood", 0),
+			"ore": resources.get("ore", 0),
+		})
 
 func _animate_main_ship() -> void:
 	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)

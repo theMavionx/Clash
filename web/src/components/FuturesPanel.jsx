@@ -9,10 +9,10 @@ import OrderBook from './OrderBook';
 import TradeHistory from './TradeHistory';
 
 const TABS = [
-  { id: 'Trade', icon: '📈', label: 'Trade' },
-  { id: 'Positions', icon: '💼', label: 'Positions' },
-  { id: 'Orders', icon: '📋', label: 'Orders' },
-  { id: 'Account', icon: '👤', label: 'Account' },
+  { id: 'Trade', icon: <svg className="tab-icon-trade" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path className="trend-line" d="m19 9-5 5-4-4-3 3"/></svg>, label: 'Trade' },
+  { id: 'Positions', icon: <svg className="tab-icon-positions" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect className="briefcase-body" width="20" height="14" x="2" y="7" rx="2" ry="2"/><path className="handle" d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>, label: 'Positions' },
+  { id: 'Orders', icon: <svg className="tab-icon-orders" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line className="order-line" x1="8" y1="6" x2="21" y2="6"/><line className="order-line" x1="8" y1="12" x2="21" y2="12"/><line className="order-line" x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>, label: 'Orders' },
+  { id: 'Account', icon: <svg className="tab-icon-account" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path className="avatar-body" d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle className="avatar-head" cx="12" cy="7" r="4"/></svg>, label: 'Account' },
 ];
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
@@ -405,7 +405,6 @@ function FuturesPanel() {
           <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
             <div style={{flex: '0 0 55%', maxWidth: '55%', position: 'relative', borderRight: '3px solid #d4c8b0'}}>
               <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
-              <button style={S.fsBtn} onClick={() => setFullscreen(false)}>⊟</button>
             </div>
             <div style={{flex: '0 0 160px', borderRight: '3px solid #d4c8b0', overflow: 'hidden'}}>
               <OrderBook symbol={symbol} />
@@ -422,7 +421,6 @@ function FuturesPanel() {
       <>
         <div style={{...S.chartArea, position: 'relative'}}>
           <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
-          <button style={S.fsBtn} onClick={() => setFullscreen(true)}>⊞</button>
         </div>
         {renderTradeControls()}
       </>
@@ -434,7 +432,9 @@ function FuturesPanel() {
     if (!positions.length) {
       return (
         <div style={S.empty}>
-          <div style={{fontSize: 48, filter: 'grayscale(100%)'}}>💼</div>
+          <div style={{opacity: 0.3, color: '#5C3A21'}}>
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+          </div>
           <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Positions</div>
         </div>
       );
@@ -522,7 +522,9 @@ function FuturesPanel() {
     if (!orders.length) {
       return (
         <div style={S.empty}>
-          <div style={{fontSize: 48, filter: 'grayscale(100%)'}}>📋</div>
+          <div style={{opacity: 0.3, color: '#5C3A21'}}>
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </div>
           <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Orders</div>
         </div>
       );
@@ -695,16 +697,25 @@ function FuturesPanel() {
             {TABS.map(t => {
               const active = activeTab === t.id;
               return (
-                <button key={t.id} onClick={() => setActiveTab(t.id)} style={active ? S.tabActive : S.tabInactive}>
-                  <span style={{fontSize: 16}}>{t.icon}</span>
+                <button key={t.id} onClick={() => setActiveTab(t.id)} className={`tab-btn ${active ? 'active' : ''}`} style={active ? S.tabActive : S.tabInactive}>
+                  {t.icon}
                   {active && <span style={{fontSize: 14, fontWeight: 800}}>{t.label}</span>}
                 </button>
               );
             })}
           </div>
-          <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <div style={{display: 'flex', gap: 10, alignItems: 'center'}}>
+            <button data-nodrag onClick={() => setFullscreen(!fullscreen)} style={S.headerBtn} title={fullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}>
+              {fullscreen ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              )}
+            </button>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
         </div>
         <div className="futures-panel-body" style={S.body}>
           <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%'}}>
@@ -715,7 +726,9 @@ function FuturesPanel() {
         {/* Gold earned notification */}
         {goldEarned && (
           <div style={S.goldPopup}>
-            <span style={S.goldIcon}>🪙</span>
+            <div style={{...S.goldIcon, color: '#FFD700'}}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            </div>
             <span style={S.goldText}>+{goldEarned.amount.toLocaleString()} Gold</span>
             <span style={S.goldReason}>{goldEarned.reason}</span>
             <button style={S.goldClose} onClick={() => clearGoldEarned()}>✕</button>
@@ -736,6 +749,62 @@ const animCSS = `
   .futures-panel-body input[type=number] { -moz-appearance: textfield; }
   @keyframes slideDown { from { opacity:0; transform:scaleY(0.95); } to { opacity:1; transform:scaleY(1); } }
   @keyframes fadeIn { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:translateY(0); } }
+
+  /* Tab Icon Animations */
+  @keyframes drawLine {
+    0% { stroke-dashoffset: 20; }
+    100% { stroke-dashoffset: 0; }
+  }
+  .tab-icon-trade .trend-line { stroke-dasharray: 20; stroke-dashoffset: 0; }
+  .tab-btn:hover .tab-icon-trade .trend-line, .tab-btn.active .tab-icon-trade .trend-line {
+    animation: drawLine 0.6s ease-out forwards;
+  }
+  
+  @keyframes briefcase-pop {
+    0%, 100% { transform: scale(1) translateY(0); }
+    50% { transform: scale(1.1, 0.9) translateY(2px); }
+  }
+  @keyframes handle-pop {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-3px); }
+  }
+  .tab-icon-positions .handle { transform-origin: center; }
+  .tab-icon-positions .briefcase-body { transform-origin: bottom center; }
+  .tab-btn:hover .tab-icon-positions .handle, .tab-btn.active .tab-icon-positions .handle {
+    animation: handle-pop 0.5s ease;
+  }
+  .tab-btn:hover .tab-icon-positions .briefcase-body, .tab-btn.active .tab-icon-positions .briefcase-body {
+    animation: briefcase-pop 0.5s ease;
+  }
+
+  @keyframes order-slide {
+    0% { transform: translateX(-6px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+  .tab-icon-orders .order-line { opacity: 1; }
+  .tab-btn:hover .tab-icon-orders .order-line, .tab-btn.active .tab-icon-orders .order-line {
+    animation: order-slide 0.4s both;
+  }
+  .tab-btn:hover .tab-icon-orders .order-line:nth-child(2), .tab-btn.active .tab-icon-orders .order-line:nth-child(2) { animation-delay: 0.1s; }
+  .tab-btn:hover .tab-icon-orders .order-line:nth-child(3), .tab-btn.active .tab-icon-orders .order-line:nth-child(3) { animation-delay: 0.2s; }
+  
+  @keyframes head-bob {
+    0%, 100% { transform: translateY(0) rotate(0); }
+    25% { transform: translateY(-2px) rotate(-10deg); }
+    75% { transform: translateY(-2px) rotate(10deg); }
+  }
+  @keyframes body-shrug {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.9); }
+  }
+  .tab-icon-account .avatar-head { transform-origin: center 7px; }
+  .tab-icon-account .avatar-body { transform-origin: bottom center; }
+  .tab-btn:hover .tab-icon-account .avatar-head, .tab-btn.active .tab-icon-account .avatar-head {
+    animation: head-bob 0.6s ease-in-out;
+  }
+  .tab-btn:hover .tab-icon-account .avatar-body, .tab-btn.active .tab-icon-account .avatar-body {
+    animation: body-shrug 0.6s ease-in-out;
+  }
 `;
 
 const S = {
@@ -803,13 +872,10 @@ const S = {
     border: '4px solid #d4c8b0', overflow: 'hidden', boxShadow: 'inset 0 3px 6px rgba(0,0,0,0.1)',
     position: 'relative',
   },
-  fsBtn: {
-    position: 'absolute', top: 6, right: 6,
-    width: 26, height: 26, borderRadius: 6,
-    background: 'rgba(92,58,33,0.7)', border: 'none', color: '#fff',
-    fontSize: 16, fontWeight: 900, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 2,
+  headerBtn: {
+    width: 32, height: 32, borderRadius: '50%', background: '#1E88E5', border: '3px solid #fff',
+    color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
   },
   symbolBtn: {
     display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
@@ -951,7 +1017,7 @@ const S = {
     boxShadow: '0 6px 20px rgba(255,160,0,0.4)',
     animation: 'fadeIn 0.3s ease-out',
   },
-  goldIcon: { fontSize: 28 },
+  goldIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center' },
   goldText: { fontSize: 18, fontWeight: 900, color: '#5C3A21', textShadow: '0 1px 0 rgba(255,255,255,0.5)' },
   goldReason: { fontSize: 11, fontWeight: 700, color: '#7B5B00', flex: 1, textAlign: 'right' },
   // Bottom panel (fullscreen)

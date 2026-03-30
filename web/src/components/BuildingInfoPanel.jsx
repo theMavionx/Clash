@@ -14,6 +14,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => sendToGodot('upgrade_building'), [sendToGodot]);
+  const handleBuyShip = useCallback(() => sendToGodot('buy_ship'), [sendToGodot]);
 
   if (!building || building.is_barracks) return null;
 
@@ -68,6 +69,15 @@ function BuildingInfoPanel({ onOpenTroops }) {
               onClick={onOpenTroops}
             >
               Troops
+            </button>
+          )}
+
+          {building.id === 'port' && !building.is_enemy && (
+            <button
+              style={styles.troopsBtn}
+              onClick={handleBuyShip}
+            >
+              Buy Ship
             </button>
           )}
         </div>
