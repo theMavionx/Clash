@@ -122,6 +122,7 @@ var building_defs: Dictionary = {
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500],
 		"cost": {"gold": 500, "wood": 400},
+		"hp_bar_height": 0.5,
 		"tower_unit": {
 			"model": "res://Model/Characters/Model/Ranger.glb",
 			"scale": 0.07,
@@ -2350,7 +2351,7 @@ func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
 	fill.position.z = -0.001
 	bar.add_child(fill)
 	var model_scale = def.get("model_scale", 0.2)
-	var bar_height = model_scale * 1.5 + 0.05
+	var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 	bar.global_position = building.global_position + Vector3(0, bar_height, 0)
 	bar.visible = false
 	return {"bar": bar, "fill": fill}
@@ -2377,7 +2378,7 @@ func _update_building_hp_bars() -> void:
 		b.hp_bar.visible = true
 		var def = building_defs.get(b.id, {})
 		var model_scale = def.get("model_scale", 0.2)
-		var bar_height = model_scale * 1.5 + 0.05
+		var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 		b.hp_bar.global_position = b.node.global_position + Vector3(0, bar_height, 0)
 		if update_billboard and cam:
 			var dir = cam.global_position - b.hp_bar.global_position
