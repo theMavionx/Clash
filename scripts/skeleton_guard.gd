@@ -19,12 +19,14 @@ const ANIM_FILES = [
 ]
 
 var detection_radius: float = 1.0
-var patrol_radius: float = 0.15
+var patrol_radius: float = 0.35
+var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
 var move_speed: float = 0.45
 var attack_range: float = 0.15
 var separation_radius: float = 0.15
 var separation_force: float = 0.4
-var building_push_radius: float = 0.12
+var building_push_radius: float = 0.18  ## push-away zone around any building center
+var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombstone
 
 var hp: int = 350
 var max_hp: int = 350
@@ -33,7 +35,7 @@ var atk_speed: float = 0.8
 
 var tombstone_pos: Vector3 = Vector3.ZERO
 
-enum State { IDLE, PATROL, CHASE, ATTACK, VICTORY }
+enum State { IDLE, PATROL, CHASE, ATTACK, VICTORY, RELOCATE }
 var state: State = State.IDLE
 
 var _patrol_target: Vector3 = Vector3.ZERO
@@ -105,6 +107,8 @@ func _process(delta: float) -> void:
 			_do_attack(delta)
 		State.VICTORY:
 			pass
+		State.RELOCATE:
+			_do_relocate(delta)
 
 
 # ── Idle: stand for a bit, then pick patrol target ────────────
@@ -132,11 +136,51 @@ func _do_idle(delta: float) -> void:
 		_pick_patrol_target()
 
 
-# ── Patrol: walk to random point near tombstone ───────────────
+# ── Relocate: run to new tombstone position ───────────────────
+
+## Called when the tombstone is moved. The skeleton will run to
+## the new position instead of teleporting.
+func relocate_to(new_tombstone_pos: Vector3) -> void:
+	tombstone_pos = new_tombstone_pos
+	state = State.RELOCATE
+	if anim_player and anim_player.has_animation("Running_A"):
+		anim_player.play("Running_A")
+
+
+func _do_relocate(delta: float) -> void:
+	# Navigate to a point BESIDE the tombstone, not its center
+	var to_tomb = tombstone_pos - global_position
+	to_tomb.y = 0
+	var dist = to_tomb.length()
+	# Arrived near the tombstone area — switch to idle / patrol
+	if dist < patrol_inner_radius + 0.04:
+		_pick_idle_wait()
+		return
+	var dir = to_tomb.normalized()
+	# Stop if another skeleton is directly ahead
+	if _is_skeleton_ahead(dir):
+		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
+			anim_player.play("Idle_A")
+		return
+	# Steer around obstacles (tombstone, buildings)
+	var avoid = _steer_around_obstacles(dir)
+	var final_dir = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
+	look_at(global_position + final_dir, Vector3.UP)
+	rotate_y(PI)
+	if anim_player and anim_player.current_animation != "Running_A" and anim_player.has_animation("Running_A"):
+		anim_player.play("Running_A")
+	var move_vec = final_dir * move_speed * delta
+	move_vec += _compute_separation(final_dir, delta)
+	move_vec += _compute_building_avoidance(delta)
+	global_position += move_vec
+
+
+# ── Patrol: walk to random point on a ring around tombstone ───
 
 func _pick_patrol_target() -> void:
 	var angle = randf() * TAU
-	var dist = randf_range(0.05, patrol_radius)
+	# Pick distance on a ring OUTSIDE the building body
+	var dist = randf_range(patrol_inner_radius, patrol_radius)
 	_patrol_target = tombstone_pos + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
 	_patrol_target.y = global_position.y
 	state = State.PATROL
@@ -162,10 +206,20 @@ func _do_patrol(delta: float) -> void:
 		return
 
 	var dir = diff.normalized()
-	look_at(global_position + dir, Vector3.UP)
+	# Stop if another skeleton is directly ahead
+	if _is_skeleton_ahead(dir):
+		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
+			anim_player.play("Idle_A")
+		return
+	# Steer around obstacles (tombstone, buildings)
+	var avoid = _steer_around_obstacles(dir)
+	var final_dir = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
+	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
-	var move_vec = dir * move_speed * 0.5 * delta
-	move_vec += _compute_separation(dir, delta)
+	if anim_player and anim_player.current_animation != "Walking_A" and anim_player.has_animation("Walking_A"):
+		anim_player.play("Walking_A")
+	var move_vec = final_dir * move_speed * 0.5 * delta
+	move_vec += _compute_separation(final_dir, delta)
 	move_vec += _compute_building_avoidance(delta)
 	global_position += move_vec
 
@@ -332,29 +386,6 @@ func _compute_separation(move_dir: Vector3, delta: float) -> Vector3:
 
 	var sep = Vector3.ZERO
 	var steer = Vector3.ZERO
-	var avoidance_range = separation_radius * 2.0
-
-	# Push away from other skeleton guards
-	for other in _get_guards_cached():
-		if other == self or not is_instance_valid(other):
-			continue
-		var to_other = other.global_position - global_position
-		to_other.y = 0
-		var d = to_other.length()
-		if d > avoidance_range or d < 0.001:
-			continue
-		if d < separation_radius:
-			sep += (global_position - other.global_position).normalized() * (separation_radius - d) / separation_radius
-		# Avoidance steering
-		var dot = to_other.normalized().dot(move_dir)
-		if dot > 0.3:
-			var lateral = Vector3.UP.cross(move_dir).normalized()
-			var side = to_other.normalized().dot(lateral)
-			var strength = (1.0 - d / avoidance_range) * 0.3 * delta * 3.0
-			if side >= 0:
-				steer -= lateral * strength
-			else:
-				steer += lateral * strength
 
 	# Also push away from enemy troops so they don't overlap
 	for other in BaseTroop._get_troops_cached():
@@ -377,8 +408,71 @@ func _compute_building_avoidance(delta: float) -> Vector3:
 		to_me.y = 0
 		var d = to_me.length()
 		if d > 0.001 and d < building_push_radius:
-			push += to_me.normalized() * (building_push_radius - d) / building_push_radius
-	return push * separation_force * delta * 3.0
+			var strength = (building_push_radius - d) / building_push_radius
+			push += to_me.normalized() * strength * strength  # quadratic falloff for stronger close push
+	# Extra strong push from own tombstone
+	var to_me_tomb = global_position - tombstone_pos
+	to_me_tomb.y = 0
+	var dt = to_me_tomb.length()
+	if dt > 0.001 and dt < tombstone_avoid_radius:
+		var strength = (tombstone_avoid_radius - dt) / tombstone_avoid_radius
+		push += to_me_tomb.normalized() * strength * 2.0
+	return push * separation_force * delta * 4.0
+
+
+## Lateral steering to go around nearby obstacles (tombstone, buildings, other skeletons).
+func _steer_around_obstacles(move_dir: Vector3) -> Vector3:
+	var steer = Vector3.ZERO
+	var lateral = Vector3.UP.cross(move_dir)
+	if lateral.length() < 0.001:
+		return Vector3.ZERO
+	lateral = lateral.normalized()
+
+	# Helper: steer around a single point obstacle
+	# avoid_radius — how far away we start steering
+	var _steer_point = func(obstacle_pos: Vector3, avoid_radius: float, weight: float) -> Vector3:
+		var to_obs = obstacle_pos - global_position
+		to_obs.y = 0
+		var d = to_obs.length()
+		if d < 0.001 or d > avoid_radius:
+			return Vector3.ZERO
+		var dot = to_obs.normalized().dot(move_dir)
+		# Only steer if we're heading toward the obstacle
+		if dot < 0.15:
+			return Vector3.ZERO
+		var side = to_obs.normalized().dot(lateral)
+		var strength = dot * (1.0 - d / avoid_radius) * weight
+		if side >= 0:
+			return -lateral * strength
+		else:
+			return lateral * strength
+
+	# 1) Own tombstone — strongest avoidance
+	steer += _steer_point.call(tombstone_pos, tombstone_avoid_radius * 2.5, 1.8)
+
+	# 2) Other buildings in range
+	for bpos in _get_buildings_cached():
+		steer += _steer_point.call(bpos, building_push_radius * 2.0, 1.2)
+
+	return steer
+
+
+## Returns true if another skeleton guard is directly ahead within stop distance.
+func _is_skeleton_ahead(move_dir: Vector3) -> bool:
+	const AHEAD_DIST = 0.12  # how close before we stop
+	const AHEAD_DOT = 0.5    # how "in front" they need to be (cos of ~60°)
+	for other in _get_guards_cached():
+		if other == self or not is_instance_valid(other):
+			continue
+		var to_other = other.global_position - global_position
+		to_other.y = 0
+		var d = to_other.length()
+		if d < 0.001 or d > AHEAD_DIST:
+			continue
+		# Check if the other skeleton is in our movement direction
+		if to_other.normalized().dot(move_dir) > AHEAD_DOT:
+			return true
+	return false
 
 
 # ── Animations ────────────────────────────────────────────────

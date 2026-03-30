@@ -122,6 +122,7 @@ var building_defs: Dictionary = {
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500],
 		"cost": {"gold": 500, "wood": 400},
+		"hp_bar_height": 0.5,
 		"tower_unit": {
 			"model": "res://Model/Characters/Model/Ranger.glb",
 			"scale": 0.07,
@@ -138,6 +139,16 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"hp_levels": [1000, 1500, 2000],
 		"cost": {"gold": 100},
+	},
+	"flag": {
+		"name": "Flag",
+		"cells": Vector2i(2, 2),
+		"color": Color(0.3, 0.3, 0.3, 0.5),
+		"height": 0.4,
+		"scene": "res://Model/flag/pirate_flag_animated.glb",
+		"model_scale": 0.15,
+		"hp_levels": [500, 800, 1200],
+		"cost": {"gold": 50},
 	},
 }
 
@@ -221,6 +232,26 @@ var return_button: Button
 var enemy_label: Label
 var find_button: Button
 
+# ── Ship cannon ───────────────────────────────────────────────
+var _ship_cannon_mode: bool = false
+var _ship_cannon_label: Label = null
+var _ship_cannonballs: Array = []  # Array of {node, target_bdata, target_pos}
+const SHIP_CANNON_DAMAGE: int = 500
+const SHIP_CANNON_SPEED: float = 6.0
+const SHIP_CANNON_HIT_SQ: float = 0.03 * 0.03
+const SHIP_CANNON_RELOAD: float = 1.0
+const SHIP_FLASH_SCALE: float = 0.25
+const SHIP_FLASH_DURATION: float = 0.12
+const SHIP_FLASH_FRAMES: Array[String] = [
+	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png",
+	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png",
+]
+var _ship_cannon_cooldown: float = 0.0
+var _attack_ship_wave_tweens: Array = []
+var _ship_flash: MeshInstance3D = null
+var _ship_flash_timer: float = 0.0
+var _ship_flash_textures: Array = []
+
 # ── Port / Ships ─────────────────────────────────────────────
 var port_panel: PanelContainer
 var port_vbox: VBoxContainer
@@ -294,8 +325,11 @@ func _ready() -> void:
 		# Grid 2: only port allowed
 		allowed_buildings = PackedStringArray(["port"])
 	elif plane_name == "gridPlane":
-		# Grid 1: everything except port
-		blocked_buildings = PackedStringArray(["port"])
+		# Grid 1: everything except port and flag
+		blocked_buildings = PackedStringArray(["port", "flag"])
+	elif plane_name == "shipPlane":
+		# Ship plane: only flags allowed
+		allowed_buildings = PackedStringArray(["flag"])
 	if create_ui:
 		_create_ui()
 		_create_building_panel()
@@ -347,6 +381,12 @@ func _process(_delta: float) -> void:
 				building_panel_hp_bar.max_value = bmax
 				building_panel_hp_bar.value = bhp
 	_update_building_hp_bars()
+	if _ship_cannon_cooldown > 0:
+		_ship_cannon_cooldown -= _delta
+	if _ship_flash_timer > 0:
+		_update_ship_flash(_delta)
+	if _ship_cannonballs.size() > 0:
+		_update_ship_cannonballs(_delta)
 
 	# Resource production tick
 	if not is_viewing_enemy:
@@ -1538,6 +1578,34 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 		return
 
+	# Ship cannon mode (enemy island only)
+	if is_viewing_enemy and event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if _check_ship_cannon_click(event.position):
+				# Click on ship — toggle cannon mode
+				if _ship_cannon_mode:
+					_exit_ship_cannon_mode()
+				else:
+					_enter_ship_cannon_mode()
+				get_viewport().set_input_as_handled()
+				return
+			elif _ship_cannon_mode:
+				# Click anywhere else in cannon mode — cancel
+				_exit_ship_cannon_mode()
+				get_viewport().set_input_as_handled()
+				return
+		if event.button_index == MOUSE_BUTTON_RIGHT and _ship_cannon_mode:
+			# Right click — fire at building (search ALL building systems)
+			for bs in get_tree().get_nodes_in_group("building_systems"):
+				var local_hit = bs._get_mouse_local()
+				if local_hit != Vector3.INF:
+					var gp = bs._local_to_grid(local_hit)
+					var bdata = bs._find_building_at(gp)
+					if bdata.size() > 0:
+						_fire_ship_cannon(bdata)
+						get_viewport().set_input_as_handled()
+						return
+
 	# Click on placed building
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_hit = _get_mouse_local()
@@ -2337,7 +2405,7 @@ func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
 	fill.position.z = -0.001
 	bar.add_child(fill)
 	var model_scale = def.get("model_scale", 0.2)
-	var bar_height = model_scale * 1.5 + 0.05
+	var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 	bar.global_position = building.global_position + Vector3(0, bar_height, 0)
 	bar.visible = false
 	return {"bar": bar, "fill": fill}
@@ -2364,7 +2432,7 @@ func _update_building_hp_bars() -> void:
 		b.hp_bar.visible = true
 		var def = building_defs.get(b.id, {})
 		var model_scale = def.get("model_scale", 0.2)
-		var bar_height = model_scale * 1.5 + 0.05
+		var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 		b.hp_bar.global_position = b.node.global_position + Vector3(0, bar_height, 0)
 		if update_billboard and cam:
 			var dir = cam.global_position - b.hp_bar.global_position
@@ -2543,20 +2611,22 @@ func _buy_ship() -> void:
 		})
 
 func _animate_main_ship() -> void:
-	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
-	if not main_ship:
-		return
-	# Hidden by default — only visible when attacking enemy
-	main_ship.visible = false
-	var rock = create_tween().set_loops()
-	rock.tween_property(main_ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	rock.tween_property(main_ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	var bob = create_tween().set_loops()
-	bob.tween_property(main_ship, "position:y", main_ship.position.y + 0.04, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	bob.tween_property(main_ship, "position:y", main_ship.position.y - 0.04, 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	var pitch = create_tween().set_loops()
-	pitch.tween_property(main_ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	pitch.tween_property(main_ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	var _root = get_tree().root
+	var attack_ship = _root.find_child("MainShipAttack", true, false)
+	var base_ship = _root.find_child("MainShipBase", true, false)
+	# Attack ship hidden by default — shown only when attacking enemy
+	if attack_ship:
+		attack_ship.visible = false
+		_start_attack_ship_waves(attack_ship)
+	# Base ship visible by default — shown only on own base
+	if base_ship:
+		base_ship.visible = true
+		var rock2 = create_tween().set_loops()
+		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		var pitch2 = create_tween().set_loops()
+		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 
 func _spawn_port_ship() -> void:
@@ -2925,6 +2995,15 @@ func _hide_all_collect_icons() -> void:
 
 
 func _switch_to_enemy_island() -> void:
+	# Instantly switch ships when button pressed
+	var _r = get_tree().root
+	var _atk = _r.find_child("MainShipAttack", true, false)
+	var _base = _r.find_child("MainShipBase", true, false)
+	if _atk:
+		_atk.visible = true
+	if _base:
+		_base.visible = false
+
 	# Hide collect icons before switching
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		bs._hide_all_collect_icons()
@@ -3002,29 +3081,209 @@ func _switch_to_enemy_island() -> void:
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 
-	# Show MainShip when attacking enemy
-	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
-	if main_ship:
-		main_ship.visible = true
-
 	# Auto enter attack mode
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
 		attack_system.enter_attack_mode()
 
 
+func _start_attack_ship_waves(ship: Node3D) -> void:
+	_stop_attack_ship_waves()
+	var rock = create_tween().set_loops()
+	rock.tween_property(ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	rock.tween_property(ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	var pitch = create_tween().set_loops()
+	pitch.tween_property(ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch.tween_property(ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	_attack_ship_wave_tweens = [rock, pitch]
+
+
+func _stop_attack_ship_waves() -> void:
+	for tw in _attack_ship_wave_tweens:
+		if tw and tw.is_valid():
+			tw.kill()
+	_attack_ship_wave_tweens.clear()
+
+
+func _spawn_ship_flash(pos: Vector3) -> void:
+	# Load textures once
+	if _ship_flash_textures.is_empty():
+		for path in SHIP_FLASH_FRAMES:
+			var tex = load(path)
+			if tex:
+				_ship_flash_textures.append(tex)
+	# Create or reuse flash quad
+	if not _ship_flash or not is_instance_valid(_ship_flash):
+		_ship_flash = MeshInstance3D.new()
+		var quad = QuadMesh.new()
+		quad.size = Vector2(SHIP_FLASH_SCALE, SHIP_FLASH_SCALE)
+		quad.center_offset = Vector3(SHIP_FLASH_SCALE * 0.2, 0.0, 0.0)
+		_ship_flash.mesh = quad
+		var mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		mat.no_depth_test = true
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		if _ship_flash_textures.size() > 0:
+			mat.albedo_texture = _ship_flash_textures[0]
+		mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
+		_ship_flash.material_override = mat
+		get_tree().root.add_child(_ship_flash)
+	_ship_flash.global_position = pos
+	_ship_flash.visible = true
+	_ship_flash_timer = SHIP_FLASH_DURATION
+	var fmat = _ship_flash.material_override as StandardMaterial3D
+	fmat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
+	if _ship_flash_textures.size() > 0:
+		fmat.albedo_texture = _ship_flash_textures[0]
+
+
+func _update_ship_flash(delta: float) -> void:
+	_ship_flash_timer -= delta
+	if _ship_flash_timer <= 0:
+		if _ship_flash and is_instance_valid(_ship_flash):
+			_ship_flash.visible = false
+		return
+	var progress = 1.0 - clampf(_ship_flash_timer / SHIP_FLASH_DURATION, 0.0, 1.0)
+	# Swap texture frame
+	var frame_idx = clampi(int(progress * _ship_flash_textures.size()), 0, _ship_flash_textures.size() - 1)
+	var fmat = _ship_flash.material_override as StandardMaterial3D
+	if frame_idx < _ship_flash_textures.size():
+		fmat.albedo_texture = _ship_flash_textures[frame_idx]
+	# Fade out in last 40%
+	if progress > 0.6:
+		var fade = (1.0 - progress) / 0.4
+		fmat.albedo_color = Color(1.5 * fade, 1.2 * fade, 0.8 * fade, fade)
+
+
+func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
+	var camera = get_viewport().get_camera_3d()
+	if not camera:
+		return false
+	var ship = get_tree().root.find_child("MainShipAttack", true, false)
+	if not ship or not ship.visible:
+		return false
+	var screen_pos = camera.unproject_position(ship.global_position)
+	return mouse_pos.distance_to(screen_pos) < 80.0
+
+
+func _enter_ship_cannon_mode() -> void:
+	_ship_cannon_mode = true
+	# Exit attack mode so it doesn't consume right-clicks
+	var attack_system = get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("exit_attack_mode"):
+		attack_system.exit_attack_mode()
+	if canvas and not _ship_cannon_label:
+		_ship_cannon_label = Label.new()
+		_ship_cannon_label.text = "Cannon mode — RMB on building to fire  |  LMB to cancel"
+		_ship_cannon_label.anchor_left = 0.5
+		_ship_cannon_label.anchor_right = 0.5
+		_ship_cannon_label.anchor_top = 0.0
+		_ship_cannon_label.anchor_bottom = 0.0
+		_ship_cannon_label.offset_left = -300
+		_ship_cannon_label.offset_right = 300
+		_ship_cannon_label.offset_top = 20
+		_ship_cannon_label.offset_bottom = 55
+		_ship_cannon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_ship_cannon_label.add_theme_font_size_override("font_size", 20)
+		_ship_cannon_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+		canvas.add_child(_ship_cannon_label)
+
+
+func _exit_ship_cannon_mode() -> void:
+	_ship_cannon_mode = false
+	if _ship_cannon_label and is_instance_valid(_ship_cannon_label):
+		_ship_cannon_label.queue_free()
+		_ship_cannon_label = null
+
+
+func _fire_ship_cannon(bdata: Dictionary) -> void:
+	if _ship_cannon_cooldown > 0:
+		return
+	var ship = get_tree().root.find_child("MainShipAttack", true, false)
+	if not ship:
+		return
+	var bnode = bdata.get("node", null) as Node3D
+	if not bnode or not is_instance_valid(bnode):
+		return
+	_ship_cannon_cooldown = SHIP_CANNON_RELOAD
+	var ball = MeshInstance3D.new()
+	var sphere = SphereMesh.new()
+	sphere.radius = 0.03
+	sphere.height = 0.06
+	ball.mesh = sphere
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.05, 0.05, 0.05)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ball.material_override = mat
+	# Add to root so global_position works correctly
+	get_tree().root.add_child(ball)
+	ball.global_position = ship.global_position + Vector3(0, 0.15, 0)
+	var tp: Vector3 = bnode.global_position + Vector3(0, 0.15, 0)
+	_ship_cannonballs.append({"node": ball, "bdata": bdata, "target_pos": tp})
+	# Muzzle flash slightly toward target
+	var flash_dir = (tp - ball.global_position).normalized()
+	_spawn_ship_flash(ball.global_position + flash_dir * 0.225)
+	# Recoil — stop waves, kickback, restart waves
+	_stop_attack_ship_waves()
+	var recoil_dir = (ship.global_position - tp).normalized()
+	recoil_dir.y = 0
+	var orig_pos = ship.position
+	var recoil_pos = orig_pos + recoil_dir * 0.025
+	var tw = create_tween()
+	tw.tween_property(ship, "position", recoil_pos, 0.12).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(ship, "position", orig_pos, 0.4).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	tw.tween_callback(_start_attack_ship_waves.bind(ship))
+
+
+func _update_ship_cannonballs(delta: float) -> void:
+	var i = _ship_cannonballs.size() - 1
+	while i >= 0:
+		var c = _ship_cannonballs[i]
+		if not is_instance_valid(c.node):
+			_ship_cannonballs.remove_at(i)
+			i -= 1
+			continue
+		c.node.global_position = c.node.global_position.move_toward(c.target_pos, SHIP_CANNON_SPEED * delta)
+		var diff = c.node.global_position - c.target_pos
+		if diff.length_squared() < SHIP_CANNON_HIT_SQ:
+			var bdata: Dictionary = c.bdata
+			bdata["hp"] = max(0, bdata.get("hp", 0) - SHIP_CANNON_DAMAGE)
+			if bdata["hp"] <= 0:
+				for bs in get_tree().get_nodes_in_group("building_systems"):
+					if bdata in bs.placed_buildings:
+						bs.remove_building(bdata)
+						break
+			c.node.queue_free()
+			_ship_cannonballs.remove_at(i)
+		i -= 1
+
+
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
-	# Hide MainShip when returning home
-	var main_ship = get_tree().current_scene.find_child("MainShip", true, false)
-	if main_ship:
-		main_ship.visible = false
+	_exit_ship_cannon_mode()
+	# Hide attack ship, show base ship when returning home
+	var _r2 = get_tree().root
+	var attack_ship2 = _r2.find_child("MainShipAttack", true, false)
+	var base_ship2 = _r2.find_child("MainShipBase", true, false)
+	if attack_ship2:
+		attack_ship2.visible = false
+	if base_ship2:
+		base_ship2.visible = true
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		bs.is_viewing_enemy = false
 	var bridge = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("enemy_mode", {"active": false})
+
+	# Free any in-flight cannonballs
+	for c in _ship_cannonballs:
+		if is_instance_valid(c.get("node")):
+			c.node.queue_free()
+	_ship_cannonballs.clear()
 
 	# Kill all spawned troops, ships, and skeleton guards immediately
 	for troop in get_tree().get_nodes_in_group("troops"):
@@ -3207,14 +3466,8 @@ func _update_move_building() -> void:
 	local_pos.z += sz / 2.0
 	local_pos.y = 0
 	b["node"].position = local_pos
-	# Move skeletons with tombstone
-	if b.id == "tombstone" and b.has("skeletons"):
-		var tomb_world = b["node"].global_position
-		for skel in b["skeletons"]:
-			if is_instance_valid(skel):
-				var offset = skel.global_position - skel.tombstone_pos
-				skel.tombstone_pos = tomb_world
-				skel.global_position = tomb_world + offset
+	# Tombstone: skeletons stay at old position during drag.
+	# They will run to the new position only after _confirm_move().
 	# Validity indicator under the building
 	var valid = _can_place(gp, def.cells)
 	_update_move_indicator(local_pos, sx, sz, valid)
@@ -3253,6 +3506,12 @@ func _confirm_move() -> void:
 			grid[idx] = true
 	b["grid_pos"] = current_grid_pos
 	# b.node is already at the new position (moved by _update_move_building)
+	# Tombstone: tell skeletons to run to the new position
+	if b.id == "tombstone" and b.has("skeletons"):
+		var tomb_world = b["node"].global_position
+		for skel in b["skeletons"]:
+			if is_instance_valid(skel) and skel.has_method("relocate_to"):
+				skel.relocate_to(tomb_world)
 	# Sync with server
 	var net = get_node_or_null("/root/Net")
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
@@ -3273,14 +3532,12 @@ func _cancel_move(reselect: bool = true) -> void:
 		# Move building back to original position
 		if is_instance_valid(b.get("node", null)):
 			b["node"].position = _move_source_pos
-			# Move skeletons back with tombstone
+			# Tombstone: restore skeletons' tombstone_pos (they stay where they are)
 			if b.id == "tombstone" and b.has("skeletons"):
 				var tomb_world = b["node"].global_position
 				for skel in b["skeletons"]:
 					if is_instance_valid(skel):
-						var offset = skel.global_position - skel.tombstone_pos
 						skel.tombstone_pos = tomb_world
-						skel.global_position = tomb_world + offset
 	_end_move()
 	if reselect and b.size() > 0:
 		_select_building(b)
