@@ -166,5 +166,8 @@ transform = Transform3D(0.1, 0, 0, 0, 0.1, 0, 0, 0, 0.1, -0.06, 0.068, 2.6073277
 visible = false
 script = ExtResource("15_ft6cd")
 
-[node name="MainShip" parent="." unique_id=562739322 instance=ExtResource("16_cvmbd")]
+[node name="MainShipAttack" parent="." unique_id=562739322 instance=ExtResource("16_cvmbd")]
 transform = Transform3D(-0.07, 0, -1.0569706e-08, 0, 0.07, 0, 1.0569706e-08, 0, -0.07, -0.15186018, 0.0918113, 5.3458157)
+
+[node name="MainShipBase" parent="." unique_id=843481737 instance=ExtResource("16_cvmbd")]
+transform = Transform3D(0.04382417, 0, -0.05458426, 0, 0.07, 0, 0.05458426, 0, 0.04382417, 0.6215995, 0.0918113, 4.2014713)
