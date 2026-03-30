@@ -405,6 +405,19 @@ function FuturesPanel() {
 
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
+    // Funding rate badge (top-right of chart)
+    const mkt = markets.find(m => m.symbol === symbol);
+    const fr = mkt ? parseFloat(mkt.funding_rate || 0) : null;
+    const nfr = mkt ? parseFloat(mkt.next_funding_rate || 0) : null;
+    const fundingBadge = mkt ? (
+      <div style={S.fundingOverlay}>
+        <span style={S.fundingOLabel}>FUNDING</span>
+        <span style={{...S.fundingOValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>
+          {fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%
+        </span>
+      </div>
+    ) : null;
+
     if (fullscreen) {
       return (
         <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
@@ -412,6 +425,7 @@ function FuturesPanel() {
           <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
             <div style={{flex: '0 0 55%', maxWidth: '55%', position: 'relative', borderRight: '3px solid #d4c8b0'}}>
               <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
+              {fundingBadge}
             </div>
             <div style={{flex: '0 0 160px', borderRight: '3px solid #d4c8b0', overflow: 'hidden'}}>
               <OrderBook symbol={symbol} />
@@ -428,6 +442,7 @@ function FuturesPanel() {
       <>
         <div style={{...S.chartArea, position: 'relative'}}>
           <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
+          {fundingBadge}
         </div>
         {renderTradeControls()}
       </>
@@ -872,6 +887,13 @@ const S = {
   pacificaLogo: { width: 20, height: 20, objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' },
   pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
   pacificaBrand: { fontSize: 11, fontWeight: 900, color: '#5C3A21', letterSpacing: '0.08em', textTransform: 'uppercase' },
+  fundingOverlay: {
+    position: 'absolute', top: 5, right: 10, zIndex: 10,
+    display: 'flex', alignItems: 'center', gap: 6,
+    pointerEvents: 'none',
+  },
+  fundingOLabel: { fontSize: 10, fontWeight: 800, color: '#a3906a', letterSpacing: '0.04em' },
+  fundingOValue: { fontSize: 11, fontWeight: 900, fontFamily: 'monospace' },
   // Common
   row: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   label: { color: '#5C3A21', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' },

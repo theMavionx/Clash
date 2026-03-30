@@ -17,6 +17,7 @@ var building_defs: Dictionary = {
 	"mine": {
 		"name": "Mine",
 		"cells": Vector2i(3, 3),
+		"footprint_padding": Vector2(2.0, 2.0),
 		"color": Color(0.55, 0.45, 0.2, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Mine/1.gltf",
@@ -158,6 +159,54 @@ var resources: Dictionary = {
 	"gold": 10000,
 	"ore": 10000,
 }
+
+const BUILDING_BASE_SHADER = """
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
+
+uniform vec4 base_color : source_color = vec4(0.25, 0.45, 0.15, 0.35);
+uniform vec4 line_color : source_color = vec4(0.5, 1.0, 0.5, 1.0);
+uniform float radius : hint_range(0.0, 0.5) = 0.22;
+uniform float blur : hint_range(0.0, 0.4) = 0.12; 
+uniform float dash_count : hint_range(1.0, 100.0) = 28.0;
+uniform float dash_ratio : hint_range(0.0, 1.0) = 0.35; 
+
+float sdRoundedBox(vec2 p, vec2 b, float r) {
+    vec2 q = abs(p) - b + r;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
+}
+
+void fragment() {
+	vec2 p = UV * 2.0 - 1.0;
+	float sdf = sdRoundedBox(p, vec2(0.88), radius);
+	
+	// 1. Soft Footing: Outer fade-out bleed
+	float bleed = smoothstep(blur, -blur, sdf);
+	
+	// 2. Inner Vignette: Highlight the border area and fade toward center
+	// This creates a "glow RING" rather than a solid "stain".
+	float vignette = smoothstep(-0.65, 0.0, sdf); 
+	float footing = bleed * vignette;
+	
+	vec4 col = base_color;
+	col.a *= footing;
+	
+	// 3. Sharp high-fidelity dotted border
+	float border_width = 0.022;
+	float border_line = smoothstep(border_width, 0.0, abs(sdf + border_width * 0.5));
+	
+	if (border_line > 0.0) {
+		vec2 d = abs(p);
+		float p_pos = (d.x > d.y) ? p.y * sign(p.x) : -p.x * sign(p.y);
+		if (fract(p_pos * dash_count) < dash_ratio) {
+			col = mix(col, line_color, border_line);
+		}
+	}
+	
+	ALBEDO = col.rgb;
+	ALPHA = col.a;
+}
+"""
 
 # ── Calculated from gridPlane ─────────────────────────────────
 var cell_size: float = 0.0
@@ -1296,6 +1345,11 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 
 		# Create the building node
 		var node = Node3D.new()
+		
+		# Add base shadow/outline
+		var base = _create_building_base(def)
+		node.add_child(base)
+		
 		if building_type == "turret":
 			var turret_script = load("res://scripts/turret.gd")
 			if turret_script:
@@ -1489,6 +1543,11 @@ func _create_ghost() -> void:
 	ghost_material.no_depth_test = true
 
 	ghost = _create_box_placeholder(def)
+	# Add base outline to ghost
+	var ghost_base = _create_building_base(def)
+	ghost_base.material_override = ghost_material
+	ghost.add_child(ghost_base)
+	
 	# Add model inside ghost
 	if def.has("scene"):
 		var scene_res = load(def.scene)
@@ -1516,8 +1575,40 @@ func _create_box_placeholder(def: Dictionary) -> Node3D:
 	return node
 
 
+func _create_building_base(def: Dictionary) -> MeshInstance3D:
+	var mesh_inst = MeshInstance3D.new()
+	var quad = QuadMesh.new()
+	
+	var padding = def.get("footprint_padding", Vector2(0.6, 0.6))
+	var offset = def.get("footprint_offset", Vector2.ZERO)
+	
+	# Increase size factor for extra soft bleed area
+	var sx = (def.cells.x + padding.x) * cell_size
+	var sz = (def.cells.y + padding.y) * cell_size
+	quad.size = Vector2(sx, sz)
+	mesh_inst.mesh = quad
+	mesh_inst.rotation_degrees.x = -90
+	mesh_inst.position = Vector3(offset.x, 0.02, offset.y) 
+	
+	var mat = ShaderMaterial.new()
+	mat.shader = Shader.new()
+	mat.shader.code = BUILDING_BASE_SHADER
+	
+	# Tuning: denser dots for small buildings, thinner for big ones
+	var perimeter = (def.cells.x + def.cells.y) * 2.0
+	mat.set_shader_parameter("dash_count", perimeter * 3.25)
+	
+	mesh_inst.material_override = mat
+	return mesh_inst
+
+
 func _create_placed_building(def: Dictionary) -> Node3D:
 	var node = Node3D.new()
+	
+	# Add base shadow/outline
+	var base = _create_building_base(def)
+	node.add_child(base)
+	
 	# Attach turret AI script BEFORE adding children so _process registers
 	if current_building_id == "turret":
 		var turret_script = load("res://scripts/turret.gd")
