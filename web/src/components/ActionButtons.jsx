@@ -299,7 +299,9 @@ const hud = {
   cannonBtn: {
     width: 82, height: 82,
     background: 'linear-gradient(180deg, rgba(12,45,80,0.94), rgba(6,24,48,0.97))',
-    border: '2px solid rgba(35,120,185,0.55)',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: 'rgba(35,120,185,0.55)',
     borderRadius: 18,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 4,

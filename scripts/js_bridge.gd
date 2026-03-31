@@ -207,7 +207,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"select_troop":
 			var asys = get_tree().current_scene.get_node_or_null("AttackSystem")
 			if asys:
-				asys._next_troop_idx = int(data.get("idx", 0))
+				asys._next_troop_idx = clampi(int(data.get("idx", 0)), 0, asys.SHIP_TROOPS.size() - 1)
 				send_to_react("troop_idx_changed", {"idx": asys._next_troop_idx})
 		"upgrade_building":
 			var active = _get_active_building_system()

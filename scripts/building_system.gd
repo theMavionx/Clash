@@ -321,7 +321,7 @@ var _ship_cannon_label: Label = null
 var _cannon_paused_attack: bool = false  # was attack mode active when cannon was entered
 var _ship_cannonballs: Array = []  # Array of {node, target_bdata, target_pos}
 const SHIP_CANNON_DAMAGE: int = 500
-const SHIP_CANNON_SPEED: float = 6.0
+const SHIP_CANNON_SPEED: float = 1.0
 const SHIP_CANNON_HIT_SQ: float = 0.03 * 0.03
 const SHIP_CANNON_RELOAD: float = 1.0
 const SHIP_FLASH_SCALE: float = 0.25
@@ -475,6 +475,8 @@ func _ready() -> void:
 
 var _bs_frame: int = 0
 var _produce_timer: float = 0.0
+var _had_troops: bool = false
+var _skeleton_respawn_timer: float = 0.0
 const PRODUCE_TICK: float = 1.0  # update production every second
 
 func _process(delta: float) -> void:
@@ -501,6 +503,23 @@ func _process(delta: float) -> void:
 		_update_ship_explosion(delta)
 	if _ship_cannonballs.size() > 0:
 		_update_ship_cannonballs(delta)
+
+	# Respawn dead tombstone skeletons after battle ends
+	if not is_viewing_enemy and create_ui:
+		var troops_alive = not BaseTroop._get_troops_cached().is_empty()
+		if troops_alive:
+			_had_troops = true
+			_skeleton_respawn_timer = 0.0
+		elif _had_troops:
+			# Troops just died — wait 2 sec then respawn skeletons
+			_skeleton_respawn_timer += delta
+			if _skeleton_respawn_timer >= 2.0:
+				_had_troops = false
+				_skeleton_respawn_timer = 0.0
+				for bs in _building_systems:
+					for b in bs.placed_buildings:
+						if b.get("id", "") == "tombstone" and is_instance_valid(b.get("node")):
+							bs._spawn_tombstone_skeletons(b, b.get("level", 1))
 
 	# Resource production tick
 	if not is_viewing_enemy:
@@ -1405,6 +1424,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 	# Always clear existing buildings first (even if no new ones to load)
 	_destroy_all_buildings()
 	if my_buildings.is_empty():
+		_reveal_initial_cover()
 		return
 	for b in my_buildings:
 		var building_type: String = b["type"]
@@ -1893,6 +1913,10 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# In enemy mode, only the main UI grid handles all input
+	if is_viewing_enemy and not create_ui:
+		return
+
 	# Move mode
 	if _is_moving:
 		if event is InputEventMouseMotion:
@@ -1923,17 +1947,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Ship cannon mode (enemy island only)
 	if is_viewing_enemy and event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			if _check_ship_cannon_click(event.position):
-				# Click on ship — toggle cannon mode
-				if _ship_cannon_mode:
-					_exit_ship_cannon_mode()
-				else:
-					_enter_ship_cannon_mode()
-				get_viewport().set_input_as_handled()
-				return
-			elif _ship_cannon_mode:
-				# Left click in cannon mode — fire at building if hit, else cancel
-				var fired := false
+			if _ship_cannon_mode:
+				# Already in cannon mode — try to fire at a building first
 				for bs in _building_systems:
 					var local_hit = bs._get_mouse_local()
 					if local_hit != Vector3.INF:
@@ -1941,12 +1956,16 @@ func _unhandled_input(event: InputEvent) -> void:
 						var bdata = bs._find_building_at(gp)
 						if bdata.size() > 0:
 							_fire_ship_cannon(bdata)
-							fired = true
 							get_viewport().set_input_as_handled()
 							return
-				if not fired:
-					_exit_ship_cannon_mode()
-					get_viewport().set_input_as_handled()
+				# No building hit — exit cannon mode
+				_exit_ship_cannon_mode()
+				get_viewport().set_input_as_handled()
+				return
+			elif _check_ship_cannon_click(event.position):
+				# Not in cannon mode — click on ship to enter
+				_enter_ship_cannon_mode()
+				get_viewport().set_input_as_handled()
 				return
 		if event.button_index == MOUSE_BUTTON_RIGHT and _ship_cannon_mode:
 			# Right click — fire at building (search ALL building systems)
@@ -1959,6 +1978,8 @@ func _unhandled_input(event: InputEvent) -> void:
 						_fire_ship_cannon(bdata)
 						get_viewport().set_input_as_handled()
 						return
+			get_viewport().set_input_as_handled()
+			return
 
 	# Click on placed building
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -2693,27 +2714,35 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 
 
 func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
-	# Remove existing skeletons first
-	_remove_tombstone_skeletons(b)
-	var skeletons: Array = []
+	# Keep alive skeletons, remove invalid references
+	var alive: Array = []
+	for skel in b.get("skeletons", []):
+		if is_instance_valid(skel):
+			alive.append(skel)
+	# Remove excess
+	while alive.size() > target_count:
+		var skel = alive.pop_back()
+		if is_instance_valid(skel):
+			skel.queue_free()
+	# Spawn missing
 	var tomb_pos = b.node.global_position
 	var script_res = load(SKELETON_SCRIPT)
 	var model_res = load(SKELETON_MODEL)
 	if not model_res or not script_res:
+		b["skeletons"] = alive
 		return
-	for i in target_count:
+	while alive.size() < target_count:
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
-		# Place around tombstone with slight offset
-		var angle = (float(i) / float(target_count)) * TAU
+		var angle = randf() * TAU
 		var offset = Vector3(cos(angle) * 0.18, 0, sin(angle) * 0.18)
 		get_tree().current_scene.add_child(skel)
 		skel.global_position = tomb_pos + offset
 		skel.tombstone_pos = tomb_pos
 		_apply_cel_shader(skel)
-		skeletons.append(skel)
-	b["skeletons"] = skeletons
+		alive.append(skel)
+	b["skeletons"] = alive
 
 
 func _remove_tombstone_skeletons(b: Dictionary) -> void:
@@ -3600,6 +3629,34 @@ func _update_ship_explosion(delta: float) -> void:
 
 
 
+func _spawn_target_ring(pos: Vector3, b_def: Dictionary) -> void:
+	# Ring size based on building AABB — extends 40% beyond footprint
+	var half_x = b_def.get("cells", Vector2i(2, 2)).x * cell_size * 0.5
+	var half_z = b_def.get("cells", Vector2i(2, 2)).y * cell_size * 0.5
+	var radius = maxf(half_x, half_z) * 1.4
+	var ring = MeshInstance3D.new()
+	var torus = TorusMesh.new()
+	torus.inner_radius = radius * 0.06
+	torus.outer_radius = radius
+	torus.rings = 24
+	torus.ring_segments = 12
+	ring.mesh = torus
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.85)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ring.material_override = mat
+	get_tree().root.add_child(ring)
+	ring.global_position = Vector3(pos.x, grid_y + 0.005, pos.z)
+	ring.scale = Vector3(0.15, 0.15, 0.15)
+	var final_s = Vector3(1.0, 1.0, 1.0)
+	var tw = create_tween().set_parallel(true)
+	tw.tween_property(ring, "scale", final_s, 0.4).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(mat, "albedo_color:a", 0.0, 0.5).set_delay(0.1).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.chain().tween_callback(func(): if is_instance_valid(ring): ring.queue_free())
+
+
 func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
 	var camera = BaseTroop._get_camera_cached()
 	if not camera:
@@ -3680,9 +3737,24 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	ball.material_override = mat
 	# Add to root so global_position works correctly
 	get_tree().root.add_child(ball)
-	ball.global_position = ship.global_position + Vector3(0, 0.15, 0)
-	var tp: Vector3 = bnode.global_position + Vector3(0, 0.15, 0)
-	_ship_cannonballs.append({"node": ball, "bdata": bdata, "target_pos": tp})
+	var start_pos = ship.global_position + Vector3(0, 0.15, 0)
+	ball.global_position = start_pos
+	# Target at front edge of building (ship-facing side) at ground level
+	var b_center = bnode.global_position
+	var dir_to_ship = (ship.global_position - b_center)
+	dir_to_ship.y = 0
+	dir_to_ship = dir_to_ship.normalized()
+	# Building half-extent from def cells
+	var b_def = building_defs.get(bdata.get("id", ""), {})
+	var half_x = b_def.get("cells", Vector2i(2, 2)).x * cell_size * 0.5
+	var half_z = b_def.get("cells", Vector2i(2, 2)).y * cell_size * 0.5
+	var edge_offset = absf(dir_to_ship.x) * half_x + absf(dir_to_ship.z) * half_z
+	var tp: Vector3 = Vector3(b_center.x + dir_to_ship.x * edge_offset, grid_y, b_center.z + dir_to_ship.z * edge_offset)
+	var dist = start_pos.distance_to(tp)
+	var flight_time = maxf(dist / SHIP_CANNON_SPEED, 1.5)
+	_ship_cannonballs.append({"node": ball, "bdata": bdata, "target_pos": tp, "start_pos": start_pos, "elapsed": 0.0, "flight_time": flight_time})
+	# Target ring centered on building (sized to its footprint)
+	_spawn_target_ring(b_center, b_def)
 	# Muzzle flash slightly toward target
 	var flash_dir = (tp - ball.global_position).normalized()
 	_spawn_ship_flash(ball.global_position + flash_dir * 0.225)
@@ -3706,9 +3778,14 @@ func _update_ship_cannonballs(delta: float) -> void:
 			_ship_cannonballs.remove_at(i)
 			i -= 1
 			continue
-		c.node.global_position = c.node.global_position.move_toward(c.target_pos, SHIP_CANNON_SPEED * delta)
-		var diff = c.node.global_position - c.target_pos
-		if diff.length_squared() < SHIP_CANNON_HIT_SQ:
+		c.elapsed += delta
+		var t = clampf(c.elapsed / c.flight_time, 0.0, 1.0)
+		# Lerp XZ, parabolic arc on Y
+		var flat_pos = c.start_pos.lerp(c.target_pos, t)
+		var arc_height = c.start_pos.distance_to(c.target_pos) * 0.35
+		var arc_y = 4.0 * arc_height * t * (1.0 - t)
+		c.node.global_position = Vector3(flat_pos.x, flat_pos.y + arc_y, flat_pos.z)
+		if t >= 1.0:
 			var bdata: Dictionary = c.bdata
 			bdata["hp"] = max(0, bdata.get("hp", 0) - SHIP_CANNON_DAMAGE)
 			if bdata["hp"] <= 0:
@@ -3972,10 +4049,11 @@ func _confirm_move() -> void:
 			grid[idx] = true
 	b["grid_pos"] = current_grid_pos
 	# b.node is already at the new position (moved by _update_move_building)
-	# Tombstone: tell skeletons to run to the new position
-	if b.id == "tombstone" and b.has("skeletons"):
+	# Tombstone: respawn dead skeletons and relocate alive ones
+	if b.id == "tombstone":
+		_spawn_tombstone_skeletons(b, b.get("level", 1))
 		var tomb_world = b["node"].global_position
-		for skel in b["skeletons"]:
+		for skel in b.get("skeletons", []):
 			if is_instance_valid(skel) and skel.has_method("relocate_to"):
 				skel.relocate_to(tomb_world)
 	# Sync with server
