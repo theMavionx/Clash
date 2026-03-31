@@ -17,7 +17,7 @@ var building_defs: Dictionary = {
 	"mine": {
 		"name": "Mine",
 		"cells": Vector2i(3, 3),
-		"footprint_padding": Vector2(2.0, 2.0),
+		"footprint_extra": 0.8,
 		"color": Color(0.55, 0.45, 0.2, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Mine/1.gltf",
@@ -51,6 +51,7 @@ var building_defs: Dictionary = {
 		"model_rotation_y": 0.0,
 		"hp_levels": [1800, 3200, 5500],
 		"cost": {"gold": 800, "wood": 300, "ore": 200},
+		"no_outline": true,
 	},
 	"sawmill": {
 		"name": "Sawmill",
@@ -79,6 +80,7 @@ var building_defs: Dictionary = {
 	"town_hall": {
 		"name": "Town Hall",
 		"cells": Vector2i(4, 4),
+		"footprint_extra": 0.3,
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
@@ -92,12 +94,14 @@ var building_defs: Dictionary = {
 	"turret": {
 		"name": "Turret",
 		"cells": Vector2i(2, 2),
+		"footprint_extra": 1.0,
 		"color": Color(0.5, 0.5, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
 		"hp_levels": [900, 1600, 2800],
 		"cost": {"gold": 600, "wood": 350, "ore": 200},
+		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
 	"storage": {
 		"name": "Storage",
@@ -167,9 +171,10 @@ render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
 uniform vec4 base_color : source_color = vec4(0.25, 0.45, 0.15, 0.35);
 uniform vec4 line_color : source_color = vec4(0.5, 1.0, 0.5, 1.0);
 uniform float radius : hint_range(0.0, 0.5) = 0.22;
-uniform float blur : hint_range(0.0, 0.4) = 0.12; 
+uniform float blur : hint_range(0.0, 0.4) = 0.12;
 uniform float dash_count : hint_range(1.0, 100.0) = 28.0;
-uniform float dash_ratio : hint_range(0.0, 1.0) = 0.35; 
+uniform float dash_ratio : hint_range(0.0, 1.0) = 0.35;
+uniform float aspect_ratio : hint_range(0.1, 5.0) = 1.0;
 
 float sdRoundedBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + r;
@@ -178,31 +183,45 @@ float sdRoundedBox(vec2 p, vec2 b, float r) {
 
 void fragment() {
 	vec2 p = UV * 2.0 - 1.0;
-	float sdf = sdRoundedBox(p, vec2(0.88), radius);
-	
+	// Correct for aspect ratio so rounded corners stay circular
+	vec2 corrected = p;
+	if (aspect_ratio > 1.0) {
+		corrected.x *= aspect_ratio;
+	} else {
+		corrected.y /= aspect_ratio;
+	}
+	// Adjust box half-extents to match corrected space
+	vec2 box_half = vec2(0.88);
+	if (aspect_ratio > 1.0) {
+		box_half.x = 0.88 * aspect_ratio;
+	} else {
+		box_half.y = 0.88 / aspect_ratio;
+	}
+	float sdf = sdRoundedBox(corrected, box_half, radius);
+
 	// 1. Soft Footing: Outer fade-out bleed
 	float bleed = smoothstep(blur, -blur, sdf);
-	
+
 	// 2. Inner Vignette: Highlight the border area and fade toward center
 	// This creates a "glow RING" rather than a solid "stain".
-	float vignette = smoothstep(-0.65, 0.0, sdf); 
+	float vignette = smoothstep(-0.65, 0.0, sdf);
 	float footing = bleed * vignette;
-	
+
 	vec4 col = base_color;
 	col.a *= footing;
-	
+
 	// 3. Sharp high-fidelity dotted border
 	float border_width = 0.022;
 	float border_line = smoothstep(border_width, 0.0, abs(sdf + border_width * 0.5));
-	
+
 	if (border_line > 0.0) {
-		vec2 d = abs(p);
-		float p_pos = (d.x > d.y) ? p.y * sign(p.x) : -p.x * sign(p.y);
+		vec2 d = abs(corrected);
+		float p_pos = (d.x > d.y) ? corrected.y * sign(corrected.x) : -corrected.x * sign(corrected.y);
 		if (fract(p_pos * dash_count) < dash_ratio) {
 			col = mix(col, line_color, border_line);
 		}
 	}
-	
+
 	ALBEDO = col.rgb;
 	ALPHA = col.a;
 }
@@ -241,6 +260,9 @@ var grid_visual: MeshInstance3D = null
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
 var _cel_shader: Shader
+
+# ── AABB Cache for precise outlines ──────────────────────────
+var _building_aabb_cache: Dictionary = {}  # {building_id: {size: Vector2, center: Vector2}}
 
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
@@ -365,6 +387,7 @@ func _ready() -> void:
 	grid.resize(grid_width * grid_height)
 	grid.fill(false)
 	_setup_from_grid_plane()
+	_precompute_building_aabbs()
 	# Auto-configure grid restrictions based on grid plane
 	var plane_name = ""
 	var plane = get_node_or_null(grid_plane_path)
@@ -1346,9 +1369,11 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		# Create the building node
 		var node = Node3D.new()
 		
-		# Add base shadow/outline
-		var base = _create_building_base(def)
-		node.add_child(base)
+		# Add base shadow/outline (using precise AABB) — skip for no_outline buildings
+		if not def.get("no_outline", false):
+			var cache_key = _aabb_cache_key(building_type, level)
+			var base = _create_building_base(def, cache_key)
+			node.add_child(base)
 		
 		if building_type == "turret":
 			var turret_script = load("res://scripts/turret.gd")
@@ -1543,10 +1568,11 @@ func _create_ghost() -> void:
 	ghost_material.no_depth_test = true
 
 	ghost = _create_box_placeholder(def)
-	# Add base outline to ghost
-	var ghost_base = _create_building_base(def)
-	ghost_base.material_override = ghost_material
-	ghost.add_child(ghost_base)
+	# Add base outline to ghost (using precise AABB) — skip for no_outline buildings
+	if not def.get("no_outline", false):
+		var ghost_base = _create_building_base(def, current_building_id)
+		ghost_base.material_override = ghost_material
+		ghost.add_child(ghost_base)
 	
 	# Add model inside ghost
 	if def.has("scene"):
@@ -1575,29 +1601,156 @@ func _create_box_placeholder(def: Dictionary) -> Node3D:
 	return node
 
 
-func _create_building_base(def: Dictionary) -> MeshInstance3D:
+## Compute the actual AABB of a building model for precise outline sizing.
+## Returns {size: Vector2(xz_width, xz_depth), center: Vector2(cx, cz)}.
+func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
+	var scene_path: String = def.get("scene", "")
+	if def.has("scenes"):
+		var idx = clampi(level - 1, 0, def.scenes.size() - 1)
+		scene_path = def.scenes[idx]
+	if scene_path == "":
+		# Fallback to grid-based sizing
+		var sx = def.cells.x * cell_size
+		var sz = def.cells.y * cell_size
+		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
+
+	var scene_res = load(scene_path)
+	if not scene_res:
+		var sx = def.cells.x * cell_size
+		var sz = def.cells.y * cell_size
+		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
+
+	var model = scene_res.instantiate()
+	var s = def.get("model_scale", 0.2)
+	model.scale = Vector3(s, s, s)
+	model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+	model.position = def.get("model_offset", Vector3.ZERO)
+
+	# Need to add to tree briefly for global transforms to resolve
+	add_child(model)
+
+	var include_filter: Array = def.get("outline_aabb_include", [])
+	var merged_aabb := AABB()
+	var first := true
+	for mi in _get_all_mesh_instances(model):
+		# If filter is set, only include meshes whose ancestor matches one of the names
+		if include_filter.size() > 0:
+			var dominated := false
+			var parent = mi
+			while parent and parent != model:
+				for f in include_filter:
+					if f in parent.name:
+						dominated = true
+						break
+				if dominated:
+					break
+				parent = parent.get_parent()
+			if not dominated:
+				continue
+		var mesh_aabb = mi.get_aabb()
+		# Transform mesh AABB corners into BuildingSystem local space
+		# (includes model scale + rotation, giving correct world-size AABB)
+		var xf = global_transform.affine_inverse() * mi.global_transform
+		var corners: Array[Vector3] = []
+		for ix in range(2):
+			for iy in range(2):
+				for iz in range(2):
+					var corner = mesh_aabb.position + mesh_aabb.size * Vector3(ix, iy, iz)
+					corners.append(xf * corner)
+		for c in corners:
+			if first:
+				merged_aabb = AABB(c, Vector3.ZERO)
+				first = false
+			else:
+				merged_aabb = merged_aabb.expand(c)
+
+	model.queue_free()
+
+	if first:
+		# No meshes found — fallback
+		var sx = def.cells.x * cell_size
+		var sz = def.cells.y * cell_size
+		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
+
+	var center_xz = Vector2(merged_aabb.get_center().x, merged_aabb.get_center().z)
+	var size_xz = Vector2(merged_aabb.size.x, merged_aabb.size.z)
+	return {"size": size_xz, "center": center_xz}
+
+
+## Pre-compute and cache AABBs for all building types at startup (all levels).
+func _precompute_building_aabbs() -> void:
+	for id in building_defs:
+		var def = building_defs[id]
+		# Level 1
+		_building_aabb_cache[id] = _compute_model_aabb(def, 1)
+		# Higher levels (if scenes array exists)
+		if def.has("scenes"):
+			for lvl in range(2, def.scenes.size() + 1):
+				var key = _aabb_cache_key(id, lvl)
+				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
+
+
+## Build cache key for a building type at a specific level.
+func _aabb_cache_key(building_id: String, level: int) -> String:
+	if level <= 1:
+		return building_id
+	return building_id + "_lv" + str(level)
+
+
+## Get cached AABB for a building type. Falls back to grid-based if not cached.
+func _get_cached_aabb(building_id: String) -> Dictionary:
+	if _building_aabb_cache.has(building_id):
+		return _building_aabb_cache[building_id]
+	# Fallback
+	var def = building_defs.get(building_id, {})
+	var sx = def.get("cells", Vector2i(2, 2)).x * cell_size
+	var sz = def.get("cells", Vector2i(2, 2)).y * cell_size
+	return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
+
+
+func _create_building_base(def: Dictionary, building_id: String = "") -> MeshInstance3D:
 	var mesh_inst = MeshInstance3D.new()
 	var quad = QuadMesh.new()
-	
-	var padding = def.get("footprint_padding", Vector2(0.6, 0.6))
-	var offset = def.get("footprint_offset", Vector2.ZERO)
-	
-	# Increase size factor for extra soft bleed area
-	var sx = (def.cells.x + padding.x) * cell_size
-	var sz = (def.cells.y + padding.y) * cell_size
+
+	var sx: float
+	var sz: float
+	var offset_x: float = 0.0
+	var offset_z: float = 0.0
+
+	# Use precise AABB if available
+	var aabb_data = _get_cached_aabb(building_id) if building_id != "" else {}
+	if aabb_data.size() > 0 and aabb_data.get("size", Vector2.ZERO) != Vector2.ZERO:
+		var padding = def.get("outline_padding", 0.08)
+		sx = aabb_data.size.x + padding * 2.0
+		sz = aabb_data.size.y + padding * 2.0
+		offset_x = aabb_data.center.x
+		offset_z = aabb_data.center.y  # Vector2.y maps to world Z
+	else:
+		# Fallback to grid-based sizing
+		var fp_offset = def.get("footprint_offset", Vector2.ZERO)
+		offset_x = fp_offset.x
+		offset_z = fp_offset.y
+		var world_extra = def.get("footprint_extra", 0.6) * cell_size
+		sx = def.cells.x * cell_size + world_extra
+		sz = def.cells.y * cell_size + world_extra
+
 	quad.size = Vector2(sx, sz)
 	mesh_inst.mesh = quad
 	mesh_inst.rotation_degrees.x = -90
-	mesh_inst.position = Vector3(offset.x, 0.02, offset.y) 
-	
+	mesh_inst.position = Vector3(offset_x, 0.02, offset_z)
+
 	var mat = ShaderMaterial.new()
 	mat.shader = Shader.new()
 	mat.shader.code = BUILDING_BASE_SHADER
-	
+
+	# Pass aspect ratio so rounded corners stay circular on non-square quads
+	var ar = sx / maxf(sz, 0.001)
+	mat.set_shader_parameter("aspect_ratio", ar)
+
 	# Tuning: denser dots for small buildings, thinner for big ones
-	var perimeter = (def.cells.x + def.cells.y) * 2.0
-	mat.set_shader_parameter("dash_count", perimeter * 3.25)
-	
+	var perimeter_world = 2.0 * (sx + sz)
+	mat.set_shader_parameter("dash_count", perimeter_world * 6.0)
+
 	mesh_inst.material_override = mat
 	return mesh_inst
 
@@ -1605,9 +1758,10 @@ func _create_building_base(def: Dictionary) -> MeshInstance3D:
 func _create_placed_building(def: Dictionary) -> Node3D:
 	var node = Node3D.new()
 	
-	# Add base shadow/outline
-	var base = _create_building_base(def)
-	node.add_child(base)
+	# Add base shadow/outline (using precise AABB) — skip for no_outline buildings
+	if not def.get("no_outline", false):
+		var base = _create_building_base(def, current_building_id)
+		node.add_child(base)
 	
 	# Attach turret AI script BEFORE adding children so _process registers
 	if current_building_id == "turret":
@@ -2241,6 +2395,14 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		if scene_res:
 			for child in model.get_children():
 				child.queue_free()
+			# Recreate building base outline for the new level's model
+			var cache_key = _aabb_cache_key(b.id, b.level)
+			if not _building_aabb_cache.has(cache_key):
+				_building_aabb_cache[cache_key] = _compute_model_aabb(def, b.level)
+			if not def.get("no_outline", false):
+				var new_base = _create_building_base(def, cache_key)
+				model.add_child(new_base)
+			# Add the new model
 			var new_model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
 			new_model.scale = Vector3(s, s, s)
