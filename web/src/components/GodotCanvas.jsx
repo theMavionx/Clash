@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import loadingImage from '../assets/file_000000003700720a9b036a5e3a313f0c.png';
+import loadingImage from '../assets/photo_5357292113839723543_y (1) (1) (1).jpg';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 
