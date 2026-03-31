@@ -261,6 +261,18 @@ var grid_visual: MeshInstance3D = null
 var selected_building: Dictionary = {}
 var _cel_shader: Shader
 
+# ── Scene / Script preload cache ─────────────────────────────
+## Preloaded PackedScene resources keyed by path — populated once on first
+## BuildingSystem _ready(), shared across all instances. Eliminates per-building
+## load() calls at transition time.
+static var _scene_res_cache: Dictionary = {}
+static var _turret_script_res: Script = null
+
+# ── Ship node cache ───────────────────────────────────────────
+var _ship_attack_node: Node3D = null
+var _ship_base_node: Node3D = null
+var _initial_load_done: bool = false
+
 # ── AABB Cache for precise outlines ──────────────────────────
 var _building_aabb_cache: Dictionary = {}  # {building_id: {size: Vector2, center: Vector2}}
 
@@ -401,6 +413,10 @@ func _ready() -> void:
 	grid.fill(false)
 	_setup_from_grid_plane()
 	_precompute_building_aabbs()
+	_preload_building_scenes()
+	# Cover with clouds before first render — revealed once buildings are placed.
+	# Non-UI grids still pre-warm the cloud for transition performance.
+	call_deferred("_initial_cover")
 	# Auto-configure grid restrictions based on grid plane
 	var plane_name = ""
 	var plane = get_node_or_null(grid_plane_path)
@@ -444,6 +460,9 @@ func _ready() -> void:
 	# Auto-login (always, not just when UI is created)
 	if net and net.has_token():
 		_auto_login()
+	else:
+		# No login will happen — reveal cloud cover so the island is visible
+		call_deferred("_reveal_initial_cover")
 
 
 var _bs_frame: int = 0
@@ -1319,13 +1338,34 @@ func _auto_login() -> void:
 		return
 	var result = await net.login()
 	if not result.has("id"):
-		# Token invalid
+		# Token invalid — reveal clouds and show register screen
 		net.token = ""
+		_reveal_initial_cover()
 		if create_ui:
 			_create_register_panel()
 		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("show_register", {})
+
+
+## Pre-warm cloud and (for the main UI grid) instantly cover the screen.
+## Called deferred from _ready() so the viewport size is stable.
+## Pre-warm cloud for island-transition performance.
+## Also signals React that Godot scene + preload is done (loading stage 88%).
+func _initial_cover() -> void:
+	_get_or_create_cloud()
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(88);")
+
+
+## Tell the HTML page to hide its loading screen — safe to call multiple times.
+## On web: keeps the native loading screen visible until buildings are placed.
+func _reveal_initial_cover() -> void:
+	if not create_ui or _initial_load_done:
+		return
+	_initial_load_done = true
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
 
 
 func _apply_server_state(state: Dictionary) -> void:
@@ -1343,6 +1383,9 @@ func _apply_server_state(state: Dictionary) -> void:
 
 
 func _load_buildings_from_server(server_buildings: Array) -> void:
+	# Signal React: server responded, now placing buildings (loading stage 94%)
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(94);")
 	var my_grid_index = _get_grid_index()
 	# Filter buildings for this grid
 	var my_buildings: Array = []
@@ -1389,11 +1432,13 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			node.add_child(base)
 		
 		if building_type == "turret":
-			var turret_script = load("res://scripts/turret.gd")
+			var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 			if turret_script:
 				node.set_script(turret_script)
 		if scene_path != "":
-			var scene_res = load(scene_path)
+			var scene_res = _scene_res_cache.get(scene_path, null)
+			if scene_res == null:
+				scene_res = load(scene_path)
 			if scene_res:
 				var model = scene_res.instantiate()
 				var s = def.get("model_scale", 0.2)
@@ -1440,6 +1485,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			_spawn_tombstone_skeletons(b_data, level)
 	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
 	_sync_react_buildings()
+	# Reveal cloud cover now that buildings are placed — first load only
+	_reveal_initial_cover()
 
 
 func _sync_react_buildings() -> void:
@@ -1703,6 +1750,28 @@ func _precompute_building_aabbs() -> void:
 				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
 
 
+## Pre-load every building scene into _scene_res_cache so that
+## _load_buildings_from_server() never calls load() at transition time.
+func _preload_building_scenes() -> void:
+	for id in building_defs:
+		var def = building_defs[id]
+		if def.has("scenes"):
+			for path in def.scenes:
+				if path != "" and not _scene_res_cache.has(path):
+					var res = load(path)
+					if res:
+						_scene_res_cache[path] = res
+		elif def.has("scene"):
+			var path: String = def.scene
+			if path != "" and not _scene_res_cache.has(path):
+				var res = load(path)
+				if res:
+					_scene_res_cache[path] = res
+	# Pre-load turret script so set_script() at transition time is instant
+	if _turret_script_res == null:
+		_turret_script_res = load("res://scripts/turret.gd")
+
+
 ## Build cache key for a building type at a specific level.
 func _aabb_cache_key(building_id: String, level: int) -> String:
 	if level <= 1:
@@ -1752,9 +1821,11 @@ func _create_building_base(def: Dictionary, building_id: String = "") -> MeshIns
 	mesh_inst.rotation_degrees.x = -90
 	mesh_inst.position = Vector3(offset_x, 0.02, offset_z)
 
+	if _building_base_shader == null:
+		_building_base_shader = Shader.new()
+		_building_base_shader.code = BUILDING_BASE_SHADER
 	var mat = ShaderMaterial.new()
-	mat.shader = Shader.new()
-	mat.shader.code = BUILDING_BASE_SHADER
+	mat.shader = _building_base_shader
 
 	# Pass aspect ratio so rounded corners stay circular on non-square quads
 	var ar = sx / maxf(sz, 0.001)
@@ -1778,11 +1849,14 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 	
 	# Attach turret AI script BEFORE adding children so _process registers
 	if current_building_id == "turret":
-		var turret_script = load("res://scripts/turret.gd")
+		var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 		if turret_script:
 			node.set_script(turret_script)
 	if def.has("scene"):
-		var scene_res = load(def.scene)
+		var _scene_path: String = def.scene
+		var scene_res = _scene_res_cache.get(_scene_path, null)
+		if scene_res == null:
+			scene_res = load(_scene_path)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
@@ -2646,6 +2720,8 @@ void fragment() {
 
 ## Shared shader for building HP bars — compiled once on GPU
 static var _bldg_hp_shader: Shader = null
+## Shared shader for building base outlines — compiled once on GPU, not per building
+static var _building_base_shader: Shader = null
 
 func _make_bldg_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMaterial:
 	if _bldg_hp_shader == null:
@@ -2886,8 +2962,12 @@ func _buy_ship() -> void:
 
 func _animate_main_ship() -> void:
 	var _root = get_tree().root
-	var attack_ship = _root.find_child("MainShipAttack", true, false)
-	var base_ship = _root.find_child("MainShipBase", true, false)
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = _root.find_child("MainShipAttack", true, false)
+	if not _ship_base_node or not is_instance_valid(_ship_base_node):
+		_ship_base_node = _root.find_child("MainShipBase", true, false)
+	var attack_ship = _ship_attack_node
+	var base_ship = _ship_base_node
 	# Attack ship hidden by default — shown only when attacking enemy
 	if attack_ship:
 		attack_ship.visible = false
@@ -3271,12 +3351,14 @@ func _hide_all_collect_icons() -> void:
 func _switch_to_enemy_island() -> void:
 	# Instantly switch ships when button pressed
 	var _r = get_tree().root
-	var _atk = _r.find_child("MainShipAttack", true, false)
-	var _base = _r.find_child("MainShipBase", true, false)
-	if _atk:
-		_atk.visible = true
-	if _base:
-		_base.visible = false
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = _r.find_child("MainShipAttack", true, false)
+	if not _ship_base_node or not is_instance_valid(_ship_base_node):
+		_ship_base_node = _r.find_child("MainShipBase", true, false)
+	if _ship_attack_node:
+		_ship_attack_node.visible = true
+	if _ship_base_node:
+		_ship_base_node.visible = false
 
 	# Hide collect icons before switching
 	for bs in _building_systems:
@@ -3439,10 +3521,11 @@ func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
 	var camera = BaseTroop._get_camera_cached()
 	if not camera:
 		return false
-	var ship = get_tree().root.find_child("MainShipAttack", true, false)
-	if not ship or not ship.visible:
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = get_tree().root.find_child("MainShipAttack", true, false)
+	if not _ship_attack_node or not _ship_attack_node.visible:
 		return false
-	var screen_pos = camera.unproject_position(ship.global_position)
+	var screen_pos = camera.unproject_position(_ship_attack_node.global_position)
 	return mouse_pos.distance_to(screen_pos) < 80.0
 
 
@@ -3479,9 +3562,11 @@ func _exit_ship_cannon_mode() -> void:
 func _fire_ship_cannon(bdata: Dictionary) -> void:
 	if _ship_cannon_cooldown > 0:
 		return
-	var ship = get_tree().root.find_child("MainShipAttack", true, false)
-	if not ship:
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = get_tree().root.find_child("MainShipAttack", true, false)
+	if not _ship_attack_node:
 		return
+	var ship = _ship_attack_node
 	var bnode = bdata.get("node", null) as Node3D
 	if not bnode or not is_instance_valid(bnode):
 		return
@@ -3544,12 +3629,14 @@ func _return_home() -> void:
 	_exit_ship_cannon_mode()
 	# Hide attack ship, show base ship when returning home
 	var _r2 = get_tree().root
-	var attack_ship2 = _r2.find_child("MainShipAttack", true, false)
-	var base_ship2 = _r2.find_child("MainShipBase", true, false)
-	if attack_ship2:
-		attack_ship2.visible = false
-	if base_ship2:
-		base_ship2.visible = true
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = _r2.find_child("MainShipAttack", true, false)
+	if not _ship_base_node or not is_instance_valid(_ship_base_node):
+		_ship_base_node = _r2.find_child("MainShipBase", true, false)
+	if _ship_attack_node:
+		_ship_attack_node.visible = false
+	if _ship_base_node:
+		_ship_base_node.visible = true
 	for bs in _building_systems:
 		bs.is_viewing_enemy = false
 	var bridge = _bridge

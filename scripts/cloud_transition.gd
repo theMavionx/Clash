@@ -36,6 +36,11 @@ func _ready() -> void:
 		_set_clouds_covering()
 		await get_tree().process_frame
 		reveal()
+	else:
+		# Pre-warmed at startup — hide everything until close()/reveal() is called
+		_white_overlay.modulate.a = 0.0
+		for spr in _clouds:
+			spr.visible = false
 
 
 func _create_cloud_noise(seed_val: int) -> NoiseTexture2D:
@@ -110,6 +115,12 @@ func _set_clouds_covering() -> void:
 
 
 # ── Public API ───────────────────────────────────────────────────
+
+## Instantly set clouds covering the screen with no animation.
+## Call this before reveal() to use cloud as a loading cover.
+func cover_instant() -> void:
+	_set_clouds_covering()
+
 
 ## Clouds fly away revealing the scene beneath.
 func reveal() -> void:

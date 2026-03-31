@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import loadingImage from '../assets/file_00000000ba347246b47ea0b6a8a5e057.png';
+import loadingImage from '../assets/file_000000003700720a9b036a5e3a313f0c.png';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 
@@ -38,7 +38,7 @@ const imgStyle = {
 
 const progressWrapperStyle = {
   position: 'absolute',
-  bottom: '10%', // Золота середина
+  bottom: '4%', // Ще нижче (було 8%)
   width: '100%',
   display: 'flex',
   flexDirection: 'column',
@@ -47,12 +47,12 @@ const progressWrapperStyle = {
 
 const barContainerStyle = {
   width: '60%',
-  maxWidth: '500px',
-  height: '36px',
-  backgroundColor: '#1f130c', // Темне дерево
-  border: '4px solid #4a2e1b', // Рамка з дерева
-  borderRadius: '18px',
-  boxShadow: '0 8px 16px rgba(0,0,0,0.8), inset 0 6px 10px rgba(0,0,0,0.9)',
+  maxWidth: '450px',
+  height: '28px',
+  backgroundColor: '#2e1c10', // Dark wood background
+  border: '3px solid #5a3a22', // Thick wood edge
+  borderRadius: '8px',
+  boxShadow: 'inset 0 4px 8px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.5)',
   overflow: 'hidden',
   position: 'relative',
 };
@@ -76,15 +76,31 @@ function GodotCanvas({ onEngineReady }) {
         return;
       }
 
-      const ESTIMATED_TOTAL = 20000000; 
+      // Actual PCK + WASM sizes from Work.html — fallback when server omits Content-Length
+      const ESTIMATED_TOTAL = 196000000;
+
+      // Stage weights (must sum to 100):
+      //  0-80 : WASM + PCK download     (real progress from onProgress)
+      //  80   : engine.startGame resolves
+      //  88   : Godot scene init + preload scenes (deferred signal)
+      //  94   : server responded, placing buildings (signal)
+      //  100  : buildings placed → hide overlay (signal)
+      const DOWNLOAD_MAX = 80;
 
       const handleProgress = (current, total) => {
-        if (total > 0) {
-          setProgress(Math.round((current / total) * 100));
-        } else {
-          const pct = Math.min(99, Math.round((current / ESTIMATED_TOTAL) * 100));
-          setProgress(pct);
-        }
+        const pct = total > 0
+          ? Math.round((current / total) * DOWNLOAD_MAX)
+          : Math.min(DOWNLOAD_MAX - 2, Math.round((current / ESTIMATED_TOTAL) * DOWNLOAD_MAX));
+        setProgress(pct);
+      };
+
+      // Godot signals intermediate stages via JavaScriptBridge
+      window.godotLoadingProgress = (pct) => setProgress(pct);
+
+      // Godot signals all buildings placed — show island, hide overlay
+      window.godotBuildingsLoaded = () => {
+        setProgress(100);
+        setTimeout(() => setIsLoaded(true), 350);
       };
 
       const engine = new GODOT({ onProgress: handleProgress });
@@ -95,11 +111,11 @@ function GodotCanvas({ onEngineReady }) {
         args: [],
         onProgress: handleProgress,
       }).then(() => {
-        setIsLoaded(true);
-        console.log('Godot game started');
+        setProgress(prev => Math.max(prev, DOWNLOAD_MAX));
         if (onEngineReady) onEngineReady(engine);
       }).catch(err => {
         console.error('Godot start error:', err);
+        setIsLoaded(true); // fallback — never leave user on black screen
       });
     };
     document.body.appendChild(script);
@@ -117,34 +133,23 @@ function GodotCanvas({ onEngineReady }) {
                 style={{
                   width: `${progress}%`,
                   height: '100%',
-                  background: `
-                    repeating-linear-gradient(
-                      -45deg,
-                      transparent,
-                      transparent 12px,
-                      rgba(255, 255, 255, 0.15) 12px,
-                      rgba(255, 255, 255, 0.15) 24px
-                    ),
-                    linear-gradient(180deg, #ffde59 0%, #ff914d 100%)
-                  `,
-                  borderRight: progress > 0 ? '3px solid #ffeba1' : 'none',
-                  boxShadow: 'inset 0 4px 6px rgba(255,255,255,0.4)',
+                  background: 'linear-gradient(to bottom, #ffe066, #e6b800)',
+                  borderRight: '2px solid #fff8dc',
+                  boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.4)',
                   transition: 'width 0.1s linear',
-                  borderRadius: '12px 0 0 12px',
                 }}
               />
             </div>
             <div style={{ 
               color: '#fff', 
-              marginTop: '16px', 
+              marginTop: '12px', 
               fontFamily: '"Inter", "Segoe UI", sans-serif', 
-              fontSize: '22px', 
+              fontSize: '20px', 
               fontWeight: 900, 
-              WebkitTextStroke: '1.5px #1a1a1a', // Outline в стилі ігрових кнопок
-              textShadow: '0 4px 6px rgba(0,0,0,0.8)',
+              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px  1px 0 #000, 1px  1px 0 #000',
               letterSpacing: '1px'
             }}>
-              ЗАВАНТАЖЕННЯ {progress}%
+              {progress < 80 ? `LOADING ${progress}%` : progress < 88 ? 'INITIALIZING...' : progress < 94 ? 'CONNECTING...' : progress < 100 ? 'PLACING BUILDINGS...' : 'READY!'}
             </div>
           </div>
         </div>
