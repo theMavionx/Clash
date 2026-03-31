@@ -421,21 +421,16 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 	var spawn_pos = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	spawn_pos.y = ship_pos.y
 
-	# Get building Y level so troops can reach buildings
+	# Get building Y and troop level in one pass over building_systems
 	var building_y = spawn_pos.y
+	var troop_level = 1
+	var level_key = _script_to_troop_key(troop_def.script)
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		if "grid_y" in bs:
 			building_y = bs.grid_y
-			break
-
-	# Get troop levels from building system for this troop type
-	var troop_level = 1
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		if "troop_levels" in bs:
-			var level_key = _script_to_troop_key(troop_def.script)
-			if bs.troop_levels.has(level_key):
-				troop_level = bs.troop_levels[level_key]
-			break
+		if "troop_levels" in bs and bs.troop_levels.has(level_key):
+			troop_level = bs.troop_levels[level_key]
+		break
 
 	for i in troops_per_ship:
 		var timer = get_tree().create_timer(troop_spawn_delay * i)

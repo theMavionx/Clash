@@ -382,8 +382,21 @@ var troop_defs: Dictionary = {
 }
 
 
+# ── Node Cache ────────────────────────────────────────────────
+var _net: Node = null
+var _bridge: Node = null
+var _building_systems: Array = []
+
+
+func _refresh_bs_cache() -> void:
+	_building_systems = get_tree().get_nodes_in_group("building_systems")
+
+
 func _ready() -> void:
 	add_to_group("building_systems")
+	_net = get_node_or_null("/root/Net")
+	_bridge = get_node_or_null("/root/Bridge")
+	call_deferred("_refresh_bs_cache")
 	grid.resize(grid_width * grid_height)
 	grid.fill(false)
 	_setup_from_grid_plane()
@@ -413,7 +426,7 @@ func _ready() -> void:
 			canvas.visible = false
 	else:
 		# Non-UI grid (e.g. port grid) — borrow canvas from main BuildingSystem
-		for bs in get_tree().get_nodes_in_group("building_systems"):
+		for bs in _building_systems:
 			if bs != self and bs.canvas:
 				canvas = bs.canvas
 				world_ui_canvas = bs.world_ui_canvas
@@ -425,7 +438,7 @@ func _ready() -> void:
 	if create_ui:
 		_animate_main_ship()
 	# Listen for server auth to load buildings (works for all grids)
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net:
 		net.auth_ok.connect(_on_server_auth_ok)
 	# Auto-login (always, not just when UI is created)
@@ -437,7 +450,7 @@ var _bs_frame: int = 0
 var _produce_timer: float = 0.0
 const PRODUCE_TICK: float = 1.0  # update production every second
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	_bs_frame += 1
 	# FPS label — update every 15th frame to avoid string alloc every frame
 	if _fps_lbl and _bs_frame % 15 == 0:
@@ -454,15 +467,15 @@ func _process(_delta: float) -> void:
 				building_panel_hp_bar.value = bhp
 	_update_building_hp_bars()
 	if _ship_cannon_cooldown > 0:
-		_ship_cannon_cooldown -= _delta
+		_ship_cannon_cooldown -= delta
 	if _ship_flash_timer > 0:
-		_update_ship_flash(_delta)
+		_update_ship_flash(delta)
 	if _ship_cannonballs.size() > 0:
-		_update_ship_cannonballs(_delta)
+		_update_ship_cannonballs(delta)
 
 	# Resource production tick
 	if not is_viewing_enemy:
-		_produce_timer += _delta
+		_produce_timer += delta
 		if _produce_timer >= PRODUCE_TICK:
 			_produce_timer -= PRODUCE_TICK
 			_tick_production()
@@ -492,7 +505,7 @@ func _tick_production() -> void:
 
 
 func _update_collect_icons() -> void:
-	var cam = get_viewport().get_camera_3d()
+	var cam = BaseTroop._get_camera_cached()
 	if not cam:
 		return
 		
@@ -678,7 +691,7 @@ func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 	
 	var old_val = int(resources.get(res_type, 0))
 	var target_val = old_val + local_amount
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	
 	# Fetch exact value from server
 	if net and net.has_token():
@@ -699,7 +712,7 @@ func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 	tw.tween_method(func(v: int):
 		resources[res_type] = v
 		_update_resource_ui()
-		var bridge = get_node_or_null("/root/Bridge")
+		var bridge = _bridge
 		if bridge: bridge.send_to_react("resources", resources)
 	, old_val, target_val, 1.2)
 
@@ -1159,7 +1172,7 @@ func _update_resource_ui() -> void:
 	if ore_label:
 		ore_label.text = str(resources.ore)
 	# Send to React
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("resources", {
 			"gold": resources.gold, "wood": resources.wood, "ore": resources.ore,
@@ -1167,7 +1180,7 @@ func _update_resource_ui() -> void:
 
 
 func _on_add_resource(res_name: String) -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.has_token():
 		var args = {"gold": 0, "wood": 0, "ore": 0}
 		args[res_name] = 1000
@@ -1182,13 +1195,13 @@ func _on_add_resource(res_name: String) -> void:
 func _update_player_name_label() -> void:
 	if not player_name_label:
 		return
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.display_name != "":
 		if player_name_label:
 			player_name_label.text = net.display_name
 		if trophy_label:
 			trophy_label.text = "Trophies: %d" % net.trophies
-		var bridge = get_node_or_null("/root/Bridge")
+		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("state", {
 				"player_name": net.display_name,
@@ -1203,7 +1216,7 @@ func _update_player_name_label() -> void:
 
 
 func _create_register_panel() -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.has_token():
 		# Already registered — try to login and load state
 		_auto_login()
@@ -1280,7 +1293,7 @@ func _create_register_panel() -> void:
 
 
 func _on_register_pressed() -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net:
 		register_status_label.text = "Network not available (add Net autoload)"
 		return
@@ -1301,7 +1314,7 @@ func _on_register_pressed() -> void:
 
 
 func _auto_login() -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net:
 		return
 	var result = await net.login()
@@ -1310,14 +1323,14 @@ func _auto_login() -> void:
 		net.token = ""
 		if create_ui:
 			_create_register_panel()
-		var bridge = get_node_or_null("/root/Bridge")
+		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("show_register", {})
 
 
 func _apply_server_state(state: Dictionary) -> void:
 	_apply_resources_from_server(state)
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and state.has("trophies"):
 		net.trophies = state.trophies
 	_update_player_name_label()
@@ -1430,12 +1443,12 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 
 
 func _sync_react_buildings() -> void:
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge and bridge.has_method("send_to_react"):
 		var arr = []
 		var counts := {}
 		# Count from ALL building systems so town_hall etc. are tracked globally
-		for bs in get_tree().get_nodes_in_group("building_systems"):
+		for bs in _building_systems:
 			for b in bs.placed_buildings:
 				var bid = b.get("id", "")
 				arr.append({
@@ -1477,7 +1490,7 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 
 
 func _show_error(msg: String) -> void:
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("error", {"message": msg})
 	if not canvas:
@@ -1509,7 +1522,7 @@ func _get_grid_index() -> int:
 
 
 func _sync_remove_building(building_data: Dictionary) -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net or not net.has_token():
 		return
 	var sid = building_data.get("server_id", -1)
@@ -1535,7 +1548,7 @@ func _start_placement(building_id: String) -> void:
 	if shop_panel:
 		shop_panel.visible = false
 	# Start placement on all building systems
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs._begin_placement(building_id)
 
 
@@ -1841,7 +1854,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 		if event.button_index == MOUSE_BUTTON_RIGHT and _ship_cannon_mode:
 			# Right click — fire at building (search ALL building systems)
-			for bs in get_tree().get_nodes_in_group("building_systems"):
+			for bs in _building_systems:
 				var local_hit = bs._get_mouse_local()
 				if local_hit != Vector3.INF:
 					var gp = bs._local_to_grid(local_hit)
@@ -1858,7 +1871,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			var gp = _local_to_grid(local_hit)
 			var found = _find_building_at(gp)
 			if found.size() > 0:
-				for bs in get_tree().get_nodes_in_group("building_systems"):
+				for bs in _building_systems:
 					if bs != self:
 						bs._deselect_building()
 				# Second click on already-selected building → start move
@@ -1874,7 +1887,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _get_mouse_local() -> Vector3:
-	var camera = get_viewport().get_camera_3d()
+	var camera = BaseTroop._get_camera_cached()
 	if camera == null:
 		return Vector3.INF
 	var mouse = get_viewport().get_mouse_position()
@@ -1990,7 +2003,7 @@ func _try_place_building() -> bool:
 
 
 func _request_place_building(building_id: String, grid_pos: Vector2i, def: Dictionary) -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net or not net.has_token():
 		_spawn_building_locally(building_id, grid_pos, def, -1)
 		return
@@ -2068,7 +2081,7 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 
 
 func _cancel_all_placement() -> void:
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs._cancel_placement()
 
 
@@ -2159,7 +2172,7 @@ func _select_building(b: Dictionary) -> void:
 	var max_hp = b.get("max_hp", hp)
 	var max_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	# Send to React
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		var cost = def.get("cost", {})
 		var multiplier = level + 1
@@ -2258,7 +2271,7 @@ func _deselect_building() -> void:
 	selected_building = {}
 	_hide_range_indicator()
 	_hide_move_arrows()
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("building_deselected", {})
 	if building_panel:
@@ -2284,7 +2297,7 @@ func _upgrade_selected() -> void:
 		return
 
 	var b = selected_building
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 
 	# Ask server first
 	if net and net.has_token():
@@ -2863,7 +2876,7 @@ func _buy_ship() -> void:
 	if typeof(selected_building) == TYPE_DICTIONARY and selected_building.size() > 0:
 		_select_building(selected_building)
 	
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("resources", {
 			"gold": resources.get("gold", 0),
@@ -3129,10 +3142,10 @@ func _can_afford(costs: Dictionary) -> bool:
 
 
 func _refresh_troop_levels_from_server() -> void:
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net or not net.has_token():
 		# No server — just send local levels
-		var bridge = get_node_or_null("/root/Bridge")
+		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("troop_levels", troop_levels)
 		return
@@ -3144,7 +3157,7 @@ func _refresh_troop_levels_from_server() -> void:
 			var local_name = troop_type.capitalize()
 			if troop_levels.has(local_name):
 				troop_levels[local_name] = level
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("troop_levels", troop_levels)
 		# Also refresh resources to stay in sync
@@ -3171,7 +3184,7 @@ func _upgrade_troop(troop_name: String) -> void:
 	var next_lvl = lvl + 1
 
 	# Ask server first
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.has_token():
 		_server_busy = true
 		var result = await net.upgrade_troop(troop_name)
@@ -3208,7 +3221,7 @@ func _on_attack_pressed() -> void:
 func _on_find_pressed() -> void:
 	if is_viewing_enemy:
 		return
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
@@ -3266,10 +3279,10 @@ func _switch_to_enemy_island() -> void:
 		_base.visible = false
 
 	# Hide collect icons before switching
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs._hide_all_collect_icons()
 		bs.is_viewing_enemy = true
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
@@ -3278,7 +3291,7 @@ func _switch_to_enemy_island() -> void:
 		})
 
 	# Cloud close animation — hide React UI during transition
-	var bridge2 = get_node_or_null("/root/Bridge")
+	var bridge2 = _bridge
 	if bridge2:
 		bridge2.send_to_react("cloud_transition", {"visible": true})
 	var cloud = _get_or_create_cloud()
@@ -3286,12 +3299,12 @@ func _switch_to_enemy_island() -> void:
 	await cloud.close_finished
 
 	# Clear ALL building systems (including port grid)
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs._destroy_all_buildings()
 
 	# Load enemy buildings on all grids
 	if enemy_info.has("buildings") and enemy_info.buildings is Array:
-		for bs in get_tree().get_nodes_in_group("building_systems"):
+		for bs in _building_systems:
 			bs._load_buildings_from_server(enemy_info.buildings)
 
 	# Hide home UI, show enemy UI
@@ -3423,7 +3436,7 @@ func _update_ship_flash(delta: float) -> void:
 
 
 func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
-	var camera = get_viewport().get_camera_3d()
+	var camera = BaseTroop._get_camera_cached()
 	if not camera:
 		return false
 	var ship = get_tree().root.find_child("MainShipAttack", true, false)
@@ -3516,7 +3529,7 @@ func _update_ship_cannonballs(delta: float) -> void:
 			var bdata: Dictionary = c.bdata
 			bdata["hp"] = max(0, bdata.get("hp", 0) - SHIP_CANNON_DAMAGE)
 			if bdata["hp"] <= 0:
-				for bs in get_tree().get_nodes_in_group("building_systems"):
+				for bs in _building_systems:
 					if bdata in bs.placed_buildings:
 						bs.remove_building(bdata)
 						break
@@ -3537,9 +3550,9 @@ func _return_home() -> void:
 		attack_ship2.visible = false
 	if base_ship2:
 		base_ship2.visible = true
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs.is_viewing_enemy = false
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge = _bridge
 	if bridge:
 		bridge.send_to_react("enemy_mode", {"active": false})
 
@@ -3580,15 +3593,15 @@ func _return_home() -> void:
 	await cloud.close_finished
 
 	# Clear ALL building systems
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		bs._destroy_all_buildings()
 
 	# Restore home buildings from server on all grids
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.has_token():
 		var state = await net.login()
 		if state.has("buildings") and state.buildings is Array:
-			for bs in get_tree().get_nodes_in_group("building_systems"):
+			for bs in _building_systems:
 				bs._load_buildings_from_server(state.buildings)
 		_apply_resources_from_server(state)
 		if state.has("trophies"):
@@ -3692,7 +3705,7 @@ func _start_move(b: Dictionary) -> void:
 	if is_viewing_enemy or _server_busy or _is_moving:
 		return
 	# Cancel any ongoing move on other building systems
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _building_systems:
 		if bs != self and bs._is_moving:
 			bs._cancel_move(false)
 	_is_moving = true
@@ -3777,7 +3790,7 @@ func _confirm_move() -> void:
 			if is_instance_valid(skel) and skel.has_method("relocate_to"):
 				skel.relocate_to(tomb_world)
 	# Sync with server
-	var net = get_node_or_null("/root/Net")
+	var net = _net
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
 		net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
 	_end_move()

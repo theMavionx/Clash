@@ -459,6 +459,8 @@ export function usePacifica() {
     if (!connected) return;
 
     let ws, reconnectTimer, pingTimer;
+    let latestPrices = null;
+    let priceThrottleTimer = null;
 
     function connect() {
       ws = new WebSocket(WS_URL);
@@ -480,7 +482,15 @@ export function usePacifica() {
       ws.onmessage = (e) => {
         try {
           const msg = JSON.parse(e.data);
-          if (msg.channel === 'prices') setPrices(msg.data);
+          if (msg.channel === 'prices') {
+            latestPrices = msg.data;
+            if (!priceThrottleTimer) {
+              priceThrottleTimer = setTimeout(() => {
+                setPrices(latestPrices);
+                priceThrottleTimer = null;
+              }, 250);
+            }
+          }
           if (msg.channel === 'account_positions') {
             // WS positions use short keys: s=symbol, d=side, a=amount, p=entry_price, m=margin, f=funding, i=isolated
             const raw = Array.isArray(msg.data) ? msg.data : [];
@@ -550,6 +560,7 @@ export function usePacifica() {
       cancelled = true;
       clearInterval(pingTimer);
       clearTimeout(reconnectTimer);
+      clearTimeout(priceThrottleTimer);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
   }, [connected, walletAddr]);

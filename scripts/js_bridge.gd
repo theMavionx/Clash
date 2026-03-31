@@ -8,9 +8,16 @@ var _callbacks: Dictionary = {}
 var _is_web: bool = false
 var _perf_timer: float = 0.0
 const PERF_INTERVAL: float = 0.25  # send perf data 4x per second
+var _bs_cache: Array = []  # cached building_systems group
+
+
+func _refresh_cache() -> void:
+	_bs_cache = get_tree().get_nodes_in_group("building_systems")
+
 
 func _ready() -> void:
 	_is_web = OS.has_feature("web")
+	call_deferred("_refresh_cache")
 	if not _is_web:
 		return
 
@@ -49,7 +56,7 @@ func _send_perf_data() -> void:
 	# Turret bullets — count from turret nodes directly
 	var turrets = 0
 	var active_bullets = 0
-	for bs in get_tree().get_nodes_in_group("building_systems"):
+	for bs in _bs_cache:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "turret" and is_instance_valid(b.get("node")):
 				if "_active_bullets" in b.node:
@@ -199,7 +206,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				active._deselect_building()
 		"collect_resource":
 			var sid = data.get("server_id", -1)
-			for bsys in get_tree().get_nodes_in_group("building_systems"):
+			for bsys in _bs_cache:
 				bsys._collect_building_resource(sid)
 		"buy_ship":
 			var active = _get_active_building_system()
@@ -207,7 +214,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				active._buy_ship()
 		"resource_bar_positions":
 			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
-			for bsys in get_tree().get_nodes_in_group("building_systems"):
+			for bsys in _bs_cache:
 				bsys._react_resource_positions = data
 
 
@@ -252,7 +259,7 @@ func _send_full_state() -> void:
 
 
 func _get_building_system() -> Node:
-	var systems = get_tree().get_nodes_in_group("building_systems")
+	var systems = _bs_cache
 	# Find the main grid (not the port grid)
 	for s in systems:
 		if s.name == "BuildingSystem":
@@ -268,7 +275,7 @@ func _get_building_system() -> Node:
 
 func _get_active_building_system() -> Node:
 	# Return whichever system currently has a building selected
-	var systems = get_tree().get_nodes_in_group("building_systems")
+	var systems = _bs_cache
 	for s in systems:
 		if s.selected_building.size() > 0:
 			return s

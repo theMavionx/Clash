@@ -29,30 +29,31 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
   } = usePacifica();
 
-  // Drag state
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  // Drag state — ref-based: zero React re-renders during drag, no listener leaks
+  const posRef = useRef({ x: 0, y: 0 });
+  const panelRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const handleMouseDown = useCallback((e) => {
     if (e.target.closest('[data-nodrag]')) return;
-    setIsDragging(true);
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const origX = pos.x;
-    const origY = pos.y;
+    const startX = e.clientX - posRef.current.x;
+    const startY = e.clientY - posRef.current.y;
 
     const onMove = (ev) => {
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
-      setPos({ x: origX + dx, y: origY + dy });
+      posRef.current = { x: ev.clientX - startX, y: ev.clientY - startY };
+      if (panelRef.current) {
+        panelRef.current.style.transform =
+          `translate(${posRef.current.x}px, ${posRef.current.y}px)`;
+      }
     };
     const onUp = () => {
       setIsDragging(false);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
     };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, [pos]);
+    setIsDragging(true);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
   const [activeTab, setActiveTab] = useState('Trade');
   const [symbol, setSymbol] = useState('BTC');
@@ -140,9 +141,9 @@ function FuturesPanel() {
     return (
       <>
         <style>{animCSS}</style>
-        <div style={{
+        <div ref={panelRef} style={{
           ...(fullscreen ? S.containerFull : S.container),
-          transform: fullscreen ? 'translate(0px, 0px)' : `translate(${pos.x}px, ${pos.y}px)`,
+          transform: fullscreen ? 'translate(0px, 0px)' : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
         }}>
           <div style={S.header} onMouseDown={handleMouseDown}>
@@ -713,9 +714,9 @@ function FuturesPanel() {
   return (
     <>
       <style>{animCSS}</style>
-      <div style={{
+      <div ref={panelRef} style={{
         ...(fullscreen ? S.containerFull : S.container),
-        transform: fullscreen ? 'translate(0px, 0px)' : `translate(${pos.x}px, ${pos.y}px)`,
+        transform: fullscreen ? 'translate(0px, 0px)' : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
       }}>
         <div style={S.header} onMouseDown={handleMouseDown}>

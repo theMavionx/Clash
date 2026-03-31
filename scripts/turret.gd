@@ -44,6 +44,10 @@ const TARGET_SEARCH_INTERVAL: float = 0.15
 static var _shared_trail_mat: StandardMaterial3D = null
 static var _flash_textures: Array = []  # loaded Texture2D frames
 
+## Per-turret flash material — shared by all 6 pool slots of THIS turret only.
+## (Cannot be global-static: concurrent turrets animate their fades independently.)
+var _flash_mat: StandardMaterial3D = null
+
 ## Object pool
 var _bullet_pool: Array = []   # pre-created {node, trail, flash} dicts
 var _active_bullets: Array = [] # currently flying
@@ -80,6 +84,10 @@ func _ready() -> void:
 		_shared_trail_mat.shading_mode               = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_shared_trail_mat.cull_mode                  = BaseMaterial3D.CULL_DISABLED
 		_shared_trail_mat.no_depth_test              = false
+	# Build pool eagerly — runs in the next frame after _ready so the scene root
+	# is stable. Builds all POOL_SIZE entries at once; startup cost is negligible
+	# compared to the spike that previously hit on the first enemy troop appearance.
+	call_deferred("_build_pool_full")
 
 
 func _build_pool() -> void:
@@ -91,6 +99,20 @@ func _build_pool() -> void:
 			var tex = load(path)
 			if tex:
 				_flash_textures.append(tex)
+
+	# Create the per-turret flash material once (shared by all pool slots of this turret).
+	# Per-turret (not static) because concurrent turrets animate their fades independently.
+	if _flash_mat == null:
+		_flash_mat = StandardMaterial3D.new()
+		_flash_mat.shading_mode  = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_flash_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		_flash_mat.transparency  = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_flash_mat.blend_mode    = BaseMaterial3D.BLEND_MODE_ADD
+		_flash_mat.no_depth_test = true
+		_flash_mat.cull_mode     = BaseMaterial3D.CULL_DISABLED
+		if _flash_textures.size() > 0:
+			_flash_mat.albedo_texture = _flash_textures[0]
+		_flash_mat.albedo_color  = Color(1.5, 1.2, 0.8, 1.0)
 
 	# Build POOL_BATCH entries per frame to spread load
 	var scene_root = get_tree().current_scene
@@ -117,17 +139,7 @@ func _build_pool() -> void:
 		# Flash in PNG is off-center (left side) — shift quad so flash aligns with muzzle
 		quad.center_offset = Vector3(FLASH_SCALE * 0.2, 0.0, 0.0)
 		flash.mesh = quad
-		var flash_mat = StandardMaterial3D.new()
-		flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		flash_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		flash_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		flash_mat.no_depth_test = true
-		flash_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		if _flash_textures.size() > 0:
-			flash_mat.albedo_texture = _flash_textures[0]
-		flash_mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
-		flash.material_override = flash_mat
+		flash.material_override = _flash_mat  # shared — one GPU resource per turret
 		flash.visible = false
 		scene_root.add_child(flash)
 
@@ -146,6 +158,13 @@ func _build_pool() -> void:
 
 	if _pool_built >= POOL_SIZE:
 		_pool_ready = true
+
+
+## Builds the complete pool in a single frame — called once from _ready via call_deferred.
+## Safe at startup because there is no combat yet, so the one-time allocation cost is free.
+func _build_pool_full() -> void:
+	while not _pool_ready:
+		_build_pool()
 
 
 func _get_pooled_bullet() -> Dictionary:
@@ -197,10 +216,6 @@ func _process(delta: float) -> void:
 			if _anim_player and _anim_player.has_animation("idle"):
 				_anim_player.play("idle")
 		return
-
-	# Build pool only when enemies appear (lazy init)
-	if not _pool_ready:
-		_build_pool()
 
 	_update_bullets(delta)
 
@@ -295,10 +310,9 @@ func _spawn_bullet() -> void:
 	b.flash.global_position = spawn_pos
 	b.flash.visible = true
 	b.flash_frame = 0
-	var fmat = b.flash.material_override as StandardMaterial3D
-	fmat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
+	_flash_mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
 	if _flash_textures.size() > 0:
-		fmat.albedo_texture = _flash_textures[0]
+		_flash_mat.albedo_texture = _flash_textures[0]
 
 	_active_bullets.append(b)
 
@@ -316,14 +330,12 @@ func _update_bullets(delta: float) -> void:
 			var frame_idx = int(progress * _flash_textures.size())
 			frame_idx = clampi(frame_idx, 0, _flash_textures.size() - 1)
 			if frame_idx != b.flash_frame and frame_idx < _flash_textures.size():
-				var fmat = b.flash.material_override as StandardMaterial3D
-				fmat.albedo_texture = _flash_textures[frame_idx]
+				_flash_mat.albedo_texture = _flash_textures[frame_idx]
 				b.flash_frame = frame_idx
 			# Fade out in last 40%
 			if progress > 0.6:
-				var fmat = b.flash.material_override as StandardMaterial3D
 				var fade = (1.0 - progress) / 0.4
-				fmat.albedo_color = Color(1.5 * fade, 1.2 * fade, 0.8 * fade, fade)
+				_flash_mat.albedo_color = Color(1.5 * fade, 1.2 * fade, 0.8 * fade, fade)
 			if b.flash_timer <= 0:
 				b.flash.visible = false
 
