@@ -30,6 +30,15 @@ cd "$APP_DIR/web"
 npm ci
 npm run build
 
+# Pre-compress Godot assets with brotli + gzip for nginx static serving
+echo "Compressing Godot assets..."
+for f in "$APP_DIR/web/dist/godot/Work.pck" "$APP_DIR/web/dist/godot/Work.wasm" "$APP_DIR/web/dist/godot/Work.side.wasm" "$APP_DIR/web/dist/godot/Work.js"; do
+    if [ -f "$f" ]; then
+        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli: $(basename $f) → $(du -h "$f.br" | cut -f1)"
+        gzip -f -k -9 "$f" && echo "  gzip:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+    fi
+done
+
 # Install & restart backend
 echo "Restarting backend..."
 cd "$APP_DIR/server"

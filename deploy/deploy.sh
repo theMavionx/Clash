@@ -46,11 +46,30 @@ echo "[3/7] Installing backend dependencies..."
 cd "$SERVER_DIR"
 npm ci --production
 
+# Install brotli for pre-compression + nginx brotli module
+if ! command -v brotli &> /dev/null; then
+    echo "Installing brotli..."
+    apt-get install -y -qq brotli
+fi
+# Install nginx brotli module if available
+if ! nginx -V 2>&1 | grep -q brotli; then
+    apt-get install -y -qq libnginx-mod-http-brotli-static libnginx-mod-http-brotli-filter 2>/dev/null || echo "  (brotli module not available — gzip_static will be used as fallback)"
+fi
+
 # ── 4. Build frontend ──
 echo "[4/7] Building frontend..."
 cd "$WEB_DIR"
 npm ci
 npm run build
+
+# Pre-compress Godot assets with brotli + gzip for nginx static serving
+echo "Compressing Godot assets..."
+for f in "$WEB_DIST/godot/Work.pck" "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.side.wasm" "$WEB_DIST/godot/Work.js"; do
+    if [ -f "$f" ]; then
+        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli: $(basename $f) → $(du -h "$f.br" | cut -f1)"
+        gzip -f -k -9 "$f" && echo "  gzip:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+    fi
+done
 
 # ── 5. Setup nginx — Step 1: HTTP only (for certbot) ──
 echo "[5/8] Configuring nginx (HTTP)..."
@@ -137,21 +156,30 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # Godot WASM files — special headers + caching
+    # Godot assets — pre-compressed gzip/brotli + long cache
     location /godot/ {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
-        add_header Cache-Control "public, max-age=86400";
+        add_header Cache-Control "public, max-age=31536000, immutable";
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
+
+        # Serve pre-compressed .gz files (Work.pck.gz, Work.wasm.gz)
+        gzip_static on;
     }
 
     gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/wasm;
+    gzip_types text/plain text/css application/json application/javascript text/xml application/wasm application/octet-stream;
     gzip_min_length 1000;
     client_max_body_size 200M;
 }
 SSLCONF
+
+# If nginx brotli module is available, enable brotli_static for Godot assets
+if nginx -V 2>&1 | grep -q brotli; then
+    sed -i '/gzip_static on;/a\        brotli_static on;' /etc/nginx/sites-available/$DOMAIN
+    echo "  brotli_static enabled in nginx"
+fi
 
 nginx -t
 systemctl reload nginx
