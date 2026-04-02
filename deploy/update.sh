@@ -33,6 +33,11 @@ cd "$APP_DIR/web"
 npm ci
 npm run build
 
+# Stamp build hash into sw.js so browsers pick up new cache on deploy
+BUILD_HASH=$(date +%s)
+sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$APP_DIR/web/dist/sw.js"
+echo "  SW cache version: clash-godot-$BUILD_HASH"
+
 # Pre-compress Godot assets with brotli + gzip for nginx static serving
 echo "Compressing Godot assets..."
 for f in "$APP_DIR/web/dist/godot/Work.pck" "$APP_DIR/web/dist/godot/Work.wasm" "$APP_DIR/web/dist/godot/Work.side.wasm" "$APP_DIR/web/dist/godot/Work.js"; do

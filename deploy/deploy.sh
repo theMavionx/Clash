@@ -62,6 +62,11 @@ cd "$WEB_DIR"
 npm ci
 npm run build
 
+# Stamp build hash into sw.js so browsers pick up new cache on deploy
+BUILD_HASH=$(date +%s)
+sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
+echo "  SW cache version: clash-godot-$BUILD_HASH"
+
 # Pre-compress Godot assets with brotli + gzip for nginx static serving
 echo "Compressing Godot assets..."
 for f in "$WEB_DIST/godot/Work.pck" "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.side.wasm" "$WEB_DIST/godot/Work.js"; do
@@ -154,6 +159,13 @@ server {
 
     location / {
         try_files $uri $uri/ /index.html;
+    }
+
+    # Service worker — never cache (browser must always check for updates)
+    location = /sw.js {
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
     }
 
     # Godot assets — pre-compressed gzip/brotli + long cache

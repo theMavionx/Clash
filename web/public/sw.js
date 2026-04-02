@@ -1,4 +1,4 @@
-const CACHE_NAME = 'clash-godot-v1';
+const CACHE_NAME = 'clash-godot-__BUILD_HASH__';
 
 // Large Godot assets to cache (cache-first strategy)
 const GODOT_ASSETS = [
