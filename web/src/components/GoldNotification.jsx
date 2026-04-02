@@ -66,7 +66,7 @@ const S = {
     animation: 'goldSlideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards',
     pointerEvents: 'auto', cursor: 'pointer',
   },
-  icon: { fontSize: 32, filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.3))' },
+  icon: { fontSize: 32, filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.5)) drop-shadow(0 0 1px rgba(0,0,0,0.8))' },
   textCol: { display: 'flex', flexDirection: 'column', gap: 2 },
   amount: {
     fontSize: 20, fontWeight: 900, color: '#5C3A21',
