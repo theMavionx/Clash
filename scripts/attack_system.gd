@@ -397,7 +397,7 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	var lateral = offset.dot(lateral_dir)
 	lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
 	var stop_pos = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
-	stop_pos.y = plane_y
+	stop_pos.y = water_y
 
 	# Offset laterally so this ship doesn't land on top of an existing one
 	stop_pos = _get_adjusted_stop_pos(stop_pos, lateral_dir)
@@ -406,7 +406,7 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	_ship_stop_positions.append(stop_pos)
 
 	var spawn_pos = stop_pos + sail_dir * spawn_distance
-	spawn_pos.y = plane_y
+	spawn_pos.y = water_y
 
 	# Flag marker at the landing spot
 	var marker = _create_x_marker(stop_pos)
@@ -422,19 +422,6 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	pivot.look_at(stop_pos, Vector3.UP)
 	pivot.rotate_y(PI)
 
-	# Start rocking immediately (even during delay)
-	var rock_tween = create_tween().set_loops()
-	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(SHIP_ROCK_ANGLE_POS), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	rock_tween.tween_property(ship, "rotation:z", deg_to_rad(SHIP_ROCK_ANGLE_NEG), 0.8).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-
-	var bob_tween = create_tween().set_loops()
-	bob_tween.tween_property(ship, "position:y",  SHIP_BOB_AMPLITUDE, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	bob_tween.tween_property(ship, "position:y", -SHIP_BOB_AMPLITUDE, 0.6).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-
-	var pitch_tween = create_tween().set_loops()
-	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(SHIP_PITCH_ANGLE_POS), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	pitch_tween.tween_property(ship, "rotation:x", deg_to_rad(SHIP_PITCH_ANGLE_NEG), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-
 	# Main movement
 	var tween = create_tween()
 	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_trans(Tween.TRANS_LINEAR)
@@ -444,9 +431,6 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	var s_dir = sail_dir
 	var ship_idx = _ships_placed
 	tween.finished.connect(func():
-		rock_tween.kill()
-		bob_tween.kill()
-		pitch_tween.kill()
 		ship.rotation = Vector3.ZERO
 		if is_instance_valid(marker):
 			marker.queue_free()

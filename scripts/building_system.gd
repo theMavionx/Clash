@@ -271,6 +271,7 @@ static var _turret_script_res: Script = null
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
 var _ship_base_node: Node3D = null
+var _water_y: float = 0.0
 var _initial_load_done: bool = false
 
 # ── AABB Cache for precise outlines ──────────────────────────
@@ -3026,6 +3027,10 @@ func _buy_ship() -> void:
 		})
 
 func _animate_main_ship() -> void:
+	# Determine water level
+	var water = get_tree().root.find_child("Water", true, false)
+	if water:
+		_water_y = water.global_position.y
 	var _root = get_tree().root
 	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
 		_ship_attack_node = _root.find_child("MainShipAttack", true, false)
@@ -3033,19 +3038,13 @@ func _animate_main_ship() -> void:
 		_ship_base_node = _root.find_child("MainShipBase", true, false)
 	var attack_ship = _ship_attack_node
 	var base_ship = _ship_base_node
-	# Attack ship hidden by default — shown only when attacking enemy
+	# Set ships to water level
 	if attack_ship:
 		attack_ship.visible = false
-		_start_attack_ship_waves(attack_ship)
-	# Base ship visible by default — shown only on own base
+		attack_ship.global_position.y = _water_y + 0.12 - 0.03
 	if base_ship:
 		base_ship.visible = true
-		var rock2 = create_tween().set_loops()
-		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-		var pitch2 = create_tween().set_loops()
-		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(0.8), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(-0.6), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		base_ship.global_position.y = _water_y + 0.12 - 0.03
 
 
 func _spawn_port_ship() -> void:
@@ -3065,22 +3064,14 @@ func _spawn_port_ship() -> void:
 	get_tree().current_scene.add_child(ship)
 	# Mark this port as having a ship
 	port_node.set_meta("has_ship", true)
-	# Place ship in front of the port at shipPlane Y level
-	var ship_plane = get_node_or_null("/root/IslandScene/Island/shipPlane")
-	var ship_y = ship_plane.global_position.y if ship_plane else port_node.global_position.y
+	# Place ship in front of the port at water level
 	var port_pos = port_node.global_position
 	var port_rot_y = port_node.global_rotation.y
 	var forward = Vector3(sin(port_rot_y), 0, cos(port_rot_y))
-	ship.global_position = port_pos + forward * 0.35
-	ship.global_position.y = ship_y
+	var ship_dist = [0.35, 0.35, 0.4, 0.57][clampi(port_level, 0, 3)]
+	ship.global_position = port_pos + forward * ship_dist
+	ship.global_position.y = _water_y - 0.03
 	ship.global_rotation.y = port_rot_y + PI * 0.5
-	# Rock animation
-	var rock = create_tween().set_loops()
-	rock.tween_property(ship, "rotation:z", deg_to_rad(2.0), 0.9).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	rock.tween_property(ship, "rotation:z", deg_to_rad(-2.0), 0.9).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	var bob = create_tween().set_loops()
-	bob.tween_property(ship, "position:y", ship.position.y + 0.03, 0.7).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	bob.tween_property(ship, "position:y", ship.position.y - 0.03, 0.7).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 
 func _create_barracks_panel() -> void:
@@ -3774,8 +3765,7 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	# Muzzle flash slightly toward target
 	var flash_dir = (tp - ball.global_position).normalized()
 	_spawn_ship_flash(ball.global_position + flash_dir * 0.225)
-	# Recoil — stop waves, kickback, restart waves
-	_stop_attack_ship_waves()
+	# Recoil — tiny kickback only
 	var recoil_dir = (ship.global_position - tp).normalized()
 	recoil_dir.y = 0
 	var orig_pos = ship.position
@@ -3783,7 +3773,6 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	var tw = create_tween()
 	tw.tween_property(ship, "position", recoil_pos, 0.12).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_SINE)
 	tw.tween_property(ship, "position", orig_pos, 0.4).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	tw.tween_callback(_start_attack_ship_waves.bind(ship))
 
 
 func _update_ship_cannonballs(delta: float) -> void:
