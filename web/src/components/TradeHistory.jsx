@@ -2,7 +2,7 @@ import { memo, useState, useEffect } from 'react';
 
 const API = 'https://api.pacifica.fi/api/v1';
 
-function TradeHistory({ walletAddr }) {
+function TradeHistory({ walletAddr, filters }) {
   const [trades, setTrades] = useState([]);
 
   useEffect(() => {
@@ -13,7 +13,34 @@ function TradeHistory({ walletAddr }) {
       .catch(() => {});
   }, [walletAddr]);
 
-  if (!trades.length) {
+  let filtered = trades;
+
+  // Symbol filter
+  if (filters?.symbol && filters.symbol !== 'All') {
+    filtered = filtered.filter(t => (t.symbol || '').toUpperCase().includes(filters.symbol.toUpperCase()));
+  }
+
+  // Side filter
+  if (filters?.side && filters.side !== 'All') {
+    const isLong = filters.side === 'Long';
+    filtered = filtered.filter(t => {
+      const side = (t.side || '').toLowerCase();
+      return isLong ? side.includes('long') : side.includes('short');
+    });
+  }
+
+  // Sort
+  const sortBy = filters?.sortBy || 'time';
+  const dir = filters?.sortDir === 'asc' ? 1 : -1;
+  filtered = [...filtered].sort((a, b) => {
+    if (sortBy === 'time') return dir * (new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    if (sortBy === 'symbol') return dir * (a.symbol || '').localeCompare(b.symbol || '');
+    if (sortBy === 'size') return dir * (Math.abs(parseFloat(b.amount || 0)) - Math.abs(parseFloat(a.amount || 0)));
+    if (sortBy === 'price') return dir * (parseFloat(b.price || 0) - parseFloat(a.price || 0));
+    return 0;
+  });
+
+  if (!filtered.length) {
     return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No trade history</div>;
   }
 
@@ -28,7 +55,7 @@ function TradeHistory({ walletAddr }) {
         <th style={S.th}>Fee</th>
       </tr></thead>
       <tbody>
-        {trades.slice(0, 50).map((t, i) => {
+        {filtered.slice(0, 100).map((t, i) => {
           const side = t.side || '';
           const isOpen = side.includes('open');
           const isLong = side.includes('long');

@@ -7,6 +7,8 @@ import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
 import OrderBook from './OrderBook';
 import TradeHistory from './TradeHistory';
+import FundingHistory from './FundingHistory';
+import FilterPopup from './FilterPopup';
 import pacificaLogo from '../assets/pacifica.png';
 
 const TABS = [
@@ -73,6 +75,9 @@ function FuturesPanel() {
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [bottomTab, setBottomTab] = useState('positions');
+  const [showFilter, setShowFilter] = useState(false);
+  const defaultFilters = { symbol: 'All', side: 'All', sortBy: 'time', sortDir: 'desc' };
+  const [btmFilters, setBtmFilters] = useState(defaultFilters);
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
 
@@ -309,32 +314,108 @@ function FuturesPanel() {
   );
 
   // ==================== BOTTOM PANEL (fullscreen) ====================
+  const btmSymbols = useMemo(() => {
+    const syms = new Set();
+    positions.forEach(p => syms.add(p.symbol));
+    orders.forEach(o => syms.add(o.symbol || o.s));
+    POPULAR_SYMBOLS.forEach(s => syms.add(s));
+    return [...syms].sort();
+  }, [positions, orders]);
+
+  const sortOptionsForTab = useMemo(() => {
+    if (bottomTab === 'positions') return [
+      { value: 'symbol', label: 'Symbol' }, { value: 'size', label: 'Size' }, { value: 'pnl', label: 'PnL' },
+    ];
+    if (bottomTab === 'orders') return [
+      { value: 'symbol', label: 'Symbol' }, { value: 'price', label: 'Price' },
+    ];
+    if (bottomTab === 'history') return [
+      { value: 'time', label: 'Time' }, { value: 'symbol', label: 'Symbol' }, { value: 'size', label: 'Size' }, { value: 'price', label: 'Price' },
+    ];
+    if (bottomTab === 'funding') return [
+      { value: 'time', label: 'Time' }, { value: 'symbol', label: 'Symbol' }, { value: 'amount', label: 'Amount' },
+    ];
+    return [{ value: 'time', label: 'Time' }];
+  }, [bottomTab]);
+
+  // Apply filters to positions
+  const filteredPositions = useMemo(() => {
+    let list = positions;
+    if (btmFilters.symbol !== 'All') list = list.filter(p => p.symbol === btmFilters.symbol);
+    if (btmFilters.side !== 'All') {
+      const wantBid = btmFilters.side === 'Long';
+      list = list.filter(p => wantBid ? p.side === 'bid' : p.side === 'ask');
+    }
+    const dir = btmFilters.sortDir === 'asc' ? 1 : -1;
+    if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * a.symbol.localeCompare(b.symbol));
+    else if (btmFilters.sortBy === 'size') list = [...list].sort((a, b) => dir * (parseFloat(b.amount) * parseFloat(prices.find(pr => pr.symbol === b.symbol)?.mark || 0) - parseFloat(a.amount) * parseFloat(prices.find(pr => pr.symbol === a.symbol)?.mark || 0)));
+    else if (btmFilters.sortBy === 'pnl') list = [...list].sort((a, b) => {
+      const pnl = (p) => { const m = parseFloat(prices.find(pr => pr.symbol === p.symbol)?.mark || 0); return m ? (m - parseFloat(p.entry_price)) * parseFloat(p.amount) * (p.side === 'bid' ? 1 : -1) : 0; };
+      return dir * (pnl(b) - pnl(a));
+    });
+    return list;
+  }, [positions, btmFilters, prices]);
+
+  // Apply filters to orders
+  const filteredOrders = useMemo(() => {
+    let list = orders;
+    if (btmFilters.symbol !== 'All') list = list.filter(o => (o.symbol || o.s) === btmFilters.symbol);
+    if (btmFilters.side !== 'All') {
+      const wantBid = btmFilters.side === 'Long';
+      list = list.filter(o => { const s = o.side || o.d; return wantBid ? s === 'bid' : s === 'ask'; });
+    }
+    const dir = btmFilters.sortDir === 'asc' ? 1 : -1;
+    if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * (a.symbol || a.s || '').localeCompare(b.symbol || b.s || ''));
+    else if (btmFilters.sortBy === 'price') list = [...list].sort((a, b) => dir * (parseFloat(b.price || b.ip || 0) - parseFloat(a.price || a.ip || 0)));
+    return list;
+  }, [orders, btmFilters]);
+
+  const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
+
   const renderBottomPanel = () => {
     const tabs = [
       { id: 'positions', label: `Positions (${positions.length})` },
       { id: 'orders', label: `Orders (${orders.length})` },
       { id: 'history', label: 'History' },
+      { id: 'funding', label: 'Funding' },
     ];
 
     return (
       <div style={S.bottomPanel}>
-        <div style={S.bottomTabs}>
+        <div style={{...S.bottomTabs, position: 'relative'}}>
           {tabs.map(t => (
-            <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => setBottomTab(t.id)}>
+            <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => { setBottomTab(t.id); setShowFilter(false); }}>
               {t.label}
             </button>
           ))}
+          <button
+            style={{...S.filterBtn, ...(hasActiveFilters ? S.filterBtnActive : {})}}
+            onClick={() => setShowFilter(v => !v)}
+            title="Filters"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46"/></svg>
+            {hasActiveFilters && <span style={S.filterDot} />}
+          </button>
+          <FilterPopup
+            visible={showFilter}
+            onClose={() => setShowFilter(false)}
+            filters={btmFilters}
+            onChange={setBtmFilters}
+            symbols={btmSymbols}
+            showSide={bottomTab !== 'funding' || true}
+            sortOptions={sortOptionsForTab}
+          />
         </div>
         <div style={S.bottomContent}>
           {bottomTab === 'positions' && (
-            positions.length ? (
+            filteredPositions.length ? (
               <table style={S.table}>
                 <thead><tr>
                   <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
                   <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
                   <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
                 </tr></thead>
-                <tbody>{positions.map((p, i) => {
+                <tbody>{filteredPositions.map((p, i) => {
                   const mark = prices.find(pr => pr.symbol === p.symbol)?.mark;
                   const entryPrice = parseFloat(p.entry_price);
                   const markPrice = mark ? parseFloat(mark) : 0;
@@ -362,16 +443,16 @@ function FuturesPanel() {
                   );
                 })}</tbody>
               </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No open positions</div>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
           )}
           {bottomTab === 'orders' && (
-            orders.length ? (
+            filteredOrders.length ? (
               <table style={S.table}>
                 <thead><tr>
                   <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Type</th>
                   <th style={S.th}>Price</th><th style={S.th}>Amount</th><th style={S.th}></th>
                 </tr></thead>
-                <tbody>{orders.map((o, i) => {
+                <tbody>{filteredOrders.map((o, i) => {
                   const sym = o.symbol || o.s;
                   const side = o.side || o.d;
                   const rawPrice = parseFloat(o.price || o.ip || 0);
@@ -397,10 +478,13 @@ function FuturesPanel() {
                   );
                 })}</tbody>
               </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No open orders</div>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
           )}
           {bottomTab === 'history' && (
-            <TradeHistory walletAddr={walletAddr} />
+            <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
+          )}
+          {bottomTab === 'funding' && (
+            <FundingHistory walletAddr={walletAddr} filters={btmFilters} />
           )}
         </div>
       </div>
@@ -1095,7 +1179,16 @@ const S = {
     fontSize: 12, fontWeight: 800, color: '#5C3A21', cursor: 'default',
     borderBottom: '2px solid #4CAF50',
   },
-  bottomContent: { flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' },
+  bottomContent: { flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none', position: 'relative' },
+  filterBtn: {
+    marginLeft: 'auto', padding: '4px 8px', background: 'transparent', border: 'none',
+    cursor: 'pointer', color: '#77573d', display: 'flex', alignItems: 'center', gap: 4, position: 'relative',
+  },
+  filterBtnActive: { color: '#4CAF50' },
+  filterDot: {
+    position: 'absolute', top: 2, right: 2, width: 6, height: 6,
+    borderRadius: '50%', background: '#4CAF50',
+  },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'monospace' },
   th: { padding: '4px 12px', textAlign: 'left', color: '#a3906a', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', background: '#e8dfc8' },
   td: { padding: '4px 12px', color: '#5C3A21', fontSize: 12, borderBottom: '1px solid #d4c8b0' },

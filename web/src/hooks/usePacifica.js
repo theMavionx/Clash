@@ -534,7 +534,7 @@ export function usePacifica() {
           if (msg.channel === 'account_positions') {
             // WS positions use short keys: s=symbol, d=side, a=amount, p=entry_price, m=margin, f=funding, i=isolated
             const raw = Array.isArray(msg.data) ? msg.data : [];
-            setPositions(raw.map(p => ({
+            const incoming = raw.map(p => ({
               symbol: p.symbol || p.s,
               side: p.side || p.d,
               amount: p.amount || p.a,
@@ -543,7 +543,19 @@ export function usePacifica() {
               funding: p.funding || p.f || '0',
               isolated: p.isolated ?? p.i ?? false,
               liquidation_price: p.liquidation_price || p.l,
-            })));
+            }));
+            setPositions(prev => {
+              // Empty array = all positions closed
+              if (incoming.length === 0) return [];
+              // Merge incoming with existing positions by symbol:side key
+              const key = (p) => `${p.symbol}:${p.side}`;
+              const map = new Map(prev.map(p => [key(p), p]));
+              for (const p of incoming) {
+                if (parseFloat(p.amount) === 0) map.delete(key(p));
+                else map.set(key(p), p);
+              }
+              return [...map.values()];
+            });
           }
           if (msg.channel === 'account_info') {
             // WS uses short keys — normalize to match REST format
