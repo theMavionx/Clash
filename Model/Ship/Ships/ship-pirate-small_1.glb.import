@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://eh6bcai5h6s2"
-path="res://.godot/imported/flag-pennant.glb-4ac4c9b0857a1a9c2d22fa95656eb256.scn"
+uid="uid://blojib7rvdkd6"
+path="res://.godot/imported/ship-pirate-small_1.glb-3656018ebb9d7619cfc2debfc5d09c29.scn"
 
 [deps]
 
-source_file="res://Model/Ship/Ships/flag-pennant.glb"
-dest_files=["res://.godot/imported/flag-pennant.glb-4ac4c9b0857a1a9c2d22fa95656eb256.scn"]
+source_file="res://Model/Ship/Ships/ship-pirate-small_1.glb"
+dest_files=["res://.godot/imported/ship-pirate-small_1.glb-3656018ebb9d7619cfc2debfc5d09c29.scn"]
 
 [params]
 

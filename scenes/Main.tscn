@@ -15,7 +15,7 @@
 [ext_resource type="Script" uid="uid://dawh2co3wdfbk" path="res://scripts/archer.gd" id="13_arch"]
 [ext_resource type="PackedScene" uid="uid://dtm3f0osbuidh" path="res://Model/Characters/Model/Rogue_Hooded.glb" id="14_cvmbd"]
 [ext_resource type="Script" uid="uid://gawcw5hava2g" path="res://scripts/ranger.gd" id="15_ft6cd"]
-[ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip.glb" id="16_cvmbd"]
+[ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip/MainShip.glb" id="16_cvmbd"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_r0du0"]
 
@@ -170,4 +170,4 @@ script = ExtResource("15_ft6cd")
 transform = Transform3D(-0.07, 0, -1.0569706e-08, 0, 0.07, 0, 1.0569706e-08, 0, -0.07, -0.15186018, 0.0918113, 5.3458157)
 
 [node name="MainShipBase" parent="." unique_id=843481737 instance=ExtResource("16_cvmbd")]
-transform = Transform3D(0.04382417, 0, -0.05458426, 0, 0.07, 0, 0.05458426, 0, 0.04382417, 0.6215995, 0.0918113, 4.2014713)
+transform = Transform3D(-0.06516588, 0, 0.025561852, 0, 0.07, 0, -0.025561852, 0, -0.06516588, 3.0879502, 0.085252225, 2.6711063)

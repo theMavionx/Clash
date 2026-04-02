@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bej0bonc53sg2"
-path="res://.godot/imported/castle-wall.glb-78b5bd375809e845989314a097bf81dd.scn"
+uid="uid://gmqmrtmi1git"
+path="res://.godot/imported/ship-pirate-large_3.glb-d9a2e494c4169cf81b89ef28f63ba114.scn"
 
 [deps]
 
-source_file="res://Model/Ship/Ships/castle-wall.glb"
-dest_files=["res://.godot/imported/castle-wall.glb-78b5bd375809e845989314a097bf81dd.scn"]
+source_file="res://Model/Ship/Ships/ship-pirate-large_3.glb"
+dest_files=["res://.godot/imported/ship-pirate-large_3.glb-d9a2e494c4169cf81b89ef28f63ba114.scn"]
 
 [params]
 

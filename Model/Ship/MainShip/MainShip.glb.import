@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bubmoitxs27wy"
-path="res://.godot/imported/rocks-b.glb-c018700ca726a9a06e684649a5ffddda.scn"
+uid="uid://cl3mm08tunr88"
+path="res://.godot/imported/MainShip.glb-54f870353cd1326501ecc3ec894c4b7b.scn"
 
 [deps]
 
-source_file="res://Model/Ship/Ships/rocks-b.glb"
-dest_files=["res://.godot/imported/rocks-b.glb-c018700ca726a9a06e684649a5ffddda.scn"]
+source_file="res://Model/Ship/MainShip/MainShip.glb"
+dest_files=["res://.godot/imported/MainShip.glb-54f870353cd1326501ecc3ec894c4b7b.scn"]
 
 [params]
 
