@@ -348,9 +348,13 @@ var port_panel: PanelContainer
 var port_vbox: VBoxContainer
 var port_ship_count_label: Label
 var owned_ships: int = 0
-const SHIP_COST_WOOD: int = 500
-const SHIP_MODEL_PATH: String = "res://Model/Ship/Sail Ship.glb"
-const SHIP_DISPLAY_SCALE: float = 0.1
+const SHIP_COST_GOLD: int = 500
+const SHIP_MODELS: Array[String] = [
+	"res://Model/Ship/Ships/ship-pirate-small_1.glb",
+	"res://Model/Ship/Ships/ship-pirate-medium_2.glb",
+	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
+]
+const SHIP_DISPLAY_SCALE: float = 0.05
 
 # ── Barracks ──────────────────────────────────────────────────
 var barracks_panel: PanelContainer
@@ -450,7 +454,8 @@ func _ready() -> void:
 			canvas.visible = false
 	else:
 		# Non-UI grid (e.g. port grid) — borrow canvas from main BuildingSystem
-		for bs in _building_systems:
+		# Use get_nodes_in_group directly because _building_systems cache isn't ready yet
+		for bs in get_tree().get_nodes_in_group("building_systems"):
 			if bs != self and bs.canvas:
 				canvas = bs.canvas
 				world_ui_canvas = bs.world_ui_canvas
@@ -2967,9 +2972,18 @@ func _refresh_port_panel() -> void:
 
 	# Buy ship button
 	var buy_btn = Button.new()
-	buy_btn.text = "Buy Ship (500 Wood)"
 	buy_btn.custom_minimum_size = Vector2(0, 44)
-	_style_button(buy_btn, Color(0.15, 0.35, 0.55), Color(0.2, 0.45, 0.65))
+	if has_ship:
+		buy_btn.text = "Ship already docked"
+		_style_button(buy_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+		buy_btn.disabled = true
+	elif resources.get("gold", 0) < SHIP_COST_GOLD:
+		buy_btn.text = "Buy Ship (%d Gold)" % SHIP_COST_GOLD
+		_style_button(buy_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+		buy_btn.disabled = true
+	else:
+		buy_btn.text = "Buy Ship (%d Gold)" % SHIP_COST_GOLD
+		_style_button(buy_btn, Color(0.15, 0.35, 0.55), Color(0.2, 0.45, 0.65))
 	buy_btn.pressed.connect(_buy_ship)
 	port_vbox.add_child(buy_btn)
 
@@ -2988,13 +3002,13 @@ func _refresh_port_panel() -> void:
 
 
 func _buy_ship() -> void:
-	if resources["wood"] < SHIP_COST_WOOD:
+	if resources["gold"] < SHIP_COST_GOLD:
 		return
 	# Check if this port already has a ship
 	var port_node = selected_building.get("node", null)
 	if is_instance_valid(port_node) and port_node.has_meta("has_ship"):
 		return
-	resources["wood"] -= SHIP_COST_WOOD
+	resources["gold"] -= SHIP_COST_GOLD
 	_update_resource_ui()
 	owned_ships += 1
 	_refresh_port_panel()
@@ -3030,8 +3044,8 @@ func _animate_main_ship() -> void:
 		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 		rock2.tween_property(base_ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 		var pitch2 = create_tween().set_loops()
-		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(0.8), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+		pitch2.tween_property(base_ship, "rotation:x", deg_to_rad(-0.6), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 
 
 func _spawn_port_ship() -> void:
@@ -3040,7 +3054,9 @@ func _spawn_port_ship() -> void:
 	var port_node = selected_building.get("node", null)
 	if not is_instance_valid(port_node):
 		return
-	var ship_res = load(SHIP_MODEL_PATH)
+	var port_level = selected_building.get("level", 1)
+	var model_idx = clampi(port_level - 1, 0, SHIP_MODELS.size() - 1)
+	var ship_res = load(SHIP_MODELS[model_idx])
 	if ship_res == null:
 		return
 	var ship = ship_res.instantiate()
@@ -3501,8 +3517,8 @@ func _start_attack_ship_waves(ship: Node3D) -> void:
 	rock.tween_property(ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	rock.tween_property(ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	var pitch = create_tween().set_loops()
-	pitch.tween_property(ship, "rotation:x", deg_to_rad(2.0), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	pitch.tween_property(ship, "rotation:x", deg_to_rad(-1.5), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch.tween_property(ship, "rotation:x", deg_to_rad(0.8), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	pitch.tween_property(ship, "rotation:x", deg_to_rad(-0.6), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
 	_attack_ship_wave_tweens = [rock, pitch]
 
 
@@ -3970,6 +3986,11 @@ func _make_arrow_mesh() -> ImmediateMesh:
 func _start_move(b: Dictionary) -> void:
 	if is_viewing_enemy or _server_busy or _is_moving:
 		return
+	# Port with a docked ship cannot be moved
+	if b.get("id") == "port":
+		var pnode = b.get("node", null)
+		if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
+			return
 	# Cancel any ongoing move on other building systems
 	for bs in _building_systems:
 		if bs != self and bs._is_moving:
