@@ -12,6 +12,21 @@ const RES_COLORS = {
   ore: '#90A4AE',
 };
 
+const CollectButton = memo(function CollectButton({ serverId, x, y, resource, amount, onCollect }) {
+  const color = RES_COLORS[resource] || '#FFD700';
+  return (
+    <div style={{ position: 'fixed', left: x - 24, top: y - 56, zIndex: 15, pointerEvents: 'all' }}>
+      <button
+        style={{ ...styles.btn, borderColor: color, boxShadow: `0 4px 12px ${color}66` }}
+        onClick={() => onCollect(serverId)}
+      >
+        <img src={RES_ICONS[resource] || goldIcon} alt={resource} style={styles.icon} />
+        <span style={styles.amount}>+{amount}</span>
+      </button>
+    </div>
+  );
+});
+
 function CollectButtons() {
   const { sendToGodot } = useSend();
   const { collectibles } = useUI();
@@ -25,28 +40,15 @@ function CollectButtons() {
   return (
     <>
       {collectibles.map((c) => (
-        <div
+        <CollectButton
           key={c.server_id}
-          style={{
-            position: 'fixed',
-            left: c.position.x - 24,
-            top: c.position.y - 56,
-            zIndex: 15,
-            pointerEvents: 'all',
-          }}
-        >
-          <button
-            style={{
-              ...styles.btn,
-              borderColor: RES_COLORS[c.resource] || '#FFD700',
-              boxShadow: `0 4px 12px ${RES_COLORS[c.resource] || '#FFD700'}66`,
-            }}
-            onClick={() => handleCollect(c.server_id)}
-          >
-            <img src={RES_ICONS[c.resource] || goldIcon} alt={c.resource} style={styles.icon} />
-            <span style={styles.amount}>+{c.amount}</span>
-          </button>
-        </div>
+          serverId={c.server_id}
+          x={c.position.x}
+          y={c.position.y}
+          resource={c.resource}
+          amount={c.amount}
+          onCollect={handleCollect}
+        />
       ))}
     </>
   );

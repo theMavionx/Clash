@@ -25,6 +25,13 @@ export default function GameUI() {
     if (!selectedBuilding) setShowTroops(false);
   }, [selectedBuilding]);
 
+  // Pause island when heavy overlay panels are open (futures, shop, barracks, profile)
+  const barracksOpen = !!(showTroops || (selectedBuilding && selectedBuilding.is_barracks && !selectedBuilding.is_enemy));
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barracksOpen || showProfile);
+  useEffect(() => {
+    sendToGodot('ui_overlay', { active: anyPanelOpen });
+  }, [anyPanelOpen, sendToGodot]);
+
   const handleCloseShop = useCallback(() => {
     setShopOpen(false);
     sendToGodot('close_shop');

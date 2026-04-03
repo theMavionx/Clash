@@ -114,6 +114,282 @@ const SP = {
   row: { transition: 'background 0.1s' },
 };
 
+// ==================== ORDERS LIST (mobile/tab card view) ====================
+const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
+  if (!orders.length) {
+    return (
+      <div style={S.empty}>
+        <div style={{opacity: 0.3, color: '#5C3A21'}}>
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </div>
+        <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Orders</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
+      {orders.map((o, i) => {
+        const sym = o.symbol || o.s;
+        const side = o.side || o.d;
+        const rawPrice = parseFloat(o.price || o.ip || 0);
+        const stopPrice = parseFloat(o.stop_price || o.sp || 0);
+        const price = rawPrice > 0 ? rawPrice : stopPrice;
+        const rawAmt = o.initial_amount || o.amount || o.a;
+        const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
+        const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+        const isBid = side === 'bid';
+        const isTP = type.includes('TAKE') || type.includes('TP');
+        const isSL = type.includes('STOP LOSS') || type.includes('SL');
+        const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+        return (
+          <div key={i} style={S.posCard}>
+            <div style={S.row}>
+              <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
+              <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
+              <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
+                {isBid ? 'BUY' : 'SELL'}
+              </span>
+              <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>✕</button>
+            </div>
+            <div style={S.row}>
+              <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
+              <span style={S.detail}>Amount: {amt}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+// ==================== POSITIONS LIST (mobile/tab card view) ====================
+const PositionsList = memo(function PositionsList({
+  positions, prices, dataReady, leverageSettings, loading, error,
+  closePosition, setTpsl, clearError,
+}) {
+  const [expandedPos, setExpandedPos] = useState(null);
+  const [closePct, setClosePct] = useState(100);
+  const [tpPrice, setTpPrice] = useState('');
+  const [slPrice, setSlPrice] = useState('');
+
+  if (!positions.length) {
+    return (
+      <div style={S.empty}>
+        <div style={{opacity: 0.3, color: '#5C3A21'}}>
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+        </div>
+        <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
+      {positions.map((pos, i) => {
+        const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
+        const entryP = parseFloat(pos.entry_price);
+        const markP = mark ? parseFloat(mark) : 0;
+        const amt = parseFloat(pos.amount);
+        const margin = parseFloat(pos.margin || 0);
+        const pnlVal = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
+        const setLev = (margin > 0 && entryP > 0 && amt > 0) ? Math.round((amt * entryP) / margin) : (leverageSettings[pos.symbol] || 1);
+        const posValueUsd = markP ? amt * markP : amt * entryP;
+        const pnlPct = entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0;
+        const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+        const posKey = `${pos.symbol}-${pos.side}`;
+        const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+
+        return (
+          <div key={i} style={S.posCard}>
+            <div style={S.row}>
+              <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+              <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                <span style={{fontSize: 11, fontWeight: 800, color: '#a3906a', background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{setLev}x</span>
+                <span style={{fontSize: 13, fontWeight: 900, color: pos.side === 'bid' ? '#4CAF50' : '#E53935'}}>
+                  {pos.side === 'bid' ? 'LONG' : 'SHORT'}
+                </span>
+              </div>
+            </div>
+            <div style={S.row}>
+              <span style={S.detail}>Size: {pos.amount} <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span></span>
+              <span style={S.detail}>Entry: ${parseFloat(pos.entry_price).toLocaleString()}</span>
+            </div>
+            <div style={S.row}>
+              <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
+              <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
+                {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
+              </span>
+            </div>
+
+            {/* Action buttons */}
+            <div style={{display: 'flex', gap: 6, marginTop: 4}}>
+              <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
+              <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+            </div>
+
+            {/* Close slider */}
+            {expanded === 'close' && (
+              <div style={S.expandPanel}>
+                <div style={S.row}>
+                  <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21'}}>Close {closePct}%</span>
+                  <span style={{fontSize: 11, color: '#a3906a', fontWeight: 700}}>
+                    {(parseFloat(pos.amount) * closePct / 100).toFixed(6)} {pos.symbol}
+                  </span>
+                </div>
+                <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
+                <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+                <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100))} disabled={loading}>
+                  {loading ? 'Closing...' : `Close ${closePct}%`}
+                </button>
+              </div>
+            )}
+
+            {/* TP/SL */}
+            {expanded === 'tpsl' && (
+              <div style={{...S.expandPanel, ...S.row}}>
+                <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
+                <button style={S.btnBlue} onClick={async () => {
+                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null);
+                  setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                }} disabled={!tpPrice && !slPrice}>Set</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+    </div>
+  );
+});
+
+// ==================== BOTTOM PANEL (fullscreen table view) ====================
+const BottomPanel = memo(function BottomPanel({
+  bottomH, bottomTab, setBottomTab,
+  showFilter, setShowFilter, btmFilters, setBtmFilters,
+  btmSymbols, sortOptionsForTab, hasActiveFilters,
+  filteredPositions, filteredOrders,
+  prices, walletAddr, dataReady, leverageSettings,
+  closePosition, cancelOrder,
+}) {
+  const tabs = [
+    { id: 'positions', label: `Positions (${filteredPositions.length})` },
+    { id: 'orders', label: `Orders (${filteredOrders.length})` },
+    { id: 'history', label: 'History' },
+    { id: 'funding', label: 'Funding' },
+  ];
+
+  return (
+    <div style={{...S.bottomPanel, height: bottomH}}>
+      <div style={{...S.bottomTabs, position: 'relative'}}>
+        {tabs.map(t => (
+          <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => { setBottomTab(t.id); setShowFilter(false); }}>
+            {t.label}
+          </button>
+        ))}
+        <button
+          style={{...S.filterBtn, ...(hasActiveFilters ? S.filterBtnActive : {})}}
+          onClick={() => setShowFilter(v => !v)}
+          title="Filters"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46"/></svg>
+          {hasActiveFilters && <span style={S.filterDot} />}
+        </button>
+        <FilterPopup
+          visible={showFilter}
+          onClose={() => setShowFilter(false)}
+          filters={btmFilters}
+          onChange={setBtmFilters}
+          symbols={btmSymbols}
+          showSide={bottomTab !== 'funding' || true}
+          sortOptions={sortOptionsForTab}
+        />
+      </div>
+      <div style={S.bottomContent}>
+        {bottomTab === 'positions' && (
+          filteredPositions.length ? (
+            <table style={S.table}>
+              <thead><tr>
+                <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
+                <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
+                <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
+              </tr></thead>
+              <tbody>{filteredPositions.map((p, i) => {
+                const mark = prices.find(pr => pr.symbol === p.symbol)?.mark;
+                const entryPrice = parseFloat(p.entry_price);
+                const markPrice = mark ? parseFloat(mark) : 0;
+                const tblAmt = parseFloat(p.amount);
+                const tblMargin = parseFloat(p.margin || 0);
+                const pnlVal = markPrice ? (markPrice - entryPrice) * tblAmt * (p.side === 'bid' ? 1 : -1) : 0;
+                const lev = (tblMargin > 0 && entryPrice > 0 && tblAmt > 0) ? Math.round((tblAmt * entryPrice) / tblMargin) : (leverageSettings[p.symbol] || 1);
+                const tblPosValue = markPrice ? tblAmt * markPrice : tblAmt * entryPrice;
+                const pnlPct = entryPrice && markPrice ? ((markPrice - entryPrice) / entryPrice * 100 * (p.side === 'bid' ? 1 : -1) * (typeof lev === 'number' ? lev : 1)) : 0;
+                const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+                return (
+                  <tr key={i} style={S.tr}>
+                    <td style={S.td}>{p.symbol}</td>
+                    <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
+                    <td style={S.td}>{p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${tblPosValue.toFixed(2)})</span></td>
+                    <td style={S.td}>${entryPrice.toLocaleString()}</td>
+                    <td style={S.td}>{markPrice ? `$${markPrice.toLocaleString()}` : '—'}</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
+                    <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                    <td style={S.td}>{lev}x</td>
+                    <td style={S.td}>
+                      <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, p.amount)}>Close</button>
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
+        )}
+        {bottomTab === 'orders' && (
+          filteredOrders.length ? (
+            <table style={S.table}>
+              <thead><tr>
+                <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Type</th>
+                <th style={S.th}>Price</th><th style={S.th}>Amount</th><th style={S.th}></th>
+              </tr></thead>
+              <tbody>{filteredOrders.map((o, i) => {
+                const sym = o.symbol || o.s;
+                const side = o.side || o.d;
+                const rawPrice = parseFloat(o.price || o.ip || 0);
+                const stopPrice = parseFloat(o.stop_price || o.sp || 0);
+                const price = rawPrice > 0 ? rawPrice : stopPrice;
+                const rawAmt = o.initial_amount || o.amount || o.a;
+                const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full';
+                const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+                const isTP = type.includes('TAKE') || type.includes('TP');
+                const isSL = type.includes('STOP LOSS') || type.includes('SL');
+                const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
+                return (
+                  <tr key={i} style={S.tr}>
+                    <td style={S.td}>{sym}</td>
+                    <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
+                    <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
+                    <td style={S.td}>${price.toLocaleString()}</td>
+                    <td style={S.td}>{amt}</td>
+                    <td style={S.td}>
+                      <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>Cancel</button>
+                    </td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
+        )}
+        {bottomTab === 'history' && (
+          <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
+        )}
+        {bottomTab === 'funding' && (
+          <FundingHistory walletAddr={walletAddr} filters={btmFilters} />
+        )}
+      </div>
+    </div>
+  );
+});
+
 function FuturesPanel() {
   const { setFuturesOpen } = useSend();
   const { connected } = useWallet();
@@ -161,14 +437,14 @@ function FuturesPanel() {
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
-  const [expandedPos, setExpandedPos] = useState(null);
-  const [closePct, setClosePct] = useState(100);
-  const [tpPrice, setTpPrice] = useState('');
-  const [slPrice, setSlPrice] = useState('');
   const [depositAmt, setDepositAmt] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [bottomTab, setBottomTab] = useState('positions');
+  const [expandedPos, setExpandedPos] = useState(null);
+  const [closePct, setClosePct] = useState(100);
+  const [tpPrice, setTpPrice] = useState('');
+  const [slPrice, setSlPrice] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const defaultFilters = { symbol: 'All', side: 'All', sortBy: 'time', sortDir: 'desc' };
   const [btmFilters, setBtmFilters] = useState(defaultFilters);
@@ -224,6 +500,9 @@ function FuturesPanel() {
   }, []);
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
+
+  // Cleanup leverage debounce timer on unmount
+  useEffect(() => () => clearTimeout(levTimerRef.current), []);
 
   // Sync leverage from Pacifica settings when symbol changes or settings load
   useEffect(() => {
@@ -340,15 +619,17 @@ function FuturesPanel() {
           {!fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        {fullscreen ? <>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>${vol24h >= 1e6 ? (vol24h/1e6).toFixed(1)+'M' : vol24h >= 1e3 ? (vol24h/1e3).toFixed(0)+'K' : vol24h.toFixed(0)}</span></div>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>OI</span><span style={S.infoCellValue}>${oi >= 1e6 ? (oi/1e6).toFixed(1)+'M' : oi >= 1e3 ? (oi/1e3).toFixed(0)+'K' : oi.toFixed(0)}</span></div>
-          <div style={S.infoCell}><span style={S.infoCellLabel}>Funding</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
-        </> : <>
-          {/* Mobile: margin mode + balance in symbol bar */}
+        {fullscreen && (
+          <>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>${vol24h >= 1e6 ? (vol24h/1e6).toFixed(1)+'M' : vol24h >= 1e3 ? (vol24h/1e3).toFixed(0)+'K' : vol24h.toFixed(0)}</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>OI</span><span style={S.infoCellValue}>${oi >= 1e6 ? (oi/1e6).toFixed(1)+'M' : oi >= 1e3 ? (oi/1e3).toFixed(0)+'K' : oi.toFixed(0)}</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>Funding</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
+          </>
+        )}
+        <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0}}>
           <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
             <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
               {marginModes[symbol] ? 'Isolated' : 'Cross'}
@@ -358,11 +639,11 @@ function FuturesPanel() {
               <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
             </svg>
           </button>
-          <div style={{marginLeft: 'auto', ...S.balBadge}}>
+          <div style={S.balBadge}>
             <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
             <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
           </div>
-        </>}
+        </div>
       </div>
       {showSymbolPicker && (
         <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
@@ -376,22 +657,7 @@ function FuturesPanel() {
 
   const renderTradeControls = () => (
     <div style={{display: 'flex', flexDirection: 'column', gap: 8, ...(fullscreen ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'} : {})}}>
-      {/* Margin mode + balance — only in fullscreen (mobile has it in symbol bar) */}
-      {fullscreen && <div style={S.row}>
-        <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
-          <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
-            {marginModes[symbol] ? 'Isolated' : 'Cross'}
-          </span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
-            <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
-            <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
-          </svg>
-        </button>
-        <div style={{...S.balBadge, marginLeft: 'auto'}}>
-          <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
-          <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
-        </div>
-      </div>}
+
       {/* Deposit/Withdraw row */}
       {pacBalance === 0 && (
         <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
@@ -501,12 +767,8 @@ function FuturesPanel() {
 
   // ==================== BOTTOM PANEL (fullscreen) ====================
   const btmSymbols = useMemo(() => {
-    const syms = new Set();
-    positions.forEach(p => syms.add(p.symbol));
-    orders.forEach(o => syms.add(o.symbol || o.s));
-    POPULAR_SYMBOLS.forEach(s => syms.add(s));
-    return [...syms].sort();
-  }, [positions, orders]);
+    return markets.map(m => m.symbol).sort();
+  }, [markets]);
 
   const sortOptionsForTab = useMemo(() => {
     if (bottomTab === 'positions') return [
@@ -558,125 +820,6 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
-  const renderBottomPanel = () => {
-    const tabs = [
-      { id: 'positions', label: `Positions (${positions.length})` },
-      { id: 'orders', label: `Orders (${orders.length})` },
-      { id: 'history', label: 'History' },
-      { id: 'funding', label: 'Funding' },
-    ];
-
-    return (
-      <div style={{...S.bottomPanel, height: bottomH}}>
-        <div style={{...S.bottomTabs, position: 'relative'}}>
-          {tabs.map(t => (
-            <button key={t.id} style={bottomTab === t.id ? S.bottomTabActive : S.bottomTabBtn} onClick={() => { setBottomTab(t.id); setShowFilter(false); }}>
-              {t.label}
-            </button>
-          ))}
-          <button
-            style={{...S.filterBtn, ...(hasActiveFilters ? S.filterBtnActive : {})}}
-            onClick={() => setShowFilter(v => !v)}
-            title="Filters"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46"/></svg>
-            {hasActiveFilters && <span style={S.filterDot} />}
-          </button>
-          <FilterPopup
-            visible={showFilter}
-            onClose={() => setShowFilter(false)}
-            filters={btmFilters}
-            onChange={setBtmFilters}
-            symbols={btmSymbols}
-            showSide={bottomTab !== 'funding' || true}
-            sortOptions={sortOptionsForTab}
-          />
-        </div>
-        <div style={S.bottomContent}>
-          {bottomTab === 'positions' && (
-            filteredPositions.length ? (
-              <table style={S.table}>
-                <thead><tr>
-                  <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
-                  <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
-                  <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
-                </tr></thead>
-                <tbody>{filteredPositions.map((p, i) => {
-                  const mark = prices.find(pr => pr.symbol === p.symbol)?.mark;
-                  const entryPrice = parseFloat(p.entry_price);
-                  const markPrice = mark ? parseFloat(mark) : 0;
-                  const tblAmt = parseFloat(p.amount);
-                  const tblMargin = parseFloat(p.margin || 0);
-                  const pnlVal = markPrice ? (markPrice - entryPrice) * tblAmt * (p.side === 'bid' ? 1 : -1) : 0;
-                  const lev = (tblMargin > 0 && entryPrice > 0 && tblAmt > 0) ? Math.round((tblAmt * entryPrice) / tblMargin) : (leverageSettings[p.symbol] || 1);
-                  const tblPosValue = markPrice ? tblAmt * markPrice : tblAmt * entryPrice;
-                  const pnlPct = entryPrice && markPrice ? ((markPrice - entryPrice) / entryPrice * 100 * (p.side === 'bid' ? 1 : -1) * (typeof lev === 'number' ? lev : 1)) : 0;
-                  const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
-                  return (
-                    <tr key={i} style={S.tr}>
-                      <td style={S.td}>{p.symbol}</td>
-                      <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
-                      <td style={S.td}>{p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${tblPosValue.toFixed(2)})</span></td>
-                      <td style={S.td}>${entryPrice.toLocaleString()}</td>
-                      <td style={S.td}>{markPrice ? `$${markPrice.toLocaleString()}` : '—'}</td>
-                      <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
-                      <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
-                      <td style={S.td}>{lev}x</td>
-                      <td style={S.td}>
-                        <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, p.amount)}>Close</button>
-                      </td>
-                    </tr>
-                  );
-                })}</tbody>
-              </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
-          )}
-          {bottomTab === 'orders' && (
-            filteredOrders.length ? (
-              <table style={S.table}>
-                <thead><tr>
-                  <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Type</th>
-                  <th style={S.th}>Price</th><th style={S.th}>Amount</th><th style={S.th}></th>
-                </tr></thead>
-                <tbody>{filteredOrders.map((o, i) => {
-                  const sym = o.symbol || o.s;
-                  const side = o.side || o.d;
-                  const rawPrice = parseFloat(o.price || o.ip || 0);
-                  const stopPrice = parseFloat(o.stop_price || o.sp || 0);
-                  const price = rawPrice > 0 ? rawPrice : stopPrice;
-                  const rawAmt = o.initial_amount || o.amount || o.a;
-                  const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full';
-                  const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
-                  const isTP = type.includes('TAKE') || type.includes('TP');
-                  const isSL = type.includes('STOP LOSS') || type.includes('SL');
-                  const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
-                  return (
-                    <tr key={i} style={S.tr}>
-                      <td style={S.td}>{sym}</td>
-                      <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
-                      <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
-                      <td style={S.td}>${price.toLocaleString()}</td>
-                      <td style={S.td}>{amt}</td>
-                      <td style={S.td}>
-                        <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>Cancel</button>
-                      </td>
-                    </tr>
-                  );
-                })}</tbody>
-              </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
-          )}
-          {bottomTab === 'history' && (
-            <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
-          )}
-          {bottomTab === 'funding' && (
-            <FundingHistory walletAddr={walletAddr} filters={btmFilters} />
-          )}
-        </div>
-      </div>
-    );
-  };
-
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
     // Funding rate badge (top-right of chart) — only for non-fullscreen
@@ -710,7 +853,26 @@ function FuturesPanel() {
           {/* Drag handle: top ↔ bottom */}
           <div style={S.dragHandleH} onMouseDown={dragBottom} />
           {/* Bottom: positions/orders panel */}
-          {renderBottomPanel()}
+          <BottomPanel
+            bottomH={bottomH}
+            bottomTab={bottomTab}
+            setBottomTab={setBottomTab}
+            showFilter={showFilter}
+            setShowFilter={setShowFilter}
+            btmFilters={btmFilters}
+            setBtmFilters={setBtmFilters}
+            btmSymbols={btmSymbols}
+            sortOptionsForTab={sortOptionsForTab}
+            hasActiveFilters={hasActiveFilters}
+            filteredPositions={filteredPositions}
+            filteredOrders={filteredOrders}
+            prices={prices}
+            walletAddr={walletAddr}
+            dataReady={dataReady}
+            leverageSettings={leverageSettings}
+            closePosition={closePosition}
+            cancelOrder={cancelOrder}
+          />
         </div>
       );
     }
@@ -1059,15 +1221,15 @@ const animCSS = `
   /* Gradient Scrollbar */
   .grad-scrollbar::-webkit-scrollbar { width: 8px; }
   .grad-scrollbar::-webkit-scrollbar-track { background: #fdf8e7; border-radius: 4px; }
-  .grad-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #e0eaff 0%, #2563eb 100%); border-radius: 4px; border: 1px solid #fdf8e7; }
-  .grad-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #b0c4de 0%, #1d4ed8 100%); }
+  .grad-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #d4c8b0 0%, #bba882 100%); border-radius: 4px; border: 1px solid #fdf8e7; }
+  .grad-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #bba882 0%, #a3906a 100%); }
 
-  /* Blue Gradient Range Slider */
+  /* Gradient Range Slider */
   .grad-slider {
     -webkit-appearance: none;
     width: 100%;
     height: 8px;
-    background: linear-gradient(90deg, #e0eaff 0%, #2563eb var(--val, 0%), #cfd5dc var(--val, 0%), #cfd5dc 100%);
+    background: linear-gradient(90deg, #5C3A21 0%, #5C3A21 var(--val, 0%), #d4c8b0 var(--val, 0%), #d4c8b0 100%);
     border-radius: 4px;
     outline: none;
     cursor: pointer;
@@ -1078,8 +1240,8 @@ const animCSS = `
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #2563eb;
-    border: 3px solid #fff;
+    background: #fdf8e7;
+    border: 4px solid #5C3A21;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     cursor: pointer;
   }
@@ -1087,8 +1249,8 @@ const animCSS = `
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: #2563eb;
-    border: 3px solid #fff;
+    background: #fdf8e7;
+    border: 4px solid #5C3A21;
     box-shadow: 0 2px 5px rgba(0,0,0,0.3);
     cursor: pointer;
   }
@@ -1206,11 +1368,11 @@ const S = {
   pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
   pacificaBrand: { fontSize: 11, fontWeight: 900, color: '#5C3A21', letterSpacing: '0.08em', textTransform: 'uppercase' },
   symbolBar: {
-    display: 'flex', alignItems: 'center', gap: 15, padding: '4px 15px',
+    display: 'flex', alignItems: 'center', gap: 12, padding: '4px 15px',
     background: 'transparent', flexShrink: 0,
     overflowX: 'auto', scrollbarWidth: 'none', minHeight: 0,
   },
-  infoCell: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 },
+  infoCell: { display: 'flex', flexDirection: 'column', gap: 0, width: 90, flexShrink: 0 },
   infoCellLabel: { fontSize: 9, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase', lineHeight: 1 },
   infoCellValue: { fontSize: 13, fontWeight: 900, color: '#5C3A21', fontFamily: 'monospace', whiteSpace: 'nowrap', lineHeight: 1.2 },
   fundingOverlay: {

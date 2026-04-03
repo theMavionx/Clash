@@ -50,6 +50,7 @@ db.exec(`
 // Safe migrations
 try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
+try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
 
 // ---------- Resource Production Definitions ----------
 
@@ -460,6 +461,21 @@ function getFullPlayerState(playerId) {
   };
 }
 
+const SHIP_COST_GOLD = 500;
+
+function buyShip(playerId, buildingId) {
+  const building = stmts.getBuildingById.get(buildingId, playerId);
+  if (!building) return { error: 'Building not found' };
+  if (building.type !== 'port') return { error: 'Can only buy ships at ports' };
+  if (building.has_ship) return { error: 'Port already has a ship' };
+  if (!canAfford(playerId, SHIP_COST_GOLD, 0, 0)) {
+    return { error: 'Not enough gold', cost: { gold: SHIP_COST_GOLD } };
+  }
+  subtractResources(playerId, SHIP_COST_GOLD, 0, 0);
+  db.prepare('UPDATE buildings SET has_ship = 1 WHERE id = ? AND player_id = ?').run(buildingId, playerId);
+  return { success: true, resources: getResources(playerId) };
+}
+
 module.exports = {
   db,
   BUILDING_DEFS,
@@ -481,5 +497,6 @@ module.exports = {
   recalculateTrophies,
   getTrophies,
   getFullPlayerState,
+  buyShip,
   TROPHY_TABLE,
 };

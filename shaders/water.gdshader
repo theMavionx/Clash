@@ -13,6 +13,8 @@ uniform vec2 tile = vec2(5.0, 5.0);
 uniform float height = 2.0;
 uniform vec2 wave_size = vec2(2.0, 2.0);
 uniform float wave_speed = 1.5;
+uniform bool paused = false;
+uniform float frozen_time = 0.0;
 
 const float M_2PI = 6.283185307;
 const float M_6PI = 18.84955592;
@@ -166,7 +168,8 @@ vec3 water(vec2 uv, vec3 cdir, float iTime) {
 }
 
 void vertex() {
-    float time = TIME * wave_speed;
+    float t = paused ? frozen_time : TIME;
+    float time = t * wave_speed;
     vec2 uv = UV * wave_size;
     float d1 = mod(uv.x + uv.y, M_2PI);
     float d2 = mod((uv.x + uv.y + 0.25) * 1.3, M_6PI);
@@ -180,6 +183,7 @@ void vertex() {
 }
 
 void fragment() {
+    float t = paused ? frozen_time : TIME;
     vec2 uv = UV;
-    ALBEDO = vec3(water(uv * tile, vec3(0, 1, 0), TIME * distortion_speed));
+    ALBEDO = vec3(water(uv * tile, vec3(0, 1, 0), t * distortion_speed));
 }

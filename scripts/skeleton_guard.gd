@@ -52,34 +52,33 @@ var anim_player: AnimationPlayer
 var _blade_attachment: BoneAttachment3D
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
+var _last_hp_ratio: float = -1.0
+var _last_hp_band: int = -1
 
 ## Cached group lookups — refreshed once per frame globally
 static var _cached_guards: Array = []
 static var _guards_cache_frame: int = -1
-static var _cached_buildings_data: Array = []  # [{pos: Vector3, radius: float}]
-static var _buildings_cache_frame: int = -1
+static var _cached_buildings_pos: Array = []  # [Vector3] — positions only
+static var _buildings_pos_cache_frame: int = -1
 
 static func _get_guards_cached() -> Array:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _guards_cache_frame:
-		var tree = Engine.get_main_loop() as SceneTree
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
 			_cached_guards = tree.get_nodes_in_group("skeleton_guards")
 		_guards_cache_frame = frame
 	return _cached_guards
 
 static func _get_buildings_cached() -> Array:
-	var frame = Engine.get_process_frames()
-	if frame != _buildings_cache_frame:
-		var tree = Engine.get_main_loop() as SceneTree
-		if tree:
-			_cached_buildings_data.clear()
-			for bs in tree.get_nodes_in_group("building_systems"):
-				for b in bs.placed_buildings:
-					if is_instance_valid(b.get("node")):
-						_cached_buildings_data.append(b.node.global_position)
-		_buildings_cache_frame = frame
-	return _cached_buildings_data
+	## Derives building positions from BaseTroop's cached data — no duplicate group query
+	var frame: int = Engine.get_process_frames()
+	if frame != _buildings_pos_cache_frame:
+		_cached_buildings_pos.clear()
+		for entry in BaseTroop._get_buildings_cached():
+			_cached_buildings_pos.append(entry.pos)
+		_buildings_pos_cache_frame = frame
+	return _cached_buildings_pos
 
 const HP_BAR_W = 0.12
 const HP_BAR_H = 0.012
@@ -124,7 +123,7 @@ func _pick_idle_wait() -> void:
 func _do_idle(delta: float) -> void:
 	_idle_timer += delta
 	# Check for enemies even while idle
-	var enemy = _find_nearest_enemy()
+	var enemy: Node3D = _find_nearest_enemy()
 	if enemy:
 		_target_troop = enemy
 		state = State.CHASE
@@ -149,27 +148,27 @@ func relocate_to(new_tombstone_pos: Vector3) -> void:
 
 func _do_relocate(delta: float) -> void:
 	# Navigate to a point BESIDE the tombstone, not its center
-	var to_tomb = tombstone_pos - global_position
+	var to_tomb: Vector3 = tombstone_pos - global_position
 	to_tomb.y = 0
-	var dist = to_tomb.length()
+	var dist: float = to_tomb.length()
 	# Arrived near the tombstone area — switch to idle / patrol
 	if dist < patrol_inner_radius + 0.04:
 		_pick_idle_wait()
 		return
-	var dir = to_tomb.normalized()
+	var dir: Vector3 = to_tomb.normalized()
 	# Stop if another skeleton is directly ahead
 	if _is_skeleton_ahead(dir):
 		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
 			anim_player.play("Idle_A")
 		return
 	# Steer around obstacles (tombstone, buildings)
-	var avoid = _steer_around_obstacles(dir)
-	var final_dir = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
+	var avoid: Vector3 = _steer_around_obstacles(dir)
+	var final_dir: Vector3 = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
 	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
 	if anim_player and anim_player.current_animation != "Running_A" and anim_player.has_animation("Running_A"):
 		anim_player.play("Running_A")
-	var move_vec = final_dir * move_speed * delta
+	var move_vec: Vector3 = final_dir * move_speed * delta
 	move_vec += _compute_separation(final_dir, delta)
 	move_vec += _compute_building_avoidance(delta)
 	global_position += move_vec
@@ -190,7 +189,7 @@ func _pick_patrol_target() -> void:
 
 func _do_patrol(delta: float) -> void:
 	# Check for enemies
-	var enemy = _find_nearest_enemy()
+	var enemy: Node3D = _find_nearest_enemy()
 	if enemy:
 		_target_troop = enemy
 		state = State.CHASE
@@ -198,27 +197,27 @@ func _do_patrol(delta: float) -> void:
 			anim_player.play("Running_A")
 		return
 
-	var diff = _patrol_target - global_position
+	var diff: Vector3 = _patrol_target - global_position
 	diff.y = 0
-	var dist = diff.length()
+	var dist: float = diff.length()
 	if dist < 0.02:
 		_pick_idle_wait()
 		return
 
-	var dir = diff.normalized()
+	var dir: Vector3 = diff.normalized()
 	# Stop if another skeleton is directly ahead
 	if _is_skeleton_ahead(dir):
 		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
 			anim_player.play("Idle_A")
 		return
 	# Steer around obstacles (tombstone, buildings)
-	var avoid = _steer_around_obstacles(dir)
-	var final_dir = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
+	var avoid: Vector3 = _steer_around_obstacles(dir)
+	var final_dir: Vector3 = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
 	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
 	if anim_player and anim_player.current_animation != "Walking_A" and anim_player.has_animation("Walking_A"):
 		anim_player.play("Walking_A")
-	var move_vec = final_dir * move_speed * 0.5 * delta
+	var move_vec: Vector3 = final_dir * move_speed * 0.5 * delta
 	move_vec += _compute_separation(final_dir, delta)
 	move_vec += _compute_building_avoidance(delta)
 	global_position += move_vec
@@ -242,15 +241,15 @@ func _do_chase(delta: float) -> void:
 		_pick_idle_wait()
 		return
 
-	var diff = _target_troop.global_position - global_position
+	var diff: Vector3 = _target_troop.global_position - global_position
 	diff.y = 0
-	var dist = diff.length()
+	var dist: float = diff.length()
 
 	if dist > 0.01:
-		var dir = diff.normalized()
+		var dir: Vector3 = diff.normalized()
 		look_at(global_position + dir, Vector3.UP)
 		rotate_y(PI)
-		var move_vec = dir * move_speed * delta
+		var move_vec: Vector3 = dir * move_speed * delta
 		move_vec += _compute_separation(dir, delta)
 		move_vec += _compute_building_avoidance(delta)
 		global_position += move_vec
@@ -275,15 +274,15 @@ func _do_attack(delta: float) -> void:
 		return
 
 	# Face target
-	var diff = _target_troop.global_position - global_position
+	var diff: Vector3 = _target_troop.global_position - global_position
 	diff.y = 0
 	if diff.length() > 0.01:
-		var dir = diff.normalized()
+		var dir: Vector3 = diff.normalized()
 		look_at(global_position + dir, Vector3.UP)
 		rotate_y(PI)
 
 	# Separation while attacking
-	var sep = _compute_separation(diff.normalized() if diff.length() > 0.01 else Vector3.FORWARD, delta)
+	var sep: Vector3 = _compute_separation(diff.normalized() if diff.length() > 0.01 else Vector3.FORWARD, delta)
 	sep += _compute_building_avoidance(delta)
 	if sep.length() > 0.001:
 		global_position += sep
@@ -306,10 +305,10 @@ func _do_attack(delta: float) -> void:
 	# Hit check at animation threshold
 	if not _hit_this_swing and _blade_attachment and is_instance_valid(_target_troop):
 		if anim_player.is_playing() and anim_player.current_animation == ATTACK_ANIM:
-			var anim_len = anim_player.current_animation_length
+			var anim_len: float = anim_player.current_animation_length
 			if anim_len > 0 and anim_player.current_animation_position / anim_len >= HIT_ANIM_THRESHOLD:
-				var blade_pos = _blade_attachment.global_position
-				var troop_pos = _target_troop.global_position
+				var blade_pos: Vector3 = _blade_attachment.global_position
+				var troop_pos: Vector3 = _target_troop.global_position
 				if blade_pos.distance_to(troop_pos) <= HIT_DISTANCE:
 					_hit_this_swing = true
 					if _target_troop.has_method("take_damage"):
@@ -384,16 +383,16 @@ func _compute_separation(move_dir: Vector3, delta: float) -> Vector3:
 	if _sep_counter % 3 != 0:
 		return _last_separation
 
-	var sep = Vector3.ZERO
-	var steer = Vector3.ZERO
+	var sep: Vector3 = Vector3.ZERO
+	var steer: Vector3 = Vector3.ZERO
 
 	# Also push away from enemy troops so they don't overlap
 	for other in BaseTroop._get_troops_cached():
 		if not is_instance_valid(other):
 			continue
-		var to_other = other.global_position - global_position
+		var to_other: Vector3 = other.global_position - global_position
 		to_other.y = 0
-		var d = to_other.length()
+		var d: float = to_other.length()
 		if d < separation_radius and d > 0.001:
 			sep += (global_position - other.global_position).normalized() * (separation_radius - d) / separation_radius
 
@@ -402,46 +401,46 @@ func _compute_separation(move_dir: Vector3, delta: float) -> Vector3:
 
 
 func _compute_building_avoidance(delta: float) -> Vector3:
-	var push = Vector3.ZERO
+	var push: Vector3 = Vector3.ZERO
 	for bpos in _get_buildings_cached():
-		var to_me = global_position - bpos
+		var to_me: Vector3 = global_position - bpos
 		to_me.y = 0
-		var d = to_me.length()
+		var d: float = to_me.length()
 		if d > 0.001 and d < building_push_radius:
-			var strength = (building_push_radius - d) / building_push_radius
+			var strength: float = (building_push_radius - d) / building_push_radius
 			push += to_me.normalized() * strength * strength  # quadratic falloff for stronger close push
 	# Extra strong push from own tombstone
-	var to_me_tomb = global_position - tombstone_pos
+	var to_me_tomb: Vector3 = global_position - tombstone_pos
 	to_me_tomb.y = 0
-	var dt = to_me_tomb.length()
+	var dt: float = to_me_tomb.length()
 	if dt > 0.001 and dt < tombstone_avoid_radius:
-		var strength = (tombstone_avoid_radius - dt) / tombstone_avoid_radius
+		var strength: float = (tombstone_avoid_radius - dt) / tombstone_avoid_radius
 		push += to_me_tomb.normalized() * strength * 2.0
 	return push * separation_force * delta * 4.0
 
 
 ## Lateral steering to go around nearby obstacles (tombstone, buildings, other skeletons).
 func _steer_around_obstacles(move_dir: Vector3) -> Vector3:
-	var steer = Vector3.ZERO
-	var lateral = Vector3.UP.cross(move_dir)
+	var steer: Vector3 = Vector3.ZERO
+	var lateral: Vector3 = Vector3.UP.cross(move_dir)
 	if lateral.length() < 0.001:
 		return Vector3.ZERO
 	lateral = lateral.normalized()
 
 	# Helper: steer around a single point obstacle
 	# avoid_radius — how far away we start steering
-	var _steer_point = func(obstacle_pos: Vector3, avoid_radius: float, weight: float) -> Vector3:
-		var to_obs = obstacle_pos - global_position
+	var _steer_point: Callable = func(obstacle_pos: Vector3, avoid_radius: float, weight: float) -> Vector3:
+		var to_obs: Vector3 = obstacle_pos - global_position
 		to_obs.y = 0
-		var d = to_obs.length()
+		var d: float = to_obs.length()
 		if d < 0.001 or d > avoid_radius:
 			return Vector3.ZERO
-		var dot = to_obs.normalized().dot(move_dir)
+		var dot: float = to_obs.normalized().dot(move_dir)
 		# Only steer if we're heading toward the obstacle
 		if dot < 0.15:
 			return Vector3.ZERO
-		var side = to_obs.normalized().dot(lateral)
-		var strength = dot * (1.0 - d / avoid_radius) * weight
+		var side: float = to_obs.normalized().dot(lateral)
+		var strength: float = dot * (1.0 - d / avoid_radius) * weight
 		if side >= 0:
 			return -lateral * strength
 		else:
@@ -464,9 +463,9 @@ func _is_skeleton_ahead(move_dir: Vector3) -> bool:
 	for other in _get_guards_cached():
 		if other == self or not is_instance_valid(other):
 			continue
-		var to_other = other.global_position - global_position
+		var to_other: Vector3 = other.global_position - global_position
 		to_other.y = 0
-		var d = to_other.length()
+		var d: float = to_other.length()
 		if d < 0.001 or d > AHEAD_DIST:
 			continue
 		# Check if the other skeleton is in our movement direction
@@ -483,26 +482,33 @@ func _setup_animations() -> void:
 	add_child(anim_player)
 	anim_player.root_node = anim_player.get_path_to(self)
 
-	var lib = AnimationLibrary.new()
-	for file_path in ANIM_FILES:
-		var res = load(file_path)
-		if res == null:
-			continue
-		var instance = res.instantiate()
-		add_child(instance)
-		_hide_meshes(instance)
-		var src = _find_anim_player(instance)
-		if src:
-			for anim_name in src.get_animation_list():
-				if anim_name == "RESET" or anim_name == "T-Pose":
-					continue
-				var anim = src.get_animation(anim_name)
-				if anim and not lib.has_animation(anim_name):
-					var dup = anim.duplicate()
-					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle"):
-						dup.loop_mode = Animation.LOOP_LINEAR
-					lib.add_animation(anim_name, dup)
-		instance.free()
+	# Reuse BaseTroop's shared animation library cache to avoid rebuilding per skeleton
+	var cache_key: String = ",".join(ANIM_FILES)
+	var lib: AnimationLibrary
+	if BaseTroop._anim_lib_cache.has(cache_key):
+		lib = BaseTroop._anim_lib_cache[cache_key]
+	else:
+		lib = AnimationLibrary.new()
+		for file_path in ANIM_FILES:
+			var res: Resource = load(file_path)
+			if res == null:
+				continue
+			var instance: Node = res.instantiate()
+			add_child(instance)
+			_hide_meshes(instance)
+			var src: AnimationPlayer = _find_anim_player(instance)
+			if src:
+				for anim_name in src.get_animation_list():
+					if anim_name == "RESET" or anim_name == "T-Pose":
+						continue
+					var anim: Animation = src.get_animation(anim_name)
+					if anim and not lib.has_animation(anim_name):
+						var dup: Animation = anim.duplicate()
+						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle"):
+							dup.loop_mode = Animation.LOOP_LINEAR
+						lib.add_animation(anim_name, dup)
+			instance.free()
+		BaseTroop._anim_lib_cache[cache_key] = lib
 
 	anim_player.add_animation_library("", lib)
 	if anim_player.has_animation("Idle_A"):
@@ -512,20 +518,20 @@ func _setup_animations() -> void:
 # ── Weapon ────────────────────────────────────────────────────
 
 func _setup_weapon() -> void:
-	var sk = _find_skeleton(self)
+	var sk: Skeleton3D = _find_skeleton(self)
 	if sk == null:
 		return
-	var bone_idx = sk.find_bone("handslot.r")
+	var bone_idx: int = sk.find_bone("handslot.r")
 	if bone_idx < 0:
 		return
-	var ba = BoneAttachment3D.new()
+	var ba: BoneAttachment3D = BoneAttachment3D.new()
 	ba.name = "BladeAttachment"
 	ba.bone_name = "handslot.r"
 	ba.bone_idx = bone_idx
 	sk.add_child(ba)
-	var scene_res = load(BLADE_SCENE)
+	var scene_res: Resource = load(BLADE_SCENE)
 	if scene_res:
-		var blade = scene_res.instantiate()
+		var blade: Node = scene_res.instantiate()
 		blade.name = "Blade"
 		blade.rotation_degrees = Vector3(0, 180, 0)
 		ba.add_child(blade)
@@ -538,14 +544,14 @@ func _create_hp_bar() -> void:
 	_hp_bar = Node3D.new()
 	_hp_bar.top_level = true
 	add_child(_hp_bar)
-	var bg = MeshInstance3D.new()
-	var bg_mesh = QuadMesh.new()
+	var bg: MeshInstance3D = MeshInstance3D.new()
+	var bg_mesh: QuadMesh = QuadMesh.new()
 	bg_mesh.size = Vector2(HP_BAR_W, HP_BAR_H)
 	bg.mesh = bg_mesh
 	bg.material_override = _make_hp_mat(Color(0.15, 0.15, 0.15, 0.75), Vector2(HP_BAR_W, HP_BAR_H), 10)
 	_hp_bar.add_child(bg)
 	_hp_fill = MeshInstance3D.new()
-	var fill_mesh = QuadMesh.new()
+	var fill_mesh: QuadMesh = QuadMesh.new()
 	fill_mesh.size = Vector2(HP_BAR_W, HP_BAR_H)
 	_hp_fill.mesh = fill_mesh
 	_hp_fill.material_override = _make_hp_mat(Color(0.1, 0.85, 0.1, 0.9), Vector2(HP_BAR_W, HP_BAR_H), 11)
@@ -570,29 +576,29 @@ func _update_hp_bar() -> void:
 		if _hp_bar.visible:
 			_hp_bar.visible = false
 		return
-	var ratio = clamp(float(hp) / float(max_hp), 0.0, 1.0)
+	var ratio: float = clamp(float(hp) / float(max_hp), 0.0, 1.0)
 	_hp_bar.visible = true
 	_hp_bar.global_position = global_position + Vector3(0, 0.25, 0)
-	var cam = BaseTroop._get_camera_cached()
+	var cam: Camera3D = BaseTroop._get_camera_cached()
 	if cam:
-		var cam_pos = cam.global_position
-		var bar_pos = _hp_bar.global_position
-		var dir = Vector3(cam_pos.x - bar_pos.x, 0, cam_pos.z - bar_pos.z).normalized()
+		var cam_pos: Vector3 = cam.global_position
+		var bar_pos: Vector3 = _hp_bar.global_position
+		var dir: Vector3 = Vector3(cam_pos.x - bar_pos.x, 0, cam_pos.z - bar_pos.z).normalized()
 		if dir.length_squared() > 0.001:
 			_hp_bar.global_transform.basis = Basis.looking_at(-dir, Vector3.UP)
-	var fill_w = HP_BAR_W * ratio
+	# Skip shader updates when ratio hasn't meaningfully changed
+	if absf(ratio - _last_hp_ratio) < 0.005 and _last_hp_ratio >= 0.0:
+		return
+	_last_hp_ratio = ratio
+	var fill_w: float = HP_BAR_W * ratio
 	(_hp_fill.mesh as QuadMesh).size.x = fill_w
 	_hp_fill.position.x = -(HP_BAR_W - fill_w) * 0.5
-	var mat = _hp_fill.material_override as ShaderMaterial
+	var mat: ShaderMaterial = _hp_fill.material_override as ShaderMaterial
 	mat.set_shader_parameter("bar_size", Vector2(fill_w, HP_BAR_H))
-	var color: Color
-	if ratio > 0.5:
-		color = Color(0.1, 0.85, 0.1, 0.9)
-	elif ratio > 0.25:
-		color = Color(0.9, 0.8, 0.1, 0.9)
-	else:
-		color = Color(0.9, 0.1, 0.1, 0.9)
-	mat.set_shader_parameter("albedo", color)
+	var band: int = 2 if ratio > 0.5 else (1 if ratio > 0.25 else 0)
+	if band != _last_hp_band:
+		_last_hp_band = band
+		mat.set_shader_parameter("albedo", BaseTroop._HP_COLORS[band])
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -605,7 +611,7 @@ func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:
 		return node
 	for child in node.get_children():
-		var result = _find_skeleton(child)
+		var result: Skeleton3D = _find_skeleton(child)
 		if result:
 			return result
 	return null
@@ -622,7 +628,7 @@ func _find_anim_player(node: Node) -> AnimationPlayer:
 	if node is AnimationPlayer:
 		return node
 	for child in node.get_children():
-		var result = _find_anim_player(child)
+		var result: AnimationPlayer = _find_anim_player(child)
 		if result:
 			return result
 	return null

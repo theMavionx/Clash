@@ -20,6 +20,7 @@ var display_name: String = ""
 var trophies: int = 0
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
 	var cfg = ConfigFile.new()
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")
@@ -145,6 +146,9 @@ func upgrade_building(building_id: int) -> Dictionary:
 
 func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})
+
+func buy_ship(building_id: int) -> Dictionary:
+	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
 
 func remove_building(building_id: int) -> Dictionary:
 	var http = HTTPRequest.new()

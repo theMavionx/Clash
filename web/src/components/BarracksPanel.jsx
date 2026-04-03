@@ -11,6 +11,35 @@ import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
 import berserkImg from '../assets/units/berserk.png';
 
+// Module-level CSS — injected once, not re-parsed on every render
+const UPGRADE_ANIM_CSS = `
+  @keyframes levelUpGlow {
+    0% { transform: scale(0.5); opacity: 1; filter: hue-rotate(0deg); }
+    50% { transform: scale(1.5); opacity: 0.8; filter: hue-rotate(90deg); }
+    100% { transform: scale(2.5); opacity: 0; filter: hue-rotate(180deg); }
+  }
+  @keyframes levelUpPop {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.15) translateY(-20px); filter: brightness(1.5); }
+    100% { transform: scale(1) translateY(0); filter: brightness(1); }
+  }
+  @keyframes levelUpText {
+    0% { transform: translateY(0) scale(0.5); opacity: 0; }
+    20% { transform: translateY(-40px) scale(1.2); opacity: 1; }
+    80% { transform: translateY(-100px) scale(1); opacity: 1; }
+    100% { transform: translateY(-120px) scale(0.8); opacity: 0; }
+  }
+  .upgrade-anim-glow {
+    animation: levelUpGlow 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  }
+  .upgrade-anim-char {
+    animation: levelUpPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+  .upgrade-anim-text {
+    animation: levelUpText 1.5s ease-out forwards;
+  }
+`;
+
 const UNIT_IMAGES = {
   Knight: knightImg,
   Mage: mageImg,
@@ -160,33 +189,7 @@ function BarracksPanel({ building, onClose }) {
 
   return (
     <div style={styles.overlay} onClick={onClose}>
-      <style>{`
-        @keyframes levelUpGlow {
-          0% { transform: scale(0.5); opacity: 1; filter: hue-rotate(0deg); }
-          50% { transform: scale(1.5); opacity: 0.8; filter: hue-rotate(90deg); }
-          100% { transform: scale(2.5); opacity: 0; filter: hue-rotate(180deg); }
-        }
-        @keyframes levelUpPop {
-          0% { transform: scale(1); }
-          30% { transform: scale(1.15) translateY(-20px); filter: brightness(1.5); }
-          100% { transform: scale(1) translateY(0); filter: brightness(1); }
-        }
-        @keyframes levelUpText {
-          0% { transform: translateY(0) scale(0.5); opacity: 0; }
-          20% { transform: translateY(-40px) scale(1.2); opacity: 1; }
-          80% { transform: translateY(-100px) scale(1); opacity: 1; }
-          100% { transform: translateY(-120px) scale(0.8); opacity: 0; }
-        }
-        .upgrade-anim-glow {
-          animation: levelUpGlow 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-        }
-        .upgrade-anim-char {
-          animation: levelUpPop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
-        }
-        .upgrade-anim-text {
-          animation: levelUpText 1.5s ease-out forwards;
-        }
-      `}</style>
+      <style>{UPGRADE_ANIM_CSS}</style>
       
       {/* Top Nav inside overlay to match "Jason Mitch" dashboard feel */}
       <div style={styles.closeArea} onClick={onClose}>

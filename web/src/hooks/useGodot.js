@@ -95,8 +95,11 @@ export function GodotProvider({ children }) {
           setCloudVisible(data.visible);
           break;
         case 'perf':
-          // Forward perf data via CustomEvent — FpsTracker subscribes to this
-          window.dispatchEvent(new CustomEvent('godot-perf', { detail: data }));
+          // Throttle perf events — Godot sends at frame rate but React only needs ~4/sec
+          if (!window._lastPerfDispatch || Date.now() - window._lastPerfDispatch >= 250) {
+            window._lastPerfDispatch = Date.now();
+            window.dispatchEvent(new CustomEvent('godot-perf', { detail: data }));
+          }
           break;
       }
     };

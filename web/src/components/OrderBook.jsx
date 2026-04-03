@@ -64,8 +64,8 @@ function OrderBook({ symbol = 'BTC' }) {
 
       {/* Asks (reversed — lowest at bottom, pushed down) */}
       <div style={S.sideAsks}>
-        {[...book.asks].reverse().map((a, i) => (
-          <div key={i} style={S.row}>
+        {[...book.asks].reverse().map((a) => (
+          <div key={a.price} style={S.row}>
             <div style={{...S.bar, ...S.barAsk, width: `${(a.amount / maxAskAmt) * 100}%`}} />
             <span style={S.price}>{a.price.toLocaleString()}</span>
             <span style={S.amount}>{a.amount.toFixed(4)}</span>
@@ -82,8 +82,8 @@ function OrderBook({ symbol = 'BTC' }) {
 
       {/* Bids */}
       <div style={S.sideBids}>
-        {book.bids.map((b, i) => (
-          <div key={i} style={S.row}>
+        {book.bids.map((b) => (
+          <div key={b.price} style={S.row}>
             <div style={{...S.bar, ...S.barBid, width: `${(b.amount / maxBidAmt) * 100}%`}} />
             <span style={{...S.price, color: '#4CAF50'}}>{b.price.toLocaleString()}</span>
             <span style={S.amount}>{b.amount.toFixed(4)}</span>

@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useEffect } from 'react';
+import { memo, useCallback, useState, useEffect, useRef } from 'react';
 import { useSend, useUI } from '../hooks/useGodot';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
@@ -67,12 +67,24 @@ const CannonBallIcon = ({ size = 48 }) => (
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
 function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSelectTroop }) {
   const [perf, setPerf] = useState({ troop_counts: {}, deployed_types: {} });
+  const perfRef = useRef(perf);
 
   useEffect(() => {
-    const h = (e) => setPerf({
-      troop_counts: e.detail.troop_counts || {},
-      deployed_types: e.detail.deployed_types || {},
-    });
+    const h = (e) => {
+      const counts = e.detail.troop_counts || {};
+      const types = e.detail.deployed_types || {};
+      // Only re-render when values actually changed
+      const prev = perfRef.current;
+      const changed = ATTACK_TROOPS.some(t =>
+        (counts[t.key] ?? 0) !== (prev.troop_counts[t.key] ?? 0) ||
+        !!types[t.key] !== !!prev.deployed_types[t.key]
+      );
+      if (changed) {
+        const next = { troop_counts: counts, deployed_types: types };
+        perfRef.current = next;
+        setPerf(next);
+      }
+    };
     window.addEventListener('godot-perf', h);
     return () => window.removeEventListener('godot-perf', h);
   }, []);

@@ -17,7 +17,7 @@ var atk_speed: float = 1.0
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
 var target_building: Dictionary = {}
-var target_bs = null
+var target_bs: Node = null
 var target_guard: Node3D = null
 var attack_timer: float = 0.0
 
@@ -39,6 +39,15 @@ static var _camera_cache_frame: int = -1
 var _sep_counter: int = 0
 var _last_separation: Vector3 = Vector3.ZERO
 var _hp_bar_frame: int = 0  # throttle HP bar billboard rotation
+var _last_hp_ratio: float = -1.0  # cache to skip redundant shader updates
+var _last_hp_band: int = -1  # cache to skip redundant color updates
+
+## Pre-allocated HP bar colors — avoids Color allocation every frame
+static var _HP_COLORS: Array = [
+	Color(0.9, 0.1, 0.1, 0.9),   # 0 = red (ratio <= 0.25)
+	Color(0.9, 0.8, 0.1, 0.9),   # 1 = yellow (ratio <= 0.5)
+	Color(0.1, 0.85, 0.1, 0.9),  # 2 = green (ratio > 0.5)
+]
 
 ## Stuck detection — if troop barely moves for too long, orbit around target
 var _stuck_timer: float = 0.0
@@ -51,6 +60,8 @@ static var _anim_lib_cache: Dictionary = {}  # key(String) -> AnimationLibrary
 ## Cached building data — refreshed once per frame, used by _find_next_target and avoidance
 static var _cached_building_list: Array = []  # [{dict, bs, pos}]
 static var _buildings_cache_frame: int = -1
+static var _building_entry_pool: Array = []  # reusable Dict pool to avoid per-frame allocation
+static var _building_entry_pool_idx: int = 0
 
 ## Cached island bounds — center, extents, rotation (from main BuildingSystem)
 static var _island_center: Vector3 = Vector3.ZERO
@@ -62,13 +73,13 @@ static var _island_bounds_ready: bool = false
 static func _ensure_island_bounds() -> void:
 	if _island_bounds_ready:
 		return
-	var tree = Engine.get_main_loop() as SceneTree
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
 	if not tree:
 		return
 	# Use main grid (largest) with slight padding for walking around edges
 	var best_area: float = 0.0
 	for bs in tree.get_nodes_in_group("building_systems"):
-		var area = bs.grid_extent_x * bs.grid_extent_z
+		var area: float = bs.grid_extent_x * bs.grid_extent_z
 		if area > best_area:
 			best_area = area
 			_island_center = bs.grid_center
@@ -85,33 +96,45 @@ static func _clamp_to_island(pos: Vector3) -> Vector3:
 	if not _island_bounds_ready:
 		_ensure_island_bounds()
 	# Transform to local island space (rotated grid)
-	var dx = pos.x - _island_center.x
-	var dz = pos.z - _island_center.z
-	var cos_r = cos(-_island_rot)
-	var sin_r = sin(-_island_rot)
-	var local_x = dx * cos_r - dz * sin_r
-	var local_z = dx * sin_r + dz * cos_r
+	var dx: float = pos.x - _island_center.x
+	var dz: float = pos.z - _island_center.z
+	var cos_r: float = cos(-_island_rot)
+	var sin_r: float = sin(-_island_rot)
+	var local_x: float = dx * cos_r - dz * sin_r
+	var local_z: float = dx * sin_r + dz * cos_r
 	# Clamp to island extents
 	local_x = clampf(local_x, -_island_extent_x * 0.5, _island_extent_x * 0.5)
 	local_z = clampf(local_z, -_island_extent_z * 0.5, _island_extent_z * 0.5)
 	# Transform back to world space
-	var cos_r2 = cos(_island_rot)
-	var sin_r2 = sin(_island_rot)
+	var cos_r2: float = cos(_island_rot)
+	var sin_r2: float = sin(_island_rot)
 	pos.x = _island_center.x + local_x * cos_r2 - local_z * sin_r2
 	pos.z = _island_center.z + local_x * sin_r2 + local_z * cos_r2
 	return pos
 
 
 static func _get_buildings_cached() -> Array:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _buildings_cache_frame:
 		_cached_building_list.clear()
-		var tree = Engine.get_main_loop() as SceneTree
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
 			for bs in tree.get_nodes_in_group("building_systems"):
 				for b in bs.placed_buildings:
 					if b.get("hp", 0) > 0 and is_instance_valid(b.get("node")):
-						_cached_building_list.append({"b": b, "bs": bs, "pos": b.node.global_position})
+						# Reuse pooled entries to avoid Dictionary allocation every frame
+						var entry: Dictionary
+						if _building_entry_pool_idx < _building_entry_pool.size():
+							entry = _building_entry_pool[_building_entry_pool_idx]
+							entry["b"] = b
+							entry["bs"] = bs
+							entry["pos"] = b.node.global_position
+						else:
+							entry = {"b": b, "bs": bs, "pos": b.node.global_position}
+							_building_entry_pool.append(entry)
+						_building_entry_pool_idx += 1
+						_cached_building_list.append(entry)
+		_building_entry_pool_idx = 0
 		_buildings_cache_frame = frame
 	return _cached_building_list
 
@@ -120,9 +143,9 @@ static var _cached_guards_list: Array = []
 static var _guards_list_cache_frame: int = -1
 
 static func _get_guards_list_cached() -> Array:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _guards_list_cache_frame:
-		var tree = Engine.get_main_loop() as SceneTree
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
 			_cached_guards_list = tree.get_nodes_in_group("skeleton_guards")
 		_guards_list_cache_frame = frame
@@ -130,9 +153,9 @@ static func _get_guards_list_cached() -> Array:
 
 
 static func _get_troops_cached() -> Array:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _troops_cache_frame:
-		var tree = Engine.get_main_loop() as SceneTree
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
 			_cached_troops = tree.get_nodes_in_group("troops")
 		_troops_cache_frame = frame
@@ -140,11 +163,11 @@ static func _get_troops_cached() -> Array:
 
 
 static func _get_camera_cached() -> Camera3D:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _camera_cache_frame:
-		var tree = Engine.get_main_loop() as SceneTree
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree and tree.root:
-			var vp = tree.root.get_viewport()
+			var vp: Viewport = tree.root.get_viewport()
 			if vp:
 				_cached_camera = vp.get_camera_3d()
 		_camera_cache_frame = frame
@@ -209,29 +232,29 @@ func _setup_animations() -> void:
 	anim_player.root_node = anim_player.get_path_to(self)
 
 	# Build cache key from sorted anim_files paths
-	var cache_key = ",".join(anim_files)
+	var cache_key: String = ",".join(anim_files)
 	var lib: AnimationLibrary
 	if _anim_lib_cache.has(cache_key):
 		lib = _anim_lib_cache[cache_key]
 	else:
 		lib = AnimationLibrary.new()
 		for file_path in anim_files:
-			var res = load(file_path)
+			var res: Resource = load(file_path)
 			if res == null:
 				continue
-			var instance = Node3D.new()
+			var instance: Node3D = Node3D.new()
 			add_child(instance)
-			var real_inst = res.instantiate()
+			var real_inst: Node = res.instantiate()
 			instance.add_child(real_inst)
 			_hide_meshes(instance)
-			var src = _find_anim_player(real_inst)
+			var src: AnimationPlayer = _find_anim_player(real_inst)
 			if src:
 				for anim_name in src.get_animation_list():
 					if anim_name == "RESET" or anim_name == "T-Pose":
 						continue
-					var anim = src.get_animation(anim_name)
+					var anim: Animation = src.get_animation(anim_name)
 					if anim and not lib.has_animation(anim_name):
-						var dup = anim.duplicate()
+						var dup: Animation = anim.duplicate()
 						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
 							dup.loop_mode = Animation.LOOP_LINEAR
 						lib.add_animation(anim_name, dup)
@@ -260,9 +283,9 @@ const PROJECTILE_SPAWN_Y: float = 0.08
 ## Y offset applied to the aim target position so projectiles arc toward the building's centre.
 const TARGET_AIM_Y: float = 0.05
 
-const HP_BAR_W = 0.12
-const HP_BAR_H = 0.012
-const HP_BAR_SHADER_CODE = "shader_type spatial;
+const HP_BAR_W: float = 0.12
+const HP_BAR_H: float = 0.012
+const HP_BAR_SHADER_CODE: String = "shader_type spatial;
 render_mode unshaded, blend_mix, depth_test_disabled, cull_disabled;
 uniform vec4 albedo : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform vec2 bar_size = vec2(0.12, 0.012);
@@ -286,7 +309,7 @@ static func _get_hp_shader() -> Shader:
 	return _hp_shader
 
 static func _make_hp_shader_mat(color: Color, size: Vector2, priority: int) -> ShaderMaterial:
-	var mat = ShaderMaterial.new()
+	var mat: ShaderMaterial = ShaderMaterial.new()
 	mat.shader = _get_hp_shader()
 	mat.set_shader_parameter("albedo", color)
 	mat.set_shader_parameter("bar_size", size)
@@ -297,14 +320,14 @@ func _create_hp_bar() -> void:
 	_hp_bar = Node3D.new()
 	_hp_bar.top_level = true
 	add_child(_hp_bar)
-	var bg = MeshInstance3D.new()
-	var bg_mesh = QuadMesh.new()
+	var bg: MeshInstance3D = MeshInstance3D.new()
+	var bg_mesh: QuadMesh = QuadMesh.new()
 	bg_mesh.size = Vector2(HP_BAR_W, HP_BAR_H)
 	bg.mesh = bg_mesh
 	bg.material_override = _make_hp_shader_mat(Color(0.15, 0.15, 0.15, 0.75), Vector2(HP_BAR_W, HP_BAR_H), 10)
 	_hp_bar.add_child(bg)
 	_hp_fill = MeshInstance3D.new()
-	var fill_mesh = QuadMesh.new()
+	var fill_mesh: QuadMesh = QuadMesh.new()
 	fill_mesh.size = Vector2(HP_BAR_W, HP_BAR_H)
 	_hp_fill.mesh = fill_mesh
 	_hp_fill.material_override = _make_hp_shader_mat(Color(0.1, 0.85, 0.1, 0.9), Vector2(HP_BAR_W, HP_BAR_H), 11)
@@ -331,20 +354,21 @@ func _update_hp_bar() -> void:
 			dir.y = 0
 			if dir.length_squared() > 0.001:
 				_hp_bar.global_transform.basis = Basis.looking_at(-dir.normalized(), Vector3.UP)
-	var ratio = float(hp) / float(max_hp)
-	var fill_w = HP_BAR_W * ratio
+	var ratio: float = float(hp) / float(max_hp)
+	# Skip shader updates when ratio hasn't meaningfully changed
+	if absf(ratio - _last_hp_ratio) < 0.005 and _last_hp_ratio >= 0.0:
+		return
+	_last_hp_ratio = ratio
+	var fill_w: float = HP_BAR_W * ratio
 	(_hp_fill.mesh as QuadMesh).size.x = fill_w
 	_hp_fill.position.x = -(HP_BAR_W - fill_w) * 0.5
-	var mat = _hp_fill.material_override as ShaderMaterial
+	var mat: ShaderMaterial = _hp_fill.material_override as ShaderMaterial
 	mat.set_shader_parameter("bar_size", Vector2(fill_w, HP_BAR_H))
-	var color: Color
-	if ratio > 0.5:
-		color = Color(0.1, 0.85, 0.1, 0.9)
-	elif ratio > 0.25:
-		color = Color(0.9, 0.8, 0.1, 0.9)
-	else:
-		color = Color(0.9, 0.1, 0.1, 0.9)
-	mat.set_shader_parameter("albedo", color)
+	# Use pre-allocated static Colors to avoid per-frame allocation
+	var band: int = 2 if ratio > 0.5 else (1 if ratio > 0.25 else 0)
+	if band != _last_hp_band:
+		_last_hp_band = band
+		mat.set_shader_parameter("albedo", _HP_COLORS[band])
 
 
 func _find_alternative_target() -> void:

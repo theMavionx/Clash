@@ -17,11 +17,12 @@ func _refresh_cache() -> void:
 
 func _ready() -> void:
 	_is_web = OS.has_feature("web")
+	process_mode = Node.PROCESS_MODE_ALWAYS  # keep bridge alive during tree pause
 	call_deferred("_refresh_cache")
 	if not _is_web:
 		return
 
-	var cb = JavaScriptBridge.create_callback(_on_react_call)
+	var cb: JavaScriptObject = JavaScriptBridge.create_callback(_on_react_call)
 	_callbacks["_on_react_call"] = cb
 	JavaScriptBridge.get_interface("window").set("godotBridge", cb)
 
@@ -40,22 +41,22 @@ func _process(delta: float) -> void:
 
 
 func _send_perf_data() -> void:
-	var troop_list = BaseTroop._get_troops_cached()
-	var troops = troop_list.size()
-	var guards = get_tree().get_nodes_in_group("skeleton_guards").size()
+	var troop_list: Array = BaseTroop._get_troops_cached()
+	var troops: int = troop_list.size()
+	var guards: int = BaseTroop._get_guards_list_cached().size()
 
 	# Count projectiles from cached troop list (no extra group query)
-	var troop_projectiles = 0
+	var troop_projectiles: int = 0
 	for troop in troop_list:
 		if "_active" in troop:
 			troop_projectiles += troop._active.size()
 
 	# Buildings count from cached data
-	var buildings = BaseTroop._get_buildings_cached().size()
+	var buildings: int = BaseTroop._get_buildings_cached().size()
 
 	# Turret bullets — count from turret nodes directly
-	var turrets = 0
-	var active_bullets = 0
+	var turrets: int = 0
+	var active_bullets: int = 0
 	for bs in _bs_cache:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "turret" and is_instance_valid(b.get("node")):
@@ -63,27 +64,27 @@ func _send_perf_data() -> void:
 					turrets += 1
 					active_bullets += b.node._active_bullets.size()
 
-	var ships = 0
-	var deployed_types := {}
-	var attack_sys = get_tree().current_scene.get_node_or_null("AttackSystem")
+	var ships: int = 0
+	var deployed_types: Dictionary = {}
+	var attack_sys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
 	if attack_sys:
 		ships = attack_sys._total_ships_launched
 		deployed_types = attack_sys._deployed_types
 
 	# Count live troops per script basename
-	var troop_counts := {}
+	var troop_counts: Dictionary = {}
 	for troop in troop_list:
 		if is_instance_valid(troop) and troop.get_script():
 			var sname: String = troop.get_script().resource_path.get_file().get_basename()
 			troop_counts[sname] = troop_counts.get(sname, 0) + 1
 
-	var state = "idle"
+	var state: String = "idle"
 	if troops > 0:
 		state = "combat"
 	elif ships > 0:
 		state = "deploying"
 
-	var payload = JSON.stringify({
+	var payload: String = JSON.stringify({
 		"action": "perf",
 		"data": {
 			"fps": Engine.get_frames_per_second(),
@@ -161,17 +162,17 @@ func _send_initial_state() -> void:
 func _on_react_call(args: Array) -> void:
 	if args.size() == 0:
 		return
-	var json = JSON.new()
+	var json: JSON = JSON.new()
 	if json.parse(str(args[0])) != OK:
 		return
-	var msg = json.data
+	var msg: Variant = json.data
 	if msg is Dictionary and msg.has("action"):
 		react_message.emit(msg.action, msg.get("data", {}))
 		_handle_react_action(msg.action, msg.get("data", {}))
 
 
 func _handle_react_action(action: String, data: Dictionary) -> void:
-	var bs = _get_building_system()
+	var bs: Node = _get_building_system()
 	match action:
 		"get_state":
 			_send_full_state()
@@ -205,7 +206,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				else:
 					bs._enter_ship_cannon_mode()
 		"select_troop":
-			var asys = get_tree().current_scene.get_node_or_null("AttackSystem")
+			var asys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
 			if asys:
 				asys._next_troop_idx = clampi(int(data.get("idx", 0)), 0, asys.SHIP_TROOPS.size() - 1)
 				send_to_react("troop_idx_changed", {"idx": asys._next_troop_idx})
@@ -240,6 +241,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 			for bsys in _bs_cache:
 				bsys._react_resource_positions = data
+		"ui_overlay":
+			_set_island_paused(data.get("active", false))
 
 
 func _do_register(player_name: String, wallet: String = "") -> void:
@@ -333,3 +336,55 @@ func _get_active_building_system() -> Node:
 		if s.selected_building.size() > 0:
 			return s
 	return _get_building_system()
+
+
+var _island_paused := false
+var _water_mats: Array[ShaderMaterial] = []  # cached ShaderMaterial refs for water/foam
+
+func _set_island_paused(paused: bool) -> void:
+	if paused == _island_paused:
+		return
+	_island_paused = paused
+	get_tree().paused = paused
+	_set_water_paused(paused)
+
+
+func _set_water_paused(pause: bool) -> void:
+	if _water_mats.is_empty():
+		_cache_water_materials()
+	var frozen_t: float = float(Time.get_ticks_msec()) / 1000.0 if pause else 0.0
+	for mat in _water_mats:
+		if is_instance_valid(mat):
+			mat.set_shader_parameter("paused", pause)
+			if pause:
+				mat.set_shader_parameter("frozen_time", frozen_t)
+
+
+func _cache_water_materials() -> void:
+	var root := get_tree().current_scene
+	if not root:
+		return
+	# Scan all nodes for ShaderMaterials that have a "paused" uniform
+	_collect_shader_mats(root)
+
+
+func _collect_shader_mats(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mat = node.material_override
+		if mat is ShaderMaterial and _has_paused_uniform(mat):
+			_water_mats.append(mat)
+	if node is CanvasItem and node.material is ShaderMaterial:
+		if _has_paused_uniform(node.material):
+			_water_mats.append(node.material)
+	for child in node.get_children():
+		_collect_shader_mats(child)
+
+
+func _has_paused_uniform(mat: ShaderMaterial) -> bool:
+	if not mat.shader:
+		return false
+	# Check if shader has our "paused" uniform
+	for param in mat.shader.get_shader_uniform_list():
+		if param.name == "paused":
+			return true
+	return false

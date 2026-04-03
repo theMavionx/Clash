@@ -28,9 +28,9 @@ var _target_search_timer: float = 0.0
 var _idle_rotation_y: float = 0.0
 var _had_enemies: bool = false
 
-var anim_player: AnimationPlayer
-var _pool: Array = []
-var _active: Array = []
+var anim_player: AnimationPlayer = null
+var _pool: Array[Dictionary] = []
+var _active: Array[Dictionary] = []
 var _pool_ready: bool = false
 var _arrow_res: Resource = null
 
@@ -46,6 +46,7 @@ func _ready() -> void:
 	_setup_animations()
 	_setup_bow()
 	_idle_rotation_y = rotation_degrees.y
+	call_deferred("_build_pool")  # pre-warm arrow pool to avoid frame drop on first combat
 
 
 func _apply_stats() -> void:

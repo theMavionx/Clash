@@ -174,6 +174,15 @@ router.post('/buildings/:id/move', auth, (req, res) => {
   res.json({ success: true, resources });
 });
 
+// Buy a ship at a port
+router.post('/buildings/:id/buy-ship', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const result = db.buyShip(req.player.id, buildingId);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
 // Remove a building
 router.delete('/buildings/:id', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
@@ -231,7 +240,7 @@ const GOLD_PER_USD_VOLUME = 0.05;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
 const GOLD_DAILY_TRADE = 200;
-const GOLD_PROFIT_RATE = 0.10; // 10% of PnL → gold (×1000)
+const GOLD_PER_10_USD_PROFIT = 100; // +100 gold per $10 positive PnL
 
 // Trading rewards table
 try {
@@ -245,10 +254,12 @@ try {
       first_deposit INTEGER NOT NULL DEFAULT 0,
       first_trade  INTEGER NOT NULL DEFAULT 0,
       last_daily   TEXT,
+      pnl_gold_pool REAL NOT NULL DEFAULT 0,
       updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 } catch {}
+try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pnl_gold_pool REAL NOT NULL DEFAULT 0`); } catch {}
 
 // Rate limiter for claim-gold (max 1 per 5 seconds per player)
 const claimCooldowns = new Map();
@@ -295,9 +306,26 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     for (const t of newTrades) {
       const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
       totalGold += Math.floor(volume * GOLD_PER_USD_VOLUME);
-
-      // Profit reward (from builder_fee we can estimate, but PnL not in this endpoint)
       if (t.history_id > maxTradeId) maxTradeId = t.history_id;
+    }
+
+    // PnL profit rewards — check realized PnL from close trades
+    let closePnl = 0;
+    for (const t of newTrades) {
+      const side = (t.side || '').toLowerCase();
+      if (side.includes('close')) {
+        const pnl = parseFloat(t.realized_pnl || t.pnl || 0);
+        if (pnl > 0) closePnl += pnl;
+      }
+    }
+    // Accumulate fractional profit in pool, award 100 gold per $10 crossed
+    let pnlPool = (reward.pnl_gold_pool || 0) + closePnl;
+    if (pnlPool >= 10) {
+      const chunks = Math.floor(pnlPool / 10);
+      const pnlGold = chunks * GOLD_PER_10_USD_PROFIT;
+      totalGold += pnlGold;
+      pnlPool -= chunks * 10;
+      reasons.push(`+$${(chunks * 10).toFixed(0)} profit`);
     }
 
     if (newTrades.length > 0) {
@@ -329,26 +357,24 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
     }
 
-    if (totalGold > 0) {
-      // Add gold to player resources
-      db.addResources(req.player.id, totalGold, 0, 0);
+    // Always update reward tracking (pnl_gold_pool accumulates even without gold payout)
+    const newVolume = newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0);
+    db.db.prepare(`
+      UPDATE trading_rewards SET
+        last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+        first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+        last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
+      WHERE player_id = ?
+    `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id);
 
-      // Log to gold history
+    if (totalGold > 0) {
+      db.addResources(req.player.id, totalGold, 0, 0);
       const reason = reasons.join(' + ') || 'Trading reward';
       db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
-
-      // Update reward tracking
-      db.db.prepare(`
-        UPDATE trading_rewards SET
-          last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
-          first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
-          last_daily = ?, updated_at = datetime('now')
-        WHERE player_id = ?
-      `).run(maxTradeId, newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0), totalGold, newTrades.length, today, req.player.id);
     }
 
     res.json({
-      gold: totalGold,
+      gold: Math.floor(totalGold),
       reason: reasons.join(' + ') || 'No new rewards',
       total_gold_earned: (reward.total_gold || 0) + totalGold,
     });

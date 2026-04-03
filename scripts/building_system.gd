@@ -417,6 +417,10 @@ func _refresh_bs_cache() -> void:
 	_building_systems = get_tree().get_nodes_in_group("building_systems")
 
 
+func _exit_tree() -> void:
+	_stop_attack_ship_waves()
+
+
 func _ready() -> void:
 	add_to_group("building_systems")
 	_net = get_node_or_null("/root/Net")
@@ -510,9 +514,9 @@ func _process(delta: float) -> void:
 	if _ship_cannonballs.size() > 0:
 		_update_ship_cannonballs(delta)
 
-	# Respawn dead tombstone skeletons after battle ends
-	if not is_viewing_enemy and create_ui:
-		var troops_alive = not BaseTroop._get_troops_cached().is_empty()
+	# Respawn dead tombstone skeletons after battle ends (only main BS to avoid double-spawn)
+	if not is_viewing_enemy and create_ui and name == "BuildingSystem":
+		var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
 		if troops_alive:
 			_had_troops = true
 			_skeleton_respawn_timer = 0.0
@@ -562,7 +566,7 @@ func _update_collect_icons() -> void:
 	var cam = BaseTroop._get_camera_cached()
 	if not cam:
 		return
-		
+
 	for b in placed_buildings:
 		var def = building_defs.get(b.id, {})
 		if not def.has("produces"):
@@ -1519,6 +1523,10 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		# Tombstone → spawn skeleton guards
 		if building_type == "tombstone":
 			_spawn_tombstone_skeletons(b_data, level)
+		# Port with ship → restore docked ship
+		if building_type == "port" and b.get("has_ship", 0) == 1:
+			_spawn_port_ship(b_data)
+			owned_ships += 1
 	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
 	_sync_react_buildings()
 	# Reveal cloud cover now that buildings are placed — first load only
@@ -2490,9 +2498,9 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 
 	# Wait for the "glow upgrade" phase (3 seconds)
 	await get_tree().create_timer(3.0).timeout
-	
-	if not is_instance_valid(model):
-		return # building destroyed while waiting
+
+	if not is_instance_valid(self) or not is_instance_valid(model):
+		return # node or building destroyed while waiting
 		
 	# Remove glow and text
 	for m in meshes:
@@ -2505,6 +2513,9 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	var tw_down = create_tween()
 	tw_down.tween_property(model, "scale", Vector3.ZERO, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tw_down.finished
+
+	if not is_instance_valid(self) or not is_instance_valid(model):
+		return
 
 	# --- UPGRADE APPLIED ---
 	b["level"] = server_new_level
@@ -2843,20 +2854,21 @@ func _update_building_hp_bars() -> void:
 			dir.y = 0
 			if dir.length_squared() > 0.001:
 				b.hp_bar.global_transform.basis = Basis.looking_at(-dir.normalized(), Vector3.UP)
-		var ratio = float(b.hp) / float(b.max_hp)
-		var fill_w = BLDG_BAR_W * ratio
+		var ratio: float = float(b.hp) / float(b.max_hp)
+		var last_ratio: float = b.get("_last_hp_ratio", -1.0)
+		if absf(ratio - last_ratio) < 0.005 and last_ratio >= 0.0:
+			continue
+		b["_last_hp_ratio"] = ratio
+		var fill_w: float = BLDG_BAR_W * ratio
 		(b.hp_fill.mesh as QuadMesh).size.x = fill_w
 		b.hp_fill.position.x = -(BLDG_BAR_W - fill_w) * 0.5
-		var mat = b.hp_fill.material_override as ShaderMaterial
+		var mat: ShaderMaterial = b.hp_fill.material_override as ShaderMaterial
 		mat.set_shader_parameter("bar_size", Vector2(fill_w, BLDG_BAR_H))
-		var color: Color
-		if ratio > 0.5:
-			color = Color(0.1, 0.85, 0.1, 0.9)
-		elif ratio > 0.25:
-			color = Color(0.9, 0.8, 0.1, 0.9)
-		else:
-			color = Color(0.9, 0.1, 0.1, 0.9)
-		mat.set_shader_parameter("albedo", color)
+		var band: int = 2 if ratio > 0.5 else (1 if ratio > 0.25 else 0)
+		var last_band: int = b.get("_last_hp_band", -1)
+		if band != last_band:
+			b["_last_hp_band"] = band
+			mat.set_shader_parameter("albedo", BaseTroop._HP_COLORS[band])
 
 
 func _get_hp_for(def: Dictionary, level: int) -> int:
@@ -3006,19 +3018,28 @@ func _buy_ship() -> void:
 	if resources["gold"] < SHIP_COST_GOLD:
 		return
 	# Check if this port already has a ship
-	var port_node = selected_building.get("node", null)
+	var port_node: Node3D = selected_building.get("node", null)
 	if is_instance_valid(port_node) and port_node.has_meta("has_ship"):
 		return
-	resources["gold"] -= SHIP_COST_GOLD
-	_update_resource_ui()
+	var server_id: int = selected_building.get("server_id", -1)
+	var net: Node = _net
+	if net and net.has_token() and server_id > 0:
+		var result: Dictionary = await net.buy_ship(server_id)
+		if result.has("error"):
+			return
+		if result.has("resources"):
+			_apply_resources_from_server(result.resources)
+	else:
+		resources["gold"] -= SHIP_COST_GOLD
+		_update_resource_ui()
 	owned_ships += 1
 	_refresh_port_panel()
 	_spawn_port_ship()
-	
+
 	if typeof(selected_building) == TYPE_DICTIONARY and selected_building.size() > 0:
 		_select_building(selected_building)
-	
-	var bridge = _bridge
+
+	var bridge: Node = _bridge
 	if bridge:
 		bridge.send_to_react("resources", {
 			"gold": resources.get("gold", 0),
@@ -3047,13 +3068,14 @@ func _animate_main_ship() -> void:
 		base_ship.global_position.y = _water_y + 0.12 - 0.03
 
 
-func _spawn_port_ship() -> void:
-	if selected_building.size() == 0:
+func _spawn_port_ship(b_override: Dictionary = {}) -> void:
+	var b: Dictionary = b_override if b_override.size() > 0 else selected_building
+	if b.size() == 0:
 		return
-	var port_node = selected_building.get("node", null)
+	var port_node: Node3D = b.get("node", null)
 	if not is_instance_valid(port_node):
 		return
-	var port_level = selected_building.get("level", 1)
+	var port_level: int = b.get("level", 1)
 	var model_idx = clampi(port_level - 1, 0, SHIP_MODELS.size() - 1)
 	var ship_res = load(SHIP_MODELS[model_idx])
 	if ship_res == null:

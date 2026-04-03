@@ -38,8 +38,8 @@ const SHIP_PUSH_RADIUS: float = 0.4
 # ---------------------------------------------------------------------------
 # Preloaded resources — loaded once at startup, never at runtime
 # ---------------------------------------------------------------------------
-var _ship_scene_res   = load("res://Model/Ship/Sail Ship.glb")
-var _flag_scene_res   = load("res://Model/flag/pirate_flag_animated.glb")
+var _ship_scene_res: Resource   = load("res://Model/Ship/Sail Ship.glb")
+var _flag_scene_res: Resource   = load("res://Model/flag/pirate_flag_animated.glb")
 
 ## Preloaded troop model PackedScenes, indexed to match SHIP_TROOPS
 var _troop_model_res: Array = [
@@ -75,7 +75,7 @@ static var _ships_cache_frame: int = -1
 
 ## Returns the "ships" group, refreshed at most once per process frame.
 static func _get_ships_cached() -> Array:
-	var frame = Engine.get_process_frames()
+	var frame: int = Engine.get_process_frames()
 	if frame != _ships_cache_frame:
 		var tree = Engine.get_main_loop() as SceneTree
 		if tree:
@@ -120,7 +120,7 @@ func _ready() -> void:
 	# Half extent = actual visual bounds of the BoxMesh (default 1x1x1, verts from -0.5 to 0.5)
 	_click_extent_x = plane_extent_x * 0.5
 	_click_extent_z = plane_extent_z * 0.5
-	var water = get_node_or_null(water_node_path)
+	var water: Node3D = get_node_or_null(water_node_path)
 	if water:
 		water_y = water.global_position.y
 	print("AttackSystem ready. center: ", plane_center, " extent_x: ", plane_extent_x, " extent_z: ", plane_extent_z)
@@ -133,22 +133,22 @@ func _process(delta: float) -> void:
 
 ## Push overlapping ships apart so they never clip through each other.
 func _separate_ships(delta: float) -> void:
-	var ships = _get_ships_cached()
+	var ships: Array = _get_ships_cached()
 	if ships.is_empty():
 		return
 	for i in ships.size():
-		var a = ships[i]
+		var a: Node3D = ships[i]
 		if not is_instance_valid(a):
 			continue
 		for j in range(i + 1, ships.size()):
-			var b = ships[j]
+			var b: Node3D = ships[j]
 			if not is_instance_valid(b):
 				continue
-			var diff = a.global_position - b.global_position
+			var diff: Vector3 = a.global_position - b.global_position
 			diff.y = 0
-			var dist = diff.length()
+			var dist: float = diff.length()
 			if dist < SHIP_PUSH_RADIUS and dist > 0.001:
-				var push = diff.normalized() * (SHIP_PUSH_RADIUS - dist) * delta * 4.0
+				var push: Vector3 = diff.normalized() * (SHIP_PUSH_RADIUS - dist) * delta * 4.0
 				a.global_position += push
 				b.global_position -= push
 
@@ -164,12 +164,12 @@ func enter_attack_mode() -> void:
 	_deployed_types.clear()
 	_ship_stop_positions.clear()
 	_ship_markers.clear()
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("troop_idx_changed", {"idx": 0})
 	if ship_plane:
 		ship_plane.visible = true
-		var mat = StandardMaterial3D.new()
+		var mat: StandardMaterial3D = StandardMaterial3D.new()
 		mat.albedo_color = Color(0.8, 0.1, 0.1, 0.35)
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -192,7 +192,7 @@ func _resume_attack_mode() -> void:
 	is_attack_mode = true
 	if ship_plane:
 		ship_plane.visible = true
-		var mat = StandardMaterial3D.new()
+		var mat: StandardMaterial3D = StandardMaterial3D.new()
 		mat.albedo_color = Color(0.8, 0.1, 0.1, 0.35)
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -282,9 +282,9 @@ func _get_mouse_hit() -> Vector3:
 ## Returns a stop position offset laterally so it doesn't overlap existing ships.
 ## Returns Vector3.INF if no valid position found within shipPlane bounds.
 func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
-	var pos = desired
+	var pos: Vector3 = desired
 	for attempt in range(10):
-		var overlap = false
+		var overlap: bool = false
 		for existing in _ship_stop_positions:
 			if pos.distance_to(existing) < SHIP_MIN_SEPARATION:
 				overlap = true
@@ -294,8 +294,8 @@ func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
 				return pos
 			return Vector3.INF
 		# Alternate left / right, increasing distance each round
-		var side = 1 if (attempt % 2 == 0) else -1
-		var dist = ceil((attempt + 1) / 2.0) * SHIP_MIN_SEPARATION
+		var side: int = 1 if (attempt % 2 == 0) else -1
+		var dist: float = ceil((attempt + 1) / 2.0) * SHIP_MIN_SEPARATION
 		pos = desired + lateral_dir * dist * side
 	return Vector3.INF
 
@@ -329,12 +329,12 @@ func _try_place_ship(hit: Vector3) -> bool:
 	_total_ships_launched += 1
 	# Auto-advance to next undeployed troop type
 	for offset in range(1, SHIP_TROOPS.size() + 1):
-		var candidate = (_next_troop_idx + offset) % SHIP_TROOPS.size()
-		var candidate_key = SHIP_TROOPS[candidate].script.get_file().get_basename()
+		var candidate: int = (_next_troop_idx + offset) % SHIP_TROOPS.size()
+		var candidate_key: String = SHIP_TROOPS[candidate].script.get_file().get_basename()
 		if not _deployed_types.has(candidate_key):
 			_next_troop_idx = candidate
 			break
-	var bridge = get_node_or_null("/root/Bridge")
+	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
 		bridge.send_to_react("troop_idx_changed", {"idx": _next_troop_idx})
 	return true
@@ -379,24 +379,24 @@ func _spawn_single_ship(target: Vector3) -> bool:
 		push_warning("AttackSystem: ship scene resource is null")
 		return false
 
-	var ship = _ship_scene_res.instantiate()
+	var ship: Node3D = _ship_scene_res.instantiate()
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
 
 	# Sailing direction — perpendicular to shipPlane, pointing outward
-	var sail_dir = ship_plane.global_transform.basis.z.normalized()
+	var sail_dir: Vector3 = ship_plane.global_transform.basis.z.normalized()
 	sail_dir.y = 0
 	sail_dir = sail_dir.normalized()
-	var to_plane = (plane_center - ship_plane.get_parent().global_position).normalized()
+	var to_plane: Vector3 = (plane_center - ship_plane.get_parent().global_position).normalized()
 	if sail_dir.dot(to_plane) < 0:
 		sail_dir = -sail_dir
 
 	# Ship stops at inner edge of ShipPlane matching player's lateral click
-	var pb = ship_plane.global_transform.basis
-	var lateral_dir = pb.x.normalized()
-	var offset = target - plane_center
-	var lateral = offset.dot(lateral_dir)
+	var pb: Basis = ship_plane.global_transform.basis
+	var lateral_dir: Vector3 = pb.x.normalized()
+	var offset: Vector3 = target - plane_center
+	var lateral: float = offset.dot(lateral_dir)
 	lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
-	var stop_pos = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
+	var stop_pos: Vector3 = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
 	stop_pos.y = water_y
 
 	# Offset laterally so this ship doesn't land on top of an existing one
@@ -405,15 +405,15 @@ func _spawn_single_ship(target: Vector3) -> bool:
 		return false
 	_ship_stop_positions.append(stop_pos)
 
-	var spawn_pos = stop_pos + sail_dir * spawn_distance
+	var spawn_pos: Vector3 = stop_pos + sail_dir * spawn_distance
 	spawn_pos.y = water_y
 
 	# Flag marker at the landing spot
-	var marker = _create_x_marker(stop_pos)
+	var marker: Node3D = _create_x_marker(stop_pos)
 	_ship_markers.append(marker)
 
 	# Wrap ship in a pivot so we can rock independently of movement
-	var pivot = Node3D.new()
+	var pivot: Node3D = Node3D.new()
 	pivot.add_to_group("ships")
 	get_tree().current_scene.add_child(pivot)
 	pivot.global_position = spawn_pos
@@ -423,13 +423,13 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	pivot.rotate_y(PI)
 
 	# Main movement
-	var tween = create_tween()
+	var tween: Tween = create_tween()
 	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_trans(Tween.TRANS_LINEAR)
 
 	# When ship arrives → remove flag marker, free stop slot, deploy troops
-	var arrived_pos = stop_pos
-	var s_dir = sail_dir
-	var ship_idx = _ships_placed
+	var arrived_pos: Vector3 = stop_pos
+	var s_dir: Vector3 = sail_dir
+	var ship_idx: int = _ships_placed
 	tween.finished.connect(func():
 		ship.rotation = Vector3.ZERO
 		if is_instance_valid(marker):
@@ -445,24 +445,24 @@ func _spawn_single_ship(target: Vector3) -> bool:
 ## Troops are staggered by [troop_spawn_delay] seconds and placed on the island
 ## at building height so they immediately engage targets.
 func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
-	var troop_idx = _ship_troop_map.get(ship_idx, ship_idx % SHIP_TROOPS.size())
-	var troop_def = SHIP_TROOPS[troop_idx]
-	var model_res  = _troop_model_res[troop_idx]
-	var script_res = _troop_script_res[troop_idx]
+	var troop_idx: int = _ship_troop_map.get(ship_idx, ship_idx % SHIP_TROOPS.size())
+	var troop_def: Dictionary = SHIP_TROOPS[troop_idx]
+	var model_res: Resource  = _troop_model_res[troop_idx]
+	var script_res: Resource = _troop_script_res[troop_idx]
 	if model_res == null or script_res == null:
 		push_warning("AttackSystem: could not load troop: %s" % troop_def.model)
 		return
 
 	# Spawn position: right at inner edge of ShipPlane
-	var pb2 = ship_plane.global_transform.basis
-	var lat_dir = pb2.x.normalized()
-	var spawn_pos = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
+	var pb2: Basis = ship_plane.global_transform.basis
+	var lat_dir: Vector3 = pb2.x.normalized()
+	var spawn_pos: Vector3 = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	spawn_pos.y = ship_pos.y
 
 	# Get building Y and troop level in one pass over building_systems
-	var building_y = spawn_pos.y
-	var troop_level = 1
-	var level_key = _script_to_troop_key(troop_def.script)
+	var building_y: float = spawn_pos.y
+	var troop_level: int = 1
+	var level_key: String = _script_to_troop_key(troop_def.script)
 	for bs in get_tree().get_nodes_in_group("building_systems"):
 		if "grid_y" in bs:
 			building_y = bs.grid_y
@@ -471,8 +471,8 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		break
 
 	for i in troops_per_ship:
-		var timer = get_tree().create_timer(troop_spawn_delay * i)
-		var lvl = troop_level  # capture for closure
+		var timer: SceneTreeTimer = get_tree().create_timer(troop_spawn_delay * i)
+		var lvl: int = troop_level  # capture for closure
 		timer.timeout.connect(func():
 			var troop = model_res.instantiate()
 			troop.set_script(script_res)
@@ -497,7 +497,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 
 ## Map script path to troop_levels dictionary key
 static func _script_to_troop_key(script_path: String) -> String:
-	var file = script_path.get_file().get_basename()
+	var file: String = script_path.get_file().get_basename()
 	match file:
 		"knight":    return "Knight"
 		"mage":      return "Mage"
