@@ -11,11 +11,12 @@ import FpsTracker from './FpsTracker';
 import FuturesPanel from './FuturesPanel';
 import ProfileModal from './ProfileModal';
 import EnemyHeader from './EnemyHeader';
+import BattleResultOverlay from './BattleResultOverlay';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
-  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen } = useUI();
+  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { selectedBuilding } = useBuilding();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -65,6 +66,10 @@ export default function GameUI() {
       <ErrorToast message={error} />
       <FpsTracker />
       <EnemyHeader />
+      <BattleResultOverlay result={battleResult} onClose={() => {
+        setBattleResult(null);
+        sendToGodot('return_home');
+      }} />
 
       {shopOpen && (
         <ShopPanel onClose={handleCloseShop} />

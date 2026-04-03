@@ -1,10 +1,13 @@
 const WebSocket = require('ws');
 const db = require('./db');
+const { CombatManager } = require('./combat_manager');
 
 const clients = new Map(); // token -> { ws, playerId, playerName }
+let combatManager = null;
 
 function setupWebSocket(server) {
   const wss = new WebSocket.Server({ server, path: '/ws' });
+  combatManager = new CombatManager(db);
 
   wss.on('connection', (ws, req) => {
     let playerId = null;
@@ -41,6 +44,11 @@ function setupWebSocket(server) {
           player: db.getFullPlayerState(player.id),
         }));
 
+        // Register combat sender
+        combatManager.registerSender(player.id, (data) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(data);
+        });
+
         // Notify others
         broadcast({
           type: 'player_online',
@@ -61,6 +69,7 @@ function setupWebSocket(server) {
         clients.delete(playerToken);
         if (info) {
           console.log(`\x1b[35mWS\x1b[0m disconnect \x1b[90m${info.playerName}\x1b[0m`);
+          combatManager.unregisterSender(info.playerId);
           broadcast({
             type: 'player_offline',
             player_id: info.playerId,
@@ -136,6 +145,29 @@ function handleMessage(ws, playerId, msg) {
     case 'recalculate_trophies':
       result = db.recalculateTrophies(playerId);
       ws.send(JSON.stringify({ type: 'trophies', data: result }));
+      break;
+
+    // ── Combat Messages ──
+    case 'attack_start': {
+      const res = combatManager.createSession(playerId, msg.defender_id);
+      if (res.error) {
+        ws.send(JSON.stringify({ type: 'attack_session_error', error: res.error }));
+      } else {
+        ws.send(JSON.stringify({ type: 'attack_session_created', ...res }));
+      }
+      break;
+    }
+    case 'place_ship': {
+      const res = combatManager.placeShip(playerId, msg.session_id, msg.x, msg.z, msg.troop_type);
+      if (res.error) {
+        ws.send(JSON.stringify({ type: 'ship_rejected', reason: res.error }));
+      } else {
+        ws.send(JSON.stringify({ type: 'ship_placed', ...res }));
+      }
+      break;
+    }
+    case 'attack_end':
+      combatManager.endSession(playerId, 'abandoned');
       break;
 
     default:

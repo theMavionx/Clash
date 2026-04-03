@@ -52,6 +52,25 @@ try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catc
 try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
 
+// Attack sessions table
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS attack_sessions (
+      id            TEXT PRIMARY KEY,
+      attacker_id   TEXT NOT NULL REFERENCES players(id),
+      defender_id   TEXT NOT NULL REFERENCES players(id),
+      status        TEXT NOT NULL DEFAULT 'active',
+      troops_deployed TEXT NOT NULL DEFAULT '{}',
+      buildings_destroyed TEXT NOT NULL DEFAULT '[]',
+      loot_gold     INTEGER NOT NULL DEFAULT 0,
+      loot_wood     INTEGER NOT NULL DEFAULT 0,
+      loot_ore      INTEGER NOT NULL DEFAULT 0,
+      started_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at      TEXT
+    )
+  `);
+} catch {}
+
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
@@ -416,12 +435,14 @@ function findEnemy(playerId) {
   const enemy = stmts.findEnemy.get(playerId, player.trophies);
   if (!enemy) return { error: 'No enemies found' };
   const buildings = stmts.getBuildings.all(enemy.id);
+  const resources = getResources(enemy.id);
   return {
     id: enemy.id,
     name: enemy.name,
     trophies: enemy.trophies,
     level: enemy.level,
     buildings,
+    resources,
   };
 }
 
@@ -476,6 +497,52 @@ function buyShip(playerId, buildingId) {
   return { success: true, resources: getResources(playerId) };
 }
 
+const LOOT_PERCENT = 0.30;
+
+function getPlayerBuildings(playerId) {
+  return stmts.getBuildings.all(playerId);
+}
+
+function createAttackSession(sessionId, attackerId, defenderId) {
+  db.prepare('INSERT INTO attack_sessions (id, attacker_id, defender_id) VALUES (?, ?, ?)').run(sessionId, attackerId, defenderId);
+}
+
+function updateAttackSession(sessionId, status, troopsDeployed, buildingsDestroyed) {
+  db.prepare(`
+    UPDATE attack_sessions SET status = ?, troops_deployed = ?, buildings_destroyed = ?, ended_at = datetime('now')
+    WHERE id = ?
+  `).run(status, troopsDeployed, buildingsDestroyed, sessionId);
+}
+
+function battleVictory(attackerId, defenderId) {
+  if (!attackerId || !defenderId) return { error: 'Missing player IDs' };
+  if (attackerId === defenderId) return { error: 'Cannot attack yourself' };
+  const defender = stmts.getPlayerById.get(defenderId);
+  if (!defender) return { error: 'Defender not found' };
+
+  // Calculate loot — 30% of defender's resources (floored to whole numbers)
+  const lootGold = Math.floor((defender.gold || 0) * LOOT_PERCENT);
+  const lootWood = Math.floor((defender.wood || 0) * LOOT_PERCENT);
+  const lootOre = Math.floor((defender.ore || 0) * LOOT_PERCENT);
+
+  // Transfer resources
+  subtractResources(defenderId, lootGold, lootWood, lootOre);
+  addResources(attackerId, lootGold, lootWood, lootOre);
+
+  // Destroy all defender buildings (set HP to 0)
+  const defenderBuildings = stmts.getBuildings.all(defenderId);
+  const destroyStmt = db.prepare('UPDATE buildings SET hp = 0 WHERE id = ? AND player_id = ?');
+  for (const b of defenderBuildings) {
+    destroyStmt.run(b.id, defenderId);
+  }
+
+  return {
+    success: true,
+    loot: { gold: lootGold, wood: lootWood, ore: lootOre },
+    attacker_resources: getResources(attackerId),
+  };
+}
+
 module.exports = {
   db,
   BUILDING_DEFS,
@@ -498,5 +565,9 @@ module.exports = {
   getTrophies,
   getFullPlayerState,
   buyShip,
+  battleVictory,
+  getPlayerBuildings,
+  createAttackSession,
+  updateAttackSession,
   TROPHY_TABLE,
 };

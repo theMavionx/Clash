@@ -324,9 +324,17 @@ func _try_place_ship(hit: Vector3) -> bool:
 		return false
 	# Record which troop type was deployed (by script basename, matches React key)
 	var script_path: String = SHIP_TROOPS[_next_troop_idx].script
-	_deployed_types[script_path.get_file().get_basename()] = true
+	var troop_type_name: String = script_path.get_file().get_basename()
+	_deployed_types[troop_type_name] = true
 	_ships_placed += 1
 	_total_ships_launched += 1
+	# Notify server of ship placement for combat session
+	var net: Node = get_node_or_null("/root/Net")
+	if net and net.has_method("ws_place_ship"):
+		var bs: Node = get_node_or_null("../BuildingSystem")
+		var session_id: String = bs._combat_session_id if bs else ""
+		if session_id != "":
+			net.ws_place_ship(session_id, hit.x, hit.z, troop_type_name)
 	# Auto-advance to next undeployed troop type
 	for offset in range(1, SHIP_TROOPS.size() + 1):
 		var candidate: int = (_next_troop_idx + offset) % SHIP_TROOPS.size()

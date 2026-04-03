@@ -216,6 +216,10 @@ router.get('/find-enemy', auth, (req, res) => {
   res.json(result);
 });
 
+// Battle is now handled server-side via WebSocket combat sessions.
+// POST /attack/result removed — victory is only granted when server simulation
+// confirms town_hall HP <= 0. See server/combat_manager.js.
+
 // ==================== TROPHIES ====================
 
 // Get trophies

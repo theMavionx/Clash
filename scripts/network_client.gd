@@ -150,6 +150,95 @@ func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 func buy_ship(building_id: int) -> Dictionary:
 	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
 
+# ── Combat WebSocket ─────────────────────────────────────────
+
+signal combat_session_created(data: Dictionary)
+signal combat_session_error(error: String)
+signal combat_tick(data: Dictionary)
+signal combat_ship_placed(data: Dictionary)
+signal combat_ship_rejected(reason: String)
+signal combat_victory(data: Dictionary)
+signal combat_defeat(data: Dictionary)
+
+var _combat_ws: WebSocketPeer = null
+var _combat_ws_connected: bool = false
+
+const WS_URL := "wss://clashofperps.fun/ws"
+
+func combat_ws_connect() -> void:
+	if _combat_ws and _combat_ws_connected:
+		return
+	_combat_ws = WebSocketPeer.new()
+	var err := _combat_ws.connect_to_url(WS_URL)
+	if err != OK:
+		print("[Net] WS connect failed: ", err)
+		return
+
+func _process(_delta: float) -> void:
+	if not _combat_ws:
+		return
+	_combat_ws.poll()
+	var state := _combat_ws.get_ready_state()
+	if state == WebSocketPeer.STATE_OPEN:
+		if not _combat_ws_connected:
+			_combat_ws_connected = true
+			# Authenticate
+			_combat_ws.send_text(JSON.stringify({"type": "auth", "token": token}))
+		while _combat_ws.get_available_packet_count() > 0:
+			var pkt := _combat_ws.get_packet().get_string_from_utf8()
+			_on_combat_ws_message(pkt)
+	elif state == WebSocketPeer.STATE_CLOSED:
+		_combat_ws_connected = false
+		_combat_ws = null
+
+func _on_combat_ws_message(raw: String) -> void:
+	var json := JSON.new()
+	if json.parse(raw) != OK:
+		return
+	var msg: Dictionary = json.data
+	var msg_type: String = msg.get("type", "")
+	match msg_type:
+		"auth_ok":
+			print("[Net] Combat WS authenticated")
+		"attack_session_created":
+			combat_session_created.emit(msg)
+		"attack_session_error":
+			combat_session_error.emit(msg.get("error", "Unknown error"))
+		"combat_tick":
+			combat_tick.emit(msg)
+		"ship_placed":
+			combat_ship_placed.emit(msg)
+		"ship_rejected":
+			combat_ship_rejected.emit(msg.get("reason", "Rejected"))
+		"attack_victory":
+			combat_victory.emit(msg)
+		"attack_defeat":
+			combat_defeat.emit(msg)
+
+func ws_attack_start(defender_id: String) -> void:
+	if not _combat_ws or not _combat_ws_connected:
+		combat_ws_connect()
+		# Wait for connection (max 3 sec)
+		var waited: float = 0.0
+		while not _combat_ws_connected and waited < 3.0:
+			await get_tree().create_timer(0.1).timeout
+			waited += 0.1
+			if _combat_ws:
+				_combat_ws.poll()
+				if _combat_ws.get_ready_state() == WebSocketPeer.STATE_OPEN:
+					_combat_ws_connected = true
+					_combat_ws.send_text(JSON.stringify({"type": "auth", "token": token}))
+	if _combat_ws_connected:
+		_combat_ws.send_text(JSON.stringify({"type": "attack_start", "defender_id": defender_id}))
+
+func ws_place_ship(session_id: String, x: float, z: float, troop_type: String) -> void:
+	if _combat_ws and _combat_ws_connected:
+		_combat_ws.send_text(JSON.stringify({"type": "place_ship", "session_id": session_id, "x": x, "z": z, "troop_type": troop_type}))
+
+func ws_attack_end(session_id: String) -> void:
+	if _combat_ws and _combat_ws_connected:
+		_combat_ws.send_text(JSON.stringify({"type": "attack_end", "session_id": session_id}))
+
 func remove_building(building_id: int) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)

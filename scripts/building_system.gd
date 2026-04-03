@@ -312,6 +312,7 @@ var _server_busy: bool = false
 var home_buildings_backup: Array[Dictionary] = []
 var home_grid_backup: Array[bool] = []
 var enemy_info: Dictionary = {}
+var _combat_session_id: String = ""
 var return_button: Button
 var enemy_label: Label
 var find_button: Button
@@ -322,7 +323,7 @@ var _ship_cannon_label: Label = null
 var _cannon_paused_attack: bool = false  # was attack mode active when cannon was entered
 var _ship_cannonballs: Array = []  # Array of {node, target_bdata, target_pos}
 const SHIP_CANNON_DAMAGE: int = 500
-const SHIP_CANNON_SPEED: float = 1.0
+const SHIP_CANNON_SPEED: float = 1.2
 const SHIP_CANNON_HIT_SQ: float = 0.03 * 0.03
 const SHIP_CANNON_RELOAD: float = 1.0
 const SHIP_FLASH_SCALE: float = 0.25
@@ -1995,7 +1996,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
-	# Click on placed building
+	# Click on placed building — disabled during attack mode to prevent misclicks
+	if is_viewing_enemy:
+		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var local_hit = _get_mouse_local()
 		if local_hit != Vector3.INF:
@@ -2232,6 +2235,9 @@ func _cancel_placement() -> void:
 
 func _destroy_all_buildings() -> void:
 	for b in placed_buildings:
+		var icon: Control = b.get("_collect_icon")
+		if is_instance_valid(icon):
+			icon.queue_free()
 		if b.node and is_instance_valid(b.node):
 			b.node.queue_free()
 	placed_buildings.clear()
@@ -2671,8 +2677,12 @@ func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 
 
 func remove_building(b: Dictionary) -> void:
-	var idx = placed_buildings.find(b)
+	var idx: int = placed_buildings.find(b)
 	if idx < 0:
+		return
+	# Town Hall destroyed during attack → victory: destroy all buildings + loot 30%
+	if b.id == "town_hall" and is_viewing_enemy:
+		_on_town_hall_destroyed()
 		return
 	# Tombstone → kill all its skeleton guards
 	if b.id == "tombstone":
@@ -2680,15 +2690,18 @@ func remove_building(b: Dictionary) -> void:
 	# Only sync removal of OWN buildings, not enemy's during attack
 	if not is_viewing_enemy:
 		_sync_remove_building(b)
-	var def = building_defs[b.id]
-	var gp = b.grid_pos as Vector2i
+	var def: Dictionary = building_defs[b.id]
+	var gp: Vector2i = b.grid_pos as Vector2i
 	for x in range(def.cells.x):
 		for z in range(def.cells.y):
-			var cell_idx = (gp.y + z) * grid_width + (gp.x + x)
+			var cell_idx: int = (gp.y + z) * grid_width + (gp.x + x)
 			if cell_idx >= 0 and cell_idx < grid.size():
 				grid[cell_idx] = false
 	if b.has("hp_bar") and is_instance_valid(b.hp_bar):
 		b.hp_bar.queue_free()
+	var icon: Control = b.get("_collect_icon")
+	if is_instance_valid(icon):
+		icon.queue_free()
 	if is_instance_valid(b.node):
 		b.node.queue_free()
 	placed_buildings.remove_at(idx)
@@ -3381,17 +3394,30 @@ func _on_attack_pressed() -> void:
 func _on_find_pressed() -> void:
 	if is_viewing_enemy:
 		return
-	var net = _net
+	var net: Node = _net
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
+
+	# Ensure combat WebSocket is connected
+	net.combat_ws_connect()
+
+	# Connect combat signals (one-shot per session)
+	if not net.combat_session_created.is_connected(_on_combat_session_created):
+		net.combat_session_created.connect(_on_combat_session_created)
+	if not net.combat_tick.is_connected(_on_combat_tick):
+		net.combat_tick.connect(_on_combat_tick)
+	if not net.combat_victory.is_connected(_on_combat_victory):
+		net.combat_victory.connect(_on_combat_victory)
+	if not net.combat_defeat.is_connected(_on_combat_defeat):
+		net.combat_defeat.connect(_on_combat_defeat)
 
 	# Disable button while searching
 	if find_button:
 		find_button.disabled = true
 		find_button.text = "Searching..."
 
-	var result = await net.find_enemy()
+	var result: Dictionary = await net.find_enemy()
 
 	if find_button:
 		find_button.disabled = false
@@ -3402,7 +3428,98 @@ func _on_find_pressed() -> void:
 		return
 
 	enemy_info = result
+	# Start server combat session
+	var defender_id: String = result.get("id", "")
+	if defender_id != "":
+		net.ws_attack_start(defender_id)
 	_switch_to_enemy_island()
+
+
+func _on_combat_session_created(data: Dictionary) -> void:
+	_combat_session_id = data.get("sessionId", "")
+	print("[Combat] Session started: ", _combat_session_id)
+
+
+func _on_combat_tick(data: Dictionary) -> void:
+	if not is_viewing_enemy:
+		return
+	# Update building HP from server authoritative state
+	var server_buildings: Array = data.get("buildings", [])
+	for sb in server_buildings:
+		var sid: String = sb.get("id", "")
+		for bs in _building_systems:
+			for b in bs.placed_buildings:
+				if "b_%d" % b.get("server_id", -1) == sid:
+					b["hp"] = sb.get("hp", b.get("hp", 0))
+					b["max_hp"] = sb.get("maxHp", b.get("max_hp", 0))
+					break
+	# Check buildings destroyed by server
+	var events: Array = data.get("events", [])
+	for evt in events:
+		var evt_type: String = evt.get("type", "")
+		if evt_type == "building_destroyed":
+			var bid: String = evt.get("buildingId", "")
+			for bs in _building_systems:
+				for b in bs.placed_buildings:
+					if "b_%d" % b.get("server_id", -1) == bid:
+						b["hp"] = 0
+						if b.get("id", "") == "town_hall":
+							# Server will send attack_victory separately
+							pass
+						else:
+							bs.remove_building(b)
+						break
+
+
+func _on_combat_victory(data: Dictionary) -> void:
+	if not is_viewing_enemy:
+		return
+	# Server confirmed victory — destroy all buildings visually
+	for bs in _building_systems:
+		var to_destroy: Array = bs.placed_buildings.duplicate()
+		for b in to_destroy:
+			if b.id == "tombstone":
+				bs._remove_tombstone_skeletons(b)
+			if b.has("hp_bar") and is_instance_valid(b.hp_bar):
+				b.hp_bar.queue_free()
+			var icon: Control = b.get("_collect_icon")
+			if is_instance_valid(icon):
+				icon.queue_free()
+			if is_instance_valid(b.node):
+				_spawn_ship_explosion(b.node.global_position)
+				b.node.queue_free()
+		bs.placed_buildings.clear()
+		bs.grid.fill(false)
+	# Set all troops to victory state
+	for troop in get_tree().get_nodes_in_group("troops"):
+		if is_instance_valid(troop) and "state" in troop:
+			troop.state = troop.State.VICTORY
+	# Update resources from server loot and show victory screen
+	var loot: Dictionary = data.get("loot", {})
+	var bridge: Node = _bridge
+	if bridge:
+		bridge.send_to_react("resources_add", {
+			"gold": loot.get("gold", 0),
+			"wood": loot.get("wood", 0),
+			"ore": loot.get("ore", 0),
+		})
+		bridge.send_to_react("battle_result", {
+			"type": "victory",
+			"loot": loot,
+		})
+	# Player returns home by clicking "RETURN HOME" on the battle result overlay
+
+
+func _on_combat_defeat(data: Dictionary) -> void:
+	if not is_viewing_enemy:
+		return
+	var reason: String = data.get("reason", "defeat")
+	var bridge: Node = _bridge
+	if bridge:
+		bridge.send_to_react("battle_result", {
+			"type": "defeat",
+			"reason": reason,
+		})
 
 
 func _get_or_create_cloud() -> Node:
@@ -3446,10 +3563,14 @@ func _switch_to_enemy_island() -> void:
 		bs.is_viewing_enemy = true
 	var bridge = _bridge
 	if bridge:
+		var enemy_res: Dictionary = enemy_info.get("resources", {})
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": enemy_info.get("name", "???"),
 			"trophies": enemy_info.get("trophies", 0),
+			"gold": enemy_res.get("gold", 0),
+			"wood": enemy_res.get("wood", 0),
+			"ore": enemy_res.get("ore", 0),
 		})
 
 	# Cloud close animation — hide React UI during transition
@@ -3768,19 +3889,12 @@ func _fire_ship_cannon(bdata: Dictionary) -> void:
 	get_tree().root.add_child(ball)
 	var start_pos = ship.global_position + Vector3(0, 0.15, 0)
 	ball.global_position = start_pos
-	# Target at front edge of building (ship-facing side) at ground level
-	var b_center = bnode.global_position
-	var dir_to_ship = (ship.global_position - b_center)
-	dir_to_ship.y = 0
-	dir_to_ship = dir_to_ship.normalized()
-	# Building half-extent from def cells
-	var b_def = building_defs.get(bdata.get("id", ""), {})
-	var half_x = b_def.get("cells", Vector2i(2, 2)).x * cell_size * 0.5
-	var half_z = b_def.get("cells", Vector2i(2, 2)).y * cell_size * 0.5
-	var edge_offset = absf(dir_to_ship.x) * half_x + absf(dir_to_ship.z) * half_z
-	var tp: Vector3 = Vector3(b_center.x + dir_to_ship.x * edge_offset, grid_y, b_center.z + dir_to_ship.z * edge_offset)
-	var dist = start_pos.distance_to(tp)
-	var flight_time = maxf(dist / SHIP_CANNON_SPEED, 1.5)
+	# Target building center (matches target ring position)
+	var b_center: Vector3 = bnode.global_position
+	var b_def: Dictionary = building_defs.get(bdata.get("id", ""), {})
+	var tp: Vector3 = Vector3(b_center.x, b_center.y, b_center.z)
+	var dist: float = start_pos.distance_to(tp)
+	var flight_time: float = maxf(dist / SHIP_CANNON_SPEED, 1.5)
 	_ship_cannonballs.append({"node": ball, "bdata": bdata, "target_pos": tp, "start_pos": start_pos, "elapsed": 0.0, "flight_time": flight_time})
 	# Target ring centered on building (sized to its footprint)
 	_spawn_target_ring(b_center, b_def)
@@ -3829,9 +3943,27 @@ func _update_ship_cannonballs(delta: float) -> void:
 		i -= 1
 
 
+func _on_town_hall_destroyed() -> void:
+	# Town hall destroyed locally (from remove_building).
+	# Server-authoritative victory is handled by _on_combat_victory.
+	# This function is now a no-op — the server decides victory.
+	pass
+
+	# Auto-return home after 3 seconds (legacy — now handled by _on_combat_victory)
+	await get_tree().create_timer(3.0).timeout
+	if not is_instance_valid(self):
+		return
+	_return_home()
+
+
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
+	# Notify server to end combat session
+	var net: Node = _net
+	if net and _combat_session_id != "":
+		net.ws_attack_end(_combat_session_id)
+		_combat_session_id = ""
 	_exit_ship_cannon_mode()
 	# Hide attack ship, show base ship when returning home
 	var _r2 = get_tree().root

@@ -23,6 +23,7 @@ export function GodotProvider({ children }) {
   const [futuresOpen, setFuturesOpen] = useState(false);
   const [cannonMode, setCannonMode] = useState(false);
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
+  const [battleResult, setBattleResult] = useState(null);
   const errorTimerRef = useRef(null);
 
   useEffect(() => {
@@ -74,6 +75,9 @@ export function GodotProvider({ children }) {
         case 'cannon_mode':
           setCannonMode(data.active);
           break;
+        case 'battle_result':
+          setBattleResult(data);
+          break;
         case 'error':
           setError(data.message);
           if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
@@ -123,8 +127,8 @@ export function GodotProvider({ children }) {
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },

@@ -501,16 +501,31 @@ func _get_target_position() -> Vector3:
 
 
 func _deal_target_damage() -> void:
+	# In server-authoritative mode, damage is applied by the server combat simulation.
+	# Client troops still animate attacks visually, but HP changes come from combat_tick.
+	var server_driven: bool = _is_server_combat_active()
 	if target_guard != null and is_instance_valid(target_guard):
-		target_guard.take_damage(damage)
+		if not server_driven:
+			target_guard.take_damage(damage)
 		if not is_instance_valid(target_guard) or not target_guard.is_inside_tree():
 			target_guard = null
 			_find_next_target()
 	elif target_building.size() > 0:
-		target_building["hp"] = target_building.get("hp", 0) - damage
+		if not server_driven:
+			target_building["hp"] = target_building.get("hp", 0) - damage
 		if target_building.get("hp", 0) <= 0:
 			_destroy_target()
 			_find_next_target()
+
+
+static func _is_server_combat_active() -> bool:
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if not tree:
+		return false
+	for bs in tree.get_nodes_in_group("building_systems"):
+		if bs.is_viewing_enemy and bs._combat_session_id != "":
+			return true
+	return false
 
 
 ## Calculates the world-space orbit slot position this troop should move toward.
