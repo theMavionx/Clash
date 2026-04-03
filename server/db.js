@@ -51,6 +51,11 @@ db.exec(`
 try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
+// Shield: protects from attacks after being raided
+try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
+// Attack cooldown: prevent re-attacking same player
+try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_by TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_at TEXT`); } catch {}
 
 // Attack sessions table
 try {
@@ -94,7 +99,9 @@ const stmts = {
   // Find enemy (closest trophies, not self)
   findEnemy: db.prepare(`
     SELECT id, name, trophies, level FROM players
-    WHERE id != ? AND trophies >= 50
+    WHERE id != ?
+      AND trophies >= 50
+      AND (shield_until IS NULL OR shield_until < datetime('now'))
     ORDER BY ABS(trophies - ?) ASC
     LIMIT 1
   `),
@@ -525,11 +532,27 @@ function updateAttackSession(sessionId, status, troopsDeployed, buildingsDestroy
   `).run(status, troopsDeployed, buildingsDestroyed, sessionId);
 }
 
+const SHIELD_HOURS = 12; // 12-hour shield after being raided
+const ATTACK_COOLDOWN_HOURS = 2; // can't attack same player for 2 hours
+
 function battleVictory(attackerId, defenderId) {
   if (!attackerId || !defenderId) return { error: 'Missing player IDs' };
   if (attackerId === defenderId) return { error: 'Cannot attack yourself' };
+
+  // Check defender has no active shield
   const defender = stmts.getPlayerById.get(defenderId);
   if (!defender) return { error: 'Defender not found' };
+  if (defender.shield_until) {
+    const shieldEnd = new Date(defender.shield_until + 'Z');
+    if (shieldEnd > new Date()) return { error: 'Defender is shielded' };
+  }
+
+  // Check cooldown — can't attack same player twice within cooldown
+  if (defender.last_attacked_by === attackerId && defender.last_attacked_at) {
+    const lastAttack = new Date(defender.last_attacked_at + 'Z');
+    const cooldownEnd = new Date(lastAttack.getTime() + ATTACK_COOLDOWN_HOURS * 3600000);
+    if (cooldownEnd > new Date()) return { error: 'Already attacked this player recently' };
+  }
 
   // Calculate loot — 30% of defender's resources (floored to whole numbers)
   const lootGold = Math.floor((defender.gold || 0) * LOOT_PERCENT);
@@ -540,12 +563,10 @@ function battleVictory(attackerId, defenderId) {
   subtractResources(defenderId, lootGold, lootWood, lootOre);
   addResources(attackerId, lootGold, lootWood, lootOre);
 
-  // Destroy all defender buildings (set HP to 0)
-  const defenderBuildings = stmts.getBuildings.all(defenderId);
-  const destroyStmt = db.prepare('UPDATE buildings SET hp = 0 WHERE id = ? AND player_id = ?');
-  for (const b of defenderBuildings) {
-    destroyStmt.run(b.id, defenderId);
-  }
+  // Grant shield to defender (12 hours)
+  const shieldUntil = new Date(Date.now() + SHIELD_HOURS * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare('UPDATE players SET shield_until = ?, last_attacked_by = ?, last_attacked_at = datetime(\'now\') WHERE id = ?')
+    .run(shieldUntil, attackerId, defenderId);
 
   return {
     success: true,
