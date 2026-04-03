@@ -272,6 +272,9 @@ static var _turret_script_res: Script = null
 var _ship_attack_node: Node3D = null
 var _ship_base_node: Node3D = null
 var _water_y: float = 0.0
+var _saved_ship_transforms: Array = []
+var _saved_port_ships: Array = []
+var _home_troops: Array = []
 var _initial_load_done: bool = false
 
 # ── AABB Cache for precise outlines ──────────────────────────
@@ -371,6 +374,8 @@ var troop_levels: Dictionary = {
 var troop_defs: Dictionary = {
 	"Knight": {
 		"display": "Knight (Tank)",
+		"model": "res://Model/Characters/Model/Knight.glb",
+		"script": "res://scripts/knight.gd",
 		"costs": {
 			1: {"gold": 150, "ore": 80},
 			2: {"gold": 400, "ore": 250},
@@ -379,6 +384,8 @@ var troop_defs: Dictionary = {
 	},
 	"Mage": {
 		"display": "Wizard (Burst Mage)",
+		"model": "res://Model/Characters/Model/Mage.glb",
+		"script": "res://scripts/mage.gd",
 		"costs": {
 			1: {"gold": 250, "ore": 150},
 			2: {"gold": 600, "ore": 400},
@@ -387,6 +394,8 @@ var troop_defs: Dictionary = {
 	},
 	"Barbarian": {
 		"display": "Berserker (Fast Brawler)",
+		"model": "res://Model/Characters/Model/Barbarian.glb",
+		"script": "res://scripts/barbarian.gd",
 		"costs": {
 			1: {"gold": 200, "ore": 120},
 			2: {"gold": 500, "ore": 350},
@@ -395,6 +404,8 @@ var troop_defs: Dictionary = {
 	},
 	"Archer": {
 		"display": "Archer (Sniper)",
+		"model": "res://Model/Characters/Model/Ranger.glb",
+		"script": "res://scripts/archer.gd",
 		"costs": {
 			1: {"gold": 180, "wood": 100},
 			2: {"gold": 450, "wood": 300},
@@ -403,6 +414,8 @@ var troop_defs: Dictionary = {
 	},
 	"Ranger": {
 		"display": "Ranger (Balanced DPS)",
+		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
+		"script": "res://scripts/ranger.gd",
 		"costs": {
 			1: {"gold": 120, "wood": 60},
 			2: {"gold": 350, "wood": 200},
@@ -410,6 +423,11 @@ var troop_defs: Dictionary = {
 		}
 	},
 }
+const BUY_TROOP_COST: int = 100
+const HOME_TROOP_SCALE: float = 0.1
+const PATROL_SPEED: float = 0.3
+const PATROL_WAIT_MIN: float = 2.0
+const PATROL_WAIT_MAX: float = 5.0
 
 
 # ── Node Cache ────────────────────────────────────────────────
@@ -3331,6 +3349,33 @@ func _refresh_barracks_panel() -> void:
 			btn.pressed.connect(func(): _upgrade_troop(tn))
 			vb.add_child(btn)
 
+	# ── Buy Troops section ──
+	var sep2 = HSeparator.new()
+	barracks_vbox.add_child(sep2)
+
+	var buy_title = Label.new()
+	buy_title.text = "Buy Troops (%d Gold each)" % BUY_TROOP_COST
+	buy_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	buy_title.add_theme_color_override("font_color", Color(0.9, 0.75, 0.3))
+	barracks_vbox.add_child(buy_title)
+
+	for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+		var tdef2 = troop_defs[troop_name]
+		var lvl2 = troop_levels[troop_name]
+		if lvl2 < 1:
+			continue  # Can only buy trained troops
+		var buy_btn = Button.new()
+		buy_btn.text = "Buy %s (Lv.%d)" % [troop_name, lvl2]
+		buy_btn.custom_minimum_size = Vector2(0, 44)
+		if resources.get("gold", 0) >= BUY_TROOP_COST:
+			_style_button(buy_btn, Color(0.4, 0.35, 0.15), Color(0.5, 0.45, 0.2))
+		else:
+			_style_button(buy_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+			buy_btn.disabled = true
+		var tn2 = troop_name
+		buy_btn.pressed.connect(func(): _buy_troop(tn2))
+		barracks_vbox.add_child(buy_btn)
+
 	# Close button
 	var close_btn = Button.new()
 	close_btn.text = "Close"
@@ -3423,6 +3468,84 @@ func _upgrade_troop(troop_name: String) -> void:
 	_refresh_troop_levels_from_server()
 
 
+func _buy_troop(troop_name: String) -> void:
+	if resources.get("gold", 0) < BUY_TROOP_COST:
+		return
+	var tdef = troop_defs.get(troop_name, {})
+	var model_path = tdef.get("model", "")
+	if model_path == "":
+		return
+	resources["gold"] -= BUY_TROOP_COST
+	_update_resource_ui()
+	_refresh_barracks_panel()
+	# Spawn troop on island
+	var model_res = load(model_path)
+	if model_res == null:
+		return
+	var troop = model_res.instantiate()
+	var s = HOME_TROOP_SCALE
+	troop.scale = Vector3(s, s, s)
+	get_tree().root.add_child(troop)
+	troop.add_to_group("home_troops")
+	var spawn_pos = _get_random_grid_world_pos()
+	troop.global_position = spawn_pos
+	var anim_player = _find_anim_player_recursive(troop)
+	if anim_player and anim_player.has_animation("Idle"):
+		anim_player.play("Idle")
+	_home_troops.append({"node": troop, "anim": anim_player, "name": troop_name})
+	_start_patrol(troop, anim_player)
+
+
+func _get_random_grid_world_pos() -> Vector3:
+	var half_x = grid_extent_x * 0.4
+	var half_z = grid_extent_z * 0.4
+	var rx = randf_range(-half_x, half_x)
+	var rz = randf_range(-half_z, half_z)
+	var world = to_global(Vector3(rx, 0, rz))
+	world.y = grid_y
+	return world
+
+
+func _start_patrol(troop: Node3D, anim_player: AnimationPlayer) -> void:
+	if not is_instance_valid(troop):
+		return
+	var wait = randf_range(PATROL_WAIT_MIN, PATROL_WAIT_MAX)
+	var tw = create_tween()
+	tw.tween_interval(wait)
+	tw.tween_callback(func():
+		if not is_instance_valid(troop):
+			return
+		var target = _get_random_grid_world_pos()
+		var dist = troop.global_position.distance_to(target)
+		var duration = dist / PATROL_SPEED
+		var dir = target - troop.global_position
+		dir.y = 0
+		if dir.length_squared() > 0.001:
+			troop.global_transform = troop.global_transform.looking_at(troop.global_position + dir, Vector3.UP)
+		if anim_player and is_instance_valid(anim_player) and anim_player.has_animation("Running_A"):
+			anim_player.play("Running_A")
+		var move_tw = create_tween()
+		move_tw.tween_property(troop, "global_position", target, duration).set_trans(Tween.TRANS_LINEAR)
+		move_tw.tween_callback(func():
+			if not is_instance_valid(troop):
+				return
+			if anim_player and is_instance_valid(anim_player) and anim_player.has_animation("Idle"):
+				anim_player.play("Idle")
+			_start_patrol(troop, anim_player)
+		)
+	)
+
+
+func _find_anim_player_recursive(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node
+	for child in node.get_children():
+		var result = _find_anim_player_recursive(child)
+		if result:
+			return result
+	return null
+
+
 func _on_attack_pressed() -> void:
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
@@ -3507,6 +3630,11 @@ func _switch_to_enemy_island() -> void:
 		_ship_attack_node.visible = true
 	if _ship_base_node:
 		_ship_base_node.visible = false
+
+	# Hide home troops
+	for ht in _home_troops:
+		if is_instance_valid(ht.get("node")):
+			ht.node.visible = false
 
 	# Hide collect icons before switching
 	for bs in _building_systems:
@@ -3967,6 +4095,11 @@ func _return_home() -> void:
 		_ship_attack_node.visible = false
 	if _ship_base_node:
 		_ship_base_node.visible = true
+	# Show home troops again
+	for ht in _home_troops:
+		if is_instance_valid(ht.get("node")):
+			ht.node.visible = true
+			_start_patrol(ht.node, ht.get("anim"))
 	for bs in _building_systems:
 		bs.is_viewing_enemy = false
 	var bridge = _bridge
