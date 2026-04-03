@@ -20,12 +20,106 @@ const TABS = [
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
 
+// Format price — no decimals for big numbers, appropriate precision for small
+const fmtPrice = (p) => {
+  if (p >= 1000) return p.toLocaleString(undefined, {maximumFractionDigits: 0});
+  if (p >= 1) return p.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  return p.toPrecision(4);
+};
+
+// Token icons — served locally from /tokens/{SYM}.png
+const TOKEN_COLORS = {
+  BTC:'#F7931A',ETH:'#627EEA',SOL:'#9945FF',DOGE:'#C2A633',XRP:'#23292F',
+  SUI:'#4DA2FF',TRUMP:'#FFD700',BNB:'#F3BA2F',HYPE:'#00D4AA',ENA:'#7C3AED',
+  PAXG:'#E4CE4F',ZEC:'#F4B728',XMR:'#FF6600',AVAX:'#E84142',ADA:'#0033AD',
+  DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
+  GOLD:'#FFD700',SILVER:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
+};
+const TokenIcon = ({sym, size = 20}) => {
+  const bg = TOKEN_COLORS[sym] || '#a3906a';
+  return (
+    <div style={{width: size, height: size, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden'}}>
+      <img src={`/tokens/${sym}.svg`} alt="" width={size} height={size} style={{borderRadius: '50%'}}
+        onError={e => {
+          // If svg fails, try png, if png fails, show fallback text
+          if (e.target.src.endsWith('.svg')) {
+            e.target.src = `/tokens/${sym}.png`;
+          } else {
+            e.target.style.display='none';
+            e.target.nextSibling.style.display='flex';
+          }
+        }} />
+      <span style={{display: 'none', fontSize: size * 0.5, fontWeight: 900, color: '#fff', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>{sym.charAt(0)}</span>
+    </div>
+  );
+};
+
+// Symbol picker dropdown with logo, max leverage, price, 24h change
+const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen }) {
+  const [search, setSearch] = useState('');
+  const rows = useMemo(() => {
+    return markets.map(m => {
+      const p = prices.find(pr => pr.symbol === m.symbol);
+      const mark = p ? parseFloat(p.mark) : 0;
+      const yest = p ? parseFloat(p.yesterday_price || 0) : 0;
+      const change = yest > 0 ? ((mark - yest) / yest) * 100 : 0;
+      return { symbol: m.symbol, maxLev: m.max_leverage, mark, change };
+    }).filter(r => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }, [markets, prices, search]);
+
+  return (
+    <div style={{maxHeight: fullscreen ? '75vh' : 350, display: 'flex', flexDirection: 'column', gap: 6, flex: 1}}>
+      <input
+        placeholder="Search..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        autoFocus
+        style={{padding: '6px 10px', border: '2px solid #d4c8b0', borderRadius: 8, background: '#fdf8e7', fontSize: 13, fontWeight: 700, color: '#5C3A21', outline: 'none'}}
+      />
+      <div className="grad-scrollbar" style={{overflowY: 'auto', flex: 1}}>
+        <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
+          <thead><tr>
+            <th style={SP.th}>Symbol</th>
+            <th style={{...SP.th, textAlign: 'right'}}>Price</th>
+            <th style={{...SP.th, textAlign: 'right'}}>24h</th>
+          </tr></thead>
+          <tbody>{rows.map(r => (
+            <tr key={r.symbol} onClick={() => onSelect(r.symbol)}
+              style={{...SP.row, background: r.symbol === symbol ? '#e8dfc8' : 'transparent', cursor: 'pointer'}}>
+              <td style={SP.td}>
+                <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
+                  <TokenIcon sym={r.symbol} size={18} />
+                  <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.symbol}</span>
+                  <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
+                </div>
+              </td>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
+                {r.mark > 0 ? fmtPrice(r.mark) : '—'}
+              </td>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.change >= 0 ? '#4CAF50' : '#E53935'}}>
+                {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+});
+
+const SP = {
+  th: { padding: '4px 8px', textAlign: 'left', fontSize: 10, fontWeight: 800, color: '#a3906a', textTransform: 'uppercase', borderBottom: '2px solid #d4c8b0' },
+  td: { padding: '6px 8px', borderBottom: '1px solid #e8dfc8' },
+  row: { transition: 'background 0.1s' },
+};
+
 function FuturesPanel() {
   const { setFuturesOpen } = useSend();
   const { connected } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const {
-    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes,
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
@@ -80,36 +174,54 @@ function FuturesPanel() {
   const [btmFilters, setBtmFilters] = useState(defaultFilters);
 
   // Resizable panel sizes (percentages / pixels)
-  const [bottomH, setBottomH] = useState(160);       // bottom panel height in px
-  const [obWidth, setObWidth] = useState(160);        // orderbook width in px
-  const [chartPct, setChartPct] = useState(55);       // chart width as % of (chart + orderbook + controls)
+  const [bottomH, setBottomH] = useState(160);
+  const [obWidth, setObWidth] = useState(160);
+  const [chartPct, setChartPct] = useState(55);
 
-  const useDrag = (onDrag) => {
-    return useCallback((e) => {
-      e.preventDefault();
-      const startX = e.clientX, startY = e.clientY;
-      const onMove = (ev) => onDrag(ev.clientX - startX, ev.clientY - startY, ev);
-      const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    }, [onDrag]);
-  };
+  const bottomHRef = useRef(bottomH);
+  bottomHRef.current = bottomH;
+  const obWidthRef = useRef(obWidth);
+  obWidthRef.current = obWidth;
 
-  const dragBottom = useDrag(useCallback((dx, dy) => {
-    setBottomH(prev => Math.max(60, Math.min(500, prev - dy)));
-  }, []));
+  const dragBottom = useCallback((e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = bottomHRef.current;
+    const onMove = (ev) => setBottomH(Math.max(60, Math.min(500, startH - (ev.clientY - startY))));
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
-  const dragOb = useDrag(useCallback((dx) => {
-    setObWidth(prev => Math.max(80, Math.min(350, prev + dx)));
-  }, []));
+  const dragOb = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = obWidthRef.current;
+    const onMove = (ev) => setObWidth(Math.max(80, Math.min(350, startW + (ev.clientX - startX))));
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
-  const dragChart = useDrag(useCallback((dx, dy, ev) => {
-    const container = panelRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const pct = ((ev.clientX - rect.left) / rect.width) * 100;
-    setChartPct(Math.max(20, Math.min(70, pct)));
-  }, []));
+  const dragChart = useCallback((e) => {
+    e.preventDefault();
+    const onMove = (ev) => {
+      const container = panelRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      setChartPct(Math.max(20, Math.min(70, pct)));
+    };
+    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
 
@@ -127,6 +239,8 @@ function FuturesPanel() {
   }, [markets, symbol]);
 
   const pacBalance = parseFloat(account?.balance || 0);
+  const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
+  const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
 
   // Convert USDC amount to token amount, rounded to lot size
   const lotSize = useMemo(() => {
@@ -205,15 +319,65 @@ function FuturesPanel() {
   }
 
   // ==================== TRADE CONTROLS (reusable) ====================
+  // Symbol info bar — token + market data (above chart)
+  const curPriceData = useMemo(() => prices.find(p => p.symbol === symbol), [prices, symbol]);
+  const change24h = useMemo(() => {
+    if (!curPriceData) return 0;
+    const yest = parseFloat(curPriceData.yesterday_price || 0);
+    const mark = parseFloat(curPriceData.mark || 0);
+    return yest > 0 ? ((mark - yest) / yest) * 100 : 0;
+  }, [curPriceData]);
+  const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
+  const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
+  const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
+
+  const renderSymbolBar = () => (
+    <>
+      <div style={{...S.symbolBar, ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
+        <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
+          <TokenIcon sym={symbol} size={20} />
+          <span style={{fontSize: 16, fontWeight: 900}}>{symbol}</span>
+          {!fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        {fullscreen ? <>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>${vol24h >= 1e6 ? (vol24h/1e6).toFixed(1)+'M' : vol24h >= 1e3 ? (vol24h/1e3).toFixed(0)+'K' : vol24h.toFixed(0)}</span></div>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>OI</span><span style={S.infoCellValue}>${oi >= 1e6 ? (oi/1e6).toFixed(1)+'M' : oi >= 1e3 ? (oi/1e3).toFixed(0)+'K' : oi.toFixed(0)}</span></div>
+          <div style={S.infoCell}><span style={S.infoCellLabel}>Funding</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
+        </> : <>
+          {/* Mobile: margin mode + balance in symbol bar */}
+          <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
+            <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
+              {marginModes[symbol] ? 'Isolated' : 'Cross'}
+            </span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
+              <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+              <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+            </svg>
+          </button>
+          <div style={{marginLeft: 'auto', ...S.balBadge}}>
+            <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
+            <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
+          </div>
+        </>}
+      </div>
+      {showSymbolPicker && (
+        <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
+          <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: '#fdf8e7', border: '5px solid #d4c8b0', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
+            <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   const renderTradeControls = () => (
     <div style={{display: 'flex', flexDirection: 'column', gap: 8, ...(fullscreen ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'} : {})}}>
-      {/* Symbol + margin mode + balance */}
-      <div style={S.row}>
-        <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)}>
-          <span style={{fontSize: 18, fontWeight: 900}}>{symbol}</span>
-          {currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${parseFloat(currentPrice).toLocaleString()}</span>}
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
+      {/* Margin mode + balance — only in fullscreen (mobile has it in symbol bar) */}
+      {fullscreen && <div style={S.row}>
         <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
           <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
             {marginModes[symbol] ? 'Isolated' : 'Cross'}
@@ -223,21 +387,11 @@ function FuturesPanel() {
             <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
           </svg>
         </button>
-        <div style={S.balBadge}>
+        <div style={{...S.balBadge, marginLeft: 'auto'}}>
           <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
           <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
         </div>
-      </div>
-
-      {showSymbolPicker && (
-        <div style={S.chips}>
-          {POPULAR_SYMBOLS.map(s => (
-            <button key={s} style={s === symbol ? S.chipActive : S.chip}
-              onClick={() => { setSymbol(s); setShowSymbolPicker(false); }}>{s}</button>
-          ))}
-        </div>
-      )}
-
+      </div>}
       {/* Deposit/Withdraw row */}
       {pacBalance === 0 && (
         <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
@@ -288,8 +442,8 @@ function FuturesPanel() {
               </span>
             )}
           </div>
-          <input type="range" min="0" max="100" step="5" value={sizePct}
-            onChange={e => handleSizePct(Number(e.target.value))} style={S.slider} />
+          <input type="range" min="0" max="100" step="5" value={sizePct} className="grad-slider"
+            onChange={e => handleSizePct(Number(e.target.value))} style={{...S.slider, '--val': `${sizePct}%`}} />
           <div style={S.sliderLabels}>
             <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
           </div>
@@ -314,7 +468,7 @@ function FuturesPanel() {
                 </button>
               </div>
               <div style={{fontSize: 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: '10px 0'}}>{leverage}x</div>
-              <input type="range" min="1" max={maxLev} value={leverage} onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, accentColor: leverage > maxLev * 0.7 ? '#E53935' : '#4CAF50'}} />
+              <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
               <div style={{display: 'flex', gap: 6, marginTop: 6}}>
                 {[1, 5, 10, 20, 50].filter(v => v <= maxLev).map(v => (
@@ -475,7 +629,7 @@ function FuturesPanel() {
                   );
                 })}</tbody>
               </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No positions match filters' : 'No open positions'}</div>
           )}
           {bottomTab === 'orders' && (
             filteredOrders.length ? (
@@ -510,7 +664,7 @@ function FuturesPanel() {
                   );
                 })}</tbody>
               </table>
-            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
+            ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
           )}
           {bottomTab === 'history' && (
             <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
@@ -525,11 +679,8 @@ function FuturesPanel() {
 
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
-    // Funding rate badge (top-right of chart)
-    const mkt = markets.find(m => m.symbol === symbol);
-    const fr = mkt ? parseFloat(mkt.funding_rate || 0) : null;
-    const nfr = mkt ? parseFloat(mkt.next_funding_rate || 0) : null;
-    const fundingBadge = mkt ? (
+    // Funding rate badge (top-right of chart) — only for non-fullscreen
+    const fundingBadge = currentMarket ? (
       <div style={S.fundingOverlay}>
         <span style={S.fundingOLabel}>FUNDING</span>
         <span style={{...S.fundingOValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>
@@ -541,11 +692,11 @@ function FuturesPanel() {
     if (fullscreen) {
       return (
         <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
+          {renderSymbolBar()}
           {/* Top: chart + orderbook + controls */}
           <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
               <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
-              {fundingBadge}
             </div>
             {/* Drag handle: chart ↔ orderbook */}
             <div style={S.dragHandleV} onMouseDown={dragChart} />
@@ -563,9 +714,10 @@ function FuturesPanel() {
         </div>
       );
     }
-    // Normal layout: chart top, controls bottom
+    // Normal (mobile) layout: symbol bar, chart with funding overlay, controls
     return (
       <>
+        {renderSymbolBar()}
         <div style={{...S.chartArea, position: 'relative'}}>
           <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
           {fundingBadge}
@@ -583,7 +735,7 @@ function FuturesPanel() {
           <div style={{opacity: 0.3, color: '#5C3A21'}}>
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
           </div>
-          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>No Positions</div>
+          <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>{dataReady ? 'No Positions' : 'Loading...'}</div>
         </div>
       );
     }
@@ -640,7 +792,7 @@ function FuturesPanel() {
                       {(parseFloat(pos.amount) * closePct / 100).toFixed(6)} {pos.symbol}
                     </span>
                   </div>
-                  <input type="range" min="5" max="100" step="5" value={closePct} onChange={e => setClosePct(Number(e.target.value))} style={S.slider} />
+                  <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                   <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
                   <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100))} disabled={loading}>
                     {loading ? 'Closing...' : `Close ${closePct}%`}
@@ -904,6 +1056,43 @@ function FuturesPanel() {
 export default memo(FuturesPanel);
 
 const animCSS = `
+  /* Gradient Scrollbar */
+  .grad-scrollbar::-webkit-scrollbar { width: 8px; }
+  .grad-scrollbar::-webkit-scrollbar-track { background: #fdf8e7; border-radius: 4px; }
+  .grad-scrollbar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #e0eaff 0%, #2563eb 100%); border-radius: 4px; border: 1px solid #fdf8e7; }
+  .grad-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #b0c4de 0%, #1d4ed8 100%); }
+
+  /* Blue Gradient Range Slider */
+  .grad-slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 8px;
+    background: linear-gradient(90deg, #e0eaff 0%, #2563eb var(--val, 0%), #cfd5dc var(--val, 0%), #cfd5dc 100%);
+    border-radius: 4px;
+    outline: none;
+    cursor: pointer;
+  }
+  .grad-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #2563eb;
+    border: 3px solid #fff;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    cursor: pointer;
+  }
+  .grad-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #2563eb;
+    border: 3px solid #fff;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    cursor: pointer;
+  }
+
   .futures-panel-body::-webkit-scrollbar { display: none; }
   .futures-panel-body { overflow-x: hidden !important; }
   .futures-panel-body input[type=number]::-webkit-inner-spin-button,
@@ -1016,6 +1205,14 @@ const S = {
   pacificaLogo: { width: 20, height: 20, objectFit: 'contain', filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' },
   pacificaText: { fontSize: 10, fontWeight: 700, color: '#a3906a', letterSpacing: '0.05em', textTransform: 'uppercase' },
   pacificaBrand: { fontSize: 11, fontWeight: 900, color: '#5C3A21', letterSpacing: '0.08em', textTransform: 'uppercase' },
+  symbolBar: {
+    display: 'flex', alignItems: 'center', gap: 15, padding: '4px 15px',
+    background: 'transparent', flexShrink: 0,
+    overflowX: 'auto', scrollbarWidth: 'none', minHeight: 0,
+  },
+  infoCell: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 },
+  infoCellLabel: { fontSize: 9, fontWeight: 700, color: '#a3906a', textTransform: 'uppercase', lineHeight: 1 },
+  infoCellValue: { fontSize: 13, fontWeight: 900, color: '#5C3A21', fontFamily: 'monospace', whiteSpace: 'nowrap', lineHeight: 1.2 },
   fundingOverlay: {
     position: 'absolute', top: 5, right: 10, zIndex: 10,
     display: 'flex', alignItems: 'center', gap: 6,
@@ -1056,7 +1253,7 @@ const S = {
     boxShadow: '0 3px 5px rgba(0,0,0,0.3)',
   },
   symbolBtn: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px',
+    display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 10, cursor: 'pointer', color: '#333',
   },
   balBadge: {

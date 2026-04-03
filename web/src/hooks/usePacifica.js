@@ -63,6 +63,7 @@ export function usePacifica() {
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [dataReady, setDataReady] = useState(false);
   const [leverageSettings, setLeverageSettings] = useState({});
   const [prices, setPrices] = useState([]);
   const [markets, setMarkets] = useState([]);
@@ -72,6 +73,7 @@ export function usePacifica() {
   const [goldEarned, setGoldEarned] = useState(null); // flash notification
   const wsRef = useRef(null);
   const marketsRef = useRef([]);
+  const withdrawTimerRef = useRef(null);
   const rewardsRef = useRef({
     firstDeposit: false,
     firstTrade: false,
@@ -204,7 +206,7 @@ export function usePacifica() {
     if (!walletAddr) return;
     try {
       const res = await fetch(`${API}/positions?account=${walletAddr}`).then(r => r.json());
-      if (res.data) setPositions(res.data);
+      if (res.data) { setPositions(res.data); setDataReady(true); }
     } catch {}
   }, [walletAddr]);
 
@@ -444,7 +446,8 @@ export function usePacifica() {
       const res = await signedRequestWithActivation('POST', '/account/withdraw', 'withdraw', { amount: String(amount) });
       if (res.error) throw new Error(res.error);
       fetchAccount();
-      setTimeout(fetchWalletUsdc, 5000); // refresh after settlement
+      clearTimeout(withdrawTimerRef.current);
+      withdrawTimerRef.current = setTimeout(fetchWalletUsdc, 5000); // refresh after settlement
       return res;
     } catch (e) {
       setError(e.message);
@@ -461,6 +464,7 @@ export function usePacifica() {
     let ws, reconnectTimer, pingTimer, pongTimer;
     let latestPrices = null;
     let priceThrottleTimer = null;
+    let claimGoldTimer = null;
     let retryCount = 0;
     const PING_INTERVAL = 15000;
     const PONG_TIMEOUT = 5000;
@@ -528,7 +532,7 @@ export function usePacifica() {
               priceThrottleTimer = setTimeout(() => {
                 setPrices(latestPrices);
                 priceThrottleTimer = null;
-              }, 250);
+              }, 1000);
             }
           }
           if (msg.channel === 'account_positions') {
@@ -589,7 +593,8 @@ export function usePacifica() {
           // Real-time: when trade happens, claim gold from server
           if (msg.channel === 'account_trades' && msg.data) {
             // Small delay to let Pacifica finalize the trade
-            setTimeout(claimGold, 1000);
+            clearTimeout(claimGoldTimer);
+            claimGoldTimer = setTimeout(claimGold, 1000);
           }
         } catch {}
       };
@@ -629,6 +634,8 @@ export function usePacifica() {
       clearTimeout(pongTimer);
       clearTimeout(reconnectTimer);
       clearTimeout(priceThrottleTimer);
+      clearTimeout(claimGoldTimer);
+      clearTimeout(withdrawTimerRef.current);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
@@ -652,7 +659,7 @@ export function usePacifica() {
   }, [signedRequest, activate]);
 
   return {
-    connected, walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes,
+    connected, walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     depositToPacifica, withdraw, activate, claimGold,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder,

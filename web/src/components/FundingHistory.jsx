@@ -4,13 +4,16 @@ const API = 'https://api.pacifica.fi/api/v1';
 
 function FundingHistory({ walletAddr, filters }) {
   const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!walletAddr) return;
+    if (!walletAddr) { setLoading(false); return; }
+    setLoading(true);
     fetch(`${API}/funding/history?account=${walletAddr}`)
       .then(r => r.json())
       .then(d => { if (d.data) setPayments(d.data); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [walletAddr]);
 
   let filtered = payments;
@@ -22,23 +25,23 @@ function FundingHistory({ walletAddr, filters }) {
 
   // Side filter
   if (filters?.side && filters.side !== 'All') {
-    const isLong = filters.side === 'Long';
-    filtered = filtered.filter(p => {
-      const side = (p.side || '').toLowerCase();
-      return isLong ? side === 'bid' || side.includes('long') : side === 'ask' || side.includes('short');
-    });
+    const wantBid = filters.side === 'Long';
+    filtered = filtered.filter(p => wantBid ? p.side === 'bid' : p.side === 'ask');
   }
 
   // Sort
   const sortBy = filters?.sortBy || 'time';
   const dir = filters?.sortDir === 'asc' ? 1 : -1;
   filtered = [...filtered].sort((a, b) => {
-    if (sortBy === 'time') return dir * (new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    if (sortBy === 'time') { const ta = typeof a.created_at === 'number' ? a.created_at : new Date(a.created_at||0).getTime(); const tb = typeof b.created_at === 'number' ? b.created_at : new Date(b.created_at||0).getTime(); return dir * (tb - ta); }
     if (sortBy === 'symbol') return dir * (a.symbol || '').localeCompare(b.symbol || '');
-    if (sortBy === 'amount') return dir * (Math.abs(parseFloat(b.payment || 0)) - Math.abs(parseFloat(a.payment || 0)));
+    if (sortBy === 'amount') return dir * (Math.abs(parseFloat(b.payout || 0)) - Math.abs(parseFloat(a.payout || 0)));
     return 0;
   });
 
+  if (loading) {
+    return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>Loading...</div>;
+  }
   if (!filtered.length) {
     return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No funding payments</div>;
   }
@@ -55,20 +58,23 @@ function FundingHistory({ walletAddr, filters }) {
       </tr></thead>
       <tbody>
         {filtered.slice(0, 100).map((p, i) => {
-          const payment = parseFloat(p.payment || 0);
-          const rate = parseFloat(p.funding_rate || 0);
-          const color = payment >= 0 ? '#4CAF50' : '#E53935';
+          const payout = parseFloat(p.payout || 0);
+          const rate = parseFloat(p.rate || 0);
+          const color = payout >= 0 ? '#4CAF50' : '#E53935';
+          const rateColor = rate >= 0 ? '#4CAF50' : '#E53935';
           const side = (p.side || '').toLowerCase();
           const isLong = side === 'bid' || side.includes('long');
-          const time = new Date(p.created_at).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+          // created_at is unix ms timestamp
+          const ts = typeof p.created_at === 'number' && p.created_at > 1e12 ? p.created_at : (p.created_at ? new Date(p.created_at).getTime() : 0);
+          const time = ts ? new Date(ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
           return (
             <tr key={i} style={S.tr}>
               <td style={S.td}>{time}</td>
               <td style={S.td}>{p.symbol || '—'}</td>
               <td style={{...S.td, color: isLong ? '#4CAF50' : '#E53935', fontWeight: 800}}>{isLong ? 'LONG' : 'SHORT'}</td>
-              <td style={{...S.td, color}}>{rate >= 0 ? '+' : ''}{(rate * 100).toFixed(4)}%</td>
-              <td style={{...S.td, color, fontWeight: 800}}>{payment >= 0 ? '+' : ''}${payment.toFixed(4)}</td>
-              <td style={S.td}>{p.position_size || p.amount || '—'}</td>
+              <td style={{...S.td, color: rateColor}}>{rate >= 0 ? '+' : ''}{(rate * 100).toFixed(4)}%</td>
+              <td style={{...S.td, color, fontWeight: 800}}>{payout >= 0 ? '+' : ''}${payout.toFixed(6)}</td>
+              <td style={S.td}>{p.amount || '—'}</td>
             </tr>
           );
         })}

@@ -7,18 +7,20 @@ function OrderBook({ symbol = 'BTC' }) {
   const wsRef = useRef(null);
 
   useEffect(() => {
-    let ws, reconnectTimer, throttleTimer = null, latestBook = null;
+    let ws, reconnectTimer, throttleTimer = null, latestBook = null, cancelled = false;
 
     function flushBook() {
-      if (latestBook) { setBook(latestBook); latestBook = null; }
+      if (latestBook && !cancelled) { setBook(latestBook); latestBook = null; }
       throttleTimer = null;
     }
 
     function connect() {
+      if (cancelled) return;
       ws = new WebSocket('wss://ws.pacifica.fi/ws');
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (cancelled) { ws.close(); return; }
         ws.send(JSON.stringify({ method: 'subscribe', params: { source: 'book', symbol, agg_level: 1 } }));
       };
 
@@ -36,15 +38,16 @@ function OrderBook({ symbol = 'BTC' }) {
         } catch {}
       };
 
-      ws.onclose = () => { reconnectTimer = setTimeout(connect, 3000); };
-      ws.onerror = () => ws.close();
+      ws.onclose = () => { if (!cancelled) reconnectTimer = setTimeout(connect, 3000); };
+      ws.onerror = () => { if (!cancelled) ws.close(); };
     }
 
     connect();
     return () => {
+      cancelled = true;
       clearTimeout(reconnectTimer);
       clearTimeout(throttleTimer);
-      if (ws) { ws.onclose = null; ws.close(); }
+      if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
   }, [symbol]);
 

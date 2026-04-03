@@ -4,13 +4,16 @@ const API = 'https://api.pacifica.fi/api/v1';
 
 function TradeHistory({ walletAddr, filters }) {
   const [trades, setTrades] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!walletAddr) return;
+    if (!walletAddr) { setLoading(false); return; }
+    setLoading(true);
     fetch(`${API}/trades/history?account=${walletAddr}`)
       .then(r => r.json())
       .then(d => { if (d.data) setTrades(d.data); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [walletAddr]);
 
   let filtered = trades;
@@ -40,6 +43,9 @@ function TradeHistory({ walletAddr, filters }) {
     return 0;
   });
 
+  if (loading) {
+    return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>Loading...</div>;
+  }
   if (!filtered.length) {
     return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No trade history</div>;
   }

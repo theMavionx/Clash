@@ -18,6 +18,7 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
   const seriesRef = useRef(null);
   const linesRef = useRef([]);
   const [interval, setInterval_] = useState('5m');
+  const [loading, setLoading] = useState(false);
 
   // Create chart once
   useEffect(() => {
@@ -64,6 +65,10 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
   useEffect(() => {
     if (!seriesRef.current) return;
     let cancelled = false;
+    
+    // Clear old data and show loading spinner when symbol/interval changes
+    setLoading(true);
+    seriesRef.current.setData([]);
 
     async function load() {
       const now = Date.now();
@@ -83,8 +88,13 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
         }));
 
         seriesRef.current.setData(candles);
-        if (chartRef.current) chartRef.current.timeScale().fitContent();
-      } catch {}
+        if (chartRef.current) {
+          chartRef.current.timeScale().fitContent();
+          chartRef.current.priceScale('right').applyOptions({ autoScale: true });
+        }
+      } catch {} finally {
+        if (!cancelled) setLoading(false);
+      }
     }
 
     load();
@@ -92,61 +102,74 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
     return () => { cancelled = true; window.clearInterval(iv); };
   }, [symbol, interval]);
 
-  // Draw entry price lines for open positions
+  // Store currentPrice in a ref so price-line effect doesn't re-run on every tick
+  const currentPriceRef = useRef(currentPrice);
+  currentPriceRef.current = currentPrice;
+
+  // Redraw price lines when positions/orders/symbol change, and periodically for PnL updates
   useEffect(() => {
     if (!seriesRef.current) return;
 
-    // Remove old lines
-    linesRef.current.forEach(l => {
-      try { seriesRef.current.removePriceLine(l); } catch {}
-    });
-    linesRef.current = [];
-
-    // Position entry lines
-    const symPositions = positions.filter(p => p.symbol === symbol);
-    for (const pos of symPositions) {
-      const entry = parseFloat(pos.entry_price);
-      if (!entry) continue;
-      const isLong = pos.side === 'bid';
-      const mark = currentPrice ? parseFloat(currentPrice) : 0;
-      const pnl = mark ? ((mark - entry) * parseFloat(pos.amount) * (isLong ? 1 : -1)) : 0;
-      const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
-      const line = seriesRef.current.createPriceLine({
-        price: entry,
-        color: isLong ? '#4CAF50' : '#E53935',
-        lineWidth: 2,
-        lineStyle: 2, // dashed
-        axisLabelVisible: true,
-        title: `${isLong ? 'LONG' : 'SHORT'} ${pnlStr}`,
+    function drawLines() {
+      if (!seriesRef.current) return;
+      // Remove old lines
+      linesRef.current.forEach(l => {
+        try { seriesRef.current.removePriceLine(l); } catch {}
       });
-      linesRef.current.push(line);
+      linesRef.current = [];
+
+      const mark = currentPriceRef.current ? parseFloat(currentPriceRef.current) : 0;
+
+      // Position entry lines
+      const symPositions = positions.filter(p => p.symbol === symbol);
+      for (const pos of symPositions) {
+        const entry = parseFloat(pos.entry_price);
+        if (!entry) continue;
+        const isLong = pos.side === 'bid';
+        const pnl = mark ? ((mark - entry) * parseFloat(pos.amount) * (isLong ? 1 : -1)) : 0;
+        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const line = seriesRef.current.createPriceLine({
+          price: entry,
+          color: isLong ? '#4CAF50' : '#E53935',
+          lineWidth: 2,
+          lineStyle: 2, // dashed
+          axisLabelVisible: true,
+          title: `${isLong ? 'LONG' : 'SHORT'} ${pnlStr}`,
+        });
+        linesRef.current.push(line);
+      }
+
+      // Order lines (limit, stop, TP/SL)
+      const symOrders = orders.filter(o => (o.symbol || o.s) === symbol);
+      for (const ord of symOrders) {
+        const rawPrice = parseFloat(ord.price || ord.ip || 0);
+        const stopPrice = parseFloat(ord.stop_price || ord.sp || 0);
+        const price = rawPrice > 0 ? rawPrice : stopPrice;
+        if (!price) continue;
+        const side = ord.side || ord.d;
+        const type = (ord.order_type || ord.ot || '').toUpperCase();
+        const isBid = side === 'bid';
+        const isTP = type.includes('TAKE') || type.includes('TP');
+        const isSL = type.includes('STOP_LOSS') || type.includes('SL');
+        const color = isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
+        const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
+        const line = seriesRef.current.createPriceLine({
+          price,
+          color,
+          lineWidth: isTP || isSL ? 2 : 1,
+          lineStyle: 1, // dotted
+          axisLabelVisible: true,
+          title: `${label} $${price.toLocaleString()}`,
+        });
+        linesRef.current.push(line);
+      }
     }
 
-    // Order lines (limit, stop, TP/SL)
-    const symOrders = orders.filter(o => (o.symbol || o.s) === symbol);
-    for (const ord of symOrders) {
-      const rawPrice = parseFloat(ord.price || ord.ip || 0);
-      const stopPrice = parseFloat(ord.stop_price || ord.sp || 0);
-      const price = rawPrice > 0 ? rawPrice : stopPrice;
-      if (!price) continue;
-      const side = ord.side || ord.d;
-      const type = (ord.order_type || ord.ot || '').toUpperCase();
-      const isBid = side === 'bid';
-      const isTP = type.includes('TAKE') || type.includes('TP');
-      const isSL = type.includes('STOP_LOSS') || type.includes('SL');
-      const color = isTP ? '#4CAF50' : isSL ? '#E53935' : stopPrice > 0 ? '#FF9800' : (isBid ? '#2196F3' : '#9C27B0');
-      const label = isTP ? 'TP' : isSL ? 'SL' : stopPrice > 0 ? 'STOP' : 'LIMIT';
-      const line = seriesRef.current.createPriceLine({
-        price,
-        color,
-        lineWidth: isTP || isSL ? 2 : 1,
-        lineStyle: 1, // dotted
-        axisLabelVisible: true,
-        title: `${label} $${price.toLocaleString()}`,
-      });
-      linesRef.current.push(line);
-    }
-  }, [positions, orders, symbol, currentPrice]);
+    drawLines();
+    // Update PnL labels every 3 seconds instead of every 250ms price tick
+    const pnlInterval = window.setInterval(drawLines, 3000);
+    return () => window.clearInterval(pnlInterval);
+  }, [positions, orders, symbol]);
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -162,7 +185,15 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
           </button>
         ))}
       </div>
-      <div ref={containerRef} style={{ flex: 1 }} />
+      <div style={{ flex: 1, position: 'relative' }}>
+        <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+        {loading && (
+          <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(253, 248, 231, 0.7)'}}>
+            <div style={{width: 40, height: 40, border: '5px solid #d4c8b0', borderTopColor: '#5C3A21', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>
+            <style dangerouslySetInnerHTML={{__html: `@keyframes tv-spin { to { transform: rotate(360deg); } }`}} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
