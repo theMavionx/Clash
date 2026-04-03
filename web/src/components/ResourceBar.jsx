@@ -6,16 +6,22 @@ import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
 const ITEMS = [
-  { key: 'gold', icon: goldIcon, bg: '#3e372b', indicator: '#e6a817', offset: { left: -22, top: '48%' } },
-  { key: 'wood', icon: woodIcon, bg: '#3e372b', indicator: '#5c4026', offset: { left: -14, top: '50%' } },
-  { key: 'ore', icon: stoneIcon, bg: '#3e372b', indicator: '#8a8a8a', offset: { left: -14, top: '50%' } },
+  { key: 'gold', icon: goldIcon, indicator: '#e6a817', offset: { left: -22, top: '48%' } },
+  { key: 'wood', icon: woodIcon, indicator: '#5c4026', offset: { left: -14, top: '50%' } },
+  { key: 'ore', icon: stoneIcon, indicator: '#8a8a8a', offset: { left: -14, top: '50%' } },
 ];
 
-const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
+const fmtShort = (n) => {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 10000) return (n / 1000).toFixed(0) + 'K';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n || 0);
+};
 
 function ResourceBar() {
-  const resources = useResources();
+  const data = useResources();
   const { sendToGodot } = useSend();
+  const caps = data.caps || { gold: 5000, wood: 5000, ore: 5000 };
 
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
@@ -23,32 +29,45 @@ function ResourceBar() {
 
   return (
     <div style={styles.bar}>
-      {ITEMS.map(({ key, icon, bg, indicator, offset }) => (
-        <div key={key} style={styles.container}>
-          <img 
-            src={icon} 
-            alt={key} 
-            style={{ 
-              ...styles.icon, 
-              left: offset?.left ?? -10,
-              top: offset?.top ?? '50%'
-            }} 
-          />
-          <div style={{ ...styles.pill, background: 'rgba(0, 0, 0, 0.4)' }}>
-            <div style={{ 
-              ...styles.indicator, 
-              background: indicator,
-              boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.4), inset 0 -1px 3px rgba(0,0,0,0.3)'
-            }} />
-            <span style={styles.value}>{formatNumber(resources[key])}</span>
-            <button
-              style={styles.hiddenButton}
-              onClick={() => handleClick(key)}
-              title={`Add ${key}`}
+      {ITEMS.map(({ key, icon, indicator, offset }) => {
+        const current = data[key] || 0;
+        const max = caps[key] || 5000;
+        const pct = Math.min(100, (current / max) * 100);
+        const full = current >= max;
+        // Color shifts: green → yellow → red as it fills
+        const barColor = indicator;
+
+        return (
+          <div key={key} style={styles.container}>
+            <img
+              src={icon}
+              alt={key}
+              style={{
+                ...styles.icon,
+                left: offset?.left ?? -10,
+                top: offset?.top ?? '50%'
+              }}
             />
+            <div style={styles.pill}>
+              <div style={{
+                ...styles.indicator,
+                background: barColor,
+                width: `${pct}%`,
+                boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.4), inset 0 -1px 3px rgba(0,0,0,0.3)'
+              }} />
+              <div style={styles.textWrap}>
+                <span style={styles.value}>{fmtShort(current)}</span>
+                <span style={styles.maxValue}>/ {fmtShort(max)}</span>
+              </div>
+              <button
+                style={styles.hiddenButton}
+                onClick={() => handleClick(key)}
+                title={`Add ${key}`}
+              />
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -77,11 +96,11 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     padding: '0 15px 0 52px',
-    height: 38,
+    height: 32,
     border: '2.5px solid #1a1a1a',
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
     boxShadow: '0 4px 6px rgba(0,0,0,0.5), inset 0 2px 4px rgba(0,0,0,0.4)',
-    minWidth: 140,
+    minWidth: 170,
     borderRadius: 8,
     position: 'relative',
     overflow: 'hidden',
@@ -91,10 +110,9 @@ const styles = {
     left: 0,
     top: 0,
     bottom: 0,
-    width: '40%', // We could make this dynamic if we had max values
     opacity: 1,
     borderRight: '1.5px solid #1a1a1a',
-    transition: 'width 0.3s ease-out',
+    transition: 'width 0.4s ease-out, background 0.3s',
   },
   icon: {
     position: 'absolute',
@@ -107,6 +125,14 @@ const styles = {
     pointerEvents: 'none',
     zIndex: 4,
   },
+  textWrap: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 4,
+    zIndex: 2,
+    width: '100%',
+    justifyContent: 'center',
+  },
   value: {
     fontSize: 18,
     fontWeight: 900,
@@ -114,9 +140,12 @@ const styles = {
     WebkitTextStroke: '1px #111',
     textShadow: '0 2px 1px rgba(0,0,0,1)',
     letterSpacing: '0.5px',
-    zIndex: 2,
-    width: '100%',
-    textAlign: 'center',
+  },
+  maxValue: {
+    fontSize: 11,
+    fontWeight: 700,
+    color: 'rgba(255,255,255,0.5)',
+    textShadow: '0 1px 1px rgba(0,0,0,0.8)',
   },
   hiddenButton: {
     position: 'absolute',

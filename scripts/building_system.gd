@@ -164,6 +164,43 @@ var resources: Dictionary = {
 	"ore": 10000,
 }
 
+# ── Storage Capacity (mirrors server/db.js) ───────────────────
+const TH_BASE_CAPACITY: Dictionary = {
+	1: {"gold": 5000, "wood": 5000, "ore": 5000},
+	2: {"gold": 10000, "wood": 10000, "ore": 10000},
+	3: {"gold": 20000, "wood": 20000, "ore": 20000},
+}
+const STORAGE_CAPACITY: Dictionary = {
+	1: {"gold": 15000, "wood": 15000, "ore": 15000},
+	2: {"gold": 35000, "wood": 35000, "ore": 35000},
+	3: {"gold": 75000, "wood": 75000, "ore": 75000},
+}
+
+func _get_resource_caps() -> Dictionary:
+	var th_level: int = 1
+	for b in placed_buildings:
+		if b.get("id", "") == "town_hall":
+			th_level = b.get("level", 1)
+	# Check all building systems for storage buildings
+	var base: Dictionary = TH_BASE_CAPACITY.get(th_level, TH_BASE_CAPACITY[1])
+	var max_gold: int = base.gold
+	var max_wood: int = base.wood
+	var max_ore: int = base.ore
+	for bs in _building_systems:
+		for b in bs.placed_buildings:
+			if b.get("id", "") == "storage":
+				var cap: Dictionary = STORAGE_CAPACITY.get(b.get("level", 1), STORAGE_CAPACITY[1])
+				max_gold += cap.gold
+				max_wood += cap.wood
+				max_ore += cap.ore
+	return {"gold": max_gold, "wood": max_wood, "ore": max_ore}
+
+func _send_resource_caps() -> void:
+	var caps: Dictionary = _get_resource_caps()
+	var bridge: Node = _bridge
+	if bridge:
+		bridge.send_to_react("resource_caps", caps)
+
 const BUILDING_BASE_SHADER = """
 shader_type spatial;
 render_mode unshaded, blend_mix, depth_draw_opaque, cull_disabled;
@@ -1578,6 +1615,8 @@ func _sync_react_buildings() -> void:
 				counts[bid] = counts.get(bid, 0) + 1
 		bridge.send_to_react("state", {"buildings": arr})
 		bridge.send_to_react("placed_counts", counts)
+		_send_resource_caps()
+
 func _load_troop_levels_from_server(server_troops: Array) -> void:
 	for t in server_troops:
 		var troop_type: String = t.get("troop_type", "")

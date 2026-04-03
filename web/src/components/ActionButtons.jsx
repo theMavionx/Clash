@@ -1,5 +1,5 @@
-import { memo, useCallback, useState, useEffect, useRef } from 'react';
-import { useSend, useUI } from '../hooks/useGodot';
+import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
+import { useSend, useUI, useResources, useBuilding } from '../hooks/useGodot';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
@@ -196,6 +196,27 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
 function ActionButtons() {
   const { sendToGodot, setFuturesOpen } = useSend();
   const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy } = useUI();
+  const resources = useResources();
+  const { buildingDefs } = useBuilding();
+
+  // Count how many building types the player can afford to build
+  const affordableCount = useMemo(() => {
+    const defs = buildingDefs?.buildings || {};
+    const placed = buildingDefs?.placed_counts || {};
+    let count = 0;
+    for (const [id, def] of Object.entries(defs)) {
+      if (id === 'barracks' || id === 'flag') continue;
+      const maxCount = def.max_count || 0;
+      if (maxCount > 0 && (placed[id] || 0) >= maxCount) continue;
+      const cost = def.cost || {};
+      if ((resources.gold || 0) >= (cost.gold || 0) &&
+          (resources.wood || 0) >= (cost.wood || 0) &&
+          (resources.ore || 0) >= (cost.ore || 0)) {
+        count++;
+      }
+    }
+    return count;
+  }, [buildingDefs, resources]);
 
   const handleReturnHome  = useCallback(() => sendToGodot('return_home'),     [sendToGodot]);
   const handleFindEnemy   = useCallback(() => sendToGodot('find_enemy'),       [sendToGodot]);
@@ -225,13 +246,13 @@ function ActionButtons() {
           <span style={styles.btnLabel}>ATTACK</span>
         </CustomBtn>
         <CustomBtn onClick={handleOpenShop} width={110} height={110}>
-          <div style={styles.notificationBadgeSmall}>!</div>
+          {affordableCount > 0 && <div style={styles.notificationBadgeSmall}>{affordableCount}</div>}
           <img src={buildIcon} alt="build" style={styles.buildIconImgSmall} />
         </CustomBtn>
       </div>
       <div style={styles.wrapRight}>
         <CustomBtn onClick={handleOpenTrade}>
-          <div style={styles.notificationBadge}>14</div>
+          {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
           <img src={chartIcon} alt="trade" style={styles.chartIconImg} />
           <span style={styles.btnLabel}>TRADE</span>
         </CustomBtn>

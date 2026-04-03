@@ -25,6 +25,7 @@ export function GodotProvider({ children }) {
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
   const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
+  const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
   const errorTimerRef = useRef(null);
 
   useEffect(() => {
@@ -83,6 +84,9 @@ export function GodotProvider({ children }) {
         case 'cannon_energy':
           setCannonEnergy({ energy: data.energy || 0, nextCost: data.next_cost || 1 });
           break;
+        case 'resource_caps':
+          setResourceCaps({ gold: data.gold || 5000, wood: data.wood || 5000, ore: data.ore || 5000 });
+          break;
         case 'error':
           setError(data.message);
           if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
@@ -127,7 +131,7 @@ export function GodotProvider({ children }) {
   // Stable context objects — only re-created when their specific values change
   const sendCtx = useMemo(() => ({ sendToGodot, setShopOpen, setFuturesOpen }), [sendToGodot, setShopOpen, setFuturesOpen]);
   const playerCtx = useMemo(() => playerState, [playerState]);
-  const resourcesCtx = useMemo(() => resources, [resources]);
+  const resourcesCtx = useMemo(() => ({ ...resources, caps: resourceCaps }), [resources, resourceCaps]);
   const buildingCtx = useMemo(() => ({
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);

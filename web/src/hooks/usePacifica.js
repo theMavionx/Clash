@@ -61,7 +61,12 @@ export function usePacifica() {
   const { connection } = useConnection();
 
   const [account, setAccount] = useState(null);
-  const [positions, setPositions] = useState([]);
+  const [positions, _setPositionsRaw] = useState([]);
+  const setPositions = (v) => {
+    _setPositionsRaw(v);
+    const list = typeof v === 'function' ? null : v;
+    if (list) window._openPositionsCount = list.length;
+  };
   const [orders, setOrders] = useState([]);
   const [dataReady, setDataReady] = useState(false);
   const [leverageSettings, setLeverageSettings] = useState({});

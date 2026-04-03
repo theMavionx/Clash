@@ -152,41 +152,49 @@ const BUILDING_DEFS = {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
     cost: { gold: 400, wood: 150, ore: 0 },
+    max_count: 4,
   },
   barn: {
     size: [2, 3], max_level: 3,
     hp_levels: [2000, 3500, 6000],
     cost: { gold: 200, wood: 200, ore: 100 },
+    max_count: 2,
   },
   port: {
     size: [4, 3], max_level: 3,
     hp_levels: [1800, 3200, 5500],
     cost: { gold: 800, wood: 300, ore: 200 },
+    max_count: 2,
   },
   sawmill: {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
     cost: { gold: 300, wood: 0, ore: 0 },
+    max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 3,
     hp_levels: [900, 1600, 2800],
     cost: { gold: 600, wood: 350, ore: 200 },
+    max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 3,
     hp_levels: [1000, 1500, 2000],
     cost: { gold: 100, wood: 0, ore: 0 },
+    max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 3,
     hp_levels: [1400, 2500, 4200],
     cost: { gold: 350, wood: 200, ore: 0 },
+    max_count: 3,
   },
   archer_tower: {
     size: [3, 3], max_level: 3,
     hp_levels: [800, 1500, 2500],
     cost: { gold: 500, wood: 400, ore: 0 },
+    max_count: 4,
   },
 };
 
@@ -231,6 +239,45 @@ function authenticatePlayer(token) {
   return stmts.getPlayerByToken.get(token);
 }
 
+// ---------- Resource Storage Capacity (CoC-style) ----------
+
+// Base capacity from Town Hall (without any Storage buildings)
+const TH_BASE_CAPACITY = {
+  1: { gold: 5000, wood: 5000, ore: 5000 },
+  2: { gold: 10000, wood: 10000, ore: 10000 },
+  3: { gold: 20000, wood: 20000, ore: 20000 },
+};
+
+// Additional capacity per Storage building per level
+const STORAGE_CAPACITY = {
+  1: { gold: 15000, wood: 15000, ore: 15000 },
+  2: { gold: 35000, wood: 35000, ore: 35000 },
+  3: { gold: 75000, wood: 75000, ore: 75000 },
+};
+
+function getResourceCaps(playerId) {
+  const buildings = stmts.getBuildings.all(playerId);
+  // Find Town Hall level
+  let thLevel = 1;
+  for (const b of buildings) {
+    if (b.type === 'town_hall') thLevel = b.level;
+  }
+  const base = TH_BASE_CAPACITY[thLevel] || TH_BASE_CAPACITY[1];
+  let maxGold = base.gold;
+  let maxWood = base.wood;
+  let maxOre = base.ore;
+  // Add capacity from each Storage building
+  for (const b of buildings) {
+    if (b.type === 'storage') {
+      const cap = STORAGE_CAPACITY[b.level] || STORAGE_CAPACITY[1];
+      maxGold += cap.gold;
+      maxWood += cap.wood;
+      maxOre += cap.ore;
+    }
+  }
+  return { gold: maxGold, wood: maxWood, ore: maxOre };
+}
+
 function getResources(playerId) {
   return stmts.getResources.get(playerId);
 }
@@ -238,9 +285,11 @@ function getResources(playerId) {
 function addResources(playerId, gold = 0, wood = 0, ore = 0) {
   const current = stmts.getResources.get(playerId);
   if (!current) return null;
-  const newGold = Math.max(0, current.gold + gold);
-  const newWood = Math.max(0, current.wood + wood);
-  const newOre = Math.max(0, current.ore + ore);
+  // Cap to storage capacity
+  const caps = getResourceCaps(playerId);
+  const newGold = Math.min(caps.gold, Math.max(0, current.gold + gold));
+  const newWood = Math.min(caps.wood, Math.max(0, current.wood + wood));
+  const newOre = Math.min(caps.ore, Math.max(0, current.ore + ore));
   stmts.updateResource.run(newGold, newWood, newOre, playerId);
   return { gold: newGold, wood: newWood, ore: newOre };
 }
@@ -490,6 +539,7 @@ function getFullPlayerState(playerId) {
     ...safe,
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
+    resource_caps: getResourceCaps(playerId),
   };
 }
 
@@ -601,6 +651,7 @@ module.exports = {
   buyShip,
   battleVictory,
   getPlayerBuildings,
+  getResourceCaps,
   createAttackSession,
   updateAttackSession,
   TROPHY_TABLE,
