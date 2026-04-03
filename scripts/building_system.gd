@@ -4016,6 +4016,7 @@ func _return_home() -> void:
 	# Restore home buildings from server — login() emits auth_ok which triggers
 	# _on_server_auth_ok → _load_buildings_from_server on each BS automatically.
 	# So we only call login() and let the signal do the work.
+	var net: Node = _net
 	if net and net.has_token():
 		await net.login()
 		_update_player_name_label()

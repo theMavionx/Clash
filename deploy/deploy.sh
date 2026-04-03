@@ -175,12 +175,13 @@ server {
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
     }
 
-    # Godot assets — pre-compressed gzip/brotli + long cache
+    # Godot assets — revalidate on every load (ETag handles 304s, SW caches after first load)
     location /godot/ {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
-        add_header Cache-Control "public, max-age=604800";
+        add_header Cache-Control "no-cache";
+        etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
 
         # Serve pre-compressed .gz files (Work.pck.gz, Work.wasm.gz)

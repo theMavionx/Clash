@@ -474,12 +474,23 @@ function getTrophies(playerId) {
 function getFullPlayerState(playerId) {
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return null;
+  // Auto-repair buildings on login (like Clash of Clans)
+  repairAllBuildings(playerId);
   const { token, ...safe } = player;
   return {
     ...safe,
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
   };
+}
+
+function repairAllBuildings(playerId) {
+  const buildings = stmts.getBuildings.all(playerId);
+  for (const b of buildings) {
+    if (b.hp < b.max_hp) {
+      db.prepare('UPDATE buildings SET hp = max_hp WHERE id = ? AND player_id = ?').run(b.id, playerId);
+    }
+  }
 }
 
 const SHIP_COST_GOLD = 500;
