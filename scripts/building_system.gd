@@ -3228,7 +3228,8 @@ func _animate_main_ship() -> void:
 		attack_ship.global_position.y = _water_y + 0.12 - 0.03
 	if base_ship:
 		base_ship.visible = true
-		base_ship.global_position.y = _water_y + 0.12 - 0.03
+		base_ship.global_position.y = _water_y + 0.09
+		base_ship.rotation.y = deg_to_rad(-135.8)
 
 
 func _spawn_port_ship(b_override: Dictionary = {}) -> void:
@@ -3257,6 +3258,8 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	ship.global_position = port_pos + forward * ship_dist
 	ship.global_position.y = _water_y - 0.03
 	ship.global_rotation.y = port_rot_y + PI * 0.5
+	# Store ship node reference on port for easy retrieval
+	port_node.set_meta("ship_node", ship)
 
 
 func _create_barracks_panel() -> void:
@@ -3649,6 +3652,185 @@ func _on_attack_pressed() -> void:
 		attack_system.enter_attack_mode()
 
 
+func _get_all_port_ships() -> Array:
+	var ships: Array = []
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		for b in bs.placed_buildings:
+			if b.get("id") == "port":
+				var pnode = b.get("node", null)
+				if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
+					var ship = pnode.get_meta("ship_node")
+					if is_instance_valid(ship):
+						ships.append(ship)
+	return ships
+
+
+func _sail_ships_away() -> void:
+	var _r = get_tree().root
+	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
+		_ship_attack_node = _r.find_child("MainShipAttack", true, false)
+	if not _ship_base_node or not is_instance_valid(_ship_base_node):
+		_ship_base_node = _r.find_child("MainShipBase", true, false)
+
+	var sailing_ships: Array = []
+	if _ship_base_node and is_instance_valid(_ship_base_node):
+		sailing_ships.append(_ship_base_node)
+	# MainShipAttack stays hidden on home base — only appears on enemy island
+	sailing_ships.append_array(_get_all_port_ships())
+
+	_saved_ship_transforms.clear()
+	for ship in sailing_ships:
+		if is_instance_valid(ship):
+			_saved_ship_transforms.append({"node": ship, "pos": ship.global_position, "rot_y": ship.rotation.y})
+
+	_saved_port_ships.clear()
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		for b in bs.placed_buildings:
+			if b.get("id") == "port":
+				var pnode = b.get("node", null)
+				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
+					_saved_port_ships.append({
+						"grid_pos": b.grid_pos,
+						"bs": bs,
+						"ship_level": pnode.get_meta("ship_level", 1),
+						"ship_troops": pnode.get_meta("ship_troops", []),
+					})
+
+	# All ships sail straight forward (their current facing direction, no rotation)
+	if sailing_ships.size() > 0:
+		var sail_tween = create_tween().set_parallel(true)
+		for ship in sailing_ships:
+			if not is_instance_valid(ship):
+				continue
+			# Forward direction based on current rotation
+			var rot_y = ship.rotation.y
+			var forward = Vector3(sin(rot_y), 0, cos(rot_y))
+			var target_pos = ship.global_position + forward * 4.0
+			target_pos.y = ship.global_position.y
+			sail_tween.tween_property(ship, "global_position", target_pos, 2.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		await sail_tween.finished
+
+	for ship in sailing_ships:
+		if is_instance_valid(ship):
+			ship.visible = false
+
+
+func _restore_ships_and_troops() -> void:
+	for data in _saved_ship_transforms:
+		var ship = data.get("node")
+		if is_instance_valid(ship):
+			ship.global_position = data.pos
+			ship.rotation.y = data.rot_y
+			ship.visible = true
+	_saved_ship_transforms.clear()
+	if _ship_attack_node:
+		_ship_attack_node.visible = false
+	if _ship_base_node:
+		_ship_base_node.visible = true
+	for ht in _home_troops:
+		var troop = ht.get("node")
+		if is_instance_valid(troop):
+			troop.visible = true
+			troop.set_process(true)
+			if "state" in troop:
+				troop.state = 0  # WanderState.IDLE
+
+
+## Called after ships already sailed and clouds closed — skips those phases
+func _switch_to_enemy_island_after_sail() -> void:
+	if _ship_attack_node:
+		_ship_attack_node.visible = true
+
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs._hide_all_collect_icons()
+		bs.is_viewing_enemy = true
+	var bridge = _bridge
+	if bridge:
+		bridge.send_to_react("enemy_mode", {
+			"active": true,
+			"name": enemy_info.get("name", "???"),
+			"trophies": enemy_info.get("trophies", 0),
+		})
+
+	_preload_explosion_textures()
+
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		bs._destroy_all_buildings()
+
+	if enemy_info.has("buildings") and enemy_info.buildings is Array:
+		for bs in get_tree().get_nodes_in_group("building_systems"):
+			bs._load_buildings_from_server(enemy_info.buildings)
+
+	if build_button:
+		build_button.visible = false
+	if find_button:
+		find_button.visible = false
+	if shop_panel:
+		shop_panel.visible = false
+	_deselect_building()
+
+	if canvas:
+		enemy_label = Label.new()
+		enemy_label.text = "Attacking: %s  [%d trophies]" % [enemy_info.get("name", "???"), enemy_info.get("trophies", 0)]
+		enemy_label.anchor_left = 0.5
+		enemy_label.anchor_right = 0.5
+		enemy_label.anchor_top = 1.0
+		enemy_label.anchor_bottom = 1.0
+		enemy_label.offset_left = -200
+		enemy_label.offset_right = 200
+		enemy_label.offset_top = -50
+		enemy_label.offset_bottom = -20
+		enemy_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		enemy_label.add_theme_font_size_override("font_size", 22)
+		enemy_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
+		canvas.add_child(enemy_label)
+
+		return_button = Button.new()
+		return_button.text = "Return Home"
+		return_button.custom_minimum_size = Vector2(300, 120)
+		return_button.anchor_left = 1.0
+		return_button.anchor_right = 1.0
+		return_button.anchor_top = 1.0
+		return_button.anchor_bottom = 1.0
+		return_button.offset_left = -320
+		return_button.offset_right = -20
+		return_button.offset_top = -140
+		return_button.offset_bottom = -20
+		_style_button(return_button, Color(0.5, 0.35, 0.1), Color(0.6, 0.45, 0.15))
+		return_button.pressed.connect(_return_home)
+		canvas.add_child(return_button)
+
+	# Cloud reveal on enemy island
+	var cloud = _get_or_create_cloud()
+	cloud.reveal()
+	await cloud.reveal_finished
+	var bridge2 = _bridge
+	if bridge2:
+		bridge2.send_to_react("cloud_transition", {"visible": false})
+
+	if _ship_attack_node and is_instance_valid(_ship_attack_node):
+		_ship_attack_node.visible = true
+
+	var attack_system = get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("enter_attack_mode"):
+		attack_system.enter_attack_mode()
+
+
+func _find_nearest_port_with_ship(from_pos: Vector3) -> Vector3:
+	var best_pos = Vector3.INF
+	var best_dist = INF
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		for b in bs.placed_buildings:
+			if b.get("id") == "port":
+				var pnode = b.get("node", null)
+				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
+					var d = from_pos.distance_to(pnode.global_position)
+					if d < best_dist:
+						best_dist = d
+						best_pos = pnode.global_position
+	return best_pos
+
+
 func _on_find_pressed() -> void:
 	if is_viewing_enemy:
 		return
@@ -3660,6 +3842,54 @@ func _on_find_pressed() -> void:
 	# Disable button while searching
 	if find_button:
 		find_button.disabled = true
+		find_button.text = "Boarding..."
+
+	# Phase 1: Send all home troops to their nearest port
+	var pending_count: int = 0
+	for ht in _home_troops:
+		var troop = ht.get("node")
+		if not is_instance_valid(troop) or not troop.visible:
+			continue
+		var port_pos = _find_nearest_port_with_ship(troop.global_position)
+		if port_pos == Vector3.INF:
+			troop.visible = false
+			continue
+		if troop.has_method("board_ship"):
+			pending_count += 1
+			troop.board_ship(port_pos)
+			troop.boarded.connect(func():
+				pending_count -= 1
+			, CONNECT_ONE_SHOT)
+		else:
+			troop.visible = false
+
+	# Wait for all troops to board (max 6 seconds timeout)
+	var wait_timer: float = 0.0
+	while pending_count > 0 and wait_timer < 6.0:
+		await get_tree().process_frame
+		wait_timer += get_process_delta_time()
+
+	# Hide any remaining troops
+	for ht in _home_troops:
+		var troop = ht.get("node")
+		if is_instance_valid(troop):
+			troop.visible = false
+
+	# Phase 2: Ships sail away
+	if find_button:
+		find_button.text = "Sailing..."
+	await _sail_ships_away()
+
+	# Phase 3: Cloud transition
+	var bridge2 = _bridge
+	if bridge2:
+		bridge2.send_to_react("cloud_transition", {"visible": true})
+	var cloud = _get_or_create_cloud()
+	cloud.close()
+	await cloud.close_finished
+
+	# Phase 4: Search for enemy
+	if find_button:
 		find_button.text = "Searching..."
 
 	var result: Dictionary = await net.find_enemy()
@@ -3670,10 +3900,16 @@ func _on_find_pressed() -> void:
 
 	if result.has("error"):
 		print("No enemy found: ", result.error)
+		# Reveal cloud, restore ships & troops
+		cloud.reveal()
+		await cloud.reveal_finished
+		if bridge2:
+			bridge2.send_to_react("cloud_transition", {"visible": false})
+		_restore_ships_and_troops()
 		return
 
 	enemy_info = result
-	_switch_to_enemy_island()
+	_switch_to_enemy_island_after_sail()
 
 
 ## Cannon energy is tracked client-side in replay model.
@@ -4273,6 +4509,52 @@ func _return_home() -> void:
 	await cloud.reveal_finished
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
+
+	# Restore ships to original positions
+	for data in _saved_ship_transforms:
+		var ship = data.get("node")
+		if is_instance_valid(ship):
+			ship.global_position = data.pos
+			ship.rotation.y = data.rot_y
+			ship.visible = true
+	_saved_ship_transforms.clear()
+	if _ship_attack_node:
+		_ship_attack_node.visible = false
+	if _ship_base_node:
+		_ship_base_node.visible = true
+
+	# Re-link port ships to rebuilt ports
+	for data in _saved_port_ships:
+		var bs = data.get("bs")
+		var gp = data.get("grid_pos")
+		if bs and is_instance_valid(bs):
+			for b2 in bs.placed_buildings:
+				if b2.get("id") == "port" and b2.grid_pos == gp:
+					var pnode = b2.get("node", null)
+					if is_instance_valid(pnode):
+						pnode.set_meta("has_ship", true)
+						# Find the ship node from saved transforms
+						for st in _saved_ship_transforms:
+							pass  # already cleared above
+						# Re-find ship near this port
+						for child in get_tree().root.get_children():
+							if child is Node3D and child.global_position.distance_to(pnode.global_position) < 1.5:
+								if child != _ship_attack_node and child != _ship_base_node and child.scene_file_path in SHIP_MODELS:
+									pnode.set_meta("ship_node", child)
+									pnode.set_meta("ship_level", data.get("ship_level", 1))
+									pnode.set_meta("ship_troops", data.get("ship_troops", []))
+									break
+					break
+	_saved_port_ships.clear()
+
+	# Show home troops again
+	for ht in _home_troops:
+		var troop = ht.get("node")
+		if is_instance_valid(troop):
+			troop.visible = true
+			troop.set_process(true)
+			if "state" in troop:
+				troop.state = 0  # WanderState.IDLE
 
 
 func _show_move_arrows(b: Dictionary) -> void:

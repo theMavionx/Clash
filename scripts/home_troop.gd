@@ -3,7 +3,7 @@ extends Node3D
 ## Avoids other home troops and buildings. Uses per-frame movement, not tweens.
 ## Attach via set_script() after instantiating the troop model.
 
-enum WanderState { IDLE, WALKING }
+enum WanderState { IDLE, WALKING, BOARDING }
 
 # ── Config ────────────────────────────────────────────────────
 @export var move_speed: float = 0.35
@@ -38,10 +38,13 @@ const WEAPON_ROTATIONS: Dictionary = {
 	"Ranger": Vector3(0, 90, 0),
 }
 
+signal boarded  # emitted when troop reaches port and disappears
+
 # ── State ─────────────────────────────────────────────────────
 var state: WanderState = WanderState.IDLE
 var _target_pos: Vector3 = Vector3.ZERO
 var _idle_timer: float = 0.0
+var _board_target: Vector3 = Vector3.ZERO
 var _anim_player: AnimationPlayer = null
 var _grid_center: Vector3 = Vector3.ZERO
 var _grid_half_x: float = 1.0
@@ -87,6 +90,39 @@ func _process(delta: float) -> void:
 				_play_anim("Running_A")
 		WanderState.WALKING:
 			_move_toward_target(delta)
+		WanderState.BOARDING:
+			_move_to_board(delta)
+
+
+## Call to make the troop walk toward a port and board the ship
+func board_ship(port_pos: Vector3) -> void:
+	_board_target = port_pos
+	_board_target.y = _grid_y
+	state = WanderState.BOARDING
+	_play_anim("Running_A")
+	# Face the port
+	var dir = _board_target - global_position
+	dir.y = 0
+	if dir.length_squared() > 0.001:
+		look_at(global_position - dir, Vector3.UP)
+
+
+func _move_to_board(delta: float) -> void:
+	var diff = _board_target - global_position
+	diff.y = 0
+	# Arrived at port — board the ship
+	if diff.length_squared() < 0.04 * 0.04:
+		visible = false
+		set_process(false)
+		boarded.emit()
+		return
+	var dir = diff.normalized()
+	var board_speed = move_speed * 1.5  # run faster to port
+	global_position += dir * board_speed * delta
+	global_position.y = _grid_y
+	# Face direction
+	if dir.length_squared() > 0.001:
+		look_at(global_position - dir, Vector3.UP)
 
 
 func _move_toward_target(delta: float) -> void:
