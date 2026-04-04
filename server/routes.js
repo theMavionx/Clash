@@ -511,12 +511,20 @@ router.get('/admin/players', adminAuth, (req, res) => {
 
 // Delete a player by name
 router.delete('/admin/players/:name', adminAuth, (req, res) => {
-  const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
-  if (!player) return res.status(404).json({ error: 'Player not found' });
-  db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
-  db.db.prepare('DELETE FROM troop_levels WHERE player_id = ?').run(player.id);
-  db.db.prepare('DELETE FROM players WHERE id = ?').run(player.id);
-  res.json({ deleted: req.params.name });
+  try {
+    const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+    if (!player) return res.status(404).json({ error: 'Player not found' });
+    db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
+    db.db.prepare('DELETE FROM troop_levels WHERE player_id = ?').run(player.id);
+    try { db.db.prepare('DELETE FROM trading_rewards WHERE player_id = ?').run(player.id); } catch {}
+    try { db.db.prepare('DELETE FROM gold_history WHERE player_id = ?').run(player.id); } catch {}
+    try { db.db.prepare('DELETE FROM player_trades WHERE player_id = ?').run(player.id); } catch {}
+    try { db.db.prepare('DELETE FROM battle_replays WHERE attacker_id = ? OR defender_id = ?').run(player.id, player.id); } catch {}
+    db.db.prepare('DELETE FROM players WHERE id = ?').run(player.id);
+    res.json({ deleted: req.params.name });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Reset a player (keep account, clear buildings & reset resources)
