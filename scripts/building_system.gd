@@ -2674,6 +2674,9 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	# Mark upgrade complete before refreshing UI
 	b["is_upgrading"] = false
 
+	# Update resource caps (storage/town_hall upgrade changes limits)
+	_send_resource_caps()
+
 	# Update React UI globally
 	if typeof(selected_building) == TYPE_DICTIONARY and selected_building == b:
 		_select_building(b)
