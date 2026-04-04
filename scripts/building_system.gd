@@ -4528,7 +4528,6 @@ func _on_town_hall_destroyed() -> void:
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
-	_combat_session_id = ""
 	_exit_ship_cannon_mode()
 	# Hide attack ship, show base ship when returning home
 	var _r2 = get_tree().root
