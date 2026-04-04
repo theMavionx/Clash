@@ -170,8 +170,8 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
             </div>
           )}
           <button
-            style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}) }}
-            onClick={onCannon}
+            style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }}
+            onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }}
             title="Ship Cannon"
             onMouseOver={e => !cannonMode && (e.currentTarget.style.filter = 'brightness(1.15)')}
             onMouseOut={e => !cannonMode && (e.currentTarget.style.filter = 'none')}
@@ -223,7 +223,10 @@ function ActionButtons() {
   const handleOpenShop    = useCallback(() => sendToGodot('open_shop'),        [sendToGodot]);
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
-  const handleSelectTroop = useCallback((idx) => sendToGodot('select_troop', { idx }), [sendToGodot]);
+  const handleSelectTroop = useCallback((idx) => {
+    if (cannonMode) sendToGodot('ship_cannon_mode'); // toggle off cannon
+    sendToGodot('select_troop', { idx });
+  }, [sendToGodot, cannonMode]);
 
   if (enemyMode.active) {
     return (
@@ -371,6 +374,11 @@ const hud = {
     borderColor: 'rgba(255,155,0,0.88)',
     boxShadow: '0 0 22px rgba(255,155,0,0.5), inset 0 0 10px rgba(255,155,0,0.12)',
     filter: 'brightness(1.18)',
+  },
+  cannonDisabled: {
+    opacity: 0.35,
+    filter: 'grayscale(1) brightness(0.5)',
+    cursor: 'default',
   },
   cannonLabel: {
     color: '#7df4ff', fontSize: 10, fontWeight: 900,

@@ -4392,8 +4392,17 @@ func _on_town_hall_destroyed() -> void:
 	var defender_id: String = enemy_info.get("id", "")
 	if net_node and net_node.has_token() and defender_id != "":
 		var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory")
-		var loot: Dictionary = result.get("loot", {})
 		var bridge: Node = _bridge
+		if result.has("error"):
+			# Server rejected — show error but still show victory screen without loot
+			if bridge:
+				bridge.send_to_react("battle_result", {
+					"type": "victory",
+					"loot": {},
+					"error": result.get("error", "") + " " + result.get("reason", ""),
+				})
+			return
+		var loot: Dictionary = result.get("loot", {})
 		if bridge:
 			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
 				bridge.send_to_react("resources_add", {

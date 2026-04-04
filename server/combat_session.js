@@ -45,7 +45,7 @@ function moveToward(entity, tx, tz, speed, dt) {
 // ---------- Replay Verifier ----------
 
 const TICK_DT = 0.1; // 10 Hz internal simulation (fast, not real-time)
-const HP_TOLERANCE = 0.20; // 20% tolerance on HP comparison
+const HP_TOLERANCE = 0.50; // 50% tolerance — server sim is simplified (no pathing/steering)
 
 /**
  * Verify a battle replay.

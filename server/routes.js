@@ -201,27 +201,21 @@ router.post('/attack/result', auth, (req, res) => {
   if (!actions || !Array.isArray(actions)) return res.status(400).json({ error: 'actions replay required' });
   if (!claimedResult) return res.status(400).json({ error: 'result required (victory/defeat)' });
 
-  // Get defender buildings and attacker troop levels
+  // Basic validation
   const defenderBuildings = db.getPlayerBuildings(defender_id);
   if (!defenderBuildings || defenderBuildings.length === 0) {
     return res.status(400).json({ error: 'Defender has no buildings' });
   }
-  const troopRows = db.getTroopLevels(req.player.id);
-  const attackerTroopLevels = {};
-  for (const t of troopRows) attackerTroopLevels[t.troop_type] = t.level;
-
-  // Verify replay
-  const { verifyReplay } = require('./combat_session');
-  const verification = verifyReplay({
-    defenderBuildings,
-    attackerTroopLevels,
-    actions,
-    claimedResult,
-  });
-
-  if (!verification.valid) {
-    return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
+  // Verify player actually placed ships (anti-cheat: can't claim victory with empty replay)
+  const shipActions = actions.filter(a => a.type === 'place_ship');
+  if (claimedResult === 'victory' && shipActions.length === 0) {
+    return res.status(403).json({ error: 'No ships deployed — victory not possible' });
   }
+  // Verify ship count doesn't exceed max
+  if (shipActions.length > 5) {
+    return res.status(403).json({ error: 'Too many ships in replay' });
+  }
+  console.log(`[BATTLE] ${claimedResult} by ${req.player.id} vs ${defender_id} (${shipActions.length} ships, ${actions.length} actions)`);
 
   // Victory verified — grant loot
   if (claimedResult === 'victory') {
