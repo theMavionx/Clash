@@ -4307,8 +4307,8 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	_cannon_energy = 10
 	_cannon_next_cost = 1
 
-	# x2 speed for replay
-	Engine.time_scale = 2.0
+	# Normal speed for replay
+	Engine.time_scale = 1.0
 
 	# Start replaying actions (do NOT enter attack mode — player can't interact)
 	_replay_playback()

@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
+import { memo, useCallback, useState, useEffect, useRef, useMemo, } from 'react';
 import { useSend, useUI, useResources, useBuilding } from '../hooks/useGodot';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
@@ -192,6 +192,40 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
   );
 }
 
+// ── Replay HUD (shown during replay mode) ────────────────────────────────
+const REPLAY_SPEEDS = [1, 2, 4];
+
+function ReplayHUD({ onReturnHome }) {
+  const { sendToGodot } = useSend();
+  const [speedIdx, setSpeedIdx] = useState(0);
+
+  const handleSpeed = useCallback(() => {
+    const next = (speedIdx + 1) % REPLAY_SPEEDS.length;
+    setSpeedIdx(next);
+    sendToGodot('replay_speed', { speed: REPLAY_SPEEDS[next] });
+  }, [speedIdx, sendToGodot]);
+
+  return (
+    <div style={hud.wrapTopRight}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button style={hud.speedBtn} onClick={handleSpeed} title="Change speed"
+          onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
+          onMouseOut={e => e.currentTarget.style.filter = 'none'}
+        >
+          <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
+        </button>
+        <div style={hud.replayBadge}>REPLAY</div>
+        <button style={hud.homeBtn} onClick={onReturnHome} title="Return Home"
+          onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
+          onMouseOut={e => e.currentTarget.style.filter = 'none'}
+        >
+          <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 // ── Shield icon for defense log ───────────────────────────────────────────
 const ShieldIcon = ({ size = 60 }) => (
@@ -250,19 +284,7 @@ function ActionButtons({ onOpenBattleLog }) {
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
     if (enemyMode.is_replay) {
-      return (
-        <div style={hud.wrapTopRight}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={hud.replayBadge}>REPLAY x2</div>
-            <button style={hud.homeBtn} onClick={handleReturnHome} title="Return Home"
-              onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
-              onMouseOut={e => e.currentTarget.style.filter = 'none'}
-            >
-              <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
-            </button>
-          </div>
-        </div>
-      );
+      return <ReplayHUD onReturnHome={handleReturnHome} />;
     }
     return (
       <AttackHUD
@@ -353,6 +375,20 @@ const hud = {
     borderRadius: 10,
     color: '#7df4ff', fontSize: 14, fontWeight: 900,
     letterSpacing: '1px',
+    textShadow: '0 0 8px rgba(60,220,255,0.5)',
+  },
+  speedBtn: {
+    width: 56, height: 56,
+    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
+    border: '2px solid rgba(40,130,195,0.55)',
+    borderRadius: 14,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', flexShrink: 0,
+    transition: 'filter 0.15s',
+    outline: 'none',
+  },
+  speedText: {
+    color: '#7df4ff', fontSize: 18, fontWeight: 900,
     textShadow: '0 0 8px rgba(60,220,255,0.5)',
   },
   sep: {

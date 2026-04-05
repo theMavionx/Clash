@@ -14,7 +14,7 @@ function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function BattleTimer({ isReplay }) {
+function BattleTimer() {
   const [elapsed, setElapsed] = useState(0);
   const startRef = useRef(Date.now());
 
@@ -22,11 +22,10 @@ function BattleTimer({ isReplay }) {
     startRef.current = Date.now();
     setElapsed(0);
     const id = setInterval(() => {
-      const raw = (Date.now() - startRef.current) / 1000;
-      setElapsed(isReplay ? raw * 2 : raw);
+      setElapsed((Date.now() - startRef.current) / 1000);
     }, 250);
     return () => clearInterval(id);
-  }, [isReplay]);
+  }, []);
 
   return (
     <div style={timerStyles.wrap}>
@@ -44,7 +43,7 @@ function EnemyHeader() {
 
   return (
     <div style={styles.container}>
-      <BattleTimer isReplay={!!enemyMode.is_replay} />
+      <BattleTimer />
       {/* Player Header - Styled like PlayerInfo */}
       <div style={styles.headerWrap}>
         <div style={styles.levelCircleContainer}>
@@ -265,7 +264,8 @@ const timerStyles = {
   wrap: {
     position: 'fixed',
     top: 16,
-    right: 80,
+    left: '50%',
+    transform: 'translateX(-50%)',
     zIndex: 100,
     pointerEvents: 'none',
   },

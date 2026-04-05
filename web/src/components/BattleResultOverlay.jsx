@@ -33,15 +33,15 @@ function BattleResultOverlay({ result, onClose }) {
           <div style={styles.panel}>
             <div style={styles.panelTitle}>You received</div>
             <div style={styles.resourceRow}>
-               <LootItem icon={goldIcon} value={result.loot.gold} delay={0.4} />
-               <LootItem icon={woodIcon} value={result.loot.wood} delay={0.7} />
-               <LootItem icon={stoneIcon} value={result.loot.ore} delay={1.0} />
+               <LootItem icon={goldIcon} value={result.loot.gold} delay={0.7} />
+               <LootItem icon={woodIcon} value={result.loot.wood} delay={0.9} />
+               <LootItem icon={stoneIcon} value={result.loot.ore} delay={1.1} />
             </div>
           </div>
         )}
 
         {/* Defeat Panel */}
-        {!isVictory && (
+        {!isVictory && !isReplay && (
            <div style={styles.panel}>
             <div style={styles.panelTitle}>Better luck next time!</div>
             <div style={styles.subtitleText}>
@@ -78,6 +78,19 @@ const ANIM_CSS = `
 .loot-pop {
   animation: popIn 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
 }
+@keyframes titleDrop {
+  0% { transform: translateY(-40px) scale(0.9); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes panelRise {
+  0% { transform: translateY(40px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes btnPop {
+  0% { transform: scale(0.5); opacity: 0; }
+  60% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
 `;
 
 const textOutline = '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 3px 6px rgba(0,0,0,0.8)';
@@ -106,6 +119,7 @@ const styles = {
     alignItems: 'center',
     position: 'relative',
     marginBottom: 8,
+    animation: 'titleDrop 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275) both',
   },
   glowBackground: {
     position: 'absolute',
@@ -150,6 +164,7 @@ const styles = {
     alignItems: 'center',
     gap: 20,
     boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.1), inset 0 -4px 0 rgba(0,0,0,0.3), 0 10px 20px rgba(0,0,0,0.5)',
+    animation: 'panelRise 0.5s ease-out 0.2s both',
   },
   panelTitle: {
     fontSize: 16,
@@ -193,6 +208,7 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    animation: 'btnPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) 1s both',
   },
   btnText: {
     color: '#fff',
