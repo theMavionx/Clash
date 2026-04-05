@@ -400,13 +400,13 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	if sail_dir.dot(to_plane) < 0:
 		sail_dir = -sail_dir
 
-	# Ship stops at inner edge of ShipPlane matching player's lateral click
+	# Ship stops at inner edge of ShipPlane (closest to buildings)
 	var pb: Basis = ship_plane.global_transform.basis
 	var lateral_dir: Vector3 = pb.x.normalized()
 	var offset: Vector3 = target - plane_center
 	var lateral: float = offset.dot(lateral_dir)
 	lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
-	var stop_pos: Vector3 = plane_center + lateral_dir * lateral + sail_dir * (plane_extent_z - 0.5)
+	var stop_pos: Vector3 = plane_center + lateral_dir * lateral - sail_dir * (_click_extent_z - 0.05)
 	stop_pos.y = water_y
 
 	# Offset laterally so this ship doesn't land on top of an existing one

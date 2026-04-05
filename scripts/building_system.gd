@@ -2671,6 +2671,13 @@ func remove_building(b: Dictionary) -> void:
 			var cell_idx: int = (gp.y + z) * grid_width + (gp.x + x)
 			if cell_idx >= 0 and cell_idx < grid.size():
 				grid[cell_idx] = false
+	# Port destroyed → sink its docked ship
+	if b.id == "port":
+		var pnode: Node3D = b.get("node", null)
+		if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
+			var ship: Node3D = pnode.get_meta("ship_node")
+			if is_instance_valid(ship):
+				_sink_ship(ship)
 	if b.has("hp_bar") and is_instance_valid(b.hp_bar):
 		b.hp_bar.queue_free()
 	var icon: Control = b.get("_collect_icon")
@@ -2683,6 +2690,23 @@ func remove_building(b: Dictionary) -> void:
 
 
 # ── Tombstone Skeleton Guards ─────────────────────────────────
+
+## Animates a ship sinking: tilts, submerges, then frees the node.
+func _sink_ship(ship: Node3D) -> void:
+	# Detach from any port meta so it's not referenced after sinking
+	ship.set_meta("sinking", true)
+	var start_y: float = ship.global_position.y
+	var sink_depth: float = 0.4
+	var tw: Tween = create_tween().set_parallel(true)
+	# Tilt to one side as it sinks
+	tw.tween_property(ship, "rotation:z", deg_to_rad(25.0), 3.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.tween_property(ship, "rotation:x", deg_to_rad(10.0), 3.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	# Sink below the water
+	tw.tween_property(ship, "global_position:y", start_y - sink_depth, 3.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_SINE)
+	# Fade out (scale down) in the last second
+	tw.tween_property(ship, "scale", Vector3.ZERO, 1.0).set_delay(2.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+	tw.chain().tween_callback(ship.queue_free)
+
 
 const SKELETON_MODEL = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb"
 const SKELETON_SCRIPT = "res://scripts/skeleton_guard.gd"

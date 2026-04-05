@@ -39,6 +39,10 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Cl
 
 @.claude/docs/context-management.md
 
+## Engine Version Reference
+
+@docs/engine-reference/godot/VERSION.md
+
 ## Game Systems
 
 ### Buildings
