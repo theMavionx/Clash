@@ -402,52 +402,37 @@ var register_status_label: Label
 var player_name_label: Label
 var trophy_label: Label
 
-# ── Enemy attack state ───────────────────────────────────────
-var is_viewing_enemy: bool = false
+# ── Enemy attack state (proxied to _battle helper) ──────────
+var is_viewing_enemy: bool:
+	get: return _battle.is_viewing_enemy if _battle else false
+	set(v):
+		if _battle: _battle.is_viewing_enemy = v
 var _server_busy: bool = false
-var home_buildings_backup: Array[Dictionary] = []
-var home_grid_backup: Array[bool] = []
-var enemy_info: Dictionary = {}
-var _battle_replay: Array = []  # [{t: float, type: String, ...}]
-var _battle_start_time: float = 0.0
-var return_button: Button
-var enemy_label: Label
+var enemy_info: Dictionary:
+	get: return _battle.enemy_info if _battle else {}
+	set(v):
+		if _battle: _battle.enemy_info = v
+var _battle_replay: Array:
+	get: return _battle._battle_replay if _battle else []
+	set(v):
+		if _battle: _battle._battle_replay = v
+var _battle_start_time: float:
+	get: return _battle._battle_start_time if _battle else 0.0
+	set(v):
+		if _battle: _battle._battle_start_time = v
 var find_button: Button
 
-# ── Replay playback ───────────────────────────────────────────
-var _replay_active: bool = false
-var _replay_actions: Array = []
-var _replay_buildings_snapshot: Array = []
+# ── Replay playback (proxied to _battle helper) ──────────────
+var _replay_active: bool:
+	get: return _battle._replay_active if _battle else false
+	set(v):
+		if _battle: _battle._replay_active = v
 
-# ── Ship cannon ───────────────────────────────────────────────
-var _ship_cannon_mode: bool = false
-var _ship_cannon_label: Label = null
-var _cannon_paused_attack: bool = false  # was attack mode active when cannon was entered
-var _ship_cannonballs: Array = []  # Array of {node, target_bdata, target_pos}
-const SHIP_CANNON_DAMAGE: int = 500
-const SHIP_CANNON_SPEED: float = 1.2
-const SHIP_CANNON_HIT_SQ: float = 0.03 * 0.03
-const SHIP_CANNON_RELOAD: float = 1.0
-const SHIP_FLASH_SCALE: float = 0.25
-const SHIP_FLASH_DURATION: float = 0.12
-const SHIP_FLASH_FRAMES: Array[String] = [
-	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png",
-	"res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png",
-]
-const SHIP_EXPLOSION_SCALE: float = 1.65
-const SHIP_EXPLOSION_DURATION: float = 0.9
-const SHIP_EXPLOSION_FRAME_COUNT: int = 86
-const SHIP_EXPLOSION_FRAME_DIR: String = "res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-%05d.png"
-var _ship_cannon_cooldown: float = 0.0
-var _cannon_energy: int = 10
-var _cannon_next_cost: int = 1
-var _attack_ship_wave_tweens: Array = []
-var _ship_flash: MeshInstance3D = null
-var _ship_flash_timer: float = 0.0
-var _ship_explosion: MeshInstance3D = null
-var _ship_explosion_timer: float = 0.0
-var _ship_explosion_textures: Array = []
-var _ship_flash_textures: Array = []
+# ── Ship cannon (proxied to _cannon helper) ──────────────────
+var _ship_cannon_mode: bool:
+	get: return _cannon._ship_cannon_mode if _cannon else false
+	set(v):
+		if _cannon: _cannon._ship_cannon_mode = v
 
 # ── Port / Ships ─────────────────────────────────────────────
 var port_panel: PanelContainer
@@ -527,6 +512,10 @@ const BUY_TROOP_COST: int = 100
 var _net: Node = null
 var _bridge: Node = null
 var _building_systems: Array = []
+var _cannon: BSCannon
+var _battle: BSBattle
+var _port: BSPort
+var _production: BSProduction
 
 
 func _refresh_bs_cache() -> void:
@@ -534,13 +523,18 @@ func _refresh_bs_cache() -> void:
 
 
 func _exit_tree() -> void:
-	_stop_attack_ship_waves()
+	if _cannon:
+		_cannon._stop_attack_ship_waves()
 
 
 func _ready() -> void:
 	add_to_group("building_systems")
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
+	_cannon = BSCannon.new().init(self)
+	_battle = BSBattle.new().init(self)
+	_port = BSPort.new().init(self)
+	_production = BSProduction.new().init(self)
 	call_deferred("_refresh_bs_cache")
 	grid.resize(grid_width * grid_height)
 	grid.fill(false)
@@ -601,8 +595,6 @@ func _ready() -> void:
 
 var _bs_frame: int = 0
 var _produce_timer: float = 0.0
-var _had_troops: bool = false
-var _skeleton_respawn_timer: float = 0.0
 const PRODUCE_TICK: float = 1.0  # update production every second
 
 func _process(delta: float) -> void:
@@ -621,124 +613,25 @@ func _process(delta: float) -> void:
 				building_panel_hp_bar.max_value = bmax
 				building_panel_hp_bar.value = bhp
 	_update_building_hp_bars()
-	if _ship_cannon_cooldown > 0:
-		_ship_cannon_cooldown -= delta
-	if _ship_flash_timer > 0:
-		_update_ship_flash(delta)
-	if _ship_explosion_timer > 0:
-		_update_ship_explosion(delta)
-	if _ship_cannonballs.size() > 0:
-		_update_ship_cannonballs(delta)
-
-	# Detect defeat during attack — all troops dead, no more ships (skip during replay)
-	if is_viewing_enemy and not _replay_active and create_ui and name == "BuildingSystem":
-		var attack_system: Node = get_node_or_null("../AttackSystem")
-		var troops_alive_atk: bool = not BaseTroop._get_troops_cached().is_empty()
-		if troops_alive_atk:
-			_had_troops = true
-			_skeleton_respawn_timer = 0.0
-		elif _had_troops:
-			var all_ships_used: bool = attack_system == null or not attack_system.is_attack_mode or attack_system._ships_placed >= attack_system.max_ships
-			if all_ships_used:
-				_skeleton_respawn_timer += delta
-				if _skeleton_respawn_timer >= 2.0:
-					_had_troops = false
-					_skeleton_respawn_timer = 0.0
-					# Submit defeat replay to server
-					var net_def: Node = _net
-					var def_id: String = enemy_info.get("id", "")
-					if net_def and net_def.has_token() and def_id != "":
-						net_def.submit_battle_result(def_id, _battle_replay, "defeat")
-					var bridge_def: Node = _bridge
-					if bridge_def:
-						bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost"})
-
-	# Respawn dead tombstone skeletons after battle ends (only main BS to avoid double-spawn)
-	if not is_viewing_enemy and create_ui and name == "BuildingSystem":
-		var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
-		if troops_alive:
-			_had_troops = true
-			_skeleton_respawn_timer = 0.0
-		elif _had_troops:
-			# Troops just died — wait 2 sec then respawn skeletons
-			_skeleton_respawn_timer += delta
-			if _skeleton_respawn_timer >= 2.0:
-				_had_troops = false
-				_skeleton_respawn_timer = 0.0
-				for bs in _building_systems:
-					for b in bs.placed_buildings:
-						if b.get("id", "") == "tombstone" and is_instance_valid(b.get("node")):
-							bs._spawn_tombstone_skeletons(b, b.get("level", 1))
+	_cannon.process(delta)
+	_battle.check_defeat(delta)
+	_battle.check_skeleton_respawn(delta)
 
 	# Resource production tick
 	if not is_viewing_enemy:
 		_produce_timer += delta
 		if _produce_timer >= PRODUCE_TICK:
 			_produce_timer -= PRODUCE_TICK
-			_tick_production()
-		# Update collect icons above production buildings
-		_update_collect_icons()
+			_production._tick_production()
+		_production._update_collect_icons()
 
 
 func _tick_production() -> void:
-	var any_ready = false
-	for b in placed_buildings:
-		var def = building_defs.get(b.id, {})
-		if not def.has("produces"):
-			continue
-		var lvl = b.get("level", 1)
-		var rate_arr = def.get("produce_rate", [0])
-		var max_arr = def.get("produce_max", [100])
-		var rate_idx = clampi(lvl - 1, 0, rate_arr.size() - 1)
-		var max_idx = clampi(lvl - 1, 0, max_arr.size() - 1)
-		var rate_per_sec = rate_arr[rate_idx] / 60.0
-		var max_stored = max_arr[max_idx]
-		var stored = b.get("stored", 0.0)
-		stored = minf(stored + rate_per_sec, max_stored)
-		b["stored"] = stored
-		if stored >= 1.0:
-			any_ready = true
-	# positions updated in _process every 3rd frame
+	_production._tick_production()
 
 
 func _update_collect_icons() -> void:
-	var cam = BaseTroop._get_camera_cached()
-	if not cam:
-		return
-
-	for b in placed_buildings:
-		var def = building_defs.get(b.id, {})
-		if not def.has("produces"):
-			continue
-		var stored = b.get("stored", 0.0)
-		var node = b.get("node")
-		if not is_instance_valid(node):
-			continue
-		var icon = b.get("_collect_icon") as Control
-		if stored >= 1.0:
-			if not icon:
-				icon = _create_collect_icon(b, node, def)
-				b["_collect_icon"] = icon
-			icon.visible = true
-			
-			# Project to 2D
-			var base_pos = node.global_position
-			var def_height = def.get("height", 0.4)
-			var target_3d = base_pos + Vector3(0, def_height + 0.1, 0)
-			
-			if cam.is_position_behind(target_3d):
-				icon.visible = false
-			else:
-				var pos2d = cam.unproject_position(target_3d)
-				
-				var anim_scale = icon.get_meta("anim_scale", 1.0)
-				icon.scale = Vector2.ONE * anim_scale
-				
-				var scaled_size = icon.size * icon.scale
-				icon.position = pos2d - scaled_size / 2.0
-		else:
-			if icon and is_instance_valid(icon):
-				icon.visible = false
+	_production._update_collect_icons()
 
 
 const COLLECT_ICON_TEXTURES = {
@@ -748,170 +641,18 @@ const COLLECT_ICON_TEXTURES = {
 }
 
 func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary) -> Control:
-	var btn = TextureButton.new()
-	btn.custom_minimum_size = Vector2(56, 56)
-	btn.size = Vector2(56, 56)
-	
-	var bg = Panel.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(1.0, 1.0, 1.0, 0.95)
-	style.corner_radius_top_left = 28
-	style.corner_radius_top_right = 28
-	style.corner_radius_bottom_left = 28
-	style.corner_radius_bottom_right = 28
-	style.border_width_left = 3
-	style.border_width_top = 3
-	style.border_width_right = 3
-	style.border_width_bottom = 3
-	
-	# Determine border color based on resource type
-	var res_type = def.get("produces", "gold")
-	if res_type == "gold":
-		style.border_color = Color(0.9, 0.75, 0.2)
-	elif res_type == "wood":
-		style.border_color = Color(0.45, 0.7, 0.3)
-	elif res_type == "ore":
-		style.border_color = Color(0.6, 0.65, 0.7)
-	else:
-		style.border_color = Color(0.5, 0.5, 0.5)
-		
-	style.shadow_color = Color(0, 0, 0, 0.2)
-	style.shadow_size = 4
-	style.shadow_offset = Vector2(0, 3)
-	bg.add_theme_stylebox_override("panel", style)
-	btn.add_child(bg)
-	
-	# Resource Icon inside
-	var tex_rect = TextureRect.new()
-	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-	tex_rect.offset_left = 10
-	tex_rect.offset_top = 10
-	tex_rect.offset_right = -10
-	tex_rect.offset_bottom = -10
-	tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	
-	var tex_path = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
-	var tex = load(tex_path)
-	if tex:
-		tex_rect.texture = tex
-	btn.add_child(tex_rect)
-	
-	btn.pressed.connect(func(): _click_collect_icon(btn, b, res_type))
-	
-	if world_ui_canvas:
-		world_ui_canvas.add_child(btn)
-	else:
-		push_warning("world_ui_canvas not valid")
-		
-	# Spawn pop-up animation
-	btn.pivot_offset = Vector2(28, 28)
-	btn.set_meta("anim_scale", 0.0)
-	var tw = btn.create_tween().set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_method(func(v): btn.set_meta("anim_scale", v), 0.0, 1.0, 0.4)
-	
-	return btn
+	return _production._create_collect_icon(b, building_node, def)
 
 
 func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
-	var start_pos = btn.global_position + btn.size / 2.0
-	btn.visible = false
-	btn.set_meta("anim_scale", 0.0) # Hide completely until refilled
-	
-	_spawn_collection_flying_icon(start_pos, res_type)
-	_collect_and_animate(b, res_type)
+	_production._click_collect_icon(btn, b, res_type)
 
 func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void:
-	var tex_path = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
-	var tex = load(tex_path)
-	if not tex: return
-
-	var screen_w = get_viewport().get_visible_rect().size.x
-	var target_pos = Vector2(screen_w - 360.0, 40.0)
-	if res_type == "wood":
-		target_pos = Vector2(screen_w - 220.0, 40.0)
-	elif res_type == "ore":
-		target_pos = Vector2(screen_w - 80.0, 40.0)
-	if not OS.has_feature("web") and is_instance_valid(gold_label) and gold_label.is_visible_in_tree():
-		if res_type == "gold" and is_instance_valid(gold_label): target_pos = gold_label.get_global_rect().get_center()
-		elif res_type == "wood" and is_instance_valid(wood_label): target_pos = wood_label.get_global_rect().get_center()
-		elif res_type == "ore" and is_instance_valid(ore_label): target_pos = ore_label.get_global_rect().get_center()
-
-	var amount = 10
-	for i in range(amount):
-		var flying = TextureRect.new()
-		flying.texture = tex
-		flying.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		flying.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		flying.size = Vector2(56, 56)
-		flying.pivot_offset = Vector2(28, 28)
-		flying.global_position = start_pos - flying.size / 2.0
-		flying.scale = Vector2.ZERO # Hide initially
-		
-		# Prevent interactions
-		flying.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		
-		if world_ui_canvas:
-			world_ui_canvas.add_child(flying)
-		else:
-			add_child(flying)
-			
-		var tw = flying.create_tween()
-		var delay = i * 0.04 # 40ms stagger between each icon
-		
-		# Stage 1: Burst outwards
-		var random_offset = Vector2(randf_range(-90, 90), randf_range(-50, -110))
-		var peak_pos = start_pos + random_offset
-		var pop_dur = 0.25 + randf() * 0.1
-		
-		tw.parallel().tween_property(flying, "global_position", peak_pos, pop_dur).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT).set_delay(delay)
-		tw.parallel().tween_property(flying, "scale", Vector2(1.5, 1.5), pop_dur * 0.5).set_delay(delay)
-		tw.parallel().tween_property(flying, "scale", Vector2(1.0, 1.0), pop_dur * 0.5).set_delay(delay + pop_dur * 0.5)
-		
-		# Stage 2: Fly to target
-		var fly_dur = 0.5 + randf() * 0.2
-		tw.chain().parallel().tween_property(flying, "global_position", target_pos, fly_dur).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-		tw.parallel().tween_property(flying, "scale", Vector2(1.0, 1.0), fly_dur)
-		tw.parallel().tween_property(flying, "modulate:a", 0.0, fly_dur * 0.2).set_delay(fly_dur * 0.8)
-		
-		tw.chain().tween_callback(flying.queue_free)
+	_production._spawn_collection_flying_icon(start_pos, res_type)
 
 
 func _collect_and_animate(b: Dictionary, res_type: String) -> void:
-	var server_id = b.get("server_id", -1)
-	var local_amount = int(b.get("stored", 0.0))
-	if local_amount <= 0: return # Already zero
-	b["stored"] = 0.0 # reset locally immediately
-	
-	var old_val = int(resources.get(res_type, 0))
-	var target_val = old_val + local_amount
-	var net = _net
-	
-	# Fetch exact value from server
-	if net and net.has_token():
-		var result = await net.collect_resources(server_id)
-		if result.has("error"): return
-		if result.has("resources"):
-			target_val = int(result.resources.get(res_type, target_val))
-			# Instantly sync other resources to avoid bugs
-			for k in ["gold", "wood", "ore"]:
-				if k != res_type and result.resources.has(k):
-					resources[k] = result.resources[k]
-	else:
-		# Offline fallback
-		target_val = old_val + local_amount
-		
-	# Tween the visual resource value over 1.2s to match the flight duration of all 10 items
-	var tw = create_tween().set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_method(func(v: int):
-		resources[res_type] = v
-		_update_resource_ui()
-		var bridge = _bridge
-		if bridge: bridge.send_to_react("resources", resources)
-	, old_val, target_val, 1.2)
+	_production._collect_and_animate(b, res_type)
 
 
 
@@ -3312,100 +3053,21 @@ func _refresh_port_panel() -> void:
 
 
 func _buy_ship() -> void:
-	var lvl: int = selected_building.get("level", 1)
-	_buy_ship_level(lvl)
+	_port._buy_ship()
 
 func _buy_ship_level(ship_lvl: int) -> void:
-	if resources.get("gold", 0) < SHIP_COST_GOLD:
-		return
-	var port_node: Node3D = selected_building.get("node", null)
-	if not is_instance_valid(port_node):
-		return
-	if port_node.has_meta("has_ship"):
-		return
-	resources["gold"] -= SHIP_COST_GOLD
-	_update_resource_ui()
-	port_node.set_meta("has_ship", true)
-	port_node.set_meta("ship_level", ship_lvl)
-	port_node.set_meta("ship_troops", [])
-	owned_ships += 1
-	# Override selected_building level to spawn correct ship model
-	var old_level = selected_building.get("level", 1)
-	selected_building["level"] = ship_lvl
-	_spawn_port_ship()
-	selected_building["level"] = old_level
-	_refresh_port_panel()
-	var bridge: Node = _bridge
-	if bridge:
-		bridge.send_to_react("resources", {
-			"gold": resources.get("gold", 0),
-			"wood": resources.get("wood", 0),
-			"ore": resources.get("ore", 0),
-		})
+	_port._buy_ship_level(ship_lvl)
 
 
 func _load_troop_to_ship(troop_name: String) -> void:
-	var port_node: Node3D = selected_building.get("node", null)
-	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
-		return
-	var ship_level: int = port_node.get_meta("ship_level", 1)
-	var ship_troops: Array = port_node.get_meta("ship_troops", [])
-	if ship_troops.size() >= ship_level:
-		return  # Ship is full
-	ship_troops.append(troop_name)
-	port_node.set_meta("ship_troops", ship_troops)
-	_refresh_port_panel()
+	_port._load_troop_to_ship(troop_name)
 
 func _animate_main_ship() -> void:
-	# Determine water level
-	var water = get_tree().root.find_child("Water", true, false)
-	if water:
-		_water_y = water.global_position.y
-	var _root = get_tree().root
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = _root.find_child("MainShipAttack", true, false)
-	if not _ship_base_node or not is_instance_valid(_ship_base_node):
-		_ship_base_node = _root.find_child("MainShipBase", true, false)
-	var attack_ship = _ship_attack_node
-	var base_ship = _ship_base_node
-	# Set ships to water level
-	if attack_ship:
-		attack_ship.visible = false
-		attack_ship.global_position.y = _water_y + 0.12 - 0.03
-	if base_ship:
-		base_ship.visible = true
-		base_ship.global_position.y = _water_y + 0.09
-		base_ship.rotation.y = deg_to_rad(-135.8)
+	_port._animate_main_ship()
 
 
 func _spawn_port_ship(b_override: Dictionary = {}) -> void:
-	var b: Dictionary = b_override if b_override.size() > 0 else selected_building
-	if b.size() == 0:
-		return
-	var port_node: Node3D = b.get("node", null)
-	if not is_instance_valid(port_node):
-		return
-	var port_level: int = b.get("level", 1)
-	var model_idx = clampi(port_level - 1, 0, SHIP_MODELS.size() - 1)
-	var ship_res = load(SHIP_MODELS[model_idx])
-	if ship_res == null:
-		return
-	var ship = ship_res.instantiate()
-	var s = SHIP_DISPLAY_SCALE
-	ship.scale = Vector3(s, s, s)
-	get_tree().current_scene.add_child(ship)
-	# Mark this port as having a ship
-	port_node.set_meta("has_ship", true)
-	# Place ship in front of the port at water level
-	var port_pos = port_node.global_position
-	var port_rot_y = port_node.global_rotation.y
-	var forward = Vector3(sin(port_rot_y), 0, cos(port_rot_y))
-	var ship_dist = [0.35, 0.35, 0.4, 0.57][clampi(port_level, 0, 3)]
-	ship.global_position = port_pos + forward * ship_dist
-	ship.global_position.y = _water_y - 0.03
-	ship.global_rotation.y = port_rot_y + PI * 0.5
-	# Store ship node reference on port for easy retrieval
-	port_node.set_meta("ship_node", ship)
+	_port._spawn_port_ship(b_override)
 
 
 func _create_barracks_panel() -> void:
@@ -3728,14 +3390,7 @@ func _upgrade_troop(troop_name: String) -> void:
 
 
 func _get_total_ship_capacity() -> int:
-	var total: int = 0
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		for b in bs.placed_buildings:
-			if b.get("id") == "port":
-				var pnode = b.get("node", null)
-				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					total += pnode.get_meta("ship_level", 1)
-	return total
+	return _port._get_total_ship_capacity()
 
 
 func _buy_troop(troop_name: String) -> void:
@@ -3799,293 +3454,37 @@ func _on_attack_pressed() -> void:
 
 
 func _get_all_port_ships() -> Array:
-	var ships: Array = []
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		for b in bs.placed_buildings:
-			if b.get("id") == "port":
-				var pnode = b.get("node", null)
-				if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
-					var ship = pnode.get_meta("ship_node")
-					if is_instance_valid(ship):
-						ships.append(ship)
-	return ships
+	return _port._get_all_port_ships()
 
 
 func _sail_ships_away() -> void:
-	var _r = get_tree().root
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not _ship_base_node or not is_instance_valid(_ship_base_node):
-		_ship_base_node = _r.find_child("MainShipBase", true, false)
-
-	var sailing_ships: Array = []
-	if _ship_base_node and is_instance_valid(_ship_base_node):
-		sailing_ships.append(_ship_base_node)
-	# MainShipAttack stays hidden on home base — only appears on enemy island
-	sailing_ships.append_array(_get_all_port_ships())
-
-	_saved_ship_transforms.clear()
-	for ship in sailing_ships:
-		if is_instance_valid(ship):
-			_saved_ship_transforms.append({"node": ship, "pos": ship.global_position, "rot_y": ship.rotation.y})
-
-	_saved_port_ships.clear()
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		for b in bs.placed_buildings:
-			if b.get("id") == "port":
-				var pnode = b.get("node", null)
-				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					_saved_port_ships.append({
-						"grid_pos": b.grid_pos,
-						"bs": bs,
-						"ship_level": pnode.get_meta("ship_level", 1),
-						"ship_troops": pnode.get_meta("ship_troops", []),
-					})
-
-	# All ships sail straight forward (their current facing direction, no rotation)
-	if sailing_ships.size() > 0:
-		var sail_tween = create_tween().set_parallel(true)
-		for ship in sailing_ships:
-			if not is_instance_valid(ship):
-				continue
-			# Sail direction: +X, -Z (toward open sea)
-			var forward: Vector3 = Vector3(1, 0, -1).normalized()
-			var target_pos = ship.global_position + forward * 4.0
-			target_pos.y = ship.global_position.y
-			sail_tween.tween_property(ship, "global_position", target_pos, 2.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-		await sail_tween.finished
-
-	for ship in sailing_ships:
-		if is_instance_valid(ship):
-			ship.visible = false
+	await _battle._sail_ships_away()
 
 
 func _restore_ships_and_troops() -> void:
-	for data in _saved_ship_transforms:
-		var ship = data.get("node")
-		if is_instance_valid(ship):
-			ship.global_position = data.pos
-			ship.rotation.y = data.rot_y
-			ship.visible = true
-	_saved_ship_transforms.clear()
-	if _ship_attack_node:
-		_ship_attack_node.visible = false
-	if _ship_base_node:
-		_ship_base_node.visible = true
-	for ht in _home_troops:
-		var troop = ht.get("node")
-		if is_instance_valid(troop):
-			troop.visible = true
-			troop.set_process(true)
-			if "state" in troop:
-				troop.state = 0  # WanderState.IDLE
+	_battle._restore_ships_and_troops()
 
 
 ## Called after ships already sailed and clouds closed — skips those phases
 func _switch_to_enemy_island_after_sail() -> void:
-	# Initialize battle replay recorder
-	_battle_replay.clear()
-	_battle_start_time = Time.get_ticks_msec() / 1000.0
-	_cannon_energy = 10
-	_cannon_next_cost = 1
-	_battle_replay.append({
-		"type": "battle_start",
-		"grid_config": {
-			"grid_width": grid_width,
-			"grid_height": grid_height,
-			"cell_size": cell_size,
-			"grid_extent_x": grid_extent_x,
-			"grid_extent_z": grid_extent_z,
-			"grid_center_x": grid_center.x,
-			"grid_center_z": grid_center.z,
-			"grid_rotation": grid_rotation,
-		}
-	})
-
-	if _ship_attack_node:
-		_ship_attack_node.visible = true
-
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		bs._hide_all_collect_icons()
-		bs.is_viewing_enemy = true
-	var bridge = _bridge
-	if bridge:
-		bridge.send_to_react("enemy_mode", {
-			"active": true,
-			"name": enemy_info.get("name", "???"),
-			"trophies": enemy_info.get("trophies", 0),
-		})
-
-	_preload_explosion_textures()
-
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		bs._destroy_all_buildings()
-
-	if enemy_info.has("buildings") and enemy_info.buildings is Array:
-		for bs in get_tree().get_nodes_in_group("building_systems"):
-			bs._load_buildings_from_server(enemy_info.buildings)
-
-	if build_button:
-		build_button.visible = false
-	if find_button:
-		find_button.visible = false
-	if shop_panel:
-		shop_panel.visible = false
-	_deselect_building()
-
-	if canvas:
-		enemy_label = Label.new()
-		enemy_label.text = "Attacking: %s  [%d trophies]" % [enemy_info.get("name", "???"), enemy_info.get("trophies", 0)]
-		enemy_label.anchor_left = 0.5
-		enemy_label.anchor_right = 0.5
-		enemy_label.anchor_top = 1.0
-		enemy_label.anchor_bottom = 1.0
-		enemy_label.offset_left = -200
-		enemy_label.offset_right = 200
-		enemy_label.offset_top = -50
-		enemy_label.offset_bottom = -20
-		enemy_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		enemy_label.add_theme_font_size_override("font_size", 22)
-		enemy_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-		canvas.add_child(enemy_label)
-
-		return_button = Button.new()
-		return_button.text = "Return Home"
-		return_button.custom_minimum_size = Vector2(300, 120)
-		return_button.anchor_left = 1.0
-		return_button.anchor_right = 1.0
-		return_button.anchor_top = 1.0
-		return_button.anchor_bottom = 1.0
-		return_button.offset_left = -320
-		return_button.offset_right = -20
-		return_button.offset_top = -140
-		return_button.offset_bottom = -20
-		_style_button(return_button, Color(0.5, 0.35, 0.1), Color(0.6, 0.45, 0.15))
-		return_button.pressed.connect(_return_home)
-		canvas.add_child(return_button)
-
-	# Cloud reveal on enemy island
-	var cloud = _get_or_create_cloud()
-	cloud.reveal()
-	await cloud.reveal_finished
-	var bridge2 = _bridge
-	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": false})
-
-	if _ship_attack_node and is_instance_valid(_ship_attack_node):
-		_ship_attack_node.visible = true
-
-	var attack_system = get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode()
+	_battle._switch_to_enemy_island_after_sail()
 
 
 func _find_nearest_port_with_ship(from_pos: Vector3) -> Vector3:
-	var best_pos = Vector3.INF
-	var best_dist = INF
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		for b in bs.placed_buildings:
-			if b.get("id") == "port":
-				var pnode = b.get("node", null)
-				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
-					var d = from_pos.distance_to(pnode.global_position)
-					if d < best_dist:
-						best_dist = d
-						best_pos = pnode.global_position
-	return best_pos
+	return _port._find_nearest_port_with_ship(from_pos)
 
 
 func _on_find_pressed() -> void:
-	if is_viewing_enemy:
-		return
-	var net: Node = _net
-	if not net or not net.has_token():
-		print("Not logged in")
-		return
-
-	# Disable button while searching
-	if find_button:
-		find_button.disabled = true
-		find_button.text = "Boarding..."
-
-	# Phase 1: Send all home troops to their nearest port
-	var pending_count: int = 0
-	for ht in _home_troops:
-		var troop = ht.get("node")
-		if not is_instance_valid(troop) or not troop.visible:
-			continue
-		var port_pos = _find_nearest_port_with_ship(troop.global_position)
-		if port_pos == Vector3.INF:
-			troop.visible = false
-			continue
-		if troop.has_method("board_ship"):
-			pending_count += 1
-			troop.board_ship(port_pos)
-			troop.boarded.connect(func():
-				pending_count -= 1
-			, CONNECT_ONE_SHOT)
-		else:
-			troop.visible = false
-
-	# Wait for all troops to board (max 6 seconds timeout)
-	var wait_timer: float = 0.0
-	while pending_count > 0 and wait_timer < 6.0:
-		await get_tree().process_frame
-		wait_timer += get_process_delta_time()
-
-	# Hide any remaining troops
-	for ht in _home_troops:
-		var troop = ht.get("node")
-		if is_instance_valid(troop):
-			troop.visible = false
-
-	# Phase 2: Ships sail away
-	if find_button:
-		find_button.text = "Sailing..."
-	await _sail_ships_away()
-
-	# Phase 3: Cloud transition
-	var bridge2 = _bridge
-	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": true})
-	var cloud = _get_or_create_cloud()
-	cloud.close()
-	await cloud.close_finished
-
-	# Phase 4: Search for enemy
-	if find_button:
-		find_button.text = "Searching..."
-
-	var result: Dictionary = await net.find_enemy()
-
-	if find_button:
-		find_button.disabled = false
-		find_button.text = "Find Enemy"
-
-	if result.has("error"):
-		print("No enemy found: ", result.error)
-		# Reveal cloud, restore ships & troops
-		cloud.reveal()
-		await cloud.reveal_finished
-		if bridge2:
-			bridge2.send_to_react("cloud_transition", {"visible": false})
-		_restore_ships_and_troops()
-		return
-
-	enemy_info = result
-	_switch_to_enemy_island_after_sail()
+	await _battle._on_find_pressed()
 
 
 ## Cannon energy is tracked client-side in replay model.
 ## Energy: starts at 10, +2 per building destroyed, shot cost escalates: 1,2,3,4...
 func _on_building_destroyed_energy() -> void:
-	_cannon_energy += 2
-	_update_cannon_energy_ui()
+	_cannon._on_building_destroyed_energy()
 
 func _update_cannon_energy_ui() -> void:
-	var bridge: Node = _bridge
-	if bridge:
-		bridge.send_to_react("cannon_energy", {"energy": _cannon_energy, "next_cost": _cannon_next_cost})
+	_cannon._update_cannon_energy_ui()
 
 
 func _get_or_create_cloud() -> Node:
@@ -4103,826 +3502,92 @@ func _get_or_create_cloud() -> Node:
 
 
 func _hide_all_collect_icons() -> void:
-	for b in placed_buildings:
-		var icon = b.get("_collect_icon")
-		if icon and is_instance_valid(icon):
-			icon.visible = false
-			icon.queue_free()
-		b["_collect_icon"] = null
+	_production._hide_all_collect_icons()
 
 
 func _switch_to_enemy_island() -> void:
-	# Reset battle replay recorder
-	_battle_replay.clear()
-	_battle_start_time = Time.get_ticks_msec() / 1000.0
-	_cannon_energy = 10
-	_cannon_next_cost = 1
-	# Record grid config snapshot for server verification
-	_battle_replay.append({
-		"type": "battle_start",
-		"grid_config": {
-			"grid_width": grid_width,
-			"grid_height": grid_height,
-			"cell_size": cell_size,
-			"grid_extent_x": grid_extent_x,
-			"grid_extent_z": grid_extent_z,
-			"grid_center_x": grid_center.x,
-			"grid_center_z": grid_center.z,
-			"grid_rotation": grid_rotation,
-		}
-	})
-	# Instantly switch ships when button pressed
-	var _r = get_tree().root
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not _ship_base_node or not is_instance_valid(_ship_base_node):
-		_ship_base_node = _r.find_child("MainShipBase", true, false)
-	if _ship_attack_node:
-		_ship_attack_node.visible = true
-	if _ship_base_node:
-		_ship_base_node.visible = false
-
-	# Hide home troops
-	for ht in _home_troops:
-		if is_instance_valid(ht.get("node")):
-			ht.node.visible = false
-
-	# Hide collect icons before switching
-	for bs in _building_systems:
-		bs._hide_all_collect_icons()
-		bs.is_viewing_enemy = true
-	var bridge = _bridge
-	if bridge:
-		var enemy_res: Dictionary = enemy_info.get("resources", {})
-		bridge.send_to_react("enemy_mode", {
-			"active": true,
-			"name": enemy_info.get("name", "???"),
-			"trophies": enemy_info.get("trophies", 0),
-			"gold": enemy_res.get("gold", 0),
-			"wood": enemy_res.get("wood", 0),
-			"ore": enemy_res.get("ore", 0),
-		})
-
-	# Cloud close animation — hide React UI during transition
-	var bridge2 = _bridge
-	if bridge2:
-		bridge2.send_to_react("cloud_transition", {"visible": true})
-	var cloud = _get_or_create_cloud()
-	cloud.close()
-	await cloud.close_finished
-	_preload_explosion_textures()
-
-	# Clear ALL building systems (including port grid)
-	for bs in _building_systems:
-		bs._destroy_all_buildings()
-
-	# Load enemy buildings on all grids
-	if enemy_info.has("buildings") and enemy_info.buildings is Array:
-		for bs in _building_systems:
-			bs._load_buildings_from_server(enemy_info.buildings)
-
-	# Hide home UI, show enemy UI
-	if build_button:
-		build_button.visible = false
-	if find_button:
-		find_button.visible = false
-	if shop_panel:
-		shop_panel.visible = false
-	_deselect_building()
-
-	if canvas:
-		# Show enemy name label
-		enemy_label = Label.new()
-		enemy_label.text = "Attacking: %s  [%d trophies]" % [enemy_info.get("name", "???"), enemy_info.get("trophies", 0)]
-		enemy_label.anchor_left = 0.5
-		enemy_label.anchor_right = 0.5
-		enemy_label.anchor_top = 1.0
-		enemy_label.anchor_bottom = 1.0
-		enemy_label.offset_left = -200
-		enemy_label.offset_right = 200
-		enemy_label.offset_top = -50
-		enemy_label.offset_bottom = -20
-		enemy_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		enemy_label.add_theme_font_size_override("font_size", 22)
-		enemy_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-		canvas.add_child(enemy_label)
-
-		# Show return button
-		return_button = Button.new()
-		return_button.text = "Return Home"
-		return_button.custom_minimum_size = Vector2(300, 120)
-		return_button.anchor_left = 1.0
-		return_button.anchor_right = 1.0
-		return_button.anchor_top = 1.0
-		return_button.anchor_bottom = 1.0
-		return_button.offset_left = -320
-		return_button.offset_right = -20
-		return_button.offset_top = -140
-		return_button.offset_bottom = -20
-		_style_button(return_button, Color(0.5, 0.35, 0.1), Color(0.6, 0.45, 0.15))
-		return_button.pressed.connect(_return_home)
-		canvas.add_child(return_button)
-
-	# Cloud reveal animation
-	cloud.reveal()
-	await cloud.reveal_finished
-	if bridge:
-		bridge.send_to_react("cloud_transition", {"visible": false})
-
-	# Auto enter attack mode
-	var attack_system = get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode()
+	await _battle._switch_to_enemy_island()
 
 
 ## Start replay playback — loads buildings snapshot and replays recorded actions.
 func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String) -> void:
-	# Unpause tree — panel overlay pauses it, but replay needs timers
-	get_tree().paused = false
-	_replay_active = true
-	_replay_actions = replay_data
-	_replay_buildings_snapshot = buildings_snapshot
-
-	# Reuse enemy island setup — fake enemy_info
-	enemy_info = {"name": attacker_name, "trophies": 0, "buildings": buildings_snapshot}
-
-	# Set viewing enemy flag
-	for bs in _building_systems:
-		bs._hide_all_collect_icons()
-		bs.is_viewing_enemy = true
-
-	var bridge = _bridge
-	if bridge:
-		bridge.send_to_react("enemy_mode", {
-			"active": true,
-			"name": "Replay: " + attacker_name,
-			"trophies": 0,
-			"is_replay": true,
-		})
-		bridge.send_to_react("cloud_transition", {"visible": true})
-
-	# Show attack ship
-	var _r = get_tree().root
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = _r.find_child("MainShipAttack", true, false)
-	if not _ship_base_node or not is_instance_valid(_ship_base_node):
-		_ship_base_node = _r.find_child("MainShipBase", true, false)
-	if _ship_attack_node:
-		_ship_attack_node.visible = true
-	if _ship_base_node:
-		_ship_base_node.visible = false
-
-	# Hide home troops
-	for ht in _home_troops:
-		if is_instance_valid(ht.get("node")):
-			ht.node.visible = false
-
-	# Cloud transition
-	var cloud = _get_or_create_cloud()
-	cloud.close()
-	await cloud.close_finished
-	_preload_explosion_textures()
-
-	# Load defender buildings from snapshot
-	for bs in _building_systems:
-		bs._destroy_all_buildings()
-	for bs in _building_systems:
-		bs._load_buildings_from_server(buildings_snapshot)
-
-	# Hide home UI
-	if build_button:
-		build_button.visible = false
-	if find_button:
-		find_button.visible = false
-	if shop_panel:
-		shop_panel.visible = false
-	_deselect_building()
-
-	# Cloud reveal
-	cloud.reveal()
-	await cloud.reveal_finished
-	if bridge:
-		bridge.send_to_react("cloud_transition", {"visible": false})
-
-	# Initialize cannon energy for replay
-	_cannon_energy = 10
-	_cannon_next_cost = 1
-
-	# Normal speed for replay
-	Engine.time_scale = 1.0
-
-	# Start replaying actions (do NOT enter attack mode — player can't interact)
-	_replay_playback()
+	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name)
 
 
 ## Plays back recorded actions at their original timestamps.
 func _replay_playback() -> void:
-	# Filter only game actions (place_ship, cannon_fire)
-	var actions: Array = []
-	for a in _replay_actions:
-		if a.get("type", "") in ["place_ship", "cannon_fire"]:
-			actions.append(a)
-
-	if actions.is_empty():
-		_replay_active = false
-		return
-
-	var attack_system: Node = get_node_or_null("../AttackSystem")
-	# Do NOT enter attack mode — replay is view-only, no player interaction
-
-	var prev_t: float = 0.0
-	for i in actions.size():
-		if not _replay_active or not is_instance_valid(self):
-			return
-		var action: Dictionary = actions[i]
-		var t: float = action.get("t", 0.0)
-		var delay: float = t - prev_t
-		if delay > 0:
-			await get_tree().create_timer(delay).timeout
-		if not _replay_active or not is_instance_valid(self):
-			return
-		prev_t = t
-
-		match action.get("type", ""):
-			"place_ship":
-				_replay_place_ship(action, attack_system)
-			"cannon_fire":
-				_replay_cannon_fire(action)
-
-	# Wait for combat to finish — all troops dead or town hall destroyed
-	while _replay_active and is_instance_valid(self):
-		await get_tree().create_timer(0.5).timeout
-		if not _replay_active:
-			return
-		# Check if town hall destroyed
-		var th_alive: bool = false
-		for bs in _building_systems:
-			for b in bs.placed_buildings:
-				if b.get("id", "") == "town_hall" and b.get("hp", 0) > 0:
-					th_alive = true
-					break
-		if not th_alive:
-			break
-		# Check if any troops still alive
-		var troops_alive: int = BaseTroop._get_troops_cached().size()
-		if troops_alive == 0:
-			break
-	# Small delay after battle ends for visual clarity
-	if _replay_active:
-		await get_tree().create_timer(2.0).timeout
-	# Restore normal speed
-	Engine.time_scale = 1.0
-	# Show result
-	if _replay_active and _bridge:
-		_bridge.send_to_react("battle_result", {"type": "replay_end", "reason": "Replay finished"})
-	_replay_active = false
+	await _battle._replay_playback()
 
 
 ## Replay a ship placement action.
 func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
-	if not attack_system:
-		return
-	var troop_type: String = action.get("troopType", "knight")
-	var troop_level: int = action.get("troopLevel", 1)
-	# Map troop type name to SHIP_TROOPS index
-	var troop_idx: int = 0
-	for i in attack_system.SHIP_TROOPS.size():
-		var script_name: String = attack_system.SHIP_TROOPS[i].script.get_file().get_basename()
-		if script_name == troop_type:
-			troop_idx = i
-			break
-	attack_system._next_troop_idx = troop_idx
-	# Override troop levels for this replay
-	var level_key: String = attack_system._script_to_troop_key(attack_system.SHIP_TROOPS[troop_idx].script)
-	var original_level: int = troop_levels.get(level_key, 1)
-	troop_levels[level_key] = troop_level
-	var hit: Vector3 = Vector3(action.get("x", 0.0), grid_y, action.get("z", 0.0))
-	attack_system._try_place_ship(hit)
-	# Restore original level
-	troop_levels[level_key] = original_level
+	_battle._replay_place_ship(action, attack_system)
 
 
 ## Replay a cannon fire action.
 func _replay_cannon_fire(action: Dictionary) -> void:
-	var server_id: int = action.get("buildingId", -1)
-	if server_id < 0:
-		return
-	# Find building by server_id
-	for bs in _building_systems:
-		for b in bs.placed_buildings:
-			if b.get("server_id", -1) == server_id:
-				_fire_ship_cannon(b)
-				return
+	_battle._replay_cannon_fire(action)
 
 
 func _start_attack_ship_waves(ship: Node3D) -> void:
-	_stop_attack_ship_waves()
-	var rock = create_tween().set_loops()
-	rock.tween_property(ship, "rotation:z", deg_to_rad(3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	rock.tween_property(ship, "rotation:z", deg_to_rad(-3.0), 1.0).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	var pitch = create_tween().set_loops()
-	pitch.tween_property(ship, "rotation:x", deg_to_rad(0.8), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	pitch.tween_property(ship, "rotation:x", deg_to_rad(-0.6), 1.2).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
-	_attack_ship_wave_tweens = [rock, pitch]
+	_cannon._start_attack_ship_waves(ship)
 
 
 func _stop_attack_ship_waves() -> void:
-	for tw in _attack_ship_wave_tweens:
-		if tw and tw.is_valid():
-			tw.kill()
-	_attack_ship_wave_tweens.clear()
+	_cannon._stop_attack_ship_waves()
 
 
 func _spawn_ship_flash(pos: Vector3) -> void:
-	# Load textures once
-	if _ship_flash_textures.is_empty():
-		for path in SHIP_FLASH_FRAMES:
-			var tex = load(path)
-			if tex:
-				_ship_flash_textures.append(tex)
-	# Create or reuse flash quad
-	if not _ship_flash or not is_instance_valid(_ship_flash):
-		_ship_flash = MeshInstance3D.new()
-		var quad = QuadMesh.new()
-		quad.size = Vector2(SHIP_FLASH_SCALE, SHIP_FLASH_SCALE)
-		quad.center_offset = Vector3(SHIP_FLASH_SCALE * 0.2, 0.0, 0.0)
-		_ship_flash.mesh = quad
-		var mat = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		mat.no_depth_test = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		if _ship_flash_textures.size() > 0:
-			mat.albedo_texture = _ship_flash_textures[0]
-		mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
-		_ship_flash.material_override = mat
-		get_tree().root.add_child(_ship_flash)
-	_ship_flash.global_position = pos
-	_ship_flash.visible = true
-	_ship_flash_timer = SHIP_FLASH_DURATION
-	var fmat = _ship_flash.material_override as StandardMaterial3D
-	fmat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
-	if _ship_flash_textures.size() > 0:
-		fmat.albedo_texture = _ship_flash_textures[0]
+	_cannon._spawn_ship_flash(pos)
 
 
 func _update_ship_flash(delta: float) -> void:
-	_ship_flash_timer -= delta
-	if _ship_flash_timer <= 0:
-		if _ship_flash and is_instance_valid(_ship_flash):
-			_ship_flash.visible = false
-		return
-	if not _ship_flash or not is_instance_valid(_ship_flash):
-		_ship_flash_timer = 0
-		return
-	var progress = 1.0 - clampf(_ship_flash_timer / SHIP_FLASH_DURATION, 0.0, 1.0)
-	# Swap texture frame
-	var frame_idx = clampi(int(progress * _ship_flash_textures.size()), 0, _ship_flash_textures.size() - 1)
-	var fmat = _ship_flash.material_override as StandardMaterial3D
-	if frame_idx < _ship_flash_textures.size():
-		fmat.albedo_texture = _ship_flash_textures[frame_idx]
-	# Fade out in last 40%
-	if progress > 0.6:
-		var fade = (1.0 - progress) / 0.4
-		fmat.albedo_color = Color(1.5 * fade, 1.2 * fade, 0.8 * fade, fade)
+	_cannon._update_ship_flash(delta)
 
 
 func _preload_explosion_textures() -> void:
-	if not _ship_explosion_textures.is_empty():
-		return
-	for i in range(1, SHIP_EXPLOSION_FRAME_COUNT + 1):
-		var tex = load(SHIP_EXPLOSION_FRAME_DIR % i)
-		if tex:
-			_ship_explosion_textures.append(tex)
+	_cannon._preload_explosion_textures()
 
 
 func _spawn_ship_explosion(pos: Vector3) -> void:
-	_preload_explosion_textures()
-	if _ship_explosion_textures.is_empty():
-		return
-	# Create or reuse explosion quad
-	if not _ship_explosion or not is_instance_valid(_ship_explosion):
-		_ship_explosion = MeshInstance3D.new()
-		var quad = QuadMesh.new()
-		quad.size = Vector2(SHIP_EXPLOSION_SCALE, SHIP_EXPLOSION_SCALE)
-		quad.center_offset = Vector3(0, SHIP_EXPLOSION_SCALE * 0.28, 0)
-		_ship_explosion.mesh = quad
-		var mat = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		mat.no_depth_test = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.albedo_texture = _ship_explosion_textures[0]
-		mat.albedo_color = Color(1.4, 1.1, 0.7, 1.0)
-		_ship_explosion.material_override = mat
-		get_tree().root.add_child(_ship_explosion)
-	_ship_explosion.global_position = pos
-	_ship_explosion.visible = true
-	_ship_explosion_timer = SHIP_EXPLOSION_DURATION
-	var emat = _ship_explosion.material_override as StandardMaterial3D
-	emat.albedo_texture = _ship_explosion_textures[0]
-	emat.albedo_color = Color(1.4, 1.1, 0.7, 1.0)
+	_cannon._spawn_ship_explosion(pos)
 
 
 func _update_ship_explosion(delta: float) -> void:
-	_ship_explosion_timer -= delta
-	if _ship_explosion_timer <= 0:
-		if _ship_explosion and is_instance_valid(_ship_explosion):
-			_ship_explosion.visible = false
-		return
-	if not _ship_explosion or not is_instance_valid(_ship_explosion):
-		_ship_explosion_timer = 0
-		return
-	var progress = 1.0 - clampf(_ship_explosion_timer / SHIP_EXPLOSION_DURATION, 0.0, 1.0)
-	var frame_idx = clampi(int(progress * _ship_explosion_textures.size()), 0, _ship_explosion_textures.size() - 1)
-	var emat = _ship_explosion.material_override as StandardMaterial3D
-	if frame_idx < _ship_explosion_textures.size():
-		emat.albedo_texture = _ship_explosion_textures[frame_idx]
-	# Fade out in last 25%
-	if progress > 0.75:
-		var fade = (1.0 - progress) / 0.25
-		emat.albedo_color = Color(1.4 * fade, 1.1 * fade, 0.7 * fade, fade)
+	_cannon._update_ship_explosion(delta)
 
 
 
 func _spawn_target_ring(pos: Vector3, b_def: Dictionary) -> void:
-	# Ring size based on building AABB — extends 40% beyond footprint
-	var half_x = b_def.get("cells", Vector2i(2, 2)).x * cell_size * 0.5
-	var half_z = b_def.get("cells", Vector2i(2, 2)).y * cell_size * 0.5
-	var radius = maxf(half_x, half_z) * 1.4
-	var ring = MeshInstance3D.new()
-	var torus = TorusMesh.new()
-	torus.inner_radius = radius * 0.06
-	torus.outer_radius = radius
-	torus.rings = 24
-	torus.ring_segments = 12
-	ring.mesh = torus
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(1.0, 1.0, 1.0, 0.85)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	ring.material_override = mat
-	get_tree().root.add_child(ring)
-	ring.global_position = Vector3(pos.x, grid_y + 0.005, pos.z)
-	ring.scale = Vector3(0.15, 0.15, 0.15)
-	var final_s = Vector3(1.0, 1.0, 1.0)
-	var tw = create_tween().set_parallel(true)
-	tw.tween_property(ring, "scale", final_s, 0.4).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-	tw.tween_property(mat, "albedo_color:a", 0.0, 0.5).set_delay(0.1).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tw.chain().tween_callback(func(): if is_instance_valid(ring): ring.queue_free())
+	_cannon._spawn_target_ring(pos, b_def)
 
 
 func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
-	var camera = BaseTroop._get_camera_cached()
-	if not camera:
-		return false
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = get_tree().root.find_child("MainShipAttack", true, false)
-	if not _ship_attack_node or not _ship_attack_node.visible:
-		return false
-	var screen_pos = camera.unproject_position(_ship_attack_node.global_position)
-	return mouse_pos.distance_to(screen_pos) < 80.0
+	return _cannon._check_ship_cannon_click(mouse_pos)
 
 
 func _enter_ship_cannon_mode() -> void:
-	_ship_cannon_mode = true
-	var bridge = get_node_or_null("/root/Bridge")
-	if bridge:
-		bridge.send_to_react("cannon_mode", {"active": true})
-	# Pause (not exit) attack mode so RMB doesn't cancel placement
-	var attack_system = get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("_pause_attack_mode"):
-		_cannon_paused_attack = attack_system.is_attack_mode
-		attack_system._pause_attack_mode()
-	else:
-		_cannon_paused_attack = false
-	if canvas and not _ship_cannon_label:
-		_ship_cannon_label = Label.new()
-		_ship_cannon_label.text = "Cannon mode — Click building to fire  |  Click sea to cancel"
-		_ship_cannon_label.anchor_left = 0.5
-		_ship_cannon_label.anchor_right = 0.5
-		_ship_cannon_label.anchor_top = 0.0
-		_ship_cannon_label.anchor_bottom = 0.0
-		_ship_cannon_label.offset_left = -300
-		_ship_cannon_label.offset_right = 300
-		_ship_cannon_label.offset_top = 20
-		_ship_cannon_label.offset_bottom = 55
-		_ship_cannon_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_ship_cannon_label.add_theme_font_size_override("font_size", 20)
-		_ship_cannon_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
-		canvas.add_child(_ship_cannon_label)
+	_cannon._enter_ship_cannon_mode()
 
 
 func _exit_ship_cannon_mode() -> void:
-	_ship_cannon_mode = false
-	var bridge = get_node_or_null("/root/Bridge")
-	if bridge:
-		bridge.send_to_react("cannon_mode", {"active": false})
-	if _ship_cannon_label and is_instance_valid(_ship_cannon_label):
-		_ship_cannon_label.queue_free()
-		_ship_cannon_label = null
-	# Restore attack placement mode if it was active before cannon
-	if _cannon_paused_attack:
-		_cannon_paused_attack = false
-		var attack_system = get_node_or_null("../AttackSystem")
-		if attack_system and attack_system.has_method("_resume_attack_mode"):
-			attack_system._resume_attack_mode()
+	_cannon._exit_ship_cannon_mode()
 
 
 func _fire_ship_cannon(bdata: Dictionary) -> void:
-	if _ship_cannon_cooldown > 0:
-		return
-	# Check cannon energy
-	if _cannon_energy < _cannon_next_cost:
-		return
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = get_tree().root.find_child("MainShipAttack", true, false)
-	if not _ship_attack_node:
-		return
-	var ship: Node3D = _ship_attack_node
-	var bnode: Node3D = bdata.get("node", null) as Node3D
-	if not bnode or not is_instance_valid(bnode):
-		return
-	# Record cannon fire in battle replay
-	var server_id: int = bdata.get("server_id", -1)
-	if is_viewing_enemy and server_id >= 0:
-		var t: float = Time.get_ticks_msec() / 1000.0 - _battle_start_time
-		_battle_replay.append({"t": t, "type": "cannon_fire", "buildingId": server_id})
-	# Deduct cannon energy
-	_cannon_energy -= _cannon_next_cost
-	_cannon_next_cost += 1
-	_update_cannon_energy_ui()
-	_ship_cannon_cooldown = SHIP_CANNON_RELOAD
-	var ball = MeshInstance3D.new()
-	var sphere = SphereMesh.new()
-	sphere.radius = 0.03
-	sphere.height = 0.06
-	ball.mesh = sphere
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.05, 0.05, 0.05)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ball.material_override = mat
-	# Add to root so global_position works correctly
-	get_tree().root.add_child(ball)
-	var start_pos = ship.global_position + Vector3(0, 0.15, 0)
-	ball.global_position = start_pos
-	# Target building center (matches target ring position)
-	var b_center: Vector3 = bnode.global_position
-	var b_def: Dictionary = building_defs.get(bdata.get("id", ""), {})
-	var tp: Vector3 = Vector3(b_center.x, b_center.y, b_center.z)
-	var dist: float = start_pos.distance_to(tp)
-	var flight_time: float = maxf(dist / SHIP_CANNON_SPEED, 1.5)
-	_ship_cannonballs.append({"node": ball, "bdata": bdata, "target_pos": tp, "start_pos": start_pos, "elapsed": 0.0, "flight_time": flight_time})
-	# Target ring centered on building (sized to its footprint)
-	_spawn_target_ring(b_center, b_def)
-	# Muzzle flash slightly toward target
-	var flash_dir = (tp - ball.global_position).normalized()
-	_spawn_ship_flash(ball.global_position + flash_dir * 0.225)
-	# Recoil — tiny kickback only
-	var recoil_dir = (ship.global_position - tp).normalized()
-	recoil_dir.y = 0
-	var orig_pos = ship.position
-	var recoil_pos = orig_pos + recoil_dir * 0.025
-	var tw = create_tween()
-	tw.tween_property(ship, "position", recoil_pos, 0.12).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_SINE)
-	tw.tween_property(ship, "position", orig_pos, 0.4).set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_SINE)
+	_cannon._fire_ship_cannon(bdata)
 
 
 func _update_ship_cannonballs(delta: float) -> void:
-	var i = _ship_cannonballs.size() - 1
-	while i >= 0:
-		var c = _ship_cannonballs[i]
-		if not is_instance_valid(c.node):
-			_ship_cannonballs.remove_at(i)
-			i -= 1
-			continue
-		c.elapsed += delta
-		var t = clampf(c.elapsed / c.flight_time, 0.0, 1.0)
-		# Lerp XZ, parabolic arc on Y
-		var flat_pos = c.start_pos.lerp(c.target_pos, t)
-		var arc_height = c.start_pos.distance_to(c.target_pos) * 0.35
-		var arc_y = 4.0 * arc_height * t * (1.0 - t)
-		c.node.global_position = Vector3(flat_pos.x, flat_pos.y + arc_y, flat_pos.z)
-		if t >= 1.0:
-			var bdata: Dictionary = c.bdata
-			bdata["hp"] = max(0, bdata.get("hp", 0) - SHIP_CANNON_DAMAGE)
-			if bdata["hp"] <= 0:
-				for bs in _building_systems:
-					if bdata in bs.placed_buildings:
-						bs.remove_building(bdata)
-						break
-			c.node.queue_free()
-			_spawn_ship_explosion(c.target_pos)
-			var cam_rig = get_tree().current_scene.find_child("CameraRig", true, false)
-			if cam_rig and cam_rig.has_method("add_trauma"):
-				cam_rig.add_trauma(0.4)
-			_ship_cannonballs.remove_at(i)
-		i -= 1
+	_cannon._update_ship_cannonballs(delta)
 
 
 func _on_town_hall_destroyed() -> void:
-	# Victory! Destroy ALL enemy buildings visually
-	for bs in _building_systems:
-		var to_destroy: Array = bs.placed_buildings.duplicate()
-		for b in to_destroy:
-			if b.id == "tombstone":
-				bs._remove_tombstone_skeletons(b)
-			if b.has("hp_bar") and is_instance_valid(b.hp_bar):
-				b.hp_bar.queue_free()
-			var icon: Control = b.get("_collect_icon")
-			if is_instance_valid(icon):
-				icon.queue_free()
-			if is_instance_valid(b.node):
-				_spawn_ship_explosion(b.node.global_position)
-				b.node.queue_free()
-		bs.placed_buildings.clear()
-		bs.grid.fill(false)
-	# Set all troops to victory state
-	for troop in get_tree().get_nodes_in_group("troops"):
-		if is_instance_valid(troop) and "state" in troop:
-			troop.state = troop.State.VICTORY
-	# Submit replay to server for verification + loot transfer
-	var net_node: Node = _net
-	var defender_id: String = enemy_info.get("id", "")
-	if net_node and net_node.has_token() and defender_id != "":
-		var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory")
-		var bridge: Node = _bridge
-		if result.has("error"):
-			# Server rejected — show error but still show victory screen without loot
-			if bridge:
-				bridge.send_to_react("battle_result", {
-					"type": "victory",
-					"loot": {},
-					"error": result.get("error", "") + " " + result.get("reason", ""),
-				})
-			return
-		var loot: Dictionary = result.get("loot", {})
-		if bridge:
-			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
-				bridge.send_to_react("resources_add", {
-					"gold": loot.get("gold", 0),
-					"wood": loot.get("wood", 0),
-					"ore": loot.get("ore", 0),
-				})
-			bridge.send_to_react("battle_result", {
-				"type": "victory",
-				"loot": loot,
-			})
-		return
-	# Fallback if no server — still show victory
-	var bridge2: Node = _bridge
-	if bridge2:
-		bridge2.send_to_react("battle_result", {"type": "victory", "loot": {}})
+	_battle._on_town_hall_destroyed()
 
 
 func _return_home() -> void:
-	if not is_viewing_enemy:
-		return
-	_replay_active = false
-	Engine.time_scale = 1.0
-	_exit_ship_cannon_mode()
-	# Hide attack ship, show base ship when returning home
-	var _r2 = get_tree().root
-	if not _ship_attack_node or not is_instance_valid(_ship_attack_node):
-		_ship_attack_node = _r2.find_child("MainShipAttack", true, false)
-	if not _ship_base_node or not is_instance_valid(_ship_base_node):
-		_ship_base_node = _r2.find_child("MainShipBase", true, false)
-	if _ship_attack_node:
-		_ship_attack_node.visible = false
-	if _ship_base_node:
-		_ship_base_node.visible = true
-	# Show home troops again
-	for ht in _home_troops:
-		if is_instance_valid(ht.get("node")):
-			ht.node.visible = true
-	for bs in _building_systems:
-		bs.is_viewing_enemy = false
-	var bridge = _bridge
-	if bridge:
-		bridge.send_to_react("enemy_mode", {"active": false})
-
-	# Free any in-flight cannonballs
-	for c in _ship_cannonballs:
-		if is_instance_valid(c.get("node")):
-			c.node.queue_free()
-	_ship_cannonballs.clear()
-
-	# Kill all spawned troops, ships, and skeleton guards immediately
-	for troop in get_tree().get_nodes_in_group("troops"):
-		if is_instance_valid(troop):
-			troop.remove_from_group("troops")
-			troop.set_process(false)
-			troop.queue_free()
-	for guard in get_tree().get_nodes_in_group("skeleton_guards"):
-		if is_instance_valid(guard):
-			guard.remove_from_group("skeleton_guards")
-			guard.set_process(false)
-			guard.queue_free()
-	for ship in get_tree().get_nodes_in_group("ships"):
-		if is_instance_valid(ship):
-			ship.queue_free()
-
-	# Exit attack mode
-	var attack_system = get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("exit_attack_mode"):
-		attack_system.exit_attack_mode()
-
-	# Wait one frame so queue_free takes effect before loading home buildings
-	await get_tree().process_frame
-
-	# Cloud close animation — hide React UI
-	if bridge:
-		bridge.send_to_react("cloud_transition", {"visible": true})
-	var cloud = _get_or_create_cloud()
-	cloud.close()
-	await cloud.close_finished
-
-	# Clear ALL building systems
-	for bs in _building_systems:
-		bs._destroy_all_buildings()
-
-	# Restore home buildings from server — login() emits auth_ok which triggers
-	# _on_server_auth_ok → _load_buildings_from_server on each BS automatically.
-	# So we only call login() and let the signal do the work.
-	var net: Node = _net
-	if net and net.has_token():
-		await net.login()
-		_update_player_name_label()
-
-	# Restore home UI
-	if build_button:
-		build_button.visible = true
-	if find_button:
-		find_button.visible = true
-	if attack_button:
-		attack_button.visible = true
-
-	# Clean up enemy UI
-	if enemy_label and is_instance_valid(enemy_label):
-		enemy_label.queue_free()
-		enemy_label = null
-	if return_button and is_instance_valid(return_button):
-		return_button.queue_free()
-		return_button = null
-
-	enemy_info = {}
-
-	# Cloud reveal animation
-	cloud.reveal()
-	await cloud.reveal_finished
-	if bridge:
-		bridge.send_to_react("cloud_transition", {"visible": false})
-
-	# Restore ships to original positions
-	for data in _saved_ship_transforms:
-		var ship = data.get("node")
-		if is_instance_valid(ship):
-			ship.global_position = data.pos
-			ship.rotation.y = data.rot_y
-			ship.visible = true
-	_saved_ship_transforms.clear()
-	if _ship_attack_node:
-		_ship_attack_node.visible = false
-	if _ship_base_node:
-		_ship_base_node.visible = true
-
-	# Re-link port ships to rebuilt ports
-	for data in _saved_port_ships:
-		var bs = data.get("bs")
-		var gp = data.get("grid_pos")
-		if bs and is_instance_valid(bs):
-			for b2 in bs.placed_buildings:
-				if b2.get("id") == "port" and b2.grid_pos == gp:
-					var pnode = b2.get("node", null)
-					if is_instance_valid(pnode):
-						pnode.set_meta("has_ship", true)
-						# Find the ship node from saved transforms
-						for st in _saved_ship_transforms:
-							pass  # already cleared above
-						# Re-find ship near this port
-						for child in get_tree().root.get_children():
-							if child is Node3D and child.global_position.distance_to(pnode.global_position) < 1.5:
-								if child != _ship_attack_node and child != _ship_base_node and child.scene_file_path in SHIP_MODELS:
-									pnode.set_meta("ship_node", child)
-									pnode.set_meta("ship_level", data.get("ship_level", 1))
-									pnode.set_meta("ship_troops", data.get("ship_troops", []))
-									break
-					break
-	_saved_port_ships.clear()
-
-	# Show home troops again
-	for ht in _home_troops:
-		var troop = ht.get("node")
-		if is_instance_valid(troop):
-			troop.visible = true
-			troop.set_process(true)
-			if "state" in troop:
-				troop.state = 0  # WanderState.IDLE
+	_battle._return_home()
 
 
 func _show_move_arrows(b: Dictionary) -> void:
