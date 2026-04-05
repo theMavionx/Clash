@@ -178,8 +178,8 @@ func _on_react_call(args: Array) -> void:
 
 func _handle_react_action(action: String, data: Dictionary) -> void:
 	var bs: Node = _get_building_system()
-	# During replay, only allow return_home and watch_replay
-	if bs and bs._replay_active and action not in ["return_home", "get_state"]:
+	# During replay, only allow return_home, replay_speed, and get_state
+	if bs and bs._replay_active and action not in ["return_home", "get_state", "replay_speed"]:
 		return
 	match action:
 		"get_state":
@@ -251,6 +251,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bsys._react_resource_positions = data
 		"ui_overlay":
 			_set_island_paused(data.get("active", false))
+		"replay_speed":
+			if bs and bs._replay_active:
+				var spd: float = clampf(float(data.get("speed", 1.0)), 0.5, 4.0)
+				Engine.time_scale = spd
 		"watch_replay":
 			if bs:
 				var replay_data: Array = data.get("replay_data", [])

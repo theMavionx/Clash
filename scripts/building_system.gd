@@ -630,8 +630,8 @@ func _process(delta: float) -> void:
 	if _ship_cannonballs.size() > 0:
 		_update_ship_cannonballs(delta)
 
-	# Detect defeat during attack — all troops dead, no more ships
-	if is_viewing_enemy and create_ui and name == "BuildingSystem":
+	# Detect defeat during attack — all troops dead, no more ships (skip during replay)
+	if is_viewing_enemy and not _replay_active and create_ui and name == "BuildingSystem":
 		var attack_system: Node = get_node_or_null("../AttackSystem")
 		var troops_alive_atk: bool = not BaseTroop._get_troops_cached().is_empty()
 		if troops_alive_atk:
@@ -2910,7 +2910,8 @@ func remove_building(b: Dictionary) -> void:
 	if idx < 0:
 		return
 	# Town Hall destroyed during attack → victory: destroy all buildings + loot 30%
-	if b.id == "town_hall" and is_viewing_enemy:
+	# Skip during replay — replay handles its own end screen
+	if b.id == "town_hall" and is_viewing_enemy and not _replay_active:
 		_on_town_hall_destroyed()
 		return
 	# Tombstone → kill all its skeleton guards
@@ -4307,8 +4308,8 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	_cannon_energy = 10
 	_cannon_next_cost = 1
 
-	# x2 speed for replay
-	Engine.time_scale = 2.0
+	# Normal speed for replay
+	Engine.time_scale = 1.0
 
 	# Start replaying actions (do NOT enter attack mode — player can't interact)
 	_replay_playback()
