@@ -277,34 +277,40 @@ router.get('/find-enemy', auth, (req, res) => {
 
 // ==================== BATTLE LOG ====================
 
-// Get attacks on the player's base (defense log)
+// Get battle log — both attacks on player's base AND player's own attacks
 router.get('/battle-log', auth, (req, res) => {
   const rows = db.db.prepare(`
-    SELECT r.id, r.attacker_id, r.claimed_result, r.verified_result,
+    SELECT r.id, r.attacker_id, r.defender_id, r.claimed_result, r.verified_result,
            r.loot_gold, r.loot_wood, r.loot_ore,
            r.sim_th_hp_pct, r.sim_buildings_destroyed, r.duration_sec,
            r.created_at, r.replay_data, r.buildings_snapshot,
-           p.name AS attacker_name, p.trophies AS attacker_trophies
+           pa.name AS attacker_name, pa.trophies AS attacker_trophies,
+           pd.name AS defender_name, pd.trophies AS defender_trophies
     FROM battle_replays r
-    LEFT JOIN players p ON p.id = r.attacker_id
-    WHERE r.defender_id = ? AND r.verified_result = 'accepted'
+    LEFT JOIN players pa ON pa.id = r.attacker_id
+    LEFT JOIN players pd ON pd.id = r.defender_id
+    WHERE (r.defender_id = ? OR r.attacker_id = ?) AND r.verified_result = 'accepted'
     ORDER BY r.created_at DESC
     LIMIT 50
-  `).all(req.player.id);
+  `).all(req.player.id, req.player.id);
 
-  res.json(rows.map(r => ({
-    id: r.id,
-    attacker_name: r.attacker_name || 'Unknown',
-    attacker_trophies: r.attacker_trophies || 0,
-    result: r.claimed_result,
-    loot: { gold: r.loot_gold, wood: r.loot_wood, ore: r.loot_ore },
-    th_hp_pct: r.sim_th_hp_pct,
-    buildings_destroyed: r.sim_buildings_destroyed,
-    duration: r.duration_sec,
-    created_at: r.created_at,
-    replay_data: r.replay_data ? JSON.parse(r.replay_data) : null,
-    buildings_snapshot: r.buildings_snapshot ? JSON.parse(r.buildings_snapshot) : null,
-  })));
+  res.json(rows.map(r => {
+    const isAttacker = r.attacker_id === req.player.id;
+    return {
+      id: r.id,
+      side: isAttacker ? 'attack' : 'defense',
+      opponent_name: isAttacker ? (r.defender_name || 'Unknown') : (r.attacker_name || 'Unknown'),
+      opponent_trophies: isAttacker ? (r.defender_trophies || 0) : (r.attacker_trophies || 0),
+      result: r.claimed_result,
+      loot: { gold: r.loot_gold, wood: r.loot_wood, ore: r.loot_ore },
+      th_hp_pct: r.sim_th_hp_pct,
+      buildings_destroyed: r.sim_buildings_destroyed,
+      duration: r.duration_sec,
+      created_at: r.created_at,
+      replay_data: r.replay_data ? JSON.parse(r.replay_data) : null,
+      buildings_snapshot: r.buildings_snapshot ? JSON.parse(r.buildings_snapshot) : null,
+    };
+  }));
 });
 
 // ==================== TROPHIES ====================

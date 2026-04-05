@@ -22,13 +22,14 @@ function BattleLogPanel({ onClose }) {
   const [battles, setBattles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
+  const [filter, setFilter] = useState('all'); // 'all' | 'attack' | 'defense'
 
   const handleWatchReplay = useCallback((battle) => {
     if (!battle.replay_data || !battle.buildings_snapshot) return;
     sendToGodot('watch_replay', {
       replay_data: battle.replay_data,
       buildings_snapshot: battle.buildings_snapshot,
-      attacker_name: battle.attacker_name,
+      attacker_name: battle.opponent_name,
     });
     onClose();
   }, [sendToGodot, onClose]);
@@ -42,12 +43,14 @@ function BattleLogPanel({ onClose }) {
       .catch(() => setLoading(false));
   }, []);
 
+  const filtered = filter === 'all' ? battles : battles.filter(b => b.side === filter);
+
   return (
     <>
       <div style={S.backdrop} onClick={onClose} />
       <div style={S.modal}>
         <div style={S.header}>
-          <span style={S.headerTitle}>Defense Log</span>
+          <span style={S.headerTitle}>Battle Log</span>
           <button style={S.closeBtn} onClick={onClose}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
               <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -55,42 +58,69 @@ function BattleLogPanel({ onClose }) {
           </button>
         </div>
 
+        {/* Filter tabs */}
+        <div style={S.filterRow}>
+          {[['all', 'All'], ['attack', 'My Attacks'], ['defense', 'Defenses']].map(([key, label]) => (
+            <button key={key} style={S.filterTab(filter === key)} onClick={() => setFilter(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div style={S.body}>
           {loading && <div style={S.empty}>Loading...</div>}
-          {!loading && battles.length === 0 && (
-            <div style={S.empty}>No attacks yet. Your base is safe!</div>
+          {!loading && filtered.length === 0 && (
+            <div style={S.empty}>No battles yet</div>
           )}
 
-          {battles.map((b) => {
+          {filtered.map((b) => {
+            const isAttack = b.side === 'attack';
             const isVictory = b.result === 'victory';
             const isExpanded = expanded === b.id;
             const totalLoot = (b.loot?.gold || 0) + (b.loot?.wood || 0) + (b.loot?.ore || 0);
             const thDmg = b.th_hp_pct != null ? Math.round((1 - b.th_hp_pct) * 100) : null;
 
+            // Badge logic
+            let badgeText, badgeDesc;
+            if (isAttack) {
+              badgeText = isVictory ? 'VICTORY' : 'DEFEAT';
+              badgeDesc = `vs ${b.opponent_name}`;
+            } else {
+              badgeText = isVictory ? 'RAIDED' : 'DEFENDED';
+              badgeDesc = `by ${b.opponent_name}`;
+            }
+
             return (
-              <div key={b.id} style={S.card} onClick={() => setExpanded(isExpanded ? null : b.id)}>
+              <div key={b.id} style={{
+                ...S.card,
+                borderColor: isAttack ? '#5b9bd5' : '#d4c8b0',
+                borderLeftWidth: 4,
+                borderLeftColor: isAttack ? '#3b7dd8' : '#E53935',
+              }} onClick={() => setExpanded(isExpanded ? null : b.id)}>
                 <div style={S.cardRow}>
-                  <div style={S.resultBadge(isVictory)}>
-                    {isVictory ? 'RAIDED' : 'DEFENDED'}
+                  <div style={S.sideBadge(isAttack, isVictory)}>
+                    {badgeText}
                   </div>
                   <div style={S.cardInfo}>
-                    <span style={S.attackerName}>{b.attacker_name}</span>
+                    <span style={S.opponentName}>{badgeDesc}</span>
                     <span style={S.time}>{timeAgo(b.created_at)}</span>
                   </div>
                   {totalLoot > 0 && (
-                    <span style={S.lootTotal}>-{fmt(totalLoot)}</span>
+                    <span style={{ ...S.lootTotal, color: isAttack ? '#43A047' : '#E53935' }}>
+                      {isAttack ? '+' : '-'}{fmt(totalLoot)}
+                    </span>
                   )}
                 </div>
 
                 {isExpanded && (
                   <div style={S.details}>
-                    {isVictory && b.loot && (
+                    {totalLoot > 0 && b.loot && (
                       <div style={S.detailRow}>
-                        <span style={S.detailLabel}>Stolen</span>
+                        <span style={S.detailLabel}>{isAttack ? 'Looted' : 'Stolen'}</span>
                         <span style={S.detailVal}>
-                          {b.loot.gold > 0 && <span style={{ color: '#e8b830' }}>{fmt(b.loot.gold)} gold</span>}
-                          {b.loot.wood > 0 && <span style={{ color: '#6ab344' }}> {fmt(b.loot.wood)} wood</span>}
-                          {b.loot.ore > 0 && <span style={{ color: '#8a9aaa' }}> {fmt(b.loot.ore)} ore</span>}
+                          {b.loot.gold > 0 && <span style={{ color: '#e8b830' }}>{fmt(b.loot.gold)} gold </span>}
+                          {b.loot.wood > 0 && <span style={{ color: '#6ab344' }}>{fmt(b.loot.wood)} wood </span>}
+                          {b.loot.ore > 0 && <span style={{ color: '#8a9aaa' }}>{fmt(b.loot.ore)} ore</span>}
                         </span>
                       </div>
                     )}
@@ -112,25 +142,22 @@ function BattleLogPanel({ onClose }) {
                         <span style={S.detailVal}>{Math.round(b.duration)}s</span>
                       </div>
                     )}
-                    {b.replay_data && (
-                      <div style={S.detailRow}>
-                        <span style={S.detailLabel}>Ships deployed</span>
-                        <span style={S.detailVal}>
-                          {(Array.isArray(b.replay_data) ? b.replay_data : []).filter(a => a.type === 'place_ship').length}
-                        </span>
-                      </div>
-                    )}
                     {b.replay_data && (() => {
                       const ships = (Array.isArray(b.replay_data) ? b.replay_data : []).filter(a => a.type === 'place_ship');
+                      if (ships.length === 0) return null;
                       const troops = {};
                       ships.forEach(s => { troops[s.troopType] = (troops[s.troopType] || 0) + 1; });
-                      const entries = Object.entries(troops);
-                      if (entries.length === 0) return null;
                       return (
-                        <div style={S.detailRow}>
-                          <span style={S.detailLabel}>Troops used</span>
-                          <span style={S.detailVal}>{entries.map(([t, c]) => `${t} x${c}`).join(', ')}</span>
-                        </div>
+                        <>
+                          <div style={S.detailRow}>
+                            <span style={S.detailLabel}>Ships</span>
+                            <span style={S.detailVal}>{ships.length}</span>
+                          </div>
+                          <div style={S.detailRow}>
+                            <span style={S.detailLabel}>Troops</span>
+                            <span style={S.detailVal}>{Object.entries(troops).map(([t, c]) => `${t} x${c}`).join(', ')}</span>
+                          </div>
+                        </>
                       );
                     })()}
                     {b.replay_data && b.buildings_snapshot && (
@@ -171,6 +198,17 @@ const S = {
     width: 30, height: 30, borderRadius: '50%', background: '#E53935', border: '3px solid #fff',
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
+  filterRow: {
+    display: 'flex', gap: 0, borderBottom: '3px solid #d4c8b0',
+  },
+  filterTab: (active) => ({
+    flex: 1, padding: '8px 0', border: 'none', cursor: 'pointer',
+    fontSize: 12, fontWeight: 800,
+    background: active ? '#fdf8e7' : '#e8dfc8',
+    color: active ? '#5C3A21' : '#a3906a',
+    borderBottom: active ? '3px solid #5C3A21' : '3px solid transparent',
+    marginBottom: -3,
+  }),
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
     overflowY: 'auto', scrollbarWidth: 'none',
@@ -181,15 +219,17 @@ const S = {
     cursor: 'pointer', transition: 'background 0.15s',
   },
   cardRow: { display: 'flex', alignItems: 'center', gap: 10 },
-  resultBadge: (isRaided) => ({
+  sideBadge: (isAttack, isVictory) => ({
     padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 900, letterSpacing: '0.5px',
-    background: isRaided ? '#E53935' : '#43A047',
+    background: isAttack
+      ? (isVictory ? '#3b7dd8' : '#6a8cba')
+      : (isVictory ? '#E53935' : '#43A047'),
     color: '#fff', textShadow: '0 1px 1px rgba(0,0,0,0.3)', flexShrink: 0,
   }),
   cardInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1 },
-  attackerName: { fontSize: 14, fontWeight: 900, color: '#5C3A21' },
+  opponentName: { fontSize: 14, fontWeight: 900, color: '#5C3A21' },
   time: { fontSize: 11, fontWeight: 700, color: '#a3906a' },
-  lootTotal: { fontSize: 14, fontWeight: 900, color: '#E53935', flexShrink: 0 },
+  lootTotal: { fontSize: 14, fontWeight: 900, flexShrink: 0 },
   details: {
     marginTop: 8, paddingTop: 8, borderTop: '2px solid #d4c8b0',
     display: 'flex', flexDirection: 'column', gap: 5,
