@@ -175,8 +175,8 @@ app.get('/trading-stats', async (req, res) => {
 </body></html>`);
 });
 
-// Admin panel — login + dashboard
-app.get('/admin', (req, res) => {
+// Admin panel — served under /api so it goes through the proxy
+app.get('/api/admin/panel', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
