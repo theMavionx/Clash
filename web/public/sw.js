@@ -9,7 +9,6 @@ const GODOT_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
-  // Don't wait for old SW — activate immediately
   self.skipWaiting();
 });
 
@@ -32,12 +31,13 @@ self.addEventListener('fetch', (event) => {
   const isGodotAsset = GODOT_ASSETS.some((path) => url.pathname === path);
   if (!isGodotAsset) return;
 
-  // Cache-first: serve from cache, fall back to network and cache the response
+  // Cache-first with streaming: serve from cache immediately, update in background
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(event.request).then((cached) => {
         if (cached) return cached;
 
+        // Not in cache — fetch and cache for next time
         return fetch(event.request).then((response) => {
           if (response.ok) {
             cache.put(event.request, response.clone());

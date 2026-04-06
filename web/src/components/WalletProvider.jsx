@@ -1,6 +1,7 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
+import { FarcasterSolanaProvider } from '@farcaster/mini-app-solana';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -47,12 +48,14 @@ export default function WalletProvider({ children }) {
   const rpc = useBestRpc();
 
   return (
-    <ConnectionProvider endpoint={rpc}>
-      <SolWalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>
-          {children}
-        </WalletModalProvider>
-      </SolWalletProvider>
-    </ConnectionProvider>
+    <FarcasterSolanaProvider>
+      <ConnectionProvider endpoint={rpc}>
+        <SolWalletProvider wallets={wallets} autoConnect>
+          <WalletModalProvider>
+            {children}
+          </WalletModalProvider>
+        </SolWalletProvider>
+      </ConnectionProvider>
+    </FarcasterSolanaProvider>
   );
 }

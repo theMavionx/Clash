@@ -54,6 +54,14 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
+// Link a wallet to existing account (e.g. Farcaster user connecting Solana wallet)
+router.post('/players/link-wallet', auth, (req, res) => {
+  const { wallet } = req.body;
+  if (!wallet) return res.status(400).json({ error: 'wallet required' });
+  db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id);
+  res.json({ success: true });
+});
+
 // Login by wallet address (recover account after cache clear)
 router.post('/players/login-wallet', (req, res) => {
   const { wallet } = req.body;

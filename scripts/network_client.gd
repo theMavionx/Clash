@@ -144,6 +144,11 @@ func upgrade_building(building_id: int) -> Dictionary:
 		building_upgraded.emit(response)
 	return response
 
+func link_wallet(wallet: String) -> void:
+	if token == "" or wallet == "":
+		return
+	await _http_post("/players/link-wallet", {"wallet": wallet})
+
 func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})
 

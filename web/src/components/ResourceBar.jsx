@@ -1,5 +1,6 @@
 import { memo, useCallback } from 'react';
 import { useResources, useSend } from '../hooks/useGodot';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -22,13 +23,14 @@ function ResourceBar() {
   const data = useResources();
   const { sendToGodot } = useSend();
   const caps = data.caps || { gold: 5000, wood: 5000, ore: 5000 };
+  const mobile = useIsMobile();
 
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
   }, [sendToGodot]);
 
   return (
-    <div style={styles.bar}>
+    <div style={{ ...styles.bar, ...(mobile ? styles.barMobile : {}) }}>
       {ITEMS.map(({ key, icon, indicator, offset }) => {
         const current = data[key] || 0;
         const max = caps[key] || 5000;
@@ -44,11 +46,12 @@ function ResourceBar() {
               alt={key}
               style={{
                 ...styles.icon,
-                left: offset?.left ?? -10,
+                ...(mobile ? styles.iconMobile : {}),
+                left: mobile ? (offset?.left ?? -10) * 0.65 : (offset?.left ?? -10),
                 top: offset?.top ?? '50%'
               }}
             />
-            <div style={styles.pill}>
+            <div style={{ ...styles.pill, ...(mobile ? styles.pillMobile : {}) }}>
               <div style={{
                 ...styles.indicator,
                 background: barColor,
@@ -56,8 +59,8 @@ function ResourceBar() {
                 boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.4), inset 0 -1px 3px rgba(0,0,0,0.3)'
               }} />
               <div style={styles.textWrap}>
-                <span style={styles.value}>{fmtShort(current)}</span>
-                <span style={styles.maxValue}>/ {fmtShort(max)}</span>
+                <span style={{ ...styles.value, ...(mobile ? { fontSize: 13 } : {}) }}>{fmtShort(current)}</span>
+                <span style={{ ...styles.maxValue, ...(mobile ? { fontSize: 9 } : {}) }}>/ {fmtShort(max)}</span>
               </div>
               <button
                 style={styles.hiddenButton}
@@ -154,5 +157,23 @@ const styles = {
     border: 'none',
     cursor: 'pointer',
     zIndex: 3,
+  },
+  // Mobile overrides
+  barMobile: {
+    top: 8,
+    right: 8,
+    gap: 6,
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+  },
+  pillMobile: {
+    minWidth: 110,
+    height: 24,
+    padding: '0 10px 0 34px',
+    borderRadius: 6,
+  },
+  iconMobile: {
+    width: 48,
+    height: 48,
   },
 };

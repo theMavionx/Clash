@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { usePlayer, useBuilding } from '../hooks/useGodot';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { colors } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
@@ -8,6 +9,7 @@ const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const playerState = usePlayer();
   const { buildingDefs } = useBuilding();
+  const mobile = useIsMobile();
   if (!playerState) return null;
 
   const townHallLevel = buildingDefs?.th_level || 1;
@@ -16,20 +18,21 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const progressPct = thTotal > 0 ? Math.min(100, (thProgress / thTotal) * 100) : 0;
 
   return (
-    <div style={styles.wrap} onClick={onOpenProfile}>
+    <div style={{ ...styles.wrap, ...(mobile ? { top: 8, left: 8, gap: 8 } : {}) }} onClick={onOpenProfile}>
       <div style={styles.levelCircleContainer}>
         <div style={{
           ...styles.levelCircle,
+          ...(mobile ? { width: 48, height: 48, borderRadius: 10, padding: 5 } : {}),
           background: `conic-gradient(from -90deg, #fff ${progressPct * 3.6}deg, #1a1a1a ${progressPct * 3.6}deg)`,
         }}>
-          <div style={styles.innerSquare}>
-            <span style={styles.levelText}>{townHallLevel}</span>
+          <div style={{ ...styles.innerSquare, ...(mobile ? { borderRadius: 7 } : {}) }}>
+            <span style={{ ...styles.levelText, ...(mobile ? { fontSize: 24 } : {}) }}>{townHallLevel}</span>
           </div>
         </div>
       </div>
 
       <div style={styles.infoStack}>
-        <span style={styles.name}>{playerState.player_name}</span>
+        <span style={{ ...styles.name, ...(mobile ? { fontSize: 16 } : {}) }}>{playerState.player_name}</span>
 
         <div style={styles.trophyContainer} onClick={(e) => { e.stopPropagation(); onOpenLeaderboard?.(); }}>
           <div style={styles.trophyBox}>

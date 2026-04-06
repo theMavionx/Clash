@@ -1,17 +1,34 @@
+import { useEffect } from 'react';
 import GodotCanvas from './components/GodotCanvas';
 import GameUI from './components/GameUI';
 import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
+import { useFarcaster } from './hooks/useFarcaster';
 import './index.css';
+
+function AppInner() {
+  const { isInFrame, user } = useFarcaster();
+
+  // Expose Farcaster user to Godot bridge for auto-registration
+  useEffect(() => {
+    if (isInFrame && user) {
+      window._farcasterUser = user;
+    }
+  }, [isInFrame, user]);
+
+  return (
+    <div style={styles.container}>
+      <GodotCanvas />
+      <GameUI />
+    </div>
+  );
+}
 
 export default function App() {
   return (
     <WalletProvider>
       <GodotProvider>
-        <div style={styles.container}>
-          <GodotCanvas />
-          <GameUI />
-        </div>
+        <AppInner />
       </GodotProvider>
     </WalletProvider>
   );

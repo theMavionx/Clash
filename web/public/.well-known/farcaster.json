@@ -1,0 +1,18 @@
+{
+  "accountAssociation": {
+    "header": "",
+    "payload": "",
+    "signature": ""
+  },
+  "miniapp": {
+    "version": "1",
+    "name": "Clash of Perps",
+    "homeUrl": "https://clashofperps.fun",
+    "iconUrl": "https://clashofperps.fun/icons/icon-512.png",
+    "description": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold. Clash of Clans meets DeFi.",
+    "splashImageUrl": "https://clashofperps.fun/icons/icon-512.png",
+    "splashBackgroundColor": "#0a0b1a",
+    "categories": ["games"],
+    "requiredChains": ["solana"]
+  }
+}

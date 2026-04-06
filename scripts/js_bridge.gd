@@ -300,7 +300,11 @@ func _try_wallet_login(wallet: String) -> void:
 	if wallet == "":
 		return
 	var net = get_node_or_null("/root/Net")
-	if not net or net.has_token():
+	if not net:
+		return
+	# If already logged in (e.g. via Farcaster), just link the wallet to account
+	if net.has_token():
+		net.link_wallet(wallet)
 		return
 	var result = await net.login_by_wallet(wallet)
 	if result.has("token"):

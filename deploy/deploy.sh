@@ -68,13 +68,28 @@ sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
 echo "  SW cache version: clash-godot-$BUILD_HASH"
 
 # Pre-compress Godot assets with brotli + gzip for nginx static serving
+# Use brotli quality 9 for big files (much smaller, slower to compress but done once at deploy)
 echo "Compressing Godot assets..."
-for f in "$WEB_DIST/godot/Work.pck" "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.side.wasm" "$WEB_DIST/godot/Work.js"; do
+for f in "$WEB_DIST/godot/Work.pck" "$WEB_DIST/godot/Work.side.wasm"; do
     if [ -f "$f" ]; then
-        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli: $(basename $f) → $(du -h "$f.br" | cut -f1)"
-        gzip -f -k -9 "$f" && echo "  gzip:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+        brotli -f -q 9 -o "$f.br" "$f" && echo "  brotli-9: $(basename $f) → $(du -h "$f.br" | cut -f1)"
+        gzip -f -k -9 "$f" && echo "  gzip-9:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
     fi
 done
+for f in "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.js"; do
+    if [ -f "$f" ]; then
+        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli-6: $(basename $f) → $(du -h "$f.br" | cut -f1)"
+        gzip -f -k -9 "$f" && echo "  gzip-9:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+    fi
+done
+# Also compress the React bundle
+for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
+    if [ -f "$f" ] && [ ! -f "$f.br" ]; then
+        brotli -f -q 6 -o "$f.br" "$f"
+        gzip -f -k -9 "$f"
+    fi
+done
+echo "  Compression complete."
 
 # ── 5. Setup nginx — Step 1: HTTP only (for certbot) ──
 echo "[5/8] Configuring nginx (HTTP)..."
@@ -175,22 +190,30 @@ server {
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
     }
 
-    # Godot assets — revalidate on every load (ETag handles 304s, SW caches after first load)
+    # Godot assets — long cache with ETag revalidation, SW caches after first load
     location /godot/ {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin" always;
         add_header Cross-Origin-Embedder-Policy "require-corp" always;
-        add_header Cache-Control "no-cache";
+        add_header Cache-Control "public, max-age=86400, must-revalidate";
         etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
 
-        # Serve pre-compressed .gz files (Work.pck.gz, Work.wasm.gz)
+        # Serve pre-compressed brotli/gzip (30-60% smaller than raw)
         gzip_static on;
+    }
+
+    # Hashed JS/CSS assets — immutable cache (filename changes on rebuild)
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Cross-Origin-Opener-Policy "same-origin" always;
+        add_header Cross-Origin-Embedder-Policy "require-corp" always;
     }
 
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/wasm application/octet-stream;
     gzip_min_length 1000;
+    gzip_comp_level 6;
     client_max_body_size 200M;
 }
 SSLCONF

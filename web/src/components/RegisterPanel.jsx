@@ -2,14 +2,17 @@ import { useState, useEffect, useRef, memo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useSend } from '../hooks/useGodot';
+import { useFarcaster } from '../hooks/useFarcaster';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 function RegisterPanel() {
   const { sendToGodot } = useSend();
   const { publicKey, connected } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
+  const { isInFrame, user: fcUser } = useFarcaster();
   const [name, setName] = useState('');
   const triedWalletLogin = useRef(false);
+  const triedFcLogin = useRef(false);
 
   // Auto-login by wallet when connected (recovers account after cache clear)
   useEffect(() => {
@@ -18,6 +21,15 @@ function RegisterPanel() {
       sendToGodot('wallet_connected', { wallet: publicKey.toBase58() });
     }
   }, [connected, publicKey, sendToGodot]);
+
+  // Auto-register with Farcaster username if inside Farcaster frame
+  useEffect(() => {
+    if (isInFrame && fcUser && !triedFcLogin.current) {
+      triedFcLogin.current = true;
+      const fcName = fcUser.username || fcUser.displayName || `fc_${fcUser.fid}`;
+      sendToGodot('register', { name: fcName, wallet: `fc_${fcUser.fid}` });
+    }
+  }, [isInFrame, fcUser, sendToGodot]);
 
   const handleSubmit = (e) => {
     e.preventDefault();

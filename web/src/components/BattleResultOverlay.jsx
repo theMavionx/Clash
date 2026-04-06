@@ -1,10 +1,34 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
+import { useFarcaster } from '../hooks/useFarcaster';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
+
+function ShareButton({ isVictory, isReplay, result }) {
+  const { isInFrame, shareCast } = useFarcaster();
+  const handleShare = useCallback(() => {
+    if (isReplay) return;
+    const loot = result?.loot;
+    const text = isVictory
+      ? `I raided a village in Clash of Perps and looted ${loot?.gold || 0} gold! ⚔️`
+      : `My troops fell in battle on Clash of Perps! Time to upgrade. 💀`;
+    if (isInFrame) {
+      shareCast(text);
+    } else {
+      window.open(`https://warpcast.com/~/compose?text=${encodeURIComponent(text)}&embeds[]=${encodeURIComponent('https://clashofperps.fun')}`, '_blank');
+    }
+  }, [isVictory, isReplay, result, isInFrame, shareCast]);
+
+  if (isReplay) return null;
+  return (
+    <div style={{ ...styles.btnWrap, background: 'linear-gradient(180deg, #8B5CF6 0%, #6D28D9 100%)' }} onClick={handleShare}>
+      <span style={styles.btnText}>Share</span>
+    </div>
+  );
+}
 
 function BattleResultOverlay({ result, onClose }) {
   if (!result) return null;
@@ -50,9 +74,12 @@ function BattleResultOverlay({ result, onClose }) {
            </div>
         )}
 
-        {/* Return Button */}
-        <div style={styles.btnWrap} onClick={onClose}>
-          <span style={styles.btnText}>Return</span>
+        {/* Buttons */}
+        <div style={{ display: 'flex', gap: 12 }}>
+          <ShareButton isVictory={isVictory} isReplay={isReplay} result={result} />
+          <div style={styles.btnWrap} onClick={onClose}>
+            <span style={styles.btnText}>Return</span>
+          </div>
         </div>
       </div>
     </div>
