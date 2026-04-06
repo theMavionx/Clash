@@ -13,6 +13,8 @@ import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
+import imgStorage from '../assets/buildings/storage.png';
+import imgShip from '../assets/buildings/shipsmall.png';
 
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
 
@@ -27,6 +29,7 @@ const THUMBNAIL_MAP = {
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
+  storage: imgStorage,
 };
 
 const DESC_MAP = {
@@ -317,9 +320,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
     const rightContent = <ResourceReqs costObj={shipCost} title="Unlock Cost" />;
     
-    const shipImg = THUMBNAIL_MAP['port'] || (
-       <div style={{...styles.characterImg, display:'flex', alignItems:'center', justifyContent:'center', fontSize: 150}}>🚢</div>
-    );
+    const shipImg = <img src={imgShip} alt="Ship" style={styles.characterImg} />;
 
     return renderModal(
       "UNLOCK GUNBOAT", 

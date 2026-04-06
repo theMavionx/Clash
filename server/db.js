@@ -194,49 +194,49 @@ const BUILDING_DEFS = {
   mine: {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
-    cost: { gold: 400, wood: 150, ore: 0 },
+    cost: { gold: 200, wood: 200, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [2, 3], max_level: 3,
     hp_levels: [2000, 3500, 6000],
-    cost: { gold: 200, wood: 200, ore: 100 },
+    cost: { gold: 100, wood: 250, ore: 150 },
     max_count: 2,
   },
   port: {
     size: [4, 3], max_level: 3,
     hp_levels: [1800, 3200, 5500],
-    cost: { gold: 800, wood: 300, ore: 200 },
+    cost: { gold: 400, wood: 400, ore: 300 },
     max_count: 2,
   },
   sawmill: {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
-    cost: { gold: 300, wood: 0, ore: 0 },
+    cost: { gold: 150, wood: 0, ore: 100 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 3,
     hp_levels: [900, 1600, 2800],
-    cost: { gold: 600, wood: 350, ore: 200 },
+    cost: { gold: 300, wood: 450, ore: 300 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 3,
     hp_levels: [1000, 1500, 2000],
-    cost: { gold: 100, wood: 0, ore: 0 },
+    cost: { gold: 50, wood: 0, ore: 100 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 3,
     hp_levels: [1400, 2500, 4200],
-    cost: { gold: 350, wood: 200, ore: 0 },
+    cost: { gold: 175, wood: 300, ore: 0 },
     max_count: 3,
   },
   archer_tower: {
     size: [3, 3], max_level: 3,
     hp_levels: [800, 1500, 2500],
-    cost: { gold: 500, wood: 400, ore: 0 },
+    cost: { gold: 250, wood: 500, ore: 0 },
     max_count: 4,
   },
 };
@@ -244,11 +244,11 @@ const BUILDING_DEFS = {
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 80 },  { gold: 300, wood: 0, ore: 200 },  { gold: 600, wood: 0, ore: 500 }] },
-  mage:      { max_level: 3, cost: [{ gold: 250, wood: 0, ore: 150 }, { gold: 500, wood: 0, ore: 350 },  { gold: 1000, wood: 0, ore: 700 }] },
-  barbarian: { max_level: 3, cost: [{ gold: 200, wood: 0, ore: 120 }, { gold: 400, wood: 0, ore: 280 },  { gold: 800, wood: 0, ore: 560 }] },
-  archer:    { max_level: 3, cost: [{ gold: 180, wood: 100, ore: 0 }, { gold: 360, wood: 250, ore: 0 },  { gold: 720, wood: 500, ore: 0 }] },
-  ranger:    { max_level: 3, cost: [{ gold: 120, wood: 60, ore: 0 },  { gold: 240, wood: 150, ore: 0 },  { gold: 480, wood: 300, ore: 0 }] },
+  knight:    { max_level: 3, cost: [{ gold: 80, wood: 0, ore: 100 },  { gold: 150, wood: 0, ore: 250 },  { gold: 300, wood: 0, ore: 500 }] },
+  mage:      { max_level: 3, cost: [{ gold: 120, wood: 0, ore: 180 }, { gold: 250, wood: 0, ore: 400 },  { gold: 500, wood: 0, ore: 800 }] },
+  barbarian: { max_level: 3, cost: [{ gold: 100, wood: 0, ore: 150 }, { gold: 200, wood: 0, ore: 350 },  { gold: 400, wood: 0, ore: 700 }] },
+  archer:    { max_level: 3, cost: [{ gold: 90, wood: 120, ore: 0 },  { gold: 180, wood: 300, ore: 0 },  { gold: 360, wood: 600, ore: 0 }] },
+  ranger:    { max_level: 3, cost: [{ gold: 60, wood: 80, ore: 0 },   { gold: 120, wood: 200, ore: 0 },  { gold: 250, wood: 400, ore: 0 }] },
 };
 
 // ---------- Trophy Points per Building (type -> level -> trophies) ----------

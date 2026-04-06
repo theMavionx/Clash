@@ -39,8 +39,23 @@ func _buy_ship_level(ship_lvl: int) -> void:
 		return
 	if port_node.has_meta("has_ship"):
 		return
-	bs.resources["gold"] -= SHIP_COST_GOLD
-	bs._update_resource_ui()
+	var sid: int = bs.selected_building.get("server_id", -1)
+	# Ask server first
+	var net: Node = bs._net
+	if net and net.has_token() and sid >= 0:
+		var result: Dictionary = await net.buy_ship(sid)
+		if result.has("error"):
+			bs._show_error(str(result.error))
+			return
+		if result.has("resources"):
+			bs.resources.gold = result.resources.gold
+			bs.resources.wood = result.resources.wood
+			bs.resources.ore = result.resources.ore
+			bs._update_resource_ui()
+	else:
+		# Offline fallback — deduct locally
+		bs.resources["gold"] -= SHIP_COST_GOLD
+		bs._update_resource_ui()
 	port_node.set_meta("has_ship", true)
 	port_node.set_meta("ship_level", ship_lvl)
 	port_node.set_meta("ship_troops", [])

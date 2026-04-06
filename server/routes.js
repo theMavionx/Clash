@@ -333,11 +333,11 @@ router.get('/trophies/table', (req, res) => {
 
 // ==================== TRADING REWARDS ====================
 
-const GOLD_PER_USD_VOLUME = 0.05;
+const GOLD_PER_USD_VOLUME = 0.20;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
-const GOLD_DAILY_TRADE = 200;
-const GOLD_PER_10_USD_PROFIT = 100; // +100 gold per $10 positive PnL
+const GOLD_DAILY_TRADE = 750;
+const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
 
 // Trading rewards table
 try {
