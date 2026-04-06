@@ -1,9 +1,13 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { FarcasterSolanaProvider } from '@farcaster/mini-app-solana';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
+
+// Detect if running inside Farcaster frame
+function isInFarcasterFrame() {
+  try { return window !== window.parent; } catch { return true; }
+}
 
 const RPC_LIST = [
   'https://solana-rpc.publicnode.com',
@@ -43,19 +47,36 @@ function useBestRpc() {
   return rpc;
 }
 
+// Lazy-load FarcasterSolanaProvider only inside Farcaster (avoids buffer polyfill issues on localhost)
+let FarcasterSolanaProvider = null;
+
 export default function WalletProvider({ children }) {
   const wallets = useMemo(() => [], []);
   const rpc = useBestRpc();
+  const [FcProvider, setFcProvider] = useState(null);
 
-  return (
-    <FarcasterSolanaProvider>
-      <ConnectionProvider endpoint={rpc}>
-        <SolWalletProvider wallets={wallets} autoConnect>
-          <WalletModalProvider>
-            {children}
-          </WalletModalProvider>
-        </SolWalletProvider>
-      </ConnectionProvider>
-    </FarcasterSolanaProvider>
+  useEffect(() => {
+    if (isInFarcasterFrame() && !FarcasterSolanaProvider) {
+      import('@farcaster/mini-app-solana').then(mod => {
+        FarcasterSolanaProvider = mod.FarcasterSolanaProvider;
+        setFcProvider(() => mod.FarcasterSolanaProvider);
+      }).catch(() => {});
+    }
+  }, []);
+
+  const core = (
+    <ConnectionProvider endpoint={rpc}>
+      <SolWalletProvider wallets={wallets} autoConnect>
+        <WalletModalProvider>
+          {children}
+        </WalletModalProvider>
+      </SolWalletProvider>
+    </ConnectionProvider>
   );
+
+  // Wrap with FarcasterSolanaProvider only inside Farcaster frame
+  if (FcProvider) {
+    return <FcProvider>{core}</FcProvider>;
+  }
+  return core;
 }

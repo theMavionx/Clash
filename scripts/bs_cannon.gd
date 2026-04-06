@@ -44,7 +44,8 @@ const SHIP_FLASH_FRAMES: Array[String] = [
 ]
 const SHIP_EXPLOSION_SCALE: float = 1.65
 const SHIP_EXPLOSION_DURATION: float = 0.9
-const SHIP_EXPLOSION_FRAME_COUNT: int = 86
+const SHIP_EXPLOSION_FRAME_COUNT: int = 29
+const SHIP_EXPLOSION_FRAME_STEP: int = 3
 const SHIP_EXPLOSION_FRAME_DIR: String = "res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-%05d.png"
 
 # ---------------------------------------------------------------------------
@@ -163,8 +164,10 @@ func _update_ship_flash(delta: float) -> void:
 func _preload_explosion_textures() -> void:
 	if not _ship_explosion_textures.is_empty():
 		return
-	for i in range(1, SHIP_EXPLOSION_FRAME_COUNT + 1):
-		var tex = load(SHIP_EXPLOSION_FRAME_DIR % i)
+	# Frames are every 3rd: 1, 4, 7, 10, ... 85 (29 frames total)
+	for i in range(SHIP_EXPLOSION_FRAME_COUNT):
+		var frame_num: int = 1 + i * SHIP_EXPLOSION_FRAME_STEP
+		var tex = load(SHIP_EXPLOSION_FRAME_DIR % frame_num)
 		if tex:
 			_ship_explosion_textures.append(tex)
 
