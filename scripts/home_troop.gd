@@ -81,6 +81,8 @@ func init_troop(troop_type: String, lvl: int) -> void:
 
 func _process(delta: float) -> void:
 	delta = minf(delta, 0.1)
+	# Force scale 0.1 every frame — GLB animations override it otherwise
+	scale = Vector3(0.1, 0.1, 0.1)
 	match state:
 		WanderState.IDLE:
 			_idle_timer -= delta
@@ -292,11 +294,10 @@ func _setup_animations() -> void:
 						var dup = anim.duplicate()
 						if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
 							dup.loop_mode = Animation.LOOP_LINEAR
-						# Strip root-level scale/position tracks so
-						# animations don't override the spawn scale
+						# Strip ALL scale and position tracks — they override spawn scale
 						for ti in range(dup.get_track_count() - 1, -1, -1):
 							var path: String = str(dup.track_get_path(ti))
-							if path == ".:scale" or path == ":scale" or path == ".:position" or path == ":position":
+							if ":scale" in path or ":position" in path:
 								dup.remove_track(ti)
 						lib.add_animation(anim_name, dup)
 			container.free()

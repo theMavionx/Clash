@@ -3,12 +3,10 @@ extends Node3D
 ## Implements: design/gdd/attack_system.md
 
 @export var grid_plane_path: NodePath = "../Island/shipPlane"
-@export var ship_scale: float = 0.15
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
 @export var max_ships: int = 5
-@export var troops_per_ship: int = 3
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 
@@ -38,27 +36,26 @@ const SHIP_PUSH_RADIUS: float = 0.4
 # ---------------------------------------------------------------------------
 # Preloaded resources — loaded once at startup, never at runtime
 # ---------------------------------------------------------------------------
-var _ship_scene_res: Resource   = load("res://Model/Ship/Sail Ship.glb")
-var _flag_scene_res: Resource   = load("res://Model/flag/pirate_flag_animated.glb")
+var _flag_scene_res: Resource = load("res://Model/flag/pirate_flag_animated.glb")
 
-## Preloaded troop model PackedScenes, indexed to match SHIP_TROOPS
-var _troop_model_res: Array = [
-	load("res://Model/Characters/Model/Knight.glb"),
-	load("res://Model/Characters/Model/Mage.glb"),
-	load("res://Model/Characters/Model/Barbarian.glb"),
-	load("res://Model/Characters/Model/Ranger.glb"),
-	load("res://Model/Characters/Model/Rogue_Hooded.glb"),
+## Ship models by level (1-indexed: level 1 = small, 2 = medium, 3 = large)
+const SHIP_MODELS: Array[String] = [
+	"res://Model/Ship/Ships/ship-pirate-small_1.glb",
+	"res://Model/Ship/Ships/ship-pirate-medium_2.glb",
+	"res://Model/Ship/Ships/ship-pirate-large_3.glb",
 ]
+const SHIP_SCALES: Array[float] = [0.05, 0.05, 0.05]
 
-## Preloaded troop GDScripts, indexed to match SHIP_TROOPS
-var _troop_script_res: Array = [
-	load("res://scripts/knight.gd"),
-	load("res://scripts/mage.gd"),
-	load("res://scripts/barbarian.gd"),
-	load("res://scripts/archer.gd"),
-	load("res://scripts/ranger.gd"),
-]
+## Troop name → {model, script} for spawning combat troops
+const TROOP_DEFS: Dictionary = {
+	"Knight":    {"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
+	"Mage":      {"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
+	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
+	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
+	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
+}
 
+## Legacy constant kept for replay compatibility
 const SHIP_TROOPS = [
 	{"model": "res://Model/Characters/Model/Knight.glb",      "script": "res://scripts/knight.gd"},
 	{"model": "res://Model/Characters/Model/Mage.glb",        "script": "res://scripts/mage.gd"},
@@ -89,9 +86,10 @@ static func _get_ships_cached() -> Array:
 var is_attack_mode: bool = false
 var _ships_placed: int = 0
 var _total_ships_launched: int = 0  # never reset mid-attack; used by React HUD
-var _next_troop_idx: int = 0
-var _ship_troop_map: Dictionary = {}   # ship_idx → troop_idx chosen at placement
-var _deployed_types: Dictionary = {}   # script basename → true; which troop types were sent
+## Fleet data: array of {level: int, troops: [String], model_path: String}
+## Populated by enter_attack_mode() from the player's actual port ships.
+var _fleet: Array = []
+var _next_troop_idx: int = 0  # kept for replay compatibility
 var ship_plane: MeshInstance3D
 var plane_y: float = 0.0
 var water_y: float = 0.0
@@ -153,20 +151,23 @@ func _separate_ships(delta: float) -> void:
 				b.global_position -= push
 
 
-## Activates attack mode, showing the placement plane and resetting ship counters.
-## Call this when the player presses the Attack button.
-func enter_attack_mode() -> void:
+## Activates attack mode with the player's actual fleet.
+## [fleet] is an Array of {level: int, troops: Array[String]} — one entry per ship.
+## If fleet is empty, falls back to legacy mode (no ships to place).
+func enter_attack_mode(fleet: Array = []) -> void:
 	is_attack_mode = true
 	_ships_placed = 0
 	_total_ships_launched = 0
-	_next_troop_idx = 0
-	_ship_troop_map.clear()
-	_deployed_types.clear()
+	_fleet = fleet
 	_ship_stop_positions.clear()
 	_ship_markers.clear()
+	var ship_count: int = mini(_fleet.size(), max_ships)
+	if ship_count == 0:
+		is_attack_mode = false
+		return
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
-		bridge.send_to_react("troop_idx_changed", {"idx": 0})
+		bridge.send_to_react("fleet_info", {"total_ships": ship_count, "placed": 0})
 	if ship_plane:
 		ship_plane.visible = true
 		var mat: StandardMaterial3D = StandardMaterial3D.new()
@@ -174,7 +175,7 @@ func enter_attack_mode() -> void:
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		ship_plane.material_override = mat
-	print("Attack mode ON - place up to %d ships!" % max_ships)
+	print("Attack mode ON - place up to %d ships from fleet!" % ship_count)
 
 
 ## Temporarily hides the placement plane without resetting any state.
@@ -187,7 +188,7 @@ func _pause_attack_mode() -> void:
 
 ## Restores the placement plane after cannon mode ends, if ships still remain.
 func _resume_attack_mode() -> void:
-	if _ships_placed >= max_ships:
+	if _ships_placed >= mini(_fleet.size(), max_ships):
 		return
 	is_attack_mode = true
 	if ship_plane:
@@ -216,9 +217,6 @@ func exit_attack_mode() -> void:
 	_ships_placed = 0
 	_total_ships_launched = 0
 	_next_troop_idx = 0
-	_deployed_types.clear()
-	# _ship_troop_map is intentionally NOT cleared here — ships still sailing
-	# need it in _deploy_troops_from_ship. Cleared only in enter_attack_mode.
 	# Free markers for ships that were cancelled before arriving
 	for marker in _ship_markers:
 		if is_instance_valid(marker):
@@ -240,7 +238,7 @@ func _input(event: InputEvent) -> void:
 			if hit != Vector3.INF:
 				if _try_place_ship(hit):
 					get_viewport().set_input_as_handled()
-					if _ships_placed >= max_ships:
+					if _ships_placed >= mini(_fleet.size(), max_ships):
 						_finish_attack_mode()
 				else:
 					get_viewport().set_input_as_handled()
@@ -309,44 +307,34 @@ func _is_within_ship_plane(pos: Vector3) -> bool:
 	return abs(local_x) <= _click_extent_x and abs(local_z) <= _click_extent_z
 
 
-## Attempts to place a ship at the clicked position. Returns true if successful.
+## Attempts to place the next fleet ship at the clicked position. Returns true if successful.
 func _try_place_ship(hit: Vector3) -> bool:
-	# Check the hit is on shipPlane
 	if not _is_within_ship_plane(hit):
 		return false
-	# Check too close to existing ship
+	if _ships_placed >= _fleet.size():
+		return false
 	for existing in _ship_stop_positions:
 		if hit.distance_to(existing) < SHIP_MIN_SEPARATION:
 			return false
-	_ship_troop_map[_ships_placed] = _next_troop_idx
 	if not _spawn_single_ship(hit):
-		_ship_troop_map.erase(_ships_placed)
 		return false
-	# Record which troop type was deployed (by script basename, matches React key)
-	var script_path: String = SHIP_TROOPS[_next_troop_idx].script
-	var troop_type_name: String = script_path.get_file().get_basename()
-	_deployed_types[troop_type_name] = true
 	_ships_placed += 1
 	_total_ships_launched += 1
 	# Record ship placement in battle replay
 	var bs: Node = get_node_or_null("../BuildingSystem")
+	var ship_data: Dictionary = _fleet[_ships_placed - 1]
 	if bs and bs.is_viewing_enemy:
 		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
-		var troop_lvl: int = 1
-		var level_key: String = _script_to_troop_key(SHIP_TROOPS[_next_troop_idx].script)
-		if "troop_levels" in bs and bs.troop_levels.has(level_key):
-			troop_lvl = bs.troop_levels[level_key]
-		bs._battle_replay.append({"t": t, "type": "place_ship", "x": hit.x, "z": hit.z, "troopType": troop_type_name, "troopLevel": troop_lvl})
-	# Auto-advance to next undeployed troop type
-	for offset in range(1, SHIP_TROOPS.size() + 1):
-		var candidate: int = (_next_troop_idx + offset) % SHIP_TROOPS.size()
-		var candidate_key: String = SHIP_TROOPS[candidate].script.get_file().get_basename()
-		if not _deployed_types.has(candidate_key):
-			_next_troop_idx = candidate
-			break
+		bs._battle_replay.append({
+			"t": t, "type": "place_ship",
+			"x": hit.x, "z": hit.z,
+			"shipLevel": ship_data.get("level", 1),
+			"troops": ship_data.get("troops", []),
+		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
-		bridge.send_to_react("troop_idx_changed", {"idx": _next_troop_idx})
+		var remaining: int = _fleet.size() - _ships_placed
+		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "remaining": remaining})
 	return true
 
 
@@ -381,15 +369,20 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 	return null
 
 
-## Spawns a single ship at the edge of the placement zone and sails it to [target].
-## Attaches rocking/bobbing tweens, places a flag marker, and schedules troop
-## deployment when the ship arrives.
+## Spawns the next fleet ship at the edge of the placement zone and sails it to [target].
+## Uses the ship model matching the fleet entry's level.
 func _spawn_single_ship(target: Vector3) -> bool:
-	if _ship_scene_res == null:
-		push_warning("AttackSystem: ship scene resource is null")
+	if _ships_placed >= _fleet.size():
 		return false
-
-	var ship: Node3D = _ship_scene_res.instantiate()
+	var ship_data: Dictionary = _fleet[_ships_placed]
+	var ship_level: int = ship_data.get("level", 1)
+	var model_idx: int = clampi(ship_level - 1, 0, SHIP_MODELS.size() - 1)
+	var ship_res: Resource = load(SHIP_MODELS[model_idx])
+	if ship_res == null:
+		push_warning("AttackSystem: ship model not found for level %d" % ship_level)
+		return false
+	var ship: Node3D = ship_res.instantiate()
+	var ship_scale: float = SHIP_SCALES[model_idx]
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
 
 	# Sailing direction — perpendicular to shipPlane, pointing outward
@@ -451,53 +444,57 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	return true
 
 
-## Deploys [troops_per_ship] troops from a ship that has arrived at [ship_pos].
-## Troops are staggered by [troop_spawn_delay] seconds and placed on the island
-## at building height so they immediately engage targets.
+## Deploys the troops loaded on this fleet ship.
+## Each troop is spawned by name from TROOP_DEFS, staggered by troop_spawn_delay.
 func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
-	var troop_idx: int = _ship_troop_map.get(ship_idx, ship_idx % SHIP_TROOPS.size())
-	var troop_def: Dictionary = SHIP_TROOPS[troop_idx]
-	var model_res: Resource  = _troop_model_res[troop_idx]
-	var script_res: Resource = _troop_script_res[troop_idx]
-	if model_res == null or script_res == null:
-		push_warning("AttackSystem: could not load troop: %s" % troop_def.model)
+	if ship_idx >= _fleet.size():
+		return
+	var ship_data: Dictionary = _fleet[ship_idx]
+	var troop_names: Array = ship_data.get("troops", [])
+	if troop_names.is_empty():
 		return
 
-	# Spawn position: right at inner edge of ShipPlane
 	var pb2: Basis = ship_plane.global_transform.basis
 	var lat_dir: Vector3 = pb2.x.normalized()
 	var spawn_pos: Vector3 = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	spawn_pos.y = ship_pos.y
 
-	# Get building Y and troop level in one pass over building_systems
+	# Get building Y and troop levels
 	var building_y: float = spawn_pos.y
-	var troop_level: int = 1
-	var level_key: String = _script_to_troop_key(troop_def.script)
-	for bs in get_tree().get_nodes_in_group("building_systems"):
-		if "grid_y" in bs:
-			building_y = bs.grid_y
-		if "troop_levels" in bs and bs.troop_levels.has(level_key):
-			troop_level = bs.troop_levels[level_key]
+	var bs_ref: Node = null
+	for building_sys in get_tree().get_nodes_in_group("building_systems"):
+		if "grid_y" in building_sys:
+			building_y = building_sys.grid_y
+			bs_ref = building_sys
 		break
 
-	for i in troops_per_ship:
+	for i in troop_names.size():
+		var troop_name: String = troop_names[i]
+		var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
+		if tdef.is_empty():
+			continue
+		var model_res: Resource = load(tdef.model)
+		var script_res: Resource = load(tdef.script)
+		if model_res == null or script_res == null:
+			continue
+		var troop_level: int = 1
+		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_name):
+			troop_level = bs_ref.troop_levels[troop_name]
 		var timer: SceneTreeTimer = get_tree().create_timer(troop_spawn_delay * i)
-		var lvl: int = troop_level  # capture for closure
+		var lvl: int = troop_level
+		var m_res: Resource = model_res
+		var s_res: Resource = script_res
 		timer.timeout.connect(func():
-			var troop = model_res.instantiate()
-			troop.set_script(script_res)
+			var troop = m_res.instantiate()
+			troop.set_script(s_res)
 			troop.name = "Troop_%d" % (randi() % 99999)
-
 			get_tree().current_scene.add_child(troop)
-			var s = troop_scale
-			troop.scale = Vector3(s, s, s)
-
+			troop._spawn_scale = troop_scale
+			troop.scale = Vector3(troop_scale, troop_scale, troop_scale)
 			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
 			troop.global_position = BaseTroop._clamp_to_island(spawn_pos + offset)
 			troop.global_position.y = building_y
-
 			troop.visible = true
-			# Apply troop level before activating
 			if lvl > 1 and troop.has_method("upgrade_to"):
 				troop.upgrade_to(lvl)
 			if troop.has_method("activate"):

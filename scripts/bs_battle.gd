@@ -36,6 +36,8 @@ var _battle_start_time: float = 0.0
 var return_button: Button
 var enemy_label: Label
 
+var _saved_fleet: Array = []  # fleet snapshot taken before home buildings are destroyed
+
 var _replay_active: bool = false
 var _replay_actions: Array = []
 var _replay_buildings_snapshot: Array = []
@@ -93,6 +95,8 @@ func _on_find_pressed() -> void:
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
+	# Snapshot the fleet BEFORE anything is freed or destroyed
+	_saved_fleet = bs._build_fleet()
 	if bs.find_button:
 		bs.find_button.disabled = true
 		bs.find_button.text = "Boarding..."
@@ -218,6 +222,8 @@ func _restore_ships_and_troops() -> void:
 ## Used when jumping to an enemy without having sailed first (e.g. direct
 ## attack from the main menu).
 func _switch_to_enemy_island() -> void:
+	if _saved_fleet.is_empty():
+		_saved_fleet = bs._build_fleet()
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
 	bs._cannon.reset()
@@ -313,7 +319,7 @@ func _switch_to_enemy_island() -> void:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 	var attack_system = bs.get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode()
+		attack_system.enter_attack_mode(_saved_fleet)
 
 
 ## Switches to the enemy island assuming ships have already sailed away.
@@ -402,7 +408,7 @@ func _switch_to_enemy_island_after_sail() -> void:
 		bs._ship_attack_node.visible = true
 	var attack_system = bs.get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode()
+		attack_system.enter_attack_mode(_saved_fleet)
 
 
 ## Returns the player to their home island: tears down enemy state, reloads
