@@ -245,6 +245,14 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active = _get_active_building_system()
 			if active:
 				active._buy_ship()
+		"buy_troop":
+			var active_bt = _get_active_building_system()
+			if active_bt:
+				active_bt._buy_troop(data.get("troop_name", ""))
+		"load_troop":
+			var active_lt = _get_active_building_system()
+			if active_lt:
+				active_lt._load_troop_to_ship(data.get("troop_name", ""))
 		"resource_bar_positions":
 			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 			for bsys in _bs_cache:

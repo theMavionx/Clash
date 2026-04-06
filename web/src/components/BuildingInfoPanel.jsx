@@ -50,7 +50,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useBuilding();
   
-  const [view, setView] = useState('ACTIONS'); // ACTIONS, INFO, UPGRADE, BUY_SHIP
+  const [view, setView] = useState('ACTIONS'); // ACTIONS, INFO, UPGRADE, BUY_SHIP, LOAD_TROOPS
 
   useEffect(() => {
     setView('ACTIONS');
@@ -110,8 +110,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
       )}
 
       {building.id === 'port' && !building.is_enemy && !building.has_ship && (
-        <button 
-          style={{ ...styles.circleBtn, ...styles.btnTroops }} 
+        <button
+          style={{ ...styles.circleBtn, ...styles.btnTroops }}
           onClick={() => setView('BUY_SHIP')}
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
@@ -122,6 +122,24 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <circle cx="12" cy="5" r="3"></circle>
             <line x1="12" y1="22" x2="12" y2="8"></line>
             <path d="M5 12H2a10 10 0 0 0 20 0h-3"></path>
+          </svg>
+        </button>
+      )}
+
+      {building.id === 'port' && !building.is_enemy && building.has_ship && (
+        <button
+          style={{ ...styles.circleBtn, ...styles.btnTroops }}
+          onClick={() => setView('LOAD_TROOPS')}
+          onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+          onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+          onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
+        >
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <line x1="19" y1="8" x2="19" y2="14"></line>
+            <line x1="22" y1="11" x2="16" y2="11"></line>
           </svg>
         </button>
       )}
@@ -333,12 +351,74 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
   };
 
+  const renderLoadTroops = () => {
+    const shipLevel = building.ship_level || 1;
+    const shipTroops = building.ship_troops || [];
+    const capacity = building.ship_capacity || shipLevel;
+    const isFull = shipTroops.length >= capacity;
+    const troopLvls = building.troop_levels || {};
+    // Godot sends PascalCase keys, ensure both cases work
+    const getTroopLvl = (name) => troopLvls[name] || troopLvls[name.toLowerCase()] || 1;
+    const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+
+    return (
+      <div style={styles.loadTroopsPanel}>
+        <div style={styles.loadTroopsHeader}>
+          <button style={styles.backBtn} onClick={() => setView('ACTIONS')}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <span style={styles.loadTroopsTitle}>
+            Ship Lv.{shipLevel} — {shipTroops.length}/{capacity}
+          </span>
+        </div>
+
+        {/* Loaded troops */}
+        {shipTroops.length > 0 && (
+          <div style={styles.loadedList}>
+            {shipTroops.map((t, i) => (
+              <div key={i} style={styles.loadedItem}>
+                <span style={styles.loadedName}>{t}</span>
+                <span style={styles.loadedLvl}>Lv.{troopLvls[t] || 1}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Load buttons */}
+        {!isFull && (
+          <div style={styles.loadBtnList}>
+            {allTroops.map(name => {
+              const lvl = getTroopLvl(name);
+              return (
+                <button
+                  key={name}
+                  style={styles.loadTroopBtn}
+                  onClick={() => {
+                    sendToGodot('load_troop', { troop_name: name });
+                  }}
+                >
+                  <span style={styles.loadTroopName}>{name}</span>
+                  <span style={styles.loadTroopLvl}>Lv.{lvl}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {isFull && (
+          <div style={styles.shipFullMsg}>Ship is full!</div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       {view === 'ACTIONS' && renderActions()}
       {view === 'INFO' && renderInfo()}
       {view === 'UPGRADE' && renderUpgrade()}
       {view === 'BUY_SHIP' && renderBuyShip()}
+      {view === 'LOAD_TROOPS' && renderLoadTroops()}
     </>
   );
 }
@@ -717,5 +797,51 @@ const styles = {
     letterSpacing: 1,
     textShadow: '0 2px 2px rgba(0,0,0,0.3)',
     transition: 'transform 0.1s',
-  }
+  },
+  // Load troops panel
+  loadTroopsPanel: {
+    position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+    width: 340, maxWidth: '95vw',
+    background: 'linear-gradient(180deg, #3E2723 0%, #2C1B0E 100%)',
+    border: '3px solid #6D4C2A', borderRadius: '16px 16px 0 0',
+    padding: 16, zIndex: 30, pointerEvents: 'auto',
+    display: 'flex', flexDirection: 'column', gap: 10,
+  },
+  loadTroopsHeader: {
+    display: 'flex', alignItems: 'center', gap: 10,
+  },
+  backBtn: {
+    width: 32, height: 32, borderRadius: 8,
+    background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  loadTroopsTitle: {
+    color: '#fff', fontSize: 16, fontWeight: 900,
+    textShadow: '0 2px 2px rgba(0,0,0,0.5)',
+  },
+  loadedList: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+  },
+  loadedItem: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '6px 12px', background: 'rgba(255,255,255,0.08)',
+    borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)',
+  },
+  loadedName: { color: '#fff', fontSize: 14, fontWeight: 700 },
+  loadedLvl: { color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: 700 },
+  loadBtnList: {
+    display: 'flex', flexWrap: 'wrap', gap: 6,
+  },
+  loadTroopBtn: {
+    flex: '1 0 45%', padding: '10px 8px',
+    background: 'linear-gradient(180deg, #2E7D32 0%, #1B5E20 100%)',
+    border: '2px solid #4CAF50', borderRadius: 10,
+    cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+  },
+  loadTroopName: { color: '#fff', fontSize: 13, fontWeight: 900 },
+  loadTroopLvl: { color: 'rgba(255,255,255,0.6)', fontSize: 11, fontWeight: 700 },
+  shipFullMsg: {
+    color: '#FFA726', fontSize: 14, fontWeight: 900, textAlign: 'center',
+    padding: 12,
+  },
 };

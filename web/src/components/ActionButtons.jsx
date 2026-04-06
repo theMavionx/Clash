@@ -65,23 +65,30 @@ const CannonBallIcon = ({ size = 48 }) => (
   </svg>
 );
 
+// Map troop names to images/display info
+const TROOP_IMG_MAP = {
+  knight: { img: knightImg, label: 'Knight', zoom: 1.35, offsetY: '10%' },
+  mage: { img: mageImg, label: 'Mage', zoom: 1.45, offsetY: '15%' },
+  barbarian: { img: berserkImg, label: 'Barbarian' },
+  archer: { img: arbaletImg, label: 'Ranger' },
+  ranger: { img: archerImg, label: 'Rogue' },
+};
+
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
-function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSelectTroop, cannonEnergy }) {
-  const { isMobile: mobile, isLandscape } = useLayout();
-  const [perf, setPerf] = useState({ troop_counts: {}, deployed_types: {} });
+function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo }) {
+  const { isMobile: mobile } = useLayout();
+  const [perf, setPerf] = useState({ troop_counts: {} });
   const perfRef = useRef(perf);
 
   useEffect(() => {
     const h = (e) => {
       const counts = e.detail.troop_counts || {};
-      const types = e.detail.deployed_types || {};
       const prev = perfRef.current;
-      const changed = ATTACK_TROOPS.some(t =>
-        (counts[t.key] ?? 0) !== (prev.troop_counts[t.key] ?? 0) ||
-        !!types[t.key] !== !!prev.deployed_types[t.key]
+      const changed = Object.keys({ ...counts, ...prev.troop_counts }).some(k =>
+        (counts[k] ?? 0) !== (prev.troop_counts[k] ?? 0)
       );
       if (changed) {
-        const next = { troop_counts: counts, deployed_types: types };
+        const next = { troop_counts: counts };
         perfRef.current = next;
         setPerf(next);
       }
@@ -89,6 +96,10 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
     window.addEventListener('godot-perf', h);
     return () => window.removeEventListener('godot-perf', h);
   }, []);
+
+  // Build ship cards from fleet info
+  const ships = fleetInfo?.ships || [];
+  const placed = fleetInfo?.placed || 0;
 
   return (
     <>
@@ -102,67 +113,60 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
         </button>
       </div>
 
-      {/* Troops - Bottom Left */}
-      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4 } : {}) }}>
-        {ATTACK_TROOPS.map((t, i) => {
-          const deployed = !!perf.deployed_types[t.key];
-          const live = perf.troop_counts[t.key] ?? 0;
-          const count = deployed ? live : 3;
-          const allDead = deployed && live === 0;
-          const selected = i === selectedTroopIdx && !cannonMode;
-
-          const imgFilter = allDead
-            ? 'grayscale(1) brightness(0.45)'
-            : deployed ? 'grayscale(0.7) brightness(0.75)' : 'none';
-
-          const cardW = mobile ? 60 : 74;
-          const cardH = mobile ? 74 : 88;
-          const imgW = mobile ? 52 : 64;
-          const imgH = mobile ? 50 : 62;
+      {/* Ships with troops - Bottom Left */}
+      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 6 } : {}) }}>
+        {ships.map((ship, shipIdx) => {
+          const isPlaced = shipIdx < placed;
+          const troops = ship.troops || [];
+          // Count live troops for this ship's types
+          const liveCount = isPlaced ? troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) : troops.length;
+          const allDead = isPlaced && liveCount === 0;
+          const cardW = mobile ? 70 : 90;
+          const cardH = mobile ? 80 : 100;
 
           return (
             <button
-              key={t.key}
+              key={shipIdx}
               style={{
                 ...hud.card,
                 width: cardW, height: cardH,
-                opacity: allDead ? 0.25 : deployed ? 0.7 : 1,
-                borderColor: selected
-                  ? 'rgba(255,210,40,0.9)'
-                  : allDead ? 'rgba(20,50,80,0.35)' : deployed ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
-                boxShadow: selected
-                  ? '0 0 16px rgba(255,210,40,0.45), inset 0 0 8px rgba(255,210,40,0.1)'
-                  : 'none',
-                cursor: allDead ? 'default' : 'pointer',
+                opacity: allDead ? 0.25 : isPlaced ? 0.5 : 1,
+                borderColor: isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
+                cursor: isPlaced ? 'default' : 'pointer',
+                flexDirection: 'column',
+                gap: 2,
+                padding: '4px 3px',
               }}
-              onClick={() => !allDead && onSelectTroop(i)}
+              onClick={() => !isPlaced && !allDead && onSelectTroop(shipIdx)}
             >
-              <div style={{ ...hud.cardImgWrap, width: imgW, height: imgH, filter: imgFilter }}>
-                <img
-                  src={t.img} alt={t.label}
-                  style={{
-                    width: '100%', height: '100%',
-                    objectFit: 'cover',
-                    objectPosition: `center ${t.offsetY || 'top'}`,
-                    transform: t.zoom ? `scale(${t.zoom})` : 'none',
-                    transformOrigin: 'center top',
-                  }}
-                />
+              {/* Ship level indicator */}
+              <div style={{ fontSize: 9, fontWeight: 800, color: 'rgba(160,220,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                {isPlaced ? 'DEPLOYED' : `Ship Lv.${ship.level}`}
               </div>
 
-              {!allDead && (
+              {/* Troop portraits row */}
+              <div style={{ display: 'flex', gap: 2 }}>
+                {troops.map((troopName, ti) => {
+                  const info = TROOP_IMG_MAP[troopName.toLowerCase()] || {};
+                  const sz = mobile ? 20 : 24;
+                  return (
+                    <div key={ti} style={{ width: sz, height: sz, borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(40,140,200,0.3)' }}>
+                      {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Troop names */}
+              <div style={{ fontSize: 8, color: 'rgba(160,220,255,0.6)', lineHeight: 1.1, textAlign: 'center' }}>
+                {troops.map(t => (TROOP_IMG_MAP[t.toLowerCase()]?.label || t).slice(0, 3)).join(' ')}
+              </div>
+
+              {!isPlaced && (
                 <div style={hud.countBadge}>
-                  <span style={{ ...hud.countText, color: deployed ? '#8fc8e0' : '#7df4ff' }}>x{count}</span>
+                  <span style={hud.countText}>x{troops.length}</span>
                 </div>
               )}
-
-              {selected && !allDead && (
-                <div style={hud.selArrow}>▲</div>
-              )}
-
-              <span style={{ ...hud.cardLabel, color: selected ? '#7df4ff' : deployed ? 'rgba(130,185,215,0.75)' : 'rgba(160,220,255,0.85)' }}>
-                {t.label}
-              </span>
             </button>
           );
         })}
@@ -248,7 +252,7 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog }) {
   const { sendToGodot, setFuturesOpen } = useSend();
-  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy } = useUI();
+  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo } = useUI();
   const resources = useResources();
   const { buildingDefs } = useBuilding();
   const { isMobile: mobile, isLandscape } = useLayout();
@@ -303,6 +307,7 @@ function ActionButtons({ onOpenBattleLog }) {
         selectedTroopIdx={selectedTroopIdx ?? 0}
         onSelectTroop={handleSelectTroop}
         cannonEnergy={cannonEnergy}
+        fleetInfo={fleetInfo}
       />
     );
   }

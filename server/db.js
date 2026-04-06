@@ -51,6 +51,7 @@ db.exec(`
 try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops TEXT NOT NULL DEFAULT '[]'`); } catch {}
 // Shield: protects from attacks after being raided
 try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
 // Attack cooldown: prevent re-attacking same player
@@ -779,6 +780,7 @@ module.exports = {
   authenticatePlayer,
   getResources,
   addResources,
+  canAfford,
   subtractResources,
   placeBuilding,
   upgradeBuilding,

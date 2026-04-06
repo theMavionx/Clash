@@ -165,9 +165,17 @@ func enter_attack_mode(fleet: Array = []) -> void:
 	if ship_count == 0:
 		is_attack_mode = false
 		return
+	# Build fleet summary for React HUD
+	var ships_data: Array = []
+	for i in mini(_fleet.size(), max_ships):
+		var ship = _fleet[i]
+		ships_data.append({
+			"level": ship.get("level", 1),
+			"troops": ship.get("troops", []),
+		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
-		bridge.send_to_react("fleet_info", {"total_ships": ship_count, "placed": 0})
+		bridge.send_to_react("fleet_info", {"total_ships": ship_count, "placed": 0, "ships": ships_data})
 	if ship_plane:
 		ship_plane.visible = true
 		var mat: StandardMaterial3D = StandardMaterial3D.new()
@@ -333,8 +341,11 @@ func _try_place_ship(hit: Vector3) -> bool:
 		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
-		var remaining: int = _fleet.size() - _ships_placed
-		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "remaining": remaining})
+		var ships_update: Array = []
+		for i in mini(_fleet.size(), max_ships):
+			var s = _fleet[i]
+			ships_update.append({"level": s.get("level", 1), "troops": s.get("troops", [])})
+		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "ships": ships_update})
 	return true
 
 

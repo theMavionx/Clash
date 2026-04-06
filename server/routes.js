@@ -322,6 +322,63 @@ router.get('/battle-log', auth, (req, res) => {
   }));
 });
 
+// ==================== TROOPS ====================
+
+// Buy a troop (deduct gold, server-validated)
+const TROOP_BUY_COST = 100;
+router.post('/troops/buy', auth, (req, res) => {
+  const { troop_name } = req.body;
+  if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
+  const validTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+  if (!validTroops.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
+  if (!db.canAfford(req.player.id, TROOP_BUY_COST, 0, 0)) {
+    return res.status(400).json({ error: 'Not enough gold', cost: TROOP_BUY_COST });
+  }
+  db.subtractResources(req.player.id, TROOP_BUY_COST, 0, 0);
+  res.json({ success: true, troop_name, cost: TROOP_BUY_COST, resources: db.getResources(req.player.id) });
+});
+
+// Load troop onto a ship at a port
+router.post('/buildings/:id/load-troop', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const { troop_name } = req.body;
+  if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
+  const validTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+  if (!validTroops.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
+
+  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+  if (!building) return res.status(404).json({ error: 'Building not found' });
+  if (building.type !== 'port') return res.status(400).json({ error: 'Not a port' });
+  if (!building.has_ship) return res.status(400).json({ error: 'No ship at this port' });
+
+  const shipTroops = JSON.parse(building.ship_troops || '[]');
+  const capacity = building.level; // ship capacity = port level
+  if (shipTroops.length >= capacity) return res.status(400).json({ error: 'Ship is full' });
+
+  shipTroops.push(troop_name);
+  db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(shipTroops), buildingId);
+
+  res.json({
+    success: true,
+    ship_troops: shipTroops,
+    ship_level: building.level,
+    ship_capacity: building.level,
+  });
+});
+
+// Unload all troops from a ship
+router.post('/buildings/:id/unload-troops', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+
+  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+  if (!building) return res.status(404).json({ error: 'Building not found' });
+
+  db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run('[]', buildingId);
+  res.json({ success: true, ship_troops: [] });
+});
+
 // ==================== LEADERBOARD ====================
 
 router.get('/leaderboard', (req, res) => {

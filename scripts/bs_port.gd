@@ -87,9 +87,31 @@ func _load_troop_to_ship(troop_name: String) -> void:
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	if ship_troops.size() >= ship_level:
 		return
-	ship_troops.append(troop_name)
-	port_node.set_meta("ship_troops", ship_troops)
+	# Ask server first
+	var sid: int = bs.selected_building.get("server_id", -1)
+	var net: Node = bs._net
+	if net and net.has_token() and sid >= 0:
+		var result: Dictionary = await net.load_troop(sid, troop_name)
+		if result.has("error"):
+			bs._show_error(str(result.error))
+			return
+		# Update from server response
+		var new_troops: Array = result.get("ship_troops", [])
+		port_node.set_meta("ship_troops", new_troops)
+	else:
+		# Offline fallback
+		ship_troops.append(troop_name)
+		port_node.set_meta("ship_troops", ship_troops)
 	bs._refresh_port_panel()
+	# Update React with new ship data
+	var updated_troops: Array = port_node.get_meta("ship_troops", [])
+	var bridge: Node = bs._bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_level": ship_level,
+			"ship_troops": updated_troops,
+			"ship_capacity": ship_level,
+		})
 
 # ---------------------------------------------------------------------------
 # Main ship animation
@@ -139,6 +161,9 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	ship.scale = Vector3(s, s, s)
 	bs.get_tree().current_scene.add_child(ship)
 	port_node.set_meta("has_ship", true)
+	port_node.set_meta("ship_level", port_level)
+	if not port_node.has_meta("ship_troops"):
+		port_node.set_meta("ship_troops", [])
 	var port_pos = port_node.global_position
 	var port_rot_y = port_node.global_rotation.y
 	var forward = Vector3(sin(port_rot_y), 0, cos(port_rot_y))

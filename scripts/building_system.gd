@@ -1403,10 +1403,20 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		# Tombstone → spawn skeleton guards
 		if building_type == "tombstone":
 			_spawn_tombstone_skeletons(b_data, level)
-		# Port with ship → restore docked ship
+		# Port with ship → restore docked ship and loaded troops
 		if building_type == "port" and b.get("has_ship", 0) == 1:
 			_spawn_port_ship(b_data)
 			owned_ships += 1
+			# Restore ship_troops from server
+			var server_troops = b.get("ship_troops", [])
+			if server_troops is String:
+				var json = JSON.new()
+				if json.parse(server_troops) == OK and json.data is Array:
+					server_troops = json.data
+				else:
+					server_troops = []
+			if server_troops.size() > 0 and is_instance_valid(b_data.get("node")):
+				b_data.node.set_meta("ship_troops", server_troops)
 	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
 	_sync_react_buildings()
 	# Reveal cloud cover now that buildings are placed — first load only
@@ -2275,9 +2285,13 @@ func _select_building(b: Dictionary) -> void:
 		if def.has("hp_levels") and level < def.hp_levels.size():
 			next_hp = def.hp_levels[level]  # level is 1-based, array is 0-based, so [level] = next
 		var bs_has_ship = false
+		var bs_ship_level: int = 0
+		var bs_ship_troops: Array = []
 		if b.has("node") and is_instance_valid(b["node"]) and b["node"].has_meta("has_ship"):
 			bs_has_ship = true
-			
+			bs_ship_level = b["node"].get_meta("ship_level", 1)
+			bs_ship_troops = b["node"].get_meta("ship_troops", [])
+
 		bridge.send_to_react("building_selected", {
 			"id": b.id, "name": def.name, "level": level,
 			"hp": hp, "max_hp": max_hp, "max_level": max_level,
@@ -2286,7 +2300,11 @@ func _select_building(b: Dictionary) -> void:
 			"is_enemy": is_viewing_enemy,
 			"is_barracks": b.id in ["barracks", "barn"],
 			"is_upgrading": b.get("is_upgrading", false),
-			"has_ship": bs_has_ship
+			"has_ship": bs_has_ship,
+			"ship_level": bs_ship_level,
+			"ship_troops": bs_ship_troops,
+			"ship_capacity": bs_ship_level,
+			"troop_levels": troop_levels,
 		})
 
 	# Range indicator for defense buildings
@@ -2557,6 +2575,18 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	# Tombstone → update skeletons
 	if b.id == "tombstone":
 		_spawn_tombstone_skeletons(b, b.level)
+
+	# Port → upgrade ship level and respawn ship model
+	if b.id == "port" and is_instance_valid(b.get("node")):
+		var pnode: Node3D = b.node
+		if pnode.has_meta("has_ship"):
+			var old_ship_node = pnode.get_meta("ship_node", null)
+			if is_instance_valid(old_ship_node):
+				old_ship_node.get_parent().remove_child(old_ship_node)
+				old_ship_node.queue_free()
+			pnode.remove_meta("ship_node")
+			pnode.set_meta("ship_level", b.level)
+			_port._spawn_port_ship(b)
 
 	# Mark upgrade complete before refreshing UI
 	b["is_upgrading"] = false
@@ -3555,8 +3585,21 @@ func _buy_troop(troop_name: String) -> void:
 	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos)
 	if port_info.is_empty():
 		return
-	resources["gold"] -= BUY_TROOP_COST
-	_update_resource_ui()
+	# Ask server first
+	var net: Node = _net
+	if net and net.has_token():
+		var result: Dictionary = await net.buy_troop(troop_name)
+		if result.has("error"):
+			_show_error(str(result.error))
+			return
+		if result.has("resources"):
+			resources.gold = result.resources.gold
+			resources.wood = result.resources.wood
+			resources.ore = result.resources.ore
+			_update_resource_ui()
+	else:
+		resources["gold"] -= BUY_TROOP_COST
+		_update_resource_ui()
 	# Reserve the ship slot immediately
 	var port_node: Node3D = port_info.port_node
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
@@ -3662,7 +3705,34 @@ func _on_attack_pressed() -> void:
 
 ## Builds the fleet array from all port ships for the attack system.
 ## Returns [{level: int, troops: [String]}] — one entry per ship with troops.
+## Auto-fill empty ship slots with available troop types (round-robin).
+## Called before building fleet so ships go into battle fully loaded.
+func _auto_fill_ships() -> void:
+	# Collect available troop types (level > 0) sorted by level desc
+	var available: Array = []
+	for troop_name in ["Knight", "Barbarian", "Mage", "Archer", "Ranger"]:
+		if troop_levels.get(troop_name, 0) >= 1:
+			available.append(troop_name)
+	if available.is_empty():
+		return
+	var idx: int = 0
+	for bs_node in _building_systems:
+		for b in bs_node.placed_buildings:
+			if b.get("id") != "port":
+				continue
+			var pnode = b.get("node", null)
+			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
+				continue
+			var ship_level: int = pnode.get_meta("ship_level", 1)
+			var ship_troops: Array = pnode.get_meta("ship_troops", [])
+			while ship_troops.size() < ship_level:
+				ship_troops.append(available[idx % available.size()])
+				idx += 1
+			pnode.set_meta("ship_troops", ship_troops)
+
+
 func _build_fleet() -> Array:
+	_auto_fill_ships()
 	var fleet: Array = []
 	for bs_node in _building_systems:
 		for b in bs_node.placed_buildings:

@@ -25,6 +25,7 @@ export function GodotProvider({ children }) {
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
   const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
+  const [fleetInfo, setFleetInfo] = useState(null);
   const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
   const resourceCapsRef = useRef({ gold: 5000, wood: 5000, ore: 5000 });
   const errorTimerRef = useRef(null);
@@ -65,6 +66,9 @@ export function GodotProvider({ children }) {
         case 'building_selected':
           setSelectedBuilding(data);
           break;
+        case 'ship_updated':
+          setSelectedBuilding(prev => prev ? { ...prev, ...data } : prev);
+          break;
         case 'building_deselected':
           setSelectedBuilding(null);
           break;
@@ -87,6 +91,9 @@ export function GodotProvider({ children }) {
           break;
         case 'cannon_energy':
           setCannonEnergy({ energy: data.energy || 0, nextCost: data.next_cost || 1 });
+          break;
+        case 'fleet_info':
+          setFleetInfo(data);
           break;
         case 'resource_caps':
           const newCaps = { gold: data.gold || 5000, wood: data.wood || 5000, ore: data.ore || 5000 };
@@ -146,8 +153,8 @@ export function GodotProvider({ children }) {
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },

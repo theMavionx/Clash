@@ -144,6 +144,12 @@ func upgrade_building(building_id: int) -> Dictionary:
 		building_upgraded.emit(response)
 	return response
 
+func buy_troop(troop_name: String) -> Dictionary:
+	return await _http_post("/troops/buy", {"troop_name": troop_name})
+
+func load_troop(building_id: int, troop_name: String) -> Dictionary:
+	return await _http_post("/buildings/%d/load-troop" % building_id, {"troop_name": troop_name})
+
 func link_wallet(wallet: String) -> void:
 	if token == "" or wallet == "":
 		return
