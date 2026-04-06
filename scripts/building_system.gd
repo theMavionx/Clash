@@ -1947,9 +1947,17 @@ func _unhandled_input(event: InputEvent) -> void:
 					_select_building(found)
 				get_viewport().set_input_as_handled()
 			else:
-				_deselect_building()
+				# No building hit — check if clicked on a port ship
+				var ship_port = _find_ship_at_click(event.position)
+				if ship_port.size() > 0:
+					_show_ship_panel(ship_port)
+					get_viewport().set_input_as_handled()
+				else:
+					_deselect_building()
+					_hide_ship_panel()
 		else:
 			_deselect_building()
+			_hide_ship_panel()
 
 
 func _get_mouse_local() -> Vector3:
@@ -3076,6 +3084,121 @@ func _refresh_port_panel() -> void:
 	port_vbox.add_child(close_btn)
 
 
+# ── Ship Info Panel (click on ship model) ────────────────────
+var ship_info_panel: PanelContainer
+var ship_info_vbox: VBoxContainer
+
+
+## Detects if the mouse click is near a port ship in screen space.
+## Returns {"port_node": Node3D} if found, {} otherwise.
+func _find_ship_at_click(mouse_pos: Vector2) -> Dictionary:
+	var camera = BaseTroop._get_camera_cached()
+	if not camera:
+		return {}
+	for bs_node in _building_systems:
+		for b in bs_node.placed_buildings:
+			if b.get("id") != "port":
+				continue
+			var pnode = b.get("node", null)
+			if not is_instance_valid(pnode) or not pnode.has_meta("ship_node"):
+				continue
+			var ship = pnode.get_meta("ship_node")
+			if not is_instance_valid(ship):
+				continue
+			var screen_pos = camera.unproject_position(ship.global_position)
+			if mouse_pos.distance_to(screen_pos) < 60.0:
+				return {"port_node": pnode}
+	return {}
+
+
+## Shows a floating panel near the ship with its crew list.
+func _show_ship_panel(ship_data: Dictionary) -> void:
+	var pnode: Node3D = ship_data.get("port_node")
+	if not is_instance_valid(pnode):
+		return
+	_hide_ship_panel()
+	_deselect_building()
+
+	var ship_level: int = pnode.get_meta("ship_level", 1)
+	var ship_troops: Array = pnode.get_meta("ship_troops", [])
+	var ship_names = ["", "Small Ship", "Medium Ship", "Large Ship"]
+	var ship_name: String = ship_names[clampi(ship_level, 0, 3)]
+
+	ship_info_panel = PanelContainer.new()
+	ship_info_panel.custom_minimum_size = Vector2(300, 0)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.06, 0.1, 0.18, 0.95)
+	style.set_corner_radius_all(12)
+	style.set_border_width_all(2)
+	style.border_color = Color(0.25, 0.45, 0.7, 0.9)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	style.shadow_color = Color(0, 0, 0, 0.4)
+	style.shadow_size = 5
+	ship_info_panel.add_theme_stylebox_override("panel", style)
+
+	# Position near the ship in screen space
+	var camera = BaseTroop._get_camera_cached()
+	if camera:
+		var ship_node = pnode.get_meta("ship_node")
+		if is_instance_valid(ship_node):
+			var screen_pos = camera.unproject_position(ship_node.global_position + Vector3(0, 0.15, 0))
+			ship_info_panel.position = screen_pos - Vector2(150, 0)
+
+	ship_info_vbox = VBoxContainer.new()
+	ship_info_vbox.add_theme_constant_override("separation", 6)
+	ship_info_panel.add_child(ship_info_vbox)
+
+	# Title
+	var title = Label.new()
+	title.text = "%s (Lv.%d)" % [ship_name, ship_level]
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0))
+	ship_info_vbox.add_child(title)
+
+	# Crew count
+	var crew_lbl = Label.new()
+	crew_lbl.text = "Crew: %d / %d" % [ship_troops.size(), ship_level]
+	crew_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	crew_lbl.add_theme_font_size_override("font_size", 14)
+	crew_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
+	ship_info_vbox.add_child(crew_lbl)
+
+	if ship_troops.size() > 0:
+		var sep = HSeparator.new()
+		ship_info_vbox.add_child(sep)
+		for i in range(ship_troops.size()):
+			var troop_name: String = ship_troops[i]
+			var tlvl: int = troop_levels.get(troop_name, 1)
+			var tdef: Dictionary = troop_defs.get(troop_name, {})
+			var display_name: String = tdef.get("display", troop_name)
+			var slot_lbl = Label.new()
+			slot_lbl.text = "%d.  %s  — Lv.%d" % [i + 1, display_name, tlvl]
+			slot_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.75))
+			slot_lbl.add_theme_font_size_override("font_size", 15)
+			ship_info_vbox.add_child(slot_lbl)
+	else:
+		var empty_lbl = Label.new()
+		empty_lbl.text = "No crew aboard"
+		empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		empty_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+		ship_info_vbox.add_child(empty_lbl)
+
+	if canvas:
+		canvas.add_child(ship_info_panel)
+
+
+## Hides and frees the ship info panel.
+func _hide_ship_panel() -> void:
+	if ship_info_panel and is_instance_valid(ship_info_panel):
+		ship_info_panel.queue_free()
+	ship_info_panel = null
+	ship_info_vbox = null
+
+
 func _buy_ship() -> void:
 	_port._buy_ship()
 
@@ -3420,44 +3543,92 @@ func _get_total_ship_capacity() -> int:
 func _buy_troop(troop_name: String) -> void:
 	if resources.get("gold", 0) < BUY_TROOP_COST:
 		return
-	# Check free ship slots instead of total capacity
 	if _port._get_free_ship_slots() <= 0:
 		return
 	var tdef = troop_defs.get(troop_name, {})
-	var model_path = tdef.get("model", "")
-	if model_path == "":
+	var model_path: String = tdef.get("model", "")
+	var script_path: String = tdef.get("script", "")
+	if model_path == "" or script_path == "":
 		return
-	# Find port with free slot BEFORE spending gold
-	var spawn_pos = _get_building_spawn_pos()
+	# Find port with free slot from barracks position
+	var spawn_pos: Vector3 = _get_building_spawn_pos()
 	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos)
 	if port_info.is_empty():
 		return
 	resources["gold"] -= BUY_TROOP_COST
 	_update_resource_ui()
-	# Reserve the slot immediately so concurrent buys don't over-fill
+	# Reserve the ship slot immediately
 	var port_node: Node3D = port_info.port_node
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	ship_troops.append(troop_name)
 	port_node.set_meta("ship_troops", ship_troops)
 	_refresh_barracks_panel()
-	var model_res = load(model_path)
-	if model_res == null:
+	# Spawn the actual combat troop model (same as attack troops)
+	var model_res: Resource = load(model_path)
+	var script_res: Resource = load(script_path)
+	if model_res == null or script_res == null:
 		return
-	var home_script = load("res://scripts/home_troop.gd")
-	var troop = model_res.instantiate()
-	troop.set_script(home_script)
-	troop.name = "HomeTroop_%d" % (randi() % 99999)
-	# Init troop type and level before adding to tree (_ready will use them)
-	troop.init_troop(troop_name, troop_levels.get(troop_name, 1))
-	get_tree().root.add_child(troop)
+	var troop: Node3D = model_res.instantiate()
+	troop.set_script(script_res)
+	troop.name = "RecruitTroop_%d" % (randi() % 99999)
+	get_tree().current_scene.add_child(troop)
 	troop.scale = Vector3(0.1, 0.1, 0.1)
-	troop.add_to_group("home_troops")
 	troop.global_position = spawn_pos
-	_home_troops.append({"node": troop, "name": troop_name, "port_node": port_node})
-	# Run to port and board the ship
-	var port_pos: Vector3 = port_info.pos
-	port_pos.y = grid_y
-	troop.board_ship(port_pos)
+	troop.global_position.y = grid_y
+	# Don't activate for combat — just walk to the ship
+	# Use a tween-based walk with building avoidance
+	_walk_troop_to_ship(troop, port_info.pos)
+
+
+## Walks a recruited troop from its spawn position to the port, avoiding
+## buildings along the way. When it arrives, it disappears (boards the ship).
+func _walk_troop_to_ship(troop: Node3D, target_pos: Vector3) -> void:
+	target_pos.y = grid_y
+	# Play run animation
+	if troop.has_method("activate"):
+		# BaseTroop — set to RUNNING manually without combat targeting
+		troop.visible = true
+		if troop.anim_player and troop.anim_player.has_animation("Running_A"):
+			troop.anim_player.play("Running_A")
+	var move_speed: float = 0.5
+	var avoid_radius: float = 0.2
+	var sep_force: float = 0.6
+	while is_instance_valid(troop):
+		var diff: Vector3 = target_pos - troop.global_position
+		diff.y = 0
+		# Arrived at port
+		if diff.length_squared() < 0.15 * 0.15:
+			troop.queue_free()
+			return
+		var dir: Vector3 = diff.normalized()
+		# Building avoidance
+		var sep: Vector3 = Vector3.ZERO
+		for bs_node in _building_systems:
+			for b in bs_node.placed_buildings:
+				var bnode: Node3D = b.get("node")
+				if not is_instance_valid(bnode):
+					continue
+				var to_bldg: Vector3 = troop.global_position - bnode.global_position
+				to_bldg.y = 0
+				var bd: float = to_bldg.length()
+				if bd < avoid_radius and bd > 0.001:
+					sep += to_bldg.normalized() * (avoid_radius - bd) / avoid_radius * 2.0
+		var delta: float = get_process_delta_time()
+		var velocity: Vector3 = dir * move_speed + sep * sep_force
+		velocity.y = 0
+		troop.global_position += velocity * delta
+		troop.global_position.y = grid_y
+		# Face movement direction (model faces -Z)
+		var face_dir: Vector3 = velocity.normalized()
+		if face_dir.length_squared() > 0.001:
+			var face_target: Vector3 = troop.global_position + face_dir
+			face_target.y = troop.global_position.y
+			troop.look_at(face_target, Vector3.UP)
+			troop.rotate_y(PI)
+		troop.scale = Vector3(0.1, 0.1, 0.1)
+		await get_tree().process_frame
+	# Troop was freed externally (e.g. scene change)
+	return
 
 
 func _get_building_spawn_pos() -> Vector3:
@@ -3486,7 +3657,24 @@ func _get_random_grid_world_pos() -> Vector3:
 func _on_attack_pressed() -> void:
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode()
+		attack_system.enter_attack_mode(_build_fleet())
+
+
+## Builds the fleet array from all port ships for the attack system.
+## Returns [{level: int, troops: [String]}] — one entry per ship with troops.
+func _build_fleet() -> Array:
+	var fleet: Array = []
+	for bs_node in _building_systems:
+		for b in bs_node.placed_buildings:
+			if b.get("id") != "port":
+				continue
+			var pnode = b.get("node", null)
+			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
+				continue
+			var ship_level: int = pnode.get_meta("ship_level", 1)
+			var ship_troops: Array = pnode.get_meta("ship_troops", [])
+			fleet.append({"level": ship_level, "troops": ship_troops.duplicate()})
+	return fleet
 
 
 func _get_all_port_ships() -> Array:
