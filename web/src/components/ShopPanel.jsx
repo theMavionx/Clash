@@ -13,6 +13,7 @@ import imgTownHall from '../assets/buildings/townhall.png';
 import imgTurret from '../assets/buildings/turret.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
+import imgStorage from '../assets/buildings/storage.png';
 
 const TABS = [
   { id: 'Economy', label: 'Economy' },
@@ -57,6 +58,7 @@ const THUMBNAIL_MAP = {
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
+  storage: imgStorage,
 };
 
 const THUMBNAIL_SCALE_MAP = {

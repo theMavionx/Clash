@@ -245,9 +245,10 @@ router.post('/attack/result', auth, (req, res) => {
     return res.json(battleResult);
   }
 
-  // Defeat — no loot, still store replay
+  // Defeat — attacker loses trophies, defender gains
+  const defeatResult = db.battleDefeat(req.player.id, defender_id);
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', 'Defeat', null, verification);
-  res.json({ success: true, loot: { gold: 0, wood: 0, ore: 0 } });
+  res.json({ success: true, loot: { gold: 0, wood: 0, ore: 0 }, trophies: defeatResult.attackerTrophies });
 });
 
 // ==================== TROOPS ====================
@@ -313,6 +314,20 @@ router.get('/battle-log', auth, (req, res) => {
   }));
 });
 
+// ==================== LEADERBOARD ====================
+
+router.get('/leaderboard', (req, res) => {
+  const rows = db.db.prepare(`
+    SELECT p.name, p.trophies,
+      COALESCE((SELECT MAX(b.level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 1) AS level
+    FROM players p
+    WHERE p.trophies > 0
+    ORDER BY p.trophies DESC
+    LIMIT 50
+  `).all();
+  res.json(rows);
+});
+
 // ==================== TROPHIES ====================
 
 // Get trophies
@@ -333,11 +348,11 @@ router.get('/trophies/table', (req, res) => {
 
 // ==================== TRADING REWARDS ====================
 
-const GOLD_PER_USD_VOLUME = 0.05;
+const GOLD_PER_USD_VOLUME = 0.20;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
-const GOLD_DAILY_TRADE = 200;
-const GOLD_PER_10_USD_PROFIT = 100; // +100 gold per $10 positive PnL
+const GOLD_DAILY_TRADE = 750;
+const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
 
 // Trading rewards table
 try {
@@ -533,7 +548,7 @@ router.get('/state', auth, (req, res) => {
 
 // ==================== ADMIN ====================
 
-const ADMIN_KEY = process.env.ADMIN_KEY || 'change-me-in-production';
+const ADMIN_KEY = process.env.ADMIN_KEY;
 function adminAuth(req, res, next) {
   if (req.headers['x-admin-key'] !== ADMIN_KEY) {
     return res.status(403).json({ error: 'Forbidden' });
@@ -541,10 +556,37 @@ function adminAuth(req, res, next) {
   next();
 }
 
-// List all players
+// List all players with full details (shields, wallet, last attack)
 router.get('/admin/players', adminAuth, (req, res) => {
-  const players = db.db.prepare('SELECT id, name, trophies, level, gold, wood, ore, created_at FROM players ORDER BY trophies DESC').all();
-  res.json(players);
+  const players = db.db.prepare(`
+    SELECT id, name, trophies, level, gold, wood, ore, wallet,
+           shield_until, last_attacked_by, last_attacked_at, created_at
+    FROM players ORDER BY trophies DESC
+  `).all();
+  res.json(players.map(p => ({
+    ...p,
+    shield_active: p.shield_until && new Date(p.shield_until + 'Z') > new Date(),
+    shield_remaining: p.shield_until ? Math.max(0, Math.round((new Date(p.shield_until + 'Z') - new Date()) / 60000)) : 0,
+    buildings_count: db.db.prepare('SELECT COUNT(*) as c FROM buildings WHERE player_id = ?').get(p.id).c,
+  })));
+});
+
+// All battle replays with full details
+router.get('/admin/replays', adminAuth, (req, res) => {
+  const rows = db.db.prepare(`
+    SELECT r.id, r.attacker_id, r.defender_id,
+           r.claimed_result, r.verified_result, r.verification_reason,
+           r.loot_gold, r.loot_wood, r.loot_ore,
+           r.sim_th_hp_pct, r.sim_buildings_destroyed, r.duration_sec,
+           r.created_at,
+           pa.name AS attacker_name, pd.name AS defender_name
+    FROM battle_replays r
+    LEFT JOIN players pa ON pa.id = r.attacker_id
+    LEFT JOIN players pd ON pd.id = r.defender_id
+    ORDER BY r.created_at DESC
+    LIMIT 200
+  `).all();
+  res.json(rows);
 });
 
 // Delete a player by name
@@ -570,9 +612,23 @@ router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
-  db.db.prepare('UPDATE players SET gold = 10000, wood = 10000, ore = 10000, trophies = 0 WHERE id = ?').run(player.id);
+  db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0 WHERE id = ?').run(player.id);
   db.db.prepare('UPDATE troop_levels SET level = 1 WHERE player_id = ?').run(player.id);
   res.json({ reset: req.params.name });
+});
+
+// Reset trophies for one player
+router.post('/admin/players/:name/reset-trophies', adminAuth, (req, res) => {
+  const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
+  if (!player) return res.status(404).json({ error: 'Player not found' });
+  db.db.prepare('UPDATE players SET trophies = 0 WHERE id = ?').run(player.id);
+  res.json({ reset_trophies: req.params.name });
+});
+
+// Reset trophies for ALL players
+router.post('/admin/reset-all-trophies', adminAuth, (req, res) => {
+  const result = db.db.prepare('UPDATE players SET trophies = 0').run();
+  res.json({ reset: result.changes });
 });
 
 // Wipe entire database

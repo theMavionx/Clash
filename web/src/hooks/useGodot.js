@@ -26,6 +26,7 @@ export function GodotProvider({ children }) {
   const [battleResult, setBattleResult] = useState(null);
   const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
   const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
+  const resourceCapsRef = useRef({ gold: 5000, wood: 5000, ore: 5000 });
   const errorTimerRef = useRef(null);
 
   useEffect(() => {
@@ -43,11 +44,14 @@ export function GodotProvider({ children }) {
           setResources(data);
           break;
         case 'resources_add':
-          setResources(prev => ({
-            gold: (prev.gold || 0) + (data.gold || 0),
-            wood: (prev.wood || 0) + (data.wood || 0),
-            ore: (prev.ore || 0) + (data.ore || 0),
-          }));
+          setResources(prev => {
+            const caps = resourceCapsRef.current;
+            return {
+              gold: Math.min(caps.gold, (prev.gold || 0) + (data.gold || 0)),
+              wood: Math.min(caps.wood, (prev.wood || 0) + (data.wood || 0)),
+              ore: Math.min(caps.ore, (prev.ore || 0) + (data.ore || 0)),
+            };
+          });
           break;
         case 'building_defs':
           setBuildingDefs(data);
@@ -85,7 +89,9 @@ export function GodotProvider({ children }) {
           setCannonEnergy({ energy: data.energy || 0, nextCost: data.next_cost || 1 });
           break;
         case 'resource_caps':
-          setResourceCaps({ gold: data.gold || 5000, wood: data.wood || 5000, ore: data.ore || 5000 });
+          const newCaps = { gold: data.gold || 5000, wood: data.wood || 5000, ore: data.ore || 5000 };
+          setResourceCaps(newCaps);
+          resourceCapsRef.current = newCaps;
           break;
         case 'th_info':
           setBuildingDefs(prev => ({ ...prev, th_level: data.level || 1, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress: data.progress || 0, th_progress_total: data.progress_total || 0 }));

@@ -5,7 +5,7 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function PlayerInfo({ onOpenProfile }) {
+function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const playerState = usePlayer();
   const { buildingDefs } = useBuilding();
   if (!playerState) return null;
@@ -31,7 +31,7 @@ function PlayerInfo({ onOpenProfile }) {
       <div style={styles.infoStack}>
         <span style={styles.name}>{playerState.player_name}</span>
 
-        <div style={styles.trophyContainer}>
+        <div style={styles.trophyContainer} onClick={(e) => { e.stopPropagation(); onOpenLeaderboard?.(); }}>
           <div style={styles.trophyBox}>
             <img src={trophyIcon} alt="trophy" style={styles.trophyImg} />
           </div>

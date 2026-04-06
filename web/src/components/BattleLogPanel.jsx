@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useCallback } from 'react';
 import { useSend } from '../hooks/useGodot';
+import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
@@ -108,11 +109,12 @@ function BattleLogPanel({ onClose }) {
                     <span style={S.opponentName}>{badgeDesc}</span>
                     <span style={S.time}>{timeAgo(b.created_at)}</span>
                   </div>
-                  {totalLoot > 0 && (
-                    <span style={{ ...S.lootTotal, color: isAttack ? '#43A047' : '#E53935' }}>
-                      {isAttack ? '+' : '-'}{fmt(totalLoot)}
+                  <div style={S.trophyTotal}>
+                    <img src={trophyIcon} alt="" style={S.trophyMini} />
+                    <span style={{ color: (isAttack && isVictory) || (!isAttack && !isVictory) ? '#b45309' : '#E53935', fontWeight: 900, fontSize: 14 }}>
+                      {(isAttack && isVictory) || (!isAttack && !isVictory) ? '+30' : '-15'}
                     </span>
-                  )}
+                  </div>
                 </div>
 
                 {isExpanded && (
@@ -232,7 +234,8 @@ const S = {
   cardInfo: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1 },
   opponentName: { fontSize: 14, fontWeight: 900, color: '#5C3A21' },
   time: { fontSize: 11, fontWeight: 700, color: '#a3906a' },
-  lootTotal: { fontSize: 14, fontWeight: 900, flexShrink: 0 },
+  trophyTotal: { display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 },
+  trophyMini: { width: 16, height: 16, objectFit: 'contain', filter: 'invert(60%) sepia(90%) saturate(500%) hue-rotate(10deg)' },
   details: {
     marginTop: 8, paddingTop: 8, borderTop: '2px solid #d4c8b0',
     display: 'flex', flexDirection: 'column', gap: 5,

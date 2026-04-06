@@ -13,6 +13,7 @@ import ProfileModal from './ProfileModal';
 import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import BattleLogPanel from './BattleLogPanel';
+import LeaderboardPanel from './LeaderboardPanel';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
@@ -23,6 +24,7 @@ export default function GameUI() {
   const [showTroops, setShowTroops] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showBattleLog, setShowBattleLog] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
@@ -30,7 +32,7 @@ export default function GameUI() {
 
   // Pause island when heavy overlay panels are open (futures, shop, barracks, profile)
   const barracksOpen = showTroops;
-  const anyPanelOpen = !!(futuresOpen || shopOpen || barracksOpen || showProfile || showBattleLog);
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barracksOpen || showProfile || showBattleLog || showLeaderboard);
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
   }, [anyPanelOpen, sendToGodot]);
@@ -58,7 +60,7 @@ export default function GameUI() {
   return (
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
-      {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} />}
+      {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
       <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} />
       <ErrorToast message={error} />
       <FpsTracker />
@@ -82,6 +84,10 @@ export default function GameUI() {
 
       {showBattleLog && (
         <BattleLogPanel onClose={() => setShowBattleLog(false)} />
+      )}
+
+      {showLeaderboard && (
+        <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
       )}
 
       {showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barracks) && !selectedBuilding.is_enemy ? (
