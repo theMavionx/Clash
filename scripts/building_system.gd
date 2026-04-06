@@ -24,9 +24,9 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
 		"hp_levels": [1200, 2200, 3800],
-		"cost": {"gold": 200, "wood": 200},
+		"cost": {"gold": 300, "wood": 280},
 		"produces": "ore",
-		"produce_rate": [10, 18, 30],   # per minute per level
+		"produce_rate": [6, 11, 18],    # per minute per level
 		"produce_max": [200, 400, 800],  # max stored before collection
 	},
 	"barn": {
@@ -38,7 +38,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [2000, 3500, 6000],
-		"cost": {"gold": 100, "wood": 250, "ore": 150},
+		"cost": {"gold": 200, "wood": 420, "ore": 200},
 	},
 	"port": {
 		"name": "Port",
@@ -50,7 +50,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
 		"hp_levels": [1800, 3200, 5500],
-		"cost": {"gold": 400, "wood": 400, "ore": 300},
+		"cost": {"gold": 600, "wood": 550, "ore": 420},
 		"no_outline": true,
 	},
 	"sawmill": {
@@ -61,9 +61,9 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800],
-		"cost": {"gold": 150, "ore": 100},
+		"cost": {"gold": 250, "ore": 220},
 		"produces": "wood",
-		"produce_rate": [12, 22, 35],
+		"produce_rate": [8, 15, 24],
 		"produce_max": [250, 500, 1000],
 	},
 	"barracks": {
@@ -75,7 +75,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [1500, 2800, 4500],
-		"cost": {"gold": 250, "wood": 400},
+		"cost": {"gold": 400, "wood": 500},
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -101,7 +101,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
 		"hp_levels": [900, 1600, 2800],
-		"cost": {"gold": 300, "wood": 450, "ore": 300},
+		"cost": {"gold": 500, "wood": 700, "ore": 500},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
 	"storage": {
@@ -114,7 +114,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
 		"hp_levels": [1400, 2500, 4200],
-		"cost": {"gold": 175, "wood": 300},
+		"cost": {"gold": 300, "wood": 560},
 	},
 	"archer_tower": {
 		"name": "Archer Tower",
@@ -127,7 +127,7 @@ var building_defs: Dictionary = {
 		"model_offset": Vector3(0.11, 0, -0.02),
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500],
-		"cost": {"gold": 250, "wood": 500},
+		"cost": {"gold": 500, "wood": 700},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
 			"model": "res://Model/Characters/Model/Ranger.glb",
@@ -144,7 +144,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb"],
 		"model_scale": 0.3,
 		"hp_levels": [1000, 1500, 2000],
-		"cost": {"gold": 50, "ore": 100},
+		"cost": {"gold": 150, "ore": 280},
 	},
 	"flag": {
 		"name": "Flag",
@@ -173,8 +173,8 @@ const TH_BASE_CAPACITY: Dictionary = {
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
-	2: {"gold": 35000, "wood": 35000, "ore": 35000},
-	3: {"gold": 75000, "wood": 75000, "ore": 75000},
+	2: {"gold": 20000, "wood": 20000, "ore": 20000},
+	3: {"gold": 30000, "wood": 30000, "ore": 30000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -459,9 +459,9 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Knight.glb",
 		"script": "res://scripts/knight.gd",
 		"costs": {
-			1: {"gold": 80, "ore": 100},
-			2: {"gold": 150, "ore": 250},
-			3: {"gold": 300, "ore": 500},
+			1: {"gold": 150, "ore": 100},
+			2: {"gold": 300, "ore": 250},
+			3: {"gold": 600, "ore": 500},
 		}
 	},
 	"Mage": {
@@ -469,9 +469,9 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Mage.glb",
 		"script": "res://scripts/mage.gd",
 		"costs": {
-			1: {"gold": 120, "ore": 180},
-			2: {"gold": 250, "ore": 400},
-			3: {"gold": 500, "ore": 800},
+			1: {"gold": 200, "ore": 200},
+			2: {"gold": 500, "ore": 500},
+			3: {"gold": 1000, "ore": 1000},
 		}
 	},
 	"Barbarian": {
@@ -479,9 +479,9 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Barbarian.glb",
 		"script": "res://scripts/barbarian.gd",
 		"costs": {
-			1: {"gold": 100, "ore": 150},
-			2: {"gold": 200, "ore": 350},
-			3: {"gold": 400, "ore": 700},
+			1: {"gold": 150, "ore": 150},
+			2: {"gold": 350, "ore": 350},
+			3: {"gold": 700, "ore": 700},
 		}
 	},
 	"Archer": {
@@ -489,9 +489,9 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Ranger.glb",
 		"script": "res://scripts/archer.gd",
 		"costs": {
-			1: {"gold": 90, "wood": 120},
-			2: {"gold": 180, "wood": 300},
-			3: {"gold": 360, "wood": 600},
+			1: {"gold": 150, "wood": 150},
+			2: {"gold": 350, "wood": 350},
+			3: {"gold": 700, "wood": 700},
 		}
 	},
 	"Ranger": {
@@ -499,9 +499,9 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/Rogue_Hooded.glb",
 		"script": "res://scripts/ranger.gd",
 		"costs": {
-			1: {"gold": 60, "wood": 80},
-			2: {"gold": 120, "wood": 200},
-			3: {"gold": 250, "wood": 400},
+			1: {"gold": 120, "wood": 120},
+			2: {"gold": 250, "wood": 250},
+			3: {"gold": 500, "wood": 500},
 		}
 	},
 }

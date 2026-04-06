@@ -612,7 +612,7 @@ router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
-  db.db.prepare('UPDATE players SET gold = 10000, wood = 10000, ore = 10000, trophies = 0 WHERE id = ?').run(player.id);
+  db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0 WHERE id = ?').run(player.id);
   db.db.prepare('UPDATE troop_levels SET level = 1 WHERE player_id = ?').run(player.id);
   res.json({ reset: req.params.name });
 });

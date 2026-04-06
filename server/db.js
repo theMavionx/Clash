@@ -17,9 +17,9 @@ db.exec(`
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
     token      TEXT NOT NULL UNIQUE,
-    gold       INTEGER NOT NULL DEFAULT 10000,
-    wood       INTEGER NOT NULL DEFAULT 10000,
-    ore        INTEGER NOT NULL DEFAULT 10000,
+    gold       INTEGER NOT NULL DEFAULT 4000,
+    wood       INTEGER NOT NULL DEFAULT 4000,
+    ore        INTEGER NOT NULL DEFAULT 4000,
     trophies   INTEGER NOT NULL DEFAULT 0,
     level      INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -83,8 +83,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [10, 18, 30], max: [200, 400, 800] },   // per minute
-  sawmill: { resource: 'wood', rate: [12, 22, 35], max: [250, 500, 1000] },
+  mine:    { resource: 'ore',  rate: [6, 11, 18], max: [200, 400, 800] },    // per minute
+  sawmill: { resource: 'wood', rate: [8, 15, 24], max: [250, 500, 1000] },
 };
 
 // ---------- Prepared Statements ----------
@@ -93,7 +93,7 @@ const stmts = {
   // Players
   createPlayer: db.prepare(`
     INSERT INTO players (id, name, token, gold, wood, ore)
-    VALUES (?, ?, ?, 10000, 10000, 10000)
+    VALUES (?, ?, ?, 4000, 4000, 4000)
   `),
   getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ?`),
   getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ?`),
@@ -193,61 +193,67 @@ const BUILDING_DEFS = {
   mine: {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
-    cost: { gold: 200, wood: 200, ore: 0 },
+    cost: { gold: 300, wood: 280, ore: 0 },
     max_count: 4,
   },
   barn: {
     size: [2, 3], max_level: 3,
     hp_levels: [2000, 3500, 6000],
-    cost: { gold: 100, wood: 250, ore: 150 },
+    cost: { gold: 200, wood: 420, ore: 200 },
     max_count: 2,
   },
   port: {
     size: [4, 3], max_level: 3,
     hp_levels: [1800, 3200, 5500],
-    cost: { gold: 400, wood: 400, ore: 300 },
+    cost: { gold: 600, wood: 550, ore: 420 },
     max_count: 2,
   },
   sawmill: {
     size: [3, 3], max_level: 3,
     hp_levels: [1200, 2200, 3800],
-    cost: { gold: 150, wood: 0, ore: 100 },
+    cost: { gold: 250, wood: 0, ore: 220 },
     max_count: 4,
   },
   turret: {
     size: [2, 2], max_level: 3,
     hp_levels: [900, 1600, 2800],
-    cost: { gold: 300, wood: 450, ore: 300 },
+    cost: { gold: 500, wood: 700, ore: 500 },
     max_count: 6,
   },
   tombstone: {
     size: [3, 3], max_level: 3,
     hp_levels: [1000, 1500, 2000],
-    cost: { gold: 50, wood: 0, ore: 100 },
+    cost: { gold: 150, wood: 0, ore: 280 },
     max_count: 4,
   },
   storage: {
     size: [4, 5], max_level: 3,
     hp_levels: [1400, 2500, 4200],
-    cost: { gold: 175, wood: 300, ore: 0 },
+    cost: { gold: 300, wood: 560, ore: 0 },
     max_count: 3,
   },
   archer_tower: {
     size: [3, 3], max_level: 3,
     hp_levels: [800, 1500, 2500],
-    cost: { gold: 250, wood: 500, ore: 0 },
+    cost: { gold: 500, wood: 700, ore: 0 },
     max_count: 4,
+  },
+  barracks: {
+    size: [3, 3], max_level: 3,
+    hp_levels: [1500, 2800, 4500],
+    cost: { gold: 400, wood: 500, ore: 0 },
+    max_count: 2,
   },
 };
 
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 3, cost: [{ gold: 80, wood: 0, ore: 100 },  { gold: 150, wood: 0, ore: 250 },  { gold: 300, wood: 0, ore: 500 }] },
-  mage:      { max_level: 3, cost: [{ gold: 120, wood: 0, ore: 180 }, { gold: 250, wood: 0, ore: 400 },  { gold: 500, wood: 0, ore: 800 }] },
-  barbarian: { max_level: 3, cost: [{ gold: 100, wood: 0, ore: 150 }, { gold: 200, wood: 0, ore: 350 },  { gold: 400, wood: 0, ore: 700 }] },
-  archer:    { max_level: 3, cost: [{ gold: 90, wood: 120, ore: 0 },  { gold: 180, wood: 300, ore: 0 },  { gold: 360, wood: 600, ore: 0 }] },
-  ranger:    { max_level: 3, cost: [{ gold: 60, wood: 80, ore: 0 },   { gold: 120, wood: 200, ore: 0 },  { gold: 250, wood: 400, ore: 0 }] },
+  knight:    { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 100 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
+  mage:      { max_level: 3, cost: [{ gold: 200, wood: 0, ore: 200 }, { gold: 500, wood: 0, ore: 500 },  { gold: 1000, wood: 0, ore: 1000 }] },
+  barbarian: { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 150 }, { gold: 350, wood: 0, ore: 350 },  { gold: 700, wood: 0, ore: 700 }] },
+  archer:    { max_level: 3, cost: [{ gold: 150, wood: 150, ore: 0 }, { gold: 350, wood: 350, ore: 0 },  { gold: 700, wood: 700, ore: 0 }] },
+  ranger:    { max_level: 3, cost: [{ gold: 120, wood: 120, ore: 0 }, { gold: 250, wood: 250, ore: 0 },  { gold: 500, wood: 500, ore: 0 }] },
 };
 
 // ---------- Trophy Points per Building (type -> level -> trophies) ----------
@@ -297,8 +303,8 @@ const TH_BASE_CAPACITY = {
 // Additional capacity per Storage building per level
 const STORAGE_CAPACITY = {
   1: { gold: 15000, wood: 15000, ore: 15000 },
-  2: { gold: 35000, wood: 35000, ore: 35000 },
-  3: { gold: 75000, wood: 75000, ore: 75000 },
+  2: { gold: 20000, wood: 20000, ore: 20000 },
+  3: { gold: 30000, wood: 30000, ore: 30000 },
 };
 
 function getResourceCaps(playerId) {
@@ -460,7 +466,6 @@ function upgradeBuilding(playerId, buildingId) {
     id: buildingId, type: building.type, level: nextLevel,
     hp: newHp, max_hp: newHp, cost,
     resources: getResources(playerId),
-    trophies: trophyResult.trophies,
   };
 }
 
