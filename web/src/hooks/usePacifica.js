@@ -2,10 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { ed25519 } from '@noble/curves/ed25519';
 import { isFarcasterFrame } from './useFarcaster';
 
-// ---------- Farcaster direct signing (bypasses wallet-standard SIP-99 wrapping) ----------
+// ---------- Farcaster direct signing ----------
+// The @farcaster/mini-app-solana wallet passes UTF-8 strings to provider.signMessage(),
+// but Warpcast native expects base64-encoded bytes. We bypass the wallet-standard adapter
+// and call the provider directly with base64.
 let _fcProvider = null;
 async function getFcProvider() {
   if (_fcProvider) return _fcProvider;
@@ -16,61 +18,14 @@ async function getFcProvider() {
   return _fcProvider;
 }
 
-function toHex(bytes) { return [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''); }
-
-async function fcSignRaw(msgBytes, pubKeyBytes) {
+async function fcSignMessage(msgBytes) {
   const provider = await getFcProvider();
   if (!provider) return null;
-
-  const msgStr = new TextDecoder().decode(msgBytes);
-  const msgB64 = btoa(String.fromCharCode(...msgBytes));
-
-  // Log what we're signing
-  console.log('[FC] msg bytes hex:', toHex(msgBytes));
-  console.log('[FC] msg string:', msgStr);
-  console.log('[FC] msg base64:', msgB64);
-  console.log('[FC] pubkey:', toHex(pubKeyBytes));
-
-  // Try 1: base64 message
   try {
+    const msgB64 = btoa(String.fromCharCode(...msgBytes));
     const res = await provider.signMessage(msgB64);
-    const sig = Uint8Array.from(atob(res.signature), c => c.charCodeAt(0));
-    console.log('[FC] base64 → sig hex:', toHex(sig), '| len:', sig.length);
-    if (sig.length === 64 && ed25519.verify(sig, msgBytes, pubKeyBytes)) {
-      console.log('[FC] ✅ base64 → raw verify OK!');
-      return sig;
-    }
-    console.log('[FC] ❌ base64 → raw verify FAIL');
-  } catch (e) { console.log('[FC] base64 error:', e.message); }
-
-  // Try 2: utf8 message (same as wallet-standard does)
-  try {
-    const res = await provider.signMessage(msgStr);
-    const sig = Uint8Array.from(atob(res.signature), c => c.charCodeAt(0));
-    console.log('[FC] utf8 → sig hex:', toHex(sig), '| len:', sig.length);
-    if (sig.length === 64 && ed25519.verify(sig, msgBytes, pubKeyBytes)) {
-      console.log('[FC] ✅ utf8 → raw verify OK!');
-      return sig;
-    }
-    console.log('[FC] ❌ utf8 → raw verify FAIL');
-
-    // Log what the signature DOES verify against (brute check common transforms)
-    const checks = [
-      ['utf8(msgStr)', new TextEncoder().encode(msgStr)],
-      ['utf8(msgB64)', new TextEncoder().encode(msgB64)],
-      ['sha256?', null], // can't check without async
-    ];
-    for (const [name, data] of checks) {
-      if (!data) continue;
-      try {
-        if (ed25519.verify(sig, data, pubKeyBytes)) {
-          console.log('[FC] ✅ sig matches:', name);
-        }
-      } catch {}
-    }
-  } catch (e) { console.log('[FC] utf8 error:', e.message); }
-
-  return null;
+    return Uint8Array.from(atob(res.signature), c => c.charCodeAt(0));
+  } catch { return null; }
 }
 
 // ---------- Pacifica Config ----------
@@ -218,12 +173,12 @@ export function usePacifica() {
     const msgBytes = new TextEncoder().encode(message);
     let sigBytes;
 
-    // In Farcaster frame: try direct SDK provider signing (bypasses SIP-99 wrapping)
+    // In Farcaster frame: sign via SDK provider with base64 (bypasses broken UTF-8 path)
     if (isFarcasterFrame()) {
-      sigBytes = await fcSignRaw(msgBytes, publicKey.toBytes());
+      sigBytes = await fcSignMessage(msgBytes);
     }
 
-    // Fallback: standard wallet-adapter signMessage
+    // Fallback: standard wallet-adapter signMessage (Phantom, etc.)
     if (!sigBytes) {
       try {
         sigBytes = await signMessage(msgBytes);
@@ -234,12 +189,6 @@ export function usePacifica() {
         throw e;
       }
     }
-
-    // Verify locally before sending
-    try {
-      const valid = ed25519.verify(sigBytes, msgBytes, publicKey.toBytes());
-      console.log('[Pacifica] sig verify:', valid);
-    } catch {}
 
     const signature = bs58.encode(sigBytes);
 
@@ -286,7 +235,8 @@ export function usePacifica() {
   const activatedRef = useRef(false);
   const signedRequestWithActivation = useCallback(async (method, endpoint, type, payload) => {
     const res = await signedRequest(method, endpoint, type, payload);
-    if (res.code === 403 && !activatedRef.current) {
+    const needsActivation = res.code === 403 || res.error?.includes('not approved') || res.error?.includes('builder code');
+    if (needsActivation && !activatedRef.current) {
       activatedRef.current = true;
       await activate();
       return signedRequest(method, endpoint, type, payload);
