@@ -26,9 +26,13 @@ function FarcasterGate({ children }) {
     }
   }, [loading]);
 
-  // Detect Android WebView (wv in UA) — doesn't support full WASM
-  // iOS WKWebView uses full Safari engine and works fine
-  const isAndroidWebView = /android/i.test(navigator.userAgent) && /\bwv\b/i.test(navigator.userAgent);
+  // Feature-detect: Godot threaded WASM needs SharedArrayBuffer + crossOriginIsolated + WebGL2
+  // UA check alone misses many Android WebViews (Realme, Xiaomi, OPPO) that lack these
+  const isAndroid = /android/i.test(navigator.userAgent);
+  const hasSharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
+  const hasCOI = window.crossOriginIsolated === true;
+  const hasWebGL2 = (() => { try { return !!document.createElement('canvas').getContext('webgl2'); } catch { return false; } })();
+  const cantRunWasm = isAndroid && (!hasSharedArrayBuffer || !hasCOI || !hasWebGL2);
 
   if (!ready) {
     return (
@@ -41,8 +45,8 @@ function FarcasterGate({ children }) {
     );
   }
 
-  // Android WebView (Farcaster, Phantom, etc.) doesn't support full WASM
-  if (isAndroidWebView) {
+  // Android without SharedArrayBuffer/COI/WebGL2 can't run threaded Godot WASM
+  if (cantRunWasm) {
     return (
       <div style={styles.splash}>
         <img src={loadingImage} alt="" style={styles.splashImg} />

@@ -1,9 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-
-// Register Farcaster wallet via wallet-standard (self-executing on import)
-import '@farcaster/mini-app-solana';
+import { FarcasterSolanaProvider } from '@farcaster/mini-app-solana';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -44,10 +42,27 @@ function useBestRpc() {
   return rpc;
 }
 
+function isFarcasterFrame() {
+  try { return window !== window.parent; } catch { return true; }
+}
+
 export default function WalletProvider({ children }) {
   const wallets = useMemo(() => [], []);
   const rpc = useBestRpc();
+  const inFrame = useMemo(() => isFarcasterFrame(), []);
 
+  // Inside Farcaster: use their provider (handles wallet registration + autoConnect)
+  if (inFrame) {
+    return (
+      <FarcasterSolanaProvider endpoint={rpc}>
+        <WalletModalProvider>
+          {children}
+        </WalletModalProvider>
+      </FarcasterSolanaProvider>
+    );
+  }
+
+  // Regular browser: standard wallet adapter
   return (
     <ConnectionProvider endpoint={rpc}>
       <SolWalletProvider wallets={wallets} autoConnect>
