@@ -26,12 +26,31 @@ function FarcasterGate({ children }) {
     }
   }, [loading]);
 
+  const isMobile = /mobile|android|iphone/i.test(navigator.userAgent);
+
   if (!ready) {
     return (
       <div style={styles.splash}>
         <img src={loadingImage} alt="" style={styles.splashImg} />
         <div style={styles.splashText}>
           {isInFrame ? 'Connecting to Farcaster...' : 'Loading...'}
+        </div>
+      </div>
+    );
+  }
+
+  // Mobile Farcaster WebView doesn't support full WASM — open in real browser
+  if (isInFrame && isMobile) {
+    return (
+      <div style={styles.splash}>
+        <img src={loadingImage} alt="" style={styles.splashImg} />
+        <div style={styles.mobilePrompt}>
+          <div style={styles.mobileTitle}>Clash of Perps</div>
+          <div style={styles.mobileDesc}>Build your island, train troops, raid enemies. Trade to earn gold.</div>
+          <button style={styles.mobileBtn} onClick={() => window.open('https://clashofperps.fun', '_blank')}>
+            Play Now
+          </button>
+          <div style={styles.mobileSub}>Opens in your browser for the best experience</div>
         </div>
       </div>
     );
@@ -97,6 +116,49 @@ const styles = {
     fontWeight: 900,
     zIndex: 1,
     textShadow: '0 2px 8px rgba(0,0,0,0.8)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+  },
+  mobilePrompt: {
+    zIndex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 16,
+    padding: '0 30px',
+    textAlign: 'center',
+  },
+  mobileTitle: {
+    color: '#fff',
+    fontSize: 32,
+    fontWeight: 900,
+    textShadow: '0 3px 8px rgba(0,0,0,0.8)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+  },
+  mobileDesc: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 15,
+    fontWeight: 600,
+    textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    maxWidth: 280,
+    lineHeight: 1.4,
+  },
+  mobileBtn: {
+    padding: '16px 48px',
+    background: 'linear-gradient(180deg, #ffe066, #e6b800)',
+    border: '3px solid #5a3a22',
+    borderRadius: 14,
+    color: '#2e1c10',
+    fontSize: 20,
+    fontWeight: 900,
+    cursor: 'pointer',
+    boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
+    marginTop: 8,
+  },
+  mobileSub: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 12,
+    fontWeight: 600,
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },
 };

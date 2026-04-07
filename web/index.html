@@ -19,12 +19,27 @@
     <link href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@700;900&display=swap" rel="stylesheet">
   </head>
   <body>
+    <!-- Debug overlay — shows errors on mobile where console isn't available -->
+    <div id="debug-overlay" style="display:none;position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(200,0,0,0.95);color:#fff;padding:12px;font:12px monospace;max-height:50vh;overflow:auto;word-break:break-all"></div>
     <div id="root"></div>
     <script>
+      // Mobile error display — catches everything before React/Godot load
+      var dbg = document.getElementById('debug-overlay');
+      var msgs = [];
+      function showDbg(m) { msgs.push(m); if (msgs.length > 10) msgs.shift(); dbg.style.display='block'; dbg.innerHTML=msgs.join('<br>'); }
+      window.addEventListener('error', function(e) { showDbg('ERR: ' + (e.message||e)); });
+      window.addEventListener('unhandledrejection', function(e) { showDbg('REJ: ' + (e.reason?.message||e.reason||e)); });
+      // Show WebGL support
+      try {
+        var c = document.createElement('canvas');
+        var gl = c.getContext('webgl2') || c.getContext('webgl');
+        showDbg('GL: ' + (gl ? gl.getParameter(gl.VERSION) : 'NONE') + ' | UA: ' + navigator.userAgent.slice(0,60));
+        dbg.style.background = 'rgba(0,100,0,0.9)';
+      } catch(e) { showDbg('GL check failed: ' + e); }
+
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(() => {});
+        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(function(){});
       }
-      // Farcaster ready() is called from useFarcaster.js React hook
     </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
