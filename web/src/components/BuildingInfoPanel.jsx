@@ -1,5 +1,6 @@
 import { memo, useCallback, useState, useEffect, useRef } from 'react';
 import { useSend, useBuilding } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -49,6 +50,7 @@ const DESC_MAP = {
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useBuilding();
+  const { isMobile } = useLayout();
   
   const [view, setView] = useState('ACTIONS'); // ACTIONS, INFO, UPGRADE, BUY_SHIP, LOAD_TROOPS
 
@@ -73,7 +75,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const upgHealth = Math.floor(building.max_hp * 0.2);
 
   const renderActions = () => (
-    <div style={styles.actionsWrap}>
+    <div style={{ ...styles.actionsWrap, ...isMobile && { bottom: 130, gap: 16 } }}>
       <div style={styles.actionLabel}>
         <span style={styles.actionName}>{building.name}</span>
         <span style={styles.actionLevel}>Level {building.level}</span>
@@ -146,14 +148,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
       {!building.is_enemy && !isMaxLevel && (
         <button 
-          style={{ ...styles.circleBtn, ...styles.btnUpgrade }} 
+          style={{ ...styles.circleBtn, ...styles.btnUpgrade, ...isMobile && { width: 56, height: 56 } }} 
           onClick={() => setView('UPGRADE')}
           onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
           onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
           onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
           onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
         >
-          <svg width={40} height={40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="19" x2="12" y2="5"></line>
             <polyline points="5 12 12 5 19 12"></polyline>
           </svg>
@@ -183,17 +185,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
             </div>
         </div>
         
-        <div style={{ ...styles.contentLayout, marginTop: 40 }}>
+        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 10 : 40, flexDirection: 'row', flexWrap: 'wrap' }}>
           
           {/* Left Column */}
-          <div style={styles.leftColumn}>
+          <div style={{...styles.leftColumn, ...isMobile && { width: '100%', order: 2, marginTop: 10 }}}>
              <h3 style={styles.sectionTitle}>Stats</h3>
              <div style={styles.statsContainer}>
                 {leftContent}
              </div>
              
              {/* Description */}
-             <div style={{marginTop: 'auto', padding: 16, background: 'rgba(255, 255, 255, 0.1)', borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.15)', boxShadow: '0 4px 8px rgba(0,0,0,0.15)'}}>
+             <div style={{marginTop: isMobile ? 8 : 'auto', padding: 16, background: 'rgba(255, 255, 255, 0.1)', borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.15)', boxShadow: '0 4px 8px rgba(0,0,0,0.15)'}}>
                 <span style={{color: '#ffffff', fontSize: 13, lineHeight: 1.5, textShadow: '0 1px 2px rgba(0,0,0,0.4)'}}>
                   {DESC_MAP[building.id] || "A critical component of your island outposts."}
                 </span>
@@ -201,7 +203,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           </div>
 
           {/* Center Column */}
-          <div style={styles.centerColumn}>
+          <div style={{...styles.centerColumn, ...isMobile && { order: 1, minHeight: 150 }}}>
              <div style={styles.characterWrapper}>
                
                {level && (
@@ -213,18 +215,18 @@ function BuildingInfoPanel({ onOpenTroops }) {
                  </div>
                )}
 
-               <div style={styles.characterSphere}>
+               <div style={{ ...styles.characterSphere, ...isMobile && { width: 120, height: 120 }}}>
                   {centerImg}
                </div>
              </div>
           </div>
 
           {/* Right Column */}
-          <div style={styles.rightColumn}>
+          <div style={{...styles.rightColumn, ...isMobile && { width: '100%', order: 3, marginTop: 10 }}}>
              {rightContent}
              
              {mainActionText && (
-               <div style={{ marginTop: 'auto', marginBottom: 20 }}>
+               <div style={{ marginTop: isMobile ? 12 : 'auto', marginBottom: 20 }}>
                  <button 
                    style={styles.actionBtn}
                    onClick={onMainAction}
@@ -581,10 +583,12 @@ const styles = {
   contentLayout: {
     display: 'flex',
     width: '100%',
-    padding: '0 40px',
-    justifyContent: 'space-between',
+    padding: '0 20px',
+    justifyContent: 'center',
     alignItems: 'stretch',
     flex: 1,
+    flexWrap: 'wrap',
+    overflowY: 'auto',
   },
   leftColumn: {
     width: '240px',

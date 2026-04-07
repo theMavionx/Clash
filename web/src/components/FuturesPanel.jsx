@@ -1,5 +1,6 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useSend, useUI } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
@@ -406,26 +407,29 @@ function FuturesPanel() {
   const posRef = useRef({ x: 0, y: 0 });
   const panelRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
-  const handleMouseDown = useCallback((e) => {
+  const handlePointerDown = useCallback((e) => {
     if (e.target.closest('[data-nodrag]')) return;
-    const startX = e.clientX - posRef.current.x;
-    const startY = e.clientY - posRef.current.y;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const startX = clientX - posRef.current.x;
+    const startY = clientY - posRef.current.y;
 
     const onMove = (ev) => {
-      posRef.current = { x: ev.clientX - startX, y: ev.clientY - startY };
+      const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const moveY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      posRef.current = { x: moveX - startX, y: moveY - startY };
       if (panelRef.current) {
-        panelRef.current.style.transform =
-          `translate(${posRef.current.x}px, ${posRef.current.y}px)`;
+        panelRef.current.style.transform = `translate(${posRef.current.x}px, ${posRef.current.y}px)`;
       }
     };
     const onUp = () => {
       setIsDragging(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp);
     };
     setIsDragging(true);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
   }, []);
 
   const [activeTab, setActiveTab] = useState('Trade');
@@ -444,6 +448,7 @@ function FuturesPanel() {
   const [bottomTab, setBottomTab] = useState('positions');
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
+  const { isMobile } = useLayout();
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
   const [showFilter, setShowFilter] = useState(false);
@@ -461,43 +466,59 @@ function FuturesPanel() {
   obWidthRef.current = obWidth;
 
   const dragBottom = useCallback((e) => {
-    e.preventDefault();
-    const startY = e.clientY;
+    const startY = e.touches ? e.touches[0].clientY : e.clientY;
     const startH = bottomHRef.current;
-    const onMove = (ev) => setBottomH(Math.max(60, Math.min(500, startH - (ev.clientY - startY))));
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    const onMove = (ev) => {
+      const moveY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      setBottomH(Math.max(60, Math.min(500, startH - (moveY - startY))));
+    };
+    const onUp = () => { 
+      window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
+      window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp);
+      document.body.style.cursor = ''; document.body.style.userSelect = ''; 
+    };
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
   }, []);
 
   const dragOb = useCallback((e) => {
-    e.preventDefault();
-    const startX = e.clientX;
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
     const startW = obWidthRef.current;
-    const onMove = (ev) => setObWidth(Math.max(80, Math.min(350, startW + (ev.clientX - startX))));
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    const onMove = (ev) => {
+      const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      setObWidth(Math.max(80, Math.min(350, startW + (moveX - startX))));
+    };
+    const onUp = () => { 
+      window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
+      window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp);
+      document.body.style.cursor = ''; document.body.style.userSelect = ''; 
+    };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
   }, []);
 
   const dragChart = useCallback((e) => {
-    e.preventDefault();
     const onMove = (ev) => {
       const container = panelRef.current;
       if (!container) return;
+      const moveX = ev.touches ? ev.touches[0].clientX : ev.clientX;
       const rect = container.getBoundingClientRect();
-      const pct = ((ev.clientX - rect.left) / rect.width) * 100;
+      const pct = ((moveX - rect.left) / rect.width) * 100;
       setChartPct(Math.max(20, Math.min(70, pct)));
     };
-    const onUp = () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); document.body.style.cursor = ''; document.body.style.userSelect = ''; };
+    const onUp = () => { 
+      window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
+      window.removeEventListener('touchmove', onMove); window.removeEventListener('touchend', onUp);
+      document.body.style.cursor = ''; document.body.style.userSelect = ''; 
+    };
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
+    window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
   }, []);
 
   const handleClose = useCallback(() => setFuturesOpen(false), [setFuturesOpen]);
@@ -567,45 +588,6 @@ function FuturesPanel() {
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi]);
 
-  // ==================== NOT CONNECTED ====================
-  if (!connected) {
-    return (
-      <>
-        <style>{animCSS}</style>
-        <div ref={panelRef} style={{
-          ...(fullscreen ? S.containerFull : S.container),
-          transform: fullscreen ? 'translate(0px, 0px)' : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
-          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
-        }}>
-          <div style={S.header} onMouseDown={handleMouseDown}>
-            <span style={S.headerTitle}>Futures Trading</span>
-            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
-          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
-            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
-            <button
-              style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
-              onClick={() => {
-                if (inFrame) {
-                  const fc = wallets.find(w => w.adapter.name === 'Farcaster');
-                  if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
-                  else openWalletModal(true);
-                } else {
-                  openWalletModal(true);
-                }
-              }}
-            >
-              <span>CONNECT WALLET</span>
-            </button>
-          </div>
-        </div>
-      </>
-    );
-  }
-
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
   const curPriceData = useMemo(() => prices.find(p => p.symbol === symbol), [prices, symbol]);
@@ -625,10 +607,10 @@ function FuturesPanel() {
         <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
           <TokenIcon sym={symbol} size={20} />
           <span style={{fontSize: 16, fontWeight: 900}}>{symbol}</span>
-          {!fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          {(!fullscreen || isMobile) && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        {fullscreen && (
+        {fullscreen && !isMobile && (
           <>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Mark</span><span style={S.infoCellValue}>{currentPrice ? fmtPrice(parseFloat(currentPrice)) : '—'}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Oracle</span><span style={S.infoCellValue}>{oracle > 0 ? fmtPrice(oracle) : '—'}</span></div>
@@ -829,6 +811,45 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
+  // ==================== NOT CONNECTED ====================
+  if (!connected) {
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          transform: fullscreen ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Futures Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
+            <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
+            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
+            <button
+              style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+              onClick={() => {
+                if (inFrame) {
+                  const fc = wallets.find(w => w.adapter.name === 'Farcaster');
+                  if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
+                  else openWalletModal(true);
+                } else {
+                  openWalletModal(true);
+                }
+              }}
+            >
+              <span>CONNECT WALLET</span>
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
     // Funding rate badge (top-right of chart) — only for non-fullscreen
@@ -842,6 +863,24 @@ function FuturesPanel() {
     ) : null;
 
     if (fullscreen) {
+      if (isMobile) {
+        return (
+          <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
+            {renderSymbolBar()}
+            {/* Top: chart */}
+            <div style={{flex: 1, position: 'relative', minHeight: 0}}>
+              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} />
+              {fundingBadge}
+            </div>
+
+            {/* Bottom: Trade controls */}
+            <div style={{flexShrink: 0, paddingBottom: 10, background: '#e8dfc8', borderTop: '2px solid #d4c8b0'}}>
+              {renderTradeControls()}
+            </div>
+          </div>
+        );
+      }
+
       return (
         <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
           {renderSymbolBar()}
@@ -1165,12 +1204,12 @@ function FuturesPanel() {
   return (
     <>
       <style>{animCSS}</style>
-      <div ref={panelRef} style={{
+      <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
         ...(fullscreen ? S.containerFull : S.container),
-        transform: fullscreen ? 'translate(0px, 0px)' : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        transform: fullscreen ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
       }}>
-        <div style={S.header} onMouseDown={handleMouseDown}>
+        <div style={S.header} onPointerDown={handlePointerDown}>
           <div style={{display: 'flex', gap: 8, alignItems: 'center'}}>
             {TABS.map(t => {
               const active = activeTab === t.id;
@@ -1327,11 +1366,12 @@ const animCSS = `
   .tab-btn:hover .tab-icon-account .avatar-body, .tab-btn.active .tab-icon-account .avatar-body {
     animation: body-shrug 0.6s ease-in-out;
   }
+
 `;
 
 const S = {
   containerFull: {
-    position: 'fixed', top: 0, right: 0, bottom: 0, width: '100%',
+    position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%',
     background: '#e8dfc8', border: '0px solid #d4c8b0', borderRadius: 0,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
     boxShadow: '0 0 0 rgba(0,0,0,0)', fontFamily: '"Inter","Segoe UI",sans-serif',

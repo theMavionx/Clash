@@ -1,5 +1,6 @@
 import { useState, memo, useCallback, useMemo } from 'react';
 import { useSend, useBuilding, usePlayer, useResources } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -138,6 +139,7 @@ function ShopPanel({ onClose }) {
   const { buildingDefs } = useBuilding();
   const { playerState } = usePlayer();
   const resources = useResources();
+  const { isMobile } = useLayout();
 
   const [activeTab, setActiveTab] = useState('Economy');
   const buildings = buildingDefs?.buildings || {};
@@ -181,13 +183,26 @@ function ShopPanel({ onClose }) {
       <div style={styles.overlay} onClick={onClose}>
         <div style={styles.container} onClick={stopPropagation}>
         <div style={styles.tabArea}>
-          <div style={styles.tabContainer}>
+          <div style={{ ...styles.tabContainer, gap: isMobile ? 2 : 4 }}>
             {TABS.map(tab => {
               const isActive = activeTab === tab.id;
+              
+              // Responsive tab adjustments
+              const activeStyle = {
+                ...TAB_STYLE_ACTIVE,
+                padding: isMobile ? '0 12px' : '0 28px',
+                fontSize: isMobile ? 14 : 16,
+              };
+              const inactiveStyle = {
+                ...TAB_STYLE_INACTIVE,
+                padding: isMobile ? '0 12px' : '0 28px',
+                fontSize: isMobile ? 14 : 16,
+              };
+
               return (
                 <button
                   key={tab.id}
-                  style={isActive ? TAB_STYLE_ACTIVE : TAB_STYLE_INACTIVE}
+                  style={isActive ? activeStyle : inactiveStyle}
                   onClick={() => setActiveTab(tab.id)}
                 >
                   <div style={isActive ? TAB_CONTENT_ACTIVE : TAB_CONTENT_INACTIVE}>
@@ -197,13 +212,13 @@ function ShopPanel({ onClose }) {
               );
             })}
           </div>
-          <button style={styles.closeBtn} onClick={onClose}>
+          <button style={{ ...styles.closeBtn, right: isMobile ? 4 : 16, bottom: isMobile ? 0 : -8 }} onClick={onClose}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
           </button>
         </div>
 
         <div style={styles.cardArea} className="grad-scrollbar">
-          <div style={styles.cardScroll}>
+          <div style={{ ...styles.cardScroll, padding: isMobile ? '16px' : '20px 24px' }}>
             {filteredBuildings.map(([id, def, status]) => {
               const disabled = status.locked || status.maxed || !status.canAfford;
               return (
@@ -310,9 +325,10 @@ const styles = {
   cardArea: {
     background: '#e8dfc8',
     borderTop: '6px solid #d4c8b0',
-    padding: '24px 20px 10px 20px',
+    padding: '16px 8px 10px 8px',
     minHeight: 'auto',
-    overflowX: 'auto',
+    overflowY: 'auto',
+    maxHeight: '55vh',
     display: 'flex',
     position: 'relative',
     zIndex: 10,
@@ -321,18 +337,20 @@ const styles = {
   },
   cardScroll: {
     display: 'flex',
-    justifyContent: 'flex-start',
-    alignItems: 'center',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
     margin: '0 auto',
-    gap: 16,
+    gap: 12,
     paddingBottom: 20,
     position: 'relative',
     zIndex: 10,
+    width: '100%',
   },
   card: {
     position: 'relative',
-    width: 'clamp(120px, 38vw, 160px)',
-    height: 'clamp(190px, 55vw, 240px)',
+    width: 'clamp(110px, 40vw, 160px)',
+    height: 'clamp(180px, 52vw, 240px)',
     background: '#fdf8e7',
     borderRadius: 14,
     border: '3px solid #d4c8b0',
@@ -360,8 +378,8 @@ const styles = {
     zIndex: 0,
   },
   thumbnail: {
-    width: 110,
-    height: 110,
+    width: 'clamp(70px, 22vw, 110px)',
+    height: 'clamp(70px, 22vw, 110px)',
     objectFit: 'contain',
     zIndex: 1,
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.4))',
@@ -413,11 +431,11 @@ const styles = {
     textAlign: 'center',
   },
   cardName: {
-    fontSize: 15,
+    fontSize: 'clamp(13px, 3.5vw, 15px)',
     fontWeight: 800,
     color: '#333',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
-    marginBottom: 2,
+    marginBottom: 1,
     lineHeight: 1.1,
   },
   cardDesc: {
@@ -436,8 +454,8 @@ const styles = {
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'flex-end',
-    gap: 12,
-    marginBottom: 4,
+    gap: 8,
+    marginBottom: 2,
   },
   costPill: {
     display: 'flex',
@@ -446,13 +464,13 @@ const styles = {
     gap: 2,
   },
   resIconSmall: {
-    width: 32,
-    height: 32,
+    width: 'clamp(22px, 7vw, 32px)',
+    height: 'clamp(22px, 7vw, 32px)',
     objectFit: 'contain',
     filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.3))',
   },
   costValue: {
-    fontSize: 16,
+    fontSize: 'clamp(12px, 3.5vw, 16px)',
     fontWeight: 800,
     color: '#333',
     fontFamily: '"Inter", "Segoe UI", sans-serif',

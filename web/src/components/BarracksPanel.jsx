@@ -462,10 +462,12 @@ const styles = {
   contentLayout: {
     display: 'flex',
     width: '100%',
-    padding: '0 30px',
-    justifyContent: 'space-between',
+    padding: '0 20px',
+    justifyContent: 'center',
     alignItems: 'stretch',
     flex: 1,
+    flexWrap: 'wrap',
+    overflowY: 'auto',
   },
   leftColumn: {
     width: '240px',
