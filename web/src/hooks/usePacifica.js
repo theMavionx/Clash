@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { ed25519 } from '@noble/curves/ed25519';
 
 // ---------- Pacifica Config ----------
 const API = 'https://api.pacifica.fi/api/v1';
@@ -155,6 +156,16 @@ export function usePacifica() {
       }
       throw e;
     }
+
+    // Debug: verify signature locally before sending to Pacifica
+    try {
+      const valid = ed25519.verify(sigBytes, msgBytes, publicKey.toBytes());
+      console.log('[Pacifica] local sig verify:', valid, '| msg:', message, '| sig len:', sigBytes.length, '| pk:', publicKey.toBase58());
+      if (!valid) {
+        console.warn('[Pacifica] Signature does NOT verify locally — wallet may wrap message before signing');
+      }
+    } catch (e) { console.warn('[Pacifica] verify error:', e); }
+
     const signature = bs58.encode(sigBytes);
 
     const body = {
@@ -172,8 +183,13 @@ export function usePacifica() {
     });
     const text = await res.text();
     try {
-      return JSON.parse(text);
+      const json = JSON.parse(text);
+      return json;
     } catch {
+      // Farcaster wallet signMessage is not compatible with Pacifica verification
+      if (text.includes('erification failed')) {
+        throw new Error('Signature verification failed. Connect Phantom or another Solana wallet to trade.');
+      }
       throw new Error(text || `API error ${res.status}`);
     }
   }, [publicKey, signMessage]);
