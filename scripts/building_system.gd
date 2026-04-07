@@ -179,10 +179,11 @@ const STORAGE_CAPACITY: Dictionary = {
 
 func _get_resource_caps() -> Dictionary:
 	var th_level: int = 1
-	for b in placed_buildings:
-		if b.get("id", "") == "town_hall":
-			th_level = b.get("level", 1)
-	# Check all building systems for storage buildings
+	# Check ALL building systems for town hall
+	for bs in _building_systems:
+		for b in bs.placed_buildings:
+			if b.get("id", "") == "town_hall":
+				th_level = maxi(th_level, b.get("level", 1))
 	var base: Dictionary = TH_BASE_CAPACITY.get(th_level, TH_BASE_CAPACITY[1])
 	var max_gold: int = base.gold
 	var max_wood: int = base.wood
