@@ -524,19 +524,34 @@ func _on_town_hall_destroyed() -> void:
 				b.node.queue_free()
 		bsys.placed_buildings.clear()
 		bsys.grid.fill(false)
+	# Count casualties: compare deployed fleet vs surviving troops
+	var deployed_troops: Dictionary = {}  # {name: count}
+	for ship in _saved_fleet:
+		for t_name in ship.get("troops", []):
+			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
+	var surviving_troops: Dictionary = {}
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop) and "state" in troop:
 			troop.state = troop.State.VICTORY
+			# Get troop type name from script path
+			var t_key: String = _troop_script_to_name(troop)
+			if t_key != "":
+				surviving_troops[t_key] = surviving_troops.get(t_key, 0) + 1
+	var casualties: Dictionary = {}
+	for t_name in deployed_troops:
+		var lost: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
+		if lost > 0:
+			casualties[t_name] = lost
 	var net_node: Node = bs._net
 	var defender_id: String = enemy_info.get("id", "")
 	if net_node and net_node.has_token() and defender_id != "":
-		var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory")
+		var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory", casualties)
+		if not is_instance_valid(bs): return
 		var bridge: Node = bs._bridge
 		if result.has("error"):
 			if bridge:
 				bridge.send_to_react("battle_result", {
-					"type": "victory",
-					"loot": {},
+					"type": "victory", "loot": {}, "casualties": casualties,
 					"error": result.get("error", "") + " " + result.get("reason", ""),
 				})
 			return
@@ -549,13 +564,12 @@ func _on_town_hall_destroyed() -> void:
 					"ore": loot.get("ore", 0),
 				})
 			bridge.send_to_react("battle_result", {
-				"type": "victory",
-				"loot": loot,
+				"type": "victory", "loot": loot, "casualties": casualties,
 			})
 		return
 	var bridge2: Node = bs._bridge
 	if bridge2:
-		bridge2.send_to_react("battle_result", {"type": "victory", "loot": {}})
+		bridge2.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties})
 
 
 ## Starts a replay of a recorded attack. Loads the buildings snapshot, enters
@@ -725,11 +739,17 @@ func check_defeat(delta: float) -> void:
 				_skeleton_respawn_timer = 0.0
 				var net_def: Node = bs._net
 				var def_id: String = enemy_info.get("id", "")
+				# All troops dead = all deployed are casualties
+				var defeat_casualties: Dictionary = {}
+				for ship in _saved_fleet:
+					for t_name in ship.get("troops", []):
+						defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
 				if net_def and net_def.has_token() and def_id != "":
-					net_def.submit_battle_result(def_id, _battle_replay, "defeat")
+					await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
+				if not is_instance_valid(bs): return
 				var bridge_def: Node = bs._bridge
 				if bridge_def:
-					bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost"})
+					bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
 
 
 ## Called every frame from BuildingSystem._process while on the home island.
@@ -753,3 +773,18 @@ func check_skeleton_respawn(delta: float) -> void:
 				for b in bsys.placed_buildings:
 					if b.get("id", "") == "tombstone" and is_instance_valid(b.get("node")):
 						bsys._spawn_tombstone_skeletons(b, b.get("level", 1))
+
+
+## Maps a troop node's script to its canonical name.
+static func _troop_script_to_name(troop: Node3D) -> String:
+	var script_res = troop.get_script()
+	if script_res == null:
+		return ""
+	var path: String = script_res.resource_path.get_file().get_basename()
+	match path:
+		"knight": return "Knight"
+		"mage": return "Mage"
+		"barbarian": return "Barbarian"
+		"archer": return "Archer"
+		"ranger": return "Ranger"
+	return ""

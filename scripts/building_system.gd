@@ -3237,84 +3237,47 @@ func _find_ship_at_click(mouse_pos: Vector2) -> Dictionary:
 	return {}
 
 
-## Shows a floating panel near the ship with its crew list.
+## Shows the React load-troops modal for a port ship.
 func _show_ship_panel(ship_data: Dictionary) -> void:
 	var pnode: Node3D = ship_data.get("port_node")
 	if not is_instance_valid(pnode):
 		return
 	_hide_ship_panel()
-	_deselect_building()
 
 	var ship_level: int = pnode.get_meta("ship_level", 1)
 	var ship_troops: Array = pnode.get_meta("ship_troops", [])
-	var ship_names = ["", "Small Ship", "Medium Ship", "Large Ship"]
-	var ship_name: String = ship_names[clampi(ship_level, 0, 3)]
 
-	ship_info_panel = PanelContainer.new()
-	ship_info_panel.custom_minimum_size = Vector2(300, 0)
-	var style = StyleBoxFlat.new()
-	style.bg_color = Color(0.06, 0.1, 0.18, 0.95)
-	style.set_corner_radius_all(12)
-	style.set_border_width_all(2)
-	style.border_color = Color(0.25, 0.45, 0.7, 0.9)
-	style.content_margin_left = 14
-	style.content_margin_right = 14
-	style.content_margin_top = 10
-	style.content_margin_bottom = 10
-	style.shadow_color = Color(0, 0, 0, 0.4)
-	style.shadow_size = 5
-	ship_info_panel.add_theme_stylebox_override("panel", style)
+	# Find the port building dict that owns this node
+	var port_building: Dictionary = {}
+	for b in placed_buildings:
+		if b.get("node") == pnode:
+			port_building = b
+			break
 
-	# Position near the ship in screen space
-	var camera = BaseTroop._get_camera_cached()
-	if camera:
-		var ship_node = pnode.get_meta("ship_node")
-		if is_instance_valid(ship_node):
-			var screen_pos = camera.unproject_position(ship_node.global_position + Vector3(0, 0.15, 0))
-			ship_info_panel.position = screen_pos - Vector2(150, 0)
-
-	ship_info_vbox = VBoxContainer.new()
-	ship_info_vbox.add_theme_constant_override("separation", 6)
-	ship_info_panel.add_child(ship_info_vbox)
-
-	# Title
-	var title = Label.new()
-	title.text = "%s (Lv.%d)" % [ship_name, ship_level]
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", Color(0.8, 0.9, 1.0))
-	ship_info_vbox.add_child(title)
-
-	# Crew count
-	var crew_lbl = Label.new()
-	crew_lbl.text = "Crew: %d / %d" % [ship_troops.size(), ship_level]
-	crew_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	crew_lbl.add_theme_font_size_override("font_size", 14)
-	crew_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
-	ship_info_vbox.add_child(crew_lbl)
-
-	if ship_troops.size() > 0:
-		var sep = HSeparator.new()
-		ship_info_vbox.add_child(sep)
-		for i in range(ship_troops.size()):
-			var troop_name: String = ship_troops[i]
-			var tlvl: int = troop_levels.get(troop_name, 1)
-			var tdef: Dictionary = troop_defs.get(troop_name, {})
-			var display_name: String = tdef.get("display", troop_name)
-			var slot_lbl = Label.new()
-			slot_lbl.text = "%d.  %s  — Lv.%d" % [i + 1, display_name, tlvl]
-			slot_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.75))
-			slot_lbl.add_theme_font_size_override("font_size", 15)
-			ship_info_vbox.add_child(slot_lbl)
-	else:
-		var empty_lbl = Label.new()
-		empty_lbl.text = "No crew aboard"
-		empty_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		empty_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-		ship_info_vbox.add_child(empty_lbl)
-
-	if canvas:
-		canvas.add_child(ship_info_panel)
+	# Send to React as a building_selected with LOAD_TROOPS view hint
+	var bridge = _bridge
+	if bridge:
+		var def = building_defs.get("port", {})
+		bridge.send_to_react("building_selected", {
+			"id": "port",
+			"name": def.get("name", "Port"),
+			"level": port_building.get("level", 1),
+			"hp": port_building.get("hp", 500),
+			"max_hp": port_building.get("max_hp", 500),
+			"max_level": 3,
+			"next_hp": 600,
+			"upgrade_cost": {},
+			"is_enemy": is_viewing_enemy,
+			"is_barracks": false,
+			"is_upgrading": false,
+			"has_ship": true,
+			"ship_level": ship_level,
+			"ship_troops": ship_troops,
+			"ship_capacity": ship_level,
+			"ship_cost": def.get("ship_cost", {}),
+			"troop_levels": troop_levels,
+			"open_load_troops": true,
+		})
 
 
 ## Hides and frees the ship info panel.
@@ -3334,6 +3297,44 @@ func _buy_ship_level(ship_lvl: int) -> void:
 
 func _load_troop_to_ship(troop_name: String) -> void:
 	_port._load_troop_to_ship(troop_name)
+
+func _reinforce_troops() -> void:
+	# Refill all ships with troops that were lost in battle
+	var net: Node = _net
+	if net and net.has_token():
+		var result: Dictionary = await net.reinforce()
+		if not is_instance_valid(self): return
+		if result.has("error"):
+			_show_error(str(result.error))
+			return
+		# Reload ship troops from server response
+		if result.has("ships"):
+			for ship_data in result.ships:
+				var bid: int = ship_data.get("id", -1)
+				for bs_node in _building_systems:
+					for b in bs_node.placed_buildings:
+						if b.get("server_id") == bid and b.get("id") == "port":
+							var pnode = b.get("node")
+							if is_instance_valid(pnode):
+								pnode.set_meta("ship_troops", ship_data.get("ship_troops", []))
+		if result.has("resources"):
+			_apply_resources_from_server(result.resources)
+		_refresh_port_panel()
+		var bridge: Node = _bridge
+		if bridge:
+			bridge.send_to_react("reinforced", {"cost": result.get("cost", 0), "restored": result.get("restored", 0)})
+			# Update React with refreshed ship data for any open panel
+			if selected_building.get("id") == "port":
+				var pnode = selected_building.get("node")
+				if is_instance_valid(pnode) and pnode.has_meta("ship_troops"):
+					bridge.send_to_react("ship_updated", {
+						"ship_troops": pnode.get_meta("ship_troops", []),
+						"ship_level": pnode.get_meta("ship_level", 1),
+						"ship_capacity": pnode.get_meta("ship_level", 1),
+					})
+
+func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
+	_port._swap_troop_on_ship(slot, troop_name)
 
 func _animate_main_ship() -> void:
 	_port._animate_main_ship()

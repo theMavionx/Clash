@@ -150,6 +150,12 @@ func buy_troop(troop_name: String) -> Dictionary:
 func load_troop(building_id: int, troop_name: String) -> Dictionary:
 	return await _http_post("/buildings/%d/load-troop" % building_id, {"troop_name": troop_name})
 
+func swap_troop(building_id: int, slot: int, troop_name: String) -> Dictionary:
+	return await _http_post("/buildings/%d/swap-troop" % building_id, {"slot": slot, "troop_name": troop_name})
+
+func reinforce() -> Dictionary:
+	return await _http_post("/reinforce", {})
+
 func link_wallet(wallet: String) -> void:
 	if token == "" or wallet == "":
 		return
@@ -161,11 +167,12 @@ func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 func buy_ship(building_id: int) -> Dictionary:
 	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
 
-func submit_battle_result(defender_id: String, actions: Array, result: String) -> Dictionary:
+func submit_battle_result(defender_id: String, actions: Array, result: String, casualties: Dictionary = {}) -> Dictionary:
 	return await _http_post("/attack/result", {
 		"defender_id": defender_id,
 		"actions": actions,
 		"result": result,
+		"casualties": casualties,
 	})
 
 

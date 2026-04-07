@@ -52,6 +52,7 @@ try { db.exec(`ALTER TABLE buildings ADD COLUMN last_collected_at TEXT`); } catc
 try { db.exec(`ALTER TABLE players ADD COLUMN wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN has_ship INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops TEXT NOT NULL DEFAULT '[]'`); } catch {}
+try { db.exec(`ALTER TABLE buildings ADD COLUMN ship_troops_template TEXT NOT NULL DEFAULT '[]'`); } catch {}
 // Shield: protects from attacks after being raided
 try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
 // Attack cooldown: prevent re-attacking same player
@@ -711,10 +712,7 @@ function battleDefeat(attackerId, defenderId) {
   return { attackerTrophies: newAttackerTrophies, defenderTrophies: newDefenderTrophies };
 }
 
-function battleVictory(attackerId, defenderId) {
-  if (!attackerId || !defenderId) return { error: 'Missing player IDs' };
-  if (attackerId === defenderId) return { error: 'Cannot attack yourself' };
-
+const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
   // Check defender has no active shield
   const defender = stmts.getPlayerById.get(defenderId);
   if (!defender) return { error: 'Defender not found' };
@@ -756,6 +754,12 @@ function battleVictory(attackerId, defenderId) {
     attacker_resources: getResources(attackerId),
     trophies: newAttackerTrophies,
   };
+});
+
+function battleVictory(attackerId, defenderId) {
+  if (!attackerId || !defenderId) return { error: 'Missing player IDs' };
+  if (attackerId === defenderId) return { error: 'Cannot attack yourself' };
+  return _battleVictoryTxn(attackerId, defenderId);
 }
 
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {

@@ -3,6 +3,10 @@ const db = require('./db');
 
 const router = express.Router();
 
+// ---------- Validation Helpers ----------
+const WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
+function isValidWallet(w) { return typeof w === 'string' && WALLET_RE.test(w); }
+
 // ---------- Auth Middleware ----------
 
 function auth(req, res, next) {
@@ -57,7 +61,7 @@ router.get('/players/me', auth, (req, res) => {
 // Link a wallet to existing account (e.g. Farcaster user connecting Solana wallet)
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
-  if (!wallet) return res.status(400).json({ error: 'wallet required' });
+  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
   db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id);
   res.json({ success: true });
 });
@@ -65,7 +69,7 @@ router.post('/players/link-wallet', auth, (req, res) => {
 // Login by wallet address (recover account after cache clear)
 router.post('/players/login-wallet', (req, res) => {
   const { wallet } = req.body;
-  if (!wallet) return res.status(400).json({ error: 'wallet required' });
+  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
   const player = db.db.prepare('SELECT * FROM players WHERE wallet = ?').get(wallet);
   if (!player) return res.status(404).json({ error: 'No account found for this wallet' });
   const state = db.getFullPlayerState(player.id);
@@ -199,6 +203,44 @@ router.delete('/buildings/:id', auth, (req, res) => {
 // ==================== BATTLE ====================
 
 // Submit battle replay for verification
+// Remove casualties from player's ship_troops after battle.
+// casualties = {Knight: 1, Mage: 2} — removes that many of each type across all ships.
+// Validates: casualty counts can't exceed what was actually deployed.
+function _applyCasualties(playerId, casualties) {
+  if (!casualties || typeof casualties !== 'object') return;
+
+  // Count total deployed troops across all ships
+  const ports = db.db.prepare('SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  const deployed = {};
+  for (const port of ports) {
+    const template = JSON.parse(port.ship_troops_template || '[]');
+    for (const t of template) deployed[t] = (deployed[t] || 0) + 1;
+  }
+
+  // Cap casualties to deployed counts (prevent client from claiming more losses than deployed)
+  const validCasualties = {};
+  for (const [name, count] of Object.entries(casualties)) {
+    if (typeof count !== 'number' || count <= 0) continue;
+    validCasualties[name] = Math.min(count, deployed[name] || 0);
+  }
+
+  const remaining = { ...validCasualties };
+  for (const port of ports) {
+    const troops = JSON.parse(port.ship_troops || '[]');
+    const filtered = [];
+    for (const t of troops) {
+      if (remaining[t] && remaining[t] > 0) {
+        remaining[t]--;
+      } else {
+        filtered.push(t);
+      }
+    }
+    if (filtered.length !== troops.length) {
+      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(filtered), port.id);
+    }
+  }
+}
+
 router.post('/attack/result', auth, (req, res) => {
   const { defender_id, actions, result: claimedResult } = req.body;
   if (!defender_id) return res.status(400).json({ error: 'defender_id required' });
@@ -226,6 +268,17 @@ router.post('/attack/result', auth, (req, res) => {
     return res.status(403).json({ error: 'Too many ships in replay' });
   }
 
+  // Cap troop levels to server-verified values (prevent level spoofing)
+  const troopLevelRows = db.getTroopLevels(req.player.id);
+  const serverTroopLevels = {};
+  for (const row of troopLevelRows) serverTroopLevels[row.troop_type] = row.level;
+  for (const act of gameActions) {
+    if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
+      const serverLvl = serverTroopLevels[act.troopType] || 1;
+      act.troopLevel = Math.min(act.troopLevel, serverLvl);
+    }
+  }
+
   // Run server simulation verification
   const { verifyReplay } = require('./combat_session');
   const verification = verifyReplay({
@@ -250,12 +303,18 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(400).json(battleResult);
     }
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', verification.reason, battleResult.loot, verification);
+    // Remove casualties from attacker's ships
+    _applyCasualties(req.player.id, req.body.casualties);
     return res.json(battleResult);
   }
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id);
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', 'Defeat', null, verification);
+
+  // Remove casualties from attacker's ships
+  _applyCasualties(req.player.id, req.body.casualties);
+
   res.json({ success: true, loot: { gold: 0, wood: 0, ore: 0 }, trophies: defeatResult.attackerTrophies });
 });
 
@@ -339,32 +398,131 @@ router.post('/troops/buy', auth, (req, res) => {
 });
 
 // Load troop onto a ship at a port
+const TROOP_COST = 100;
+const REINFORCE_COST = 50;
+const VALID_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+
+// Load a troop into a ship slot (costs 100 gold). Also saves template.
 router.post('/buildings/:id/load-troop', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { troop_name } = req.body;
-  if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
-  const validTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
-  if (!validTroops.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
+  if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
 
-  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
-  if (!building) return res.status(404).json({ error: 'Building not found' });
-  if (building.type !== 'port') return res.status(400).json({ error: 'Not a port' });
-  if (!building.has_ship) return res.status(400).json({ error: 'No ship at this port' });
+  const txn = db.db.transaction(() => {
+    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+    if (!building) throw { status: 404, error: 'Building not found' };
+    if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
-  const shipTroops = JSON.parse(building.ship_troops || '[]');
-  const capacity = building.level; // ship capacity = port level
-  if (shipTroops.length >= capacity) return res.status(400).json({ error: 'Ship is full' });
+    const shipTroops = JSON.parse(building.ship_troops || '[]');
+    const capacity = building.level;
+    if (shipTroops.length >= capacity) throw { status: 400, error: 'Ship is full' };
 
-  shipTroops.push(troop_name);
-  db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(shipTroops), buildingId);
+    const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
+    if (player.gold < TROOP_COST) throw { status: 400, error: 'Not enough gold' };
 
-  res.json({
-    success: true,
-    ship_troops: shipTroops,
-    ship_level: building.level,
-    ship_capacity: building.level,
+    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
+    shipTroops.push(troop_name);
+    const troopsJson = JSON.stringify(shipTroops);
+    // Save both current troops and template (what player chose)
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
+
+    const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
+    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: capacity, resources: updated };
   });
+
+  try {
+    const result = txn();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.error || 'Server error' });
+  }
+});
+
+// Swap a troop in a specific slot (costs 100 gold). Updates template.
+router.post('/buildings/:id/swap-troop', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const { slot, troop_name } = req.body;
+  if (!Number.isInteger(slot) || !troop_name || !VALID_TROOPS.includes(troop_name)) {
+    return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
+  }
+
+  const txn = db.db.transaction(() => {
+    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+    if (!building) throw { status: 404, error: 'Building not found' };
+    if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
+
+    const shipTroops = JSON.parse(building.ship_troops || '[]');
+    if (slot < 0 || slot >= shipTroops.length) throw { status: 400, error: 'Invalid slot' };
+
+    const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
+    if (player.gold < TROOP_COST) throw { status: 400, error: 'Not enough gold' };
+
+    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
+    shipTroops[slot] = troop_name;
+    const troopsJson = JSON.stringify(shipTroops);
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
+
+    const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
+    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level, resources: updated };
+  });
+
+  try {
+    const result = txn();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.error || 'Server error' });
+  }
+});
+
+// Reinforce: restore dead troops from template (costs 50 gold per restored troop)
+router.post('/reinforce', auth, (req, res) => {
+  const txn = db.db.transaction(() => {
+    const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
+
+    let totalToRestore = 0;
+    const shipsToRestore = [];
+
+    for (const port of ports) {
+      const current = JSON.parse(port.ship_troops || '[]');
+      const template = JSON.parse(port.ship_troops_template || '[]');
+      // If template is empty, nothing to restore (player never loaded troops)
+      if (template.length === 0) continue;
+      // Compare: template is the full layout, current may have gaps (nulls) or fewer entries
+      const missing = template.length - current.length;
+      if (missing > 0) {
+        totalToRestore += missing;
+        shipsToRestore.push({ port, template });
+      }
+    }
+
+    if (totalToRestore === 0) return { cost: 0, restored: 0, ships: [] };
+
+    const totalCost = totalToRestore * REINFORCE_COST;
+    const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
+    if (player.gold < totalCost) throw { status: 400, error: `Not enough gold (need ${totalCost})` };
+
+    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(totalCost, req.player.id);
+
+    // Restore each ship to its template (exact same troops, same slots)
+    const resultShips = [];
+    for (const { port, template } of shipsToRestore) {
+      const troopsJson = JSON.stringify(template);
+      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
+      resultShips.push({ id: port.id, ship_troops: template });
+    }
+
+    const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
+    return { cost: totalCost, restored: totalToRestore, ships: resultShips, resources: updated };
+  });
+
+  try {
+    const result = txn();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.error || 'Server error' });
+  }
 });
 
 // Unload all troops from a ship
@@ -375,7 +533,7 @@ router.post('/buildings/:id/unload-troops', auth, (req, res) => {
   const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
   if (!building) return res.status(404).json({ error: 'Building not found' });
 
-  db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run('[]', buildingId);
+  db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run('[]', '[]', buildingId);
   res.json({ success: true, ship_troops: [] });
 });
 
