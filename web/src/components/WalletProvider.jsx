@@ -2,6 +2,9 @@ import { useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 
+// Register Farcaster wallet via wallet-standard (self-executing on import)
+import '@farcaster/mini-app-solana';
+
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 const RPC_LIST = [
