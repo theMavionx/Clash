@@ -26,8 +26,8 @@ function RegisterPanel() {
   useEffect(() => {
     if (isInFrame && fcUser && !triedFcLogin.current) {
       triedFcLogin.current = true;
-      const fcName = fcUser.username || fcUser.displayName || `fc_${fcUser.fid}`;
-      sendToGodot('register', { name: fcName, wallet: `fc_${fcUser.fid}` });
+      const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
+      sendToGodot('register', { name: fcName, wallet: 'fc_' + fcUser.fid });
     }
   }, [isInFrame, fcUser, sendToGodot]);
 

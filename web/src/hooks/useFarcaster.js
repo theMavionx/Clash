@@ -11,12 +11,11 @@ function isFarcasterFrame() {
   }
 }
 
-// Start SDK init immediately on module load (not waiting for React)
+// Start SDK init immediately on module load
 if (isFarcasterFrame()) {
-  initPromise = import('@farcaster/miniapp-sdk').then(mod => {
+  initPromise = import('@farcaster/miniapp-sdk').then(async (mod) => {
     sdkInstance = mod.sdk;
-    // Call ready() ASAP — this dismisses Farcaster splash
-    mod.sdk.actions.ready();
+    await mod.sdk.actions.ready();
     return mod.sdk;
   }).catch(() => null);
 }
@@ -34,17 +33,23 @@ export function useFarcaster() {
 
     let cancelled = false;
 
-    initPromise.then(sdk => {
+    initPromise.then(async (sdk) => {
       if (cancelled || !sdk) { setLoading(false); return; }
       setIsInFrame(true);
-      if (sdk.context?.user) {
-        setUser({
-          fid: sdk.context.user.fid,
-          username: sdk.context.user.username,
-          displayName: sdk.context.user.displayName,
-          pfpUrl: sdk.context.user.pfpUrl,
-        });
-      }
+
+      try {
+        // sdk.context is a Comlink Proxy — MUST await it
+        const ctx = await sdk.context;
+        if (ctx?.user) {
+          setUser({
+            fid: Number(ctx.user.fid) || 0,
+            username: String(ctx.user.username || ''),
+            displayName: String(ctx.user.displayName || ''),
+            pfpUrl: String(ctx.user.pfpUrl || ''),
+          });
+        }
+      } catch {}
+
       setLoading(false);
     }).catch(() => { if (!cancelled) setLoading(false); });
 
