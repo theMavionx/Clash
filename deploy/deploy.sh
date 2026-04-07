@@ -67,10 +67,17 @@ BUILD_HASH=$(date +%s)
 sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
 echo "  SW cache version: clash-godot-$BUILD_HASH"
 
+# Patch Work.js — remove side.wasm from dynamicLibraries (thread support disabled)
+if [ -f "$WEB_DIST/godot/Work.js" ]; then
+    sed -i "s|\[\`\${loadPath}.side.wasm\`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g" "$WEB_DIST/godot/Work.js"
+    rm -f "$WEB_DIST/godot/Work.side.wasm"
+    echo "  Patched Work.js: removed side.wasm reference"
+fi
+
 # Pre-compress Godot assets with brotli + gzip for nginx static serving
 # Use brotli quality 9 for big files (much smaller, slower to compress but done once at deploy)
 echo "Compressing Godot assets..."
-for f in "$WEB_DIST/godot/Work.pck" "$WEB_DIST/godot/Work.side.wasm"; do
+for f in "$WEB_DIST/godot/Work.pck"; do
     if [ -f "$f" ]; then
         brotli -f -q 9 -o "$f.br" "$f" && echo "  brotli-9: $(basename $f) → $(du -h "$f.br" | cut -f1)"
         gzip -f -k -9 "$f" && echo "  gzip-9:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"

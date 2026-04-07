@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, memo } from 'react';
 import loadingImage from '../assets/photo_5357292113839723543_y (1) (1) (1).jpg';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
+const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy
 
 const canvasStyle = {
   width: '100%',
@@ -87,7 +88,7 @@ function GodotCanvas({ onEngineReady }) {
     window.addEventListener('unhandledrejection', (e) => errHandler({ message: e.reason }));
 
     const script = document.createElement('script');
-    script.src = `${GODOT_FILES}/Work.js`;
+    script.src = `${GODOT_FILES}/Work.js${CACHE_BUST}`;
     script.onload = () => {
       const GODOT = window.Engine || window.Godot;
       if (!GODOT) {
