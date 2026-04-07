@@ -17,7 +17,39 @@ import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgShip from '../assets/buildings/shipsmall.png';
 
+import knightImg from '../assets/units/knight.png';
+import mageImg from '../assets/units/mage.png';
+import arbaletImg from '../assets/units/arbalet.png';
+import archerImg from '../assets/units/archer.png';
+import berserkImg from '../assets/units/berserk.png';
+
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
+
+const UNIT_IMAGES = {
+  Knight: knightImg,
+  Mage: mageImg,
+  Archer: archerImg,
+  Ranger: arbaletImg,
+  Barbarian: berserkImg,
+};
+
+const TROOP_STYLE_MAP = {
+  Knight: { scale: 2.2, offsetY: '35%' },
+  Mage: { scale: 2.5, offsetY: '50%' },
+  Barbarian: { scale: 1.9, offsetY: '25%' },
+  Archer: { scale: 1.9, offsetY: '25%' },
+  Ranger: { scale: 1.9, offsetY: '25%' },
+};
+
+const CARD_TROOP_STYLE_MAP = {
+  Knight: { scale: 1.35, offsetY: '0%' },
+  Mage: { scale: 1.45, offsetY: '0%' },
+  Barbarian: { scale: 1.05, offsetY: '0%' },
+  Archer: { scale: 1.05, offsetY: '0%' },
+  Ranger: { scale: 1.05, offsetY: '0%' },
+};
+
+const TROOP_COST = 100; // gold per unit
 
 const THUMBNAIL_MAP = {
   mine: imgMine,
@@ -55,8 +87,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [view, setView] = useState('ACTIONS'); // ACTIONS, INFO, UPGRADE, BUY_SHIP, LOAD_TROOPS
 
   useEffect(() => {
-    setView('ACTIONS');
-  }, [building?.id]);
+    if (building?.open_load_troops) {
+      setView('LOAD_TROOPS');
+    } else {
+      setView('ACTIONS');
+    }
+  }, [building?.id, building?.open_load_troops]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {
@@ -165,45 +201,35 @@ function BuildingInfoPanel({ onOpenTroops }) {
   );
 
   const renderModal = (title, level, leftContent, centerImg, rightContent, mainActionText, onMainAction) => (
-    <div style={styles.overlay} onClick={handleDeselect}>
-       <div style={styles.closeArea} onClick={handleDeselect}>
-         <div style={styles.navBottomBar}>
-            <span style={styles.navIcons}>Close ✕</span>
-         </div>
-      </div>
-      
-      <div style={styles.panel} onClick={e => e.stopPropagation()}>
-        <div style={styles.mainTitleArea}>
-            <div style={styles.titleLines}>
-              <div style={styles.horizontalLine}></div>
-              <div style={styles.diamond}></div>
-            </div>
-            <h1 style={styles.mainTitle}>{title}</h1>
-            <div style={styles.titleLines}>
-              <div style={styles.diamond}></div>
-              <div style={styles.horizontalLine}></div>
-            </div>
+    <div style={LT.overlay} onClick={handleDeselect}>
+      <div style={LT.panel} onClick={e => e.stopPropagation()}>
+        {/* Header matching Load Troops */}
+        <div style={LT.header}>
+          <span style={LT.headerTitle}>{title}</span>
+          <button style={LT.closeBtn} onClick={handleDeselect}>
+            ✖
+          </button>
         </div>
         
-        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 10 : 40, flexDirection: 'row', flexWrap: 'wrap' }}>
+        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 10 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: 20 }}>
           
-          {/* Left Column */}
+          {/* Left Column (Stats & Cost) */}
           <div style={{...styles.leftColumn, ...isMobile && { width: '100%', order: 2, marginTop: 10 }}}>
-             <h3 style={styles.sectionTitle}>Stats</h3>
+             <h3 style={{...styles.sectionTitle, marginTop: 0}}>Stats</h3>
              <div style={styles.statsContainer}>
                 {leftContent}
              </div>
              
-             {/* Description */}
-             <div style={{marginTop: isMobile ? 8 : 'auto', padding: 16, background: 'rgba(255, 255, 255, 0.1)', borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.15)', boxShadow: '0 4px 8px rgba(0,0,0,0.15)'}}>
-                <span style={{color: '#ffffff', fontSize: 13, lineHeight: 1.5, textShadow: '0 1px 2px rgba(0,0,0,0.4)'}}>
-                  {DESC_MAP[building.id] || "A critical component of your island outposts."}
-                </span>
-             </div>
+             {/* Cost moved to Left Column */}
+             {rightContent && (
+               <div style={{ marginTop: 20 }}>
+                 {rightContent}
+               </div>
+             )}
           </div>
 
-          {/* Center Column */}
-          <div style={{...styles.centerColumn, ...isMobile && { order: 1, minHeight: 150 }}}>
+          {/* Right Column (Image + Action) */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
              <div style={styles.characterWrapper}>
                
                {level && (
@@ -215,30 +241,27 @@ function BuildingInfoPanel({ onOpenTroops }) {
                  </div>
                )}
 
-               <div style={{ ...styles.characterSphere, ...isMobile && { width: 120, height: 120 }}}>
+               <div style={{ ...styles.characterSphere, ...isMobile && { width: 140, height: 140 }}}>
                   {centerImg}
                </div>
              </div>
-          </div>
 
-          {/* Right Column */}
-          <div style={{...styles.rightColumn, ...isMobile && { width: '100%', order: 3, marginTop: 10 }}}>
-             {rightContent}
-             
-             {mainActionText && (
-               <div style={{ marginTop: isMobile ? 12 : 'auto', marginBottom: 20 }}>
-                 <button 
-                   style={styles.actionBtn}
-                   onClick={onMainAction}
-                   onMouseOver={e => e.currentTarget.style.transform = 'scale(1.02)'}
-                   onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
-                   onMouseDown={e => e.currentTarget.style.transform = 'scale(0.98)'}
-                   onMouseUp={e => e.currentTarget.style.transform = 'scale(1.02)'}
-                 >
-                    {mainActionText}
-                 </button>
-               </div>
-             )}
+             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 'auto', paddingBottom: 16 }}>
+                 {mainActionText && (
+                   <div style={{ width: '100%', maxWidth: 240, marginTop: 16 }}>
+                     <button 
+                       style={styles.actionBtn}
+                       onClick={onMainAction}
+                       onMouseOver={e => e.currentTarget.style.transform = 'scale(1.02)'}
+                       onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+                       onMouseDown={e => e.currentTarget.style.transform = 'scale(0.98)'}
+                       onMouseUp={e => e.currentTarget.style.transform = 'scale(1.02)'}
+                     >
+                        {mainActionText}
+                     </button>
+                   </div>
+                 )}
+             </div>
           </div>
         </div>
       
@@ -302,8 +325,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const rightContent = (
       <>
          <h3 style={styles.sectionTitle}>Status</h3>
-         <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(255, 255, 255, 0.1)', borderRadius: 16, border: '1px solid rgba(255, 255, 255, 0.15)', boxShadow: '0 4px 8px rgba(0,0,0,0.15)'}}>
-           <span style={{color: '#fff', fontSize: 16, fontWeight: 800, textShadow: '0 2px 4px rgba(0,0,0,0.3)'}}>Functional</span>
+         <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 16, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
+           <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Functional</span>
          </div>
       </>
     );
@@ -353,63 +376,146 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
   };
 
+  const [swapSlot, setSwapSlot] = useState(null);
+  const [localTroops, setLocalTroops] = useState(null); // optimistic override
+
+  // Sync local troops with server data when building updates
+  useEffect(() => {
+    setLocalTroops(null);
+  }, [building?.ship_troops]);
+
   const renderLoadTroops = () => {
     const shipLevel = building.ship_level || 1;
-    const shipTroops = building.ship_troops || [];
+    const shipTroops = localTroops || building.ship_troops || [];
     const capacity = building.ship_capacity || shipLevel;
     const isFull = shipTroops.length >= capacity;
     const troopLvls = building.troop_levels || {};
-    // Godot sends PascalCase keys, ensure both cases work
     const getTroopLvl = (name) => troopLvls[name] || troopLvls[name.toLowerCase()] || 1;
     const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 
+    const handleLoadTroop = (name) => {
+      if (swapSlot !== null) {
+        // Optimistic swap
+        const updated = [...shipTroops];
+        updated[swapSlot] = name;
+        setLocalTroops(updated);
+        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name });
+        setSwapSlot(null);
+      } else {
+        // Optimistic load
+        setLocalTroops([...shipTroops, name]);
+        sendToGodot('load_troop', { troop_name: name });
+      }
+    };
+
+    const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
+
     return (
-      <div style={styles.loadTroopsPanel}>
-        <div style={styles.loadTroopsHeader}>
-          <button style={styles.backBtn} onClick={() => setView('ACTIONS')}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><path d="M15 18l-6-6 6-6"/></svg>
-          </button>
-          <span style={styles.loadTroopsTitle}>
-            Ship Lv.{shipLevel} — {shipTroops.length}/{capacity}
-          </span>
-        </div>
-
-        {/* Loaded troops */}
-        {shipTroops.length > 0 && (
-          <div style={styles.loadedList}>
-            {shipTroops.map((t, i) => (
-              <div key={i} style={styles.loadedItem}>
-                <span style={styles.loadedName}>{t}</span>
-                <span style={styles.loadedLvl}>Lv.{troopLvls[t] || 1}</span>
-              </div>
-            ))}
+      <div style={LT.overlay} onClick={handleClose}>
+        <div style={LT.panel} onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div style={LT.header}>
+            <span style={LT.headerTitle}>Choose Troops</span>
+            <button style={LT.closeBtn} onClick={handleClose}>
+              ✖
+            </button>
           </div>
-        )}
 
-        {/* Load buttons */}
-        {!isFull && (
-          <div style={styles.loadBtnList}>
+          {/* Loaded troops slots */}
+          <div style={LT.loadedBar}>
+            {Array.from({ length: capacity }).map((_, i) => {
+              const t = shipTroops[i];
+              const isSwapping = swapSlot === i;
+              if (t) {
+                return (
+                  <div
+                    key={i}
+                    style={{ ...LT.loadedSlot, ...(isSwapping ? LT.loadedSlotActive : {}) }}
+                    onClick={() => setSwapSlot(isSwapping ? null : i)}
+                    onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.1)'}
+                    onMouseOut={e => e.currentTarget.style.filter = isSwapping ? 'brightness(1.15)' : 'none'}
+                  >
+                    <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
+                      {UNIT_IMAGES[t] && (
+                        <img 
+                          src={UNIT_IMAGES[t]} 
+                          alt={t} 
+                          style={{
+                            ...LT.loadedSlotImg,
+                            transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})`
+                          }}
+                        />
+                      )}
+                    </div>
+                    {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
+                  </div>
+                );
+              }
+              return (
+                <div 
+                  key={`empty-${i}`} 
+                  style={LT.emptySlot}
+                  onClick={() => setSwapSlot(i)}
+                  onMouseOver={e => e.currentTarget.style.filter = 'brightness(0.95)'}
+                  onMouseOut={e => e.currentTarget.style.filter = 'none'}
+                >
+                  ?
+                </div>
+              );
+            })}
+          </div>
+
+          {swapSlot !== null && (
+            <div style={LT.swapHint}>Select a troop below for slot {swapSlot + 1}</div>
+          )}
+
+          {/* Troop selection grid */}
+          <div style={LT.grid}>
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
               return (
                 <button
                   key={name}
-                  style={styles.loadTroopBtn}
+                  style={LT.troopCard}
                   onClick={() => {
-                    sendToGodot('load_troop', { troop_name: name });
+                    if (isFull && swapSlot === null) {
+                      // Auto-swap last slot directly
+                      const updated = [...shipTroops];
+                      updated[capacity - 1] = name;
+                      setLocalTroops(updated);
+                      sendToGodot('swap_troop', { slot: capacity - 1, troop_name: name });
+                    } else {
+                      handleLoadTroop(name);
+                    }
                   }}
+                  onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.1)'}
+                  onMouseOut={e => e.currentTarget.style.filter = 'none'}
                 >
-                  <span style={styles.loadTroopName}>{name}</span>
-                  <span style={styles.loadTroopLvl}>Lv.{lvl}</span>
+                  <div style={LT.troopLvlBadge}>Lvl {lvl}</div>
+                  
+                  <div style={LT.troopImgWrap}>
+                    {UNIT_IMAGES[name] && (
+                      <img 
+                        src={UNIT_IMAGES[name]} 
+                        alt={name} 
+                        style={{
+                          ...LT.troopImg,
+                          transform: `scale(${CARD_TROOP_STYLE_MAP[name]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[name]?.offsetY || '0%'})`
+                        }} 
+                      />
+                    )}
+                  </div>
+
+                  <div style={LT.bottomOverlay}>
+                    <span style={LT.bottomLabel}>{name.toUpperCase()}</span>
+                    <img src={goldIcon} alt="gold" style={LT.costIcon} />
+                    <span style={LT.costText}>{TROOP_COST}</span>
+                  </div>
                 </button>
               );
             })}
           </div>
-        )}
-
-        {isFull && (
-          <div style={styles.shipFullMsg}>Ship is full!</div>
-        )}
+        </div>
       </div>
     );
   };
@@ -498,88 +604,7 @@ const styles = {
     lineHeight: 1,
   },
 
-  // BARRACKS / DARK OVERLAY STYLE
-  overlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(12, 12, 28, 0.85)',
-    backdropFilter: 'blur(10px)',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 20,
-    pointerEvents: 'all',
-  },
-  closeArea: {
-    position: 'absolute',
-    top: 20,
-    right: 40,
-    cursor: 'pointer',
-    color: '#64748b',
-    zIndex: 30,
-  },
-  navBottomBar: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-    borderBottom: '1px solid rgba(255,255,255,0.1)',
-    paddingBottom: 8,
-  },
-  navIcons: {
-    fontSize: 14,
-    fontWeight: 600,
-    color: '#94a3b8',
-    transition: 'color 0.2s',
-  },
-  panel: {
-    background: 'linear-gradient(180deg, #4aa6ef 0%, #1e70b9 100%)',
-    borderRadius: 20,
-    border: '3px solid #AAB7B8',
-    width: '95vw',
-    maxWidth: 840,
-    maxHeight: '85vh',
-    boxShadow: '0 24px 48px rgba(0,0,0,0.6), inset 0 8px 16px rgba(0,0,0,0.4)',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    padding: '20px 0',
-    overflow: 'auto',
-    overflow: 'hidden',
-    position: 'relative',
-    cursor: 'default',
-  },
-  mainTitleArea: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 24,
-    marginBottom: 12,
-  },
-  titleLines: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    opacity: 0.3,
-  },
-  horizontalLine: {
-    width: 80,
-    height: 1,
-    background: 'rgba(70, 184, 232, 0.3)',
-  },
-  diamond: {
-    width: 6,
-    height: 6,
-    background: 'rgba(70, 184, 232, 0.5)',
-    transform: 'rotate(45deg)',
-  },
-  mainTitle: {
-    margin: 0,
-    fontSize: 32,
-    fontWeight: 900,
-    color: '#ffffff',
-    letterSpacing: -1,
-    textShadow: '0 4px 4px rgba(0,0,0,0.5), 0 8px 16px rgba(0,0,0,0.3)',
-  },
+  // MODAL / SHARED STYLE
   contentLayout: {
     display: 'flex',
     width: '100%',
@@ -595,7 +620,6 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 16,
-    marginTop: 20,
     position: 'relative',
     zIndex: 10,
   },
@@ -603,8 +627,7 @@ const styles = {
     margin: 0,
     fontSize: 20,
     fontWeight: 900,
-    color: '#ffffff',
-    textShadow: '0 2px 4px rgba(0,0,0,0.4)',
+    color: '#377d9f',
     marginBottom: 8,
   },
   statsContainer: {
@@ -613,20 +636,19 @@ const styles = {
     gap: 12,
   },
   statBox: {
-    background: 'rgba(255, 255, 255, 0.1)',
+    background: 'rgba(0, 0, 0, 0.05)',
     borderRadius: 16,
     padding: '12px 16px',
-    border: '1px solid rgba(255, 255, 255, 0.15)',
-    boxShadow: '0 4px 8px rgba(0,0,0,0.15)',
+    border: '1px solid rgba(0, 0, 0, 0.1)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
   },
   statBoxLabel: {
     fontSize: 12,
-    fontWeight: 700,
-    color: '#e2e8f0',
+    fontWeight: 800,
+    color: '#7692a1',
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 4,
-    textShadow: '0 1px 2px rgba(0,0,0,0.3)',
   },
   statBoxValues: {
     display: 'flex',
@@ -636,19 +658,17 @@ const styles = {
   statCurrent: {
     fontSize: 24,
     fontWeight: 800,
-    color: '#ffffff',
-    textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+    color: '#1a3c4f',
   },
   statArrow: {
     fontSize: 16,
-    color: '#ffffff',
+    color: '#1a3c4f',
     opacity: 0.7,
   },
   statUpgraded: {
     fontSize: 24,
     fontWeight: 900,
-    color: '#7ad23f',
-    textShadow: '0 2px 4px rgba(0,0,0,0.5)',
+    color: '#479a1f',
   },
 
   centerColumn: {
@@ -674,30 +694,10 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  sphereCore: {
-    width: 120,
-    height: 120,
+    background: 'radial-gradient(circle at 30% 30%, #d4caa8 0%, #b8af8c 100%)',
     borderRadius: '50%',
-    background: 'radial-gradient(circle at 30% 30%, #46b8e8 0%, #2a9ccb 40%, #15516b 100%)',
-    boxShadow: 'inset 0 10px 30px rgba(255,255,255,0.2), 0 20px 40px rgba(0,0,0,0.5)',
-    zIndex: 2,
-  },
-  sphereGlow: {
-    position: 'absolute',
-    inset: -60,
-    borderRadius: '50%',
-    background: 'conic-gradient(from 0deg, transparent, rgba(70, 184, 232, 0.3), transparent)',
-    animation: 'spin 12s linear infinite',
-    zIndex: 1,
-  },
-  bigSoftGlow: {
-    position: 'absolute',
-    width: 600,
-    height: 600,
-    borderRadius: '50%',
-    background: 'radial-gradient(circle, rgba(70, 184, 232, 0.15) 0%, transparent 60%)',
-    zIndex: 1,
+    boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.3)',
+    border: '2px solid rgba(0,0,0,0.1)'
   },
   characterImg: {
     position: 'absolute',
@@ -706,7 +706,7 @@ const styles = {
     objectFit: 'contain',
     zIndex: 5,
     pointerEvents: 'none',
-    filter: 'drop-shadow(0 20px 40px rgba(0,0,0,0.6))',
+    filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.4))',
   },
   upgradeBadge: {
     position: 'absolute',
@@ -749,13 +749,14 @@ const styles = {
   },
   reqGrid: {
     display: 'flex',
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
     flexWrap: 'wrap',
     gap: 12,
   },
   reqBox: {
-    background: 'rgba(255, 255, 255, 0.1)',
-    border: '1px solid rgba(255, 255, 255, 0.15)',
+    background: 'rgba(0, 0, 0, 0.05)',
+    border: '1px solid rgba(0, 0, 0, 0.1)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
     borderRadius: 20,
     width: 90,
     height: 90,
@@ -764,26 +765,24 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    boxShadow: '0 4px 8px rgba(0,0,0,0.15)',
     transition: 'transform 0.2s, background 0.2s',
   },
   reqBoxMax: {
     gridColumn: '1 / -1',
     display: 'flex',
-    justifyContent: 'flex-start',
+    justifyContent: 'center',
   },
   reqIconImg: {
     width: 44,
     height: 44,
     objectFit: 'contain',
-    filter: 'drop-shadow(0 4px 4px rgba(0,0,0,0.5))',
+    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.3))',
     marginBottom: 4,
   },
   reqAmt: {
     fontSize: 16,
     fontWeight: 900,
-    color: '#f8fafc',
-    textShadow: '0 2px 2px rgba(0,0,0,0.5)',
+    color: '#1a3c4f',
   },
   actionBtn: {
     background: 'linear-gradient(180deg, #FBC02D 0%, #F57F17 100%)',
@@ -802,50 +801,108 @@ const styles = {
     textShadow: '0 2px 2px rgba(0,0,0,0.3)',
     transition: 'transform 0.1s',
   },
-  // Load troops panel
-  loadTroopsPanel: {
-    position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-    width: 340, maxWidth: '95vw',
-    background: 'linear-gradient(180deg, #3E2723 0%, #2C1B0E 100%)',
-    border: '3px solid #6D4C2A', borderRadius: '16px 16px 0 0',
-    padding: 16, zIndex: 30, pointerEvents: 'auto',
-    display: 'flex', flexDirection: 'column', gap: 10,
+};
+
+// Load troops modal styles
+const LT = {
+  overlay: {
+    position: 'fixed', inset: 0,
+    background: 'rgba(0,0,0,0.6)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 30, pointerEvents: 'all',
   },
-  loadTroopsHeader: {
-    display: 'flex', alignItems: 'center', gap: 10,
+  panel: {
+    width: 680, maxWidth: '98vw', maxHeight: '90vh',
+    background: '#ebdaba',
+    border: '4px solid #377d9f',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    display: 'flex', flexDirection: 'column',
+    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
   },
-  backBtn: {
-    width: 32, height: 32, borderRadius: 8,
-    background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
-    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
+    height: 54, background: '#4ca5d2',
+    borderBottom: '4px solid #377d9f',
   },
-  loadTroopsTitle: {
-    color: '#fff', fontSize: 16, fontWeight: 900,
-    textShadow: '0 2px 2px rgba(0,0,0,0.5)',
+  headerTitle: { 
+    fontSize: 24, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
+    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)' 
   },
-  loadedList: {
-    display: 'flex', flexDirection: 'column', gap: 4,
+  closeBtn: {
+    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+    width: 32, height: 32, background: 'rgba(0,0,0,0.1)', border: 'none', borderRadius: 4,
+    color: '#1a3c4f', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    fontSize: 20, fontWeight: 'bold'
   },
-  loadedItem: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '6px 12px', background: 'rgba(255,255,255,0.08)',
-    borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)',
+  loadedBar: {
+    display: 'flex', gap: 6, padding: '12px 14px',
+    justifyContent: 'center', background: 'rgba(0,0,0,0.06)', borderBottom: '2px solid rgba(0,0,0,0.06)',
   },
-  loadedName: { color: '#fff', fontSize: 14, fontWeight: 700 },
-  loadedLvl: { color: 'rgba(255,255,255,0.5)', fontSize: 12, fontWeight: 700 },
-  loadBtnList: {
-    display: 'flex', flexWrap: 'wrap', gap: 6,
+  loadedSlot: {
+    width: 70, height: 90, borderRadius: 8,
+    background: 'linear-gradient(180deg, #d4d2c8 0%, #a5a398 100%)', border: '1px solid #727068',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    position: 'relative', overflow: 'hidden', cursor: 'pointer',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.2)',
+    transition: 'filter 0.1s',
   },
-  loadTroopBtn: {
-    flex: '1 0 45%', padding: '10px 8px',
-    background: 'linear-gradient(180deg, #2E7D32 0%, #1B5E20 100%)',
-    border: '2px solid #4CAF50', borderRadius: 10,
-    cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+  loadedSlotImg: { 
+    width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top center',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transformOrigin: 'top center',
   },
-  loadTroopName: { color: '#fff', fontSize: 13, fontWeight: 900 },
-  loadTroopLvl: { color: 'rgba(255,255,255,0.6)', fontSize: 11, fontWeight: 700 },
-  shipFullMsg: {
-    color: '#FFA726', fontSize: 14, fontWeight: 900, textAlign: 'center',
-    padding: 12,
+  loadedSlotActive: { border: '2px solid #E53935', filter: 'brightness(1.15)', transform: 'scale(1.05)', zIndex: 10 },
+  emptySlot: {
+    width: 70, height: 90, background: 'rgba(0,0,0,0.05)', border: '2px dashed #928d81', borderRadius: 8,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#928d81', fontSize: 24, fontWeight: 900, cursor: 'pointer',
+    transition: 'filter 0.1s',
+  },
+  grid: {
+    display: 'flex', flexWrap: 'wrap', gap: 10,
+    padding: '16px 20px', justifyContent: 'center',
+    overflowY: 'auto', flex: 1,
+  },
+  troopCard: {
+    width: 108, flexShrink: 0, aspectRatio: '3/4', borderRadius: 8,
+    background: 'linear-gradient(180deg, #d4d2c8 0%, #a5a398 100%)', border: '1px solid #727068',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', position: 'relative', overflow: 'hidden',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.15)',
+    transition: 'filter 0.1s', padding: 0,
+  },
+  troopLvlBadge: {
+    position: 'absolute', top: 6, right: 8, zIndex: 10,
+    fontSize: 16, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
+    textShadow: '0 2px 3px rgba(0,0,0,0.9), 0 -1px 2px rgba(0,0,0,1), 1px 0 2px rgba(0,0,0,1), -1px 0 2px rgba(0,0,0,1)',
+  },
+  troopImgWrap: {
+    position: 'absolute', inset: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', paddingBottom: 16,
+  },
+  troopImg: {
+    width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top center',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
+    transformOrigin: 'top center',
+  },
+  bottomOverlay: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    height: 34, background: 'linear-gradient(180deg, rgba(0,0,0,0.2) 0%, rgba(0,0,0,0.8) 100%)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, zIndex: 10,
+    padding: '0 4px',
+  },
+  bottomLabel: { 
+    fontSize: 10, fontWeight: 900, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+    flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: 0.5,
+  },
+  costIcon: { width: 14, height: 14, objectFit: 'contain', filter: 'drop-shadow(0 1px 1px black)' },
+  costText: { fontSize: 13, fontWeight: 900, color: '#FFD700', textShadow: '0 1px 2px rgba(0,0,0,0.8)' },
+  swapBadge: {
+    position: 'absolute', top: -2, right: -2,
+    background: '#E53935', color: '#fff', fontSize: 10, fontWeight: 900,
+    padding: '2px 5px', borderRadius: 4, lineHeight: 1, boxShadow: '0 2px 4px rgba(0,0,0,0.4)', zIndex: 20
+  },
+  swapHint: {
+    textAlign: 'center', padding: '10px 16px', fontSize: 14, fontWeight: 900, color: '#E53935',
+    background: 'transparent',
   },
 };

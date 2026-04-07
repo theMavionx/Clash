@@ -5,6 +5,14 @@ import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 
+import knightImg from '../assets/units/knight.png';
+import mageImg from '../assets/units/mage.png';
+import arbaletImg from '../assets/units/arbalet.png';
+import archerImg from '../assets/units/archer.png';
+import berserkImg from '../assets/units/berserk.png';
+
+const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Archer: archerImg, Ranger: arbaletImg, Barbarian: berserkImg };
+
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
 function ShareButton({ isVictory, isReplay, result }) {
@@ -35,6 +43,10 @@ function BattleResultOverlay({ result, onClose }) {
 
   const isVictory = result.type === 'victory';
   const isReplay = result.type === 'replay_end';
+  const casualties = Object.entries(result.casualties || {}).filter(([, c]) => c > 0);
+  const totalCasualties = casualties.reduce((sum, [, c]) => sum + c, 0);
+  const REINFORCE_COST_PER_UNIT = 50;
+  const totalReinforceCost = totalCasualties * REINFORCE_COST_PER_UNIT;
 
   return (
     <div style={styles.backdrop}>
@@ -72,6 +84,28 @@ function BattleResultOverlay({ result, onClose }) {
               Upgrade your troops and try again.
             </div>
            </div>
+        )}
+
+        {/* Casualties */}
+        {casualties.length > 0 && !isReplay && (
+          <div style={styles.panel}>
+            <div style={styles.panelTitle}>Casualties</div>
+            <div style={styles.casualtyRow}>
+              {casualties.map(([name, count]) => (
+                <div key={name} className="loot-pop" style={{...styles.casualtyItem, animationDelay: '1.2s'}}>
+                  <div style={styles.casualtyImgWrap}>
+                    <img src={UNIT_IMAGES[name]} alt={name} style={styles.casualtyImg} />
+                    <div style={styles.casualtyCount}>x{count}</div>
+                  </div>
+                  <span style={styles.casualtyName}>{name}</span>
+                </div>
+              ))}
+            </div>
+            <div style={styles.reinforceInfo}>
+              <img src={goldIcon} alt="gold" style={{width: 20, height: 20}} />
+              <span style={styles.reinforceCost}>{totalReinforceCost} gold to reinforce</span>
+            </div>
+          </div>
         )}
 
         {/* Buttons */}
@@ -244,7 +278,35 @@ const styles = {
     textShadow: textOutline,
     letterSpacing: '0.5px',
     transform: 'translateY(-1px)',
-  }
+  },
+  casualtyRow: {
+    display: 'flex', justifyContent: 'center', gap: 20, flexWrap: 'wrap',
+  },
+  casualtyItem: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+  },
+  casualtyImgWrap: {
+    position: 'relative', width: 56, height: 56,
+  },
+  casualtyImg: {
+    width: 56, height: 56, objectFit: 'contain',
+    filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.5)) grayscale(40%)',
+  },
+  casualtyCount: {
+    position: 'absolute', bottom: -4, right: -6,
+    background: '#E53935', color: '#fff', fontSize: 12, fontWeight: 900,
+    padding: '1px 6px', borderRadius: 8, lineHeight: '16px',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+  },
+  casualtyName: {
+    fontSize: 11, fontWeight: 800, color: '#ccc', textShadow: textOutline,
+  },
+  reinforceInfo: {
+    display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
+  },
+  reinforceCost: {
+    fontSize: 13, fontWeight: 800, color: '#FFD700', textShadow: textOutline,
+  },
 };
 
 export default memo(BattleResultOverlay);

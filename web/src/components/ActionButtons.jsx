@@ -333,6 +333,16 @@ function ActionButtons({ onOpenBattleLog }) {
         </CustomBtn>
       </div>
       <div style={{ ...styles.wrapRight, ...(mobile ? { bottom: 8, right: 8 } : {}) }}>
+        <CustomBtn onClick={() => sendToGodot('reinforce')} width={btnSmall} height={btnSmall}>
+          <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
+            <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+            <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+            <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+            <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
+            <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
+        </CustomBtn>
         <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize}>
           {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
           <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />

@@ -95,15 +95,50 @@ func _load_troop_to_ship(troop_name: String) -> void:
 		if result.has("error"):
 			bs._show_error(str(result.error))
 			return
-		# Update from server response
 		var new_troops: Array = result.get("ship_troops", [])
 		port_node.set_meta("ship_troops", new_troops)
+		# Update resources from server
+		if result.has("resources"):
+			var res_data: Dictionary = result.resources
+			bs._apply_resources_from_server(res_data)
 	else:
-		# Offline fallback
 		ship_troops.append(troop_name)
 		port_node.set_meta("ship_troops", ship_troops)
 	bs._refresh_port_panel()
-	# Update React with new ship data
+	var updated_troops: Array = port_node.get_meta("ship_troops", [])
+	var bridge: Node = bs._bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_level": ship_level,
+			"ship_troops": updated_troops,
+			"ship_capacity": ship_level,
+		})
+
+func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
+	var port_node: Node3D = bs.selected_building.get("node", null)
+	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
+		return
+	var ship_troops: Array = port_node.get_meta("ship_troops", [])
+	if slot < 0 or slot >= ship_troops.size():
+		return
+	var ship_level: int = port_node.get_meta("ship_level", 1)
+	# Ask server
+	var sid: int = bs.selected_building.get("server_id", -1)
+	var net: Node = bs._net
+	if net and net.has_token() and sid >= 0:
+		var result: Dictionary = await net.swap_troop(sid, slot, troop_name)
+		if result.has("error"):
+			bs._show_error(str(result.error))
+			return
+		var new_troops: Array = result.get("ship_troops", [])
+		port_node.set_meta("ship_troops", new_troops)
+		if result.has("resources"):
+			var res_data: Dictionary = result.resources
+			bs._apply_resources_from_server(res_data)
+	else:
+		ship_troops[slot] = troop_name
+		port_node.set_meta("ship_troops", ship_troops)
+	bs._refresh_port_panel()
 	var updated_troops: Array = port_node.get_meta("ship_troops", [])
 	var bridge: Node = bs._bridge
 	if bridge:
