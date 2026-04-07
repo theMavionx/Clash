@@ -156,6 +156,17 @@ var building_defs: Dictionary = {
 		"hp_levels": [500, 800, 1200],
 		"cost": {"gold": 50},
 	},
+	"ruins": {
+		"name": "Ruins",
+		"cells": Vector2i(2, 2),
+		"color": Color(0.35, 0.3, 0.25, 0.5),
+		"height": 0.2,
+		"scene": "res://Model/BrokenModel/BrokenModel.glb",
+		"model_scale": 0.15,
+		"hp_levels": [300, 500, 800],
+		"cost": {},
+		"no_shop": true,
+	},
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -879,6 +890,8 @@ func _create_ui() -> void:
 
 	for id in building_defs:
 		var def = building_defs[id]
+		if def.get("no_shop", false):
+			continue
 		var cost = def.get("cost", {})
 		var cost_parts: Array = []
 		if cost.has("gold"):
@@ -2723,6 +2736,37 @@ func remove_building(b: Dictionary) -> void:
 	if is_instance_valid(icon):
 		icon.queue_free()
 	if is_instance_valid(b.node):
+		# Fire bomb explosion on destruction
+		BaseTroop._preload_fire_bomb()
+		if not BaseTroop._fire_bomb_textures.is_empty():
+			var explosion: MeshInstance3D = MeshInstance3D.new()
+			var quad: QuadMesh = QuadMesh.new()
+			quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
+			explosion.mesh = quad
+			var mat: StandardMaterial3D = StandardMaterial3D.new()
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			mat.no_depth_test = true
+			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
+			explosion.material_override = mat
+			get_tree().current_scene.add_child(explosion)
+			explosion.global_position = b.node.global_position + Vector3(0, 0.15, 0)
+			var frames: Array = BaseTroop._fire_bomb_textures
+			var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
+			var tw: Tween = create_tween()
+			for fi in range(frames.size()):
+				var idx2: int = fi
+				tw.tween_callback(func():
+					if is_instance_valid(explosion):
+						(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
+				).set_delay(frame_dur if fi > 0 else 0.0)
+			tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
+			tw.chain().tween_callback(explosion.queue_free)
+		# Spawn ruins on the grid at same local position
+		_spawn_ruins(b.node.position)
 		b.node.queue_free()
 	placed_buildings.remove_at(idx)
 	_deselect_building()
@@ -2906,6 +2950,9 @@ func _update_building_hp_bars() -> void:
 				b.hp_bar.global_transform.basis = Basis.looking_at(-dir.normalized(), Vector3.UP)
 		var ratio: float = float(b.hp) / float(b.max_hp)
 		var last_ratio: float = b.get("_last_hp_ratio", -1.0)
+		# Flash building when it takes damage
+		if ratio < 1.0 and (last_ratio < 0.0 or ratio < last_ratio - 0.004) and not b.get("_flashing", false):
+			_flash_building_hit(b)
 		if absf(ratio - last_ratio) < 0.005 and last_ratio >= 0.0:
 			continue
 		b["_last_hp_ratio"] = ratio
@@ -2919,6 +2966,54 @@ func _update_building_hp_bars() -> void:
 		if band != last_band:
 			b["_last_hp_band"] = band
 			mat.set_shader_parameter("albedo", BaseTroop._HP_COLORS[band])
+
+
+## Preloaded ruins model — appears where a destroyed building stood.
+const RUINS_MODEL: String = "res://Model/BrokenModel/BrokenModel.glb"
+const RUINS_SCALE: float = 0.15
+const RUINS_Y_OFFSET: float = 0.05  ## Adjust if ruins float or sink
+static var _ruins_res: Resource = null
+
+## Spawns ruins on the grid at the given local position (child of BuildingSystem).
+## Ruins are non-selectable — they have a "is_ruins" meta tag.
+func _spawn_ruins(local_pos: Vector3) -> void:
+	if _ruins_res == null:
+		_ruins_res = load(RUINS_MODEL)
+	if _ruins_res == null:
+		return
+	var ruins: Node3D = _ruins_res.instantiate()
+	var s: float = RUINS_SCALE
+	ruins.scale = Vector3(s, s, s)
+	ruins.set_meta("is_ruins", true)
+	add_child(ruins)
+	ruins.position = Vector3(local_pos.x, RUINS_Y_OFFSET, local_pos.z)
+	# Pop-in animation
+	ruins.scale = Vector3.ZERO
+	var tw: Tween = create_tween()
+	tw.tween_property(ruins, "scale", Vector3(s, s, s), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+## Spawns a brief OmniLight3D inside the building to brighten it on hit.
+func _flash_building_hit(b: Dictionary) -> void:
+	var node: Node3D = b.get("node")
+	if not is_instance_valid(node):
+		return
+	b["_flashing"] = true
+	var light: OmniLight3D = OmniLight3D.new()
+	light.light_color = Color(1.0, 1.0, 1.0)
+	light.light_energy = 0.25
+	light.omni_range = 0.25
+	light.omni_attenuation = 0.5
+	light.shadow_enabled = false
+	node.add_child(light)
+	light.position = Vector3(0, 0.15, 0)
+	var tw: Tween = create_tween()
+	tw.tween_property(light, "light_energy", 0.0, 0.05)
+	tw.tween_callback(func():
+		if is_instance_valid(light):
+			light.queue_free()
+		b["_flashing"] = false
+	)
 
 
 func _get_hp_for(def: Dictionary, level: int) -> int:

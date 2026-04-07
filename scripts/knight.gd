@@ -3,7 +3,7 @@ extends BaseTroop
 ## Implements the Knight troop spec (design/gdd/troops.md).
 
 @export var sword_scene: String = "res://Model/Characters/Assets/sword_1handed.gltf"
-@export var hit_distance: float = 0.25
+@export var hit_distance: float = 0.35
 @export var hit_anim_threshold: float = 0.4
 
 var _sword_attachment: BoneAttachment3D
