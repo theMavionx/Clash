@@ -171,10 +171,13 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
         // New format: troops is an array of troop names per ship
         // Old format: troopType is a single troop name
         const troops = act.troops || (act.troopType ? [act.troopType] : []);
+        console.log(`[SIM] Ship ${shipsPlaced + 1}: troops=${JSON.stringify(troops)}, troopType=${act.troopType}, shipLevel=${act.shipLevel}`);
         for (let ti = 0; ti < troops.length; ti++) {
-          const troopType = troops[ti];
-          if (!VALID_TROOP_TYPES.includes(troopType)) continue;
-          const level = act.troopLevel || (serverTroopLevels && serverTroopLevels[troopType]) || 1;
+          const rawName = troops[ti];
+          const troopType = rawName.toLowerCase();
+          if (!VALID_TROOP_TYPES.includes(troopType)) { console.log(`[SIM] SKIP invalid troop: ${rawName}`); continue; }
+          const level = act.troopLevel || (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType])) || 1;
+          console.log(`[SIM] Spawn ${troopType} lv${level} at t=${act.t + SAIL_DELAY_SEC + ti * 0.2}`);
           pendingSpawns.push({
             time: act.t + SAIL_DELAY_SEC + ti * 0.2,
             troopType, troopLevel: level,

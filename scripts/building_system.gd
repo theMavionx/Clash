@@ -2208,6 +2208,14 @@ func _destroy_all_buildings() -> void:
 		# Free tower archer units
 		if b.has("tower_unit_node") and is_instance_valid(b.get("tower_unit_node")):
 			b.tower_unit_node.queue_free()
+		# Free port ship nodes (they are separate scene children, not port children)
+		if b.get("id") == "port":
+			var pnode = b.get("node")
+			if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
+				var ship = pnode.get_meta("ship_node")
+				if is_instance_valid(ship):
+					ship.queue_free()
+				pnode.remove_meta("ship_node")
 		var icon: Control = b.get("_collect_icon")
 		if is_instance_valid(icon):
 			icon.queue_free()

@@ -280,6 +280,11 @@ router.post('/attack/result', auth, (req, res) => {
     }
   }
 
+  // Debug: log what the server sees
+  const shipActs = gameActions.filter(a => a.type === 'place_ship');
+  console.log(`[BATTLE] Ships: ${shipActs.length}, troops:`, shipActs.map(a => ({ troops: a.troops, troopType: a.troopType, shipLevel: a.shipLevel })));
+  console.log(`[BATTLE] Server troop levels:`, serverTroopLevels);
+
   // Run server simulation verification
   const { verifyReplay } = require('./combat_session');
   const verification = verifyReplay({
