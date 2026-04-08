@@ -31,15 +31,25 @@ export function useFarcaster() {
     }
 
     let cancelled = false;
+    let readyCalled = false;
+
+    const callReady = async (sdk) => {
+      if (readyCalled) return;
+      readyCalled = true;
+      try { await sdk.actions.ready(); } catch {}
+      if (!cancelled) setLoading(false);
+    };
 
     initPromise.then(async (sdk) => {
       if (cancelled || !sdk) { setLoading(false); return; }
       setIsInFrame(true);
 
+      // Fallback: if context takes too long, call ready() anyway after 3s
+      const timeout = setTimeout(() => callReady(sdk), 3000);
+
       try {
-        // sdk.context is a Comlink Proxy — MUST await it
         const ctx = await sdk.context;
-        if (ctx?.user) {
+        if (ctx?.user && !cancelled) {
           setUser({
             fid: Number(ctx.user.fid) || 0,
             username: String(ctx.user.username || ''),
@@ -49,10 +59,8 @@ export function useFarcaster() {
         }
       } catch {}
 
-      // Tell Farcaster the app is ready — hides their splash screen
-      try { await sdk.actions.ready(); } catch {}
-
-      setLoading(false);
+      clearTimeout(timeout);
+      callReady(sdk);
     }).catch(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
