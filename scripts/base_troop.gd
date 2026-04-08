@@ -834,6 +834,59 @@ func _destroy_target() -> void:
 	target_guard = null
 
 
+# ── Fire Bomb Explosion ──────────────────────────────────────
+const FIRE_BOMB_FRAME_COUNT: int = 12  # frames 4..15
+const FIRE_BOMB_DIR: String = "res://Model/FireBomb/Fire-bomb%d.png"
+const FIRE_BOMB_SCALE: float = 1.2
+const FIRE_BOMB_DURATION: float = 0.8
+
+static var _fire_bomb_textures: Array = []
+
+static func _preload_fire_bomb() -> void:
+	if not _fire_bomb_textures.is_empty():
+		return
+	for i in range(4, 16):
+		var tex = load(FIRE_BOMB_DIR % i)
+		if tex:
+			_fire_bomb_textures.append(tex)
+
+
+func _spawn_fire_explosion(pos: Vector3) -> void:
+	_preload_fire_bomb()
+	if _fire_bomb_textures.is_empty():
+		return
+	var explosion: MeshInstance3D = MeshInstance3D.new()
+	var quad: QuadMesh = QuadMesh.new()
+	quad.size = Vector2(FIRE_BOMB_SCALE, FIRE_BOMB_SCALE)
+	explosion.mesh = quad
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.no_depth_test = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = _fire_bomb_textures[0]
+	mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+	explosion.material_override = mat
+	get_tree().current_scene.add_child(explosion)
+	explosion.global_position = pos + Vector3(0, 0.15, 0)
+	# Animate frames then free
+	var frame_count: int = _fire_bomb_textures.size()
+	var frame_dur: float = FIRE_BOMB_DURATION / float(frame_count)
+	var tw: Tween = explosion.create_tween()
+	for i in range(frame_count):
+		var idx: int = i
+		tw.tween_callback(func():
+			if is_instance_valid(explosion):
+				(explosion.material_override as StandardMaterial3D).albedo_texture = _fire_bomb_textures[idx]
+		).set_delay(frame_dur if i > 0 else 0.0)
+	# Fade out in last 30%
+	var fade_start: float = FIRE_BOMB_DURATION * 0.7
+	tw.parallel().tween_property(mat, "albedo_color:a", 0.0, FIRE_BOMB_DURATION * 0.3).set_delay(fade_start)
+	tw.chain().tween_callback(explosion.queue_free)
+
+
 func _attach_to_bone(bone_name: String, attachment_name: String, scene_path: String, node_name: String, rot_deg: Vector3 = Vector3.ZERO) -> BoneAttachment3D:
 	var sk = _find_skeleton(self)
 	if sk == null:

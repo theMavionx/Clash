@@ -3,7 +3,7 @@ extends BaseTroop
 ## Implements the Barbarian troop spec (design/gdd/troops.md).
 
 @export var axe_scene: String = "res://Model/Characters/Assets/axe_1handed.gltf"
-@export var hit_distance: float = 0.25
+@export var hit_distance: float = 0.35
 @export var hit_anim_threshold: float = 0.4
 
 var _axe_attachment: BoneAttachment3D
