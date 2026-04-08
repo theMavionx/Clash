@@ -835,9 +835,15 @@ func _destroy_target() -> void:
 
 
 # ── Fire Bomb Explosion ──────────────────────────────────────
-const FIRE_BOMB_FRAME_COUNT: int = 12  # frames 4..15
-const FIRE_BOMB_DIR: String = "res://Model/FireBomb/Fire-bomb%d.png"
-const FIRE_BOMB_SCALE: float = 1.2
+const FIRE_BOMB_FRAMES: Array[String] = [
+	"res://Model/effeckt/boom/4833049_2540505.png",
+	"res://Model/effeckt/boom/4833049_2540505 (1).png",
+	"res://Model/effeckt/boom/4833049_2540505 (2).png",
+	"res://Model/effeckt/boom/4833049_2540505 (3).png",
+	"res://Model/effeckt/boom/4833049_2540505 (4).png",
+	"res://Model/effeckt/boom/4833049_2540505 (5).png",
+]
+const FIRE_BOMB_SCALE: float = 1.8
 const FIRE_BOMB_DURATION: float = 0.8
 
 static var _fire_bomb_textures: Array = []
@@ -845,8 +851,8 @@ static var _fire_bomb_textures: Array = []
 static func _preload_fire_bomb() -> void:
 	if not _fire_bomb_textures.is_empty():
 		return
-	for i in range(4, 16):
-		var tex = load(FIRE_BOMB_DIR % i)
+	for path in FIRE_BOMB_FRAMES:
+		var tex = load(path)
 		if tex:
 			_fire_bomb_textures.append(tex)
 
