@@ -177,6 +177,11 @@ server {
         proxy_set_header Host $host;
     }
 
+    # Farcaster hosted manifest redirect (307)
+    location = /.well-known/farcaster.json {
+        return 307 https://api.farcaster.xyz/miniapps/hosted-manifest/019d6ec6-7244-cab3-2b5d-7b331d4c9be9;
+    }
+
     # Frontend static files
     root /opt/clash/web/dist;
     index index.html;
