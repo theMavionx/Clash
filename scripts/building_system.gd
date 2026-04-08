@@ -2780,7 +2780,7 @@ func remove_building(b: Dictionary) -> void:
 				mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
 				explosion.material_override = mat
 				get_tree().current_scene.add_child(explosion)
-				explosion.global_position = bnode_ref.global_position + Vector3(0, 0.15, 0)
+				explosion.global_position = bnode_ref.global_position + Vector3(0, 0.35, 0)
 				var frames: Array = BaseTroop._fire_bomb_textures
 				var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
 				var tw: Tween = create_tween()
@@ -2792,8 +2792,11 @@ func remove_building(b: Dictionary) -> void:
 					).set_delay(frame_dur if fi > 0 else 0.0)
 				tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
 				tw.chain().tween_callback(explosion.queue_free)
-			# Swap model with ruins
-			_replace_with_ruins(bnode_ref)
+			# Ports disappear entirely — other buildings get ruins
+			if b.get("id", "") == "port":
+				bnode_ref.queue_free()
+			else:
+				_replace_with_ruins(bnode_ref)
 		)
 	placed_buildings.remove_at(idx)
 	_deselect_building()
