@@ -4,7 +4,7 @@
     "payload": "eyJkb21haW4iOiJjbGFzaG9mcGVycHMuZnVuIn0",
     "signature": "VZ/DBml3za90+boWuHGQv0IVUSLZWaKCOlREUJwDNAES/n1LfxYqXpYolUq91cD3ReIS9pF4qF4oXBGbsMQPYBs="
   },
-  "miniapp": {
+  "frame": {
     "version": "1",
     "name": "Clash of Perps",
     "subtitle": "Build, Raid, Trade",
@@ -12,6 +12,7 @@
     "tagline": "Build, Battle, Conquer",
     "homeUrl": "https://clashofperps.fun",
     "iconUrl": "https://clashofperps.fun/icons/icon.jpg",
+    "imageUrl": "https://clashofperps.fun/hero.jpg",
     "heroImageUrl": "https://clashofperps.fun/hero.jpg",
     "splashImageUrl": "https://clashofperps.fun/icons/icon.jpg",
     "splashBackgroundColor": "#0a0b1a",
@@ -20,11 +21,6 @@
     "tags": ["strategy", "clash", "defi", "solana", "battle"],
     "ogTitle": "Clash of Perps",
     "ogDescription": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold.",
-    "ogImageUrl": "https://clashofperps.fun/hero.jpg",
-    "requiredChains": ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"],
-    "requiredCapabilities": [
-      "actions.signIn"
-    ],
-    "noindex": false
+    "ogImageUrl": "https://clashofperps.fun/hero.jpg"
   }
 }
