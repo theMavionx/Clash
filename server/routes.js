@@ -18,6 +18,16 @@ function auth(req, res, next) {
   next();
 }
 
+// ==================== CLIENT LOGS (no auth) ====================
+
+router.post('/client-log', (req, res) => {
+  const { level, message, ua, url } = req.body || {};
+  const ts = new Date().toISOString();
+  const ip = req.headers['x-real-ip'] || req.ip;
+  console.log(`[CLIENT ${(level || 'info').toUpperCase()}] ${ts} | ${ip} | ${(ua || '').slice(0, 80)} | ${url || ''} | ${message || ''}`);
+  res.json({ ok: true });
+});
+
 // ==================== PLAYERS ====================
 
 // Register a new player (or recover existing account by wallet)

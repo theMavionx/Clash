@@ -2,27 +2,35 @@ import { useState, useEffect, useCallback } from 'react';
 
 let sdkInstance = null;
 let initPromise = null;
+let detectedInMiniApp = false;
 
-export function isFarcasterFrame() {
-  try {
-    return window !== window.parent;
-  } catch {
-    return true;
-  }
+// Always try to init SDK — use official isInMiniApp() detection
+initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
+  const hasOfficialDetect = typeof mod.isInMiniApp === 'function';
+  const inApp = hasOfficialDetect ? mod.isInMiniApp() : _fallbackDetect();
+  _log('info', `SDK loaded. isInMiniApp=${inApp} (official=${hasOfficialDetect})`);
+  if (!inApp) return null;
+  detectedInMiniApp = true;
+  sdkInstance = mod.sdk;
+  return mod.sdk;
+}).catch((err) => { _log('error', `SDK import failed: ${err}`); return null; });
+
+function _fallbackDetect() {
+  try { return window !== window.parent; } catch { return true; }
 }
 
-// Start SDK init immediately on module load (don't call ready yet — must be in useEffect)
-if (isFarcasterFrame()) {
-  initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
-    sdkInstance = mod.sdk;
-    return mod.sdk;
-  }).catch(() => null);
+function _log(level, message) {
+  fetch('/api/client-log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ level, message, ua: navigator.userAgent, url: location.href }),
+  }).catch(() => {});
 }
 
 export function useFarcaster() {
   const [isInFrame, setIsInFrame] = useState(false);
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(isFarcasterFrame());
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!initPromise) {
@@ -32,19 +40,26 @@ export function useFarcaster() {
 
     let cancelled = false;
     initPromise.then(async (sdk) => {
-      if (cancelled || !sdk) { setLoading(false); return; }
+      if (cancelled || !sdk) {
+        _log('info', `SDK init resolved: sdk=${!!sdk}, cancelled=${cancelled}`);
+        setLoading(false);
+        return;
+      }
       setIsInFrame(true);
+      _log('info', 'In mini app, fetching context...');
 
       // Timeout: if context takes too long, call ready() anyway
       const timeout = setTimeout(async () => {
         if (!cancelled) {
-          try { await sdk.actions.ready({ disableNativeGestures: true }); } catch {}
+          _log('warn', 'Context timeout (3s), calling ready() anyway');
+          try { await sdk.actions.ready({ disableNativeGestures: true }); } catch (e) { _log('error', `ready() timeout failed: ${e}`); }
           setLoading(false);
         }
       }, 3000);
 
       try {
         const ctx = await sdk.context;
+        _log('info', `Context received: user=${ctx?.user?.fid || 'none'}, client=${ctx?.client?.platformType || 'unknown'}`);
         if (ctx?.user && !cancelled) {
           setUser({
             fid: Number(ctx.user.fid) || 0,
@@ -53,15 +68,18 @@ export function useFarcaster() {
             pfpUrl: String(ctx.user.pfpUrl || ''),
           });
         }
-      } catch {}
+      } catch (e) { _log('error', `Context error: ${e}`); }
 
       clearTimeout(timeout);
       if (!cancelled) {
-        // Called inside useEffect as Farcaster docs recommend
-        try { await sdk.actions.ready({ disableNativeGestures: true }); } catch {}
+        _log('info', 'Calling ready()...');
+        try {
+          await sdk.actions.ready({ disableNativeGestures: true });
+          _log('info', 'ready() succeeded');
+        } catch (e) { _log('error', `ready() failed: ${e}`); }
         setLoading(false);
       }
-    }).catch(() => { if (!cancelled) setLoading(false); });
+    }).catch((e) => { _log('error', `Init promise error: ${e}`); if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
   }, []);
