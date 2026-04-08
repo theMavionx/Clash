@@ -38,7 +38,7 @@ export function useFarcaster() {
       // Timeout: if context takes too long, call ready() anyway
       const timeout = setTimeout(async () => {
         if (!cancelled) {
-          try { await sdk.actions.ready(); } catch {}
+          try { await sdk.actions.ready({ disableNativeGestures: true }); } catch {}
           setLoading(false);
         }
       }, 3000);
@@ -58,7 +58,7 @@ export function useFarcaster() {
       clearTimeout(timeout);
       if (!cancelled) {
         // Called inside useEffect as Farcaster docs recommend
-        try { await sdk.actions.ready(); } catch {}
+        try { await sdk.actions.ready({ disableNativeGestures: true }); } catch {}
         setLoading(false);
       }
     }).catch(() => { if (!cancelled) setLoading(false); });
