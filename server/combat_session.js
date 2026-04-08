@@ -309,8 +309,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
             t.hitTimer += TICK_DT;
             if (t.hitTimer >= t.atkSpeed * t.hitDelay) {
               t.hitPending = false;
+              const wasAlive = target.hp > 0;
               target.hp -= t.damage;
-              if (target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+              if (wasAlive && target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
             }
           }
         } else {
@@ -480,8 +481,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
     }
 
     // ── End conditions ──
-    const th = buildings.find(b => b.id === townHallId);
-    if (th && th.hp <= 0) break;
+    const thCheck = buildings.find(b => b.id === townHallId);
+    if (thCheck && thCheck.hp <= 0) break;
 
     const anyAlive = aliveTroops.length > 0;
     if (!anyAlive && pendingSpawns.length === 0 && actionIdx >= sortedActions.length) break;

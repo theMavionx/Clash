@@ -100,7 +100,7 @@ func _on_find_pressed() -> void:
 		print("Not logged in")
 		return
 	# Snapshot the fleet BEFORE anything is freed or destroyed
-	_saved_fleet = bs._build_fleet()
+	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
 		bs.find_button.disabled = true
 		bs.find_button.text = "Boarding..."
@@ -227,7 +227,7 @@ func _restore_ships_and_troops() -> void:
 ## attack from the main menu).
 func _switch_to_enemy_island() -> void:
 	if _saved_fleet.is_empty():
-		_saved_fleet = bs._build_fleet()
+		_saved_fleet = await bs._build_fleet()
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
 	_battle_timer = 0.0

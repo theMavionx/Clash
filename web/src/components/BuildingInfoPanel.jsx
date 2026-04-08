@@ -84,7 +84,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { selectedBuilding: building } = useBuilding();
   const { isMobile } = useLayout();
   
-  const [view, setView] = useState('ACTIONS'); // ACTIONS, INFO, UPGRADE, BUY_SHIP, LOAD_TROOPS
+  const [view, setView] = useState('ACTIONS');
+  const [swapSlot, setSwapSlot] = useState(null);
+  const [localTroops, setLocalTroops] = useState(null);
 
   useEffect(() => {
     if (building?.open_load_troops) {
@@ -93,6 +95,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setView('ACTIONS');
     }
   }, [building?.id, building?.open_load_troops]);
+
+  // Reset optimistic troops when server data arrives
+  useEffect(() => {
+    setLocalTroops(null);
+  }, [building?.ship_troops?.length]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {
@@ -375,14 +382,6 @@ function BuildingInfoPanel({ onOpenTroops }) {
       handleBuyShip
     );
   };
-
-  const [swapSlot, setSwapSlot] = useState(null);
-  const [localTroops, setLocalTroops] = useState(null); // optimistic override
-
-  // Sync local troops with server data when building updates
-  useEffect(() => {
-    setLocalTroops(null);
-  }, [building?.ship_troops]);
 
   const renderLoadTroops = () => {
     const shipLevel = building.ship_level || 1;

@@ -299,19 +299,15 @@ router.post('/attack/result', auth, (req, res) => {
 
   if (!verification.valid) {
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', verification.reason, null, verification);
-    return res.status(403).json({
-      error: 'Replay verification failed',
-      reason: verification.reason,
-      debug: {
-        troopsSpawned: verification._troopsSpawned,
-        troopsAlive: verification._troopsAlive,
-        guardsAlive: verification._guardsAlive,
-        simTimeSec: verification._simTimeSec,
-        buildingsDestroyed: verification.buildingsDestroyed,
-        buildingHPs: verification._buildingHPs,
-        troopEndState: verification._troopEndState,
-      },
-    });
+    // Debug info logged server-side only — never expose sim internals to client
+    console.log('[SIM REJECT]', JSON.stringify({
+      troopsSpawned: verification._troopsSpawned,
+      troopsAlive: verification._troopsAlive,
+      guardsAlive: verification._guardsAlive,
+      simTimeSec: verification._simTimeSec,
+      buildingsDestroyed: verification.buildingsDestroyed,
+    }));
+    return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
   }
 
   // Victory verified — grant loot

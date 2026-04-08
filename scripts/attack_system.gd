@@ -492,7 +492,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		if "grid_y" in building_sys:
 			building_y = building_sys.grid_y
 			bs_ref = building_sys
-		break
+			break
 
 	for i in troop_names.size():
 		var troop_name: String = troop_names[i]

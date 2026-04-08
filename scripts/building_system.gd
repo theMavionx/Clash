@@ -3829,7 +3829,7 @@ func _get_random_grid_world_pos() -> Vector3:
 func _on_attack_pressed() -> void:
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode(_build_fleet())
+		attack_system.enter_attack_mode(await _build_fleet())
 
 
 ## Builds the fleet array from all port ships for the attack system.
@@ -3853,7 +3853,7 @@ func _auto_fill_ships() -> void:
 			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
 				continue
 			var ship_level: int = pnode.get_meta("ship_level", 1)
-			var ship_troops: Array = pnode.get_meta("ship_troops", [])
+			var ship_troops: Array = pnode.get_meta("ship_troops", []).duplicate()
 			while ship_troops.size() < ship_level:
 				ship_troops.append(available[idx % available.size()])
 				idx += 1
