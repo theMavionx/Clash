@@ -718,38 +718,64 @@ func _replay_cannon_fire(action: Dictionary) -> void:
 
 
 ## Called every frame from BuildingSystem._process while in enemy-view mode.
-## Detects when all attacking troops have been lost and all ships have been
-## deployed, then submits a defeat result after a short grace period.
+## Detects when all attacking troops have been lost and ALL ships have been
+## deployed (placed + sailed), then submits a defeat result after a grace period.
 func check_defeat(delta: float) -> void:
 	if not is_viewing_enemy or _replay_active:
 		return
 	if not bs.create_ui or bs.name != "BuildingSystem":
 		return
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
-	var troops_alive_atk: bool = not BaseTroop._get_troops_cached().is_empty()
-	if troops_alive_atk:
-		_had_troops = true
+
+	var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
+	# Ships still sailing count as "alive" — they haven't deployed yet
+	var ships_still_sailing: bool = false
+	if attack_system:
+		for ship_node in attack_system._get_ships_cached():
+			if is_instance_valid(ship_node):
+				ships_still_sailing = true
+				break
+
+	if troops_alive or ships_still_sailing:
+		if troops_alive:
+			_had_troops = true
 		_skeleton_respawn_timer = 0.0
-	elif _had_troops:
-		var all_ships_used: bool = attack_system == null or not attack_system.is_attack_mode or attack_system._ships_placed >= attack_system.max_ships
-		if all_ships_used:
-			_skeleton_respawn_timer += delta
-			if _skeleton_respawn_timer >= 2.0:
-				_had_troops = false
-				_skeleton_respawn_timer = 0.0
-				var net_def: Node = bs._net
-				var def_id: String = enemy_info.get("id", "")
-				# All troops dead = all deployed are casualties
-				var defeat_casualties: Dictionary = {}
-				for ship in _saved_fleet:
-					for t_name in ship.get("troops", []):
-						defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
-				if net_def and net_def.has_token() and def_id != "":
-					await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
-				if not is_instance_valid(bs): return
-				var bridge_def: Node = bs._bridge
-				if bridge_def:
-					bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
+		return
+
+	# No troops alive and no ships sailing — check if all ships have been placed
+	if not _had_troops:
+		return  # battle hasn't started yet
+
+	var fleet_size: int = _saved_fleet.size()
+	var ships_placed: int = 0
+	if attack_system:
+		ships_placed = attack_system._ships_placed
+	# Still has unplaced ships — player can still send more, don't defeat yet
+	if ships_placed < fleet_size and attack_system and attack_system.is_attack_mode:
+		_skeleton_respawn_timer = 0.0
+		return
+
+	# Grace period before declaring defeat (gives time for last troops to spawn)
+	_skeleton_respawn_timer += delta
+	if _skeleton_respawn_timer < 3.0:
+		return
+
+	_had_troops = false
+	_skeleton_respawn_timer = 0.0
+
+	# Submit defeat
+	var net_def: Node = bs._net
+	var def_id: String = enemy_info.get("id", "")
+	var defeat_casualties: Dictionary = {}
+	for ship in _saved_fleet:
+		for t_name in ship.get("troops", []):
+			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
+	if net_def and net_def.has_token() and def_id != "":
+		await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
+	if not is_instance_valid(bs): return
+	var bridge_def: Node = bs._bridge
+	if bridge_def:
+		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
 
 
 ## Called every frame from BuildingSystem._process while on the home island.

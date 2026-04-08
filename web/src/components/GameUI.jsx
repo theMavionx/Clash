@@ -90,12 +90,12 @@ export default function GameUI() {
         <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
       )}
 
-      {showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barracks) && !selectedBuilding.is_enemy ? (
+      {!enemyMode?.active && showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barracks) && !selectedBuilding.is_enemy ? (
         <BarracksPanel
           building={{ ...selectedBuilding, is_barracks: true }}
           onClose={handleCloseTroops}
         />
-      ) : selectedBuilding ? (
+      ) : !enemyMode?.active && selectedBuilding ? (
         <BuildingInfoPanel onOpenTroops={handleOpenTroops} />
       ) : null}
     </div>

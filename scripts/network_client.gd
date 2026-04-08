@@ -156,6 +156,9 @@ func swap_troop(building_id: int, slot: int, troop_name: String) -> Dictionary:
 func reinforce() -> Dictionary:
 	return await _http_post("/reinforce", {})
 
+func report_troop_death(troop_name: String) -> Dictionary:
+	return await _http_post("/troop-died", {"troop_name": troop_name})
+
 func link_wallet(wallet: String) -> void:
 	if token == "" or wallet == "":
 		return

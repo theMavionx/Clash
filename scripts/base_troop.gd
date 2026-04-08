@@ -549,7 +549,40 @@ func take_damage(dmg: int) -> void:
 	if hp <= 0:
 		if is_in_group("troops"):
 			remove_from_group("troops")
+		# Notify server immediately that this troop died
+		_report_death()
 		queue_free()
+
+
+## Reports this troop's death to the server via Bridge so casualties persist
+## even if the player quits mid-battle.
+func _report_death() -> void:
+	var troop_name: String = _get_troop_name()
+	if troop_name == "":
+		return
+	var bridge: Node = get_node_or_null("/root/Bridge")
+	if bridge and bridge.has_method("send_to_react"):
+		bridge.send_to_react("troop_died", {"troop_name": troop_name})
+	# Also notify server directly
+	for bs_node in get_tree().get_nodes_in_group("building_systems"):
+		if bs_node.has_method("_on_troop_died"):
+			bs_node._on_troop_died(troop_name)
+			break
+
+
+## Returns the canonical troop name from this script's path.
+func _get_troop_name() -> String:
+	var script_res = get_script()
+	if script_res == null:
+		return ""
+	var file: String = script_res.resource_path.get_file().get_basename()
+	match file:
+		"knight": return "Knight"
+		"mage": return "Mage"
+		"barbarian": return "Barbarian"
+		"archer": return "Archer"
+		"ranger": return "Ranger"
+	return ""
 
 
 func _has_valid_target() -> bool:

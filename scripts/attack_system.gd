@@ -316,22 +316,34 @@ func _is_within_ship_plane(pos: Vector3) -> bool:
 	return abs(local_x) <= _click_extent_x and abs(local_z) <= _click_extent_z
 
 
-## Attempts to place the next fleet ship at the clicked position. Returns true if successful.
+## Attempts to place the selected fleet ship at the clicked position. Returns true if successful.
 func _try_place_ship(hit: Vector3) -> bool:
 	if not _is_within_ship_plane(hit):
 		return false
 	if _ships_placed >= _fleet.size():
 		return false
+	# Find which ship to place — use selected index, skip already-placed ships
+	var ship_idx: int = clampi(_next_troop_idx, 0, _fleet.size() - 1)
+	if _fleet[ship_idx].get("_placed", false):
+		# Selected ship already placed — find next unplaced
+		ship_idx = -1
+		for i in _fleet.size():
+			if not _fleet[i].get("_placed", false):
+				ship_idx = i
+				break
+		if ship_idx < 0:
+			return false
 	for existing in _ship_stop_positions:
 		if hit.distance_to(existing) < SHIP_MIN_SEPARATION:
 			return false
-	if not _spawn_single_ship(hit):
+	if not _spawn_single_ship(hit, ship_idx):
 		return false
+	_fleet[ship_idx]["_placed"] = true
 	_ships_placed += 1
 	_total_ships_launched += 1
 	# Record ship placement in battle replay
 	var bs: Node = get_node_or_null("../BuildingSystem")
-	var ship_data: Dictionary = _fleet[_ships_placed - 1]
+	var ship_data: Dictionary = _fleet[ship_idx]
 	if bs and bs.is_viewing_enemy:
 		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
 		bs._battle_replay.append({
@@ -345,7 +357,7 @@ func _try_place_ship(hit: Vector3) -> bool:
 		var ships_update: Array = []
 		for i in mini(_fleet.size(), max_ships):
 			var s = _fleet[i]
-			ships_update.append({"level": s.get("level", 1), "troops": s.get("troops", [])})
+			ships_update.append({"level": s.get("level", 1), "troops": s.get("troops", []), "placed": s.get("_placed", false)})
 		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "ships": ships_update})
 	return true
 
@@ -381,12 +393,14 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 	return null
 
 
-## Spawns the next fleet ship at the edge of the placement zone and sails it to [target].
-## Uses the ship model matching the fleet entry's level.
-func _spawn_single_ship(target: Vector3) -> bool:
-	if _ships_placed >= _fleet.size():
+## Spawns a fleet ship at the edge of the placement zone and sails it to [target].
+## [ship_idx] specifies which fleet entry to use.
+func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
+	if ship_idx < 0:
+		ship_idx = _ships_placed
+	if ship_idx >= _fleet.size():
 		return false
-	var ship_data: Dictionary = _fleet[_ships_placed]
+	var ship_data: Dictionary = _fleet[ship_idx]
 	var ship_level: int = ship_data.get("level", 1)
 	var model_idx: int = clampi(ship_level - 1, 0, SHIP_MODELS.size() - 1)
 	var ship_res: Resource = load(SHIP_MODELS[model_idx])
@@ -444,13 +458,13 @@ func _spawn_single_ship(target: Vector3) -> bool:
 	# When ship arrives → remove flag marker, free stop slot, deploy troops
 	var arrived_pos: Vector3 = stop_pos
 	var s_dir: Vector3 = sail_dir
-	var ship_idx: int = _ships_placed
+	var _deploy_idx: int = ship_idx
 	tween.finished.connect(func():
 		ship.rotation = Vector3.ZERO
 		if is_instance_valid(marker):
 			marker.queue_free()
 		_ship_markers.erase(marker)
-		_deploy_troops_from_ship(arrived_pos, s_dir, ship_idx)
+		_deploy_troops_from_ship(arrived_pos, s_dir, _deploy_idx)
 	)
 	print("Ship %d/%d sailing to: %s" % [_ships_placed + 1, max_ships, stop_pos])
 	return true

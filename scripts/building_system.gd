@@ -1958,11 +1958,12 @@ func _unhandled_input(event: InputEvent) -> void:
 					_select_building(found)
 				get_viewport().set_input_as_handled()
 			else:
-				# No building hit — check if clicked on a port ship
-				var ship_port = _find_ship_at_click(event.position)
-				if ship_port.size() > 0:
-					_show_ship_panel(ship_port)
-					get_viewport().set_input_as_handled()
+				# No building hit — check if clicked on a port ship (home island only)
+				if not is_viewing_enemy:
+					var ship_port = _find_ship_at_click(event.position)
+					if ship_port.size() > 0:
+						_show_ship_panel(ship_port)
+						get_viewport().set_input_as_handled()
 				else:
 					_deselect_building()
 					_hide_ship_panel()
@@ -3152,12 +3153,20 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 	var ship_level: int = pnode.get_meta("ship_level", 1)
 	var ship_troops: Array = pnode.get_meta("ship_troops", [])
 
-	# Find the port building dict that owns this node
+	# Find the port building dict that owns this node (search all building systems)
 	var port_building: Dictionary = {}
-	for b in placed_buildings:
-		if b.get("node") == pnode:
-			port_building = b
+	for bsys in _building_systems:
+		for b in bsys.placed_buildings:
+			if b.get("node") == pnode:
+				port_building = b
+				break
+		if not port_building.is_empty():
 			break
+	if port_building.is_empty():
+		return
+
+	# Set selected_building so swap/load can find server_id
+	selected_building = port_building
 
 	# Send to React as a building_selected with LOAD_TROOPS view hint
 	var bridge = _bridge
@@ -3181,6 +3190,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 			"ship_capacity": ship_level,
 			"ship_cost": def.get("ship_cost", {}),
 			"troop_levels": troop_levels,
+			"server_id": port_building.get("server_id", -1),
 			"open_load_troops": true,
 		})
 
@@ -3237,6 +3247,14 @@ func _reinforce_troops() -> void:
 						"ship_level": pnode.get_meta("ship_level", 1),
 						"ship_capacity": pnode.get_meta("ship_level", 1),
 					})
+
+## Called when a troop dies in battle — removes one instance from ship_troops on server.
+func _on_troop_died(troop_name: String) -> void:
+	if not is_viewing_enemy:
+		return
+	var net: Node = _net
+	if net and net.has_token():
+		net.report_troop_death(troop_name)
 
 func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
 	_port._swap_troop_on_ship(slot, troop_name)

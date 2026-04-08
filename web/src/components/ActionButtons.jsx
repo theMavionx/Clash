@@ -116,11 +116,11 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
       {/* Ships with troops - Bottom Left */}
       <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 6 } : {}) }}>
         {ships.map((ship, shipIdx) => {
-          const isPlaced = shipIdx < placed;
+          const isPlaced = !!ship.placed;
           const troops = ship.troops || [];
-          // Count live troops for this ship's types
           const liveCount = isPlaced ? troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) : troops.length;
           const allDead = isPlaced && liveCount === 0;
+          const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
           const cardW = mobile ? 70 : 90;
           const cardH = mobile ? 80 : 100;
 
@@ -131,13 +131,18 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
                 ...hud.card,
                 width: cardW, height: cardH,
                 opacity: allDead ? 0.25 : isPlaced ? 0.5 : 1,
-                borderColor: isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
+                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
+                boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
                 flexDirection: 'column',
                 gap: 2,
                 padding: '4px 3px',
               }}
-              onClick={() => !isPlaced && !allDead && onSelectTroop(shipIdx)}
+              onClick={(e) => {
+                console.log('[SHIP BTN]', { shipIdx, isPlaced, allDead, placed, troops: troops.length });
+                e.stopPropagation();
+                if (!isPlaced && !allDead) onSelectTroop(shipIdx);
+              }}
             >
               {/* Ship level indicator */}
               <div style={{ fontSize: 9, fontWeight: 800, color: 'rgba(160,220,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
@@ -252,7 +257,10 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog }) {
   const { sendToGodot, setFuturesOpen } = useSend();
-  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo } = useUI();
+  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties } = useUI();
+  const [showReinforce, setShowReinforce] = useState(false);
+  const [serverCasualties, setServerCasualties] = useState(null);
+  const [loadingCasualties, setLoadingCasualties] = useState(false);
   const resources = useResources();
   const { buildingDefs } = useBuilding();
   const { isMobile: mobile, isLandscape } = useLayout();
@@ -290,6 +298,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
   const handleSelectTroop = useCallback((idx) => {
+    console.log('[SELECT TROOP]', idx, 'cannonMode:', cannonMode);
     if (cannonMode) sendToGodot('ship_cannon_mode'); // toggle off cannon
     sendToGodot('select_troop', { idx });
   }, [sendToGodot, cannonMode]);
@@ -333,25 +342,151 @@ function ActionButtons({ onOpenBattleLog }) {
         </CustomBtn>
       </div>
       <div style={{ ...styles.wrapRight, ...(mobile ? { bottom: 8, right: 8 } : {}) }}>
-        <CustomBtn onClick={() => sendToGodot('reinforce')} width={btnSmall} height={btnSmall}>
-          <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
-            <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-            <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-            <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
-            <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
-            <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
-        </CustomBtn>
+        {pendingCasualties && (
+          <CustomBtn onClick={() => {
+            setLoadingCasualties(true);
+            const token = window._playerToken;
+            fetch('/api/casualties', { headers: { 'x-token': token } })
+              .then(r => r.json())
+              .then(data => {
+                if (data.total > 0) {
+                  setServerCasualties(data);
+                  setShowReinforce(true);
+                } else {
+                  setPendingCasualties(null);
+                }
+              })
+              .catch(() => setShowReinforce(true))
+              .finally(() => setLoadingCasualties(false));
+          }} width={btnSmall} height={btnSmall}>
+            <div style={styles.notificationBadgeSmall}>!</div>
+            <svg width={mobile ? 44 : 56} height={mobile ? 44 : 56} viewBox="0 0 64 64" fill="none">
+              <path d="M32 8L40 20H24L32 8Z" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+              <rect x="28" y="20" width="8" height="28" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+              <rect x="20" y="28" width="24" height="8" rx="2" fill="#e8b830" stroke="#5C3A21" strokeWidth="2"/>
+              <circle cx="32" cy="52" r="6" fill="#4CAF50" stroke="#2E7D32" strokeWidth="2"/>
+              <path d="M29 52L31 54L35 50" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
+          </CustomBtn>
+        )}
         <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize}>
           {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
           <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
           <span style={styles.btnLabel}>TRADE</span>
         </CustomBtn>
       </div>
+      {showReinforce && (serverCasualties || pendingCasualties) && (
+        <ReinforceModal
+          casualties={serverCasualties?.casualties || pendingCasualties}
+          cost={serverCasualties?.cost}
+          onConfirm={() => {
+            sendToGodot('reinforce');
+            setShowReinforce(false);
+            setServerCasualties(null);
+            setPendingCasualties(null);
+          }}
+          onClose={() => { setShowReinforce(false); setServerCasualties(null); }}
+        />
+      )}
     </>
   );
 }
+
+const REINFORCE_COST = 50;
+const UNIT_IMG_MAP = {
+  Knight: knightImg, Mage: mageImg, Barbarian: berserkImg, Archer: archerImg, Ranger: arbaletImg,
+};
+
+function ReinforceModal({ casualties, cost: serverCost, onConfirm, onClose }) {
+  const entries = Object.entries(casualties).filter(([, c]) => c > 0);
+  const total = entries.reduce((s, [, c]) => s + c, 0);
+  const cost = serverCost ?? total * REINFORCE_COST;
+
+  return (
+    <div style={rf.overlay} onClick={onClose}>
+      <div style={rf.panel} onClick={e => e.stopPropagation()}>
+        <div style={rf.header}>
+          <span style={rf.title}>Reinforce Troops</span>
+          <button style={rf.closeBtn} onClick={onClose}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div style={rf.body}>
+          <div style={rf.grid}>
+            {entries.map(([name, count]) => (
+              <div key={name} style={rf.card}>
+                <div style={rf.imgWrap}>
+                  {UNIT_IMG_MAP[name] && <img src={UNIT_IMG_MAP[name]} alt={name} style={rf.img} />}
+                  <div style={rf.countBadge}>x{count}</div>
+                </div>
+                <span style={rf.name}>{name}</span>
+              </div>
+            ))}
+          </div>
+          <div style={rf.costRow}>
+            <span style={rf.costLabel}>{total} troops to restore</span>
+            <span style={rf.costVal}>{cost} gold</span>
+          </div>
+          <button style={rf.confirmBtn} onClick={onConfirm}>REINFORCE ALL</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const rf = {
+  overlay: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 200, pointerEvents: 'all',
+  },
+  panel: {
+    width: 400, maxWidth: '95vw', background: '#fdf8e7',
+    border: '6px solid #d4c8b0', borderRadius: 24,
+    boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+    overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+  },
+  title: { fontSize: 20, fontWeight: 900, color: '#5C3A21' },
+  closeBtn: {
+    width: 30, height: 30, borderRadius: '50%', background: '#E53935',
+    border: '3px solid #fff', color: '#fff', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+  },
+  body: { padding: 20, display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center' },
+  grid: { display: 'flex', flexWrap: 'wrap', gap: 14, justifyContent: 'center' },
+  card: { width: 90, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
+  imgWrap: {
+    width: 80, height: 80, borderRadius: 14, background: '#e8dfc8',
+    border: '3px solid #d4c8b0', position: 'relative', overflow: 'hidden',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  img: { width: '100%', height: '100%', objectFit: 'cover', filter: 'drop-shadow(0 3px 5px rgba(0,0,0,0.4)) sepia(0.2)' },
+  countBadge: {
+    position: 'absolute', bottom: 2, right: 2,
+    background: '#E53935', color: '#fff', fontSize: 12, fontWeight: 900,
+    padding: '1px 7px', borderRadius: 8, boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+  },
+  name: { fontSize: 12, fontWeight: 900, color: '#5C3A21' },
+  costRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    width: '100%', padding: '10px 0', borderTop: '2px solid #e8dfc8',
+  },
+  costLabel: { fontSize: 14, fontWeight: 800, color: '#77573d' },
+  costVal: { fontSize: 18, fontWeight: 900, color: '#e8b830' },
+  confirmBtn: {
+    width: '100%', padding: '14px',
+    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
+    border: '3px solid #1B5E20', borderRadius: 14,
+    color: '#fff', fontSize: 16, fontWeight: 900, cursor: 'pointer',
+    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
+    boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
+  },
+};
 
 export default memo(ActionButtons);
 

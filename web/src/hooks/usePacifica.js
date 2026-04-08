@@ -454,7 +454,7 @@ export function usePacifica() {
       if (res.error) throw new Error(res.error);
       return res;
     } catch (e) { setError(e.message); }
-  }, [publicKey, signedRequest]);
+  }, [publicKey, signedRequestWithActivation]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     if (!publicKey) return;

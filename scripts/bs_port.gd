@@ -92,15 +92,14 @@ func _load_troop_to_ship(troop_name: String) -> void:
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
 		var result: Dictionary = await net.load_troop(sid, troop_name)
+		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
 			return
 		var new_troops: Array = result.get("ship_troops", [])
 		port_node.set_meta("ship_troops", new_troops)
-		# Update resources from server
 		if result.has("resources"):
-			var res_data: Dictionary = result.resources
-			bs._apply_resources_from_server(res_data)
+			bs._apply_resources_from_server(result.resources)
 	else:
 		ship_troops.append(troop_name)
 		port_node.set_meta("ship_troops", ship_troops)
@@ -127,17 +126,18 @@ func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
 		var result: Dictionary = await net.swap_troop(sid, slot, troop_name)
+		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
 			return
 		var new_troops: Array = result.get("ship_troops", [])
 		port_node.set_meta("ship_troops", new_troops)
 		if result.has("resources"):
-			var res_data: Dictionary = result.resources
-			bs._apply_resources_from_server(res_data)
+			bs._apply_resources_from_server(result.resources)
 	else:
 		ship_troops[slot] = troop_name
 		port_node.set_meta("ship_troops", ship_troops)
+	if not is_instance_valid(port_node): return
 	bs._refresh_port_panel()
 	var updated_troops: Array = port_node.get_meta("ship_troops", [])
 	var bridge: Node = bs._bridge

@@ -173,8 +173,9 @@ router.post('/buildings/:id/upgrade', auth, (req, res) => {
 router.post('/buildings/:id/move', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
-  const { grid_x, grid_z } = req.body;
-  if (grid_x === undefined || grid_z === undefined) return res.status(400).json({ error: 'grid_x and grid_z required' });
+  const grid_x = parseInt(req.body.grid_x, 10);
+  const grid_z = parseInt(req.body.grid_z, 10);
+  if (!Number.isInteger(grid_x) || !Number.isInteger(grid_z)) return res.status(400).json({ error: 'Valid integer grid_x and grid_z required' });
   const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
   if (!building) return res.status(404).json({ error: 'Building not found' });
   db.db.prepare('UPDATE buildings SET grid_x = ?, grid_z = ? WHERE id = ?').run(grid_x, grid_z, buildingId);
@@ -474,6 +475,54 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
   } catch (e) {
     res.status(e.status || 500).json({ error: e.error || 'Server error' });
   }
+});
+
+// Report a single troop death during battle — removes one from ship_troops immediately
+router.post('/troop-died', auth, (req, res) => {
+  const { troop_name } = req.body;
+  if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop' });
+
+  // Find first port that has this troop and remove one instance
+  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
+  for (const port of ports) {
+    const troops = JSON.parse(port.ship_troops || '[]');
+    const idx = troops.indexOf(troop_name);
+    if (idx !== -1) {
+      troops.splice(idx, 1);
+      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(troops), port.id);
+      return res.json({ success: true, removed: troop_name, port_id: port.id });
+    }
+  }
+  res.json({ success: true, removed: null }); // troop not found in any ship (already removed)
+});
+
+// Get casualties: compare ship_troops vs ship_troops_template to find missing troops
+router.get('/casualties', auth, (req, res) => {
+  const ports = db.db.prepare('SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
+  const casualties = {};
+  let totalMissing = 0;
+
+  for (const port of ports) {
+    const current = JSON.parse(port.ship_troops || '[]');
+    const template = JSON.parse(port.ship_troops_template || '[]');
+    // Count how many of each troop type are missing
+    const currentCounts = {};
+    for (const t of current) currentCounts[t] = (currentCounts[t] || 0) + 1;
+    for (const t of template) {
+      if (currentCounts[t] && currentCounts[t] > 0) {
+        currentCounts[t]--;
+      } else {
+        casualties[t] = (casualties[t] || 0) + 1;
+        totalMissing++;
+      }
+    }
+  }
+
+  res.json({
+    casualties,
+    total: totalMissing,
+    cost: totalMissing * REINFORCE_COST,
+  });
 });
 
 // Reinforce: restore dead troops from template (costs 50 gold per restored troop)

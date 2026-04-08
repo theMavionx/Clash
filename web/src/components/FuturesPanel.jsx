@@ -4,6 +4,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
+import { isFarcasterFrame } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
 import OrderBook from './OrderBook';
@@ -395,7 +396,7 @@ function FuturesPanel() {
   const { setFuturesOpen } = useSend();
   const { connected, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
-  const inFrame = useMemo(() => { try { return window !== window.parent; } catch { return true; } }, []);
+  const inFrame = useMemo(() => isFarcasterFrame(), []);
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,

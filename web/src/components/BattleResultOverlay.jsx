@@ -45,8 +45,7 @@ function BattleResultOverlay({ result, onClose }) {
   const isReplay = result.type === 'replay_end';
   const casualties = Object.entries(result.casualties || {}).filter(([, c]) => c > 0);
   const totalCasualties = casualties.reduce((sum, [, c]) => sum + c, 0);
-  const REINFORCE_COST_PER_UNIT = 50;
-  const totalReinforceCost = totalCasualties * REINFORCE_COST_PER_UNIT;
+  const totalReinforceCost = totalCasualties * 50;
 
   return (
     <div style={styles.backdrop}>
