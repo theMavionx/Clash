@@ -1,18 +1,30 @@
 {
   "accountAssociation": {
-    "header": "",
-    "payload": "",
-    "signature": ""
+    "header": "eyJmaWQiOjkzOTk1MSwidHlwZSI6ImF1dGgiLCJrZXkiOiIweDcwOTBiZjc3MkVEZmU1NjZEODJlRjFjNjRjYTU0YkIwNGQ3MTI2ZEYifQ",
+    "payload": "eyJkb21haW4iOiJjbGFzaG9mcGVycHMuZnVuIn0",
+    "signature": "VZ/DBml3za90+boWuHGQv0IVUSLZWaKCOlREUJwDNAES/n1LfxYqXpYolUq91cD3ReIS9pF4qF4oXBGbsMQPYBs="
   },
   "miniapp": {
     "version": "1",
     "name": "Clash of Perps",
+    "subtitle": "Build, Raid, Trade",
+    "description": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold. Clash of Clans meets DeFi.",
+    "tagline": "Build, Battle, Conquer",
     "homeUrl": "https://clashofperps.fun",
     "iconUrl": "https://clashofperps.fun/icons/icon-512.png",
-    "description": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold. Clash of Clans meets DeFi.",
+    "heroImageUrl": "https://clashofperps.fun/hero.png",
     "splashImageUrl": "https://clashofperps.fun/icons/icon-512.png",
     "splashBackgroundColor": "#0a0b1a",
-    "categories": ["games"],
-    "requiredChains": ["solana"]
+    "webhookUrl": "https://clashofperps.fun/api/webhook",
+    "primaryCategory": "games",
+    "tags": ["strategy", "clash", "defi", "solana", "battle"],
+    "ogTitle": "Clash of Perps",
+    "ogDescription": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold.",
+    "ogImageUrl": "https://clashofperps.fun/hero.png",
+    "requiredChains": ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"],
+    "requiredCapabilities": [
+      "actions.signIn"
+    ],
+    "noindex": false
   }
 }

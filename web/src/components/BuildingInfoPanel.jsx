@@ -436,14 +436,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   >
                     <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
                       {UNIT_IMAGES[t] && (
-                        <img 
-                          src={UNIT_IMAGES[t]} 
-                          alt={t} 
-                          style={{
-                            ...LT.loadedSlotImg,
-                            transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})`
-                          }}
-                        />
+                        <div key={`${t}-${i}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                          <img 
+                            src={UNIT_IMAGES[t]} 
+                            alt={t} 
+                            style={{
+                              ...LT.loadedSlotImg,
+                              transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})`
+                            }}
+                          />
+                        </div>
                       )}
                     </div>
                     {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
