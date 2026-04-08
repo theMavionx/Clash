@@ -3044,11 +3044,18 @@ func _flash_building_hit(b: Dictionary) -> void:
 			push_dir = diff.normalized()
 	if push_dir == Vector3.ZERO:
 		push_dir = Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized()
-	var original_pos: Vector3 = node.position
-	var wobble_pos: Vector3 = original_pos + Vector3(push_dir.x * 0.012, 0, push_dir.z * 0.012)
+	# Wobble only the GLB model, not the outline
+	var model_node: Node3D = null
+	for child in node.get_children():
+		if child is Node3D and not (child is MeshInstance3D and child.material_override is ShaderMaterial) and not (child is OmniLight3D) and not (child is AnimationPlayer):
+			model_node = child
+			break
 	var tw: Tween = create_tween()
-	tw.tween_property(node, "position", wobble_pos, 0.04).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(node, "position", original_pos, 0.08).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	if model_node and is_instance_valid(model_node):
+		var original_pos: Vector3 = model_node.position
+		var wobble_pos: Vector3 = original_pos + Vector3(push_dir.x * 0.006, 0, push_dir.z * 0.006)
+		tw.tween_property(model_node, "position", wobble_pos, 0.04).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		tw.tween_property(model_node, "position", original_pos, 0.08).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.parallel().tween_property(light, "light_energy", 0.0, 0.05)
 	tw.tween_callback(func():
 		if is_instance_valid(light):
