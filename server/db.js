@@ -199,7 +199,7 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   barn: {
-    size: [2, 3], max_level: 3,
+    size: [4, 3], max_level: 3,
     hp_levels: [2000, 3500, 6000],
     cost: { gold: 200, wood: 420, ore: 200 },
     max_count: 2,
@@ -223,7 +223,7 @@ const BUILDING_DEFS = {
     max_count: 6,
   },
   tombstone: {
-    size: [3, 3], max_level: 3,
+    size: [4, 5], max_level: 3,
     hp_levels: [1000, 1500, 2000],
     cost: { gold: 150, wood: 0, ore: 280 },
     max_count: 4,

@@ -2225,6 +2225,10 @@ func _destroy_all_buildings() -> void:
 			b.node.queue_free()
 	placed_buildings.clear()
 	grid.fill(false)
+	# Remove any ruins left over from destroyed buildings
+	for child in get_children():
+		if child is Node3D and child.has_meta("is_ruins"):
+			child.queue_free()
 
 
 func _show_grid() -> void:
