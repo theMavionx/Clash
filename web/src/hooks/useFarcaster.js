@@ -11,7 +11,7 @@ export function isFarcasterFrame() {
   }
 }
 
-// Start SDK init immediately on module load (but don't call ready() yet)
+// Start SDK init immediately on module load (don't call ready yet — must be in useEffect)
 if (isFarcasterFrame()) {
   initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
     sdkInstance = mod.sdk;
@@ -31,21 +31,17 @@ export function useFarcaster() {
     }
 
     let cancelled = false;
-    let readyCalled = false;
-
-    const callReady = async (sdk) => {
-      if (readyCalled) return;
-      readyCalled = true;
-      try { await sdk.actions.ready(); } catch {}
-      if (!cancelled) setLoading(false);
-    };
-
     initPromise.then(async (sdk) => {
       if (cancelled || !sdk) { setLoading(false); return; }
       setIsInFrame(true);
 
-      // Fallback: if context takes too long, call ready() anyway after 3s
-      const timeout = setTimeout(() => callReady(sdk), 3000);
+      // Timeout: if context takes too long, call ready() anyway
+      const timeout = setTimeout(async () => {
+        if (!cancelled) {
+          try { await sdk.actions.ready(); } catch {}
+          setLoading(false);
+        }
+      }, 3000);
 
       try {
         const ctx = await sdk.context;
@@ -60,7 +56,11 @@ export function useFarcaster() {
       } catch {}
 
       clearTimeout(timeout);
-      callReady(sdk);
+      if (!cancelled) {
+        // Called inside useEffect as Farcaster docs recommend
+        try { await sdk.actions.ready(); } catch {}
+        setLoading(false);
+      }
     }).catch(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
