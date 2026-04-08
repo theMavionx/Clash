@@ -2,7 +2,7 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d185lylesgb82"
+uid="uid://baxbxx3r2ok1u"
 path.s3tc="res://.godot/imported/BrokenModel_1.jpg-58de9e84860339360dc8067382ec2c64.s3tc.ctex"
 path.etc2="res://.godot/imported/BrokenModel_1.jpg-58de9e84860339360dc8067382ec2c64.etc2.ctex"
 metadata={
@@ -10,7 +10,7 @@ metadata={
 "vram_texture": true
 }
 generator_parameters={
-"md5": "7d938ef0e6c121baf6546fd3be012deb"
+"md5": "d8d85f901a6826d34c4da4b289d1c8d7"
 }
 
 [deps]
