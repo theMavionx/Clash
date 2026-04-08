@@ -26,37 +26,12 @@ function FarcasterGate({ children }) {
     }
   }, [loading]);
 
-  // Feature-detect: Godot threaded WASM needs SharedArrayBuffer + crossOriginIsolated + WebGL2
-  // UA check alone misses many Android WebViews (Realme, Xiaomi, OPPO) that lack these
-  const isAndroid = /android/i.test(navigator.userAgent);
-  const hasSharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
-  const hasCOI = window.crossOriginIsolated === true;
-  const hasWebGL2 = (() => { try { return !!document.createElement('canvas').getContext('webgl2'); } catch { return false; } })();
-  const cantRunWasm = isAndroid && (!hasSharedArrayBuffer || !hasCOI || !hasWebGL2);
-
   if (!ready) {
     return (
       <div style={styles.splash}>
         <img src={loadingImage} alt="" style={styles.splashImg} />
         <div style={styles.splashText}>
           {isInFrame ? 'Connecting to Farcaster...' : 'Loading...'}
-        </div>
-      </div>
-    );
-  }
-
-  // Android without SharedArrayBuffer/COI/WebGL2 can't run threaded Godot WASM
-  if (cantRunWasm) {
-    return (
-      <div style={styles.splash}>
-        <img src={loadingImage} alt="" style={styles.splashImg} />
-        <div style={styles.mobilePrompt}>
-          <div style={styles.mobileTitle}>Clash of Perps</div>
-          <div style={styles.mobileDesc}>Build your island, train troops, raid enemies. Trade to earn gold.</div>
-          <button style={styles.mobileBtn} onClick={() => window.open('https://clashofperps.fun', '_blank')}>
-            Play Now
-          </button>
-          <div style={styles.mobileSub}>Opens in your browser for the best experience</div>
         </div>
       </div>
     );

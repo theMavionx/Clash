@@ -754,17 +754,9 @@ func check_defeat(delta: float) -> void:
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 
 	var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
-	# Ships still sailing count as "alive" — they haven't deployed yet
-	var ships_still_sailing: bool = false
-	if attack_system:
-		for ship_node in attack_system._get_ships_cached():
-			if is_instance_valid(ship_node):
-				ships_still_sailing = true
-				break
 
-	if troops_alive or ships_still_sailing:
-		if troops_alive:
-			_had_troops = true
+	if troops_alive:
+		_had_troops = true
 		_skeleton_respawn_timer = 0.0
 		return
 

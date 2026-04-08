@@ -73,6 +73,25 @@ func _update_collect_icons() -> void:
 				icon = _create_collect_icon(b, node, def)
 				b["_collect_icon"] = icon
 			icon.visible = true
+			# Check if storage is full — tint icon red
+			var _res_type: String = def.get("produces", "gold")
+			var _current: int = int(bs.resources.get(_res_type, 0))
+			var _caps: Dictionary = bs._get_resource_caps()
+			var _cap: int = int(_caps.get(_res_type, 99999))
+			var _full: bool = _current >= _cap
+			if icon.get_child_count() > 0:
+				var _bg: Panel = icon.get_child(0) as Panel
+				if _bg:
+					var _st: StyleBoxFlat = _bg.get_theme_stylebox("panel") as StyleBoxFlat
+					if _st:
+						if _full:
+							_st.border_color = Color(0.9, 0.15, 0.15)
+							_st.bg_color = Color(1.0, 0.85, 0.85, 0.95)
+						else:
+							_st.bg_color = Color(1.0, 1.0, 1.0, 0.95)
+							if _res_type == "gold": _st.border_color = Color(0.9, 0.75, 0.2)
+							elif _res_type == "wood": _st.border_color = Color(0.45, 0.7, 0.3)
+							elif _res_type == "ore": _st.border_color = Color(0.6, 0.65, 0.7)
 			var base_pos: Vector3   = node.global_position
 			var def_height: float   = def.get("height", 0.4)
 			var target_3d: Vector3  = base_pos + Vector3(0, def_height + 0.1, 0)
@@ -158,6 +177,13 @@ func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary)
 ## Handle a tap/click on a collect icon: hide it, fire the flying animation,
 ## then sync resources with the server.
 func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
+	# Block collection if storage is full
+	var current: int = int(bs.resources.get(res_type, 0))
+	var caps: Dictionary = bs._get_resource_caps()
+	var cap: int = int(caps.get(res_type, 99999))
+	if current >= cap:
+		bs._show_error("Storage full! Upgrade Storage or Town Hall.")
+		return
 	var start_pos: Vector2 = btn.global_position + btn.size / 2.0
 	btn.visible = false
 	btn.set_meta("anim_scale", 0.0)

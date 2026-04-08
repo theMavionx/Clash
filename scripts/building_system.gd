@@ -3871,7 +3871,11 @@ func _get_random_grid_world_pos() -> Vector3:
 func _on_attack_pressed() -> void:
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
-		attack_system.enter_attack_mode(await _build_fleet())
+		var fleet: Array = await _build_fleet()
+		if fleet.is_empty():
+			_show_error("No troops! Reinforce your ships first.")
+			return
+		attack_system.enter_attack_mode(fleet)
 
 
 ## Builds the fleet array from all port ships for the attack system.
@@ -3896,6 +3900,11 @@ func _auto_fill_ships() -> void:
 				continue
 			var ship_level: int = pnode.get_meta("ship_level", 1)
 			var ship_troops: Array = pnode.get_meta("ship_troops", []).duplicate()
+			var ship_template: Array = pnode.get_meta("ship_troops_template", [])
+			# Only auto-fill if player never configured this ship (template empty)
+			# If template exists but troops are empty = troops died, don't auto-fill
+			if not ship_template.is_empty():
+				continue
 			while ship_troops.size() < ship_level:
 				ship_troops.append(available[idx % available.size()])
 				idx += 1
@@ -3912,12 +3921,14 @@ func _build_fleet() -> Array:
 			for ship_data in result.ships:
 				var sid: int = ship_data.get("id", -1)
 				var server_troops: Array = ship_data.get("ship_troops", [])
+				var server_template: Array = ship_data.get("ship_troops_template", [])
 				for bs_node in _building_systems:
 					for b in bs_node.placed_buildings:
 						if b.get("server_id") == sid and b.get("id") == "port":
 							var pnode = b.get("node")
 							if is_instance_valid(pnode):
 								pnode.set_meta("ship_troops", server_troops)
+								pnode.set_meta("ship_troops_template", server_template)
 	_auto_fill_ships()
 	var fleet: Array = []
 	for bs_node in _building_systems:
@@ -3929,6 +3940,7 @@ func _build_fleet() -> Array:
 				continue
 			var ship_level: int = pnode.get_meta("ship_level", 1)
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
+			if not ship_troops.is_empty():
 			fleet.append({"level": ship_level, "troops": ship_troops.duplicate()})
 	return fleet
 
