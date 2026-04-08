@@ -1,16 +1,19 @@
 /**
- * Replay-based combat verification.
- * Matches client (Godot) simulation 1:1:
- * - Projectile travel time for ranged troops, turrets, archer towers
- * - Melee hit delay (40% through attack animation)
- * - Skeleton guards detect relative to tombstone, chase up to 2x detection radius
- * - Turret first shot fires instantly on target acquisition
- * - 60 Hz tick rate (same as client 60fps)
+ * Replay-based combat verification — 1:1 match with Godot client.
+ *
+ * Key behaviors replicated:
+ * - Troop targeting: unified nearest (buildings + guards), guard threat check
+ * - Melee hit at 40% through attack cycle
+ * - Ranged projectiles home toward target each tick
+ * - Turret first shot is instant; Archer Tower first shot has full delay
+ * - Skeleton guards detect relative to tombstone, chase up to 2x radius
+ * - Multiple troops per ship from troops[] array
+ * - 60 Hz tick rate matching client
  */
 
 const {
   TROOP_STATS, DEFENSE_STATS, SKELETON_GUARD,
-  MAX_SHIPS, TROOPS_PER_SHIP, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
+  MAX_SHIPS, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   CANNON_DAMAGE, CANNON_INITIAL_ENERGY, CANNON_ENERGY_PER_DESTROY,
   cannonShotCost, VALID_TROOP_TYPES,
 } = require('./combat_defs');
@@ -18,17 +21,27 @@ const { BUILDING_DEFS } = require('./db');
 
 // ---------- Config ----------
 
-const TICK_DT = 1 / 30;         // 30 Hz — close enough to client 60fps, 2x faster
-const HP_TOLERANCE = 0.50;      // Accept victory if TH ≤50% HP
-const PROJ_HIT_DIST = 0.05;     // projectile hit distance (client HIT_DIST_SQ = 0.05²)
-const TURRET_HIT_DIST = 0.03;   // turret bullet tighter hit box
+const TICK_DT = 1 / 60;            // 60 Hz — matches client framerate
+const HP_TOLERANCE = 0.05;         // Max 5% TH HP deviation allowed
+const PROJ_HIT_DIST_SQ = 0.0025;   // 0.05² — client HIT_DIST_SQ
+const TURRET_HIT_DIST_SQ = 0.0009; // 0.03² — turret tighter hitbox
+const GUARD_THREAT_MULT = 1.5;     // Troops switch to guards within range * 1.5
+const TROOP_SPAWN_DELAY = 0.2;     // Seconds between each troop from same ship
+const RETARGET_INTERVAL = 10;      // Frames between target re-evaluation (matches client)
+const DEFENSE_SEARCH_SEC = 0.15;   // Target search interval for defenses (matches client)
+const SEPARATION_RADIUS = 0.18;    // Troop push-apart radius (matches client)
+const SEPARATION_FORCE = 0.5;      // Troop push-apart strength
 
 // ---------- Helpers ----------
 
-function dist2d(a, b) {
-  const dx = a.x - b.x;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dz * dz);
+function distSq2d(ax, az, bx, bz) {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return dx * dx + dz * dz;
+}
+
+function dist2d(ax, az, bx, bz) {
+  return Math.sqrt(distSq2d(ax, az, bx, bz));
 }
 
 function moveToward(entity, tx, tz, speed, dt) {
@@ -41,20 +54,19 @@ function moveToward(entity, tx, tz, speed, dt) {
   entity.z += (dz / d) * step;
 }
 
-function findNearest(x, z, targets) {
+// Find nearest alive target from a list. Returns {target, distSq} or null.
+function findNearestAlive(x, z, targets) {
   let best = null;
-  let bestDist = Infinity;
+  let bestDistSq = Infinity;
   for (const t of targets) {
     if (t.hp <= 0) continue;
-    const dx = x - t.x;
-    const dz = z - t.z;
-    const d = Math.sqrt(dx * dx + dz * dz);
-    if (d < bestDist) { bestDist = d; best = t; }
+    const dsq = distSq2d(x, z, t.x, t.z);
+    if (dsq < bestDistSq) { bestDistSq = dsq; best = t; }
   }
-  return best ? { target: best, dist: bestDist } : null;
+  return best ? { target: best, distSq: bestDistSq } : null;
 }
 
-// Convert grid coordinates to world coordinates (mirrors GDScript _grid_to_local + transform)
+// Convert grid coordinates to world coordinates
 function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
   const halfX = gc.grid_extent_x / 2.0;
   const halfZ = gc.grid_extent_z / 2.0;
@@ -72,21 +84,11 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
 // ---------- Replay Verifier ----------
 
 function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, serverTroopLevels }) {
-  // Validate grid config
   if (!gridConfig || !gridConfig.cell_size || gridConfig.cell_size <= 0) {
     return { valid: false, reason: 'Missing or invalid grid_config' };
   }
-
-  // Validate actions
   if (!actions || !Array.isArray(actions)) {
     return { valid: false, reason: 'No actions' };
-  }
-
-  // Validate timestamps are monotonic
-  for (let i = 1; i < actions.length; i++) {
-    if (actions[i].t < actions[i - 1].t - 0.01) {
-      return { valid: false, reason: 'Actions have non-monotonic timestamps' };
-    }
   }
 
   // Init buildings with world coordinates
@@ -104,17 +106,16 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
   const troops = [];
   const guards = [];
   const defenses = [];
-  const projectiles = [];  // { x, z, tx, tz, speed, damage, targetId, type, hitDist }
+  const projectiles = [];
   let townHallId = null;
   let nextTroopId = 0;
   let shipsPlaced = 0;
   const pendingSpawns = [];
 
-  // Cannon energy tracking
   let cannonEnergy = CANNON_INITIAL_ENERGY;
   let cannonShotsFired = 0;
 
-  // Init defenses & guards
+  // Init defenses & guards from buildings
   for (const b of buildings) {
     if (b.type === 'town_hall') townHallId = b.id;
 
@@ -126,9 +127,10 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
         projSpeed: s.projSpeed,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
+        _searchTimer: 0,  // throttle target search to DEFENSE_SEARCH_SEC
       });
     }
-    if (b.type === 'archer_tower') {
+    if (b.type === 'archer_tower' || b.type === 'archertower' || b.type === 'archtower') {
       const s = DEFENSE_STATS.archer_tower[b.level] || DEFENSE_STATS.archer_tower[1];
       defenses.push({
         buildingId: b.id, type: 'archer_tower',
@@ -136,64 +138,58 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
         projSpeed: s.projSpeed,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
+        _searchTimer: 0,
       });
     }
     if (b.type === 'tombstone') {
-      for (let i = 0; i < (b.level || 1); i++) {
-        const angle = (Math.PI * 2 * i) / (b.level || 1);
+      const guardCount = b.level || 1;
+      for (let i = 0; i < guardCount; i++) {
+        const angle = (Math.PI * 2 * i) / guardCount;
         guards.push({
+          id: `g${nextTroopId++}`,
           hp: SKELETON_GUARD.hp, damage: SKELETON_GUARD.damage,
           atkSpeed: SKELETON_GUARD.atkSpeed, moveSpeed: SKELETON_GUARD.moveSpeed,
           detectionRadius: SKELETON_GUARD.detectionRadius,
           attackRange: SKELETON_GUARD.attackRange,
           hitDelay: SKELETON_GUARD.hitDelay,
-          // Position starts near tombstone
-          x: b.x + Math.cos(angle) * 0.15, z: b.z + Math.sin(angle) * 0.15,
-          // Tombstone anchor — detection is relative to this
+          x: b.x + Math.cos(angle) * 0.15,
+          z: b.z + Math.sin(angle) * 0.15,
           tombX: b.x, tombZ: b.z,
-          targetId: null, atkTimer: 0, hitPending: false,
+          targetId: null, atkTimer: 0, hitPending: false, hitTimer: 0,
         });
       }
     }
   }
 
-  // Sort actions by time
   const sortedActions = [...actions].sort((a, b) => a.t - b.t);
   let actionIdx = 0;
   let time = 0;
 
   while (time < TIME_LIMIT_SEC) {
-    // ── Process player actions at current time ──
+    // ── Process player actions ──
     while (actionIdx < sortedActions.length && sortedActions[actionIdx].t <= time) {
       const act = sortedActions[actionIdx++];
 
       if (act.type === 'place_ship' && shipsPlaced < MAX_SHIPS) {
-        // New format: troops is an array of troop names per ship
-        // Old format: troopType is a single troop name
-        const troops = act.troops || (act.troopType ? [act.troopType] : []);
-        console.log(`[SIM] Ship ${shipsPlaced + 1}: troops=${JSON.stringify(troops)}, troopType=${act.troopType}, shipLevel=${act.shipLevel}`);
-        for (let ti = 0; ti < troops.length; ti++) {
-          const rawName = troops[ti];
+        // Support both old (troopType) and new (troops[]) format
+        const shipTroops = act.troops || (act.troopType ? [act.troopType] : []);
+        for (let ti = 0; ti < shipTroops.length; ti++) {
+          const rawName = shipTroops[ti];
           const troopType = rawName.toLowerCase();
-          if (!VALID_TROOP_TYPES.includes(troopType)) { console.log(`[SIM] SKIP invalid troop: ${rawName}`); continue; }
-          const level = act.troopLevel || (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType])) || 1;
-          console.log(`[SIM] Spawn ${troopType} lv${level} at t=${act.t + SAIL_DELAY_SEC + ti * 0.2}`);
+          if (!VALID_TROOP_TYPES.includes(troopType)) continue;
+          const level = (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType])) || act.troopLevel || 1;
           pendingSpawns.push({
-            time: act.t + SAIL_DELAY_SEC + ti * 0.2,
+            time: act.t + SAIL_DELAY_SEC + ti * TROOP_SPAWN_DELAY,
             troopType, troopLevel: level,
-            x: act.x, z: act.z
+            x: act.x, z: act.z,
           });
         }
         shipsPlaced++;
       }
 
       if (act.type === 'cannon_fire') {
-        // Don't hard-fail on energy mismatch — sim timing differences can cause
-        // buildings to be destroyed in different order, shifting +2 energy bonuses.
-        // Just apply the shot if we have any energy, skip if truly impossible.
         cannonShotsFired++;
-        const cost = cannonShotCost(cannonShotsFired);
-        cannonEnergy -= cost;
+        cannonEnergy -= cannonShotCost(cannonShotsFired);
         const target = buildings.find(b => b.id === act.buildingId && b.hp > 0);
         if (target) {
           target.hp -= CANNON_DAMAGE;
@@ -202,44 +198,108 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
       }
     }
 
-    // ── Deploy pending troops (after sail delay) ──
+    // ── Deploy pending troops ──
     for (let i = pendingSpawns.length - 1; i >= 0; i--) {
       if (pendingSpawns[i].time <= time) {
         const sp = pendingSpawns.splice(i, 1)[0];
         const stats = TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1];
         if (!stats) continue;
-        for (let j = 0; j < TROOPS_PER_SHIP; j++) {
-          troops.push({
-            id: nextTroopId++,
-            hp: stats.hp, damage: stats.damage,
-            atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
-            melee: stats.melee, projSpeed: stats.projSpeed || 0,
-            hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
-            x: sp.x + (j - 1) * 0.05, z: sp.z,
-            atkTimer: 0, hitPending: false, hitTimer: 0,
-          });
+        // One troop per spawn entry
+        troops.push({
+          id: nextTroopId++,
+          type: sp.troopType,
+          hp: stats.hp, damage: stats.damage,
+          atkSpeed: stats.atkSpeed, moveSpeed: stats.moveSpeed, range: stats.range,
+          melee: stats.melee, projSpeed: stats.projSpeed || 0,
+          hitDelay: stats.hitDelay || 0, shootDelay: stats.shootDelay || 0,
+          x: sp.x, z: sp.z,
+          atkTimer: 0, hitPending: false, hitTimer: 0,
+          _pendingTarget: null,
+          _retargetCounter: 0,       // throttle target search
+          _currentTarget: null,      // sticky target ref
+          _currentTargetIsGuard: false,
+        });
+      }
+    }
+
+    // ── Build alive lists ──
+    const aliveTroops = [];
+    for (const t of troops) { if (t.hp > 0) aliveTroops.push(t); }
+    const aliveGuards = [];
+    for (const g of guards) { if (g.hp > 0) aliveGuards.push(g); }
+    const aliveBuildings = [];
+    for (const b of buildings) { if (b.hp > 0) aliveBuildings.push(b); }
+
+    // ── Troop separation (push apart overlapping troops) ──
+    for (let i = 0; i < aliveTroops.length; i++) {
+      for (let j = i + 1; j < aliveTroops.length; j++) {
+        const a = aliveTroops[i], b = aliveTroops[j];
+        const dx = a.x - b.x, dz = a.z - b.z;
+        const dsq = dx * dx + dz * dz;
+        if (dsq < SEPARATION_RADIUS * SEPARATION_RADIUS && dsq > 0.0001) {
+          const d = Math.sqrt(dsq);
+          const push = (SEPARATION_RADIUS - d) * SEPARATION_FORCE * TICK_DT;
+          const nx = dx / d, nz = dz / d;
+          a.x += nx * push; a.z += nz * push;
+          b.x -= nx * push; b.z -= nz * push;
         }
       }
     }
 
-    // ── Move troops & attack ──
-    for (const t of troops) {
-      if (t.hp <= 0) continue;
+    // ── Troop AI ──
+    for (const t of aliveTroops) {
+      // Retarget throttle — only search every RETARGET_INTERVAL frames (matches client)
+      let target = t._currentTarget;
+      let targetIsGuard = t._currentTargetIsGuard;
 
-      // Find nearest target (building or guard)
-      const nearB = findNearest(t.x, t.z, buildings);
-      const nearG = findNearest(t.x, t.z, guards);
-      let target = null, targetDist = Infinity;
-      if (nearB) { target = nearB.target; targetDist = nearB.dist; }
-      if (nearG && nearG.dist < targetDist) { target = nearG.target; targetDist = nearG.dist; }
+      // Validate current target still alive
+      if (target && target.hp <= 0) { target = null; t._currentTarget = null; }
+
+      t._retargetCounter++;
+      const shouldRetarget = !target || t._retargetCounter >= RETARGET_INTERVAL;
+
+      if (shouldRetarget) {
+        t._retargetCounter = 0;
+        const nearB = findNearestAlive(t.x, t.z, aliveBuildings);
+        const nearG = findNearestAlive(t.x, t.z, aliveGuards);
+        let bestTarget = null;
+        let bestDistSq = Infinity;
+        targetIsGuard = false;
+
+        if (nearB) { bestTarget = nearB.target; bestDistSq = nearB.distSq; }
+        if (nearG && nearG.distSq < bestDistSq) {
+          bestTarget = nearG.target; bestDistSq = nearG.distSq; targetIsGuard = true;
+        }
+        target = bestTarget;
+        t._currentTarget = target;
+        t._currentTargetIsGuard = targetIsGuard;
+      }
+
+      // Guard threat check — runs every frame (not throttled, matches client _check_guard_threat)
+      if (target && !targetIsGuard) {
+        const nearG = findNearestAlive(t.x, t.z, aliveGuards);
+        if (nearG) {
+          const threatRadiusSq = (t.range * GUARD_THREAT_MULT) ** 2;
+          if (nearG.distSq < threatRadiusSq) {
+            target = nearG.target;
+            targetIsGuard = true;
+            t._currentTarget = target;
+            t._currentTargetIsGuard = true;
+          }
+        }
+      }
+
       if (!target) continue;
 
+      const targetDistSq = distSq2d(t.x, t.z, target.x, target.z);
+      const targetDist = Math.sqrt(targetDistSq);
+
       if (targetDist <= t.range) {
-        // In range — attack
+        // ── In range — attack ──
         t.atkTimer += TICK_DT;
 
         if (t.melee) {
-          // Melee: damage dealt at hitDelay fraction of atkSpeed
+          // Melee: cycle resets at atkSpeed, hit fires at 40% of cycle
           if (t.atkTimer >= t.atkSpeed) {
             t.atkTimer -= t.atkSpeed;
             t.hitPending = true;
@@ -250,23 +310,21 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
             if (t.hitTimer >= t.atkSpeed * t.hitDelay) {
               t.hitPending = false;
               target.hp -= t.damage;
-              // Only buildings grant cannon energy, not guards
               if (target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
             }
           }
         } else {
-          // Ranged: spawn projectile that travels to target
+          // Ranged: spawn homing projectile
           const shootAt = t.shootDelay > 0 ? t.atkSpeed * t.shootDelay : 0;
+
           if (t.atkTimer >= t.atkSpeed) {
             t.atkTimer -= t.atkSpeed;
             if (shootAt <= 0) {
-              // Archer/Mage: fire immediately
-              const isBuilding = !!target.type;
+              // Mage/Archer: fire immediately
               projectiles.push({
                 x: t.x, z: t.z,
-                tx: target.x, tz: target.z,
-                speed: t.projSpeed, damage: t.damage,
-                targetRef: target, isBuilding, hitDist: PROJ_HIT_DIST,
+                targetRef: target, speed: t.projSpeed, damage: t.damage,
+                isBuilding: !!target.type, hitDistSq: PROJ_HIT_DIST_SQ,
               });
             } else {
               // Ranger: delayed shot
@@ -277,99 +335,83 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
           }
           if (t.hitPending && t.shootDelay > 0) {
             t.hitTimer += TICK_DT;
-            if (t.hitTimer >= t.atkSpeed * t.shootDelay) {
+            if (t.hitTimer >= shootAt) {
               t.hitPending = false;
               const pt = t._pendingTarget || target;
-              const isBuilding = !!pt.type;
               projectiles.push({
                 x: t.x, z: t.z,
-                tx: pt.x, tz: pt.z,
-                speed: t.projSpeed, damage: t.damage,
-                targetRef: pt, isBuilding, hitDist: PROJ_HIT_DIST,
+                targetRef: pt, speed: t.projSpeed, damage: t.damage,
+                isBuilding: !!pt.type, hitDistSq: PROJ_HIT_DIST_SQ,
               });
             }
           }
         }
       } else {
-        // Move toward target
+        // ── Move toward target ──
         moveToward(t, target.x, target.z, t.moveSpeed, TICK_DT);
       }
     }
 
-    // ── Build alive troops list once per tick (avoid repeated .filter) ──
-    const aliveTroops = [];
-    for (const t of troops) { if (t.hp > 0) aliveTroops.push(t); }
-
-    // ── Defense attacks (turrets, archer towers) ──
+    // ── Defense AI (turrets + archer towers) ──
     for (const d of defenses) {
       const bld = buildings.find(b => b.id === d.buildingId);
       if (!bld || bld.hp <= 0) continue;
 
       const detectSq = d.detectRange * d.detectRange;
 
-      // Target acquisition — keep current target if still in range
+      // Throttle target search to DEFENSE_SEARCH_SEC (matches client TARGET_SEARCH_INTERVAL)
+      d._searchTimer += TICK_DT;
       let currentTarget = null;
+
       if (d.targetId != null) {
         currentTarget = aliveTroops.find(t => t.id === d.targetId);
-        if (currentTarget) {
-          const dx = d.x - currentTarget.x;
-          const dz = d.z - currentTarget.z;
-          if (dx * dx + dz * dz > detectSq) currentTarget = null;
-        }
-      }
-      if (!currentTarget) {
-        const near = findNearest(d.x, d.z, aliveTroops);
-        if (near && near.dist <= d.detectRange) {
-          currentTarget = near.target;
+        if (currentTarget && distSq2d(d.x, d.z, currentTarget.x, currentTarget.z) > detectSq) {
+          currentTarget = null;
         }
       }
 
+      if (!currentTarget && d._searchTimer >= DEFENSE_SEARCH_SEC) {
+        d._searchTimer = 0;
+        const near = findNearestAlive(d.x, d.z, aliveTroops);
+        if (near && near.distSq <= detectSq) currentTarget = near.target;
+      }
+
       if (!currentTarget) {
-        if (d.isAttacking) {
-          d.isAttacking = false;
-          d.timer = 0;
-          d.targetId = null;
-        }
+        if (d.isAttacking) { d.isAttacking = false; d.timer = 0; d.targetId = null; }
         continue;
       }
 
       d.targetId = currentTarget.id;
 
-      // First shot instant — timer starts at fireRate on target acquisition
       if (!d.isAttacking) {
         d.isAttacking = true;
-        d.timer = d.fireRate;  // matches client: _fire_timer = fire_rate
+        // Turret: first shot instant (timer = fireRate). Archer Tower: full delay (timer = 0)
+        d.timer = d.type === 'turret' ? d.fireRate : 0;
       }
 
       d.timer += TICK_DT;
       if (d.timer >= d.fireRate) {
         d.timer -= d.fireRate;
-        // Spawn projectile toward target (defense → targets troops, never buildings)
         projectiles.push({
           x: d.x, z: d.z,
-          tx: currentTarget.x, tz: currentTarget.z,
-          speed: d.projSpeed, damage: d.damage,
-          targetRef: currentTarget, isBuilding: false,
-          hitDist: d.type === 'turret' ? TURRET_HIT_DIST : PROJ_HIT_DIST,
+          targetRef: currentTarget, speed: d.projSpeed, damage: d.damage,
+          isBuilding: false,
+          hitDistSq: d.type === 'turret' ? TURRET_HIT_DIST_SQ : PROJ_HIT_DIST_SQ,
         });
       }
     }
 
-    // ── Guard AI — detect relative to tombstone, chase up to 2x radius ──
-    for (const g of guards) {
-      if (g.hp <= 0) continue;
-
-      // Find target — detection is relative to TOMBSTONE position
+    // ── Guard AI ──
+    for (const g of aliveGuards) {
+      // Find target — detection relative to tombstone
       if (g.targetId == null) {
-        let bestTarget = null;
+        let best = null;
         let bestDist = g.detectionRadius;
         for (const t of aliveTroops) {
-          const dx = t.x - g.tombX;
-          const dz = t.z - g.tombZ;
-          const d = Math.sqrt(dx * dx + dz * dz);
-          if (d < bestDist) { bestDist = d; bestTarget = t; }
+          const d = dist2d(t.x, t.z, g.tombX, g.tombZ);
+          if (d < bestDist) { bestDist = d; best = t; }
         }
-        if (bestTarget) g.targetId = bestTarget.id;
+        if (best) g.targetId = best.id;
       }
 
       if (g.targetId == null) continue;
@@ -377,19 +419,15 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
       const target = aliveTroops.find(t => t.id === g.targetId);
       if (!target) { g.targetId = null; continue; }
 
-      // Abandon chase if troop moved too far from tombstone (2x detection radius)
-      const troopToTomb = Math.sqrt(
-        (target.x - g.tombX) ** 2 + (target.z - g.tombZ) ** 2
-      );
-      if (troopToTomb > g.detectionRadius * 2.0) {
+      // Abandon chase if troop too far from tombstone
+      if (dist2d(target.x, target.z, g.tombX, g.tombZ) > g.detectionRadius * 2.0) {
         g.targetId = null;
         continue;
       }
 
-      const gDist = dist2d(g, target);
+      const gDist = dist2d(g.x, g.z, target.x, target.z);
 
       if (gDist <= g.attackRange) {
-        // Attack with melee hit delay
         g.atkTimer += TICK_DT;
         if (g.atkTimer >= g.atkSpeed) {
           g.atkTimer -= g.atkSpeed;
@@ -397,7 +435,6 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
           g.hitTimer = 0;
         }
         if (g.hitPending) {
-          if (!g.hitTimer) g.hitTimer = 0;
           g.hitTimer += TICK_DT;
           if (g.hitTimer >= g.atkSpeed * g.hitDelay) {
             g.hitPending = false;
@@ -405,43 +442,48 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
           }
         }
       } else {
-        // Move toward target
         moveToward(g, target.x, target.z, g.moveSpeed, TICK_DT);
       }
     }
 
-    // ── Update projectiles — move toward target, deal damage on hit ──
+    // ── Projectiles — home toward target each tick ──
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
-      const dx = p.tx - p.x;
-      const dz = p.tz - p.z;
-      const d = Math.sqrt(dx * dx + dz * dz);
+      const tgt = p.targetRef;
 
-      if (d <= p.hitDist) {
-        // Hit — deal damage to stored target reference
-        const target = p.targetRef;
-        if (target && target.hp > 0) {
-          target.hp -= p.damage;
-          // Only buildings grant cannon energy
-          if (target.hp <= 0 && p.isBuilding) {
-            cannonEnergy += CANNON_ENERGY_PER_DESTROY;
-          }
-        }
+      // Target dead — despawn projectile (matches client: no hit if target freed)
+      if (!tgt || tgt.hp <= 0) {
         projectiles.splice(i, 1);
         continue;
       }
 
-      // Move projectile
+      // Home toward current target position (not fixed spawn position)
+      const tx = tgt.x;
+      const tz = tgt.z;
+      const dx = tx - p.x;
+      const dz = tz - p.z;
+      const dsq = dx * dx + dz * dz;
+
+      if (dsq <= p.hitDistSq) {
+        // Hit
+        tgt.hp -= p.damage;
+        if (tgt.hp <= 0 && p.isBuilding) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+        projectiles.splice(i, 1);
+        continue;
+      }
+
+      // Move
+      const d = Math.sqrt(dsq);
       const step = Math.min(p.speed * TICK_DT, d);
       p.x += (dx / d) * step;
       p.z += (dz / d) * step;
     }
 
-    // ── Check end conditions ──
+    // ── End conditions ──
     const th = buildings.find(b => b.id === townHallId);
     if (th && th.hp <= 0) break;
 
-    const anyAlive = troops.some(t => t.hp > 0);
+    const anyAlive = aliveTroops.length > 0;
     if (!anyAlive && pendingSpawns.length === 0 && actionIdx >= sortedActions.length) break;
 
     time += TICK_DT;
@@ -457,10 +499,18 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
     if (townHallDestroyed || townHallHpPct <= HP_TOLERANCE) {
       return { valid: true, reason: 'Victory verified', townHallDestroyed: true, buildingsDestroyed, townHallHpPct };
     }
-    return { valid: false, reason: `TH at ${Math.round(townHallHpPct * 100)}% HP in sim (need ≤${HP_TOLERANCE * 100}%)`, townHallDestroyed: false, buildingsDestroyed, townHallHpPct };
+    return {
+      valid: false,
+      reason: `TH at ${Math.round(townHallHpPct * 100)}% HP in sim (need ≤${Math.round(HP_TOLERANCE * 100)}%)`,
+      townHallDestroyed: false, buildingsDestroyed, townHallHpPct,
+    };
   }
 
-  // Defeat always accepted
+  // Defeat — require at least one ship placed
+  const hasShips = sortedActions.some(a => a.type === 'place_ship');
+  if (!hasShips) {
+    return { valid: false, reason: 'No ships deployed in defeat' };
+  }
   return { valid: true, reason: 'Defeat accepted', townHallDestroyed: false, buildingsDestroyed, townHallHpPct };
 }
 
