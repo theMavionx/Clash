@@ -2780,8 +2780,8 @@ func remove_building(b: Dictionary) -> void:
 				).set_delay(frame_dur if fi > 0 else 0.0)
 			tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
 			tw.chain().tween_callback(explosion.queue_free)
-		# Spawn ruins on the grid at same local position
-		_spawn_ruins(b.node.position)
+		# Spawn ruins on the grid at same local position with building outline
+		_spawn_ruins(b.node.position, b.get("id", ""), b.get("level", 1))
 		b.node.queue_free()
 	placed_buildings.remove_at(idx)
 	_deselect_building()
@@ -2986,7 +2986,7 @@ func _update_building_hp_bars() -> void:
 ## Preloaded ruins model — appears where a destroyed building stood.
 const RUINS_MODEL: String = "res://Model/BrokenModel/BrokenModel.glb"
 const RUINS_SCALE: float = 0.15
-const RUINS_Y_OFFSET: float = 0.05  ## Adjust if ruins float or sink
+const RUINS_Y_OFFSET: float = 0.0  ## Same Y as buildings (local to BuildingSystem)
 static var _ruins_res: Resource = null
 
 ## Spawns ruins on the grid at the given local position (child of BuildingSystem).
@@ -2996,16 +2996,37 @@ func _spawn_ruins(local_pos: Vector3) -> void:
 		_ruins_res = load(RUINS_MODEL)
 	if _ruins_res == null:
 		return
-	var ruins: Node3D = _ruins_res.instantiate()
-	var s: float = RUINS_SCALE
-	ruins.scale = Vector3(s, s, s)
+	# Wrap model in a container so we can offset Y without affecting grid position
+	var ruins: Node3D = Node3D.new()
 	ruins.set_meta("is_ruins", true)
+	var model: Node3D = _ruins_res.instantiate()
+	var s: float = RUINS_SCALE
+	model.scale = Vector3(s, s, s)
+	model.position.y = 0.1  # push model mesh above the grid plane
+	ruins.add_child(model)
+	# Circular shadow beneath the ruins — slightly larger than the model
+	var shadow: MeshInstance3D = MeshInstance3D.new()
+	var disc: CylinderMesh = CylinderMesh.new()
+	disc.top_radius = s * 1.5
+	disc.bottom_radius = s * 1.5
+	disc.height = 0.001
+	disc.radial_segments = 32
+	shadow.mesh = disc
+	shadow.position = Vector3(0, -0.03, 0)
+	var shadow_mat: StandardMaterial3D = StandardMaterial3D.new()
+	shadow_mat.albedo_color = Color(0.0, 0.0, 0.0, 0.3)
+	shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	shadow_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	shadow.material_override = shadow_mat
+	add_child(shadow)
+	shadow.position = Vector3(local_pos.x, local_pos.y + 0.005, local_pos.z)
 	add_child(ruins)
-	ruins.position = Vector3(local_pos.x, RUINS_Y_OFFSET, local_pos.z)
-	# Pop-in animation
+	ruins.position = Vector3(local_pos.x, local_pos.y, local_pos.z)
+	# Pop-in animation on the container
 	ruins.scale = Vector3.ZERO
 	var tw: Tween = create_tween()
-	tw.tween_property(ruins, "scale", Vector3(s, s, s), 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ruins, "scale", Vector3.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 ## Spawns a brief OmniLight3D inside the building to brighten it on hit.
