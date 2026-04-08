@@ -71,7 +71,7 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
 
 // ---------- Replay Verifier ----------
 
-function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig }) {
+function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, serverTroopLevels }) {
   // Validate grid config
   if (!gridConfig || !gridConfig.cell_size || gridConfig.cell_size <= 0) {
     return { valid: false, reason: 'Missing or invalid grid_config' };
@@ -168,10 +168,19 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig })
       const act = sortedActions[actionIdx++];
 
       if (act.type === 'place_ship' && shipsPlaced < MAX_SHIPS) {
-        const troopType = act.troopType;
-        if (!VALID_TROOP_TYPES.includes(troopType)) continue;
-        const level = act.troopLevel || 1;
-        pendingSpawns.push({ time: act.t + SAIL_DELAY_SEC, troopType, troopLevel: level, x: act.x, z: act.z });
+        // New format: troops is an array of troop names per ship
+        // Old format: troopType is a single troop name
+        const troops = act.troops || (act.troopType ? [act.troopType] : []);
+        for (let ti = 0; ti < troops.length; ti++) {
+          const troopType = troops[ti];
+          if (!VALID_TROOP_TYPES.includes(troopType)) continue;
+          const level = act.troopLevel || (serverTroopLevels && serverTroopLevels[troopType]) || 1;
+          pendingSpawns.push({
+            time: act.t + SAIL_DELAY_SEC + ti * 0.2,
+            troopType, troopLevel: level,
+            x: act.x, z: act.z
+          });
+        }
         shipsPlaced++;
       }
 

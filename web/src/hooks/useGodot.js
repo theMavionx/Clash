@@ -24,7 +24,8 @@ export function GodotProvider({ children }) {
   const [cannonMode, setCannonMode] = useState(false);
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
-  const [pendingCasualties, setPendingCasualties] = useState(null); // {Knight: 1, Mage: 2} after battle
+  const [pendingCasualties, setPendingCasualties] = useState(null);
+  const [battleTimer, setBattleTimer] = useState(null); // seconds remaining, null = no timer
   const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
   const [fleetInfo, setFleetInfo] = useState(null);
   const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
@@ -92,6 +93,9 @@ export function GodotProvider({ children }) {
           if (data.casualties && Object.values(data.casualties).some(c => c > 0)) {
             setPendingCasualties(data.casualties);
           }
+          break;
+        case 'battle_timer':
+          setBattleTimer(data.remaining ?? null);
           break;
         case 'troop_died':
           setPendingCasualties(prev => {
@@ -167,8 +171,8 @@ export function GodotProvider({ children }) {
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },

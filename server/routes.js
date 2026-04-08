@@ -287,6 +287,7 @@ router.post('/attack/result', auth, (req, res) => {
     actions: gameActions,
     claimedResult,
     gridConfig,
+    serverTroopLevels,
   });
 
   console.log(`[BATTLE] ${claimedResult} by ${req.player.id} vs ${defender_id}: ${verification.reason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);

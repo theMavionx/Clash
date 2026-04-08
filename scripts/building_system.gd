@@ -1972,12 +1972,14 @@ func _unhandled_input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 			else:
 				# No building hit — check if clicked on a port ship (home island only)
+				var did_ship: bool = false
 				if not is_viewing_enemy:
 					var ship_port = _find_ship_at_click(event.position)
 					if ship_port.size() > 0:
 						_show_ship_panel(ship_port)
 						get_viewport().set_input_as_handled()
-				else:
+						did_ship = true
+				if not did_ship:
 					_deselect_building()
 					_hide_ship_panel()
 		else:

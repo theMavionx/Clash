@@ -38,6 +38,10 @@ var enemy_label: Label
 
 var _saved_fleet: Array = []  # fleet snapshot taken before home buildings are destroyed
 
+const BATTLE_TIME_LIMIT: float = 180.0  ## 3 minutes max battle duration
+var _battle_timer: float = 0.0
+var _battle_timer_active: bool = false
+
 var _replay_active: bool = false
 var _replay_actions: Array = []
 var _replay_buildings_snapshot: Array = []
@@ -226,6 +230,8 @@ func _switch_to_enemy_island() -> void:
 		_saved_fleet = bs._build_fleet()
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
+	_battle_timer = 0.0
+	_battle_timer_active = true
 	bs._cannon.reset()
 	_battle_replay.append({
 		"type": "battle_start",
@@ -328,6 +334,8 @@ func _switch_to_enemy_island() -> void:
 func _switch_to_enemy_island_after_sail() -> void:
 	_battle_replay.clear()
 	_battle_start_time = Time.get_ticks_msec() / 1000.0
+	_battle_timer = 0.0
+	_battle_timer_active = true
 	bs._cannon.reset()
 	_battle_replay.append({
 		"type": "battle_start",
@@ -418,6 +426,8 @@ func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
 	_replay_active = false
+	_battle_timer_active = false
+	_battle_timer = 0.0
 	Engine.time_scale = 1.0
 	bs._cannon._exit_ship_cannon_mode()
 	var _r2 = bs.get_tree().root
@@ -725,6 +735,22 @@ func check_defeat(delta: float) -> void:
 		return
 	if not bs.create_ui or bs.name != "BuildingSystem":
 		return
+
+	# Battle timer — auto-defeat after 3 minutes
+	if _battle_timer_active:
+		_battle_timer += delta
+		var remaining: int = ceili(BATTLE_TIME_LIMIT - _battle_timer)
+		# Send timer to React every second
+		if remaining >= 0 and int(_battle_timer) != int(_battle_timer - delta):
+			var bridge_t: Node = bs._bridge
+			if bridge_t:
+				bridge_t.send_to_react("battle_timer", {"remaining": remaining})
+		if _battle_timer >= BATTLE_TIME_LIMIT:
+			_battle_timer_active = false
+			# Force defeat — time's up
+			_force_defeat("Time's up!")
+			return
+
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 
 	var troops_alive: bool = not BaseTroop._get_troops_cached().is_empty()
@@ -776,6 +802,22 @@ func check_defeat(delta: float) -> void:
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
+
+
+## Forces a defeat — used when battle timer expires.
+## Only already-dead troops count as casualties. Survivors stay alive.
+func _force_defeat(reason: String) -> void:
+	_had_troops = false
+	_skeleton_respawn_timer = 0.0
+	# Casualties already reported to server via /troop-died in real-time
+	# Just send the defeat result with empty casualties (server already has the data)
+	var net_def: Node = bs._net
+	var def_id: String = enemy_info.get("id", "")
+	if net_def and net_def.has_token() and def_id != "":
+		net_def.submit_battle_result(def_id, _battle_replay, "defeat", {})
+	var bridge_def: Node = bs._bridge
+	if bridge_def:
+		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason})
 
 
 ## Called every frame from BuildingSystem._process while on the home island.

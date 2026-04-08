@@ -75,7 +75,7 @@ const TROOP_IMG_MAP = {
 };
 
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
-function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo }) {
+function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
   const { isMobile: mobile } = useLayout();
   const [perf, setPerf] = useState({ troop_counts: {} });
   const perfRef = useRef(perf);
@@ -103,14 +103,25 @@ function AttackHUD({ onReturnHome, onCannon, cannonMode, selectedTroopIdx, onSel
 
   return (
     <>
-      {/* Return Home - Top Right */}
+      {/* Return Home + Timer - Top Right */}
       <div style={hud.wrapTopRight}>
-        <button style={hud.homeBtn} onClick={onReturnHome} title="Return Home"
-          onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
-          onMouseOut={e => e.currentTarget.style.filter = 'none'}
-        >
-          <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {battleTimer != null && (
+            <div style={{
+              ...hud.timerPill,
+              color: battleTimer <= 30 ? '#ff4444' : '#7df4ff',
+              borderColor: battleTimer <= 30 ? 'rgba(255,68,68,0.55)' : 'rgba(40,130,195,0.55)',
+            }}>
+              {Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}
+            </div>
+          )}
+          <button style={hud.homeBtn} onClick={onSurrender} title="Surrender"
+            onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
+            onMouseOut={e => e.currentTarget.style.filter = 'none'}
+          >
+            <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
+          </button>
+        </div>
       </div>
 
       {/* Ships with troops - Bottom Left */}
@@ -257,7 +268,7 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog }) {
   const { sendToGodot, setFuturesOpen } = useSend();
-  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties } = useUI();
+  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
   const [showReinforce, setShowReinforce] = useState(false);
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
@@ -292,6 +303,7 @@ function ActionButtons({ onOpenBattleLog }) {
     return count;
   }, [buildingDefs, resources]);
 
+  const [showSurrender, setShowSurrender] = useState(false);
   const handleReturnHome  = useCallback(() => sendToGodot('return_home'),     [sendToGodot]);
   const handleFindEnemy   = useCallback(() => sendToGodot('find_enemy'),       [sendToGodot]);
   const handleOpenShop    = useCallback(() => sendToGodot('open_shop'),        [sendToGodot]);
@@ -309,15 +321,45 @@ function ActionButtons({ onOpenBattleLog }) {
       return <ReplayHUD onReturnHome={handleReturnHome} />;
     }
     return (
+      <>
       <AttackHUD
         onReturnHome={handleReturnHome}
+        onSurrender={() => setShowSurrender(true)}
         onCannon={handleShipCannon}
         cannonMode={cannonMode}
         selectedTroopIdx={selectedTroopIdx ?? 0}
         onSelectTroop={handleSelectTroop}
         cannonEnergy={cannonEnergy}
         fleetInfo={fleetInfo}
+        battleTimer={battleTimer}
       />
+      {showSurrender && (
+        <div style={rf.overlay} onClick={() => setShowSurrender(false)}>
+          <div style={{...rf.panel, width: 360}} onClick={e => e.stopPropagation()}>
+            <div style={rf.header}>
+              <span style={rf.title}>Surrender?</span>
+              <button style={rf.closeBtn} onClick={() => setShowSurrender(false)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={rf.body}>
+              <div style={{fontSize: 42, textAlign: 'center'}}>🏳️</div>
+              <div style={{fontSize: 15, fontWeight: 800, color: '#5C3A21', textAlign: 'center', lineHeight: 1.5}}>
+                You will lose <span style={{color: '#E53935'}}>trophies</span> and retreat from battle. Dead troops will need reinforcing.
+              </div>
+              <div style={{display: 'flex', gap: 10, width: '100%'}}>
+                <button style={{...rf.confirmBtn, background: 'linear-gradient(180deg, #9E9E9E 0%, #616161 100%)', border: '3px solid #424242', flex: 1}} onClick={() => setShowSurrender(false)}>
+                  CANCEL
+                </button>
+                <button style={{...rf.confirmBtn, background: 'linear-gradient(180deg, #E53935 0%, #B71C1C 100%)', border: '3px solid #7f0000', flex: 1}} onClick={() => { setShowSurrender(false); handleReturnHome(); }}>
+                  SURRENDER
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      </>
     );
   }
 
@@ -519,6 +561,15 @@ const hud = {
     right: 20,
     pointerEvents: 'all',
     zIndex: 10,
+  },
+  timerPill: {
+    padding: '8px 16px',
+    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
+    border: '2px solid rgba(40,130,195,0.55)',
+    borderRadius: 10,
+    fontSize: 20, fontWeight: 900,
+    letterSpacing: '1px',
+    textShadow: '0 0 8px rgba(60,220,255,0.5)',
   },
   homeBtn: {
     width: 56, height: 56,
