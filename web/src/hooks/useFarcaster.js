@@ -11,11 +11,10 @@ export function isFarcasterFrame() {
   }
 }
 
-// Start SDK init immediately on module load
+// Start SDK init immediately on module load (but don't call ready() yet)
 if (isFarcasterFrame()) {
-  initPromise = import('@farcaster/miniapp-sdk').then(async (mod) => {
+  initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
     sdkInstance = mod.sdk;
-    await mod.sdk.actions.ready();
     return mod.sdk;
   }).catch(() => null);
 }
@@ -49,6 +48,9 @@ export function useFarcaster() {
           });
         }
       } catch {}
+
+      // Tell Farcaster the app is ready — hides their splash screen
+      try { await sdk.actions.ready(); } catch {}
 
       setLoading(false);
     }).catch(() => { if (!cancelled) setLoading(false); });
