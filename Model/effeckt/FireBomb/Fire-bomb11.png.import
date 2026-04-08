@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dd7heqryvak8"
-path="res://.godot/imported/Fire-bomb7.png-640e9cde1b1c97d398010105bb562eda.ctex"
+uid="uid://cgkj4kdb4r04k"
+path="res://.godot/imported/Fire-bomb11.png-49616a5f04d9fcdd70ad770ee08a0415.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://Model/FireBomb/Fire-bomb7.png"
-dest_files=["res://.godot/imported/Fire-bomb7.png-640e9cde1b1c97d398010105bb562eda.ctex"]
+source_file="res://Model/effeckt/FireBomb/Fire-bomb11.png"
+dest_files=["res://.godot/imported/Fire-bomb11.png-49616a5f04d9fcdd70ad770ee08a0415.ctex"]
 
 [params]
 

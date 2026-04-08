@@ -2748,37 +2748,53 @@ func remove_building(b: Dictionary) -> void:
 	if is_instance_valid(icon):
 		icon.queue_free()
 	if is_instance_valid(b.node):
-		# Fire bomb explosion on destruction
-		BaseTroop._preload_fire_bomb()
-		if not BaseTroop._fire_bomb_textures.is_empty():
-			var explosion: MeshInstance3D = MeshInstance3D.new()
-			var quad: QuadMesh = QuadMesh.new()
-			quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
-			explosion.mesh = quad
-			var mat: StandardMaterial3D = StandardMaterial3D.new()
-			mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-			mat.no_depth_test = true
-			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-			mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
-			explosion.material_override = mat
-			get_tree().current_scene.add_child(explosion)
-			explosion.global_position = b.node.global_position + Vector3(0, 0.15, 0)
-			var frames: Array = BaseTroop._fire_bomb_textures
-			var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
-			var tw: Tween = create_tween()
-			for fi in range(frames.size()):
-				var idx2: int = fi
-				tw.tween_callback(func():
-					if is_instance_valid(explosion):
-						(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
-				).set_delay(frame_dur if fi > 0 else 0.0)
-			tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
-			tw.chain().tween_callback(explosion.queue_free)
-		# Swap the 3D model with BrokenModel — keep the outline
-		_replace_with_ruins(b.node)
+		# Find the GLB model child to swell before explosion
+		var model_child: Node3D = null
+		for child in b.node.get_children():
+			if child is Node3D and not (child is MeshInstance3D and child.material_override is ShaderMaterial) and not (child is OmniLight3D) and not (child is AnimationPlayer):
+				model_child = child
+				break
+		# Swell 5% → explosion → swap to ruins (all chained, no await)
+		var bnode_ref: Node3D = b.node
+		var swell_tw: Tween = create_tween()
+		if model_child and is_instance_valid(model_child):
+			var big_scale: Vector3 = model_child.scale * 1.05
+			swell_tw.tween_property(model_child, "scale", big_scale, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		swell_tw.tween_callback(func():
+			if not is_instance_valid(bnode_ref):
+				return
+			# Fire bomb explosion
+			BaseTroop._preload_fire_bomb()
+			if not BaseTroop._fire_bomb_textures.is_empty():
+				var explosion: MeshInstance3D = MeshInstance3D.new()
+				var quad: QuadMesh = QuadMesh.new()
+				quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
+				explosion.mesh = quad
+				var mat: StandardMaterial3D = StandardMaterial3D.new()
+				mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+				mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+				mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+				mat.no_depth_test = true
+				mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+				mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
+				explosion.material_override = mat
+				get_tree().current_scene.add_child(explosion)
+				explosion.global_position = bnode_ref.global_position + Vector3(0, 0.15, 0)
+				var frames: Array = BaseTroop._fire_bomb_textures
+				var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
+				var tw: Tween = create_tween()
+				for fi in range(frames.size()):
+					var idx2: int = fi
+					tw.tween_callback(func():
+						if is_instance_valid(explosion):
+							(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
+					).set_delay(frame_dur if fi > 0 else 0.0)
+				tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
+				tw.chain().tween_callback(explosion.queue_free)
+			# Swap model with ruins
+			_replace_with_ruins(bnode_ref)
+		)
 	placed_buildings.remove_at(idx)
 	_deselect_building()
 
@@ -3003,6 +3019,7 @@ func _replace_with_ruins(node: Node3D) -> void:
 	var ruins_model: Node3D = _ruins_res.instantiate()
 	var s: float = RUINS_SCALE
 	ruins_model.scale = Vector3(s, s, s)
+	ruins_model.position.y = 0.07
 	node.add_child(ruins_model)
 	node.set_meta("is_ruins", true)
 	# Pop-in animation
@@ -3017,15 +3034,6 @@ func _flash_building_hit(b: Dictionary) -> void:
 	if not is_instance_valid(node):
 		return
 	b["_flashing"] = true
-	# Light flash
-	var light: OmniLight3D = OmniLight3D.new()
-	light.light_color = Color(1.0, 1.0, 1.0)
-	light.light_energy = 0.25
-	light.omni_range = 0.25
-	light.omni_attenuation = 0.5
-	light.shadow_enabled = false
-	node.add_child(light)
-	light.position = Vector3(0, 0.15, 0)
 	# Wobble — push away from nearest attacker then snap back
 	var push_dir: Vector3 = Vector3.ZERO
 	var bpos: Vector3 = node.global_position
@@ -3053,10 +3061,7 @@ func _flash_building_hit(b: Dictionary) -> void:
 		var wobble_pos: Vector3 = original_pos + Vector3(push_dir.x * 0.006, 0, push_dir.z * 0.006)
 		tw.tween_property(model_node, "position", wobble_pos, 0.04).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tw.tween_property(model_node, "position", original_pos, 0.08).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.parallel().tween_property(light, "light_energy", 0.0, 0.05)
 	tw.tween_callback(func():
-		if is_instance_valid(light):
-			light.queue_free()
 		b["_flashing"] = false
 	)
 
