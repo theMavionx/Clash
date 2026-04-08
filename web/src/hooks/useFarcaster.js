@@ -7,7 +7,7 @@ let detectedInMiniApp = false;
 // Always try to init SDK — use official isInMiniApp() detection
 initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
   const hasOfficialDetect = typeof mod.isInMiniApp === 'function';
-  const inApp = hasOfficialDetect ? mod.isInMiniApp() : _fallbackDetect();
+  const inApp = hasOfficialDetect ? mod.isInMiniApp() : isFarcasterFrame();
   _log('info', `SDK loaded. isInMiniApp=${inApp} (official=${hasOfficialDetect})`);
   if (!inApp) return null;
   detectedInMiniApp = true;
@@ -15,7 +15,8 @@ initPromise = import('@farcaster/miniapp-sdk').then((mod) => {
   return mod.sdk;
 }).catch((err) => { _log('error', `SDK import failed: ${err}`); return null; });
 
-function _fallbackDetect() {
+export function isFarcasterFrame() {
+  if (detectedInMiniApp) return true;
   try { return window !== window.parent; } catch { return true; }
 }
 
