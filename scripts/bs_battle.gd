@@ -570,6 +570,9 @@ func _on_town_hall_destroyed() -> void:
 					"error": result.get("error", "") + " " + result.get("reason", ""),
 				})
 			return
+		# Apply authoritative post-casualty ship state from server
+		if result.has("ships"):
+			bs._apply_ships_from_server(result.get("ships", []))
 		var loot: Dictionary = result.get("loot", {})
 		if bridge:
 			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
@@ -802,7 +805,11 @@ func check_defeat(delta: float) -> void:
 		for t_name in ship.get("troops", []):
 			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
 	if net_def and net_def.has_token() and def_id != "":
-		await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
+		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
+		if not is_instance_valid(bs): return
+		# Apply authoritative post-casualty ship state from server
+		if defeat_result is Dictionary and defeat_result.has("ships"):
+			bs._apply_ships_from_server(defeat_result.get("ships", []))
 	if not is_instance_valid(bs): return
 	var bridge_def: Node = bs._bridge
 	if bridge_def:

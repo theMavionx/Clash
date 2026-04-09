@@ -1421,7 +1421,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		if building_type == "port" and b.get("has_ship", 0) == 1:
 			_spawn_port_ship(b_data)
 			owned_ships += 1
-			# Restore ship_troops from server
+			# Restore ship_troops from server — unconditional so empty arrays
+			# correctly clear stale meta from previous sessions.
 			var server_troops = b.get("ship_troops", [])
 			if server_troops is String:
 				var json = JSON.new()
@@ -1429,7 +1430,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					server_troops = json.data
 				else:
 					server_troops = []
-			if server_troops.size() > 0 and is_instance_valid(b_data.get("node")):
+			if is_instance_valid(b_data.get("node")):
 				b_data.node.set_meta("ship_troops", server_troops)
 	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
 	_sync_react_buildings()
@@ -3403,6 +3404,23 @@ func _on_troop_died(troop_name: String) -> void:
 	if net and net.has_token():
 		net.report_troop_death(troop_name)
 
+
+## Applies authoritative ship_troops data returned by the server (e.g. from
+## /attack/result) to the local port metas across all building systems.
+## Accepts an Array of {id, ship_troops, ship_troops_template, level}.
+func _apply_ships_from_server(ships: Array) -> void:
+	if ships == null or ships.is_empty():
+		return
+	for ship_data in ships:
+		var sid: int = ship_data.get("id", -1)
+		var server_troops: Array = ship_data.get("ship_troops", [])
+		for bs_node in _building_systems:
+			for b in bs_node.placed_buildings:
+				if b.get("server_id") == sid and b.get("id") == "port":
+					var pnode = b.get("node")
+					if is_instance_valid(pnode):
+						pnode.set_meta("ship_troops", server_troops)
+
 func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
 	_port._swap_troop_on_ship(slot, troop_name)
 
@@ -3870,51 +3888,36 @@ func _on_attack_pressed() -> void:
 		attack_system.enter_attack_mode(await _build_fleet())
 
 
+## Refreshes ship_troops meta on all ports from the authoritative server state.
+## Called before assembling the fleet so the client and server agree on loadouts.
+func _refresh_port_ship_meta_from_server() -> void:
+	var net: Node = _net
+	if not net or not net.has_token():
+		return
+	var result = await net.get_ships()
+	if not is_instance_valid(self):
+		return
+	if not (result is Dictionary) or not result.has("ships"):
+		return
+	for ship_data in result.ships:
+		var sid: int = ship_data.get("id", -1)
+		var server_troops: Array = ship_data.get("ship_troops", [])
+		for bs_node in _building_systems:
+			for b in bs_node.placed_buildings:
+				if b.get("server_id") == sid and b.get("id") == "port":
+					var pnode = b.get("node")
+					if is_instance_valid(pnode):
+						pnode.set_meta("ship_troops", server_troops)
+
+
 ## Builds the fleet array from all port ships for the attack system.
 ## Returns [{level: int, troops: [String]}] — one entry per ship with troops.
-## Auto-fill empty ship slots with available troop types (round-robin).
-## Called before building fleet so ships go into battle fully loaded.
-func _auto_fill_ships() -> void:
-	# Collect available troop types (level > 0) sorted by level desc
-	var available: Array = []
-	for troop_name in ["Knight", "Barbarian", "Mage", "Archer", "Ranger"]:
-		if troop_levels.get(troop_name, 0) >= 1:
-			available.append(troop_name)
-	if available.is_empty():
-		return
-	var idx: int = 0
-	for bs_node in _building_systems:
-		for b in bs_node.placed_buildings:
-			if b.get("id") != "port":
-				continue
-			var pnode = b.get("node", null)
-			if not is_instance_valid(pnode) or not pnode.has_meta("has_ship"):
-				continue
-			var ship_level: int = pnode.get_meta("ship_level", 1)
-			var ship_troops: Array = pnode.get_meta("ship_troops", []).duplicate()
-			while ship_troops.size() < ship_level:
-				ship_troops.append(available[idx % available.size()])
-				idx += 1
-			pnode.set_meta("ship_troops", ship_troops)
-
-
+## NOTE: Fleet contains ONLY purchased troops. Empty ships are excluded.
+## The previous auto-fill behaviour was a desync/cheat source — see code review.
 func _build_fleet() -> Array:
-	# Sync ship troops from server before building fleet
-	var net: Node = _net
-	if net and net.has_token():
-		var result = await net.get_ships()
-		if not is_instance_valid(self): return []
-		if result is Dictionary and result.has("ships"):
-			for ship_data in result.ships:
-				var sid: int = ship_data.get("id", -1)
-				var server_troops: Array = ship_data.get("ship_troops", [])
-				for bs_node in _building_systems:
-					for b in bs_node.placed_buildings:
-						if b.get("server_id") == sid and b.get("id") == "port":
-							var pnode = b.get("node")
-							if is_instance_valid(pnode):
-								pnode.set_meta("ship_troops", server_troops)
-	_auto_fill_ships()
+	await _refresh_port_ship_meta_from_server()
+	if not is_instance_valid(self):
+		return []
 	var fleet: Array = []
 	for bs_node in _building_systems:
 		for b in bs_node.placed_buildings:

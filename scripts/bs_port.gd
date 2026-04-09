@@ -77,17 +77,16 @@ func _buy_ship_level(ship_lvl: int) -> void:
 # Troop loading
 # ---------------------------------------------------------------------------
 
-## Loads a named troop into the ship docked at the currently selected port,
-## up to the ship's capacity (equal to its level).
+## Loads a named troop into the ship docked at the currently selected port.
+## The capacity check is deferred to the server — local meta may be stale
+## (e.g. post-battle casualties not yet synced), so we always round-trip.
 func _load_troop_to_ship(troop_name: String) -> void:
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return
 	var ship_level: int = port_node.get_meta("ship_level", 1)
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
-	if ship_troops.size() >= ship_level:
-		return
-	# Ask server first
+	# Ask server first — server is authoritative on capacity.
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
@@ -101,6 +100,9 @@ func _load_troop_to_ship(troop_name: String) -> void:
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
+		# Offline fallback only — keep the local capacity check.
+		if ship_troops.size() >= ship_level:
+			return
 		ship_troops.append(troop_name)
 		port_node.set_meta("ship_troops", ship_troops)
 	bs._refresh_port_panel()

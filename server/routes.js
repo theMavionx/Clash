@@ -250,6 +250,25 @@ function _applyCasualties(playerId, casualties) {
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(filtered), port.id);
     }
   }
+
+  // Defensive log: if any casualties weren't applied, /troop-died removed them first,
+  // or client's dict diverged from server state — worth noticing.
+  const leftover = Object.entries(remaining).filter(([, c]) => c > 0);
+  if (leftover.length > 0) {
+    console.log(`[CASUALTIES] Player ${playerId} had ${leftover.length} casualty types not applied (already removed or desync):`, leftover);
+  }
+}
+
+// Returns current ship_troops for all ports as [{id, level, ship_troops, ship_troops_template}].
+// Used to push the authoritative post-battle state back to the client in /attack/result response.
+function _getShipsPayload(playerId) {
+  const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(playerId, 'port');
+  return ports.filter(p => p.has_ship).map(p => ({
+    id: p.id,
+    level: p.level,
+    ship_troops: JSON.parse(p.ship_troops || '[]'),
+    ship_troops_template: JSON.parse(p.ship_troops_template || '[]'),
+  }));
 }
 
 router.post('/attack/result', auth, (req, res) => {
@@ -330,7 +349,8 @@ router.post('/attack/result', auth, (req, res) => {
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', verification.reason, battleResult.loot, verification);
     // Remove casualties from attacker's ships
     _applyCasualties(req.player.id, req.body.casualties);
-    return res.json(battleResult);
+    // Return authoritative post-casualty ship state so client can sync immediately
+    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id) });
   }
 
   // Defeat — attacker loses trophies, defender gains
@@ -340,7 +360,12 @@ router.post('/attack/result', auth, (req, res) => {
   // Remove casualties from attacker's ships
   _applyCasualties(req.player.id, req.body.casualties);
 
-  res.json({ success: true, loot: { gold: 0, wood: 0, ore: 0 }, trophies: defeatResult.attackerTrophies });
+  res.json({
+    success: true,
+    loot: { gold: 0, wood: 0, ore: 0 },
+    trophies: defeatResult.attackerTrophies,
+    ships: _getShipsPayload(req.player.id),
+  });
 });
 
 // ==================== TROOPS ====================
@@ -508,7 +533,9 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
     db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
     shipTroops[slot] = troop_name;
     const troopsJson = JSON.stringify(shipTroops);
-    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
+    // Update ship_troops only — template stays as the last full loadout so /reinforce
+    // can still restore the original slot count after casualties.
+    db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
     return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level, resources: updated };
