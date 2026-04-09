@@ -8,6 +8,8 @@ extends Node3D
 # ── Camera Settings ──────────────────────────────────────────────
 ## How fast the camera pans when dragging (scaled by zoom level)
 @export var pan_speed: float = 0.010
+## Touch pan speed (faster than mouse — fingers move further)
+@export var touch_pan_speed: float = 0.025
 ## How fast the camera moves with WASD keys
 @export var key_pan_speed: float = 3.0
 ## How fast the camera zooms with scroll wheel
@@ -17,7 +19,13 @@ extends Node3D
 ## Maximum distance from pivot (farthest zoom)
 @export var max_zoom: float = 5
 ## Pinch zoom speed multiplier (touch)
-@export var pinch_zoom_speed: float = 0.015
+@export var pinch_zoom_speed: float = 0.025
+## Pixels of movement before a touch is treated as a drag (not a tap)
+@export var tap_threshold: float = 12.0
+## Edge-pan speed when dragging building near screen edge (world units/sec)
+@export var edge_pan_speed: float = 4.0
+## Percentage of screen edge that triggers edge-pan (0.12 = 12%)
+@export var edge_zone_pct: float = 0.12
 ## Smooth interpolation factor (higher = snappier)
 @export var smoothing: float = 6.0
 
@@ -40,7 +48,9 @@ var _is_panning: bool = false
 var zoom_blocked: bool = false
 
 # ── Touch state ──────────────────────────────────────────────────
-var _touch_points: Dictionary = {}  # touch_index -> Vector2 position
+var _touch_points: Dictionary = {}      # touch_index -> Vector2 current position
+var _touch_start: Dictionary = {}        # touch_index -> Vector2 start position
+var _is_dragging_touch: bool = false     # exceeded tap_threshold this gesture
 var _last_pinch_distance: float = 0.0
 
 var _shake_trauma: float = 0.0
@@ -70,15 +80,20 @@ func _ready() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	var bs_busy: bool = _is_building_system_busy()
+
 	# ── Mouse Button Events ──────────────────────────────────────
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 
-		# Left click → start/stop panning
+		# Left click → start/stop panning (disabled while placing/moving a building)
 		if mb.button_index == MOUSE_BUTTON_LEFT:
-			_is_panning = mb.pressed
+			if bs_busy:
+				_is_panning = false
+			else:
+				_is_panning = mb.pressed
 
-		# Scroll wheel → zoom in/out
+		# Scroll wheel → zoom in/out (always allowed)
 		if mb.pressed and not zoom_blocked:
 			if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 				_target_zoom = maxf(_target_zoom - zoom_speed, min_zoom)
@@ -86,7 +101,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_target_zoom = minf(_target_zoom + zoom_speed, max_zoom)
 
 	# ── Mouse Motion → Pan ───────────────────────────────────────
-	if event is InputEventMouseMotion and _is_panning:
+	# Block mouse pan completely while placing/moving — also blocks emulated-from-touch.
+	if event is InputEventMouseMotion and _is_panning and not bs_busy:
 		var motion := event as InputEventMouseMotion
 		var delta := motion.relative
 
@@ -101,30 +117,28 @@ func _unhandled_input(event: InputEvent) -> void:
 
 		_target_position.y = 0.0
 
-	# ── Touch events (mobile) ────────────────────────────────────
+	# ── Touch tracking (always — needed for edge-pan + pinch) ────
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		if st.pressed:
 			_touch_points[st.index] = st.position
+			_touch_start[st.index] = st.position
 		else:
 			_touch_points.erase(st.index)
-			if _touch_points.size() < 2:
+			_touch_start.erase(st.index)
+			if _touch_points.is_empty():
+				_is_dragging_touch = false
+				_last_pinch_distance = 0.0
+			elif _touch_points.size() < 2:
 				_last_pinch_distance = 0.0
 
 	if event is InputEventScreenDrag:
 		var sd := event as InputEventScreenDrag
 		_touch_points[sd.index] = sd.position
 
-		if _touch_points.size() == 1:
-			# Single finger → pan
-			var right := Vector3(1.0, 0.0, 0.0)
-			var forward := Vector3(0.0, 0.0, 1.0)
-			var zoom_factor := _current_zoom * 0.2
-			_target_position -= right * sd.relative.x * pan_speed * zoom_factor
-			_target_position -= forward * sd.relative.y * pan_speed * zoom_factor
-			_target_position.y = 0.0
-		elif _touch_points.size() >= 2 and not zoom_blocked:
-			# Two fingers → pinch zoom
+		# Pinch-to-zoom always works (even during placement so player can zoom out)
+		if _touch_points.size() >= 2 and not zoom_blocked:
+			_is_dragging_touch = true
 			var points := _touch_points.values()
 			var p0: Vector2 = points[0]
 			var p1: Vector2 = points[1]
@@ -133,6 +147,28 @@ func _unhandled_input(event: InputEvent) -> void:
 				var diff: float = _last_pinch_distance - dist
 				_target_zoom = clampf(_target_zoom + diff * pinch_zoom_speed, min_zoom, max_zoom)
 			_last_pinch_distance = dist
+			get_viewport().set_input_as_handled()
+
+
+## Returns true if building system is currently placing or moving a building.
+## When busy, camera should NOT pan/zoom — let the placement system own touches.
+func _is_building_system_busy() -> bool:
+	var bs = get_node_or_null("/root/Main/BuildingSystem")
+	if not bs:
+		# Try alternative paths — building system might be a child node
+		var roots = get_tree().root.get_children()
+		for r in roots:
+			var found = r.find_child("BuildingSystem", true, false)
+			if found:
+				bs = found
+				break
+	if not bs:
+		return false
+	if "is_placing" in bs and bs.is_placing:
+		return true
+	if "_is_moving" in bs and bs._is_moving:
+		return true
+	return false
 
 
 func _process(delta_raw: float) -> void:
@@ -151,6 +187,28 @@ func _process(delta_raw: float) -> void:
 		var speed = key_pan_speed * _current_zoom * 0.2 * delta
 		_target_position += move_dir.normalized() * speed
 		_target_position.y = 0.0
+
+	# ── Edge-pan when dragging building near screen edge ─────────
+	if _is_building_system_busy() and _touch_points.size() == 1:
+		var screen_size: Vector2 = get_viewport().get_visible_rect().size
+		var finger_pos: Vector2 = _touch_points.values()[0]
+		var edge_x: float = screen_size.x * edge_zone_pct
+		var edge_y: float = screen_size.y * edge_zone_pct
+		var edge_dir := Vector3.ZERO
+		# Horizontal edges
+		if finger_pos.x < edge_x:
+			edge_dir.x = -((edge_x - finger_pos.x) / edge_x)  # 0 at boundary, -1 at screen edge
+		elif finger_pos.x > screen_size.x - edge_x:
+			edge_dir.x = ((finger_pos.x - (screen_size.x - edge_x)) / edge_x)
+		# Vertical edges
+		if finger_pos.y < edge_y:
+			edge_dir.z = -((edge_y - finger_pos.y) / edge_y)
+		elif finger_pos.y > screen_size.y - edge_y:
+			edge_dir.z = ((finger_pos.y - (screen_size.y - edge_y)) / edge_y)
+		if edge_dir != Vector3.ZERO:
+			var zoom_factor: float = _current_zoom * 0.2
+			_target_position += edge_dir * edge_pan_speed * zoom_factor * delta
+			_target_position.y = 0.0
 
 	# ── Q/E zoom ─────────────────────────────────────────────────
 	if Input.is_key_pressed(KEY_E):
