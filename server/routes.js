@@ -362,6 +362,27 @@ router.post('/troops/:type/upgrade', auth, (req, res) => {
 
 // Find enemy with closest trophies
 router.get('/find-enemy', auth, (req, res) => {
+  // Pre-flight: player must have a port with a ship loaded with troops
+  const buildings = db.getPlayerBuildings(req.player.id);
+  const ports = buildings.filter(b => b.type === 'port');
+  if (ports.length === 0) {
+    return res.status(400).json({ error: 'You need a Port to attack. Build one first.' });
+  }
+  const portsWithShips = ports.filter(p => p.has_ship === 1);
+  if (portsWithShips.length === 0) {
+    return res.status(400).json({ error: 'You need a Ship to attack. Buy one at your Port.' });
+  }
+  let totalTroopsLoaded = 0;
+  for (const p of portsWithShips) {
+    try {
+      const troops = JSON.parse(p.ship_troops || '[]');
+      totalTroopsLoaded += troops.length;
+    } catch {}
+  }
+  if (totalTroopsLoaded === 0) {
+    return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barracks first.' });
+  }
+
   const result = db.findEnemy(req.player.id);
   if (result.error) return res.status(404).json(result);
   res.json(result);

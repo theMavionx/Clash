@@ -145,11 +145,12 @@ func _on_find_pressed() -> void:
 		bs.find_button.disabled = false
 		bs.find_button.text = "Find Enemy"
 	if result.has("error"):
-		print("No enemy found: ", result.error)
+		print("Find enemy error: ", result.error)
 		cloud.reveal()
 		await cloud.reveal_finished
 		if bridge2:
 			bridge2.send_to_react("cloud_transition", {"visible": false})
+			bridge2.send_to_react("error", {"message": result.error})
 		_restore_ships_and_troops()
 		return
 	enemy_info = result

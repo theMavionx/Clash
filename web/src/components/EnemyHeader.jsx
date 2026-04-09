@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef } from 'react';
+import { memo } from 'react';
 import { useUI } from '../hooks/useGodot';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -8,34 +8,6 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function formatTime(sec) {
-  const m = Math.floor(Math.abs(sec) / 60);
-  const s = Math.floor(Math.abs(sec) % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function BattleTimer() {
-  const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
-
-  useEffect(() => {
-    startRef.current = Date.now();
-    setElapsed(0);
-    const id = setInterval(() => {
-      setElapsed((Date.now() - startRef.current) / 1000);
-    }, 250);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <div style={timerStyles.wrap}>
-      <div style={timerStyles.box}>
-        <span style={timerStyles.text}>{formatTime(elapsed)}</span>
-      </div>
-    </div>
-  );
-}
-
 function EnemyHeader() {
   const { enemyMode } = useUI();
 
@@ -43,7 +15,6 @@ function EnemyHeader() {
 
   return (
     <div style={styles.container}>
-      <BattleTimer />
       {/* Player Header - Styled like PlayerInfo */}
       <div style={styles.headerWrap}>
         <div style={styles.levelCircleContainer}>
@@ -151,8 +122,7 @@ const styles = {
     color: '#fff',
     fontSize: 28,
     fontWeight: 900,
-    WebkitTextStroke: '2px #0a0a0a',
-    textShadow: '0 2px 2px rgba(0,0,0,1)',
+    textShadow: '-2px -2px 0 #0a0a0a, 2px -2px 0 #0a0a0a, -2px 2px 0 #0a0a0a, 2px 2px 0 #0a0a0a, 0 2px 2px rgba(0,0,0,1)',
     zIndex: 2,
     transform: 'translateY(-1px)',
     letterSpacing: '-1px',
@@ -167,8 +137,7 @@ const styles = {
     color: '#fff',
     fontSize: 20,
     fontWeight: 900,
-    WebkitTextStroke: '1px #1a1a1a',
-    textShadow: '0 2px 2px rgba(0,0,0,0.8)',
+    textShadow: '-1px -1px 0 #1a1a1a, 1px -1px 0 #1a1a1a, -1px 1px 0 #1a1a1a, 1px 1px 0 #1a1a1a, 0 2px 2px rgba(0,0,0,0.8)',
     marginLeft: 4,
     letterSpacing: '0.5px',
   },
@@ -216,8 +185,7 @@ const styles = {
     fontSize: 14,
     fontWeight: 900,
     color: '#fff',
-    WebkitTextStroke: '1px #000',
-    textShadow: '0 1px 1px rgba(0,0,0,1)',
+    textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 1px 1px rgba(0,0,0,1)',
     letterSpacing: '0.5px',
     width: '100%',
     textAlign: 'center',
@@ -257,32 +225,6 @@ const styles = {
     fontWeight: 900,
     color: '#fff',
     textShadow: textOutline,
-  },
-};
-
-const timerStyles = {
-  wrap: {
-    position: 'fixed',
-    top: 16,
-    left: '50%',
-    transform: 'translateX(-50%)',
-    zIndex: 100,
-    pointerEvents: 'none',
-  },
-  box: {
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
-    border: '2.5px solid rgba(40,130,195,0.55)',
-    borderRadius: 12,
-    padding: '8px 18px',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-  },
-  text: {
-    fontSize: 22,
-    fontWeight: 900,
-    color: '#fff',
-    fontFamily: 'monospace',
-    letterSpacing: '2px',
-    textShadow: '0 2px 4px rgba(0,0,0,0.8)',
   },
 };
 
