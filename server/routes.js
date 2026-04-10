@@ -65,6 +65,7 @@ router.post('/players/register', (req, res) => {
     db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
   }
   const state = db.getFullPlayerState(result.id);
+  logAuth('Player registered', { name: finalName, wallet: wallet || null });
   res.json({ ...state, token: result.token });
 });
 
@@ -168,6 +169,7 @@ router.post('/buildings/:id/collect', auth, (req, res) => {
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const result = db.collectResources(req.player.id, buildingId);
   if (result.error) return res.status(400).json(result);
+  if (result.collected > 0) logEconomy('collect', { player: req.player.id, resource: result.resource, amount: result.collected });
   res.json(result);
 });
 
@@ -325,6 +327,13 @@ router.post('/attack/result', auth, (req, res) => {
     serverTroopLevels,
   });
 
+  logBattle(`${claimedResult} ${verification.valid ? 'ACCEPTED' : 'REJECTED'}`, {
+    attacker: req.player.id, defender: defender_id,
+    reason: verification.reason,
+    thHp: Math.round((verification.townHallHpPct || 0) * 100) + '%',
+    ships: gameActions.filter(a => a.type === 'place_ship').length,
+    destroyed: verification.buildingsDestroyed,
+  });
   console.log(`[BATTLE] ${claimedResult} by ${req.player.id} vs ${defender_id}: ${verification.reason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
   console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
   console.log(`[BATTLE] Actions:`, JSON.stringify(gameActions.filter(a => a.type === 'place_ship').map(a => ({t: a.t, troops: a.troops, troopType: a.troopType, x: a.x?.toFixed(2), z: a.z?.toFixed(2)}))));
@@ -386,6 +395,7 @@ router.post('/troops/:type/upgrade', auth, (req, res) => {
   const { type } = req.params;
   const result = db.upgradeTroop(req.player.id, type);
   if (result.error) return res.status(400).json(result);
+  logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
   res.json(result);
 });
 
@@ -415,7 +425,8 @@ router.get('/find-enemy', auth, (req, res) => {
   }
 
   const result = db.findEnemy(req.player.id);
-  if (result.error) return res.status(404).json(result);
+  if (result.error) { logBattle('find_enemy failed', { player: req.player.id, error: result.error }); return res.status(404).json(result); }
+  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name });
   res.json(result);
 });
 
@@ -658,8 +669,10 @@ router.post('/reinforce', auth, (req, res) => {
 
   try {
     const result = txn();
+    if (result.restored > 0) logEconomy('reinforce', { player: req.player.id, restored: result.restored, cost: result.cost });
     res.json({ success: true, ...result });
   } catch (e) {
+    logError('reinforce failed', { player: req.player.id, error: e.error || e.message });
     res.status(e.status || 500).json({ error: e.error || 'Server error' });
   }
 });
@@ -1063,6 +1076,51 @@ router.post('/admin/players/:name/add-resources', adminAuth, (req, res) => {
   res.json({ success: true, resources: db.getResources(player.id) });
 });
 
+// Server logs — in-memory ring buffer
+const LOG_MAX = 500;
+const _serverLogs = [];
+function addLog(type, message, data = null) {
+  _serverLogs.push({ ts: new Date().toISOString(), type, message, data });
+  if (_serverLogs.length > LOG_MAX) _serverLogs.shift();
+}
+
+// Expose log function for use in other handlers
+function logBattle(msg, data) { addLog('battle', msg, data); }
+function logEconomy(msg, data) { addLog('economy', msg, data); }
+function logAuth(msg, data) { addLog('auth', msg, data); }
+function logError(msg, data) { addLog('error', msg, data); }
+
+// Get server logs
+router.get('/admin/logs', adminAuth, (req, res) => {
+  const type = req.query.type;
+  const limit = Math.min(parseInt(req.query.limit) || 100, LOG_MAX);
+  let logs = type ? _serverLogs.filter(l => l.type === type) : _serverLogs;
+  res.json(logs.slice(-limit));
+});
+
+// Server stats
+router.get('/admin/stats', adminAuth, (req, res) => {
+  const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players').get().c;
+  const buildingCount = db.db.prepare('SELECT COUNT(*) as c FROM buildings').get().c;
+  const replayCount = db.db.prepare('SELECT COUNT(*) as c FROM battle_replays').get().c;
+  const accepted = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE verified_result='accepted'").get().c;
+  const rejected = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE verified_result='rejected'").get().c;
+  const totalGold = db.db.prepare('SELECT SUM(gold) as s FROM players').get().s || 0;
+  const totalWood = db.db.prepare('SELECT SUM(wood) as s FROM players').get().s || 0;
+  const totalOre = db.db.prepare('SELECT SUM(ore) as s FROM players').get().s || 0;
+  const shielded = db.db.prepare("SELECT COUNT(*) as c FROM players WHERE shield_until > datetime('now')").get().c;
+  const recentBattles = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE created_at > datetime('now', '-1 hour')").get().c;
+  const topPlayers = db.db.prepare('SELECT name, trophies, gold, wood, ore FROM players ORDER BY trophies DESC LIMIT 5').all();
+  res.json({
+    players: playerCount, buildings: buildingCount, replays: replayCount,
+    accepted, rejected, shielded, recentBattles,
+    economy: { totalGold, totalWood, totalOre },
+    topPlayers,
+    uptime: Math.floor(process.uptime()),
+    memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
+  });
+});
+
 // Wipe entire database
 router.post('/admin/wipe', adminAuth, (req, res) => {
   db.db.prepare('DELETE FROM buildings').run();
@@ -1071,4 +1129,4 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
   res.json({ wiped: true });
 });
 
-module.exports = { router, auth };
+module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

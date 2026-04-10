@@ -239,6 +239,8 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="tabs">
     <div class="tab active" onclick="switchTab('players')">Players</div>
     <div class="tab" onclick="switchTab('replays')">Battle Replays</div>
+    <div class="tab" onclick="switchTab('logs')">Logs</div>
+    <div class="tab" onclick="switchTab('stats')">Stats</div>
   </div>
 
   <div class="panel active" id="tab-players">
@@ -246,6 +248,32 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>Name</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Buildings</th><th>Shield</th><th>Joined</th><th>Actions</th>
     </tr></thead><tbody id="playersBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-logs">
+    <div class="filter">
+      <span style="color:#9ca3af;font-size:13px">Type:</span>
+      <select id="logFilter" onchange="loadLogs()">
+        <option value="">All</option>
+        <option value="battle">Battle</option>
+        <option value="economy">Economy</option>
+        <option value="auth">Auth</option>
+        <option value="error">Error</option>
+      </select>
+      <button class="btn" onclick="loadLogs()">Refresh</button>
+      <span id="logCount" style="color:#6b7280;font-size:12px;margin-left:8px"></span>
+    </div>
+    <table><thead><tr>
+      <th>Time</th><th>Type</th><th>Message</th><th>Data</th>
+    </tr></thead><tbody id="logsBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-stats">
+    <div class="stats" id="serverStats"></div>
+    <h2 style="color:#f59e0b;font-size:18px;margin:20px 0 12px">Top Players</h2>
+    <table><thead><tr>
+      <th>Name</th><th>Trophies</th><th>Gold</th><th>Wood</th><th>Ore</th>
+    </tr></thead><tbody id="topPlayersBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-replays">
@@ -421,6 +449,54 @@ async function deletePlayer(name) {
   await fetch('/api/admin/players/' + encodeURIComponent(name), { method: 'DELETE', headers: { 'x-admin-key': KEY } });
   loadAll();
 }
+
+async function loadLogs() {
+  try {
+    const type = document.getElementById('logFilter').value;
+    const url = '/api/admin/logs?limit=200' + (type ? '&type=' + type : '');
+    const logs = await api(url.replace('/api', ''));
+    document.getElementById('logCount').textContent = logs.length + ' entries';
+    document.getElementById('logsBody').innerHTML = logs.reverse().map(l => {
+      const typeColor = l.type === 'error' ? '#fca5a5' : l.type === 'battle' ? '#93c5fd' : l.type === 'economy' ? '#34d399' : l.type === 'auth' ? '#c084fc' : '#9ca3af';
+      return '<tr>' +
+        '<td class="mono" style="white-space:nowrap">' + (l.ts||'').split('T')[1]?.split('.')[0] + '</td>' +
+        '<td><span class="badge" style="background:' + typeColor + '22;color:' + typeColor + '">' + l.type + '</span></td>' +
+        '<td>' + esc(l.message) + '</td>' +
+        '<td class="mono" style="max-width:300px;word-break:break-all;font-size:11px;color:#6b7280">' + (l.data ? esc(JSON.stringify(l.data)) : '') + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
+async function loadStats() {
+  try {
+    const s = await api('/admin/stats');
+    document.getElementById('serverStats').innerHTML =
+      '<div class="stat"><div class="v">' + s.players + '</div><div class="l">Players</div></div>' +
+      '<div class="stat"><div class="v">' + s.replays + '</div><div class="l">Replays</div></div>' +
+      '<div class="stat"><div class="v" style="color:#34d399">' + s.accepted + '</div><div class="l">Accepted</div></div>' +
+      '<div class="stat"><div class="v" style="color:#fca5a5">' + s.rejected + '</div><div class="l">Rejected</div></div>' +
+      '<div class="stat"><div class="v">' + s.recentBattles + '</div><div class="l">Battles/hr</div></div>' +
+      '<div class="stat"><div class="v">' + s.shielded + '</div><div class="l">Shielded</div></div>' +
+      '<div class="stat"><div class="v" style="color:#e8b830">' + Math.round(s.economy.totalGold/1000) + 'K</div><div class="l">Total Gold</div></div>' +
+      '<div class="stat"><div class="v" style="color:#6ab344">' + Math.round(s.economy.totalWood/1000) + 'K</div><div class="l">Total Wood</div></div>' +
+      '<div class="stat"><div class="v" style="color:#8a9aaa">' + Math.round(s.economy.totalOre/1000) + 'K</div><div class="l">Total Ore</div></div>' +
+      '<div class="stat"><div class="v">' + Math.floor(s.uptime/60) + 'm</div><div class="l">Uptime</div></div>' +
+      '<div class="stat"><div class="v">' + s.memory + 'MB</div><div class="l">Memory</div></div>';
+    document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
+      '<tr><td><strong>' + esc(p.name) + '</strong></td><td>' + p.trophies + '</td>' +
+      '<td style="color:#e8b830">' + p.gold + '</td><td style="color:#6ab344">' + p.wood + '</td><td style="color:#8a9aaa">' + p.ore + '</td></tr>'
+    ).join('');
+  } catch(e) { console.error(e); }
+}
+
+// Load logs/stats when switching to those tabs
+const origSwitch = switchTab;
+switchTab = function(name) {
+  origSwitch(name);
+  if (name === 'logs') loadLogs();
+  if (name === 'stats') loadStats();
+};
 
 // Auto-login if key saved
 if (KEY) { doLogin(); }
