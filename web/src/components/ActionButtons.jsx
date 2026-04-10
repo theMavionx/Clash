@@ -5,6 +5,7 @@ import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
+import shipImg from '../assets/buildings/shipsmall.png';
 
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
@@ -80,6 +81,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
   const { isMobile: mobile } = useLayout();
   const [perf, setPerf] = useState({ troop_counts: {} });
   const perfRef = useRef(perf);
+  const [expandedShip, setExpandedShip] = useState(null);
 
   useEffect(() => {
     const h = (e) => {
@@ -125,79 +127,88 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
         </div>
       </div>
 
-      {/* Ships with troops - Bottom Left */}
+      {/* Ships - Bottom Left: compact ship icons */}
       <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4 } : {}) }}>
+        {/* Fleet info button */}
+        <button
+          style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'rgba(255,215,0,0.6)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
+          onClick={(e) => { e.stopPropagation(); setExpandedShip(expandedShip !== null ? null : 0); }}
+        >
+          <span style={{ fontSize: mobile ? 10 : 12, fontWeight: 900, color: '#FFD700' }}>?</span>
+        </button>
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
           const troops = ship.troops || [];
-          const liveCount = isPlaced ? troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) : troops.length;
-          const allDead = isPlaced && liveCount === 0;
+          const allDead = isPlaced && troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) === 0;
           const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
-          const cardW = mobile ? 60 : 80;
-          const cardH = mobile ? 70 : 90;
-
-          // Group troops by type for compact display
-          const troopGroups = {};
-          for (const t of troops) {
-            const key = t.toLowerCase();
-            troopGroups[key] = (troopGroups[key] || 0) + 1;
-          }
-          const groupEntries = Object.entries(troopGroups);
+          const sz = mobile ? 56 : 70;
 
           return (
             <button
               key={shipIdx}
               style={{
                 ...hud.card,
-                width: cardW, height: cardH,
+                width: sz, height: sz,
                 opacity: allDead ? 0.25 : isPlaced ? 0.5 : 1,
                 borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
                 boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
-                flexDirection: 'column',
-                gap: 1,
-                padding: '3px 2px',
+                flexDirection: 'column', gap: 0, padding: 2, position: 'relative',
               }}
               onClick={(e) => {
                 e.stopPropagation();
                 if (!isPlaced && !allDead) onSelectTroop(shipIdx);
               }}
             >
-              {/* Ship level indicator */}
-              <div style={{ fontSize: 8, fontWeight: 800, color: 'rgba(160,220,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+              <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />
+              <div style={{ fontSize: 7, fontWeight: 800, color: 'rgba(160,220,255,0.8)', textTransform: 'uppercase' }}>
                 {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
               </div>
-
-              {/* Troop portraits — grouped with count badges */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center', flex: 1, alignItems: 'center' }}>
-                {groupEntries.map(([troopKey, count]) => {
-                  const info = TROOP_IMG_MAP[troopKey] || {};
-                  const sz = mobile ? 18 : 22;
-                  return (
-                    <div key={troopKey} style={{ position: 'relative' }}>
-                      <div style={{ width: sz, height: sz, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(40,140,200,0.3)' }}>
-                        {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />}
-                      </div>
-                      {count > 1 && (
-                        <div style={{ position: 'absolute', bottom: -2, right: -4, background: '#1a3050', color: '#7df4ff', fontSize: 7, fontWeight: 900, borderRadius: 3, padding: '0 2px', lineHeight: '10px', border: '1px solid rgba(40,140,200,0.4)' }}>
-                          x{count}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+              {/* Troop count badge */}
+              <div style={{ position: 'absolute', top: -4, right: -4, background: '#1a3050', color: '#7df4ff', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid rgba(40,140,200,0.5)' }}>
+                x{troops.length}
               </div>
-
-              {/* Total troop count badge */}
-              {!isPlaced && (
-                <div style={hud.countBadge}>
-                  <span style={hud.countText}>x{troops.length}</span>
-                </div>
-              )}
             </button>
           );
         })}
       </div>
+
+      {/* Fleet details modal */}
+      {expandedShip !== null && (
+        <div style={hud.shipModal} onClick={() => setExpandedShip(null)}>
+          <div style={hud.shipModalPanel} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: '#FFD700', textAlign: 'center', marginBottom: 10 }}>
+              Fleet — {ships.length} Ships
+            </div>
+            {ships.map((ship, si) => {
+              const troops = ship.troops || [];
+              const groups = {};
+              for (const t of troops) groups[t.toLowerCase()] = (groups[t.toLowerCase()] || 0) + 1;
+              return (
+                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? 'rgba(160,220,255,0.5)' : '#7df4ff', marginBottom: 4 }}>
+                    Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'DEPLOYED' : `${troops.length} troops`}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {Object.entries(groups).map(([key, count]) => {
+                      const info = TROOP_IMG_MAP[key] || {};
+                      return (
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 6, padding: '2px 6px' }}>
+                          <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
+                            {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                          </div>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: '#fff' }}>{info.label || key} x{count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+            <button style={{ marginTop: 6, padding: '8px 20px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }} onClick={() => setExpandedShip(null)}>Close</button>
+          </div>
+        </div>
+      )}
 
       {/* Cannon + Energy - Bottom Right */}
       <div style={{ ...hud.wrapRight, ...(mobile ? { bottom: 10, right: 10 } : {}) }}>
@@ -658,6 +669,18 @@ const hud = {
     position: 'absolute', bottom: 19, left: 4,
     color: '#7df4ff', fontSize: 9, lineHeight: 1,
     textShadow: '0 0 6px rgba(60,220,255,0.9)',
+  },
+  shipModal: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 200, pointerEvents: 'all',
+  },
+  shipModalPanel: {
+    background: 'linear-gradient(180deg, #1a2a3e 0%, #0d1926 100%)',
+    border: '2px solid rgba(40,140,200,0.4)', borderRadius: 16,
+    padding: '16px 20px', maxWidth: 320, width: 'calc(100% - 32px)',
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
   },
   cardLabel: {
     fontSize: 9, fontWeight: 700,

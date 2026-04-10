@@ -47,18 +47,25 @@ export function GodotProvider({ children }) {
           setPlayerState(prev => ({ ...(prev || {}), ...data }));
           if (data.token) {
             window._playerToken = data.token;
-            // Fetch tutorial progress once (Godot bridge doesn't include it)
+            // Fetch tutorial progress once (Godot bridge doesn't include it).
+            // Deferred to avoid blocking render. Uses requestIdleCallback where available.
             if (!tutorialFetchedRef.current) {
               tutorialFetchedRef.current = true;
-              fetch('/api/tutorial', { headers: { 'x-token': data.token } })
-                .then(r => r.json()).then(res => {
-                  if (res.tutorial_flags !== undefined) {
-                    setTutorialFlags(res.tutorial_flags);
-                    if (!(res.tutorial_flags & 1)) setTutorialPhase('base');
-                    else if (!(res.tutorial_flags & 2)) setTutorialPhase('army');
-                    else if (!(res.tutorial_flags & 8)) setTutorialPhase('trade');
-                  }
-                }).catch(() => {});
+              const doFetch = () => {
+                fetch('/api/tutorial', { headers: { 'x-token': data.token } })
+                  .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+                  .then(res => {
+                    const flags = res.tutorial_flags ?? 0xFF;
+                    if (flags === 0xFF) return;
+                    setTutorialFlags(flags);
+                    if (!(flags & 1)) setTutorialPhase('base');
+                    else if (!(flags & 2)) setTutorialPhase('army');
+                    else if (!(flags & 8)) setTutorialPhase('trade');
+                  }).catch(() => {});
+              };
+              // Delay fetch so it doesn't block initial render
+              if (window.requestIdleCallback) window.requestIdleCallback(doFetch);
+              else setTimeout(doFetch, 2000);
             }
           }
           break;
@@ -100,8 +107,6 @@ export function GodotProvider({ children }) {
           setEnemyMode(data);
           if (data.active) {
             setCannonEnergy({ energy: 10, nextCost: 1 }); setBattleResult(null);
-            // Trigger attack tutorial on first attack
-            setTutorialFlags(prev => { if (!(prev & 4)) setTutorialPhase('attack'); return prev; });
           }
           if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setSelectedTroopIdx(0); }
           break;

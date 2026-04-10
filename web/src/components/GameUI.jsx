@@ -32,6 +32,13 @@ export default function GameUI() {
     if (!selectedBuilding) setShowTroops(false);
   }, [selectedBuilding]);
 
+  // Trigger attack tutorial on first enemy mode
+  useEffect(() => {
+    if (enemyMode?.active && tutorialFlags !== null && !(tutorialFlags & 4)) {
+      setTutorialPhase('attack');
+    }
+  }, [enemyMode?.active]);
+
   // Pause island when heavy overlay panels are open (futures, shop, barracks, profile)
   const barracksOpen = showTroops;
   const anyPanelOpen = !!(futuresOpen || shopOpen || barracksOpen || showProfile || showBattleLog || showLeaderboard);
