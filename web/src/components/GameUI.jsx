@@ -15,11 +15,12 @@ import BattleResultOverlay from './BattleResultOverlay';
 import BattleLogPanel from './BattleLogPanel';
 import LeaderboardPanel from './LeaderboardPanel';
 import TutorialOverlay from './TutorialOverlay';
-import { useSend, useUI, useBuilding } from '../hooks/useGodot';
+import { useSend, useUI, useBuilding, useTutorial } from '../hooks/useGodot';
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
-  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult, tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useUI();
+  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
+  const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const { selectedBuilding } = useBuilding();
 
   const [showTroops, setShowTroops] = useState(false);

@@ -6,6 +6,7 @@ const ResourcesContext = createContext(null);
 const PlayerContext = createContext(null);
 const BuildingContext = createContext(null);
 const UIContext = createContext(null);
+const TutorialContext = createContext(null);
 
 export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
@@ -33,6 +34,7 @@ export function GodotProvider({ children }) {
   const errorTimerRef = useRef(null);
   const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
   const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|null
+  const tutorialFetchedRef = useRef(false);
 
   useEffect(() => {
     window.onGodotMessage = (msg) => {
@@ -45,16 +47,19 @@ export function GodotProvider({ children }) {
           setPlayerState(prev => ({ ...(prev || {}), ...data }));
           if (data.token) {
             window._playerToken = data.token;
-            // Fetch tutorial progress from server (Godot bridge doesn't include it)
-            fetch('/api/tutorial', { headers: { 'x-token': data.token } })
-              .then(r => r.json()).then(res => {
-                if (res.tutorial_flags !== undefined) {
-                  setTutorialFlags(res.tutorial_flags);
-                  if (!(res.tutorial_flags & 1)) setTutorialPhase('base');
-                  else if (!(res.tutorial_flags & 2)) setTutorialPhase('army');
-                  else if (!(res.tutorial_flags & 8)) setTutorialPhase('trade');
-                }
-              }).catch(() => {});
+            // Fetch tutorial progress once (Godot bridge doesn't include it)
+            if (!tutorialFetchedRef.current) {
+              tutorialFetchedRef.current = true;
+              fetch('/api/tutorial', { headers: { 'x-token': data.token } })
+                .then(r => r.json()).then(res => {
+                  if (res.tutorial_flags !== undefined) {
+                    setTutorialFlags(res.tutorial_flags);
+                    if (!(res.tutorial_flags & 1)) setTutorialPhase('base');
+                    else if (!(res.tutorial_flags & 2)) setTutorialPhase('army');
+                    else if (!(res.tutorial_flags & 8)) setTutorialPhase('trade');
+                  }
+                }).catch(() => {});
+            }
           }
           break;
         case 'resources':
@@ -189,8 +194,11 @@ export function GodotProvider({ children }) {
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer, tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer, tutorialFlags, tutorialPhase]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
+  const tutorialCtx = useMemo(() => ({
+    tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
+  }), [tutorialFlags, tutorialPhase]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },
@@ -198,7 +206,9 @@ export function GodotProvider({ children }) {
       createElement(ResourcesContext.Provider, { value: resourcesCtx },
         createElement(PlayerContext.Provider, { value: playerCtx },
           createElement(BuildingContext.Provider, { value: buildingCtx },
-            children
+            createElement(TutorialContext.Provider, { value: tutorialCtx },
+              children
+            )
           )
         )
       )
@@ -212,3 +222,4 @@ export function useResources() { return useContext(ResourcesContext); }
 export function usePlayer() { return useContext(PlayerContext); }
 export function useBuilding() { return useContext(BuildingContext); }
 export function useUI() { return useContext(UIContext); }
+export function useTutorial() { return useContext(TutorialContext); }
