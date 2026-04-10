@@ -71,14 +71,14 @@ export default function App() {
 const styles = {
   container: {
     width: '100vw',
-    height: '100dvh',
+    height: '100vh',
     overflow: 'hidden',
     position: 'relative',
     background: '#0a0b1a',
   },
   splash: {
     width: '100vw',
-    height: '100dvh',
+    height: '100vh',
     background: '#0a0b1a',
     display: 'flex',
     alignItems: 'center',
