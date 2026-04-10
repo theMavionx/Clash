@@ -4,8 +4,8 @@ let sdkInstance = null;
 let initPromise = null;
 let _resolved = false;
 let _inMiniApp = false;
-let _cachedContext = null;
 let _resolveDetect;
+// Promise that resolves once we know if we're in a mini app or not
 const detectPromise = new Promise((r) => { _resolveDetect = r; });
 
 function _log(level, message) {
@@ -23,10 +23,9 @@ initPromise = import('@farcaster/miniapp-sdk').then(async (mod) => {
   await mod.sdk.actions.ready({ disableNativeGestures: true });
   _log('info', 'ready() done');
 
-  // Check if we're actually inside a mini app — cache context for useFarcaster hook
+  // Check if we're actually inside a mini app
   try {
     const ctx = await mod.sdk.context;
-    _cachedContext = ctx;
     if (ctx?.user) {
       _inMiniApp = true;
       _log('info', `Detected mini app: fid=${ctx.user.fid}, platform=${ctx?.client?.platformType || '?'}`);
@@ -68,20 +67,21 @@ export function useFarcaster() {
   useEffect(() => {
     let cancelled = false;
 
-    initPromise.then((sdk) => {
+    initPromise.then(async (sdk) => {
       if (cancelled || !sdk) { setLoading(false); return; }
 
-      // Use cached context from module init — no second await
-      const ctx = _cachedContext;
-      if (ctx?.user && !cancelled) {
-        setIsInFrame(true);
-        setUser({
-          fid: Number(ctx.user.fid) || 0,
-          username: String(ctx.user.username || ''),
-          displayName: String(ctx.user.displayName || ''),
-          pfpUrl: String(ctx.user.pfpUrl || ''),
-        });
-      }
+      try {
+        const ctx = await sdk.context;
+        if (ctx?.user && !cancelled) {
+          setIsInFrame(true);
+          setUser({
+            fid: Number(ctx.user.fid) || 0,
+            username: String(ctx.user.username || ''),
+            displayName: String(ctx.user.displayName || ''),
+            pfpUrl: String(ctx.user.pfpUrl || ''),
+          });
+        }
+      } catch {}
 
       if (!cancelled) setLoading(false);
     }).catch(() => { if (!cancelled) setLoading(false); });

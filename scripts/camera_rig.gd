@@ -103,9 +103,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	# ── Mouse Motion → Pan ───────────────────────────────────────
 	# Block mouse pan completely while placing/moving — also blocks emulated-from-touch.
 	# Also block when touch is active — touch handler does its own pan.
-	# Force-cancel panning if building system became busy mid-drag.
-	if bs_busy and _is_panning:
-		_is_panning = false
 	if event is InputEventMouseMotion and _is_panning and not bs_busy and _touch_points.is_empty():
 		var motion := event as InputEventMouseMotion
 		var delta := motion.relative

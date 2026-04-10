@@ -1,5 +1,6 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
 import { useSend, useBuilding } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -130,7 +131,8 @@ const ProgressBar = ({ label, value, max, gradient, showAsTime = false }) => {
 function BarracksPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs, troopLevels } = useBuilding();
-  
+  const { isMobile: mobile } = useLayout();
+
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Fetch authoritative troop levels from server when panel opens
@@ -195,25 +197,66 @@ function BarracksPanel({ building, onClose }) {
   // Create a combined string for bottom pill (just to match layout of "SPX held")
   const totalCostVal = nextCost ? Object.values(nextCost).reduce((a, b) => a + b, 0) : 0;
 
+  const sphereSize = mobile ? 100 : 200;
+  const sliderW = mobile ? 32 : 48;
+  const sliderH = mobile ? 52 : 72;
+  const reqBoxSize = mobile ? 60 : 90;
+
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={{...styles.overlay, ...(mobile ? { alignItems: 'stretch' } : {})}} onClick={onClose}>
       <style>{UPGRADE_ANIM_CSS}</style>
-      
-      <div style={styles.panel} onClick={stopPropagation}>
-        
-        {/* Header matching Load Troops */}
+
+      <div style={{...styles.panel, ...(mobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={stopPropagation}>
+
         <div style={styles.header}>
-          <span style={styles.headerTitle}>{displayName}</span>
-          <button style={styles.closeBtn} onClick={onClose}>
-            ✖
-          </button>
+          <span style={{...styles.headerTitle, fontSize: mobile ? 18 : 24}}>{displayName}</span>
+          <button style={styles.closeBtn} onClick={onClose}>✖</button>
         </div>
 
-        <div style={styles.contentLayout}>
-          
-          {/* Left Column: Stats & Resources */}
-          <div style={styles.leftColumn}>
-            <h3 style={styles.sectionTitle}>Stats</h3>
+        <div style={{...styles.contentLayout, flexDirection: mobile ? 'column' : 'row', flexWrap: mobile ? 'nowrap' : 'wrap', padding: mobile ? '16px 16px' : '24px 20px', gap: mobile ? 16 : 24, overflowY: 'auto', minHeight: 0}}>
+
+          {/* Character + Sliders — on mobile show FIRST (above stats) */}
+          <div style={{...styles.rightColumn, ...(mobile ? { maxWidth: '100%', width: '100%', flex: 'none', order: -1 } : {})}}>
+            <div style={styles.characterDisplayArea}>
+              <button style={{...styles.sliderBtn, width: sliderW, height: sliderH, fontSize: mobile ? 24 : 32}} onClick={handlePrev}>❮</button>
+
+              <div style={styles.characterWrapper}>
+                <div style={{...styles.characterSphere, width: sphereSize, height: sphereSize}}>
+                  <div style={{...styles.upgradeBadge, ...(mobile ? { padding: '2px 10px', top: -6, right: -14 } : {})}}>
+                    <div style={styles.badgeBigPart}>
+                      <span style={{...styles.badgeLvlText, fontSize: mobile ? 10 : 14}}>Lvl</span>
+                      <span style={{...styles.badgeLvlNumber, fontSize: mobile ? 18 : 32}}>{lvl}</span>
+                    </div>
+                  </div>
+                  {isAnimatingUpgrade && (
+                    <div className="upgrade-anim-glow" style={{ position: 'absolute', width: sphereSize * 2, height: sphereSize * 2, borderRadius: '50%', background: 'radial-gradient(circle, rgba(251, 192, 45, 0.6) 0%, transparent 70%)', zIndex: 4, pointerEvents: 'none' }} />
+                  )}
+                  {isAnimatingUpgrade && (
+                    <div className="upgrade-anim-text" style={{ position: 'absolute', top: '20%', color: '#FBC02D', fontSize: mobile ? 36 : 56, fontWeight: 900, textShadow: '0 4px 20px rgba(251, 192, 45, 0.8), 0 4px 4px #000', zIndex: 20, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                      LEVEL UP!
+                    </div>
+                  )}
+                  {troopNames.map(name => {
+                    if (!UNIT_IMAGES[name]) return null;
+                    const isActive = name === currentTroopName;
+                    const charStyle = CARD_TROOP_STYLE_MAP[name] || { scale: 1.8, offsetY: '5%' };
+                    return (
+                      <img
+                        key={name} src={UNIT_IMAGES[name]} alt={name} className={isActive && isAnimatingUpgrade ? "upgrade-anim-char" : ""}
+                        style={{ ...styles.characterImg, transform: `translateY(${charStyle.offsetY}) scale(${charStyle.scale})`, opacity: isActive ? 1 : 0, pointerEvents: isActive ? 'auto' : 'none' }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button style={{...styles.sliderBtn, width: sliderW, height: sliderH, fontSize: mobile ? 24 : 32}} onClick={handleNext}>❯</button>
+            </div>
+          </div>
+
+          {/* Stats & Resources */}
+          <div style={{...styles.leftColumn, ...(mobile ? { maxWidth: '100%', width: '100%', flex: '1 1 100%' } : {})}}>
+            <h3 style={{...styles.sectionTitle, fontSize: mobile ? 16 : 20}}>Stats</h3>
             {stats && maxStats && (
               <div style={styles.progressContainer}>
                 <ProgressBar label="Health Points" value={stats.hp} max={maxStats.hp} gradient="linear-gradient(90deg, #f59e0b, #fbbf24)" />
@@ -223,14 +266,14 @@ function BarracksPanel({ building, onClose }) {
               </div>
             )}
 
-            <h3 style={{...styles.sectionTitle, marginTop: 16}}>Upgrade Resources</h3>
-            <div style={styles.reqGrid}>
+            <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
+            <div style={{...styles.reqGrid, ...(mobile ? { flexWrap: 'nowrap', justifyContent: 'center', gap: 8 } : {})}}>
               {nextCost ? Object.entries(nextCost).map(([res, amt]) => {
                 if (amt === 0) return null;
                 return (
-                  <div key={res} style={styles.reqBox}>
-                    <img src={RES_ICONS[res] || goldIcon} style={styles.reqIconImg} alt={res} />
-                    <span style={styles.reqAmt}>{amt}</span>
+                  <div key={res} style={{...styles.reqBox, width: reqBoxSize, height: reqBoxSize}}>
+                    <img src={RES_ICONS[res] || goldIcon} style={{...styles.reqIconImg, width: mobile ? 34 : 44, height: mobile ? 34 : 44}} alt={res} />
+                    <span style={{...styles.reqAmt, fontSize: mobile ? 13 : 16}}>{amt}</span>
                   </div>
                 );
               }) : (
@@ -241,67 +284,16 @@ function BarracksPanel({ building, onClose }) {
             </div>
           </div>
 
-          {/* Right Column: Character + Sliders + Action Button */}
-          <div style={styles.rightColumn}>
-            <div style={styles.characterDisplayArea}>
-              <button style={styles.sliderBtn} onClick={handlePrev}>❮</button>
-              
-              <div style={styles.characterWrapper}>
-                
-                {/* Character specific placement */}
-                <div style={styles.characterSphere}>
-                  
-                  {/* Upgrade Badge floating on edge of sphere */}
-                  <div style={styles.upgradeBadge}>
-                    <div style={styles.badgeBigPart}>
-                      <span style={styles.badgeLvlText}>Lvl</span>
-                      <span style={styles.badgeLvlNumber}>{lvl}</span>
-                    </div>
-                  </div>
-                  {/* Level Up Effects */}
-                  {isAnimatingUpgrade && (
-                    <div className="upgrade-anim-glow" style={{ position: 'absolute', width: 400, height: 400, borderRadius: '50%', background: 'radial-gradient(circle, rgba(251, 192, 45, 0.6) 0%, transparent 70%)', zIndex: 4, pointerEvents: 'none' }} />
-                  )}
-                  {isAnimatingUpgrade && (
-                    <div className="upgrade-anim-text" style={{ position: 'absolute', top: '20%', color: '#FBC02D', fontSize: 56, fontWeight: 900, textShadow: '0 4px 20px rgba(251, 192, 45, 0.8), 0 4px 4px #000', zIndex: 20, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-                      LEVEL UP!
-                    </div>
-                  )}
-
-                  {/* Preload and crossfade all characters */}
-                  {troopNames.map(name => {
-                    if (!UNIT_IMAGES[name]) return null;
-                    const isActive = name === currentTroopName;
-                    const charStyle = CARD_TROOP_STYLE_MAP[name] || { scale: 1.8, offsetY: '5%' };
-                    
-                    return (
-                      <img 
-                        key={name} src={UNIT_IMAGES[name]} alt={name} className={isActive && isAnimatingUpgrade ? "upgrade-anim-char" : ""}
-                        style={{ 
-                          ...styles.characterImg, 
-                          transform: `translateY(${charStyle.offsetY}) scale(${charStyle.scale})`,
-                          opacity: isActive ? 1 : 0, 
-                          pointerEvents: isActive ? 'auto' : 'none' 
-                        }} 
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-              
-              <button style={styles.sliderBtn} onClick={handleNext}>❯</button>
-            </div>
-
-            <div style={{ marginTop: 24, width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, zIndex: 20, position: 'relative' }}>
-              {!isMax && !building.is_enemy && (
-                <button style={styles.actionBtn} onClick={() => handleUpgradeTroop(currentTroopName)}>
-                  Upgrade to Lv {lvl + 1}
-                </button>
-              )}
-            </div>
-          </div>
-          
         </div>
+
+        {/* Upgrade button — fixed at bottom, outside scroll area */}
+        {!isMax && !building.is_enemy && (
+          <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
+            <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={() => handleUpgradeTroop(currentTroopName)}>
+              Upgrade to Lv {lvl + 1}
+            </button>
+          </div>
+        )}
 
       </div>
     </div>

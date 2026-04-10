@@ -6,7 +6,6 @@ const ResourcesContext = createContext(null);
 const PlayerContext = createContext(null);
 const BuildingContext = createContext(null);
 const UIContext = createContext(null);
-const TutorialContext = createContext(null);
 
 export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
@@ -32,8 +31,8 @@ export function GodotProvider({ children }) {
   const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
   const resourceCapsRef = useRef({ gold: 5000, wood: 5000, ore: 5000 });
   const errorTimerRef = useRef(null);
-  const [tutorialFlags, setTutorialFlags] = useState(0xFF);
-  const [tutorialPhase, setTutorialPhase] = useState(null);
+  const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
+  const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|null
 
   useEffect(() => {
     window.onGodotMessage = (msg) => {
@@ -43,37 +42,34 @@ export function GodotProvider({ children }) {
           setReady(true);
           break;
         case 'state':
-          setPlayerState(prev => {
-            const next = { ...(prev || {}), ...data };
-            if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
-            return next;
-          });
+          setPlayerState(prev => ({ ...(prev || {}), ...data }));
           if (data.token) window._playerToken = data.token;
+          if (data.tutorial_flags !== undefined) {
+            setTutorialFlags(data.tutorial_flags);
+            // Auto-trigger first uncompleted tutorial phase
+            if (!(data.tutorial_flags & 1)) setTutorialPhase('base');
+            else if (!(data.tutorial_flags & 2)) setTutorialPhase('army');
+            else if (!(data.tutorial_flags & 8)) setTutorialPhase('trade');
+          }
           break;
         case 'resources':
-          setResources(prev => {
-            if (prev.gold === data.gold && prev.wood === data.wood && prev.ore === data.ore) return prev;
-            return data;
-          });
+          setResources(data);
           break;
         case 'resources_add':
           setResources(prev => {
             const caps = resourceCapsRef.current;
-            const gold = Math.min(caps.gold, (prev.gold || 0) + (data.gold || 0));
-            const wood = Math.min(caps.wood, (prev.wood || 0) + (data.wood || 0));
-            const ore = Math.min(caps.ore, (prev.ore || 0) + (data.ore || 0));
-            if (gold === prev.gold && wood === prev.wood && ore === prev.ore) return prev;
-            return { gold, wood, ore };
+            return {
+              gold: Math.min(caps.gold, (prev.gold || 0) + (data.gold || 0)),
+              wood: Math.min(caps.wood, (prev.wood || 0) + (data.wood || 0)),
+              ore: Math.min(caps.ore, (prev.ore || 0) + (data.ore || 0)),
+            };
           });
           break;
         case 'building_defs':
           setBuildingDefs(data);
           break;
         case 'placed_counts':
-          setBuildingDefs(prev => {
-            if (JSON.stringify(prev.placed_counts) === JSON.stringify(data)) return prev;
-            return { ...prev, placed_counts: data };
-          });
+          setBuildingDefs(prev => ({ ...prev, placed_counts: data }));
           break;
         case 'troop_levels':
           setTroopLevels(data);
@@ -94,6 +90,8 @@ export function GodotProvider({ children }) {
           setEnemyMode(data);
           if (data.active) {
             setCannonEnergy({ energy: 10, nextCost: 1 }); setBattleResult(null);
+            // Trigger attack tutorial on first attack
+            setTutorialFlags(prev => { if (!(prev & 4)) setTutorialPhase('attack'); return prev; });
           }
           if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setSelectedTroopIdx(0); }
           break;
@@ -110,11 +108,7 @@ export function GodotProvider({ children }) {
           }
           break;
         case 'battle_timer':
-          setBattleTimer(prev => {
-            const next = data.remaining ?? null;
-            if (prev === next) return prev;
-            return next;
-          });
+          setBattleTimer(data.remaining ?? null);
           break;
         case 'troop_died':
           setPendingCasualties(prev => {
@@ -127,31 +121,18 @@ export function GodotProvider({ children }) {
           setPendingCasualties(null);
           break;
         case 'cannon_energy':
-          setCannonEnergy(prev => {
-            const energy = data.energy || 0;
-            const nextCost = data.next_cost || 1;
-            if (prev.energy === energy && prev.nextCost === nextCost) return prev;
-            return { energy, nextCost };
-          });
+          setCannonEnergy({ energy: data.energy || 0, nextCost: data.next_cost || 1 });
           break;
         case 'fleet_info':
           setFleetInfo(data);
           break;
         case 'resource_caps':
-          setResourceCaps(prev => {
-            const gold = data.gold || 5000, wood = data.wood || 5000, ore = data.ore || 5000;
-            if (prev.gold === gold && prev.wood === wood && prev.ore === ore) return prev;
-            const next = { gold, wood, ore };
-            resourceCapsRef.current = next;
-            return next;
-          });
+          const newCaps = { gold: data.gold || 5000, wood: data.wood || 5000, ore: data.ore || 5000 };
+          setResourceCaps(newCaps);
+          resourceCapsRef.current = newCaps;
           break;
         case 'th_info':
-          setBuildingDefs(prev => {
-            const th_level = data.level || 1, th_progress = data.progress || 0, th_progress_total = data.progress_total || 0;
-            if (prev.th_level === th_level && prev.th_progress === th_progress && prev.th_progress_total === th_progress_total) return prev;
-            return { ...prev, th_level, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress, th_progress_total };
-          });
+          setBuildingDefs(prev => ({ ...prev, th_level: data.level || 1, th_unlock: data.unlock || {}, th_max_counts: data.max_counts || {}, th_progress: data.progress || 0, th_progress_total: data.progress_total || 0 }));
           break;
         case 'error':
           setError(data.message);
@@ -168,11 +149,7 @@ export function GodotProvider({ children }) {
           setShopOpen(false);
           break;
         case 'collectible_resources':
-          setCollectibles(prev => {
-            const next = data.buildings || [];
-            if (prev.length === next.length && JSON.stringify(prev) === JSON.stringify(next)) return prev;
-            return next;
-          });
+          setCollectibles(data.buildings || []);
           break;
         case 'cloud_transition':
           setCloudVisible(data.visible);
@@ -207,11 +184,8 @@ export function GodotProvider({ children }) {
     buildingDefs, troopLevels, selectedBuilding,
   }), [buildingDefs, troopLevels, selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
-  const tutorialCtx = useMemo(() => ({
-    tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
-  }), [tutorialFlags, tutorialPhase]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer, tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer, tutorialFlags, tutorialPhase]);
 
   // Nested providers using createElement (no JSX needed in .js file)
   return createElement(SendContext.Provider, { value: sendCtx },
@@ -219,9 +193,7 @@ export function GodotProvider({ children }) {
       createElement(ResourcesContext.Provider, { value: resourcesCtx },
         createElement(PlayerContext.Provider, { value: playerCtx },
           createElement(BuildingContext.Provider, { value: buildingCtx },
-            createElement(TutorialContext.Provider, { value: tutorialCtx },
-              children
-            )
+            children
           )
         )
       )
@@ -235,4 +207,3 @@ export function useResources() { return useContext(ResourcesContext); }
 export function usePlayer() { return useContext(PlayerContext); }
 export function useBuilding() { return useContext(BuildingContext); }
 export function useUI() { return useContext(UIContext); }
-export function useTutorial() { return useContext(TutorialContext); }

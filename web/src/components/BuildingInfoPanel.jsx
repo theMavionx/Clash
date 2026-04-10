@@ -211,70 +211,59 @@ function BuildingInfoPanel({ onOpenTroops }) {
   );
 
   const renderModal = (title, level, leftContent, centerImg, rightContent, mainActionText, onMainAction) => (
-    <div style={LT.overlay} onClick={handleDeselect}>
-      <div style={LT.panel} onClick={e => e.stopPropagation()}>
-        {/* Header matching Load Troops */}
-        <div style={LT.header}>
-          <span style={LT.headerTitle}>{title}</span>
-          <button style={LT.closeBtn} onClick={handleDeselect}>
-            ✖
-          </button>
+    <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleDeselect}>
+      <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{...LT.header, height: isMobile ? 44 : 54}}>
+          <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>{title}</span>
+          <button style={LT.closeBtn} onClick={handleDeselect}>✖</button>
         </div>
-        
-        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 10 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: 20 }}>
-          
-          {/* Left Column (Stats & Cost) */}
-          <div style={{...styles.leftColumn, ...isMobile && { width: '100%', order: 2, marginTop: 10 }}}>
-             <h3 style={{...styles.sectionTitle, marginTop: 0}}>Stats</h3>
-             <div style={styles.statsContainer}>
-                {leftContent}
-             </div>
-             
-             {/* Cost moved to Left Column */}
-             {rightContent && (
-               <div style={{ marginTop: 20 }}>
-                 {rightContent}
-               </div>
-             )}
-          </div>
 
-          {/* Right Column (Image + Action) */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
+        {/* Scrollable content area */}
+        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : 20, minHeight: 0, padding: isMobile ? '8px 12px' : undefined }}>
+
+          {/* Image column (on mobile: first, smaller) */}
+          <div style={{ flex: isMobile ? 'none' : 1, display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
              <div style={styles.characterWrapper}>
-               
                {level && (
                  <div style={styles.upgradeBadge}>
                    <div style={styles.badgeBigPart}>
                      <span style={styles.badgeLvlText}>Lvl</span>
-                     <span style={styles.badgeLvlNumber}>{level}</span>
+                     <span style={{...styles.badgeLvlNumber, fontSize: isMobile ? 22 : undefined}}>{level}</span>
                    </div>
                  </div>
                )}
-
-               <div style={{ ...styles.characterSphere, ...isMobile && { width: 140, height: 140 }}}>
+               <div style={{ ...styles.characterSphere, ...(isMobile ? { width: 110, height: 110 } : {})}}>
                   {centerImg}
                </div>
              </div>
+          </div>
 
-             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 'auto', paddingBottom: 16 }}>
-                 {mainActionText && (
-                   <div style={{ width: '100%', maxWidth: 240, marginTop: 16 }}>
-                     <button 
-                       style={styles.actionBtn}
-                       onClick={onMainAction}
-                       onMouseOver={e => e.currentTarget.style.transform = 'scale(1.02)'}
-                       onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
-                       onMouseDown={e => e.currentTarget.style.transform = 'scale(0.98)'}
-                       onMouseUp={e => e.currentTarget.style.transform = 'scale(1.02)'}
-                     >
-                        {mainActionText}
-                     </button>
-                   </div>
-                 )}
+          {/* Stats & Cost column */}
+          <div style={{...styles.leftColumn, ...isMobile && { width: '100%', order: 2, marginTop: 4 }}}>
+             <h3 style={{...styles.sectionTitle, marginTop: 0, fontSize: isMobile ? 16 : undefined}}>Stats</h3>
+             <div style={styles.statsContainer}>
+                {leftContent}
              </div>
+             {rightContent && (
+               <div style={{ marginTop: isMobile ? 12 : 20 }}>
+                 {rightContent}
+               </div>
+             )}
           </div>
         </div>
-      
+
+        {/* Action button — always at bottom, outside scroll area */}
+        {mainActionText && (
+          <div style={{ padding: isMobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
+            <button
+              style={{...styles.actionBtn, width: '100%', maxWidth: isMobile ? '100%' : 240}}
+              onClick={onMainAction}
+            >
+               {mainActionText}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -412,19 +401,21 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
     const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
 
+    const slotW = isMobile ? 54 : 70;
+    const slotH = isMobile ? 70 : 90;
+    const cardW = isMobile ? 'calc(33% - 6px)' : 108;
+
     return (
-      <div style={LT.overlay} onClick={handleClose}>
-        <div style={LT.panel} onClick={e => e.stopPropagation()}>
+      <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleClose}>
+        <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
           {/* Header */}
-          <div style={LT.header}>
-            <span style={LT.headerTitle}>Choose Troops</span>
-            <button style={LT.closeBtn} onClick={handleClose}>
-              ✖
-            </button>
+          <div style={{...LT.header, height: isMobile ? 44 : 54}}>
+            <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>Choose Troops</span>
+            <button style={LT.closeBtn} onClick={handleClose}>✖</button>
           </div>
 
           {/* Loaded troops slots */}
-          <div style={LT.loadedBar}>
+          <div style={{...LT.loadedBar, padding: isMobile ? '8px 10px' : '12px 14px'}}>
             {Array.from({ length: capacity }).map((_, i) => {
               const t = shipTroops[i];
               const isSwapping = swapSlot === i;
@@ -432,22 +423,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 return (
                   <div
                     key={i}
-                    style={{ ...LT.loadedSlot, ...(isSwapping ? LT.loadedSlotActive : {}) }}
+                    style={{ ...LT.loadedSlot, width: slotW, height: slotH, ...(isSwapping ? LT.loadedSlotActive : {}) }}
                     onClick={() => setSwapSlot(isSwapping ? null : i)}
-                    onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.1)'}
-                    onMouseOut={e => e.currentTarget.style.filter = isSwapping ? 'brightness(1.15)' : 'none'}
                   >
                     <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
                       {UNIT_IMAGES[t] && (
                         <div key={`${t}-${i}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                          <img 
-                            src={UNIT_IMAGES[t]} 
-                            alt={t} 
-                            style={{
-                              ...LT.loadedSlotImg,
-                              transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})`
-                            }}
-                          />
+                          <img src={UNIT_IMAGES[t]} alt={t} style={{ ...LT.loadedSlotImg, transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})` }} />
                         </div>
                       )}
                     </div>
@@ -456,34 +438,25 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 );
               }
               return (
-                <div 
-                  key={`empty-${i}`} 
-                  style={LT.emptySlot}
-                  onClick={() => setSwapSlot(i)}
-                  onMouseOver={e => e.currentTarget.style.filter = 'brightness(0.95)'}
-                  onMouseOut={e => e.currentTarget.style.filter = 'none'}
-                >
-                  ?
-                </div>
+                <div key={`empty-${i}`} style={{...LT.emptySlot, width: slotW, height: slotH}} onClick={() => setSwapSlot(i)}>?</div>
               );
             })}
           </div>
 
           {swapSlot !== null && (
-            <div style={LT.swapHint}>Select a troop below for slot {swapSlot + 1}</div>
+            <div style={{...LT.swapHint, fontSize: isMobile ? 12 : 14}}>Select a troop below for slot {swapSlot + 1}</div>
           )}
 
           {/* Troop selection grid */}
-          <div style={LT.grid}>
+          <div style={{...LT.grid, padding: isMobile ? '10px 8px' : '16px 20px', gap: isMobile ? 6 : 10}}>
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
               return (
                 <button
                   key={name}
-                  style={LT.troopCard}
+                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0}}
                   onClick={() => {
                     if (isFull && swapSlot === null) {
-                      // Auto-swap last slot directly
                       const updated = [...shipTroops];
                       updated[capacity - 1] = name;
                       setLocalTroops(updated);
@@ -492,28 +465,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
                       handleLoadTroop(name);
                     }
                   }}
-                  onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.1)'}
-                  onMouseOut={e => e.currentTarget.style.filter = 'none'}
                 >
-                  <div style={LT.troopLvlBadge}>Lvl {lvl}</div>
-                  
+                  <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {lvl}</div>
                   <div style={LT.troopImgWrap}>
                     {UNIT_IMAGES[name] && (
-                      <img 
-                        src={UNIT_IMAGES[name]} 
-                        alt={name} 
-                        style={{
-                          ...LT.troopImg,
-                          transform: `scale(${CARD_TROOP_STYLE_MAP[name]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[name]?.offsetY || '0%'})`
-                        }} 
-                      />
+                      <img src={UNIT_IMAGES[name]} alt={name} style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP[name]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[name]?.offsetY || '0%'})` }} />
                     )}
                   </div>
-
-                  <div style={LT.bottomOverlay}>
-                    <span style={LT.bottomLabel}>{name.toUpperCase()}</span>
+                  <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
+                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>{name.toUpperCase()}</span>
                     <img src={goldIcon} alt="gold" style={LT.costIcon} />
-                    <span style={LT.costText}>{TROOP_COST}</span>
+                    <span style={{...LT.costText, fontSize: isMobile ? 11 : 13}}>{TROOP_COST}</span>
                   </div>
                 </button>
               );

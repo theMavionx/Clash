@@ -14,11 +14,12 @@ import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import BattleLogPanel from './BattleLogPanel';
 import LeaderboardPanel from './LeaderboardPanel';
+import TutorialOverlay from './TutorialOverlay';
 import { useSend, useUI, useBuilding } from '../hooks/useGodot';
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
-  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
+  const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult, tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useUI();
   const { selectedBuilding } = useBuilding();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -45,6 +46,34 @@ export default function GameUI() {
   const handleCloseTroops = useCallback(() => setShowTroops(false), []);
   const handleDeselectBuilding = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleOpenTroops = useCallback(() => setShowTroops(true), []);
+
+  // Tutorial: mark phase complete on server and advance to next
+  const handleTutorialComplete = useCallback((flag) => {
+    const newFlags = (tutorialFlags || 0) | flag;
+    setTutorialFlags(newFlags);
+    setTutorialPhase(null);
+    // Persist to server (fire-and-forget)
+    const token = window._playerToken;
+    if (token) {
+      fetch('/api/tutorial/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({ flag }),
+      }).catch(() => {});
+    }
+    // Auto-advance to next uncompleted phase after short delay
+    setTimeout(() => {
+      if (!(newFlags & 2)) setTutorialPhase('army');
+      else if (!(newFlags & 8)) setTutorialPhase('trade');
+    }, 500);
+  }, [tutorialFlags, setTutorialFlags, setTutorialPhase]);
+
+  const handleTutorialSkip = useCallback((flag) => {
+    // Skip marks as complete too
+    handleTutorialComplete(flag);
+  }, [handleTutorialComplete]);
+
+
 
   if (!ready) return null;
 
@@ -86,6 +115,15 @@ export default function GameUI() {
 
       {showLeaderboard && (
         <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
+      )}
+
+      {tutorialPhase && (
+        <TutorialOverlay
+          tutorialFlags={tutorialFlags}
+          phase={tutorialPhase}
+          onComplete={handleTutorialComplete}
+          onSkip={handleTutorialSkip}
+        />
       )}
 
       {!enemyMode?.active && showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barracks) && !selectedBuilding.is_enemy ? (

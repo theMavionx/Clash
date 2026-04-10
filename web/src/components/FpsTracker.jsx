@@ -1,27 +1,30 @@
-import { useEffect, useRef, memo } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
+
+const FPS_DROP_THRESHOLD = 40;
+const FPS_CRITICAL_THRESHOLD = 25;
+const HISTORY_SIZE = 120;
 
 function FpsTracker() {
-  const ref = useRef(null);
+  const [perf, setPerf] = useState(null);
 
   useEffect(() => {
     function onPerf(e) {
-      // Direct DOM update — no React re-render needed for a number display
-      if (ref.current && e.detail) {
-        const fps = e.detail.fps;
-        ref.current.textContent = fps;
-        ref.current.style.color = fps >= 55 ? '#44ff44'
-          : fps >= 40 ? '#aaff44'
-          : fps >= 25 ? '#ffaa00'
-          : '#ff4444';
-      }
+      setPerf(e.detail);
     }
     window.addEventListener('godot-perf', onPerf);
     return () => window.removeEventListener('godot-perf', onPerf);
   }, []);
 
+  if (!perf) return null;
+
+  const fpsColor = perf.fps >= 55 ? '#44ff44'
+    : perf.fps >= FPS_DROP_THRESHOLD ? '#aaff44'
+    : perf.fps >= FPS_CRITICAL_THRESHOLD ? '#ffaa00'
+    : '#ff4444';
+
   return (
     <div style={styles.container}>
-      <span ref={ref} style={styles.fpsNumber}>--</span>
+      <span style={{ ...styles.fpsNumber, color: fpsColor }}>{perf.fps}</span>
     </div>
   );
 }
@@ -45,7 +48,6 @@ const styles = {
     fontWeight: 'bold',
     lineHeight: 1,
     opacity: 0.8,
-    color: '#44ff44',
   },
 };
 
