@@ -516,7 +516,7 @@ func _return_home() -> void:
 ## Handles town hall destruction: sets troops to VICTORY, then destroys
 ## remaining buildings one-by-one with staggered explosions. Victory screen
 ## shows only after the last building is gone.
-const CHAIN_DESTROY_DELAY: float = 1.5  ## seconds between each building explosion
+const CHAIN_DESTROY_DELAY: float = 3.0  ## seconds between each building explosion
 
 func _on_town_hall_destroyed() -> void:
 	_battle_timer_active = false

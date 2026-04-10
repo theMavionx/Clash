@@ -2715,9 +2715,20 @@ func remove_building(b: Dictionary) -> void:
 	var idx: int = placed_buildings.find(b)
 	if idx < 0:
 		return
-	# Town Hall destroyed during attack → victory: destroy all buildings + loot 30%
+	# Town Hall destroyed during attack → explode TH first, then chain-destroy remaining
 	# Skip during replay — replay handles its own end screen
 	if b.id == "town_hall" and is_viewing_enemy and not _replay_active:
+		# Explode TH itself (same logic as normal building destruction below)
+		if b.has("hp_bar") and is_instance_valid(b.hp_bar):
+			b.hp_bar.queue_free()
+		var th_icon: Control = b.get("_collect_icon")
+		if is_instance_valid(th_icon):
+			th_icon.queue_free()
+		if is_instance_valid(b.node):
+			_cannon._spawn_ship_explosion(b.node.global_position)
+			_replace_with_ruins(b.node)
+		placed_buildings.remove_at(idx)
+		# Then chain-destroy remaining buildings with delay
 		_on_town_hall_destroyed()
 		return
 	# Tombstone → kill all its skeleton guards
