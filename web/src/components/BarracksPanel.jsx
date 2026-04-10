@@ -69,47 +69,47 @@ const TROOP_STATS = {
   Knight: {
     display: "Knight",
     stats: {
-      1: { hp: 1100, damage: 75, atk_speed: 1.667 },
-      2: { hp: 1450, damage: 100, atk_speed: 1.538 },
-      3: { hp: 1850, damage: 130, atk_speed: 1.429 },
+      1: { hp: 367, damage: 25, atk_speed: 1.667 },
+      2: { hp: 483, damage: 33, atk_speed: 1.538 },
+      3: { hp: 617, damage: 43, atk_speed: 1.429 },
     },
-    maxStats: { hp: 2000, damage: 150, atk_speed: 2.0 }
+    maxStats: { hp: 700, damage: 50, atk_speed: 2.0 }
   },
   Mage: {
     display: "Mage",
     stats: {
-      1: { hp: 420, damage: 185, atk_speed: 1.25 },
-      2: { hp: 560, damage: 245, atk_speed: 1.111 },
-      3: { hp: 720, damage: 320, atk_speed: 1.0 },
+      1: { hp: 140, damage: 62, atk_speed: 1.25 },
+      2: { hp: 187, damage: 82, atk_speed: 1.111 },
+      3: { hp: 240, damage: 107, atk_speed: 1.0 },
     },
-    maxStats: { hp: 800, damage: 350, atk_speed: 2.0 }
+    maxStats: { hp: 270, damage: 120, atk_speed: 2.0 }
   },
   Barbarian: {
     display: "Barbarian",
     stats: {
-      1: { hp: 520, damage: 90, atk_speed: 0.625 },
-      2: { hp: 690, damage: 120, atk_speed: 0.571 },
-      3: { hp: 880, damage: 158, atk_speed: 0.526 },
+      1: { hp: 173, damage: 30, atk_speed: 0.625 },
+      2: { hp: 230, damage: 40, atk_speed: 0.571 },
+      3: { hp: 293, damage: 53, atk_speed: 0.526 },
     },
-    maxStats: { hp: 1000, damage: 200, atk_speed: 1.0 }
+    maxStats: { hp: 330, damage: 60, atk_speed: 1.0 }
   },
   Archer: {
     display: "Archer",
     stats: {
-      1: { hp: 580, damage: 130, atk_speed: 1.111 },
-      2: { hp: 760, damage: 175, atk_speed: 1.0 },
-      3: { hp: 970, damage: 228, atk_speed: 0.909 },
+      1: { hp: 193, damage: 43, atk_speed: 1.111 },
+      2: { hp: 253, damage: 58, atk_speed: 1.0 },
+      3: { hp: 323, damage: 76, atk_speed: 0.909 },
     },
-    maxStats: { hp: 1100, damage: 250, atk_speed: 1.5 }
+    maxStats: { hp: 370, damage: 85, atk_speed: 1.5 }
   },
   Ranger: {
     display: "Ranger",
     stats: {
-      1: { hp: 680, damage: 110, atk_speed: 1.0 },
-      2: { hp: 900, damage: 148, atk_speed: 0.909 },
-      3: { hp: 1150, damage: 192, atk_speed: 0.833 },
+      1: { hp: 227, damage: 37, atk_speed: 1.0 },
+      2: { hp: 300, damage: 49, atk_speed: 0.909 },
+      3: { hp: 383, damage: 64, atk_speed: 0.833 },
     },
-    maxStats: { hp: 1300, damage: 220, atk_speed: 1.0 }
+    maxStats: { hp: 430, damage: 75, atk_speed: 1.0 }
   }
 };
 

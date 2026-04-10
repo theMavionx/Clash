@@ -43,13 +43,18 @@ export function GodotProvider({ children }) {
           break;
         case 'state':
           setPlayerState(prev => ({ ...(prev || {}), ...data }));
-          if (data.token) window._playerToken = data.token;
-          if (data.tutorial_flags !== undefined) {
-            setTutorialFlags(data.tutorial_flags);
-            // Auto-trigger first uncompleted tutorial phase
-            if (!(data.tutorial_flags & 1)) setTutorialPhase('base');
-            else if (!(data.tutorial_flags & 2)) setTutorialPhase('army');
-            else if (!(data.tutorial_flags & 8)) setTutorialPhase('trade');
+          if (data.token) {
+            window._playerToken = data.token;
+            // Fetch tutorial progress from server (Godot bridge doesn't include it)
+            fetch('/api/tutorial', { headers: { 'x-token': data.token } })
+              .then(r => r.json()).then(res => {
+                if (res.tutorial_flags !== undefined) {
+                  setTutorialFlags(res.tutorial_flags);
+                  if (!(res.tutorial_flags & 1)) setTutorialPhase('base');
+                  else if (!(res.tutorial_flags & 2)) setTutorialPhase('army');
+                  else if (!(res.tutorial_flags & 8)) setTutorialPhase('trade');
+                }
+              }).catch(() => {});
           }
           break;
         case 'resources':

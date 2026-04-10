@@ -126,15 +126,23 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
       </div>
 
       {/* Ships with troops - Bottom Left */}
-      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 6 } : {}) }}>
+      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4 } : {}) }}>
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
           const troops = ship.troops || [];
           const liveCount = isPlaced ? troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) : troops.length;
           const allDead = isPlaced && liveCount === 0;
           const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
-          const cardW = mobile ? 70 : 90;
-          const cardH = mobile ? 80 : 100;
+          const cardW = mobile ? 60 : 80;
+          const cardH = mobile ? 70 : 90;
+
+          // Group troops by type for compact display
+          const troopGroups = {};
+          for (const t of troops) {
+            const key = t.toLowerCase();
+            troopGroups[key] = (troopGroups[key] || 0) + 1;
+          }
+          const groupEntries = Object.entries(troopGroups);
 
           return (
             <button
@@ -147,38 +155,40 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
                 boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
                 flexDirection: 'column',
-                gap: 2,
-                padding: '4px 3px',
+                gap: 1,
+                padding: '3px 2px',
               }}
               onClick={(e) => {
-                console.log('[SHIP BTN]', { shipIdx, isPlaced, allDead, placed, troops: troops.length });
                 e.stopPropagation();
                 if (!isPlaced && !allDead) onSelectTroop(shipIdx);
               }}
             >
               {/* Ship level indicator */}
-              <div style={{ fontSize: 9, fontWeight: 800, color: 'rgba(160,220,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
-                {isPlaced ? 'DEPLOYED' : `Ship Lv.${ship.level}`}
+              <div style={{ fontSize: 8, fontWeight: 800, color: 'rgba(160,220,255,0.7)', textTransform: 'uppercase', letterSpacing: '0.3px' }}>
+                {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
               </div>
 
-              {/* Troop portraits row */}
-              <div style={{ display: 'flex', gap: 2 }}>
-                {troops.map((troopName, ti) => {
-                  const info = TROOP_IMG_MAP[troopName.toLowerCase()] || {};
-                  const sz = mobile ? 20 : 24;
+              {/* Troop portraits — grouped with count badges */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'center', flex: 1, alignItems: 'center' }}>
+                {groupEntries.map(([troopKey, count]) => {
+                  const info = TROOP_IMG_MAP[troopKey] || {};
+                  const sz = mobile ? 18 : 22;
                   return (
-                    <div key={ti} style={{ width: sz, height: sz, borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(40,140,200,0.3)' }}>
-                      {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />}
+                    <div key={troopKey} style={{ position: 'relative' }}>
+                      <div style={{ width: sz, height: sz, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(40,140,200,0.3)' }}>
+                        {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />}
+                      </div>
+                      {count > 1 && (
+                        <div style={{ position: 'absolute', bottom: -2, right: -4, background: '#1a3050', color: '#7df4ff', fontSize: 7, fontWeight: 900, borderRadius: 3, padding: '0 2px', lineHeight: '10px', border: '1px solid rgba(40,140,200,0.4)' }}>
+                          x{count}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
-              {/* Troop names */}
-              <div style={{ fontSize: 8, color: 'rgba(160,220,255,0.6)', lineHeight: 1.1, textAlign: 'center' }}>
-                {troops.map(t => (TROOP_IMG_MAP[t.toLowerCase()]?.label || t).slice(0, 3)).join(' ')}
-              </div>
-
+              {/* Total troop count badge */}
               {!isPlaced && (
                 <div style={hud.countBadge}>
                   <span style={hud.countText}>x{troops.length}</span>

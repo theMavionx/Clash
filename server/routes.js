@@ -492,7 +492,7 @@ router.post('/buildings/:id/load-troop', auth, (req, res) => {
     if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
-    const capacity = building.level;
+    const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
     if (shipTroops.length >= capacity) throw { status: 400, error: 'Ship is full' };
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
@@ -516,7 +516,7 @@ router.post('/buildings/:id/load-troop', auth, (req, res) => {
   }
 });
 
-// Swap a troop in a specific slot (costs 100 gold). Updates template.
+// Swap a troop in a specific slot (costs 100 gold). Does NOT update template.
 router.post('/buildings/:id/swap-troop', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
@@ -544,7 +544,7 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
     db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
-    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level, resources: updated };
+    return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level * 3, resources: updated };
   });
 
   try {
@@ -684,6 +684,13 @@ router.post('/buildings/:id/unload-troops', auth, (req, res) => {
 // Bit 2 (4):  attack tutorial (first battle guide)
 // Bit 3 (8):  trading tutorial
 
+// GET current tutorial state
+router.get('/tutorial', auth, (req, res) => {
+  const player = db.db.prepare('SELECT tutorial_flags FROM players WHERE id = ?').get(req.player.id);
+  res.json({ tutorial_flags: player?.tutorial_flags || 0 });
+});
+
+// POST mark a tutorial phase as complete (flag is a bitmask: 1,2,4,8)
 router.post('/tutorial/complete', auth, (req, res) => {
   const { flag } = req.body;
   if (!Number.isInteger(flag) || flag < 1 || flag > 15) return res.status(400).json({ error: 'Invalid flag' });

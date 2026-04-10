@@ -19,9 +19,9 @@ var _pool_ready: bool = false
 
 
 const LEVEL_STATS = {
-	1: {"hp": 580, "damage": 130, "atk_speed": 1.111},
-	2: {"hp": 760, "damage": 175, "atk_speed": 1.0},
-	3: {"hp": 970, "damage": 228, "atk_speed": 0.909},
+	1: {"hp": 193, "damage": 43, "atk_speed": 1.111},
+	2: {"hp": 253, "damage": 58, "atk_speed": 1.0},
+	3: {"hp": 323, "damage": 76, "atk_speed": 0.909},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files

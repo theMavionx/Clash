@@ -401,8 +401,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
     const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
 
-    const slotW = isMobile ? 54 : 70;
-    const slotH = isMobile ? 70 : 90;
+    const slotW = isMobile ? 36 : (capacity > 6 ? 50 : 70);
+    const slotH = isMobile ? 46 : (capacity > 6 ? 64 : 90);
     const cardW = isMobile ? 'calc(33% - 6px)' : 108;
 
     return (
@@ -415,7 +415,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           </div>
 
           {/* Loaded troops slots */}
-          <div style={{...LT.loadedBar, padding: isMobile ? '8px 10px' : '12px 14px'}}>
+          <div style={{...LT.loadedBar, padding: isMobile ? '6px 8px' : '10px 14px', flexWrap: 'wrap', gap: isMobile ? 4 : 6}}>
             {Array.from({ length: capacity }).map((_, i) => {
               const t = shipTroops[i];
               const isSwapping = swapSlot === i;

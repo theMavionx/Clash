@@ -112,7 +112,7 @@ func _load_troop_to_ship(troop_name: String) -> void:
 		bridge.send_to_react("ship_updated", {
 			"ship_level": ship_level,
 			"ship_troops": updated_troops,
-			"ship_capacity": ship_level,
+			"ship_capacity": ship_level * 3,
 		})
 
 func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
@@ -147,7 +147,7 @@ func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
 		bridge.send_to_react("ship_updated", {
 			"ship_level": ship_level,
 			"ship_troops": updated_troops,
-			"ship_capacity": ship_level,
+			"ship_capacity": ship_level * 3,
 		})
 
 # ---------------------------------------------------------------------------
@@ -240,7 +240,7 @@ func _find_port_with_free_slot(from_pos: Vector3) -> Dictionary:
 					continue
 				var ship_level: int = pnode.get_meta("ship_level", 1)
 				var ship_troops: Array = pnode.get_meta("ship_troops", [])
-				if ship_troops.size() >= ship_level:
+				if ship_troops.size() >= ship_level * 3:
 					continue  # full
 				var d: float = from_pos.distance_to(pnode.global_position)
 				if d < best_dist:
@@ -259,7 +259,7 @@ func _get_free_ship_slots() -> int:
 				if is_instance_valid(pnode) and pnode.has_meta("has_ship"):
 					var ship_level: int = pnode.get_meta("ship_level", 1)
 					var ship_troops: Array = pnode.get_meta("ship_troops", [])
-					free += ship_level - ship_troops.size()
+					free += ship_level * 3 - ship_troops.size()
 	return free
 
 

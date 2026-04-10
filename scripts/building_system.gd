@@ -2330,7 +2330,7 @@ func _select_building(b: Dictionary) -> void:
 			"has_ship": bs_has_ship,
 			"ship_level": bs_ship_level,
 			"ship_troops": bs_ship_troops,
-			"ship_capacity": bs_ship_level,
+			"ship_capacity": bs_ship_level * 3,
 			"troop_levels": troop_levels,
 		})
 
@@ -3194,7 +3194,7 @@ func _refresh_port_panel() -> void:
 	var port_node = b.get("node", null)
 	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
 	var ship_level: int = port_node.get_meta("ship_level", 0) if has_ship and is_instance_valid(port_node) else 0
-	var ship_capacity: int = ship_level  # Lv1=1, Lv2=2, Lv3=3
+	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9
 	var ship_troops: Array = port_node.get_meta("ship_troops", []) if has_ship and is_instance_valid(port_node) else []
 
 	if has_ship:
@@ -3349,7 +3349,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 			"has_ship": true,
 			"ship_level": ship_level,
 			"ship_troops": ship_troops,
-			"ship_capacity": ship_level,
+			"ship_capacity": ship_level * 3,
 			"ship_cost": def.get("ship_cost", {}),
 			"troop_levels": troop_levels,
 			"server_id": port_building.get("server_id", -1),
@@ -3407,7 +3407,7 @@ func _reinforce_troops() -> void:
 					bridge.send_to_react("ship_updated", {
 						"ship_troops": pnode.get_meta("ship_troops", []),
 						"ship_level": pnode.get_meta("ship_level", 1),
-						"ship_capacity": pnode.get_meta("ship_level", 1),
+						"ship_capacity": pnode.get_meta("ship_level", 1) * 3,
 					})
 
 ## Called when a troop dies in battle — removes one instance from ship_troops on server.
