@@ -356,7 +356,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const shipCost = building.ship_cost || { gold: 1500, wood: 1000 };
     const leftContent = (
       <>
-        <StatBox label="Troop Capacity" current={0} upgradeTo={10} />
+        <StatBox label="Troop Capacity" current={0} upgradeTo={(building.level || 1) * 3} />
         <StatBox label="Barrage / Artillery" current={"None"} upgradeTo={250} />
       </>
     );
@@ -663,12 +663,13 @@ const styles = {
     background: 'radial-gradient(circle at 30% 30%, #d4caa8 0%, #b8af8c 100%)',
     borderRadius: '50%',
     boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.3)',
-    border: '2px solid rgba(0,0,0,0.1)'
+    border: '2px solid rgba(0,0,0,0.1)',
+    overflow: 'hidden',
   },
   characterImg: {
     position: 'absolute',
-    width: 280,
-    height: 280,
+    width: '100%',
+    height: '100%',
     objectFit: 'contain',
     zIndex: 5,
     pointerEvents: 'none',
@@ -826,7 +827,7 @@ const LT = {
   grid: {
     display: 'flex', flexWrap: 'wrap', gap: 10,
     padding: '16px 20px', justifyContent: 'center',
-    overflowY: 'auto', flex: 1,
+    overflowY: 'auto', flex: 1, minHeight: 0,
   },
   troopCard: {
     width: 108, flexShrink: 0, aspectRatio: '3/4', borderRadius: 8,

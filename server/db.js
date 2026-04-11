@@ -177,6 +177,7 @@ const TH_MAX_COUNT = {
   tombstone:    [0, 1, 3],  // unlocked at TH2
   turret:       [0, 0, 3],  // unlocked at TH3
   storage:      [0, 1, 2],  // unlocked at TH2
+  barracks:     [1, 1, 2],
   town_hall:    [1, 1, 1],
 };
 

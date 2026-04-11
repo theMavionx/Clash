@@ -580,6 +580,9 @@ func _on_town_hall_destroyed() -> void:
 		var bsys: Node = entry.bsys
 		if not is_instance_valid(b.get("node")):
 			continue
+		# Skip already-destroyed buildings (troops may have killed it during the delay)
+		if b.get("hp", 0) <= 0:
+			continue
 		# Tombstone → remove skeletons
 		if b.id == "tombstone":
 			bsys._remove_tombstone_skeletons(b)
@@ -841,7 +844,7 @@ func check_defeat(delta: float) -> void:
 	if not _had_troops:
 		return  # battle hasn't started yet
 
-	var fleet_size: int = _saved_fleet.size()
+	var fleet_size: int = mini(_saved_fleet.size(), 5)  # cap to max_ships
 	var total_launched: int = 0
 	if attack_system:
 		total_launched = attack_system._total_ships_launched
@@ -867,7 +870,8 @@ func check_defeat(delta: float) -> void:
 			continue  # skip ships that were never deployed
 		for t_name in ship.get("troops", []):
 			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
-	if net_def and net_def.has_token() and def_id != "":
+	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
+		_victory_declared = true  # prevent double-submission
 		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
 		if not is_instance_valid(bs): return
 		# Apply authoritative post-casualty ship state from server

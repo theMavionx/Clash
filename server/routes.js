@@ -230,10 +230,11 @@ function _applyCasualties(playerId, casualties) {
 
   // Count total deployed troops across all ships
   const ports = db.db.prepare('SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  // Count from actual ship_troops (not template) — template may differ after swaps
   const deployed = {};
   for (const port of ports) {
-    const template = JSON.parse(port.ship_troops_template || '[]');
-    for (const t of template) deployed[t] = (deployed[t] || 0) + 1;
+    const troops = JSON.parse(port.ship_troops || '[]');
+    for (const t of troops) deployed[t] = (deployed[t] || 0) + 1;
   }
 
   // Cap casualties to deployed counts (prevent client from claiming more losses than deployed)
@@ -590,18 +591,21 @@ router.post('/troop-died', auth, (req, res) => {
   const { troop_name } = req.body;
   if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop' });
 
-  // Find first port that has this troop and remove one instance
-  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
-  for (const port of ports) {
-    const troops = JSON.parse(port.ship_troops || '[]');
-    const idx = troops.indexOf(troop_name);
-    if (idx !== -1) {
-      troops.splice(idx, 1);
-      db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(troops), port.id);
-      return res.json({ success: true, removed: troop_name, port_id: port.id });
+  // Find first port that has this troop and remove one instance (atomic)
+  const result = db.db.transaction(() => {
+    const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
+    for (const port of ports) {
+      const troops = JSON.parse(port.ship_troops || '[]');
+      const idx = troops.indexOf(troop_name);
+      if (idx !== -1) {
+        troops.splice(idx, 1);
+        db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(troops), port.id);
+        return { removed: troop_name, port_id: port.id };
+      }
     }
-  }
-  res.json({ success: true, removed: null }); // troop not found in any ship (already removed)
+    return { removed: null };
+  })();
+  res.json({ success: true, ...result });
 });
 
 // Get casualties: compare ship_troops vs ship_troops_template to find missing troops
@@ -671,9 +675,12 @@ router.post('/reinforce', auth, (req, res) => {
     db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(totalCost, req.player.id);
 
     // Append missing troops to current (preserves swaps, only restores casualties)
+    // Cap to ship capacity to prevent overflow from swap+reinforce combo
     const resultShips = [];
     for (const { port, current, toAdd } of shipsToRestore) {
-      const restored = [...current, ...toAdd];
+      const capacity = port.level * 3;
+      const slotsAvailable = Math.max(0, capacity - current.length);
+      const restored = [...current, ...toAdd.slice(0, slotsAvailable)];
       const troopsJson = JSON.stringify(restored);
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
       resultShips.push({ id: port.id, ship_troops: restored });

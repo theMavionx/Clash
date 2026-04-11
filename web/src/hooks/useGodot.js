@@ -12,7 +12,7 @@ export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [playerState, setPlayerState] = useState(null);
   const [resources, setResources] = useState({ gold: 0, wood: 0, ore: 0 });
-  const [buildingDefs, setBuildingDefs] = useState({ buildings: {}, troops: {} });
+  const [buildingDefs, setBuildingDefs] = useState({ buildings: {}, troops: {}, placed_counts: {} });
   const [troopLevels, setTroopLevels] = useState({});
   const [selectedBuilding, setSelectedBuilding] = useState(null);
   const [shopOpen, setShopOpen] = useState(false);

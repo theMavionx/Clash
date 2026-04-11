@@ -24,7 +24,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
 		"hp_levels": [1200, 2200, 3800],
-		"cost": {"gold": 300, "wood": 280},
+		"cost": {"gold": 200, "wood": 500},
 		"produces": "ore",
 		"produce_rate": [6, 11, 18],    # per minute per level
 		"produce_max": [200, 400, 800],  # max stored before collection
@@ -38,7 +38,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [2000, 3500, 6000],
-		"cost": {"gold": 200, "wood": 420, "ore": 200},
+		"cost": {"gold": 300, "wood": 800, "ore": 600},
 	},
 	"port": {
 		"name": "Port",
@@ -50,7 +50,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
 		"hp_levels": [1800, 3200, 5500],
-		"cost": {"gold": 600, "wood": 550, "ore": 420},
+		"cost": {"gold": 500, "wood": 1200, "ore": 1000},
 		"no_outline": true,
 	},
 	"sawmill": {
@@ -61,7 +61,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
 		"hp_levels": [1200, 2200, 3800],
-		"cost": {"gold": 250, "ore": 220},
+		"cost": {"gold": 200, "ore": 500},
 		"produces": "wood",
 		"produce_rate": [8, 15, 24],
 		"produce_max": [250, 500, 1000],
@@ -75,7 +75,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
 		"hp_levels": [1500, 2800, 4500],
-		"cost": {"gold": 400, "wood": 500},
+		"cost": {"gold": 300, "wood": 1000},
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -90,7 +90,7 @@ var building_defs: Dictionary = {
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 5000, "wood": 3000, "ore": 2000}, 3: {"gold": 15000, "wood": 10000, "ore": 8000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -101,7 +101,7 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
 		"hp_levels": [900, 1600, 2800],
-		"cost": {"gold": 500, "wood": 700, "ore": 500},
+		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
 	"storage": {
@@ -114,7 +114,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
 		"hp_levels": [1400, 2500, 4200],
-		"cost": {"gold": 300, "wood": 560},
+		"cost": {"gold": 300, "wood": 1200},
 	},
 	"archer_tower": {
 		"name": "Archer Tower",
@@ -127,7 +127,7 @@ var building_defs: Dictionary = {
 		"model_offset": Vector3(0.11, 0, -0.02),
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500],
-		"cost": {"gold": 500, "wood": 700},
+		"cost": {"gold": 400, "wood": 1500},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
 			"model": "res://Model/Characters/Model/Ranger.glb",
@@ -144,7 +144,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb"],
 		"model_scale": 0.3,
 		"hp_levels": [1000, 1500, 2000],
-		"cost": {"gold": 150, "ore": 280},
+		"cost": {"gold": 200, "ore": 800},
 	},
 	"flag": {
 		"name": "Flag",

@@ -128,7 +128,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
       </div>
 
       {/* Ships - Bottom Left: compact ship icons */}
-      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4 } : {}) }}>
+      <div style={{ ...hud.wrapLeft, ...(mobile ? { bottom: 10, left: 10, gap: 4, flexWrap: 'wrap', maxWidth: 'calc(100vw - 80px)' } : {}) }}>
         {/* Fleet info button */}
         <button
           style={{ ...hud.card, width: mobile ? 28 : 34, height: mobile ? 28 : 34, padding: 0, borderColor: 'rgba(255,215,0,0.6)', cursor: 'pointer', flexDirection: 'column', gap: 0 }}
@@ -139,7 +139,6 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
           const troops = ship.troops || [];
-          const allDead = isPlaced && troops.reduce((sum, t) => sum + (perf.troop_counts[t.toLowerCase()] ?? 0), 0) === 0;
           const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
           const sz = mobile ? 56 : 70;
 
@@ -149,7 +148,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
               style={{
                 ...hud.card,
                 width: sz, height: sz,
-                opacity: allDead ? 0.25 : isPlaced ? 0.5 : 1,
+                opacity: isPlaced ? 0.5 : 1,
                 borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
                 boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
@@ -157,7 +156,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
               }}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!isPlaced && !allDead) onSelectTroop(shipIdx);
+                if (!isPlaced) onSelectTroop(shipIdx);
               }}
             >
               <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />

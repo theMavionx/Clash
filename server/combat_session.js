@@ -13,7 +13,7 @@
 
 const {
   TROOP_STATS, DEFENSE_STATS, SKELETON_GUARD,
-  MAX_SHIPS, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
+  MAX_SHIPS, TROOPS_PER_SHIP, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   CANNON_DAMAGE, CANNON_INITIAL_ENERGY, CANNON_ENERGY_PER_DESTROY,
   cannonShotCost, VALID_TROOP_TYPES,
 } = require('./combat_defs');
@@ -172,7 +172,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
 
       if (act.type === 'place_ship' && shipsPlaced < MAX_SHIPS) {
         // Support both old (troopType) and new (troops[]) format
-        const shipTroops = act.troops || (act.troopType ? [act.troopType] : []);
+        const shipTroops = (act.troops || (act.troopType ? [act.troopType] : [])).slice(0, TROOPS_PER_SHIP);
         for (let ti = 0; ti < shipTroops.length; ti++) {
           const rawName = shipTroops[ti];
           const troopType = rawName.toLowerCase();
