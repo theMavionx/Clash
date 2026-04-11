@@ -2,7 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react';
 import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import { useFarcaster } from './hooks/useFarcaster';
-import loadingImage from './assets/photo_5357292113839723543_y (1) (1) (1).jpg';
+import loadingImage from './assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
 import './index.css';
 
 // Lazy load heavy components — only after Farcaster SDK is ready

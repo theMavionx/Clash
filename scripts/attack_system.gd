@@ -90,6 +90,7 @@ var _total_ships_launched: int = 0  # never reset mid-attack; used by React HUD
 ## Fleet data: array of {level: int, troops: [String], model_path: String}
 ## Populated by enter_attack_mode() from the player's actual port ships.
 var _fleet: Array = []
+var _active_ship_tweens: Array = []  # track tweens to kill on cancel
 var _next_troop_idx: int = 0  # kept for replay compatibility
 var ship_plane: MeshInstance3D
 var plane_y: float = 0.0
@@ -226,6 +227,11 @@ func exit_attack_mode() -> void:
 	_ships_placed = 0
 	_total_ships_launched = 0
 	_next_troop_idx = 0
+	# Kill any in-flight ship tweens to prevent orphaned troop deployment
+	for tw in _active_ship_tweens:
+		if tw and tw.is_valid():
+			tw.kill()
+	_active_ship_tweens.clear()
 	# Free markers for ships that were cancelled before arriving
 	for marker in _ship_markers:
 		if is_instance_valid(marker):
@@ -453,6 +459,7 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
 
 	# Main movement
 	var tween: Tween = create_tween()
+	_active_ship_tweens.append(tween)
 	tween.tween_property(pivot, "global_position", stop_pos, sail_duration).set_trans(Tween.TRANS_LINEAR)
 
 	# When ship arrives → remove flag marker, free stop slot, deploy troops

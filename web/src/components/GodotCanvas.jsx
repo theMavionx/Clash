@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import loadingImage from '../assets/photo_5357292113839723543_y (1) (1) (1).jpg';
+import loadingImage from '../assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy

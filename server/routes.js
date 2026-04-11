@@ -579,7 +579,14 @@ router.get('/ships', auth, (req, res) => {
 });
 
 // Report a single troop death during battle — removes one from ship_troops immediately
+// Rate-limited: max 1 per 500ms per player to prevent abuse
+const _troopDiedTimestamps = {};
 router.post('/troop-died', auth, (req, res) => {
+  const now = Date.now();
+  const last = _troopDiedTimestamps[req.player.id] || 0;
+  if (now - last < 500) return res.status(429).json({ error: 'Too fast' });
+  _troopDiedTimestamps[req.player.id] = now;
+
   const { troop_name } = req.body;
   if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop' });
 
@@ -637,13 +644,21 @@ router.post('/reinforce', auth, (req, res) => {
     for (const port of ports) {
       const current = JSON.parse(port.ship_troops || '[]');
       const template = JSON.parse(port.ship_troops_template || '[]');
-      // If template is empty, nothing to restore (player never loaded troops)
       if (template.length === 0) continue;
-      // Compare: template is the full layout, current may have gaps (nulls) or fewer entries
-      const missing = template.length - current.length;
-      if (missing > 0) {
-        totalToRestore += missing;
-        shipsToRestore.push({ port, template });
+      // Count missing troops by type (template - current)
+      const currentCounts = {};
+      for (const t of current) currentCounts[t] = (currentCounts[t] || 0) + 1;
+      const toAdd = [];
+      for (const t of template) {
+        if (currentCounts[t] && currentCounts[t] > 0) {
+          currentCounts[t]--;
+        } else {
+          toAdd.push(t);
+        }
+      }
+      if (toAdd.length > 0) {
+        totalToRestore += toAdd.length;
+        shipsToRestore.push({ port, current, toAdd });
       }
     }
 
@@ -655,12 +670,13 @@ router.post('/reinforce', auth, (req, res) => {
 
     db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(totalCost, req.player.id);
 
-    // Restore each ship to its template (exact same troops, same slots)
+    // Append missing troops to current (preserves swaps, only restores casualties)
     const resultShips = [];
-    for (const { port, template } of shipsToRestore) {
-      const troopsJson = JSON.stringify(template);
+    for (const { port, current, toAdd } of shipsToRestore) {
+      const restored = [...current, ...toAdd];
+      const troopsJson = JSON.stringify(restored);
       db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, port.id);
-      resultShips.push({ id: port.id, ship_troops: template });
+      resultShips.push({ id: port.id, ship_troops: restored });
     }
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);

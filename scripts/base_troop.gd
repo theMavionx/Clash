@@ -754,13 +754,14 @@ func _move_to_target(delta: float) -> void:
 
 	# Enter attack when close to slot or within attack range
 	if slot_dist < 0.05 or dist <= attack_range:
+		if state != State.ATTACKING:
+			# Only reset timer on first entry — not on re-entry from oscillation
+			attack_timer = 0.0
+			if attack_anim != "" and anim_player.has_animation(attack_anim):
+				anim_player.play(attack_anim)
 		state = State.ATTACKING
-		attack_timer = 0.0
-		# Snap rotation to face target
 		look_at(global_position + dir_to_target, Vector3.UP)
 		rotate_y(PI)
-		if attack_anim != "" and anim_player.has_animation(attack_anim):
-			anim_player.play(attack_anim)
 		return
 
 	# Stuck detection

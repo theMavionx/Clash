@@ -127,6 +127,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if st.pressed:
 			_touch_points[st.index] = st.position
 			_touch_start[st.index] = st.position
+			_is_panning = false  # disable mouse pan — touch handles it
 		else:
 			_touch_points.erase(st.index)
 			_touch_start.erase(st.index)
@@ -202,21 +203,14 @@ func _screen_to_world_xz(screen_pos: Vector2) -> Vector3:
 ## Returns true if building system is currently placing or moving a building.
 ## When busy, camera should NOT pan/zoom — let the placement system own touches.
 func _is_building_system_busy() -> bool:
-	var bs = get_node_or_null("/root/Main/BuildingSystem")
-	if not bs:
-		# Try alternative paths — building system might be a child node
-		var roots = get_tree().root.get_children()
-		for r in roots:
-			var found = r.find_child("BuildingSystem", true, false)
-			if found:
-				bs = found
-				break
-	if not bs:
-		return false
-	if "is_placing" in bs and bs.is_placing:
-		return true
-	if "_is_moving" in bs and bs._is_moving:
-		return true
+	# Check ALL building systems (there can be multiple in the scene)
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not is_instance_valid(bs):
+			continue
+		if "is_placing" in bs and bs.is_placing:
+			return true
+		if "_is_moving" in bs and bs._is_moving:
+			return true
 	return false
 
 
