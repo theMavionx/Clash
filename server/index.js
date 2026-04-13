@@ -278,13 +278,23 @@ app.get('/api/admin/panel', (req, res) => {
   </div>
 
   <div class="panel" id="tab-tasks">
-    <div class="stats">
-      <div class="stat" style="cursor:pointer;border-color:#34d399" onclick="openTaskForm()"><div class="v" style="font-size:14px;color:#34d399">+ NEW TASK</div><div class="l">Create Quest</div></div>
-      <div class="stat"><div class="v" id="tasksCount">0</div><div class="l">Total</div></div>
-      <div class="stat"><div class="v" id="tasksActive" style="color:#34d399">0</div><div class="l">Active</div></div>
+    <div class="stats" id="tasksSummary"></div>
+    <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap">
+      <div style="flex:1;min-width:280px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
+        <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Top Quest Hunters</h3>
+        <table style="font-size:12px"><thead><tr>
+          <th>Player</th><th>Claims</th><th>Gold</th>
+        </tr></thead><tbody id="tasksTopPlayers"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:280px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
+        <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Claims by Type</h3>
+        <table style="font-size:12px"><thead><tr>
+          <th>Type</th><th>Claims</th>
+        </tr></thead><tbody id="tasksByType"></tbody></table>
+      </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Type</th><th>Title</th><th>Params</th><th>Reward</th><th>Active</th><th>Repeat</th><th>Started</th><th>Claimed</th><th>Actions</th>
+      <th>ID</th><th>Type</th><th>Title</th><th>Params</th><th>Reward</th><th>Active</th><th>Repeat</th><th>Started</th><th>Claimed</th><th>Rate</th><th>Avg %</th><th>Last Claim</th><th>Actions</th>
     </tr></thead><tbody id="tasksBody"></tbody></table>
   </div>
 
@@ -675,23 +685,56 @@ let TASKS_CACHE = [];
 
 async function loadTasks() {
   try {
-    const list = await api('/admin/tasks');
+    const [list, summary] = await Promise.all([api('/admin/tasks'), api('/admin/tasks-summary')]);
     TASKS_CACHE = list;
-    document.getElementById('tasksCount').textContent = list.length;
-    document.getElementById('tasksActive').textContent = list.filter(t => t.active).length;
+
+    // Summary cards
+    const sr = summary.rewards || {};
+    document.getElementById('tasksSummary').innerHTML =
+      '<div class="stat" style="cursor:pointer;border-color:#34d399" onclick="openTaskForm()"><div class="v" style="font-size:14px;color:#34d399">+ NEW</div><div class="l">Create Quest</div></div>' +
+      '<div class="stat"><div class="v">' + summary.total + '</div><div class="l">Total Quests</div></div>' +
+      '<div class="stat"><div class="v" style="color:#34d399">' + summary.active + '</div><div class="l">Active</div></div>' +
+      '<div class="stat"><div class="v">' + summary.started + '</div><div class="l">Total Starts</div></div>' +
+      '<div class="stat"><div class="v" style="color:#34d399">' + summary.claimed + '</div><div class="l">Total Claims</div></div>' +
+      '<div class="stat"><div class="v">' + Math.round(summary.completion_rate * 100) + '%</div><div class="l">Completion</div></div>' +
+      '<div class="stat"><div class="v">' + summary.unique_players_started + '</div><div class="l">Players Started</div></div>' +
+      '<div class="stat"><div class="v">' + summary.unique_players_claimed + '</div><div class="l">Players Claimed</div></div>' +
+      '<div class="stat"><div class="v" style="color:#e8b830">' + (sr.gold||0).toLocaleString() + '</div><div class="l">Gold Paid</div></div>' +
+      '<div class="stat"><div class="v" style="color:#6ab344">' + (sr.wood||0).toLocaleString() + '</div><div class="l">Wood Paid</div></div>' +
+      '<div class="stat"><div class="v" style="color:#8a9aaa">' + (sr.ore||0).toLocaleString() + '</div><div class="l">Ore Paid</div></div>' +
+      '<div class="stat"><div class="v" style="color:#93c5fd">' + summary.last_24h.started + ' / ' + summary.last_24h.claimed + '</div><div class="l">24h Starts / Claims</div></div>';
+
+    // Top players
+    document.getElementById('tasksTopPlayers').innerHTML = (summary.top_players || []).map(p =>
+      '<tr><td><strong>' + esc(p.name) + '</strong></td><td>' + p.claims + '</td><td style="color:#e8b830">' + (p.gold_earned || 0).toLocaleString() + '</td></tr>'
+    ).join('') || '<tr><td colspan="3" style="color:#6b7280;text-align:center;padding:12px">No claims yet</td></tr>';
+
+    // Claims by type
+    document.getElementById('tasksByType').innerHTML = (summary.by_type || []).map(r =>
+      '<tr><td><span class="badge" style="background:#1e3a5f;color:#93c5fd">' + r.type + '</span></td><td>' + r.claims + '</td></tr>'
+    ).join('') || '<tr><td colspan="2" style="color:#6b7280;text-align:center;padding:12px">No data</td></tr>';
+
+    // Tasks table
     document.getElementById('tasksBody').innerHTML = list.map(t => {
       const paramsText = Object.entries(t.params || {}).map(([k,v]) => k + '=' + v).join(', ');
       const reward = [t.reward_gold && ('G:' + t.reward_gold), t.reward_wood && ('W:' + t.reward_wood), t.reward_ore && ('O:' + t.reward_ore)].filter(Boolean).join(' ');
+      const ratePct = Math.round((t.completion_rate || 0) * 100);
+      const avgPct = Math.round((t.avg_progress || 0) * 100);
+      const rateColor = ratePct >= 50 ? '#34d399' : ratePct >= 20 ? '#f59e0b' : '#fca5a5';
+      const lastClaim = t.last_claim ? t.last_claim.replace('T',' ').split('.')[0].split(' ')[0] : '—';
       return '<tr>' +
         '<td class="mono">' + t.id + '</td>' +
         '<td><span class="badge" style="background:#1e3a5f;color:#93c5fd">' + t.type + '</span></td>' +
         '<td><strong>' + esc(t.title) + '</strong><div style="color:#6b7280;font-size:11px">' + esc(t.description||'') + '</div></td>' +
-        '<td class="mono" style="font-size:11px;color:#9ca3af;max-width:220px;word-break:break-all">' + esc(paramsText) + '</td>' +
+        '<td class="mono" style="font-size:11px;color:#9ca3af;max-width:200px;word-break:break-all">' + esc(paramsText) + '</td>' +
         '<td>' + reward + '</td>' +
         '<td>' + (t.active ? '<span class="badge badge-ok">on</span>' : '<span class="badge badge-off">off</span>') + '</td>' +
         '<td>' + (t.repeatable ? ('<span class="badge badge-shield">' + t.cooldown_hours + 'h</span>') : '—') + '</td>' +
         '<td>' + (t.started_count || 0) + '</td>' +
-        '<td>' + (t.claimed_count || 0) + '</td>' +
+        '<td style="color:#34d399">' + (t.claimed_count || 0) + '</td>' +
+        '<td style="color:' + rateColor + ';font-weight:700">' + ratePct + '%</td>' +
+        '<td><div style="width:60px;height:6px;background:#111827;border-radius:3px;overflow:hidden;border:1px solid #374151"><div style="width:' + avgPct + '%;height:100%;background:#f59e0b"></div></div><div style="font-size:10px;color:#9ca3af;margin-top:2px">' + avgPct + '%</div></td>' +
+        '<td class="mono" style="font-size:11px;color:#9ca3af">' + lastClaim + '</td>' +
         '<td><button class="btn" onclick="taskStats(' + t.id + ')">Stats</button> <button class="btn" onclick="editTask(' + t.id + ')">Edit</button> <button class="btn" onclick="toggleTask(' + t.id + ',' + (t.active?0:1) + ')">' + (t.active?'Disable':'Enable') + '</button> <button class="btn" onclick="resetTaskProgress(' + t.id + ')" style="border-color:#f59e0b;color:#f59e0b">Reset</button> <button class="btn btn-danger" onclick="deleteTask(' + t.id + ')">Del</button></td>' +
         '</tr>';
     }).join('');

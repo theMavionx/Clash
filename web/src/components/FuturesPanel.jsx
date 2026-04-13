@@ -11,6 +11,8 @@ import OrderBook from './OrderBook';
 import TradeHistory from './TradeHistory';
 import FundingHistory from './FundingHistory';
 import QuestsTab from './QuestsTab';
+import ExplainMoveModal from './ExplainMoveModal';
+import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
 import pacificaLogo from '../assets/pacifica.png';
 
@@ -59,7 +61,7 @@ const TokenIcon = ({sym, size = 20}) => {
 };
 
 // Symbol picker dropdown with logo, max leverage, price, 24h change
-const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen }) {
+const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen, signals }) {
   const [search, setSearch] = useState('');
   const rows = useMemo(() => {
     return markets.map(m => {
@@ -96,6 +98,16 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   <TokenIcon sym={r.symbol} size={18} />
                   <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.symbol}</span>
                   <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
+                  {signals && signals[r.symbol] && signals[r.symbol].badge !== '·' && (
+                    <span title={signals[r.symbol].label} style={{
+                      fontSize: 11, fontWeight: 800, padding: '1px 5px', borderRadius: 4,
+                      background: '#fff5cc', border: '1px solid #d4c8b0', color: '#5C3A21',
+                      display: 'inline-flex', alignItems: 'center', gap: 2, whiteSpace: 'nowrap',
+                    }}>
+                      {signals[r.symbol].badge}
+                      {signals[r.symbol].label && <span style={{fontSize: 9}}>{signals[r.symbol].label}</span>}
+                    </span>
+                  )}
                 </div>
               </td>
               <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
@@ -443,6 +455,8 @@ function FuturesPanel() {
   const [orderType, setOrderType] = useState('market');
   const [limitPrice, setLimitPrice] = useState('');
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(false);
+  const elfaSignals = useElfaSignals();
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
@@ -610,8 +624,20 @@ function FuturesPanel() {
         <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
           <TokenIcon sym={symbol} size={20} />
           <span style={{fontSize: 16, fontWeight: 900}}>{symbol}</span>
+          {elfaSignals[symbol] && elfaSignals[symbol].badge !== '·' && (
+            <span title={elfaSignals[symbol].label} style={{fontSize: 12, fontWeight: 800}}>{elfaSignals[symbol].badge}</span>
+          )}
           {(!fullscreen || isMobile) && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <button data-nodrag onClick={() => setExplainOpen(true)} title="Explain this move (AI)" style={{
+          display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px',
+          background: 'linear-gradient(180deg, #fff5cc 0%, #f3ebd1 100%)',
+          border: '2px solid #d4c8b0', borderRadius: 8, color: '#5C3A21',
+          fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap',
+        }}>
+          <span style={{fontSize: 14}}>🧠</span>
+          <span>Explain</span>
         </button>
         {fullscreen && !isMobile && (
           <>
@@ -642,7 +668,7 @@ function FuturesPanel() {
       {showSymbolPicker && (
         <div style={{position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: 60}} onClick={() => setShowSymbolPicker(false)}>
           <div style={{width: fullscreen ? 480 : '90%', maxWidth: 600, maxHeight: '80vh', background: '#fdf8e7', border: '5px solid #d4c8b0', borderRadius: 16, padding: 12, boxShadow: '0 15px 40px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column'}} onClick={e => e.stopPropagation()}>
-            <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} />
+            <SymbolPicker markets={markets} prices={prices} symbol={symbol} onSelect={(s) => { setSymbol(s); setShowSymbolPicker(false); }} fullscreen={fullscreen} signals={elfaSignals} />
           </div>
         </div>
       )}
@@ -1251,6 +1277,8 @@ function FuturesPanel() {
           <span style={S.pacificaText}>Powered by</span>
           <span style={S.pacificaBrand}>Pacifica</span>
         </div>
+
+        {explainOpen && <ExplainMoveModal symbol={symbol} onClose={() => setExplainOpen(false)} />}
 
         {/* Gold earned notification */}
         {goldEarned && (

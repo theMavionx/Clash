@@ -165,7 +165,17 @@ func get_ships() -> Dictionary:
 func link_wallet(wallet: String) -> void:
 	if token == "" or wallet == "":
 		return
-	await _http_post("/players/link-wallet", {"wallet": wallet})
+	var response = await _http_post("/players/link-wallet", {"wallet": wallet})
+	# Server may tell us the wallet already belongs to another account and
+	# hand us that account's canonical token. Switch our session to it so
+	# desktop and Farcaster players share the same progress.
+	if response.get("switched_account", false) and response.has("token"):
+		token = response["token"]
+		player_id = response.get("id", player_id)
+		display_name = response.get("name", display_name)
+		trophies = response.get("trophies", trophies)
+		_save_token()
+		auth_ok.emit(response)
 
 func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})

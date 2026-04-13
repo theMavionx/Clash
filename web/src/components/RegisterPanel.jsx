@@ -22,17 +22,29 @@ function RegisterPanel() {
     }
   }, [connected, publicKey, sendToGodot]);
 
-  // Auto-register with Farcaster username if inside Farcaster frame
+  // Auto-register for Farcaster users.
+  // Wait up to 3s for the embedded Solana wallet to connect so we can register
+  // WITH the wallet — this is what links the Farcaster session to the same account
+  // the user has on desktop (otherwise two separate accounts get created).
   useEffect(() => {
-    if (isInFrame && fcUser && !triedFcLogin.current) {
+    if (!isInFrame || !fcUser || triedFcLogin.current) return;
+
+    const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
+
+    if (connected && publicKey) {
       triedFcLogin.current = true;
-      const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
-      // Don't pass Farcaster FID as wallet — it's not a Solana address and breaks
-      // wallet-dependent features (Pacifica trades, quests). Real wallet will be
-      // linked later when the Solana wallet connects (see wallet_connected flow).
-      sendToGodot('register', { name: fcName });
+      sendToGodot('register', { name: fcName, wallet: publicKey.toBase58() });
+      return;
     }
-  }, [isInFrame, fcUser, sendToGodot]);
+
+    // Wallet not ready yet — set a fallback timer so we don't hang forever
+    const fallback = setTimeout(() => {
+      if (triedFcLogin.current) return;
+      triedFcLogin.current = true;
+      sendToGodot('register', { name: fcName });
+    }, 3000);
+    return () => clearTimeout(fallback);
+  }, [isInFrame, fcUser, connected, publicKey, sendToGodot]);
 
   const handleSubmit = (e) => {
     e.preventDefault();

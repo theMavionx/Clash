@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./db');
 const tasks = require('./tasks');
+const elfa = require('./elfa');
 
 const router = express.Router();
 
@@ -76,12 +77,37 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
-// Link a wallet to existing account (e.g. Farcaster user connecting Solana wallet)
+// Link a wallet to current account. Wallet is the canonical identity — if it
+// already belongs to a different account (e.g. user plays on desktop with
+// wallet, then opens in Farcaster which auto-created a stub account), we do NOT
+// create a duplicate. Instead return the canonical account's token so the
+// client can switch sessions into it. The stub account is left intact for now
+// (admin can clean it up later) to avoid destroying data on race conditions.
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
-  db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id);
-  res.json({ success: true });
+
+  const current = req.player;
+  const existing = db.db.prepare('SELECT * FROM players WHERE wallet = ? AND id != ?').get(wallet, current.id);
+
+  if (existing) {
+    // Wallet is already bound to another account — that one wins.
+    // Tell the client to switch its session token.
+    const state = db.getFullPlayerState(existing.id);
+    logAuth('Wallet already linked to another account; returning canonical token', {
+      from_account: current.name, to_account: existing.name, wallet,
+    });
+    return res.json({
+      success: true,
+      switched_account: true,
+      token: existing.token,
+      ...state,
+    });
+  }
+
+  // No conflict — bind wallet to current account
+  db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, current.id);
+  res.json({ success: true, switched_account: false });
 });
 
 // Login by wallet address (recover account after cache clear)
@@ -1101,6 +1127,44 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   });
 });
 
+// ==================== ELFA (SOCIAL INTEL) ====================
+
+// Per-player rate limit for /elfa/explain — 10/min
+const explainRate = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 120000;
+  for (const [k, arr] of explainRate) {
+    const kept = arr.filter(t => t >= cutoff);
+    if (kept.length) explainRate.set(k, kept); else explainRate.delete(k);
+  }
+}, 300000);
+
+function explainRateLimit(playerId) {
+  const now = Date.now();
+  const arr = (explainRate.get(playerId) || []).filter(t => now - t < 60000);
+  if (arr.length >= 10) return false;
+  arr.push(now);
+  explainRate.set(playerId, arr);
+  return true;
+}
+
+// Social signals for all known trending tokens — cached 1h server-side
+router.get('/elfa/signals', auth, async (req, res) => {
+  const r = await elfa.getAllSignals();
+  res.json(r);
+});
+
+// Explain why a symbol is moving — cached 10 min, 10 req/min per player
+router.get('/elfa/explain/:symbol', auth, async (req, res) => {
+  const symbol = String(req.params.symbol || '').toUpperCase();
+  if (!/^[A-Z0-9]{1,10}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
+  if (!explainRateLimit(req.player.id)) {
+    return res.status(429).json({ error: 'Too many requests — try again in a minute' });
+  }
+  const data = await elfa.getExplain(symbol);
+  res.json(data);
+});
+
 // ==================== FULL STATE ====================
 
 // Get full player state (resources + buildings + troops)
@@ -1286,21 +1350,89 @@ router.get('/admin/stats', adminAuth, (req, res) => {
 // ---------- Admin: Tasks CRUD ----------
 router.get('/admin/tasks', adminAuth, (req, res) => {
   const list = tasks.getAllTasks();
-  // Aggregate stats per task
+  // Per-task aggregate stats
   const startedRows = db.db.prepare(
     `SELECT task_id, COUNT(*) AS n FROM player_tasks GROUP BY task_id`
   ).all();
   const claimedRows = db.db.prepare(
     `SELECT task_id, COUNT(*) AS n FROM player_tasks WHERE claimed_at IS NOT NULL GROUP BY task_id`
   ).all();
+  const progressRows = db.db.prepare(
+    `SELECT task_id, AVG(CASE WHEN target_value > 0 THEN progress_value / target_value ELSE 0 END) AS avg_progress,
+            MAX(claimed_at) AS last_claim, MAX(started_at) AS last_start
+     FROM player_tasks GROUP BY task_id`
+  ).all();
   const startedMap = {}; for (const r of startedRows) startedMap[r.task_id] = r.n;
   const claimedMap = {}; for (const r of claimedRows) claimedMap[r.task_id] = r.n;
-  res.json(list.map(t => ({
-    ...t,
-    params: tasks.parseParams(t.params),
-    started_count: startedMap[t.id] || 0,
-    claimed_count: claimedMap[t.id] || 0,
-  })));
+  const progMap = {}; for (const r of progressRows) progMap[r.task_id] = r;
+  res.json(list.map(t => {
+    const p = progMap[t.id] || {};
+    const started = startedMap[t.id] || 0;
+    const claimed = claimedMap[t.id] || 0;
+    return {
+      ...t,
+      params: tasks.parseParams(t.params),
+      started_count: started,
+      claimed_count: claimed,
+      completion_rate: started > 0 ? claimed / started : 0,
+      avg_progress: p.avg_progress || 0,
+      last_claim: p.last_claim || null,
+      last_start: p.last_start || null,
+    };
+  }));
+});
+
+// Overall quest system stats — for the big summary card
+router.get('/admin/tasks-summary', adminAuth, (req, res) => {
+  const total = db.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
+  const active = db.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE active = 1').get().n;
+  const started = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks').get().n;
+  const claimed = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
+  const uniquePlayers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks').get().n;
+  const claimers = db.db.prepare('SELECT COUNT(DISTINCT player_id) AS n FROM player_tasks WHERE claimed_at IS NOT NULL').get().n;
+  // Rewards paid — sum reward_* for each claimed (player_tasks, task)
+  const rewardRow = db.db.prepare(`
+    SELECT COALESCE(SUM(t.reward_gold),0) AS gold,
+           COALESCE(SUM(t.reward_wood),0) AS wood,
+           COALESCE(SUM(t.reward_ore),0)  AS ore
+    FROM player_tasks pt
+    JOIN tasks t ON t.id = pt.task_id
+    WHERE pt.claimed_at IS NOT NULL
+  `).get();
+  // Recent activity — last 24h
+  const cutoff24 = new Date(Date.now() - 24 * 3600 * 1000).toISOString().replace('T', ' ').split('.')[0];
+  const started24 = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE started_at >= ?').get(cutoff24).n;
+  const claimed24 = db.db.prepare('SELECT COUNT(*) AS n FROM player_tasks WHERE claimed_at >= ?').get(cutoff24).n;
+  // Top 5 players by claims
+  const topPlayers = db.db.prepare(`
+    SELECT p.name, COUNT(*) AS claims,
+           COALESCE(SUM(t.reward_gold),0) AS gold_earned
+    FROM player_tasks pt
+    JOIN tasks t   ON t.id = pt.task_id
+    JOIN players p ON p.id = pt.player_id
+    WHERE pt.claimed_at IS NOT NULL
+    GROUP BY pt.player_id
+    ORDER BY claims DESC, gold_earned DESC
+    LIMIT 5
+  `).all();
+  // Breakdown by task type
+  const byType = db.db.prepare(`
+    SELECT t.type, COUNT(pt.task_id) AS claims
+    FROM tasks t
+    LEFT JOIN player_tasks pt ON pt.task_id = t.id AND pt.claimed_at IS NOT NULL
+    GROUP BY t.type
+  `).all();
+  res.json({
+    total, active,
+    started, claimed,
+    unique_players_started: uniquePlayers,
+    unique_players_claimed: claimers,
+    completion_rate: started > 0 ? claimed / started : 0,
+    rewards: rewardRow,
+    last_24h: { started: started24, claimed: claimed24 },
+    top_players: topPlayers,
+    by_type: byType,
+  });
 });
 
 // Per-task player breakdown: who started, who claimed, progress, last claim time

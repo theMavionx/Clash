@@ -37,6 +37,7 @@ echo "[2/7] Copying project files..."
 mkdir -p "$APP_DIR"
 rsync -a --delete \
     --exclude='node_modules' --exclude='.git' --exclude='clash.db*' \
+    --exclude='.env' \
     --exclude='server-futures/node_modules' --exclude='server-futures/*.db*' \
     --exclude='server-futures/server.log' \
     "$(dirname "$(dirname "$(readlink -f "$0")")")/" "$APP_DIR/"
@@ -248,6 +249,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
 ADMIN_KEY=$ADMIN_KEY
 REWARD_SECRET=$REWARD_SECRET
 NODE_ENV=production
+ELFA_API_KEY=
 EOF
     echo "Generated .env with ADMIN_KEY=$ADMIN_KEY"
 fi
