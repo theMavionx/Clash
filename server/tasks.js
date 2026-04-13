@@ -72,8 +72,34 @@ async function buildSnapshot(player, task) {
   const snap = { start_time: now, type: task.type };
 
   if (task.type === 'volume' || task.type === 'positions' || task.type === 'combo_volume_attack') {
-    const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(player.id);
-    snap.trade_id_start = reward ? reward.last_trade_id : 0;
+    // Baseline = max history_id from Pacifica (source of truth). trading_rewards.last_trade_id
+    // may be stale (if the player hasn't claimed gold yet), so we can't rely on it —
+    // it would let pre-existing trades leak into the quest progress.
+    const wallet = (player && player.wallet) || (() => {
+      try {
+        const row = db.db.prepare('SELECT wallet FROM trading_rewards WHERE player_id = ?').get(player.id);
+        return row && row.wallet;
+      } catch { return null; }
+    })();
+    let baseline = 0;
+    if (wallet && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) {
+      try {
+        const r = await fetch(`https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`);
+        const j = await r.json();
+        if (j && j.success && Array.isArray(j.data)) {
+          for (const t of j.data) {
+            const id = Number(t.history_id || 0);
+            if (id > baseline) baseline = id;
+          }
+        }
+      } catch {}
+    }
+    // Fallback to trading_rewards only if Pacifica fetch failed (avoids zero baseline)
+    if (baseline === 0) {
+      const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(player.id);
+      baseline = reward ? reward.last_trade_id : 0;
+    }
+    snap.trade_id_start = baseline;
   }
   if (task.type === 'combo_volume_attack') {
     const winsRow = db.db.prepare(

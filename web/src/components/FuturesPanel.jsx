@@ -60,6 +60,35 @@ const TokenIcon = ({sym, size = 20}) => {
   );
 };
 
+const SignalIcon = ({ type, size = 14 }) => {
+  if (type === '🔥') return (
+    <svg width={size} height={size} viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-label="hot">
+      <path fill="#FF6B35" d="M12.963 2.286a.75.75 0 0 0-1.071-.136 9.742 9.742 0 0 0-3.539 6.176A7.55 7.55 0 0 1 6.648 6.61a.75.75 0 0 0-1.152-.082A9 9 0 1 0 15.68 4.534a7.46 7.46 0 0 1-2.717-2.248Z" />
+      <path fill="#FFD54A" d="M15.75 14.25a3.75 3.75 0 1 1-7.313-1.172c.628.465 1.35.81 2.133 1a5.99 5.99 0 0 1 1.925-3.545 3.75 3.75 0 0 1 3.255 3.717Z" />
+    </svg>
+  );
+  if (type === '📈') return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#4CAF50" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+      <polyline points="16 7 22 7 22 13" />
+    </svg>
+  );
+  if (type === '📉') return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#E53935" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 17 13.5 8.5 8.5 13.5 2 7" />
+      <polyline points="16 17 22 17 22 11" />
+    </svg>
+  );
+  if (type === '💀') return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#a3906a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 10a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-1 0v-1a.5.5 0 0 1 .5-.5zm6 0a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-1 0v-1a.5.5 0 0 1 .5-.5z" />
+      <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+      <path d="M12 13c-2 0-3 1-3 3s1 3 3 3 3-1 3-3-1-3-3-3z" />
+    </svg>
+  );
+  return null;
+};
+
 // Symbol picker dropdown with logo, max leverage, price, 24h change
 const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSelect, fullscreen, signals }) {
   const [search, setSearch] = useState('');
@@ -99,13 +128,8 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.symbol}</span>
                   <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
                   {signals && signals[r.symbol] && signals[r.symbol].badge !== '·' && (
-                    <span title={signals[r.symbol].label} style={{
-                      fontSize: 11, fontWeight: 800, padding: '1px 5px', borderRadius: 4,
-                      background: '#fff5cc', border: '1px solid #d4c8b0', color: '#5C3A21',
-                      display: 'inline-flex', alignItems: 'center', gap: 2, whiteSpace: 'nowrap',
-                    }}>
-                      {signals[r.symbol].badge}
-                      {signals[r.symbol].label && <span style={{fontSize: 9}}>{signals[r.symbol].label}</span>}
+                    <span title={signals[r.symbol].label} style={{display: 'inline-flex', alignItems: 'center'}}>
+                      <SignalIcon type={signals[r.symbol].badge} size={14} />
                     </span>
                   )}
                 </div>
@@ -418,12 +442,15 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
   } = usePacifica();
 
+  const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
   const posRef = useRef({ x: 0, y: 0 });
   const panelRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const handlePointerDown = useCallback((e) => {
     if (e.target.closest('[data-nodrag]')) return;
+    // On mobile, panel is fixed/centered — dragging would just throw layout off.
+    if (isMobile) return;
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
     const startX = clientX - posRef.current.x;
@@ -445,7 +472,7 @@ function FuturesPanel() {
     setIsDragging(true);
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
     window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
-  }, []);
+  }, [isMobile]);
 
   const [activeTab, setActiveTab] = useState('Trade');
   const [symbol, setSymbol] = useState('BTC');
@@ -465,7 +492,6 @@ function FuturesPanel() {
   const [bottomTab, setBottomTab] = useState('positions');
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
-  const { isMobile } = useLayout();
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
   const [showFilter, setShowFilter] = useState(false);
@@ -621,13 +647,15 @@ function FuturesPanel() {
   const renderSymbolBar = () => (
     <>
       <div style={{...S.symbolBar, ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
-        <button style={S.symbolBtn} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
+        <button style={{...S.symbolBtn, padding: '6px 10px', gap: 6, whiteSpace: 'nowrap', flexShrink: 0}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
           <TokenIcon sym={symbol} size={20} />
-          <span style={{fontSize: 16, fontWeight: 900}}>{symbol}</span>
+          <span style={{fontSize: 15, fontWeight: 900}}>{symbol}</span>
           {elfaSignals[symbol] && elfaSignals[symbol].badge !== '·' && (
-            <span title={elfaSignals[symbol].label} style={{fontSize: 12, fontWeight: 800}}>{elfaSignals[symbol].badge}</span>
+            <span title={elfaSignals[symbol].label} style={{display: 'inline-flex', alignItems: 'center'}}>
+              <SignalIcon type={elfaSignals[symbol].badge} size={14} />
+            </span>
           )}
-          {(!fullscreen || isMobile) && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
+          {!isMobile && !fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         {fullscreen && !isMobile && (
@@ -640,19 +668,19 @@ function FuturesPanel() {
             <div style={S.infoCell}><span style={S.infoCellLabel}>Funding</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
           </>
         )}
-        <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0}}>
-          <button style={S.marginSwapBtn} onClick={() => setMarginMode(symbol, !marginModes[symbol])}>
+        <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
+          <button style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4}} onClick={() => setMarginMode(symbol, !marginModes[symbol])} title={marginModes[symbol] ? 'Isolated margin' : 'Cross margin'}>
             <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
               {marginModes[symbol] ? 'Isolated' : 'Cross'}
             </span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{flexShrink: 0}}>
               <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
               <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
             </svg>
           </button>
-          <div style={S.balBadge}>
-            <span style={{fontSize: 9, fontWeight: 700, color: '#a3906a'}}>BALANCE</span>
-            <span style={{fontSize: 15, fontWeight: 900, color: '#5C3A21'}}>${pacBalance.toFixed(2)}</span>
+          <div style={{...S.balBadge, padding: '4px 8px'}}>
+            <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>BALANCE</span>
+            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${pacBalance.toFixed(2)}</span>
           </div>
         </div>
       </div>
@@ -1245,7 +1273,8 @@ function FuturesPanel() {
       <style>{animCSS}</style>
       <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
         ...(fullscreen ? S.containerFull : S.container),
-        transform: fullscreen ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+        transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
         transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
       }}>
         <div style={S.header} onPointerDown={handlePointerDown}>
@@ -1612,8 +1641,9 @@ const S = {
   },
   marginSwapBtn: {
     padding: '8px 12px', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,
-    fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center',
-    height: '100%', boxSizing: 'border-box',
+    fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
+    height: '100%', boxSizing: 'border-box', whiteSpace: 'nowrap', flexShrink: 0,
+    lineHeight: 1,
   },
   levPreset: {
     flex: 1, padding: '8px 0', background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 8,

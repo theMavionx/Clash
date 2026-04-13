@@ -1,4 +1,8 @@
 import { useState, useEffect, useCallback, memo } from 'react';
+import goldIcon from '../assets/resources/gold_bar.png';
+import woodIcon from '../assets/resources/wood_bar.png';
+import stoneIcon from '../assets/resources/stone_bar.png';
+
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 
@@ -56,10 +60,26 @@ function QuestCard({ task, onStart, onClaim, loading }) {
 
       <div style={S.rewardRow}>
         <div style={S.rewards}>
-          {task.reward_gold > 0 && <span style={S.rewardGold}>+{task.reward_gold.toLocaleString()} G</span>}
-          {task.reward_wood > 0 && <span style={S.rewardWood}>+{task.reward_wood.toLocaleString()} W</span>}
-          {task.reward_ore > 0 && <span style={S.rewardOre}>+{task.reward_ore.toLocaleString()} O</span>}
+          {task.reward_gold > 0 && (
+            <span style={S.rewardGold}>
+              +{task.reward_gold.toLocaleString()}
+              <img src={goldIcon} alt="Gold" style={S.rewardIcon} />
+            </span>
+          )}
+          {task.reward_wood > 0 && (
+            <span style={S.rewardWood}>
+              +{task.reward_wood.toLocaleString()}
+              <img src={woodIcon} alt="Wood" style={S.rewardIcon} />
+            </span>
+          )}
+          {task.reward_ore > 0 && (
+            <span style={S.rewardOre}>
+              +{task.reward_ore.toLocaleString()}
+              <img src={stoneIcon} alt="Ore" style={S.rewardIcon} />
+            </span>
+          )}
         </div>
+
         {!task.started ? (
           <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>Start</button>
         ) : isDone && !isClaimed ? (
@@ -177,9 +197,11 @@ const S = {
   progressText: { fontSize: 11, fontWeight: 700, color: '#5C3A21', textAlign: 'right' },
   rewardRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginTop: 2 },
   rewards: { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  rewardGold: { fontSize: 12, fontWeight: 900, color: '#b8860b', background: '#fff5cc', padding: '3px 8px', borderRadius: 6, border: '1px solid #e8b830' },
-  rewardWood: { fontSize: 12, fontWeight: 900, color: '#4d7a2e', background: '#e8f5d8', padding: '3px 8px', borderRadius: 6, border: '1px solid #6ab344' },
-  rewardOre: { fontSize: 12, fontWeight: 900, color: '#566878', background: '#dde5ea', padding: '3px 8px', borderRadius: 6, border: '1px solid #8a9aaa' },
+  rewardGold: { fontSize: 12, fontWeight: 900, color: '#b8860b', background: '#fff5cc', padding: '3px 8px', borderRadius: 6, border: '1px solid #e8b830', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardWood: { fontSize: 12, fontWeight: 900, color: '#4d7a2e', background: '#e8f5d8', padding: '3px 8px', borderRadius: 6, border: '1px solid #6ab344', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardOre: { fontSize: 12, fontWeight: 900, color: '#566878', background: '#dde5ea', padding: '3px 8px', borderRadius: 6, border: '1px solid #8a9aaa', display: 'flex', alignItems: 'center', gap: 4 },
+  rewardIcon: { width: 16, height: 16, objectFit: 'contain' },
+
   btnStart: {
     padding: '6px 14px', background: 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)',
     color: '#fff', fontWeight: 900, fontSize: 12, border: '2px solid #3a5e22', borderRadius: 8,
