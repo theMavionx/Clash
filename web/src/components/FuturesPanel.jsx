@@ -127,11 +127,21 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   <TokenIcon sym={r.symbol} size={18} />
                   <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.symbol}</span>
                   <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
-                  {signals && signals[r.symbol] && signals[r.symbol].badge !== '·' && (
-                    <span title={signals[r.symbol].label} style={{display: 'inline-flex', alignItems: 'center'}}>
-                      <SignalIcon type={signals[r.symbol].badge} size={14} />
-                    </span>
-                  )}
+                  {(() => {
+                    // If signals are loaded but this symbol isn't in the top-N trending feed,
+                    // we know Elfa has no chatter for it → show 💀 "quiet" badge.
+                    const loaded = signals && Object.keys(signals).length > 0;
+                    const sig = signals && signals[r.symbol];
+                    if (!loaded) return null;
+                    const badge = sig ? sig.badge : '💀';
+                    const label = sig ? sig.label : 'quiet';
+                    if (badge === '·') return null;
+                    return (
+                      <span title={label} style={{display: 'inline-flex', alignItems: 'center'}}>
+                        <SignalIcon type={badge} size={14} />
+                      </span>
+                    );
+                  })()}
                 </div>
               </td>
               <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
@@ -650,11 +660,19 @@ function FuturesPanel() {
         <button style={{...S.symbolBtn, padding: '6px 10px', gap: 6, whiteSpace: 'nowrap', flexShrink: 0}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
           <TokenIcon sym={symbol} size={20} />
           <span style={{fontSize: 15, fontWeight: 900}}>{symbol}</span>
-          {elfaSignals[symbol] && elfaSignals[symbol].badge !== '·' && (
-            <span title={elfaSignals[symbol].label} style={{display: 'inline-flex', alignItems: 'center'}}>
-              <SignalIcon type={elfaSignals[symbol].badge} size={14} />
-            </span>
-          )}
+          {(() => {
+            const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
+            if (!loaded) return null;
+            const sig = elfaSignals[symbol];
+            const badge = sig ? sig.badge : '💀';
+            const label = sig ? sig.label : 'quiet';
+            if (badge === '·') return null;
+            return (
+              <span title={label} style={{display: 'inline-flex', alignItems: 'center'}}>
+                <SignalIcon type={badge} size={14} />
+              </span>
+            );
+          })()}
           {!isMobile && !fullscreen && currentPrice && <span style={{fontSize: 13, color: '#5C3A21', fontWeight: 700}}>${fmtPrice(parseFloat(currentPrice))}</span>}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
         </button>

@@ -112,11 +112,11 @@ function classifySignal(t) {
   const cur = Number(t.current_count || 0);
   const prev = Number(t.previous_count || 0);
   const chg = Number(t.change_percent || 0);
-  let badge = '·', label = '';
-  if (chg >= 50 && cur >= 20) { badge = '🔥'; label = `+${Math.round(chg)}%`; }
-  else if (chg >= 20 && cur >= 5) { badge = '📈'; label = `+${Math.round(chg)}%`; }
-  else if (chg <= -30) { badge = '📉'; label = `${Math.round(chg)}%`; }
-  else if (cur <= 3) { badge = '💀'; label = 'quiet'; }
+  let badge = '💀', label = 'quiet';
+  if (chg >= 40 && cur >= 15) { badge = '🔥'; label = `+${Math.round(chg)}%`; }
+  else if (chg >= 10 && cur >= 5) { badge = '📈'; label = `+${Math.round(chg)}%`; }
+  else if (chg <= -15) { badge = '📉'; label = `${Math.round(chg)}%`; }
+  else if (cur >= 5) { badge = '·'; label = `${cur}/24h`; } // moderate activity
   return {
     badge, label,
     mentions: cur,
@@ -135,7 +135,7 @@ async function getAllSignals() {
   let tokens = null;
   if (hasKey()) {
     // Real endpoint returns { data: { data: [...] } } — two levels deep
-    const j = await fetchElfa('/aggregations/trending-tokens', { timeWindow: '24h', limit: 50, page: 1 });
+    const j = await fetchElfa('/aggregations/trending-tokens', { timeWindow: '24h', limit: 200, page: 1 });
     const arr = j && j.data && (Array.isArray(j.data.data) ? j.data.data : Array.isArray(j.data) ? j.data : null);
     tokens = arr || null;
   }
