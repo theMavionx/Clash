@@ -61,7 +61,9 @@ const barContainerStyle = {
 function GodotCanvas({ onEngineReady }) {
   const canvasRef = useRef(null);
   const loadedRef = useRef(false);
-  const [progress, setProgress] = useState(0);
+  // Two-stage loading: stage 1 = download engine files (wasm/pck/js), stage 2 = scene init + server data + buildings.
+  const [stage, setStage] = useState(1);           // 1 | 2
+  const [stageProgress, setStageProgress] = useState(0); // 0-100 within stage
   const [isLoaded, setIsLoaded] = useState(false);
   const [stuck, setStuck] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
@@ -71,12 +73,12 @@ function GodotCanvas({ onEngineReady }) {
   useEffect(() => {
     const id = setInterval(() => {
       const { value, time } = lastProgressRef.current;
-      if (!isLoaded && progress === value && Date.now() - time > 30000 && progress > 0 && progress < 100) {
+      if (!isLoaded && stageProgress === value && Date.now() - time > 30000 && stageProgress > 0 && stageProgress < 100) {
         setStuck(true);
       }
     }, 5000);
     return () => clearInterval(id);
-  }, [progress, isLoaded]);
+  }, [stageProgress, isLoaded]);
 
   useEffect(() => {
     if (loadedRef.current) return;
@@ -96,32 +98,69 @@ function GodotCanvas({ onEngineReady }) {
         return;
       }
 
-      // Actual PCK + WASM sizes from Work.html — fallback when server omits Content-Length
-      const ESTIMATED_TOTAL = 196000000;
+      // Server doesn't send Content-Length for Godot files; real total is ~280MB.
+      // We scale by max-observed current so the bar fills smoothly regardless.
+      let maxDownload = 280000000;
 
-      // Stage weights (must sum to 100):
-      //  0-80 : WASM + PCK download     (real progress from onProgress)
-      //  80   : engine.startGame resolves
-      //  88   : Godot scene init + preload scenes (deferred signal)
-      //  94   : server responded, placing buildings (signal)
-      //  100  : buildings placed → hide overlay (signal)
-      const DOWNLOAD_MAX = 80;
-
-      const handleProgress = (current, total) => {
-        const pct = total > 0
-          ? Math.round((current / total) * DOWNLOAD_MAX)
-
-          : Math.min(DOWNLOAD_MAX - 2, Math.round((current / ESTIMATED_TOTAL) * DOWNLOAD_MAX));
-        setProgress(pct);
+      // Stage 2: pure linear time-based ramp 0 → 100 over STAGE2_MIN_MS.
+      // If Godot signals "buildings loaded" before ramp finishes — we still
+      // finish the ramp (otherwise it looks janky). If ramp finishes before
+      // buildings loaded — we hold at 99% until the signal.
+      const STAGE2_MIN_MS = 1800;
+      let stage2StartTime = null;
+      let stage2BuildingsDone = false;
+      let stage2RafId = null;
+      const tickStage2 = () => {
+        if (stage2StartTime == null) return;
+        const elapsed = Date.now() - stage2StartTime;
+        const rampValue = Math.min(100, (elapsed / STAGE2_MIN_MS) * 100);
+        // Hold at 99 until buildings confirm, then allow 100.
+        const value = (rampValue >= 100 && !stage2BuildingsDone) ? 99 : rampValue;
+        setStageProgress(Math.round(value));
+        if (value >= 100) {
+          setTimeout(() => setIsLoaded(true), 300);
+          stage2RafId = null;
+          return;
+        }
+        stage2RafId = requestAnimationFrame(tickStage2);
+      };
+      const startStage2 = () => {
+        if (stage2StartTime != null) return;
+        console.log('[load] stage2 ramp starting');
+        stage2StartTime = Date.now();
+        setStage(2);
+        setStageProgress(0);
+        stage2RafId = requestAnimationFrame(tickStage2);
       };
 
-      // Godot signals intermediate stages via JavaScriptBridge
-      window.godotLoadingProgress = (pct) => setProgress(pct);
+      const handleProgress = (current, total) => {
+        // If Content-Length arrives, use it directly. Otherwise scale against
+        // the highest `current` we've seen (grow maxDownload if needed so %
+        // never stalls above 99 while more bytes stream in).
+        let pct;
+        if (total > 0) {
+          pct = Math.round((current / total) * 100);
+        } else {
+          if (current > maxDownload * 0.99) maxDownload = current / 0.99;
+          pct = Math.min(99, Math.round((current / maxDownload) * 100));
+        }
+        console.log('[load] stage1 download', { current, total, maxDownload, pct });
+        setStage(1);
+        setStageProgress(pct);
+        lastProgressRef.current = { value: pct, time: Date.now() };
+      };
 
-      // Godot signals all buildings placed — show island, hide overlay
+      // Godot's stage-2 signals are noisy and fire BEFORE startGame resolves,
+      // so we don't use them to drive progress — only log for diagnostics.
+      window.godotLoadingProgress = (rawPct) => {
+        console.log('[load] stage2 signal (ignored for progress)', { rawPct });
+      };
+
+      // Godot signals all buildings placed — mark done; ramp will finish to 100.
       window.godotBuildingsLoaded = () => {
-        setProgress(100);
-        setTimeout(() => setIsLoaded(true), 350);
+        if (stage2BuildingsDone) return;
+        console.log('[load] stage2 complete (godotBuildingsLoaded)');
+        stage2BuildingsDone = Date.now();
       };
 
       const engine = new GODOT({ onProgress: handleProgress });
@@ -143,9 +182,21 @@ function GodotCanvas({ onEngineReady }) {
         canvasResizePolicy: 0,
         onProgress: handleProgress,
       }).then(() => {
-        setProgress(prev => Math.max(prev, DOWNLOAD_MAX));
+        // Download finished → ease stage 1 from current% up to 100 over 500ms,
+        // pause 450ms at 100%, then start stage 2.
+        console.log('[load] engine.startGame resolved → easing stage 1 → 100');
         resizeCanvas();
         if (onEngineReady) onEngineReady(engine);
+        const from = lastProgressRef.current.value;
+        const easeStart = Date.now();
+        const easeTick = () => {
+          const t = Math.min(1, (Date.now() - easeStart) / 500);
+          const v = Math.round(from + (100 - from) * t);
+          setStageProgress(v);
+          if (t < 1) requestAnimationFrame(easeTick);
+          else setTimeout(() => startStage2(), 450);
+        };
+        requestAnimationFrame(easeTick);
       }).catch(err => {
         console.error('Godot start error:', err);
         setErrorMsg(String(err?.message || err));
@@ -165,36 +216,90 @@ function GodotCanvas({ onEngineReady }) {
               <div style={{ fontWeight: 900, marginBottom: 8 }}>Error loading game:</div>
               {errorMsg}
               <div style={{ marginTop: 12, fontSize: 11, opacity: 0.7 }}>
-                Progress: {progress}% | UA: {navigator.userAgent.slice(0, 80)}
+                Stage {stage}: {stageProgress}% | UA: {navigator.userAgent.slice(0, 80)}
               </div>
               <button onClick={() => window.location.reload()} style={{ marginTop: 10, padding: '8px 20px', background: '#fff', color: '#000', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}>Reload</button>
             </div>
           )}
-          
+
           <div style={progressWrapperStyle}>
+            {/* Stage label */}
+            <div style={{
+              color: '#fff',
+              marginBottom: '14px',
+              fontFamily: '"Inter", "Segoe UI", sans-serif',
+              fontSize: '22px',
+              fontWeight: 900,
+              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              letterSpacing: '1px',
+              textAlign: 'center',
+            }}>
+              {stage === 1 ? 'DOWNLOADING GAME' : 'LOADING WORLD'}
+            </div>
+
+            {/* Progress bar */}
             <div style={barContainerStyle}>
               <div
                 style={{
-                  width: `${progress}%`,
+                  width: `${stageProgress}%`,
                   height: '100%',
-                  background: 'linear-gradient(to bottom, #ffe066, #e6b800)',
+                  background: stage === 1
+                    ? 'linear-gradient(to bottom, #ffe066, #e6b800)'
+                    : 'linear-gradient(to bottom, #8be3ff, #35a8e0)',
                   borderRight: '2px solid #fff8dc',
                   boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.4)',
-                  transition: 'width 0.1s linear',
+                  transition: 'width 0.1s linear, background 0.3s ease',
                 }}
               />
             </div>
-            <div style={{ 
-              color: '#fff', 
-              marginTop: '12px', 
-              fontFamily: '"Inter", "Segoe UI", sans-serif', 
-              fontSize: '20px', 
-              fontWeight: 900, 
-              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px  1px 0 #000, 1px  1px 0 #000',
-              letterSpacing: '1px'
+
+            {/* Percentage */}
+            <div style={{
+              color: '#fff',
+              marginTop: '10px',
+              fontFamily: '"Inter", "Segoe UI", sans-serif',
+              fontSize: '18px',
+              fontWeight: 900,
+              textShadow: '0 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              letterSpacing: '1px',
+              textAlign: 'center',
             }}>
-              {progress < 80 ? `LOADING ${progress}%` : progress < 88 ? 'INITIALIZING...' : progress < 94 ? 'CONNECTING...' : progress < 100 ? 'PLACING BUILDINGS...' : 'READY!'}
+              {stageProgress}%
             </div>
+
+            {/* Stage indicators — 1 • 2 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              gap: 10, marginTop: 16,
+            }}>
+              {[1, 2].map(s => (
+                <div key={s} style={{
+                  width: s === stage ? 28 : 10,
+                  height: 10,
+                  borderRadius: 5,
+                  background: s < stage ? '#8be3ff' : s === stage ? '#ffe066' : 'rgba(255,255,255,0.25)',
+                  boxShadow: s === stage ? '0 0 8px rgba(255,224,102,0.8)' : 'none',
+                  transition: 'all 0.3s ease',
+                }} />
+              ))}
+            </div>
+
+            {/* Substage hint (stage 2 only) */}
+            {stage === 2 && (
+              <div style={{
+                color: 'rgba(255,255,255,0.75)',
+                marginTop: '10px',
+                fontFamily: '"Inter", "Segoe UI", sans-serif',
+                fontSize: '13px',
+                fontWeight: 700,
+                textAlign: 'center',
+              }}>
+                {stageProgress < 30 ? 'Initializing scene…'
+                  : stageProgress < 70 ? 'Connecting to server…'
+                  : stageProgress < 100 ? 'Placing buildings…'
+                  : 'Ready!'}
+              </div>
+            )}
           </div>
         </div>
       )}

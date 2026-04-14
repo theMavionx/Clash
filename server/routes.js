@@ -36,9 +36,13 @@ router.post('/client-log', (req, res) => {
 router.post('/players/register', (req, res) => {
   const { name, wallet } = req.body;
 
-  // If wallet provided, check if an account already exists for this wallet
+  // If wallet provided, check if an account already exists for this wallet.
+  // Multiple rows may share a wallet (legacy bug — no UNIQUE constraint). Prefer
+  // the account with the most progress (highest trophies, then highest id/newest).
   if (wallet) {
-    const existing = db.db.prepare('SELECT * FROM players WHERE wallet = ?').get(wallet);
+    const existing = db.db.prepare(
+      'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
+    ).get(wallet);
     if (existing) {
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
@@ -110,11 +114,14 @@ router.post('/players/link-wallet', auth, (req, res) => {
   res.json({ success: true, switched_account: false });
 });
 
-// Login by wallet address (recover account after cache clear)
+// Login by wallet address (recover account after cache clear).
+// Same canonical-row rule as /register: prefer highest trophies, newest id.
 router.post('/players/login-wallet', (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
-  const player = db.db.prepare('SELECT * FROM players WHERE wallet = ?').get(wallet);
+  const player = db.db.prepare(
+    'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
+  ).get(wallet);
   if (!player) return res.status(404).json({ error: 'No account found for this wallet' });
   const state = db.getFullPlayerState(player.id);
   res.json({ ...state, token: player.token });
@@ -1243,6 +1250,15 @@ router.get('/admin/replays/:id', adminAuth, (req, res) => {
 });
 
 // Delete a player by name
+// Diagnose wallet → accounts. Returns every row sharing the given wallet
+// (legacy duplicates — DB lacks a UNIQUE constraint on wallet).
+router.get('/admin/wallets/:wallet/accounts', adminAuth, (req, res) => {
+  const rows = db.db.prepare(
+    'SELECT id, name, trophies, wallet, created_at FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC'
+  ).all(req.params.wallet);
+  res.json({ wallet: req.params.wallet, count: rows.length, accounts: rows });
+});
+
 router.delete('/admin/players/:name', adminAuth, (req, res) => {
   try {
     const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
