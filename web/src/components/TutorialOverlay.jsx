@@ -1,5 +1,4 @@
 import { memo, useState, useEffect, useCallback, useRef } from 'react';
-import { cartoonBtn } from '../styles/theme';
 
 // ── Tutorial flags (bitmask) ──────────────────────────────────────
 const FLAG_BASE = 1;    // welcome, TH, buildings, resources
@@ -111,8 +110,24 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
         <h2 style={S.title}>{step.title}</h2>
         <p style={S.text}>{step.text}</p>
         <div style={S.buttons}>
-          <button style={S.skipBtn} onClick={handleSkip}>Skip</button>
-          <button style={S.nextBtn} onClick={handleNext}>
+          <button 
+            style={S.skipBtn} 
+            onClick={handleSkip}
+            onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.05)'}
+            onMouseOut={e => e.currentTarget.style.filter = 'none'}
+            onMouseDown={e => e.currentTarget.style.transform = 'scale(0.96)'}
+            onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+          >
+            Skip
+          </button>
+          <button 
+            style={S.nextBtn} 
+            onClick={handleNext}
+            onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.1)'}
+            onMouseOut={e => e.currentTarget.style.filter = 'none'}
+            onMouseDown={e => e.currentTarget.style.transform = 'scale(0.96)'}
+            onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+          >
             {isLast ? 'Got it!' : 'Next'}
           </button>
         </div>
@@ -129,55 +144,54 @@ export default memo(TutorialOverlay);
 const S = {
   overlay: {
     position: 'fixed', inset: 0,
-    background: 'rgba(0,0,0,0.7)',
+    background: 'rgba(0,0,0,0.6)',
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-end',
     zIndex: 250, pointerEvents: 'all',
-    paddingBottom: 20,
+    paddingBottom: 24,
     animation: 'fadeIn 0.3s ease',
   },
   stepDots: {
-    position: 'absolute', top: 16,
-    display: 'flex', gap: 8, zIndex: 260,
+    position: 'absolute', top: 20,
+    display: 'flex', gap: 10, zIndex: 260,
   },
   dot: {
-    width: 10, height: 10, borderRadius: '50%',
-    background: 'rgba(255,255,255,0.3)',
+    width: 12, height: 12, borderRadius: '50%',
+    background: 'rgba(255,255,255,0.4)',
     transition: 'all 0.2s',
   },
   dotActive: {
-    background: '#FFD700',
-    boxShadow: '0 0 8px rgba(255,215,0,0.6)',
+    background: '#4CAF50',
+    boxShadow: '0 0 10px rgba(76, 175, 80, 0.8)',
     transform: 'scale(1.3)',
   },
   card: {
-    background: 'linear-gradient(180deg, #3E2723 0%, #2C1B0E 100%)',
-    border: '3px solid #6D4C2A',
-    borderRadius: 20,
-    padding: '20px 24px 16px',
-    maxWidth: 360, width: 'calc(100% - 32px)',
+    background: '#fdf8e7',
+    border: '6px solid #d4c8b0',
+    borderRadius: 24,
+    padding: '24px 24px 20px',
+    maxWidth: 380, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    boxShadow: '0 -4px 30px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1)',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
     animation: 'panelRise 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
   },
   iconCircle: {
-    width: 56, height: 56, borderRadius: '50%',
-    background: 'linear-gradient(180deg, #FFD700, #C59600)',
-    border: '3px solid #8B6914',
+    width: 64, height: 64, borderRadius: '50%',
+    background: '#e8dfc8',
+    border: '4px solid #d4c8b0',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-    marginTop: -44,
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+    marginTop: -52,
   },
-  icon: { fontSize: 28, lineHeight: 1 },
+  icon: { fontSize: 32, lineHeight: 1 },
   title: {
-    margin: '12px 0 6px', fontSize: 20, fontWeight: 900,
-    color: '#FFD700', textAlign: 'center',
-    textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+    margin: '16px 0 8px', fontSize: 22, fontWeight: 900,
+    color: '#5C3A21', textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   text: {
-    margin: '0 0 16px', fontSize: 14, fontWeight: 600,
-    color: 'rgba(255,255,255,0.85)', textAlign: 'center',
+    margin: '0 0 20px', fontSize: 15, fontWeight: 600,
+    color: '#77573d', textAlign: 'center',
     lineHeight: 1.5, maxWidth: 300,
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -185,17 +199,22 @@ const S = {
     display: 'flex', gap: 12, width: '100%',
   },
   skipBtn: {
-    flex: 1, padding: '10px 16px', borderRadius: 12,
-    border: '2px solid #6D4C2A', background: 'transparent',
-    color: 'rgba(255,255,255,0.5)', fontSize: 14, fontWeight: 800,
+    flex: 1, padding: '12px 14px', borderRadius: 14,
+    border: '3px solid #d4c8b0', background: '#e8dfc8',
+    color: '#77573d', fontSize: 15, fontWeight: 800,
     cursor: 'pointer', transition: 'all 0.1s',
   },
   nextBtn: {
-    ...cartoonBtn('#FFD700', '#C59600'),
-    flex: 2, padding: '10px 16px', fontSize: 15, textAlign: 'center',
+    flex: 2, padding: '12px 14px', borderRadius: 14,
+    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
+    border: '3px solid #1B5E20',
+    color: '#fff', fontSize: 15, fontWeight: 900, textAlign: 'center',
+    cursor: 'pointer', transition: 'all 0.1s',
+    textShadow: '0 2px 2px rgba(0,0,0,0.3)',
+    boxShadow: '0 6px 16px rgba(0,0,0,0.3)',
   },
   counter: {
-    marginTop: 10, fontSize: 11, fontWeight: 700,
-    color: 'rgba(255,255,255,0.3)',
+    marginTop: 12, fontSize: 12, fontWeight: 800,
+    color: '#bba882',
   },
 };

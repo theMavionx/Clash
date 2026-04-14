@@ -1,18 +1,113 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { usePrivy } from '@privy-io/react-auth';
+import { useWallets as usePrivySolanaWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import { useSend } from '../hooks/useGodot';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
+
+// Sub-component that calls Privy hooks. Only rendered when VITE_PRIVY_APP_ID is set,
+// so the hooks always find a provider (rules-of-hooks-safe).
+function PrivyLoginButton({ onLoggedIn }) {
+  const { ready, authenticated, login, logout, user } = usePrivy();
+  const { wallets: solWallets } = usePrivySolanaWallets();
+  const { createWallet } = useCreateWallet();
+  const fired = useRef(false);
+  const createAttempted = useRef(false);
+
+  // Full state log — fires on every re-render of this component
+  console.log('[privy] render', {
+    ready,
+    authenticated,
+    hasCreateWallet: typeof createWallet === 'function',
+    userId: user?.id || null,
+    userEmail: user?.email?.address || null,
+    linkedAccountsCount: user?.linkedAccounts?.length || 0,
+    linkedAccountTypes: (user?.linkedAccounts || []).map(a => a.type),
+    solWalletsCount: solWallets?.length || 0,
+    solWallets: (solWallets || []).map(w => ({ addr: w?.address, type: w?.walletClientType })),
+    firedOnce: fired.current,
+    createAttempted: createAttempted.current,
+  });
+
+  useEffect(() => {
+    console.log('[privy] effect run', { authenticated, solWalletsCount: solWallets?.length, fired: fired.current, createAttempted: createAttempted.current });
+    if (fired.current) { console.log('[privy] already fired, skip'); return; }
+    if (!authenticated) { console.log('[privy] not authenticated, skip'); return; }
+
+    const w = solWallets.find(x => x && x.walletClientType === 'privy') || solWallets[0];
+    console.log('[privy] wallet lookup result:', w ? { addr: w.address, type: w.walletClientType } : 'none');
+
+    if (w && w.address) {
+      fired.current = true;
+      console.log('[privy] ✅ firing onLoggedIn with wallet:', w.address);
+      onLoggedIn({ wallet: w.address, email: user?.email?.address || null });
+      return;
+    }
+
+    if (!createAttempted.current && createWallet) {
+      createAttempted.current = true;
+      console.log('[privy] 🔨 calling createWallet()...');
+      createWallet()
+        .then(result => {
+          console.log('[privy] ✅ createWallet resolved:', result);
+        })
+        .catch(err => {
+          // Returning users already have an embedded wallet — not an error,
+          // the existing wallet was already surfaced via useWallets().
+          const msg = err?.message || '';
+          if (msg.includes('already has an embedded wallet')) return;
+          console.error('[privy] ❌ createWallet rejected:', err);
+          createAttempted.current = false;
+        });
+    } else if (!createWallet) {
+      console.warn('[privy] createWallet hook returned undefined');
+    } else {
+      console.log('[privy] createWallet already attempted, waiting for wallet to appear in useWallets()...');
+    }
+  }, [authenticated, solWallets, user, onLoggedIn, createWallet]);
+
+  if (!ready) return null;
+  return (
+    <button
+      style={{...cartoonBtn('#e8b830', '#b8860b'), width: '100%', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10}}
+      onClick={() => {
+        if (authenticated) {
+          logout();
+          fired.current = false;
+        } else {
+          login();
+        }
+      }}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+        <polyline points="22,6 12,13 2,6"/>
+      </svg>
+      {authenticated ? 'LOGOUT PRIVY' : 'LOGIN WITH PRIVY'}
+    </button>
+  );
+}
 
 function RegisterPanel() {
   const { sendToGodot } = useSend();
   const { publicKey, connected, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame, user: fcUser } = useFarcaster();
+  const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
   const [name, setName] = useState('');
   const triedWalletLogin = useRef(false);
   const triedFcLogin = useRef(false);
+  const triedPrivyLogin = useRef(false);
+
+  const handlePrivyLoggedIn = ({ wallet, email }) => {
+    if (triedPrivyLogin.current) return;
+    triedPrivyLogin.current = true;
+    // Godot's _do_register tries login_by_wallet first, then registers if new.
+    const name = email ? email.split('@')[0].slice(0, 20) : ('player_' + wallet.slice(0, 6));
+    sendToGodot('register', { name, wallet });
+  };
 
   // Auto-login by wallet when connected (recovers account after cache clear)
   useEffect(() => {
@@ -89,6 +184,7 @@ function RegisterPanel() {
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/></svg>
               CONNECT WALLET
             </button>
+            {privyEnabled && <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />}
           </>
         ) : (
           <form onSubmit={handleSubmit} style={styles.form}>

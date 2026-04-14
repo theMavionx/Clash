@@ -3,6 +3,11 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { isFarcasterFrame } from './useFarcaster';
+// Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
+// build-time constant, so the conditional call is stable per build (safe under
+// rules-of-hooks even though ESLint can't statically prove it).
+import { useSignMessage as usePrivySignMessage, useSignAndSendTransaction as usePrivySignAndSend } from '@privy-io/react-auth/solana';
+import { useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
 
 // ---------- Farcaster direct signing ----------
 // The @farcaster/mini-app-solana wallet passes UTF-8 strings to provider.signMessage(),
@@ -77,9 +82,31 @@ function getATA(owner, mint) {
 }
 
 // ---------- Hook ----------
+const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+
 export function usePacifica() {
   const { publicKey, signMessage, sendTransaction, connected } = useWallet();
   const { connection } = useConnection();
+
+  // Privy embedded-wallet integration. When PRIVY_ENABLED is false (no app id),
+  // skip these hooks entirely — the provider isn't mounted, so calling them
+  // would throw.
+  let privySignMessage = null;
+  let privyWalletObj = null;
+  let privySendTx = null;
+  if (PRIVY_ENABLED) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signMessage: pSign } = usePrivySignMessage();
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { wallets: pWallets } = usePrivyWallets();
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signAndSendTransaction: pSend } = usePrivySignAndSend();
+    privySignMessage = pSign;
+    privySendTx = pSend;
+    privyWalletObj = (pWallets || []).find(w => w && w.walletClientType === 'privy') || (pWallets || [])[0] || null;
+  }
+  const privyAddr = privyWalletObj?.address || null;
+  const privyActive = !publicKey && !!privyAddr;
 
   const [account, setAccount] = useState(null);
   const [positions, _setPositionsRaw] = useState([]);
@@ -103,7 +130,7 @@ export function usePacifica() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
-  const walletAddr = publicKey?.toBase58() || null;
+  const walletAddr = publicKey?.toBase58() || privyAddr;
 
   // Claim gold from game server (server verifies trades via Pacifica API)
   const claimGold = useCallback(async () => {
@@ -130,8 +157,9 @@ export function usePacifica() {
 
   // Fetch wallet USDC balance — try connection first, fallback to direct RPC
   const fetchWalletUsdc = useCallback(async () => {
-    if (!publicKey) return;
-    const ata = getATA(publicKey, USDC_MINT);
+    if (!walletAddr) return;
+    const ownerPk = publicKey || new PublicKey(walletAddr);
+    const ata = getATA(ownerPk, USDC_MINT);
 
     // Try main connection
     try {
@@ -164,12 +192,15 @@ export function usePacifica() {
       } catch {}
     }
     setWalletUsdc(0);
-  }, [publicKey, connection]);
+  }, [walletAddr, publicKey, connection]);
 
   // Sign & send to Pacifica API
   const signedRequest = useCallback(async (method, endpoint, type, payload) => {
-    if (!publicKey || !signMessage) throw new Error('Wallet not connected');
+    const hasAdapter = !!(publicKey && signMessage);
+    const hasPrivy = !!(privyActive && privySignMessage && privyWalletObj);
+    if (!hasAdapter && !hasPrivy) throw new Error('Wallet not connected');
 
+    const account = publicKey ? publicKey.toBase58() : privyAddr;
     const message = buildMessage(type, payload);
     const msgBytes = new TextEncoder().encode(message);
     let sigBytes;
@@ -179,8 +210,22 @@ export function usePacifica() {
       sigBytes = await fcSignMessage(msgBytes);
     }
 
-    // Fallback: standard wallet-adapter signMessage (Phantom, etc.)
-    if (!sigBytes) {
+    // Privy embedded wallet path (email login, no adapter)
+    if (!sigBytes && privyActive && privySignMessage && privyWalletObj) {
+      try {
+        const result = await privySignMessage({ message: msgBytes, wallet: privyWalletObj });
+        // Privy returns { signature: Uint8Array } in recent versions; older SDK returned raw Uint8Array.
+        sigBytes = result?.signature || result;
+      } catch (e) {
+        if (e?.message?.includes('rejected') || e?.message?.includes('cancelled')) {
+          throw new Error('Signature rejected');
+        }
+        throw e;
+      }
+    }
+
+    // Standard wallet-adapter signMessage (Phantom, etc.)
+    if (!sigBytes && hasAdapter) {
       try {
         sigBytes = await signMessage(msgBytes);
       } catch (e) {
@@ -194,7 +239,7 @@ export function usePacifica() {
     const signature = bs58.encode(sigBytes);
 
     const body = {
-      account: publicKey.toBase58(),
+      account,
       signature,
       timestamp: JSON.parse(message).timestamp,
       expiry_window: 30000,
@@ -217,11 +262,11 @@ export function usePacifica() {
       }
       throw new Error(text || `API error ${res.status}`);
     }
-  }, [publicKey, signMessage]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     try {
       await signedRequest('POST', '/referral/user/code/claim', 'claim_referral_code', { code: 'Vip' });
     } catch {}
@@ -230,7 +275,7 @@ export function usePacifica() {
         builder_code: BUILDER_CODE, max_fee_rate: '0.001',
       });
     } catch {}
-  }, [publicKey, signedRequest]);
+  }, [walletAddr, signedRequest]);
 
   // Auto-activate: retry on 403 — wraps signedRequest with activation fallback
   const activatedRef = useRef(false);
@@ -305,9 +350,14 @@ export function usePacifica() {
   }, [walletAddr]);
 
 
-  // ---------- Deposit (on-chain via Phantom) ----------
+  // ---------- Deposit (on-chain) ----------
   const depositToPacifica = useCallback(async (amountUsdc) => {
-    if (!publicKey || !sendTransaction) return;
+    const ownerPk = publicKey || (privyAddr ? new PublicKey(privyAddr) : null);
+    if (!ownerPk) { setError('Wallet not connected'); return; }
+    const canSendAdapter = !!sendTransaction;
+    const canSendPrivy = privyActive && !!privySendTx && !!privyWalletObj;
+    if (!canSendAdapter && !canSendPrivy) { setError('Wallet cannot send transactions'); return; }
+
     setLoading(true);
     setError(null);
     try {
@@ -316,11 +366,11 @@ export function usePacifica() {
 
       // Check SOL balance for gas fees
       let solBal = 0;
-      try { solBal = await connection.getBalance(publicKey); } catch {}
+      try { solBal = await connection.getBalance(ownerPk); } catch {}
       if (solBal < 5000000) throw new Error('Not enough SOL for gas fees (need ~0.005 SOL)');
 
       // Check USDC balance
-      const depositorAta = getATA(publicKey, USDC_MINT);
+      const depositorAta = getATA(ownerPk, USDC_MINT);
       let usdcBal = 0;
       try {
         const tokenBal = await connection.getTokenAccountBalance(depositorAta);
@@ -338,7 +388,7 @@ export function usePacifica() {
       const ix = new TransactionInstruction({
         programId: PACIFICA_PROGRAM,
         keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: ownerPk, isSigner: true, isWritable: true },
           { pubkey: depositorAta, isSigner: false, isWritable: true },
           { pubkey: CENTRAL_STATE, isSigner: false, isWritable: true },
           { pubkey: VAULT_TOKEN, isSigner: false, isWritable: true },
@@ -353,7 +403,26 @@ export function usePacifica() {
       });
 
       const tx = new Transaction().add(ix);
-      const sig = await sendTransaction(tx, connection);
+      // Privy's signAndSendTransaction needs feePayer + blockhash pre-set.
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = ownerPk;
+
+      let sig;
+      if (canSendAdapter && publicKey) {
+        sig = await sendTransaction(tx, connection);
+      } else {
+        // Privy's useSignAndSendTransaction expects a serialized Uint8Array, not
+        // a Transaction object. Partial-sign=false so Privy signs fully.
+        const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+        const result = await privySendTx({
+          transaction: new Uint8Array(serialized),
+          wallet: privyWalletObj,
+        });
+        const sigBytes = result?.signature || result;
+        // Signature is Uint8Array — encode to base58 for confirmTransaction
+        sig = typeof sigBytes === 'string' ? sigBytes : bs58.encode(sigBytes);
+      }
       await connection.confirmTransaction(sig, 'confirmed');
 
       // Auto-activate after first deposit
@@ -371,11 +440,11 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, sendTransaction, connection, activate, fetchAccount, fetchWalletUsdc]);
+  }, [publicKey, sendTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privyWalletObj, privyAddr, claimGold]);
 
   // ---------- Trading ----------
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     setLoading(true);
     setError(null);
     try {
@@ -397,10 +466,10 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount]);
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     setLoading(true);
     setError(null);
     try {
@@ -421,10 +490,10 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, signedRequestWithActivation, fetchOrders, fetchAccount]);
+  }, [walletAddr, signedRequestWithActivation, fetchOrders, fetchAccount]);
 
   const closePosition = useCallback(async (symbol, side, amount) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     setLoading(true);
     setError(null);
     try {
@@ -445,20 +514,20 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, signedRequestWithActivation, fetchPositions, fetchAccount]);
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchAccount]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     try {
       const res = await signedRequestWithActivation('POST', '/orders/cancel', 'cancel_order', { symbol, order_id: orderId });
       if (res.error) throw new Error(res.error);
       fetchOrders();
       return res;
     } catch (e) { setError(e.message); }
-  }, [publicKey, signedRequestWithActivation, fetchOrders]);
+  }, [walletAddr, signedRequestWithActivation, fetchOrders]);
 
   const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     try {
       const payload = { symbol, side, builder_code: BUILDER_CODE };
       if (takeProfit) payload.take_profit = { stop_price: takeProfit };
@@ -467,25 +536,32 @@ export function usePacifica() {
       if (res.error) throw new Error(res.error);
       return res;
     } catch (e) { setError(e.message); }
-  }, [publicKey, signedRequestWithActivation]);
+  }, [walletAddr, signedRequestWithActivation]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     try {
+      // Cap at symbol's actual max (Pacifica rejects otherwise with InvalidLeverage).
+      const mkt = marketsRef.current.find(m => m.symbol === symbol);
+      const maxLev = mkt?.max_leverage ? Number(mkt.max_leverage) : 50;
+      const capped = Math.max(1, Math.min(Number(leverage), maxLev));
       const res = await signedRequestWithActivation('POST', '/account/leverage', 'update_leverage', {
-        symbol, leverage: Number(leverage),
+        symbol, leverage: capped,
       });
       if (res.error) {
         if (res.code === 422) throw new Error('Close your ' + symbol + ' position first (can only increase leverage)');
+        if (/InvalidLeverage/i.test(res.error)) {
+          throw new Error(`Leverage ${capped}x not accepted by Pacifica (max for ${symbol} is ${maxLev}x). Close open position first.`);
+        }
         throw new Error(res.error);
       }
       fetchLeverageSettings();
       return res;
     } catch (e) { setError(e.message); }
-  }, [publicKey, signedRequestWithActivation, fetchLeverageSettings]);
+  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings]);
 
   const setMarginMode = useCallback(async (symbol, isIsolated) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     try {
       const res = await signedRequestWithActivation('POST', '/account/margin', 'update_margin_mode', {
         symbol, is_isolated: isIsolated,
@@ -497,10 +573,10 @@ export function usePacifica() {
       fetchLeverageSettings();
       return res;
     } catch (e) { setError(e.message); }
-  }, [publicKey, signedRequestWithActivation, fetchLeverageSettings]);
+  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings]);
 
   const withdraw = useCallback(async (amount) => {
-    if (!publicKey) return;
+    if (!walletAddr) return;
     setLoading(true);
     setError(null);
     try {
@@ -516,11 +592,11 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, signedRequestWithActivation, fetchAccount]);
+  }, [walletAddr, signedRequestWithActivation, fetchAccount]);
 
   // ---------- WebSocket ----------
   useEffect(() => {
-    if (!connected) return;
+    if (!walletAddr) return;
 
     let ws, reconnectTimer, pingTimer, pongTimer;
     let latestPrices = null;
@@ -701,13 +777,13 @@ export function usePacifica() {
       window.removeEventListener('offline', handleOffline);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
-  }, [connected, walletAddr]);
+  }, [walletAddr]);
 
   // Fetch markets once
   useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
 
   return {
-    connected, walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
+    connected: !!walletAddr, walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     depositToPacifica, withdraw, activate, claimGold,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder,

@@ -1,11 +1,14 @@
 import { memo, useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { usePrivy } from '@privy-io/react-auth';
 import { usePlayer, useResources, useBuilding } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
+
+const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 
 function ProfileModal({ onClose }) {
   const player = usePlayer();
@@ -13,8 +16,35 @@ function ProfileModal({ onClose }) {
   const { publicKey, connected, disconnect, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
-  const { account } = usePacifica();
+  const { account, walletAddr } = usePacifica();
   const [tradingStats, setTradingStats] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  // Privy logout — hook only called when provider is mounted (build-time flag).
+  let privyLogout = null, privyAuthed = false;
+  if (PRIVY_ENABLED) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const p = usePrivy();
+    privyLogout = p.logout;
+    privyAuthed = !!p.authenticated;
+  }
+
+  // Unified wallet address — wallet-adapter (Phantom etc.) or Privy-embedded.
+  const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
+  const activeWallet = adapterAddr || walletAddr || player?.wallet || null;
+  const walletSource = adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null);
+
+  const handleDisconnect = async () => {
+    if (walletSource === 'adapter') {
+      disconnect();
+    } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
+      await privyLogout();
+    }
+    // Clear local session so the register screen shows again
+    window._playerToken = null;
+    try { localStorage.removeItem('godot_user_auth_cfg'); } catch {}
+    window.location.reload();
+  };
 
   const { buildingDefs } = useBuilding();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
@@ -55,15 +85,44 @@ function ProfileModal({ onClose }) {
 
         <div style={S.body}>
           {/* Wallet */}
-          {(connected && publicKey) ? (
+          {activeWallet ? (
             <div style={S.connectedBox}>
               <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
                 <div style={S.dot} />
                 <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>
-                  {publicKey.toBase58().slice(0, 6)}...{publicKey.toBase58().slice(-4)}
+                  {copied ? 'Copied' : `${activeWallet.slice(0, 6)}...${activeWallet.slice(-4)}`}
                 </span>
+                <button
+                  title="Copy full address"
+                  onClick={async () => {
+                    try { await navigator.clipboard.writeText(activeWallet); } catch {}
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, padding: 0, borderRadius: 6,
+                    background: copied ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
+                    border: `1px solid ${copied ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
+                    cursor: 'pointer', color: copied ? '#2E7D32' : '#5C3A21',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {copied ? (
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  )}
+                </button>
               </div>
-              {!inFrame && <button style={S.disconnectBtn} onClick={disconnect}>Disconnect</button>}
+              {!inFrame && walletSource && (
+                <button style={S.disconnectBtn} onClick={handleDisconnect}>Disconnect</button>
+              )}
             </div>
           ) : inFrame ? (
             <div style={S.connectedBox}>
@@ -99,7 +158,7 @@ function ProfileModal({ onClose }) {
           ))}
 
           {/* Trading stats */}
-          {(connected || inFrame) && (
+          {(activeWallet || inFrame) && (
             <>
               <div style={S.sectionTitle}>Trading</div>
               {[

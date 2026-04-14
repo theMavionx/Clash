@@ -28,8 +28,10 @@ export default defineConfig({
   },
   server: {
     headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+      // COEP intentionally not set: it strips credentials from cross-origin
+      // iframes, which breaks Privy's auth.privy.io embedded-wallet iframe
+      // ("Exceeded max attempts"). Godot falls back to single-threaded WASM.
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
     proxy: {
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',

@@ -161,6 +161,7 @@ func _send_initial_state() -> void:
 			"trophies": net.trophies,
 			"player_id": net.player_id,
 			"token": net.token,
+			"wallet": net.wallet,
 		})
 
 
@@ -330,6 +331,7 @@ func _try_wallet_login(wallet: String) -> void:
 			"trophies": net.trophies,
 			"player_id": net.player_id,
 			"token": net.token,
+			"wallet": net.wallet,
 		})
 
 
@@ -341,6 +343,7 @@ func _send_full_state() -> void:
 			"trophies": net.trophies,
 			"player_id": net.player_id,
 			"token": net.token,
+			"wallet": net.wallet,
 		})
 	var bs = _get_building_system()
 	if bs:

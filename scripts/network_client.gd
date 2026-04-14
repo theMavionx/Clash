@@ -18,6 +18,7 @@ var token: String = ""
 var player_id: String = ""
 var display_name: String = ""
 var trophies: int = 0
+var wallet: String = ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
@@ -54,6 +55,7 @@ func register(player_name: String, wallet: String = "") -> Dictionary:
 		player_id = response["id"]
 		display_name = response["name"]
 		trophies = response.get("trophies", 0)
+		wallet = response.get("wallet", "")
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -66,6 +68,7 @@ func login() -> Dictionary:
 		player_id = response["id"]
 		display_name = response["name"]
 		trophies = response.get("trophies", 0)
+		wallet = response.get("wallet", "")
 		auth_ok.emit(response)
 	return response
 
@@ -85,6 +88,7 @@ func login_by_wallet(wallet: String) -> Dictionary:
 		player_id = response["id"]
 		display_name = response["name"]
 		trophies = response.get("trophies", 0)
+		wallet = response.get("wallet", "")
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -162,10 +166,10 @@ func report_troop_death(troop_name: String) -> Dictionary:
 func get_ships() -> Dictionary:
 	return await _http_get("/ships")
 
-func link_wallet(wallet: String) -> void:
-	if token == "" or wallet == "":
+func link_wallet(w: String) -> void:
+	if token == "" or w == "":
 		return
-	var response = await _http_post("/players/link-wallet", {"wallet": wallet})
+	var response = await _http_post("/players/link-wallet", {"wallet": w})
 	# Server may tell us the wallet already belongs to another account and
 	# hand us that account's canonical token. Switch our session to it so
 	# desktop and Farcaster players share the same progress.
@@ -174,8 +178,11 @@ func link_wallet(wallet: String) -> void:
 		player_id = response.get("id", player_id)
 		display_name = response.get("name", display_name)
 		trophies = response.get("trophies", trophies)
+		wallet = response.get("wallet", w)
 		_save_token()
 		auth_ok.emit(response)
+	elif response.get("success", false):
+		wallet = w
 
 func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 	return await _http_post("/buildings/%d/move" % building_id, {"grid_x": grid_x, "grid_z": grid_z})

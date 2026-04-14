@@ -1,5 +1,5 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
-import { useSend, useUI } from '../hooks/useGodot';
+import { useSend, useUI, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
@@ -15,12 +15,13 @@ import ExplainMoveModal from './ExplainMoveModal';
 import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
 import pacificaLogo from '../assets/pacifica.png';
+import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
 const TABS = [
   { id: 'Trade', icon: <svg className="tab-icon-trade" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path className="trend-line" d="m19 9-5 5-4-4-3 3"/></svg>, label: 'Trade' },
   { id: 'Positions', icon: <svg className="tab-icon-positions" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect className="briefcase-body" width="20" height="14" x="2" y="7" rx="2" ry="2"/><path className="handle" d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>, label: 'Positions' },
   { id: 'Orders', icon: <svg className="tab-icon-orders" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line className="order-line" x1="8" y1="6" x2="21" y2="6"/><line className="order-line" x1="8" y1="12" x2="21" y2="12"/><line className="order-line" x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>, label: 'Orders' },
-  { id: 'Quests', icon: <svg className="tab-icon-quests" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 2h10l3 6-8 14L4 8z"/><path d="M7 2l5 6 5-6"/><path d="M4 8h16"/></svg>, label: 'Quests' },
+  { id: 'Quests', icon: <svg className="tab-icon-quests" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><g className="sword-group"><path d="M14.5 17.5L3 6V3h3l11.5 11.5"/><path d="M13 19l6-6"/><path d="M16 16l4 4"/><path d="M19 21l2-2"/></g></svg>, label: 'Quests' },
   { id: 'Account', icon: <svg className="tab-icon-account" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path className="avatar-body" d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle className="avatar-head" cx="12" cy="7" r="4"/></svg>, label: 'Account' },
 ];
 
@@ -445,12 +446,16 @@ function FuturesPanel() {
   const { connected, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
+  const player = usePlayer();
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
   } = usePacifica();
+  // walletAddr covers adapter + Privy-embedded. player.wallet is the server's
+  // view (only populated once Godot re-export includes the new payload).
+  const hasWallet = !!walletAddr || connected || !!player?.wallet;
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -493,6 +498,7 @@ function FuturesPanel() {
   const [limitPrice, setLimitPrice] = useState('');
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
   const [explainOpen, setExplainOpen] = useState(false);
+  const [walletCopied, setWalletCopied] = useState(false);
   const elfaSignals = useElfaSignals();
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
@@ -619,19 +625,6 @@ function FuturesPanel() {
     }
   }, [pacBalance, currentPrice, maxUsdc, amountInUsdc]);
 
-  const handleTrade = useCallback(async (side) => {
-    const qty = amountInUsdc ? tokenAmount : amount;
-    if (!qty || parseFloat(qty) <= 0) return;
-    if (orderType === 'market') {
-      await placeMarketOrder(symbol, side, qty, '0.5');
-    } else {
-      if (!limitPrice) return;
-      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC');
-    }
-    setAmount('');
-    setSizePct(0);
-  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder]);
-
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
     const v = Math.min(Number(val), maxLev);
@@ -640,6 +633,29 @@ function FuturesPanel() {
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi]);
+
+  const handleTrade = useCallback(async (side) => {
+    const qty = amountInUsdc ? tokenAmount : amount;
+    if (!qty || parseFloat(qty) <= 0) return;
+    // Flush any pending leverage change before placing the order so Pacifica
+    // sees the right leverage on fill (prevents "opened at 1x" surprises).
+    if (levTimerRef.current) {
+      clearTimeout(levTimerRef.current);
+      levTimerRef.current = null;
+      const serverLev = leverageSettings[symbol];
+      if (leverage !== serverLev) {
+        await setLeverageApi(symbol, leverage);
+      }
+    }
+    if (orderType === 'market') {
+      await placeMarketOrder(symbol, side, qty, '0.5');
+    } else {
+      if (!limitPrice) return;
+      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC');
+    }
+    setAmount('');
+    setSizePct(0);
+  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -878,7 +894,7 @@ function FuturesPanel() {
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
   // ==================== NOT CONNECTED (skip in Farcaster — wallet auto-connects) ====================
-  if (!connected && !inFrame) {
+  if (!hasWallet && !inFrame) {
     return (
       <>
         <style>{animCSS}</style>
@@ -938,7 +954,7 @@ function FuturesPanel() {
         title="What's happening with this token?"
         aria-label="Explain"
       >
-        <span className="explain-q">?</span>
+        <img src={elfaBadge} alt="" className="explain-q" />
         <span className="explain-label">Explain</span>
       </button>
     );
@@ -1175,9 +1191,39 @@ function FuturesPanel() {
         <div style={S.fullCard}>
           <div style={S.row}>
             <span style={S.label}>Connected Wallet</span>
-            <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
-              {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}
-            </span>
+            <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
+              <span style={{fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
+                {walletCopied ? 'Copied' : `${walletAddr?.slice(0, 6)}...${walletAddr?.slice(-4)}`}
+              </span>
+              <button
+                title="Copy full address"
+                onClick={async () => {
+                  if (!walletAddr) return;
+                  try { await navigator.clipboard.writeText(walletAddr); } catch {}
+                  setWalletCopied(true);
+                  setTimeout(() => setWalletCopied(false), 1500);
+                }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 22, height: 22, padding: 0, borderRadius: 6,
+                  background: walletCopied ? 'rgba(67,160,71,0.18)' : 'rgba(0,0,0,0.08)',
+                  border: `1px solid ${walletCopied ? 'rgba(46,125,50,0.5)' : 'rgba(92,58,33,0.3)'}`,
+                  cursor: 'pointer', color: walletCopied ? '#2E7D32' : '#5C3A21',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {walletCopied ? (
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1378,12 +1424,11 @@ const animCSS = `
     outline: none;
   }
   .explain-chart-pill .explain-q {
-    display: inline-flex; align-items: center; justify-content: center;
     width: 22px; height: 22px; flex-shrink: 0;
     margin-left: 1px;
     border-radius: 50%;
-    background: #5C3A21; color: #fff;
-    font-size: 14px; font-weight: 900; line-height: 1;
+    object-fit: cover;
+    display: block;
   }
   .explain-chart-pill .explain-label {
     max-width: 0; opacity: 0;
@@ -1504,6 +1549,15 @@ const animCSS = `
   }
   .tab-btn:hover .tab-icon-account .avatar-body, .tab-btn.active .tab-icon-account .avatar-body {
     animation: body-shrug 0.6s ease-in-out;
+  }
+  
+  @keyframes sword-swing {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(-25deg); }
+  }
+  .tab-icon-quests .sword-group { transform-origin: 16px 16px; }
+  .tab-btn:hover .tab-icon-quests .sword-group, .tab-btn.active .tab-icon-quests .sword-group {
+    animation: sword-swing 0.5s ease-out;
   }
 
 `;
