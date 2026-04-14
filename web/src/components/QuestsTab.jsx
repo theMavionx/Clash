@@ -98,6 +98,7 @@ function QuestCard({ task, onStart, onClaim, loading }) {
 
 function QuestsTab() {
   const [tasks, setTasks] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
@@ -111,6 +112,7 @@ function QuestsTab() {
       const data = await r.json();
       setTasks(Array.isArray(data) ? data : []);
     } catch (e) { /* swallow */ }
+    finally { setLoaded(true); }
   }, []);
 
   useEffect(() => {
@@ -155,6 +157,21 @@ function QuestsTab() {
       await fetchTasks();
     } finally { setLoading(false); }
   }, [fetchTasks]);
+
+  if (!loaded) {
+    return (
+      <div style={{...S.empty, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12}}>
+        <div style={{
+          width: 36, height: 36, borderRadius: '50%',
+          border: '3px solid rgba(92,58,33,0.15)',
+          borderTopColor: '#e8b830',
+          animation: 'qt-spin 0.9s linear infinite',
+        }} />
+        <div style={S.emptyTitle}>Loading quests…</div>
+        <style>{`@keyframes qt-spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   if (!tasks.length) {
     return (

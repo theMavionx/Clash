@@ -3,6 +3,21 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
 import { useWallets as usePrivySolanaWallets, useCreateWallet } from '@privy-io/react-auth/solana';
+
+function Spinner({ label }) {
+  return (
+    <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14}}>
+      <div style={{
+        width: 44, height: 44, borderRadius: '50%',
+        border: '4px solid rgba(92,58,33,0.15)',
+        borderTopColor: '#e8b830',
+        animation: 'rp-spin 0.9s linear infinite',
+      }} />
+      {label && <div style={{fontSize: 14, fontWeight: 800, color: '#a3906a'}}>{label}</div>}
+      <style>{`@keyframes rp-spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
 import { useSend } from '../hooks/useGodot';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
@@ -90,13 +105,23 @@ function PrivyLoginButton({ onLoggedIn }) {
   );
 }
 
+// Sub-component: tracks whether Privy is still resolving on page load. While
+// resolving, RegisterPanel shows a loader instead of the "Join the Battle" form.
+function PrivyReadyProbe({ onStatus }) {
+  const { ready, authenticated } = usePrivy();
+  useEffect(() => { onStatus({ ready, authenticated }); }, [ready, authenticated, onStatus]);
+  return null;
+}
+
 function RegisterPanel() {
   const { sendToGodot } = useSend();
-  const { publicKey, connected, select, wallets, connect } = useWallet();
+  const { publicKey, connected, connecting, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame, user: fcUser } = useFarcaster();
   const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
   const [name, setName] = useState('');
+  const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
+  const [waitingForGodot, setWaitingForGodot] = useState(false);
   const triedWalletLogin = useRef(false);
   const triedFcLogin = useRef(false);
   const triedPrivyLogin = useRef(false);
@@ -104,6 +129,7 @@ function RegisterPanel() {
   const handlePrivyLoggedIn = ({ wallet, email }) => {
     if (triedPrivyLogin.current) return;
     triedPrivyLogin.current = true;
+    setWaitingForGodot(true);
     // Godot's _do_register tries login_by_wallet first, then registers if new.
     const name = email ? email.split('@')[0].slice(0, 20) : ('player_' + wallet.slice(0, 6));
     sendToGodot('register', { name, wallet });
@@ -113,6 +139,7 @@ function RegisterPanel() {
   useEffect(() => {
     if (connected && publicKey && !triedWalletLogin.current) {
       triedWalletLogin.current = true;
+      setWaitingForGodot(true);
       sendToGodot('wallet_connected', { wallet: publicKey.toBase58() });
     }
   }, [connected, publicKey, sendToGodot]);
@@ -153,15 +180,36 @@ function RegisterPanel() {
     return (
       <div style={styles.overlay}>
         <div style={styles.panel}>
-          <div style={styles.icon}>⚔️</div>
-          <h2 style={styles.title}>Joining as {fcUser.username || fcUser.displayName}...</h2>
+          <Spinner label={`Joining as ${fcUser.username || fcUser.displayName}…`} />
         </div>
       </div>
     );
   }
 
+  // Hide the form while auth is still resolving on page load — prevents the
+  // "Join the Battle" flash when a returning user's session is about to restore.
+  const authInProgress =
+    waitingForGodot ||
+    connecting ||
+    (privyEnabled && !privyStatus.ready) ||
+    (privyEnabled && privyStatus.authenticated && !triedPrivyLogin.current);
+
+  if (authInProgress) {
+    return (
+      <>
+        {privyEnabled && <PrivyReadyProbe onStatus={setPrivyStatus} />}
+        <div style={styles.overlay}>
+          <div style={styles.panel}>
+            <Spinner label="Signing you in…" />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <div style={styles.overlay}>
+      {privyEnabled && <PrivyReadyProbe onStatus={setPrivyStatus} />}
       <div style={styles.panel}>
         <div style={styles.icon}>⚔️</div>
         <h2 style={styles.title}>Join the Battle</h2>
