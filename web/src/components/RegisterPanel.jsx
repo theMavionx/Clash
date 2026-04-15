@@ -22,6 +22,53 @@ import { useSend } from '../hooks/useGodot';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
+// Headless — runs the Privy auto-login effect regardless of which UI branch
+// RegisterPanel is showing. This prevents deadlocks where the spinner hides
+// the login button, so the effect never fires.
+function PrivyAutoLogin({ onLoggedIn, onStatus }) {
+  const { ready, authenticated, user } = usePrivy();
+  const { wallets: solWallets } = usePrivySolanaWallets();
+  const { createWallet } = useCreateWallet();
+  const fired = useRef(false);
+  const createAttempted = useRef(false);
+
+  useEffect(() => { onStatus({ ready, authenticated }); }, [ready, authenticated, onStatus]);
+
+  // Reset guards when Privy logs out so re-login works without a page reload.
+  useEffect(() => {
+    if (!authenticated) {
+      fired.current = false;
+      createAttempted.current = false;
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (fired.current) return;
+    if (!authenticated) return;
+    const w = (solWallets || []).find(x => x && x.walletClientType === 'privy') || (solWallets || [])[0];
+    if (w && w.address) {
+      fired.current = true;
+      console.log('[privy] ✅ firing onLoggedIn with wallet:', w.address);
+      onLoggedIn({ wallet: w.address, email: user?.email?.address || null });
+      return;
+    }
+    if (!createAttempted.current && createWallet) {
+      createAttempted.current = true;
+      console.log('[privy] 🔨 calling createWallet()...');
+      createWallet()
+        .then(result => console.log('[privy] ✅ createWallet resolved:', result))
+        .catch(err => {
+          const msg = err?.message || '';
+          if (msg.includes('already has an embedded wallet')) return;
+          console.error('[privy] ❌ createWallet rejected:', err);
+          createAttempted.current = false;
+        });
+    }
+  }, [authenticated, solWallets, user, onLoggedIn, createWallet]);
+
+  return null;
+}
+
 // Sub-component that calls Privy hooks. Only rendered when VITE_PRIVY_APP_ID is set,
 // so the hooks always find a provider (rules-of-hooks-safe).
 function PrivyLoginButton({ onLoggedIn }) {
@@ -103,14 +150,6 @@ function PrivyLoginButton({ onLoggedIn }) {
       {authenticated ? 'LOGOUT PRIVY' : 'LOGIN WITH PRIVY'}
     </button>
   );
-}
-
-// Sub-component: tracks whether Privy is still resolving on page load. While
-// resolving, RegisterPanel shows a loader instead of the "Join the Battle" form.
-function PrivyReadyProbe({ onStatus }) {
-  const { ready, authenticated } = usePrivy();
-  useEffect(() => { onStatus({ ready, authenticated }); }, [ready, authenticated, onStatus]);
-  return null;
 }
 
 function RegisterPanel() {
@@ -197,7 +236,7 @@ function RegisterPanel() {
   if (authInProgress) {
     return (
       <>
-        {privyEnabled && <PrivyReadyProbe onStatus={setPrivyStatus} />}
+        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
         <div style={styles.overlay}>
           <div style={styles.panel}>
             <Spinner label="Signing you in…" />
@@ -209,7 +248,7 @@ function RegisterPanel() {
 
   return (
     <div style={styles.overlay}>
-      {privyEnabled && <PrivyReadyProbe onStatus={setPrivyStatus} />}
+      {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
       <div style={styles.panel}>
         <div style={styles.icon}>⚔️</div>
         <h2 style={styles.title}>Join the Battle</h2>

@@ -205,8 +205,19 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 	elif res_type == "ore":
 		target_pos = Vector2(screen_w - 80.0, 40.0)
 
-	# Prefer the actual label position when it is visible on screen
-	if not OS.has_feature("web") and is_instance_valid(bs.gold_label) and bs.gold_label.is_visible_in_tree():
+	# On web: read the real React HUD icon position published by ResourceBar.jsx
+	# into window.godotResourceIconPositions[res_type] = {x, y} (device pixels).
+	if OS.has_feature("web"):
+		var js_target = JavaScriptBridge.eval(
+			"(window.godotResourceIconPositions && window.godotResourceIconPositions['" + res_type + "']) ? " +
+			"window.godotResourceIconPositions['" + res_type + "'].x + ',' + window.godotResourceIconPositions['" + res_type + "'].y : ''"
+		)
+		if js_target is String and js_target != "":
+			var parts: PackedStringArray = js_target.split(",")
+			if parts.size() == 2:
+				target_pos = Vector2(float(parts[0]), float(parts[1]))
+	elif is_instance_valid(bs.gold_label) and bs.gold_label.is_visible_in_tree():
+		# Desktop/editor: use Godot's own HUD labels if they're visible.
 		if res_type == "gold" and is_instance_valid(bs.gold_label):
 			target_pos = bs.gold_label.get_global_rect().get_center()
 		elif res_type == "wood" and is_instance_valid(bs.wood_label):

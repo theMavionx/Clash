@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useEffect, useRef } from 'react';
 import { useResources, useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 
@@ -25,6 +25,38 @@ function ResourceBar() {
   const caps = data.caps || { gold: 5000, wood: 5000, ore: 5000 };
   const { isMobile: mobile, isLandscape } = useLayout();
 
+  // Publish icon screen positions to window so Godot's fly-to-icon animation
+  // can target the real React HUD icons. Godot reads these via JavaScriptBridge.
+  const iconRefs = useRef({ gold: null, wood: null, ore: null });
+  useEffect(() => {
+    const publish = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const out = {};
+      for (const key of ['gold', 'wood', 'ore']) {
+        const el = iconRefs.current[key];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        out[key] = {
+          x: Math.round((r.left + r.width / 2) * dpr),
+          y: Math.round((r.top + r.height / 2) * dpr),
+        };
+      }
+      window.godotResourceIconPositions = out;
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    for (const el of Object.values(iconRefs.current)) if (el) ro.observe(el);
+    window.addEventListener('resize', publish);
+    window.addEventListener('scroll', publish, true);
+    const iv = setInterval(publish, 2000); // catch layout shifts from mobile/orientation
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', publish);
+      window.removeEventListener('scroll', publish, true);
+      clearInterval(iv);
+    };
+  }, [mobile, isLandscape]);
+
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
   }, [sendToGodot]);
@@ -42,6 +74,7 @@ function ResourceBar() {
         return (
           <div key={key} style={styles.container}>
             <img
+              ref={el => { iconRefs.current[key] = el; }}
               src={icon}
               alt={key}
               style={{

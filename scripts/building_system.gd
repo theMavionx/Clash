@@ -1271,8 +1271,15 @@ func _auto_login() -> void:
 		return
 	var result = await net.login()
 	if not result.has("id"):
-		# Token invalid — reveal clouds and show register screen
+		# Token invalid — reveal clouds and show register screen.
+		# Also persist the cleared state so we don't retry the same bad token
+		# on every page reload (otherwise a deleted account's token permanently
+		# yields /state 401 → looks like the game is broken).
 		net.token = ""
+		net.player_id = ""
+		net.display_name = ""
+		net.wallet = ""
+		net._save_token()
 		_reveal_initial_cover()
 		if create_ui:
 			_create_register_panel()
