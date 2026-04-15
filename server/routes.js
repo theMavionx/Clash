@@ -1172,6 +1172,18 @@ router.get('/elfa/explain/:symbol', auth, async (req, res) => {
   res.json(data);
 });
 
+// Structured trade idea (side/entry/tp/sl/confidence) — hacked on top of /chat
+// with a JSON prompt. Cached 30 min. Same rate limit bucket as explain.
+router.get('/elfa/trade-idea/:symbol', auth, async (req, res) => {
+  const symbol = String(req.params.symbol || '').toUpperCase();
+  if (!/^[A-Z0-9]{1,10}$/.test(symbol)) return res.status(400).json({ error: 'bad symbol' });
+  if (!explainRateLimit(req.player.id)) {
+    return res.status(429).json({ error: 'Too many requests — try again in a minute' });
+  }
+  const data = await elfa.getTradeIdea(symbol, req.player.name);
+  res.json(data);
+});
+
 // Admin: per-symbol Elfa stats + error log
 router.get('/admin/elfa/stats', adminAuth, (req, res) => {
   res.json({

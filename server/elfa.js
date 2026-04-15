@@ -251,10 +251,131 @@ async function getExplain(symbol, playerName) {
   }
 }
 
+// ---------- Trade Ideas (hacked on top of /chat with JSON prompt) ----------
+// Not an official Elfa endpoint — we coerce the LLM to output structured JSON.
+// Cost: ~46-60 credits per fresh call. Cached 30 minutes (shorter than explain
+// because trade parameters stale faster than narrative).
+const inFlightTrade = new Map();
+
+function safeParseJson(text) {
+  if (!text) return null;
+  // Strip markdown code fences (```json ... ```) if present.
+  const cleaned = text.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+  // Grab the first {...} block, in case model included preamble.
+  const m = cleaned.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+function validTradeIdea(j) {
+  if (!j || typeof j !== 'object') return false;
+  const side = String(j.side || '').toLowerCase();
+  if (side !== 'long' && side !== 'short') return false;
+  if (typeof j.entry !== 'number' || !isFinite(j.entry)) return false;
+  if (typeof j.tp !== 'number' || !isFinite(j.tp)) return false;
+  if (typeof j.sl !== 'number' || !isFinite(j.sl)) return false;
+  // Sanity check ordering: long → tp > entry > sl, short → tp < entry < sl
+  if (side === 'long' && !(j.tp > j.entry && j.entry > j.sl)) return false;
+  if (side === 'short' && !(j.tp < j.entry && j.entry < j.sl)) return false;
+  return true;
+}
+
+async function getTradeIdea(symbol, playerName) {
+  const sym = String(symbol || '').toUpperCase();
+  recordStat(sym, { trade_idea_hits: 1, last_player: playerName || null });
+  const key = 'trade:' + sym;
+  const cached = cacheGet(key);
+  if (cached) {
+    recordStat(sym, { cache_hits: 1 });
+    return { ...cached, cached: true };
+  }
+  if (inFlightTrade.has(key)) {
+    recordStat(sym, { cache_hits: 1 });
+    return inFlightTrade.get(key);
+  }
+
+  const promise = (async () => {
+    let idea = null;
+    let credits_used = 0;
+
+    if (hasKey()) {
+      const all = await getAllSignals();
+      const ctx = all.signals[sym];
+      const ctxStr = ctx
+        ? `Current 24h trending: ${ctx.mentions} mentions (${ctx.change_percent >= 0 ? '+' : ''}${ctx.change_percent}% vs prev window).`
+        : '';
+
+      const prompt = `You are a crypto trade-idea assistant. For ${sym}, produce a single structured trade suggestion based on current social narrative, momentum, and price action.
+
+Return ONLY valid JSON (no markdown, no prose, no code fences) with EXACTLY these keys:
+{
+  "side": "long" | "short",
+  "entry": <number — limit order entry price in USD>,
+  "tp": <number — take-profit price in USD>,
+  "sl": <number — stop-loss price in USD>,
+  "confidence": <integer 0-100>,
+  "rr": <string like "1:3">,
+  "horizon": <string like "6-48 hours">,
+  "reason": <string, 1 short sentence, why>
+}
+
+Rules:
+- For "long": tp > entry > sl. For "short": tp < entry < sl.
+- Numbers must be realistic for the current price level of ${sym}.
+- Keep risk/reward ≥ 1:2 when confidence ≥ 50.
+- "reason" max 120 chars, no hype words.
+${ctxStr}`;
+
+      const chat = await fetchElfa('/chat', {}, { method: 'POST', body: { message: prompt }, timeoutMs: 25000 });
+      const msg = chat && chat.data && (chat.data.message || chat.data.response || chat.data.text);
+      credits_used = (chat && chat.data && chat.data.creditsConsumed) || 0;
+      recordStat(sym, {
+        fresh_calls: 1,
+        credits_total: credits_used,
+        last_refreshed_at: new Date().toISOString(),
+      });
+      console.log(`[elfa.trade] ${sym} raw_len=${msg ? msg.length : 0} credits=${credits_used}`);
+
+      const parsed = safeParseJson(msg);
+      if (parsed && validTradeIdea(parsed)) {
+        idea = {
+          side: String(parsed.side).toLowerCase(),
+          entry: Number(parsed.entry),
+          tp: Number(parsed.tp),
+          sl: Number(parsed.sl),
+          confidence: Math.max(0, Math.min(100, Math.round(Number(parsed.confidence) || 0))),
+          rr: String(parsed.rr || ''),
+          horizon: String(parsed.horizon || ''),
+          reason: String(parsed.reason || '').slice(0, 200),
+        };
+      } else {
+        recordError('/trade-idea', 0, `Invalid JSON from /chat for ${sym}: ${(msg || '').slice(0, 200)}`);
+      }
+    }
+
+    const result = {
+      symbol: sym,
+      idea, // null if parse failed — client should show "unavailable" state
+      credits_used,
+      updated_at: new Date().toISOString(),
+    };
+    cacheSet(key, result, 30 * 60 * 1000);
+    return { ...result, cached: false };
+  })();
+
+  inFlightTrade.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlightTrade.delete(key);
+  }
+}
+
 module.exports = {
   hasKey,
   getAllSignals,
   getExplain,
+  getTradeIdea,
   cacheGet,
   cacheSet,
   getStats,
