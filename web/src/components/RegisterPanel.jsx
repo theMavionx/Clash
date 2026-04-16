@@ -20,6 +20,7 @@ function Spinner({ label }) {
 }
 import { useSend } from '../hooks/useGodot';
 import { useFarcaster } from '../hooks/useFarcaster';
+import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
 // Headless — runs the Privy auto-login effect regardless of which UI branch
@@ -157,6 +158,7 @@ function RegisterPanel() {
   const { publicKey, connected, connecting, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame, user: fcUser } = useFarcaster();
+  const { dex, setDex } = useDex();
   const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
   const [name, setName] = useState('');
   const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
@@ -218,7 +220,7 @@ function RegisterPanel() {
     e.preventDefault();
     if (!connected || !publicKey) return;
     if (name.trim().length < 2) return;
-    sendToGodot('register', { name: name.trim(), wallet: publicKey.toBase58() });
+    sendToGodot('register', { name: name.trim(), wallet: publicKey.toBase58(), dex });
   };
 
   // In Farcaster frame with user — auto-registering, show loading
@@ -298,6 +300,54 @@ function RegisterPanel() {
               autoFocus
             />
 
+            {/* DEX Selector */}
+            <div style={styles.dexLabel}>Choose your Perp DEX</div>
+            <div style={styles.dexSelector}>
+              {Object.values(DEX_CONFIG).map(cfg => {
+                const isSelected = dex === cfg.id;
+                return (
+                  <button
+                    key={cfg.id}
+                    type="button"
+                    onClick={() => setDex(cfg.id)}
+                    style={{
+                      flex: 1,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '10px 8px',
+                      borderRadius: 12,
+                      border: `2.5px solid ${isSelected ? cfg.color : '#4a3520'}`,
+                      background: isSelected ? cfg.colorLight : 'rgba(255,255,255,0.04)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      outline: 'none',
+                      boxShadow: isSelected ? `0 0 12px ${cfg.color}55` : 'none',
+                    }}
+                  >
+                    <span style={{ fontSize: 22 }}>{cfg.emoji}</span>
+                    <span style={{
+                      fontSize: 12, fontWeight: 900, letterSpacing: '0.5px',
+                      color: isSelected ? cfg.color : '#888',
+                    }}>{cfg.label}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700,
+                      color: isSelected ? cfg.color : '#555',
+                      opacity: 0.8,
+                    }}>{cfg.chain}</span>
+                    {isSelected && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 900, padding: '1px 6px',
+                        background: cfg.color, color: '#fff', borderRadius: 4,
+                        letterSpacing: '0.5px',
+                      }}>SELECTED</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
             <button
               type="submit"
               style={{...cartoonBtn('#43A047', '#2E7D32'), width: '100%', textAlign: 'center', opacity: name.trim().length < 2 ? 0.5 : 1}}
@@ -354,5 +404,12 @@ const styles = {
     border: '3px solid #6D4C2A', background: '#1a1008',
     color: '#fff', fontSize: 18, fontWeight: 700,
     textAlign: 'center', outline: 'none', boxSizing: 'border-box',
+  },
+  dexLabel: {
+    fontSize: 11, fontWeight: 800, color: '#a3906a',
+    textTransform: 'uppercase', letterSpacing: '1px', alignSelf: 'flex-start',
+  },
+  dexSelector: {
+    display: 'flex', gap: 10, width: '100%',
   },
 };

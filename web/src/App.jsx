@@ -2,6 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react';
 import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
+import { DexProvider } from './contexts/DexContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import loadingImage from './assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
 import './index.css';
@@ -61,13 +62,15 @@ function AppInner() {
 
 export default function App() {
   return (
-    <PrivyAuthProvider>
-      <WalletProvider>
-        <GodotProvider>
-          <AppInner />
-        </GodotProvider>
-      </WalletProvider>
-    </PrivyAuthProvider>
+    <DexProvider>
+      <PrivyAuthProvider>
+        <WalletProvider>
+          <GodotProvider>
+            <AppInner />
+          </GodotProvider>
+        </WalletProvider>
+      </PrivyAuthProvider>
+    </DexProvider>
   );
 }
 

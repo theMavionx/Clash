@@ -2,6 +2,7 @@ import { memo } from 'react';
 import { usePlayer, useBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { colors } from '../styles/theme';
+import { useDex, DexBadge } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
@@ -10,6 +11,7 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const playerState = usePlayer();
   const { buildingDefs } = useBuilding();
   const { isMobile: mobile, isLandscape } = useLayout();
+  const { dex } = useDex();
   if (!playerState) return null;
 
   const townHallLevel = buildingDefs?.th_level || 1;
@@ -32,7 +34,10 @@ function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
       </div>
 
       <div style={styles.infoStack}>
-        <span style={{ ...styles.name, ...(mobile ? { fontSize: 18 } : {}) }}>{playerState.player_name}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ ...styles.name, ...(mobile ? { fontSize: 18 } : {}) }}>{playerState.player_name}</span>
+          <DexBadge dexId={dex} size={mobile ? 'sm' : 'lg'} />
+        </div>
 
         <div style={styles.trophyContainer} onClick={(e) => { e.stopPropagation(); onOpenLeaderboard?.(); }}>
           <div style={styles.trophyBox}>

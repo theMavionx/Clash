@@ -1,5 +1,6 @@
 import { memo, useState, useEffect } from 'react';
 import { usePlayer } from '../hooks/useGodot';
+import { useDex, DexBadge } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
@@ -8,6 +9,7 @@ function LeaderboardPanel({ onClose }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const player = usePlayer();
+  const { dex } = useDex();
 
   useEffect(() => {
     fetch('/api/leaderboard')
@@ -59,9 +61,14 @@ function LeaderboardPanel({ onClose }) {
                   {rank}
                 </div>
                 <div style={S.info}>
-                  <span style={{ ...S.name, color: isMe ? '#b45309' : '#5C3A21' }}>
-                    {r.name}{isMe ? ' (you)' : ''}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                    <span style={{ ...S.name, color: isMe ? '#b45309' : '#5C3A21' }}>
+                      {r.name}{isMe ? ' (you)' : ''}
+                    </span>
+                    {/* Show badge for current player (their choice stored locally);
+                        show server-provided dex for other players if available */}
+                    <DexBadge dexId={isMe ? dex : (r.dex || null)} size="sm" />
+                  </div>
                   <span style={S.level}>TH {r.level}</span>
                 </div>
                 <div style={S.trophyWrap}>
