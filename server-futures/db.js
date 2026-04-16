@@ -11,11 +11,14 @@ db.pragma('foreign_keys = ON');
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS wallets (
-    player_id    TEXT PRIMARY KEY,
+    player_id    TEXT NOT NULL,
     player_name  TEXT NOT NULL,
     public_key   TEXT NOT NULL UNIQUE,
     secret_key   TEXT NOT NULL,
-    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    dex          TEXT NOT NULL DEFAULT 'pacifica',
+    chain        TEXT NOT NULL DEFAULT 'solana',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (player_id, dex)
   );
 
   CREATE TABLE IF NOT EXISTS deposits (
@@ -47,11 +50,11 @@ db.exec(`
 // ---------- Prepared Statements ----------
 
 const stmts = {
-  getWallet: db.prepare('SELECT * FROM wallets WHERE player_id = ?'),
+  getWallet: db.prepare('SELECT * FROM wallets WHERE player_id = ? AND dex = ?'),
   getWalletByPubkey: db.prepare('SELECT * FROM wallets WHERE public_key = ?'),
   createWallet: db.prepare(`
-    INSERT INTO wallets (player_id, player_name, public_key, secret_key)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO wallets (player_id, player_name, public_key, secret_key, dex, chain)
+    VALUES (?, ?, ?, ?, ?, ?)
   `),
 
   addDeposit: db.prepare(`
@@ -70,21 +73,21 @@ const stmts = {
 
 // ---------- Wallet Functions ----------
 
-function getWallet(playerId) {
-  return stmts.getWallet.get(playerId);
+function getWallet(playerId, dex = 'pacifica') {
+  return stmts.getWallet.get(playerId, dex);
 }
 
-function createWallet(playerId, playerName, publicKey, secretKey) {
-  stmts.createWallet.run(playerId, playerName, publicKey, secretKey);
-  return stmts.getWallet.get(playerId);
+function createWallet(playerId, playerName, publicKey, secretKey, dex = 'pacifica', chain = 'solana') {
+  stmts.createWallet.run(playerId, playerName, publicKey, secretKey, dex, chain);
+  return stmts.getWallet.get(playerId, dex);
 }
 
-function getOrCreateWallet(playerId, playerName, generateFn) {
-  let wallet = stmts.getWallet.get(playerId);
+function getOrCreateWallet(playerId, playerName, generateFn, dex = 'pacifica', chain = 'solana') {
+  let wallet = stmts.getWallet.get(playerId, dex);
   if (wallet) return { wallet, created: false };
 
   const { publicKey, secretKey } = generateFn();
-  wallet = createWallet(playerId, playerName, publicKey, secretKey);
+  wallet = createWallet(playerId, playerName, publicKey, secretKey, dex, chain);
   return { wallet, created: true };
 }
 
@@ -122,3 +125,16 @@ module.exports = {
   addTrade,
   getTrades,
 };
+
+// Migrate existing wallets table if dex/chain columns are missing
+try {
+  const cols = db.prepare("PRAGMA table_info(wallets)").all().map(c => c.name);
+  if (!cols.includes('dex')) {
+    db.exec("ALTER TABLE wallets ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'");
+  }
+  if (!cols.includes('chain')) {
+    db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'");
+  }
+} catch (e) {
+  // Columns may already exist or table was freshly created with them
+}
