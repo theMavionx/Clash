@@ -231,7 +231,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var tn = data.get("troop_name", "")
 				bs._upgrade_troop(tn)
 		"register":
-			_do_register(data.get("name", ""), data.get("wallet", ""))
+			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""))
 		"wallet_connected":
 			_try_wallet_login(data.get("wallet", ""))
 		"logout":
@@ -282,27 +282,32 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bs._start_replay(replay_data, buildings_snapshot, attacker_name)
 
 
-func _do_register(player_name: String, wallet: String = "") -> void:
+func _do_register(player_name: String, wallet: String = "", dex: String = "") -> void:
 	var net = get_node_or_null("/root/Net")
 	if not net:
 		send_to_react("error", {"message": "Network not available"})
 		return
-	# Try to recover existing account by wallet first
+	# Try to recover existing account by wallet first. If found and the caller
+	# specified a different DEX than the stored one, switch it via /set-dex so
+	# the account matches the user's current intent.
 	if wallet != "":
 		var wallet_result = await net.login_by_wallet(wallet)
 		if wallet_result.has("token"):
+			if dex != "" and wallet_result.get("dex", "") != dex:
+				await net.set_dex(dex)
 			send_to_react("registered", {"success": true})
 			send_to_react("state", {
 				"player_name": net.display_name,
 				"trophies": net.trophies,
 				"player_id": net.player_id,
 				"token": net.token,
+				"dex": dex if dex != "" else wallet_result.get("dex", ""),
 			})
 			return
 	if player_name.length() < 2:
 		send_to_react("error", {"message": "Name must be at least 2 characters"})
 		return
-	var result = await net.register(player_name, wallet)
+	var result = await net.register(player_name, wallet, dex)
 	if result.has("error"):
 		send_to_react("error", {"message": str(result.error)})
 		return
@@ -312,6 +317,7 @@ func _do_register(player_name: String, wallet: String = "") -> void:
 		"trophies": net.trophies,
 		"player_id": net.player_id,
 		"token": net.token,
+		"dex": dex if dex != "" else result.get("dex", ""),
 	})
 
 

@@ -44,21 +44,61 @@ const TOKEN_COLORS = {
   DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
   GOLD:'#FFD700',SILVER:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
 };
+// Logo lookup: local /tokens first (hand-curated), then public CDNs covering
+// crypto (jsDelivr/coincap) and US equities (parqet). Avantis lists stocks
+// like AAPL/AMZN alongside crypto — single CDN isn't enough.
+const STOCK_SYMBOLS = new Set([
+  'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
+  'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
+  'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
+  'JPM','BAC','GS','WFC','V','MA','CRCL',
+]);
+function tokenLogoSources(sym) {
+  const s = String(sym || '').toUpperCase();
+  const low = s.toLowerCase();
+  const sources = [
+    `/tokens/${s}.svg`,
+    `/tokens/${s}.png`,
+  ];
+  if (STOCK_SYMBOLS.has(s)) {
+    sources.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
+  } else {
+    sources.push(
+      `https://assets.coincap.io/assets/icons/${low}@2x.png`,
+      `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@latest/svg/color/${low}.svg`,
+    );
+  }
+  return sources;
+}
 const TokenIcon = ({sym, size = 20}) => {
   const bg = TOKEN_COLORS[sym] || '#a3906a';
+  const sources = tokenLogoSources(sym);
+  const [srcIdx, setSrcIdx] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  // Reset when the symbol changes so a new row doesn't inherit prior failures.
+  useEffect(() => { setSrcIdx(0); setFailed(false); }, [sym]);
+
   return (
     <div style={{width: size, height: size, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden'}}>
-      <img src={`/tokens/${sym}.svg`} alt="" width={size} height={size} style={{borderRadius: '50%'}}
-        onError={e => {
-          // If svg fails, try png, if png fails, show fallback text
-          if (e.target.src.endsWith('.svg')) {
-            e.target.src = `/tokens/${sym}.png`;
-          } else {
-            e.target.style.display='none';
-            e.target.nextSibling.style.display='flex';
-          }
-        }} />
-      <span style={{display: 'none', fontSize: size * 0.5, fontWeight: 900, color: '#fff', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>{sym.charAt(0)}</span>
+      {!failed && (
+        <img
+          src={sources[srcIdx]}
+          alt=""
+          width={size}
+          height={size}
+          style={{borderRadius: '50%', objectFit: 'cover'}}
+          onError={() => {
+            if (srcIdx < sources.length - 1) setSrcIdx(srcIdx + 1);
+            else setFailed(true);
+          }}
+        />
+      )}
+      {failed && (
+        <span style={{fontSize: size * 0.5, fontWeight: 900, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>
+          {sym.charAt(0)}
+        </span>
+      )}
     </div>
   );
 };
@@ -1031,7 +1071,7 @@ function FuturesPanel() {
             {renderSymbolBar()}
             {/* Top: chart */}
             <div style={{flex: 1, position: 'relative', minHeight: 0}}>
-              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} />
+              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
               {fundingBadge}
             </div>
 
@@ -1049,7 +1089,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} />
+              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
             {dex !== 'avantis' && (
               <>
@@ -1096,7 +1136,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} />
+          <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
           {fundingBadge}
         </div>
         {renderTradeControls()}

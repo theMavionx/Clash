@@ -1,18 +1,43 @@
 import { memo, useEffect, useRef, useState, useCallback } from 'react';
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
 
-const API = 'https://api.pacifica.fi/api/v1';
+const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
+// Pyth Benchmarks serves historical candles in TradingView UDF format for
+// every Pyth feed — which is Avantis's pricing source. No CORS restrictions.
+const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
 
 const INTERVALS = [
-  { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000 },
-  { label: '5m', value: '5m', ms: 12 * 60 * 60 * 1000 },
-  { label: '15m', value: '15m', ms: 24 * 60 * 60 * 1000 },
-  { label: '1H', value: '1h', ms: 7 * 24 * 60 * 60 * 1000 },
-  { label: '4H', value: '4h', ms: 30 * 24 * 60 * 60 * 1000 },
-  { label: '1D', value: '1d', ms: 180 * 24 * 60 * 60 * 1000 },
+  { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
+  { label: '5m', value: '5m', ms: 12 * 60 * 60 * 1000, pyth: '5' },
+  { label: '15m', value: '15m', ms: 24 * 60 * 60 * 1000, pyth: '15' },
+  { label: '1H', value: '1h', ms: 7 * 24 * 60 * 60 * 1000, pyth: '60' },
+  { label: '4H', value: '4h', ms: 30 * 24 * 60 * 60 * 1000, pyth: '240' },
+  { label: '1D', value: '1d', ms: 180 * 24 * 60 * 60 * 1000, pyth: '1D' },
 ];
 
-function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], currentPrice, chartOverlay }) {
+// Avantis trades a mix of crypto, equities, FX, and commodities — all via
+// Pyth. Pyth identifies symbols as e.g. "Crypto.BTC/USD", "Equity.US.AAPL/USD",
+// "FX.EUR/USD", "Metal.XAU/USD". This table maps ticker → Pyth category.
+const EQUITIES = new Set([
+  'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
+  'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
+  'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
+  'JPM','BAC','GS','WFC','V','MA','CRCL',
+]);
+const FX = new Set(['EUR','GBP','JPY','AUD','CAD','CHF','NZD','CNY','MXN','INR']);
+const METALS_MAP = { GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XPD' };
+const COMMODITIES = new Set(['CL','NATGAS','COPPER','BRENT','WTI']);
+
+function toPythSymbol(sym) {
+  const s = String(sym || '').toUpperCase();
+  if (EQUITIES.has(s)) return `Equity.US.${s}/USD`;
+  if (FX.has(s)) return `FX.${s}/USD`;
+  if (s in METALS_MAP) return `Metal.${METALS_MAP[s]}/USD`;
+  if (COMMODITIES.has(s)) return `Commodities.${s}/USD`;
+  return `Crypto.${s}/USD`;
+}
+
+function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -75,17 +100,33 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
       const tf = INTERVALS.find(i => i.value === interval) || INTERVALS[1];
       const start = now - tf.ms;
       try {
-        const res = await fetch(`${API}/kline?symbol=${symbol}&interval=${interval}&start_time=${start}&end_time=${now}`);
-        const json = await res.json();
-        if (cancelled || !json.data) return;
-
-        const candles = json.data.map(c => ({
-          time: Math.floor(c.t / 1000),
-          open: parseFloat(c.o),
-          high: parseFloat(c.h),
-          low: parseFloat(c.l),
-          close: parseFloat(c.c),
-        }));
+        let candles = [];
+        if (dex === 'avantis') {
+          // Pyth Benchmarks UDF: /history?symbol=Crypto.BTC/USD&resolution=5&from=SEC&to=SEC
+          const pythSym = toPythSymbol(symbol);
+          const url = `${PYTH_BENCHMARKS}/history?symbol=${encodeURIComponent(pythSym)}&resolution=${tf.pyth}&from=${Math.floor(start / 1000)}&to=${Math.floor(now / 1000)}`;
+          const res = await fetch(url);
+          const json = await res.json();
+          if (cancelled || json.s !== 'ok' || !Array.isArray(json.t)) return;
+          candles = json.t.map((t, i) => ({
+            time: t,
+            open: parseFloat(json.o[i]),
+            high: parseFloat(json.h[i]),
+            low: parseFloat(json.l[i]),
+            close: parseFloat(json.c[i]),
+          }));
+        } else {
+          const res = await fetch(`${PACIFICA_API}/kline?symbol=${symbol}&interval=${interval}&start_time=${start}&end_time=${now}`);
+          const json = await res.json();
+          if (cancelled || !json.data) return;
+          candles = json.data.map(c => ({
+            time: Math.floor(c.t / 1000),
+            open: parseFloat(c.o),
+            high: parseFloat(c.h),
+            low: parseFloat(c.l),
+            close: parseFloat(c.c),
+          }));
+        }
 
         seriesRef.current.setData(candles);
         if (chartRef.current) {
@@ -100,7 +141,7 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
     load();
     const iv = window.setInterval(load, 30000);
     return () => { cancelled = true; window.clearInterval(iv); };
-  }, [symbol, interval]);
+  }, [symbol, interval, dex]);
 
   // Store currentPrice in a ref so price-line effect doesn't re-run on every tick
   const currentPriceRef = useRef(currentPrice);

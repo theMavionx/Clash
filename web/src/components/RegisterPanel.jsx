@@ -170,6 +170,9 @@ function RegisterPanel() {
   const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
   const [waitingForGodot, setWaitingForGodot] = useState(false);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+  // Holds the Avantis auth result (wallet + email) between the login step
+  // and the name-input step. `null` = still on the login screen.
+  const [avantisAuth, setAvantisAuth] = useState(null);
   // dexPicked: has the user explicitly chosen a DEX? localStorage['clash_dex_picked']
   // persists across sessions so returning users skip the picker.
   const [dexPicked, setDexPicked] = useState(() => {
@@ -187,39 +190,53 @@ function RegisterPanel() {
 
   const handlePrivyLoggedIn = ({ wallet, email, chain }) => {
     if (triedPrivyLogin.current) return;
+    // Avantis: show a name-input step before registering (the Godot backend
+    // still short-circuits to the existing account if this wallet is already
+    // registered, so this form is only seen by new users).
+    if (dex === 'avantis') {
+      const suggested = email ? email.split('@')[0].slice(0, 20) : '';
+      setAvantisAuth({ wallet, email, chain: chain || 'base', source: 'privy' });
+      setName(suggested);
+      return;
+    }
+    // Pacifica email path: register immediately with derived name — the user
+    // already provided trust by connecting a wallet or email account.
     triedPrivyLogin.current = true;
     setWaitingForGodot(true);
-    // Derive display name from email (preferred) or wallet prefix.
     const derivedName = email
       ? email.split('@')[0].slice(0, 20)
       : ('player_' + (wallet || '').slice(0, 6));
-    // Pacifica: link the Solana wallet (used for trade signatures).
-    // Avantis: send the EVM address as identity; server creates a separate
-    // custodial Base wallet — the user's Privy EVM wallet is just the login.
-    const payload = dex === 'avantis'
-      ? { name: derivedName, wallet, dex: 'avantis', chain: chain || 'base' }
-      : { name: derivedName, wallet, dex: 'pacifica' };
-    sendToGodot('register', payload);
-    // Safety: drop the spinner after 8s if Godot never fires `registered` —
-    // otherwise a silent failure traps the user forever.
+    sendToGodot('register', { name: derivedName, wallet, dex: 'pacifica' });
     setTimeout(() => setWaitingForGodot(false), 8000);
   };
 
-  // External EVM wallet connected via custom modal (not Privy). Same payload
-  // shape as the Privy email path — server treats the EVM address as identity
-  // and provisions the custodial Base trading wallet separately.
+  // External EVM wallet connected via custom modal (not Privy). Avantis path
+  // always goes through the name-input step.
   const handleEvmWalletConnected = ({ address, walletName }) => {
     setEvmModalOpen(false);
     if (triedPrivyLogin.current) return;
+    setAvantisAuth({
+      wallet: address,
+      email: null,
+      chain: 'base',
+      source: walletName || 'external',
+    });
+    setName('');
+  };
+
+  // Commit the Avantis registration with the name the user typed.
+  const submitAvantisRegister = (e) => {
+    e?.preventDefault?.();
+    if (!avantisAuth) return;
+    if (name.trim().length < 2) return;
     triedPrivyLogin.current = true;
     setWaitingForGodot(true);
-    const derivedName = 'player_' + address.slice(2, 8);
     sendToGodot('register', {
-      name: derivedName,
-      wallet: address,
+      name: name.trim(),
+      wallet: avantisAuth.wallet,
       dex: 'avantis',
-      chain: 'base',
-      walletSource: walletName || 'external',
+      chain: avantisAuth.chain,
+      walletSource: avantisAuth.source,
     });
     setTimeout(() => setWaitingForGodot(false), 8000);
   };
@@ -293,11 +310,14 @@ function RegisterPanel() {
 
   // Hide the form while auth is still resolving on page load — prevents the
   // "Join the Battle" flash when a returning user's session is about to restore.
+  // For Avantis on the name-input step (`avantisAuth` set), DO NOT count the
+  // Privy authenticated state as "in progress" — the user needs to fill the
+  // form, we're not waiting on Privy anymore.
   const authInProgress =
     waitingForGodot ||
     connecting ||
     (privyEnabled && !privyStatus.ready) ||
-    (privyEnabled && privyStatus.authenticated && !triedPrivyLogin.current);
+    (privyEnabled && privyStatus.authenticated && !triedPrivyLogin.current && dex !== 'avantis' && !avantisAuth);
 
   if (authInProgress) {
     return (
@@ -458,6 +478,42 @@ function RegisterPanel() {
                 SWITCH TO PACIFICA
               </button>
             </>
+          ) : avantisAuth ? (
+            // Auth succeeded — user picks a display name before we register.
+            <form onSubmit={submitAvantisRegister} style={styles.form}>
+              <div style={styles.walletBadge}>
+                <div style={styles.dot} />
+                <span style={styles.walletAddr}>
+                  {avantisAuth.wallet.slice(0, 6)}…{avantisAuth.wallet.slice(-4)}
+                </span>
+              </div>
+              <input
+                style={styles.input}
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Enter your name..."
+                maxLength={20}
+                autoFocus
+              />
+              <button
+                type="submit"
+                style={{...cartoonBtn('#43A047', '#2E7D32'), width: '100%', textAlign: 'center', opacity: name.trim().length < 2 ? 0.5 : 1}}
+                disabled={name.trim().length < 2}
+              >
+                PLAY
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAvantisAuth(null); setName(''); }}
+                style={{
+                  background: 'transparent', border: 'none', color: '#a3906a',
+                  fontSize: 11, fontWeight: 800, letterSpacing: '0.5px',
+                  cursor: 'pointer', padding: '4px 8px',
+                }}
+              >
+                ← BACK
+              </button>
+            </form>
           ) : (
             <>
               <p style={{...styles.desc, marginTop: 0}}>

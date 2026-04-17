@@ -38,13 +38,15 @@ func has_token() -> bool:
 
 # ── Registration ──────────────────────────────────────────────
 
-func register(player_name: String, wallet: String = "") -> Dictionary:
+func register(player_name: String, wallet: String = "", dex: String = "") -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
 	var data = {"name": player_name}
 	if wallet != "":
 		data["wallet"] = wallet
+	if dex != "":
+		data["dex"] = dex
 	var body = JSON.stringify(data)
 	http.request(SERVER_URL + "/players/register", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed
@@ -92,6 +94,12 @@ func login_by_wallet(wallet: String) -> Dictionary:
 		_save_token()
 		auth_ok.emit(response)
 	return response
+
+# Update the player's DEX preference server-side. Used when login_by_wallet
+# recovers an existing account but the user picked a different DEX on the
+# current session.
+func set_dex(dex: String) -> Dictionary:
+	return await _http_post("/players/set-dex", {"dex": dex})
 
 # ── Resources ─────────────────────────────────────────────────
 

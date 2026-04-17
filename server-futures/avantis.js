@@ -480,10 +480,13 @@ async function getMarketInfo() {
 }
 
 async function getPrices() {
+  // Avantis socket API response shape is { data: { pairInfos, prices, ... } }
+  // (same nesting as getPairsMap). The old code read data.prices and got
+  // undefined, leaving the UI showing "—" for every symbol.
   try {
     const res = await fetch(`${SOCKET_API}`);
     const data = await res.json();
-    return data.prices || data;
+    return data?.data?.prices || data?.prices || {};
   } catch {
     return {};
   }
