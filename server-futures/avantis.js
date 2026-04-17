@@ -150,6 +150,43 @@ function walletClientFromPrivkey(privateKey) {
   });
 }
 
+// Per-wallet serialization — Avantis reverts on nonce collisions when two
+// writes from the same address overlap. `withLock(address, fn)` queues fn so
+// only one on-chain write per wallet is in-flight at a time.
+const _walletQueues = new Map(); // address → Promise chain
+function withLock(address, fn) {
+  const key = String(address).toLowerCase();
+  const prev = _walletQueues.get(key) || Promise.resolve();
+  const next = prev.then(fn, fn); // always run even if prev rejected
+  _walletQueues.set(key, next.catch(() => {}));
+  return next;
+}
+
+// Bounded numeric input. Throws a clean 400-friendly Error on bad values so
+// parseUnits never receives "1e100", "Infinity", "NaN", etc. (viem would
+// accept some of those silently and corrupt gold-reward volume downstream).
+function assertFiniteAmount(amount, { min = 0, max = 1_000_000 } = {}) {
+  const n = typeof amount === 'number' ? amount : parseFloat(amount);
+  if (!Number.isFinite(n)) throw new Error('amount must be a finite number');
+  if (n <= min) throw new Error(`amount must be > ${min}`);
+  if (n > max) throw new Error(`amount must be ≤ ${max}`);
+  return n;
+}
+
+// Rough upper bound on the execution fee we'll ever pay (0.001 ETH = $3 @ ETH $3k).
+// Used as a pre-flight ETH reservation check.
+const MIN_ETH_RESERVE = parseEther_('0.0002');
+function parseEther_(s) {
+  // avoid importing parseEther just for this — BigInt(1e18 * n) is close enough.
+  return BigInt(Math.floor(Number(s) * 1e18));
+}
+async function assertEnoughEthForGas(address, requiredWei = MIN_ETH_RESERVE) {
+  const bal = await publicClient.getBalance({ address });
+  if (bal < requiredWei) {
+    throw new Error(`Insufficient ETH for gas (have ${Number(bal) / 1e18}, need ${Number(requiredWei) / 1e18}). Deposit a little ETH to your custodial wallet on Base.`);
+  }
+}
+
 // ---------- Wallet ----------
 
 function generateWallet() {
@@ -402,13 +439,17 @@ async function ensureUsdcApproval(walletClient, amount) {
 
   if (allowance >= amountRaw) return null; // Already approved
 
+  // Blast-radius hardening: approve EXACTLY what this trade needs + a tiny
+  // buffer for fees. Previously we approved amountRaw * 1000n "to save gas",
+  // but that meant a $200 trade granted $200k allowance — a TradingStorage
+  // compromise would drain the whole custody wallet. Per-trade approvals cost
+  // ~30k gas extra each, which is <$0.01 on Base. Worth it.
+  const approveAmount = (amountRaw * 101n) / 100n; // +1% cushion for fees
   const hash = await walletClient.writeContract({
     address: USDC_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'approve',
-    // Approve a large amount so the user doesn't pay gas for approval on
-    // every trade. Matches the SDK's "$100k default" approach.
-    args: [TRADING_STORAGE_ADDRESS, amountRaw * 1000n],
+    args: [TRADING_STORAGE_ADDRESS, approveAmount],
   });
 
   await publicClient.waitForTransactionReceipt({ hash });
@@ -439,30 +480,48 @@ async function getAccountInfo(privateKey) {
     }
   } catch {}
 
-  // Margin used = sum of position collaterals. Avantis exposes this on each
-  // position as `trade.initialPosToken` (raw) or `collateral` (scaled USDC).
-  // Fall back to 0 if the shape doesn't match.
+  // Margin used = sum of position collaterals. Avantis Core API's position
+  // rows contain `trade.positionSizeUSDC` as raw 1e6 (the collateral posted
+  // on openTrade). Other shapes we see in the wild: top-level `collateral`
+  // (already scaled) or `initialPosToken` (usually 0 for USDC-collateralised
+  // trades — hence the earlier bug where margin_used showed as 0).
   let marginUsed = 0;
   for (const p of positions) {
-    const c = Number(p.collateral ?? p.trade?.initialPosToken ?? 0);
-    // initialPosToken is raw 1e6 USDC; `collateral` is already scaled.
-    const scaled = p.collateral !== undefined ? c : c / 1e6;
-    if (Number.isFinite(scaled)) marginUsed += scaled;
+    let scaled = 0;
+    if (typeof p.collateral === 'number' && Number.isFinite(p.collateral)) {
+      scaled = p.collateral;
+    } else if (p.trade?.positionSizeUSDC !== undefined) {
+      scaled = Number(p.trade.positionSizeUSDC) / 1e6;
+    } else if (p.positionSizeUSDC !== undefined) {
+      scaled = Number(p.positionSizeUSDC) / 1e6;
+    } else if (p.trade?.initialPosToken) {
+      scaled = Number(p.trade.initialPosToken) / 1e6;
+    }
+    if (Number.isFinite(scaled) && scaled > 0) marginUsed += scaled;
   }
+  // Unrealised PnL — Core API surfaces per-position `pnl` (signed USDC, already
+  // scaled). Sum them for equity. Missing field → treat as 0.
+  let unrealisedPnl = 0;
+  for (const p of positions) {
+    const pnl = Number(p.pnl ?? p.pnlUSD ?? p.unrealised ?? 0);
+    if (Number.isFinite(pnl)) unrealisedPnl += pnl;
+  }
+  const equity = usdc + unrealisedPnl; // wallet USDC + open-position PnL
   const available = Math.max(usdc - marginUsed, 0);
 
   return {
     address,
     balance_usdc: usdc,
     balance_eth: eth,
-    equity: usdc,
+    equity,
     positions,
     limit_orders: limitOrders,
+    unrealised_pnl: unrealisedPnl,
     // Pacifica-shaped aliases so the shared FuturesPanel UI works unchanged.
     // FuturesPanel reads account.balance / account_equity / available_to_withdraw /
     // total_margin_used — without these, everything renders $0 for Avantis.
     balance: usdc,
-    account_equity: usdc,
+    account_equity: equity,
     available_to_withdraw: available,
     total_margin_used: marginUsed,
   };
@@ -556,9 +615,10 @@ async function getPrices() {
     }
     if (!feedIds.length) return {};
 
-    // Start from last-known latest prices so a partial Pyth response doesn't
-    // erase existing values (Hermes occasionally omits feeds in a batch).
-    const latest = { ...pricesCache.latest };
+    // Seed from last-known so a partial Pyth response doesn't erase values,
+    // BUT track publish_time per feed so we can drop anything that's too old.
+    // `latest` now stores { price, publish_time } tuples.
+    const latest = { ...(pricesCache.latestDetailed || {}) };
     const chunks = [];
     for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
 
@@ -570,7 +630,8 @@ async function getPrices() {
         const j = await res.json();
         for (const p of (j.parsed || [])) {
           const price = Number(p.price.price) * Math.pow(10, p.price.expo);
-          latest[p.id.replace(/^0x/, '')] = price;
+          const publish_time = Number(p.price.publish_time || 0);
+          latest[p.id.replace(/^0x/, '')] = { price, publish_time };
         }
       } catch (e) {
         if (attempt < 2) return fetchChunk(chunk, attempt + 1);
@@ -578,17 +639,37 @@ async function getPrices() {
     }
     await Promise.all(chunks.map(c => fetchChunk(c)));
 
+    // Drop feeds that haven't updated in > 5 min. Better to show "—" than a
+    // dead-tape price that a user might trade against. Equities are closed
+    // nights/weekends and will legitimately have stale publish_times — scope
+    // the staleness check to feeds that ARE expected to update frequently
+    // (crypto). For everything else we trust whatever Pyth last gave us.
+    const STALE_MS = 5 * 60 * 1000;
+    const nowSec = Math.floor(now / 1000);
+    const pythSymByFid = {};
+    for (const p of raw) {
+      const fid = String(p?.feed?.feedId || '').replace(/^0x/, '').toLowerCase();
+      if (fid) pythSymByFid[fid] = p?.feed?.attributes?.symbol || '';
+    }
+
     const yesterday = await fetchYesterdayPrices(feedIds);
 
     // Build the price map keyed by pair label (matches normalizePrices's
-    // Object.entries split on "/" to extract base).
+    // Object.entries split on "/" to extract base). Drop feeds that are stale
+    // for asset types that should update continuously (Crypto.*). Equities,
+    // FX, commodities can be off-hours — keep whatever Pyth last returned.
     const out = {};
     for (const fid of feedIds) {
       const pair = pairByFeedId[fid];
-      if (!pair || !latest[fid]) continue;
-      out[pair] = { mark: latest[fid], yesterday_price: yesterday[fid] || 0 };
+      const entry = latest[fid];
+      if (!pair || !entry) continue;
+      const isCrypto = String(pythSymByFid[fid] || '').startsWith('Crypto.');
+      if (isCrypto && entry.publish_time && (nowSec - entry.publish_time) * 1000 > STALE_MS) {
+        continue; // too old, show "—" rather than a dead tape
+      }
+      out[pair] = { mark: entry.price, yesterday_price: yesterday[fid] || 0 };
     }
-    pricesCache = { data: out, ts: now, latest };
+    pricesCache = { data: out, ts: now, latestDetailed: latest };
     return out;
   } catch (e) {
     console.error('getPrices (avantis/pyth) failed:', e?.message || e);
@@ -601,7 +682,7 @@ async function getPrices() {
 
 async function createMarketOrder(privateKey, {
   symbol,
-  side,        // 'long' or 'short'
+  side,        // 'long' or 'short' (also accept 'buy'/'sell'/'bid'/'ask')
   amount,      // USDC collateral
   leverage,    // e.g. 10
   slippage_percent = 1,
@@ -610,69 +691,94 @@ async function createMarketOrder(privateKey, {
   reduceOnly = false,
 }) {
   await assertBaseMainnet();
+  // Input validation — reject Infinity/NaN/huge values before they hit the
+  // chain or corrupt trade_history.notional_usd.
+  const collateralUsdc = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
+  const levNum = assertFiniteAmount(leverage, { min: 0, max: 1000 });
+  // Slippage must be > 0 — 0 (or any non-positive) makes Avantis revert on the
+  // slightest price drift. Clamp to sane window.
+  const slipNum = Math.max(0.1, Math.min(Number(slippage_percent) || 1, 50));
+
+  // Explicit side normaliser — accept every spelling seen in clients, fail
+  // loudly on anything else. 'bid' always means LONG, 'ask' always SHORT
+  // (Pacifica convention). Previously `side==='long' || side==='buy'` quietly
+  // treated 'bid' as SHORT.
+  const s = String(side || '').toLowerCase();
+  let isBuy;
+  if (s === 'long' || s === 'buy' || s === 'bid') isBuy = true;
+  else if (s === 'short' || s === 'sell' || s === 'ask') isBuy = false;
+  else throw new Error(`Invalid side: ${side}`);
+
   const walletClient = walletClientFromPrivkey(privateKey);
   const trader = walletClient.account.address;
+  await assertEnoughEthForGas(trader);
   const pairIndex = await pairIndexFromSymbol(symbol);
-  const isBuy = side.toLowerCase() === 'long' || side.toLowerCase() === 'buy';
 
-  const positionSizeUSDC = parseUnits(String(amount), 6);
+  const positionSizeUSDC = parseUnits(String(collateralUsdc), 6);
 
   // Get current price from feed
   const { price: currentPrice } = await getPriceUpdateData(pairIndex);
-  const openPrice = currentPrice > 0 ? priceToContract(currentPrice) : 0n;
+  if (!(currentPrice > 0)) {
+    throw new Error('Price feed unavailable for this pair — try again in a moment.');
+  }
+  const openPrice = priceToContract(currentPrice);
 
-  const leverageContract = leverageToContract(leverage);
-  const tpContract = tp > 0 ? priceToContract(tp) : 0n;
-  const slContract = sl > 0 ? priceToContract(sl) : 0n;
-  const slippageP = BigInt(Math.floor(slippage_percent * 1e10));
+  const leverageContract = leverageToContract(levNum);
+  const tpContract = Number(tp) > 0 ? priceToContract(Number(tp)) : 0n;
+  const slContract = Number(sl) > 0 ? priceToContract(Number(sl)) : 0n;
+  const slippageP = BigInt(Math.floor(slipNum * 1e10));
 
-  // Ensure USDC approval
-  await ensureUsdcApproval(walletClient, amount);
+  // Serialize writes per-wallet so concurrent trade/close/withdraw calls
+  // don't collide on nonce.
+  return withLock(trader, async () => {
+    // Ensure USDC approval
+    await ensureUsdcApproval(walletClient, collateralUsdc);
 
-  // Next free per-pair trade slot (see getNextTradeIndex comment).
-  const tradeIndex = await getNextTradeIndex(trader, pairIndex);
+    // Next free per-pair trade slot (see getNextTradeIndex comment).
+    const tradeIndex = await getNextTradeIndex(trader, pairIndex);
 
-  // Dynamic execution fee (falls back to 0.00035 ETH).
-  const execFee = await getExecutionFeeWei();
+    // Dynamic execution fee (falls back to 0.00035 ETH).
+    const execFee = await getExecutionFeeWei();
 
-  const tradeInput = {
-    trader,
-    pairIndex: BigInt(pairIndex),
-    index: BigInt(tradeIndex),
-    initialPosToken: 0n,
-    positionSizeUSDC,
-    openPrice,
-    buy: isBuy,
-    leverage: leverageContract,
-    tp: tpContract,
-    sl: slContract,
-    timestamp: 0n,
-  };
+    const tradeInput = {
+      trader,
+      pairIndex: BigInt(pairIndex),
+      index: BigInt(tradeIndex),
+      initialPosToken: 0n,
+      positionSizeUSDC,
+      openPrice,
+      buy: isBuy,
+      leverage: leverageContract,
+      tp: tpContract,
+      sl: slContract,
+      timestamp: 0n,
+    };
 
-  // Fetch fresh nonce — after the approval tx the in-memory client may still
-  // think the old nonce is current, and the RPC rejects with "nonce too low".
-  const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+    // Fetch fresh nonce — after the approval tx the in-memory client may still
+    // think the old nonce is current, and the RPC rejects with "nonce too low".
+    const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
 
-  const hash = await walletClient.writeContract({
-    address: TRADING_ADDRESS,
-    abi: TRADING_ABI,
-    functionName: 'openTrade',
-    args: [tradeInput, ORDER_TYPE.MARKET, slippageP],
-    value: execFee,
-    nonce,
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'openTrade',
+      args: [tradeInput, ORDER_TYPE.MARKET, slippageP],
+      value: execFee,
+      nonce,
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'submitted' : 'failed',
+      pair_index: pairIndex,
+      trade_index: tradeIndex,
+      side: isBuy ? 'long' : 'short',
+      amount: collateralUsdc,
+      leverage: levNum,
+    };
   });
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'submitted' : 'failed',
-    pair_index: pairIndex,
-    trade_index: tradeIndex,
-    side: isBuy ? 'long' : 'short',
-    amount,
-    leverage,
-  };
 }
 
 async function createLimitOrder(privateKey, {
@@ -686,61 +792,68 @@ async function createLimitOrder(privateKey, {
   sl = 0,
 }) {
   await assertBaseMainnet();
+  const collateralUsdc = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
+  const levNum = assertFiniteAmount(leverage, { min: 0, max: 1000 });
+  const priceNum = assertFiniteAmount(price, { min: 0, max: 1e12 });
+  const slipNum = Math.max(0.1, Math.min(Number(slippage_percent) || 1, 50));
+
+  const s = String(side || '').toLowerCase();
+  let isBuy;
+  if (s === 'long' || s === 'buy' || s === 'bid') isBuy = true;
+  else if (s === 'short' || s === 'sell' || s === 'ask') isBuy = false;
+  else throw new Error(`Invalid side: ${side}`);
+
   const walletClient = walletClientFromPrivkey(privateKey);
   const trader = walletClient.account.address;
+  await assertEnoughEthForGas(trader);
   const pairIndex = await pairIndexFromSymbol(symbol);
-  const isBuy = side.toLowerCase() === 'long' || side.toLowerCase() === 'buy';
 
-  const positionSizeUSDC = parseUnits(String(amount), 6);
-  const openPrice = priceToContract(price);
-  const leverageContract = leverageToContract(leverage);
-  const tpContract = tp > 0 ? priceToContract(tp) : 0n;
-  const slContract = sl > 0 ? priceToContract(sl) : 0n;
-  const slippageP = BigInt(Math.floor(slippage_percent * 1e10));
+  const positionSizeUSDC = parseUnits(String(collateralUsdc), 6);
+  const openPrice = priceToContract(priceNum);
+  const leverageContract = leverageToContract(levNum);
+  const tpContract = Number(tp) > 0 ? priceToContract(Number(tp)) : 0n;
+  const slContract = Number(sl) > 0 ? priceToContract(Number(sl)) : 0n;
+  const slippageP = BigInt(Math.floor(slipNum * 1e10));
 
-  // Ensure USDC approval
-  await ensureUsdcApproval(walletClient, amount);
+  return withLock(trader, async () => {
+    await ensureUsdcApproval(walletClient, collateralUsdc);
+    const tradeIndex = await getNextTradeIndex(trader, pairIndex);
+    const execFee = await getExecutionFeeWei();
 
-  // Next free per-pair trade slot and dynamic exec fee.
-  const tradeIndex = await getNextTradeIndex(trader, pairIndex);
-  const execFee = await getExecutionFeeWei();
+    const tradeInput = {
+      trader,
+      pairIndex: BigInt(pairIndex),
+      index: BigInt(tradeIndex),
+      initialPosToken: 0n,
+      positionSizeUSDC,
+      openPrice,
+      buy: isBuy,
+      leverage: leverageContract,
+      tp: tpContract,
+      sl: slContract,
+      timestamp: 0n,
+    };
 
-  const tradeInput = {
-    trader,
-    pairIndex: BigInt(pairIndex),
-    index: BigInt(tradeIndex),
-    initialPosToken: 0n,
-    positionSizeUSDC,
-    openPrice,
-    buy: isBuy,
-    leverage: leverageContract,
-    tp: tpContract,
-    sl: slContract,
-    timestamp: 0n,
-  };
-
-  const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
-
-  const hash = await walletClient.writeContract({
-    address: TRADING_ADDRESS,
-    abi: TRADING_ABI,
-    functionName: 'openTrade',
-    args: [tradeInput, ORDER_TYPE.LIMIT, slippageP],
-    value: execFee,
-    nonce,
+    const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'openTrade',
+      args: [tradeInput, ORDER_TYPE.LIMIT, slippageP],
+      value: execFee,
+      nonce,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'open' : 'failed',
+      pair_index: pairIndex,
+      side: isBuy ? 'long' : 'short',
+      price: priceNum,
+      amount: collateralUsdc,
+      leverage: levNum,
+    };
   });
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'open' : 'failed',
-    pair_index: pairIndex,
-    side: isBuy ? 'long' : 'short',
-    price,
-    amount,
-    leverage,
-  };
 }
 
 async function closePosition(privateKey, {
@@ -749,26 +862,33 @@ async function closePosition(privateKey, {
   amount, // USDC collateral to close (full amount = full close)
 }) {
   await assertBaseMainnet();
+  if (pair_index === undefined || pair_index === null) throw new Error('pair_index required');
+  if (trade_index === undefined || trade_index === null) throw new Error('trade_index required');
+  const amt = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
   const walletClient = walletClientFromPrivkey(privateKey);
-  const amountRaw = parseUnits(String(amount), 6);
-  const execFee = await getExecutionFeeWei();
+  const trader = walletClient.account.address;
+  await assertEnoughEthForGas(trader);
+  const amountRaw = parseUnits(String(amt), 6);
 
-  const hash = await walletClient.writeContract({
-    address: TRADING_ADDRESS,
-    abi: TRADING_ABI,
-    functionName: 'closeTradeMarket',
-    args: [BigInt(pair_index), BigInt(trade_index), amountRaw],
-    value: execFee,
+  return withLock(trader, async () => {
+    const execFee = await getExecutionFeeWei();
+    const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'closeTradeMarket',
+      args: [BigInt(pair_index), BigInt(trade_index), amountRaw],
+      value: execFee,
+      nonce,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'closed' : 'failed',
+      pair_index,
+      trade_index,
+    };
   });
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'closed' : 'failed',
-    pair_index,
-    trade_index,
-  };
 }
 
 async function cancelLimitOrder(privateKey, {
@@ -776,23 +896,29 @@ async function cancelLimitOrder(privateKey, {
   trade_index,
 }) {
   await assertBaseMainnet();
+  if (pair_index === undefined || pair_index === null) throw new Error('pair_index required');
+  if (trade_index === undefined || trade_index === null) throw new Error('trade_index required');
   const walletClient = walletClientFromPrivkey(privateKey);
+  const trader = walletClient.account.address;
+  await assertEnoughEthForGas(trader);
 
-  const hash = await walletClient.writeContract({
-    address: TRADING_ADDRESS,
-    abi: TRADING_ABI,
-    functionName: 'cancelOpenLimitOrder',
-    args: [BigInt(pair_index), BigInt(trade_index)],
+  return withLock(trader, async () => {
+    const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'cancelOpenLimitOrder',
+      args: [BigInt(pair_index), BigInt(trade_index)],
+      nonce,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'cancelled' : 'failed',
+      pair_index,
+      trade_index,
+    };
   });
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'cancelled' : 'failed',
-    pair_index,
-    trade_index,
-  };
 }
 
 async function updateTpSl(privateKey, {
@@ -802,38 +928,47 @@ async function updateTpSl(privateKey, {
   stop_loss = 0,   // price (0 to remove)
 }) {
   await assertBaseMainnet();
+  if (pair_index === undefined || pair_index === null) throw new Error('pair_index required');
+  if (trade_index === undefined || trade_index === null) throw new Error('trade_index required');
   const walletClient = walletClientFromPrivkey(privateKey);
+  const trader = walletClient.account.address;
+  await assertEnoughEthForGas(trader);
 
   // Fetch Pyth price update data
   const { priceUpdateData } = await getPriceUpdateData(pair_index);
+  if (!priceUpdateData || priceUpdateData === '0x') {
+    throw new Error('Price feed unavailable — cannot update TP/SL without fresh Pyth data.');
+  }
 
-  const tpContract = take_profit > 0 ? priceToContract(take_profit) : 0n;
-  const slContract = stop_loss > 0 ? priceToContract(stop_loss) : 0n;
+  const tpContract = Number(take_profit) > 0 ? priceToContract(Number(take_profit)) : 0n;
+  const slContract = Number(stop_loss) > 0 ? priceToContract(Number(stop_loss)) : 0n;
 
-  const hash = await walletClient.writeContract({
-    address: TRADING_ADDRESS,
-    abi: TRADING_ABI,
-    functionName: 'updateTpAndSl',
-    args: [
-      BigInt(pair_index),
-      BigInt(trade_index),
-      slContract,
-      tpContract,
-      [priceUpdateData],
-    ],
-    value: 1n, // 1 wei for Pyth fee
+  return withLock(trader, async () => {
+    const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'updateTpAndSl',
+      args: [
+        BigInt(pair_index),
+        BigInt(trade_index),
+        slContract,
+        tpContract,
+        [priceUpdateData],
+      ],
+      value: 1n, // 1 wei for Pyth fee
+      nonce,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'updated' : 'failed',
+      pair_index,
+      trade_index,
+      take_profit,
+      stop_loss,
+    };
   });
-
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'updated' : 'failed',
-    pair_index,
-    trade_index,
-    take_profit,
-    stop_loss,
-  };
 }
 
 // ---------- Withdraw ----------
@@ -846,8 +981,14 @@ async function withdrawUsdc(privateKey, { toAddress, amount }) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(toAddress)) throw new Error('Invalid Base destination address');
   const walletClient = walletClientFromPrivkey(privateKey);
   const from = walletClient.account.address;
-  const amountRaw = parseUnits(String(amount), 6);
-  if (amountRaw <= 0n) throw new Error('Amount must be > 0');
+  // Block no-op self-transfer (wastes gas).
+  if (toAddress.toLowerCase() === from.toLowerCase()) {
+    throw new Error('Destination is the same as the custodial wallet — nothing to do.');
+  }
+  // Validate amount and ETH gas.
+  const amt = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
+  const amountRaw = parseUnits(String(amt), 6);
+  await assertEnoughEthForGas(from);
 
   // Sanity check: do we have the USDC?
   const bal = await publicClient.readContract({
@@ -857,25 +998,27 @@ async function withdrawUsdc(privateKey, { toAddress, amount }) {
     args: [from],
   });
   if (bal < amountRaw) {
-    throw new Error(`Insufficient USDC: have ${formatUnits(bal, 6)}, need ${amount}`);
+    throw new Error(`Insufficient USDC: have ${formatUnits(bal, 6)}, need ${amt}`);
   }
 
-  const nonce = await publicClient.getTransactionCount({ address: from, blockTag: 'pending' });
-  const hash = await walletClient.writeContract({
-    address: USDC_ADDRESS,
-    abi: ERC20_ABI,
-    functionName: 'transfer',
-    args: [toAddress, amountRaw],
-    nonce,
+  return withLock(from, async () => {
+    const nonce = await publicClient.getTransactionCount({ address: from, blockTag: 'pending' });
+    const hash = await walletClient.writeContract({
+      address: USDC_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: 'transfer',
+      args: [toAddress, amountRaw],
+      nonce,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return {
+      tx_hash: hash,
+      status: receipt.status === 'success' ? 'withdrawn' : 'failed',
+      from,
+      to: toAddress,
+      amount: amt,
+    };
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  return {
-    tx_hash: hash,
-    status: receipt.status === 'success' ? 'withdrawn' : 'failed',
-    from,
-    to: toAddress,
-    amount,
-  };
 }
 
 // ---------- Exports ----------

@@ -19,11 +19,20 @@ const ENC_MARKER = 'enc1:'; // versioned prefix so we can migrate schemes later
 function getEncKey() {
   const raw = process.env.CLASH_WALLET_ENCRYPTION_KEY;
   if (raw && /^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('CLASH_WALLET_ENCRYPTION_KEY not set in production');
+  // Anything that isn't a valid key is a hard fail. Previous behaviour fell
+  // back to sha256("clash-dev-fallback") when NODE_ENV !== 'production' —
+  // that's a deterministic, publicly-known key. A deployment that forgets to
+  // set NODE_ENV would silently encrypt real wallets under a well-known key.
+  // Fail loudly instead. Dev hosts can set NODE_ENV=development to opt in to
+  // the fallback explicitly.
+  if (process.env.NODE_ENV === 'development' && !raw) {
+    console.warn('[futures] WARNING: CLASH_WALLET_ENCRYPTION_KEY unset — using INSECURE dev fallback. Never run production this way.');
+    return crypto.createHash('sha256').update('clash-dev-fallback').digest();
   }
-  // Dev fallback — NOT secure, but keeps local runs unblocked.
-  return crypto.createHash('sha256').update('clash-dev-fallback').digest();
+  throw new Error(
+    'CLASH_WALLET_ENCRYPTION_KEY must be set to a 64-hex-char key. ' +
+    'Generate with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"'
+  );
 }
 let _encKey = null;
 function encKey() { return _encKey || (_encKey = getEncKey()); }
@@ -39,7 +48,13 @@ function encryptSecret(plain) {
 }
 
 function decryptSecret(stored) {
-  if (!stored.startsWith(ENC_MARKER)) return stored; // legacy plaintext row
+  if (!stored.startsWith(ENC_MARKER)) {
+    // Any row without the enc1: prefix is a bug (migration didn't run, or a
+    // raw row was inserted). Loudly surface it — silently returning plaintext
+    // hides the lapse forever and encourages downstream misuse.
+    // To unstick a broken deploy: call migrateLegacyPlaintext() manually.
+    throw new Error('Wallet secret is not encrypted — refusing to use. Re-run migration or restore from backup.');
+  }
   const parts = stored.slice(ENC_MARKER.length).split(':');
   if (parts.length !== 3) throw new Error('Malformed encrypted secret');
   const iv = Buffer.from(parts[0], 'hex');

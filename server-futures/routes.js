@@ -23,7 +23,8 @@ function ensureMainDb() {
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
     mainDb.pragma('journal_mode = WAL');
-    playerByTokenStmt = mainDb.prepare('SELECT id, name FROM players WHERE token = ?');
+    // Also pull the player's saved DEX — used to reject client-header spoof.
+    playerByTokenStmt = mainDb.prepare('SELECT id, name, dex FROM players WHERE token = ?');
   } catch (e) {
     console.error('[futures] Failed to open main DB at', MAIN_DB_PATH, e.message);
   }
@@ -39,9 +40,23 @@ function auth(req, res, next) {
   if (!player) return res.status(401).json({ error: 'Invalid token' });
   req.playerId = player.id;
   req.playerName = player.name;
-  // Resolve DEX from query param or header (default: pacifica)
-  const dex = (req.query.dex || req.headers['x-dex'] || 'pacifica').toLowerCase();
-  req.dex = dex === 'avantis' ? 'avantis' : 'pacifica';
+
+  // Trust the SERVER-stored dex, not whatever the client asks for. The client
+  // header/query is still useful as a best-effort sanity check: if it explicitly
+  // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
+  const storedDex = (player.dex === 'avantis' || player.dex === 'pacifica')
+    ? player.dex
+    : 'pacifica';
+  const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
+  const normalizedAsked = askedDex === 'avantis' ? 'avantis' : 'pacifica';
+  if (normalizedAsked !== storedDex) {
+    return res.status(409).json({
+      error: `Account is registered for '${storedDex}'. Switch DEX in your profile before calling ${normalizedAsked} endpoints.`,
+      stored_dex: storedDex,
+      requested_dex: normalizedAsked,
+    });
+  }
+  req.dex = storedDex;
   next();
 }
 
@@ -487,14 +502,21 @@ router.post('/withdraw', auth, async (req, res) => {
         toAddress,
         amount: parseFloat(amount),
       });
+      // Invalidate the 10s balance cache so the client's next /balance poll
+      // reflects the withdraw immediately (user could otherwise double-tap).
+      balanceCache.delete(`${req.playerId}:${req.dex}`);
       return res.json(result);
     }
 
     const result = await pacifica.withdraw(wallet.secret_key, { amount: parseFloat(amount) });
+    balanceCache.delete(`${req.playerId}:${req.dex}`);
     res.json(result);
   } catch (e) {
     console.error('Withdraw error:', e);
-    res.status(500).json({ error: e.message || 'Withdrawal failed' });
+    // Viem wraps contract reverts as ContractFunctionExecutionError with the
+    // reason in .shortMessage (or nested cause). Surface that to the user.
+    const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Withdrawal failed';
+    res.status(500).json({ error: String(msg).slice(0, 300) });
   }
 });
 

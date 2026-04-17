@@ -17,24 +17,46 @@ const INTERVALS = [
 
 // Avantis trades a mix of crypto, equities, FX, and commodities — all via
 // Pyth. Pyth identifies symbols as e.g. "Crypto.BTC/USD", "Equity.US.AAPL/USD",
-// "FX.EUR/USD", "Metal.XAU/USD". This table maps ticker → Pyth category.
+// "FX.USD/JPY" (NOTE: FX pairs keep USD as BASE, not quote, in Pyth), and
+// "Metal.XAU/USD". Our internal `symbol` key for FX is the concatenated
+// "USDJPY" to avoid colliding with USD crypto rows.
 const EQUITIES = new Set([
   'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
   'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
   'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
-  'JPM','BAC','GS','WFC','V','MA','CRCL',
+  'JPM','BAC','GS','WFC','V','MA','CRCL','AVNT','GOAT','MON','REZ','XPL',
 ]);
-const FX = new Set(['EUR','GBP','JPY','AUD','CAD','CHF','NZD','CNY','MXN','INR']);
-const METALS_MAP = { GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XPD' };
-const COMMODITIES = new Set(['CL','NATGAS','COPPER','BRENT','WTI']);
+// FX non-USD quotes (Avantis has USD/JPY, USD/CAD, …). When the symbol arrives
+// as e.g. "USDJPY" we split it into USD/JPY and build "FX.USD/JPY".
+const FX_NON_USD = new Set([
+  'EUR','GBP','JPY','AUD','CAD','CHF','NZD','CNH','CNY','INR','KRW',
+  'MXN','SEK','SGD','TRY','BRL','IDR','TWD','ZAR',
+]);
+// Metals: Avantis uses XAU/XAG directly (Pyth's convention). Also keep GOLD
+// / SILVER aliases in case the UI sends those.
+const METALS = new Set(['XAU','XAG','XPT','XPD','GOLD','SILVER']);
+const METAL_ALIAS = { GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XPD' };
+// Commodities: Pyth uses "Crude Oil.{WTI|BRENT}/USD" for oil and various
+// "Commodities.XXX/USD" for others. USOILSPOT is Pyth's feed for spot WTI.
+const OIL = new Set(['WTI','BRENT','USOILSPOT']);
+const COMMODITIES = new Set(['CL','NATGAS','COPPER']);
 
 function toPythSymbol(sym) {
-  // Strip any quote suffix ("APT/USD" → "APT") — some callers pass the full
-  // pair label.
-  const s = String(sym || '').toUpperCase().split('/')[0].trim();
+  const raw = String(sym || '').toUpperCase().trim();
+  // Strip optional quote suffix first ("APT/USD" → "APT"). But NOT for FX
+  // pairs stored as "USD/JPY" — those shouldn't be split naively.
+  const s = raw.includes('/') ? raw.split('/')[0].trim() : raw;
+
+  // FX: symbols stored as "USDJPY" → "FX.USD/JPY"
+  if (s.length === 6 && s.startsWith('USD') && FX_NON_USD.has(s.slice(3))) {
+    return `FX.USD/${s.slice(3)}`;
+  }
+  // Cross FX where non-USD is base, USD implicit quote
+  if (FX_NON_USD.has(s)) return `FX.${s}/USD`;
+
   if (EQUITIES.has(s)) return `Equity.US.${s}/USD`;
-  if (FX.has(s)) return `FX.${s}/USD`;
-  if (s in METALS_MAP) return `Metal.${METALS_MAP[s]}/USD`;
+  if (METALS.has(s)) return `Metal.${METAL_ALIAS[s] || s}/USD`;
+  if (OIL.has(s)) return `Crude Oil.${s}/USD`;
   if (COMMODITIES.has(s)) return `Commodities.${s}/USD`;
   return `Crypto.${s}/USD`;
 }

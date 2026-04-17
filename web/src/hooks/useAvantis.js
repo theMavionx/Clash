@@ -204,6 +204,14 @@ export function useAvantis() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
+  // Auto-dismiss errors after 10s so a stale failure message doesn't sit on
+  // top of fresh UI indefinitely. User can still dismiss manually.
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(null), 10000);
+    return () => clearTimeout(t);
+  }, [error]);
+
   // ---------- Wallet provisioning ----------
   // First call to POST /wallet creates the custodial Base wallet if missing.
   const ensureWallet = useCallback(async () => {

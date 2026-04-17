@@ -917,30 +917,49 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       return res.json({ gold: 0, reason: 'No new trades' });
     }
 
+    // Sanity: clamp each trade's notional to a sane range so a bugged/forged
+    // row (e.g. Infinity from parseFloat("1e100")) cannot mint unlimited gold.
+    // Also require a realistic minimum — Avantis min notional is $100.
+    const SANE_MIN_NOTIONAL = 50;      // cushion below $100 contract floor
+    const SANE_MAX_NOTIONAL = 10_000_000;
+
     let totalGold = 0;
     const reasons = [];
     let maxId = reward.last_trade_id || 0;
     let newVolume = 0;
+    let creditedTrades = 0;
     for (const t of newTrades) {
-      const vol = Number(t.notional_usd) || 0;
-      newVolume += vol;
-      totalGold += Math.floor(vol * GOLD_PER_USD_VOLUME);
+      const raw = Number(t.notional_usd);
+      if (!Number.isFinite(raw) || raw < SANE_MIN_NOTIONAL || raw > SANE_MAX_NOTIONAL) {
+        if (t.id > maxId) maxId = t.id; // still advance cursor to skip it
+        continue;
+      }
+      newVolume += raw;
+      totalGold += Math.floor(raw * GOLD_PER_USD_VOLUME);
+      creditedTrades++;
       if (t.id > maxId) maxId = t.id;
     }
-    if (newTrades.length > 0) reasons.push(`${newTrades.length} trades`);
+    if (creditedTrades > 0) reasons.push(`${creditedTrades} trades`);
 
-    if (!reward.first_deposit) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
-    if (!reward.first_trade && newTrades.length > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
+    // GOLD_FIRST_DEPOSIT: only award once the player has ALSO completed their
+    // first real trade. Previously it was granted unconditionally on the first
+    // /claim-gold call, letting a brand-new account farm 500 gold without
+    // ever depositing or trading.
+    const hasRealTrade = creditedTrades > 0 || reward.first_trade;
+    if (!reward.first_deposit && hasRealTrade) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
+    if (!reward.first_trade && creditedTrades > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
     const today = new Date().toISOString().split('T')[0];
-    if (reward.last_daily !== today && newTrades.length > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
+    if (reward.last_daily !== today && creditedTrades > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
 
     db.db.prepare(`
       UPDATE trading_rewards SET
         last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
-        first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
-        last_daily = ?, updated_at = datetime('now')
+        first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
+        first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+        last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
+        updated_at = datetime('now')
       WHERE player_id = ?
-    `).run(maxId, newVolume, totalGold, newTrades.length, today, req.player.id);
+    `).run(maxId, newVolume, totalGold, creditedTrades, creditedTrades, creditedTrades, today, req.player.id);
 
     if (totalGold > 0) {
       db.addResources(req.player.id, totalGold, 0, 0);

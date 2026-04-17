@@ -798,51 +798,64 @@ function FuturesPanel() {
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi, dex]);
 
+  // Synchronous double-click guard. React's `loading` state is async, so a
+  // second click can land between dispatch-1 and React committing the button's
+  // `disabled` attribute. This ref flips synchronously in-callback.
+  const tradeInFlight = useRef(false);
   const handleTrade = useCallback(async (side) => {
-    // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
-    // Avantis API: 3rd arg is COLLATERAL in USDC — notional / leverage.
-    // The UI's `amount` (in USDC mode) is a NOTIONAL figure (buying power),
-    // so for Avantis we divide by leverage to get actual collateral.
-    let qty;
-    if (dex === 'avantis') {
-      // Notional USDC that the user wants to open:
-      const notionalUsdc = amountInUsdc
-        ? parseFloat(amount)
-        : parseFloat(tokenAmount) * (currentPrice || 0);
-      if (!notionalUsdc || notionalUsdc <= 0) return;
-      // Avantis on-chain min notional = $100. Pre-check so the user isn't
-      // hit with a BELOW_MIN_POS revert.
-      if (notionalUsdc < 100) {
-        alert(`Avantis requires position size ≥ $100. Yours: $${notionalUsdc.toFixed(2)}. Increase amount or leverage.`);
-        return;
+    if (tradeInFlight.current) return;
+    tradeInFlight.current = true;
+    try {
+      // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
+      // Avantis API: 3rd arg is COLLATERAL in USDC — notional / leverage.
+      // The UI's `amount` (in USDC mode) is a NOTIONAL figure (buying power),
+      // so for Avantis we divide by leverage to get actual collateral.
+      // Guard against missing/NaN currentPrice (feed blip) — would otherwise
+      // produce NaN collateral and a useless on-chain revert.
+      const price = parseFloat(currentPrice);
+      let qty;
+      if (dex === 'avantis') {
+        const notionalUsdc = amountInUsdc
+          ? parseFloat(amount)
+          : (price > 0 ? parseFloat(tokenAmount) * price : 0);
+        if (!Number.isFinite(notionalUsdc) || notionalUsdc <= 0) {
+          alert('Enter a valid amount.');
+          return;
+        }
+        if (notionalUsdc < 100) {
+          alert(`Avantis requires position size ≥ $100. Yours: $${notionalUsdc.toFixed(2)}. Increase amount or leverage.`);
+          return;
+        }
+        const collateralUsdc = notionalUsdc / leverage;
+        qty = String(collateralUsdc.toFixed(6));
+      } else {
+        qty = amountInUsdc ? tokenAmount : amount;
+        if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
       }
-      const collateralUsdc = notionalUsdc / leverage;
-      qty = String(collateralUsdc.toFixed(6));
-    } else {
-      qty = amountInUsdc ? tokenAmount : amount;
-      if (!qty || parseFloat(qty) <= 0) return;
-    }
-    // Pacifica-only: flush any pending leverage change before placing the
-    // order so the server sees the right leverage on fill. Avantis takes
-    // leverage per-trade as a direct argument, so no pre-flush needed.
-    if (dex !== 'avantis' && levTimerRef.current) {
-      clearTimeout(levTimerRef.current);
-      levTimerRef.current = null;
-      const serverLev = leverageSettings[symbol];
-      if (leverage !== serverLev) {
-        await setLeverageApi(symbol, leverage);
+      // Pacifica-only: flush any pending leverage change before placing the
+      // order so the server sees the right leverage on fill. Avantis takes
+      // leverage per-trade as a direct argument, so no pre-flush needed.
+      if (dex !== 'avantis' && levTimerRef.current) {
+        clearTimeout(levTimerRef.current);
+        levTimerRef.current = null;
+        const serverLev = leverageSettings[symbol];
+        if (leverage !== serverLev) {
+          await setLeverageApi(symbol, leverage);
+        }
       }
+      if (orderType === 'market') {
+        // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
+        await placeMarketOrder(symbol, side, qty, '0.5', leverage);
+      } else {
+        if (!limitPrice) return;
+        await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
+      }
+      setAmount('');
+      setSizePct(0);
+    } finally {
+      tradeInFlight.current = false;
     }
-    if (orderType === 'market') {
-      // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
-      await placeMarketOrder(symbol, side, qty, '0.5', leverage);
-    } else {
-      if (!limitPrice) return;
-      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
-    }
-    setAmount('');
-    setSizePct(0);
-  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
+  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
