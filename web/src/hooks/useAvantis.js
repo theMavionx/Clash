@@ -95,12 +95,24 @@ function normalizeMarkets(raw) {
   return list.map((p, i) => {
     const fullSymbol = String(p.symbol || `${p.from || p.base || ''}/${p.to || p.quote || 'USD'}`).toUpperCase();
     const base = String(p.from || p.base || fullSymbol.split('/')[0]).toUpperCase();
+    // Avantis leverages live at p.leverages.{minLeverage, maxLeverage}.
+    // Per-pair override (when present) is p.pairMinLeverage. Fall back to
+    // flat fields for safety, then hard fallback 100 (never hit in practice
+    // once the API responds correctly).
+    const maxLev = p.leverages?.maxLeverage
+      ?? p.maxLeverage
+      ?? p.max_leverage
+      ?? 100;
+    const minLev = p.pairMinLeverage
+      ?? p.leverages?.minLeverage
+      ?? 1;
     return {
       symbol: base,
       pair: p.pair || fullSymbol,
       index: i,
       pair_index: p.index ?? i,
-      max_leverage: String(p.maxLeverage || p.max_leverage || 100),
+      max_leverage: String(maxLev),
+      min_leverage: String(minLev),
       lot_size: String(p.lotSize || p.lot_size || '0.0001'),
       tick_size: String(p.tickSize || p.tick_size || '0.01'),
       funding_rate: p.fundingRate || p.funding_rate || '0',
