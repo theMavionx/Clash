@@ -93,22 +93,21 @@ function normalizeMarkets(raw) {
   // Pyth benchmark lookup, and price matching all key off "BTC".
   const list = Array.isArray(raw) ? raw : (raw?.pairs || raw?.data || []);
   return list.map((p, i) => {
-    const fullSymbol = String(p.symbol || `${p.from || p.base || ''}/${p.to || p.quote || 'USD'}`).toUpperCase();
-    const base = String(p.from || p.base || fullSymbol.split('/')[0]).toUpperCase();
-    // Avantis leverages live at p.leverages.{minLeverage, maxLeverage}.
-    // Per-pair override (when present) is p.pairMinLeverage. Fall back to
-    // flat fields for safety, then hard fallback 100 (never hit in practice
-    // once the API responds correctly).
-    const maxLev = p.leverages?.maxLeverage
-      ?? p.maxLeverage
-      ?? p.max_leverage
-      ?? 100;
-    const minLev = p.pairMinLeverage
-      ?? p.leverages?.minLeverage
-      ?? 1;
+    const from = String(p.from || p.base || '').toUpperCase();
+    const to = String(p.to || p.quote || 'USD').toUpperCase();
+    const fullPair = from && to ? `${from}/${to}` : String(p.symbol || '').toUpperCase();
+    // Unique display/state key. For crypto & equities (quoted in USD) the base
+    // is already unique — keep "ETH", "AAPL". For FX pairs where USD itself
+    // is the base (USD/JPY, USD/CAD, USD/CHF…) using just "USD" would collapse
+    // all 14 into one row, so concatenate instead → "USDJPY", "USDCAD".
+    const symbol = from === 'USD' && to && to !== 'USD' ? `${from}${to}` : from || fullPair;
+    const maxLev = p.leverages?.maxLeverage ?? p.maxLeverage ?? p.max_leverage ?? 100;
+    const minLev = p.pairMinLeverage ?? p.leverages?.minLeverage ?? 1;
     return {
-      symbol: base,
-      pair: p.pair || fullSymbol,
+      symbol,
+      pair: p.pair || fullPair,
+      base: from,
+      quote: to,
       index: i,
       pair_index: p.index ?? i,
       max_leverage: String(maxLev),
@@ -122,18 +121,34 @@ function normalizeMarkets(raw) {
 }
 
 function normalizePrices(raw) {
-  // /prices returns { "BTC/USD": 67234.5, ... } or array of {pair, price}
+  // Current server shape: { "ETH/USD": { mark, yesterday_price }, ... }
+  // Fallback shapes: array of {pair, price} OR flat { "ETH/USD": price }.
+  // We mirror normalizeMarkets' symbol rule so FX USD-base pairs collide-free:
+  //   ETH/USD → symbol "ETH"
+  //   USD/JPY → symbol "USDJPY"
+  const toSymbol = (pair) => {
+    const parts = String(pair || '').toUpperCase().split('/');
+    const [from, to] = [parts[0] || '', parts[1] || 'USD'];
+    if (from === 'USD' && to && to !== 'USD') return `${from}${to}`;
+    return from;
+  };
+
   if (Array.isArray(raw)) {
     return raw.map(p => ({
-      symbol: (p.symbol || p.pair || '').split('/')[0].toUpperCase(),
+      symbol: toSymbol(p.symbol || p.pair),
       mark: String(p.price || p.mark || 0),
+      yesterday_price: String(p.yesterday_price || 0),
     }));
   }
   if (raw && typeof raw === 'object') {
-    return Object.entries(raw).map(([pair, price]) => ({
-      symbol: String(pair).split('/')[0].toUpperCase(),
-      mark: String(price),
-    }));
+    return Object.entries(raw).map(([pair, val]) => {
+      const isObj = val && typeof val === 'object';
+      return {
+        symbol: toSymbol(pair),
+        mark: String(isObj ? (val.mark ?? 0) : val),
+        yesterday_price: String(isObj ? (val.yesterday_price ?? 0) : 0),
+      };
+    });
   }
   return [];
 }

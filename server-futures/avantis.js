@@ -15,6 +15,7 @@ const BASE_RPC        = 'https://mainnet.base.org';
 const CORE_API        = 'https://core.avantisfi.com';
 const FEED_V3_URL     = 'https://feed-v3.avantisfi.com';
 const SOCKET_API      = 'https://socket-api-pub.avantisfi.com/socket-api/v1/data';
+const PYTH_HERMES     = 'https://hermes.pyth.network';
 
 // Execution fee for market/close orders (~0.00035 ETH)
 const EXECUTION_FEE_WEI = 350000000000000n; // 0.00035 ETH
@@ -438,6 +439,18 @@ async function getAccountInfo(privateKey) {
     }
   } catch {}
 
+  // Margin used = sum of position collaterals. Avantis exposes this on each
+  // position as `trade.initialPosToken` (raw) or `collateral` (scaled USDC).
+  // Fall back to 0 if the shape doesn't match.
+  let marginUsed = 0;
+  for (const p of positions) {
+    const c = Number(p.collateral ?? p.trade?.initialPosToken ?? 0);
+    // initialPosToken is raw 1e6 USDC; `collateral` is already scaled.
+    const scaled = p.collateral !== undefined ? c : c / 1e6;
+    if (Number.isFinite(scaled)) marginUsed += scaled;
+  }
+  const available = Math.max(usdc - marginUsed, 0);
+
   return {
     address,
     balance_usdc: usdc,
@@ -445,6 +458,13 @@ async function getAccountInfo(privateKey) {
     equity: usdc,
     positions,
     limit_orders: limitOrders,
+    // Pacifica-shaped aliases so the shared FuturesPanel UI works unchanged.
+    // FuturesPanel reads account.balance / account_equity / available_to_withdraw /
+    // total_margin_used — without these, everything renders $0 for Avantis.
+    balance: usdc,
+    account_equity: usdc,
+    available_to_withdraw: available,
+    total_margin_used: marginUsed,
   };
 }
 
@@ -479,15 +499,85 @@ async function getMarketInfo() {
   return { pairs: raw, count: raw.length };
 }
 
+// Cache for 24h-ago prices (used to compute 24h change). Refreshed hourly.
+let yesterdayPricesCache = null;
+let yesterdayPricesCacheTime = 0;
+
+async function fetchYesterdayPrices(feedIds) {
+  const now = Math.floor(Date.now() / 1000);
+  if (yesterdayPricesCache && now * 1000 - yesterdayPricesCacheTime < 60 * 60 * 1000) {
+    return yesterdayPricesCache;
+  }
+  const yesterday = now - 24 * 60 * 60;
+  const result = {};
+  // Hermes /v2/updates/price/<timestamp>?ids[]=... gives historical snapshot.
+  // We batch in chunks to stay under URL length limits.
+  const chunks = [];
+  for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
+  for (const chunk of chunks) {
+    try {
+      const qs = chunk.map(id => `ids[]=${id}`).join('&');
+      const res = await fetch(`${PYTH_HERMES}/v2/updates/price/${yesterday}?${qs}&parsed=true`);
+      if (!res.ok) continue;
+      const j = await res.json();
+      for (const p of (j.parsed || [])) {
+        const price = Number(p.price.price) * Math.pow(10, p.price.expo);
+        result[p.id.replace(/^0x/, '')] = price;
+      }
+    } catch {}
+  }
+  yesterdayPricesCache = result;
+  yesterdayPricesCacheTime = now * 1000;
+  return result;
+}
+
 async function getPrices() {
-  // Avantis socket API response shape is { data: { pairInfos, prices, ... } }
-  // (same nesting as getPairsMap). The old code read data.prices and got
-  // undefined, leaving the UI showing "—" for every symbol.
+  // Avantis socket data doesn't carry live prices — only pair/group config.
+  // The prices live on Pyth (Avantis's price source). For each pair we grab
+  // its feedId from pairInfos, then batch-query Pyth Hermes for the latest
+  // price. We return a Pacifica-compatible map: { "ETH/USD": { mark, yesterday_price } }.
   try {
-    const res = await fetch(`${SOCKET_API}`);
-    const data = await res.json();
-    return data?.data?.prices || data?.prices || {};
-  } catch {
+    const { raw } = await getPairsMap();
+    const feedIds = [];
+    const pairByFeedId = {};
+    for (const p of raw) {
+      const fid = String(p?.feed?.feedId || '').replace(/^0x/, '').toLowerCase();
+      if (!fid) continue;
+      feedIds.push(fid);
+      pairByFeedId[fid] = p.symbol; // e.g. "ETH/USD"
+    }
+    if (!feedIds.length) return {};
+
+    // Batch current prices in chunks of 25.
+    const latest = {};
+    const chunks = [];
+    for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
+    await Promise.all(chunks.map(async chunk => {
+      const qs = chunk.map(id => `ids[]=${id}`).join('&');
+      try {
+        const res = await fetch(`${PYTH_HERMES}/v2/updates/price/latest?${qs}&parsed=true`);
+        if (!res.ok) return;
+        const j = await res.json();
+        for (const p of (j.parsed || [])) {
+          const price = Number(p.price.price) * Math.pow(10, p.price.expo);
+          latest[p.id.replace(/^0x/, '')] = price;
+        }
+      } catch {}
+    }));
+
+    const yesterday = await fetchYesterdayPrices(feedIds);
+
+    // Build the price map keyed by pair label (matches normalizePrices's
+    // Object.entries split on "/" to extract base).
+    const out = {};
+    for (const fid of feedIds) {
+      const pair = pairByFeedId[fid];
+      if (!pair || !latest[fid]) continue;
+      out[pair] = { mark: latest[fid], yesterday_price: yesterday[fid] || 0 };
+    }
+    return out;
+  } catch (e) {
+    console.error('getPrices (avantis/pyth) failed:', e?.message || e);
     return {};
   }
 }

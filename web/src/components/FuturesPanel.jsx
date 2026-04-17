@@ -44,59 +44,94 @@ const TOKEN_COLORS = {
   DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
   GOLD:'#FFD700',SILVER:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
 };
-// Logo lookup: local /tokens first (hand-curated), then public CDNs covering
-// crypto (jsDelivr/coincap) and US equities (parqet). Avantis lists stocks
-// like AAPL/AMZN alongside crypto — single CDN isn't enough.
+// US equities known to have Parqet logo coverage (verified by probing).
 const STOCK_SYMBOLS = new Set([
   'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
   'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
   'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
   'JPM','BAC','GS','WFC','V','MA','CRCL',
 ]);
+// Commodities map (Avantis uses CL/NATGAS/COPPER/GOLD/SILVER; Parqet carries
+// the big ones by ticker). Unknown → letter fallback.
+const COMMODITY_SYMBOLS = new Set(['CL','COPPER','GOLD','SILVER','NATGAS','BRENT']);
+
+// Canonicalise a display symbol (strip "/USD" pair suffix, upper-case) so
+// lookup keys are stable no matter which hook produced the value.
+function canonSym(sym) {
+  return String(sym || '').toUpperCase().split('/')[0].trim();
+}
+
+// Module-level caches: once a URL is known-good (or all sources failed) for a
+// symbol, NEVER hit the network again from any TokenIcon mount. This prevents
+// the 1000+ repeated 404s on re-renders / picker scrolls.
+const logoCache = new Map(); // sym → resolved URL
+const logoFailed = new Set(); // sym → definitely no logo found
+
 function tokenLogoSources(sym) {
-  const s = String(sym || '').toUpperCase();
+  const s = canonSym(sym);
   const low = s.toLowerCase();
-  const sources = [
+  const srcs = [
     `/tokens/${s}.svg`,
     `/tokens/${s}.png`,
   ];
-  if (STOCK_SYMBOLS.has(s)) {
-    sources.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
+  if (STOCK_SYMBOLS.has(s) || COMMODITY_SYMBOLS.has(s)) {
+    // Parqet covers US equities and major commodities.
+    srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
   } else {
-    sources.push(
-      `https://assets.coincap.io/assets/icons/${low}@2x.png`,
-      `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@latest/svg/color/${low}.svg`,
-    );
+    // Crypto: Coincap first (broad coverage, small PNGs), Spothq as backup.
+    srcs.push(`https://assets.coincap.io/assets/icons/${low}@2x.png`);
+    srcs.push(`https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@latest/svg/color/${low}.svg`);
   }
-  return sources;
+  return srcs;
 }
-const TokenIcon = ({sym, size = 20}) => {
-  const bg = TOKEN_COLORS[sym] || '#a3906a';
-  const sources = tokenLogoSources(sym);
-  const [srcIdx, setSrcIdx] = useState(0);
-  const [failed, setFailed] = useState(false);
 
-  // Reset when the symbol changes so a new row doesn't inherit prior failures.
-  useEffect(() => { setSrcIdx(0); setFailed(false); }, [sym]);
+const TokenIcon = ({sym, size = 20}) => {
+  const canon = canonSym(sym);
+  const bg = TOKEN_COLORS[canon] || '#a3906a';
+
+  // Resolved from cache? Skip straight to the image.
+  const cached = logoCache.get(canon);
+  const [srcIdx, setSrcIdx] = useState(0);
+  const [failed, setFailed] = useState(logoFailed.has(canon));
+
+  // Rebuild sources once per symbol (not every render) to avoid thrash.
+  const sources = useMemo(() => (cached ? [cached] : tokenLogoSources(canon)), [canon, cached]);
+
+  useEffect(() => {
+    setSrcIdx(0);
+    setFailed(logoFailed.has(canon));
+  }, [canon]);
+
+  const onImgError = useCallback(() => {
+    if (srcIdx < sources.length - 1) {
+      setSrcIdx(srcIdx + 1);
+    } else {
+      logoFailed.add(canon);
+      setFailed(true);
+    }
+  }, [srcIdx, sources.length, canon]);
+
+  const onImgLoad = useCallback((e) => {
+    // Only cache successful remote URLs — local /tokens may change at build.
+    const url = sources[srcIdx];
+    if (url && !logoCache.has(canon)) logoCache.set(canon, url);
+  }, [sources, srcIdx, canon]);
 
   return (
     <div style={{width: size, height: size, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden'}}>
-      {!failed && (
+      {!failed ? (
         <img
           src={sources[srcIdx]}
           alt=""
           width={size}
           height={size}
           style={{borderRadius: '50%', objectFit: 'cover'}}
-          onError={() => {
-            if (srcIdx < sources.length - 1) setSrcIdx(srcIdx + 1);
-            else setFailed(true);
-          }}
+          onError={onImgError}
+          onLoad={onImgLoad}
         />
-      )}
-      {failed && (
+      ) : (
         <span style={{fontSize: size * 0.5, fontWeight: 900, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>
-          {sym.charAt(0)}
+          {canon.charAt(0)}
         </span>
       )}
     </div>
@@ -141,9 +176,18 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
       const mark = p ? parseFloat(p.mark) : 0;
       const yest = p ? parseFloat(p.yesterday_price || 0) : 0;
       const change = yest > 0 ? ((mark - yest) / yest) * 100 : 0;
-      return { symbol: m.symbol, maxLev: m.max_leverage, mark, change };
-    }).filter(r => !search || r.symbol.toLowerCase().includes(search.toLowerCase()))
-      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+      return {
+        symbol: m.symbol,
+        // Prefer the human-readable pair ("USD/JPY") when present; falls back
+        // to the symbol key for legacy Pacifica markets that only ship base.
+        label: m.pair || m.symbol,
+        iconSym: m.base || m.symbol,
+        maxLev: m.max_leverage,
+        mark,
+        change,
+      };
+    }).filter(r => !search || r.label.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [markets, prices, search]);
 
   return (
@@ -167,8 +211,8 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
               style={{...SP.row, background: r.symbol === symbol ? '#e8dfc8' : 'transparent', cursor: 'pointer'}}>
               <td style={SP.td}>
                 <div style={{display: 'flex', alignItems: 'center', gap: 5}}>
-                  <TokenIcon sym={r.symbol} size={18} />
-                  <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.symbol}</span>
+                  <TokenIcon sym={r.iconSym} size={18} />
+                  <span style={{fontWeight: 900, color: '#5C3A21'}}>{r.label}</span>
                   <span style={{fontSize: 10, fontWeight: 800, color: '#a3906a'}}>{r.maxLev}x</span>
                   {(() => {
                     // If signals are loaded but this symbol isn't in the top-N trending feed,
@@ -700,6 +744,17 @@ function FuturesPanel() {
   const handleTrade = useCallback(async (side) => {
     const qty = amountInUsdc ? tokenAmount : amount;
     if (!qty || parseFloat(qty) <= 0) return;
+    // Avantis on-chain min notional = $100. If the user's position size is
+    // below that, the tx will revert (BELOW_MIN_POS). Catch it here with a
+    // clear message so they can bump leverage or collateral.
+    if (dex === 'avantis') {
+      const collateralUsdc = amountInUsdc ? parseFloat(amount) : parseFloat(tokenAmount) * (currentPrice || 0);
+      const notional = collateralUsdc * leverage;
+      if (notional > 0 && notional < 100) {
+        alert(`Avantis requires position size ≥ $100. Yours: $${notional.toFixed(2)} (${collateralUsdc.toFixed(2)} USDC × ${leverage}x). Increase leverage or collateral.`);
+        return;
+      }
+    }
     // Pacifica-only: flush any pending leverage change before placing the
     // order so the server sees the right leverage on fill. Avantis takes
     // leverage per-trade as a direct argument, so no pre-flush needed.
@@ -768,15 +823,26 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          <button style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4}} onClick={() => setMarginMode(symbol, !marginModes[symbol])} title={marginModes[symbol] ? 'Isolated margin' : 'Cross margin'}>
-            <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
-              {marginModes[symbol] ? 'Isolated' : 'Cross'}
-            </span>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{flexShrink: 0}}>
-              <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
-              <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
-            </svg>
-          </button>
+          {dex === 'avantis' ? (
+            // Avantis has no cross margin — every position is isolated per-trade.
+            // Render a read-only badge rather than a clickable toggle.
+            <div
+              style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
+              title="Avantis uses isolated margin per trade (no cross mode)"
+            >
+              <span style={{color: '#FF9800', fontWeight: 900}}>Isolated</span>
+            </div>
+          ) : (
+            <button style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4}} onClick={() => setMarginMode(symbol, !marginModes[symbol])} title={marginModes[symbol] ? 'Isolated margin' : 'Cross margin'}>
+              <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
+                {marginModes[symbol] ? 'Isolated' : 'Cross'}
+              </span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{flexShrink: 0}}>
+                <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+              </svg>
+            </button>
+          )}
           <div style={{...S.balBadge, padding: '4px 8px'}}>
             <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>BALANCE</span>
             <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${pacBalance.toFixed(2)}</span>
