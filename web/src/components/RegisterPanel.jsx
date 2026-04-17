@@ -313,21 +313,25 @@ function RegisterPanel() {
                   fontFamily: 'inherit',
                 }}
               >
-                <span style={{
-                  fontSize: 32,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>{cfg.emoji}</span>
-                <div style={{flex: 1, minWidth: 0}}>
-                  <div style={{
-                    fontSize: 17, fontWeight: 900, color: '#fff',
-                    letterSpacing: '0.8px',
-                    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
-                  }}>{cfg.label}</div>
+                <div style={{flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4}}>
+                  <img
+                    src={cfg.logo}
+                    alt={cfg.label}
+                    style={{
+                      height: 24,
+                      width: 'auto',
+                      maxWidth: '100%',
+                      objectFit: 'contain',
+                      objectPosition: 'left center',
+                      filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                      alignSelf: 'flex-start',
+                    }}
+                  />
                   <div style={{
                     fontSize: 11, fontWeight: 800,
                     color: 'rgba(255,255,255,0.88)',
-                    marginTop: 2,
                     textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                    letterSpacing: '0.3px',
                   }}>
                     {cfg.chain} · {cfg.id === 'avantis' ? 'CUSTODIAL · EMAIL' : 'SELF-CUSTODY · WALLET'}
                   </div>
@@ -357,12 +361,16 @@ function RegisterPanel() {
         border: `2px solid ${dexCfg.borderColor}`,
         boxShadow: `0 2px 0 ${dexCfg.borderColor}`,
       }}>
-        <span style={{fontSize: 14, filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))'}}>{dexCfg.emoji}</span>
-        <span style={{
-          fontSize: 11, fontWeight: 900, color: '#fff',
-          letterSpacing: '0.8px',
-          textShadow: '0 1px 0 rgba(0,0,0,0.35)',
-        }}>{dexCfg.label}</span>
+        <img
+          src={dexCfg.logo}
+          alt={dexCfg.label}
+          style={{
+            height: 12,
+            width: 'auto',
+            objectFit: 'contain',
+            filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))',
+          }}
+        />
       </div>
       <button
         type="button"

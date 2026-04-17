@@ -1,7 +1,7 @@
 #!/bin/bash
 # Deploy script for clashofperps.fun
 # Backend: Node.js on port 4000
-# Frontend: Vite build served by nginx on port 4001 (proxied)
+# Frontend: Vite build served by nginx on port 3999 (proxied)
 # Nginx: SSL termination + proxy to both
 
 set -e
@@ -148,10 +148,10 @@ server {
     # embedded-wallet creation ("Exceeded max attempts"). Godot runs single-threaded.
     add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
 
-    # Futures proxy → server-futures on port 4001 (Avantis + optional Pacifica).
+    # Futures proxy → server-futures on port 3999 (Avantis + optional Pacifica).
     # Must come BEFORE /api/ because nginx matches longest prefix first.
     location /api/futures/ {
-        proxy_pass http://127.0.0.1:4001/api/;
+        proxy_pass http://127.0.0.1:3999/api/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -278,7 +278,7 @@ fi
 pm2 delete clash-api 2>/dev/null || true
 pm2 start index.js --name clash-api --env production --node-args="--env-file=$APP_DIR/.env"
 
-# ── Futures service (port 4001) — Avantis custodial trading ──
+# ── Futures service (port 3999) — Avantis custodial trading ──
 FUTURES_DIR="$APP_DIR/server-futures"
 if [ -d "$FUTURES_DIR" ]; then
     echo "Installing server-futures dependencies..."

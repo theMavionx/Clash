@@ -1,4 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import pacificaLogo from '../assets/pacifica.png';
+import avantisLogo from '../assets/avantis.svg';
 
 const DexContext = createContext(null);
 
@@ -10,6 +12,7 @@ export const DEX_CONFIG = {
     label: 'PACIFICA',
     shortLabel: 'PAC',
     emoji: '🌊',
+    logo: pacificaLogo,
     color: '#7C3AED',
     colorDark: '#5B21B6',
     colorLight: 'rgba(124,58,237,0.15)',
@@ -23,6 +26,7 @@ export const DEX_CONFIG = {
     label: 'AVANTIS',
     shortLabel: 'AVT',
     emoji: '⚡',
+    logo: avantisLogo,
     color: '#0EA5E9',
     colorDark: '#0369A1',
     colorLight: 'rgba(14,165,233,0.15)',
@@ -83,11 +87,15 @@ export function useDex() {
   return ctx;
 }
 
+// Shared tint for Avantis (white SVG → brand blue on light backgrounds).
+const AVANTIS_BLUE_FILTER = 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)';
+
 // Standalone badge component — usable anywhere
 export function DexBadge({ dexId, size = 'sm' }) {
   const cfg = DEX_CONFIG[dexId];
   if (!cfg) return null; // unknown dex — hide badge
   const isLg = size === 'lg';
+  const logoH = isLg ? 12 : 9;
 
   return (
     <span style={{
@@ -107,8 +115,51 @@ export function DexBadge({ dexId, size = 'sm' }) {
       flexShrink: 0,
       userSelect: 'none',
     }}>
-      <span style={{ fontSize: isLg ? 13 : 10 }}>{cfg.emoji}</span>
-      {cfg.shortLabel}
+      <img
+        src={cfg.logo}
+        alt=""
+        style={{
+          height: logoH,
+          width: 'auto',
+          objectFit: 'contain',
+          filter: cfg.id === 'avantis' ? AVANTIS_BLUE_FILTER : 'none',
+        }}
+      />
     </span>
+  );
+}
+
+// "Powered by X" footer block — renders the real DEX wordmark inline. Used
+// under FuturesPanel / TradeIdeaModal so users know which venue they're
+// trading on. Colors handled via CSS filter (SVGs ship as white).
+export function PoweredBy({ dexId, inverted = false }) {
+  const cfg = DEX_CONFIG[dexId];
+  if (!cfg) return null;
+  // If inverted=true we're on a light background (need dark logo).
+  // Pacifica PNG is already colored; Avantis SVG needs tint.
+  const avantisLightFilter = 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      gap: 6, fontSize: 10, fontWeight: 900,
+      color: inverted ? '#5C3A21' : 'rgba(255,255,255,0.85)',
+      letterSpacing: '0.8px', textTransform: 'uppercase',
+      textShadow: inverted ? 'none' : '0 1px 0 rgba(0,0,0,0.35)',
+      opacity: 0.9,
+    }}>
+      <span>Powered by</span>
+      <img
+        src={cfg.logo}
+        alt={cfg.label}
+        style={{
+          height: 16,
+          width: 'auto',
+          objectFit: 'contain',
+          filter: cfg.id === 'avantis'
+            ? (inverted ? avantisLightFilter : 'none') // white on dark, tinted on light
+            : 'none',
+        }}
+      />
+    </div>
   );
 }

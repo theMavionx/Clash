@@ -107,8 +107,8 @@ const stmts = {
   getDeposits: db.prepare('SELECT id, tx_signature, amount, token, status, created_at FROM deposits WHERE player_id = ? ORDER BY created_at DESC LIMIT 50'),
 
   addTrade: db.prepare(`
-    INSERT INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
@@ -159,8 +159,13 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending' }) {
-  const info = stmts.addTrade.run(playerId, symbol, side, orderType, amount, price || null, orderId || null, clientOrderId || null, status);
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0 }) {
+  const info = stmts.addTrade.run(
+    playerId, symbol, side, orderType,
+    amount, price || null,
+    orderId || null, clientOrderId || null,
+    status, dex, notional_usd
+  );
   return { id: info.lastInsertRowid };
 }
 
@@ -209,3 +214,8 @@ try {
 } catch (e) {
   console.error('[futures.db] Encryption migration failed:', e.message);
 }
+
+// trade_history migration: add dex + notional_usd so the main server can
+// attribute gold rewards per-DEX and by traded volume.
+try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}

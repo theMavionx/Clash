@@ -857,6 +857,27 @@ setInterval(() => {
 }, 600000);
 
 // Claim gold — server verifies trades via Pacifica API
+// Lazy-open server-futures DB (read-only) so this endpoint can credit gold
+// for Avantis trades recorded by the futures service. Guarded so the main
+// server still works on hosts where server-futures isn't deployed.
+let _futuresDb = null;
+function futuresDbReadonly() {
+  if (_futuresDb === 'unavailable') return null;
+  if (_futuresDb) return _futuresDb;
+  try {
+    const Database = require('better-sqlite3');
+    const fpath = process.env.CLASH_FUTURES_DB || require('path').join(__dirname, '..', 'server-futures', 'futures.db');
+    if (!require('fs').existsSync(fpath)) throw new Error('futures.db not found at ' + fpath);
+    _futuresDb = new Database(fpath, { readonly: true, fileMustExist: true });
+    _futuresDb.pragma('journal_mode = WAL');
+  } catch (e) {
+    console.warn('[claim-gold] Avantis futures.db unavailable:', e.message);
+    _futuresDb = 'unavailable';
+    return null;
+  }
+  return _futuresDb;
+}
+
 router.post('/trading/claim-gold', auth, async (req, res) => {
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
@@ -865,6 +886,64 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
   claimCooldowns.set(req.player.id, Date.now());
   const wallet = req.body.wallet || req.player.wallet;
+  const dex = String(req.body.dex || req.player.dex || 'pacifica').toLowerCase();
+
+  // ── Avantis branch: count volume from server-futures.trade_history ──
+  if (dex === 'avantis') {
+    const fdb = futuresDbReadonly();
+    if (!fdb) {
+      return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
+    }
+    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    if (!reward) {
+      db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet || '');
+      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    }
+    // Use last_trade_id as a rowid-threshold — avantis rows have integer PKs.
+    const newTrades = fdb.prepare(`
+      SELECT id, symbol, side, amount, notional_usd, status, created_at
+      FROM trade_history
+      WHERE player_id = ? AND dex = 'avantis' AND status != 'failed' AND id > ?
+      ORDER BY id ASC
+    `).all(req.player.id, reward.last_trade_id || 0);
+
+    if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      return res.json({ gold: 0, reason: 'No new trades' });
+    }
+
+    let totalGold = 0;
+    const reasons = [];
+    let maxId = reward.last_trade_id || 0;
+    let newVolume = 0;
+    for (const t of newTrades) {
+      const vol = Number(t.notional_usd) || 0;
+      newVolume += vol;
+      totalGold += Math.floor(vol * GOLD_PER_USD_VOLUME);
+      if (t.id > maxId) maxId = t.id;
+    }
+    if (newTrades.length > 0) reasons.push(`${newTrades.length} trades`);
+
+    if (!reward.first_deposit) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
+    if (!reward.first_trade && newTrades.length > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
+    const today = new Date().toISOString().split('T')[0];
+    if (reward.last_daily !== today && newTrades.length > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
+
+    db.db.prepare(`
+      UPDATE trading_rewards SET
+        last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+        first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+        last_daily = ?, updated_at = datetime('now')
+      WHERE player_id = ?
+    `).run(maxId, newVolume, totalGold, newTrades.length, today, req.player.id);
+
+    if (totalGold > 0) {
+      db.addResources(req.player.id, totalGold, 0, 0);
+      return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex: 'avantis' });
+    }
+    return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex: 'avantis' });
+  }
+
+  // ── Pacifica branch (existing, unchanged) ──
   if (!wallet) return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
 
   try {

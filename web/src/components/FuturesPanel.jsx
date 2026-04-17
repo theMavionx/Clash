@@ -5,7 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
-import { useDex } from '../contexts/DexContext';
+import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
@@ -202,7 +202,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
               <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                 {isBid ? 'BUY' : 'SELL'}
               </span>
-              <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>✕</button>
+              <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
             </div>
             <div style={S.row}>
               <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
@@ -298,7 +298,7 @@ const PositionsList = memo(function PositionsList({
                 </div>
                 <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                 <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100))} disabled={loading}>
+                <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100), pos.pair_index, pos.trade_index)} disabled={loading}>
                   {loading ? 'Closing...' : `Close ${closePct}%`}
                 </button>
               </div>
@@ -310,7 +310,7 @@ const PositionsList = memo(function PositionsList({
                 <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
-                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null);
+                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index);
                   setTpPrice(''); setSlPrice(''); setExpandedPos(null);
                 }} disabled={!tpPrice && !slPrice}>Set</button>
               </div>
@@ -331,13 +331,17 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder,
+  closePosition, cancelOrder, dex,
 }) {
+  // Avantis has no order-flow history or funding payments exposed via a
+  // public API like Pacifica, so we hide those tabs entirely on that DEX.
   const tabs = [
     { id: 'positions', label: `Positions (${filteredPositions.length})` },
     { id: 'orders', label: `Orders (${filteredOrders.length})` },
-    { id: 'history', label: 'History' },
-    { id: 'funding', label: 'Funding' },
+    ...(dex === 'avantis' ? [] : [
+      { id: 'history', label: 'History' },
+      { id: 'funding', label: 'Funding' },
+    ]),
   ];
 
   return (
@@ -397,7 +401,7 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
                     <td style={S.td}>{lev}x</td>
                     <td style={S.td}>
-                      <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, p.amount)}>Close</button>
+                      <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, p.amount, p.pair_index, p.trade_index)}>Close</button>
                     </td>
                   </tr>
                 );
@@ -432,7 +436,7 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>${price.toLocaleString()}</td>
                     <td style={S.td}>{amt}</td>
                     <td style={S.td}>
-                      <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>Cancel</button>
+                      <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>Cancel</button>
                     </td>
                   </tr>
                 );
@@ -440,10 +444,10 @@ const BottomPanel = memo(function BottomPanel({
             </table>
           ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
         )}
-        {bottomTab === 'history' && (
+        {bottomTab === 'history' && dex !== 'avantis' && (
           <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
         )}
-        {bottomTab === 'funding' && (
+        {bottomTab === 'funding' && dex !== 'avantis' && (
           <FundingHistory walletAddr={walletAddr} filters={btmFilters} />
         )}
       </div>
@@ -655,9 +659,10 @@ function FuturesPanel() {
   const handleTrade = useCallback(async (side) => {
     const qty = amountInUsdc ? tokenAmount : amount;
     if (!qty || parseFloat(qty) <= 0) return;
-    // Flush any pending leverage change before placing the order so Pacifica
-    // sees the right leverage on fill (prevents "opened at 1x" surprises).
-    if (levTimerRef.current) {
+    // Pacifica-only: flush any pending leverage change before placing the
+    // order so the server sees the right leverage on fill. Avantis takes
+    // leverage per-trade as a direct argument, so no pre-flush needed.
+    if (dex !== 'avantis' && levTimerRef.current) {
       clearTimeout(levTimerRef.current);
       levTimerRef.current = null;
       const serverLev = leverageSettings[symbol];
@@ -666,14 +671,15 @@ function FuturesPanel() {
       }
     }
     if (orderType === 'market') {
-      await placeMarketOrder(symbol, side, qty, '0.5');
+      // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
+      await placeMarketOrder(symbol, side, qty, '0.5', leverage);
     } else {
       if (!limitPrice) return;
-      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC');
+      await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
     }
     setAmount('');
     setSizePct(0);
-  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi]);
+  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -1044,13 +1050,17 @@ function FuturesPanel() {
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
               <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} />
             </div>
-            {/* Drag handle: chart ↔ orderbook */}
-            <div style={S.dragHandleV} onMouseDown={dragChart} />
-            <div style={{flex: `0 0 ${obWidth}px`, overflow: 'hidden'}}>
-              <OrderBook symbol={symbol} />
-            </div>
-            {/* Drag handle: orderbook ↔ controls */}
-            <div style={S.dragHandleV} onMouseDown={dragOb} />
+            {dex !== 'avantis' && (
+              <>
+                {/* Drag handle: chart ↔ orderbook */}
+                <div style={S.dragHandleV} onMouseDown={dragChart} />
+                <div style={{flex: `0 0 ${obWidth}px`, overflow: 'hidden'}}>
+                  <OrderBook symbol={symbol} />
+                </div>
+                {/* Drag handle: orderbook ↔ controls */}
+                <div style={S.dragHandleV} onMouseDown={dragOb} />
+              </>
+            )}
             <div style={{flex: 1, minWidth: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
           </div>
           {/* Drag handle: top ↔ bottom */}
@@ -1075,6 +1085,7 @@ function FuturesPanel() {
             leverageSettings={leverageSettings}
             closePosition={closePosition}
             cancelOrder={cancelOrder}
+            dex={dex}
           />
         </div>
       );
@@ -1167,7 +1178,7 @@ function FuturesPanel() {
                   </div>
                   <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                   <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100))} disabled={loading}>
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String(parseFloat(pos.amount) * closePct / 100), pos.pair_index, pos.trade_index)} disabled={loading}>
                     {loading ? 'Closing...' : `Close ${closePct}%`}
                   </button>
                 </div>
@@ -1179,7 +1190,7 @@ function FuturesPanel() {
                   <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
-                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null);
+                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index);
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
                   }} disabled={!tpPrice && !slPrice}>Set</button>
                 </div>
@@ -1228,7 +1239,7 @@ function FuturesPanel() {
                 <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                   {isBid ? 'BUY' : 'SELL'}
                 </span>
-                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i)}>✕</button>
+                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
@@ -1435,11 +1446,28 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Powered by Pacifica footer */}
+        {/* Powered by DEX footer — switches logo + label per active DEX */}
         <div style={S.pacificaFooter}>
-          <img src={pacificaLogo} alt="Pacifica" style={S.pacificaLogo} />
-          <span style={S.pacificaText}>Powered by</span>
-          <span style={S.pacificaBrand}>Pacifica</span>
+          {dex === 'avantis' ? (
+            <>
+              <span style={S.pacificaText}>Powered by</span>
+              <img
+                src={DEX_CONFIG.avantis.logo}
+                alt="Avantis"
+                style={{
+                  height: 14, width: 'auto', objectFit: 'contain',
+                  // Tint white SVG to Avantis blue on the light footer bg.
+                  filter: 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)',
+                }}
+              />
+            </>
+          ) : (
+            <>
+              <img src={pacificaLogo} alt="Pacifica" style={S.pacificaLogo} />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={S.pacificaBrand}>Pacifica</span>
+            </>
+          )}
         </div>
 
         {tradeIdeaOpen && (

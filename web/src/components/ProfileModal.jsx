@@ -102,21 +102,30 @@ function ProfileModal({ onClose }) {
                 border: `3px solid ${cfg.borderColor}`,
                 boxShadow: `0 3px 0 ${cfg.borderColor}, 0 4px 8px rgba(0,0,0,0.2)`,
               }}>
-                <span style={{
-                  fontSize: 26,
-                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                }}>{cfg.emoji}</span>
+                {/* Official DEX wordmark — renders white on the gradient bg.
+                    Avantis SVG already ships white; Pacifica PNG stays as-is. */}
+                <img
+                  src={cfg.logo}
+                  alt={cfg.label}
+                  style={{
+                    height: 22,
+                    width: 'auto',
+                    objectFit: 'contain',
+                    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                  }}
+                />
                 <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{
+                    fontSize: 10, fontWeight: 800,
+                    color: 'rgba(255,255,255,0.88)',
+                    letterSpacing: '0.5px',
+                    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                  }}>TRADING ON</div>
                   <div style={{
                     fontSize: 12, fontWeight: 900, color: '#fff',
                     letterSpacing: '0.8px',
                     textShadow: '0 1px 0 rgba(0,0,0,0.35)',
-                  }}>TRADING ON {cfg.label}</div>
-                  <div style={{
-                    fontSize: 10, fontWeight: 800,
-                    color: 'rgba(255,255,255,0.88)',
-                    marginTop: 2, letterSpacing: '0.5px',
-                    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                    marginTop: 1,
                   }}>
                     {cfg.chain} · {dex === 'avantis' ? 'CUSTODIAL' : 'SELF-CUSTODY'}
                   </div>

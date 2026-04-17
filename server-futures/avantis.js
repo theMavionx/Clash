@@ -5,6 +5,10 @@ const { base } = require('viem/chains');
 // ---------- Config ----------
 
 const TRADING_ADDRESS = '0x44914408af82bC9983bbb330e3578E1105e11d4e';
+// USDC is pulled by the TradingStorage contract, not Trading — so approvals
+// must be granted to this address. Mismatched spender was the cause of the
+// "ERC20: transfer amount exceeds allowance" revert we hit in testing.
+const TRADING_STORAGE_ADDRESS = '0x8a311D7048c35985aa31C131B9A13e03a5f7422d';
 const USDC_ADDRESS    = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID        = 8453; // Base mainnet
 const BASE_RPC        = 'https://mainnet.base.org';
@@ -168,6 +172,96 @@ function leverageToContract(leverage) {
   return BigInt(Math.floor(leverage * 1e10));
 }
 
+// ---------- Trade-index resolution ----------
+// Avantis lets a trader hold multiple trades per pair. Each trade has a
+// per-pair `index` starting at 0 and incrementing. When opening a new trade
+// we must count existing open trades + limit orders on that pair and pass
+// the next free slot — otherwise openTrade reverts ("trade already exists").
+async function getNextTradeIndex(address, pairIndex) {
+  try {
+    const res = await fetch(`${CORE_API}/user-data?trader=${address}`);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    const usedIndexes = new Set();
+    const pairMatches = (item) => {
+      const pi = item?.pairIndex ?? item?.pair_index ?? item?.trade?.pairIndex;
+      return Number(pi) === Number(pairIndex);
+    };
+    for (const pos of (data.positions || [])) {
+      if (pairMatches(pos)) {
+        const idx = pos.index ?? pos.trade?.index;
+        if (idx != null) usedIndexes.add(Number(idx));
+      }
+    }
+    for (const lo of (data.limitOrders || [])) {
+      if (pairMatches(lo)) {
+        const idx = lo.index ?? lo.trade?.index;
+        if (idx != null) usedIndexes.add(Number(idx));
+      }
+    }
+    // Return smallest non-negative integer not in the set
+    let i = 0;
+    while (usedIndexes.has(i)) i++;
+    return i;
+  } catch (e) {
+    console.warn('[avantis] getNextTradeIndex failed:', e.message);
+    return 0;
+  }
+}
+
+// ---------- Execution fee ----------
+// Avantis contract charges an ETH fee that covers L1 gas for price settlement.
+// SDK fetches dynamically; we mirror that with a cached fetch from Core API,
+// falling back to the 0.00035 ETH hard default if the endpoint is unreachable.
+let feeCache = null;
+let feeCacheTime = 0;
+const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH
+
+async function getExecutionFeeWei() {
+  const now = Date.now();
+  if (feeCache && now - feeCacheTime < 30000) return feeCache;
+  try {
+    const res = await fetch(`${CORE_API}/execution-fee`);
+    if (res.ok) {
+      const data = await res.json();
+      // API typically returns `{fee: "0.00042"}` in ETH, or raw wei
+      const eth = parseFloat(data.fee || data.execution_fee || data.eth || 0);
+      if (eth > 0 && eth < 0.01) {
+        const wei = BigInt(Math.floor(eth * 1e18));
+        feeCache = wei;
+        feeCacheTime = now;
+        return wei;
+      }
+    }
+  } catch (e) {
+    console.warn('[avantis] getExecutionFeeWei fetch failed, using fallback:', e.message);
+  }
+  // Cache the fallback too so we don't hammer the API repeatedly on outage
+  feeCache = FEE_FALLBACK_WEI;
+  feeCacheTime = now;
+  return FEE_FALLBACK_WEI;
+}
+
+// ---------- Chain sanity check ----------
+// Refuse to operate if the configured RPC isn't actually Base mainnet.
+// Checked once per process — caches the result.
+let chainVerified = false;
+async function assertBaseMainnet() {
+  if (chainVerified) return;
+  try {
+    const onChainId = await publicClient.getChainId();
+    if (Number(onChainId) !== CHAIN_ID) {
+      throw new Error(`Wrong chain: RPC returned ${onChainId}, expected Base mainnet ${CHAIN_ID}`);
+    }
+    chainVerified = true;
+  } catch (e) {
+    // Don't permanently fail — a transient RPC blip shouldn't lock us out.
+    // But surface the error to logs so ops can investigate.
+    console.error('[avantis] Chain verification failed:', e.message);
+    throw e;
+  }
+}
+
 // ---------- Pair index cache ----------
 
 let pairsCache = null;
@@ -182,27 +276,51 @@ async function getPairsMap() {
     const data = await res.json();
     const map = {};
     const indexMap = {};
-    const pairsData = data.pairs || data.data?.pairs || [];
-    pairsData.forEach((p, i) => {
-      const symbol = `${p.from}/${p.to}`.toUpperCase();
-      map[symbol] = i;
-      indexMap[i] = { symbol, from: p.from, to: p.to };
-    });
-    pairsCache = { map, indexMap, raw: pairsData };
+    const raw = [];
+    // Avantis socket returns pairInfos as { "0": {from, to, ...}, "1": ... }.
+    // Older shapes (data.pairs as array) are kept as a graceful fallback.
+    const pairInfos = data?.data?.pairInfos || data?.pairInfos || null;
+    if (pairInfos && typeof pairInfos === 'object') {
+      for (const [idxStr, p] of Object.entries(pairInfos)) {
+        const i = Number(idxStr);
+        const from = String(p.from || '').toUpperCase();
+        const to = String(p.to || 'USD').toUpperCase();
+        if (!from) continue;
+        const fullSym = `${from}/${to}`;
+        // Index by both "BTC/USD" and "BTC" so callers can pass either form.
+        map[fullSym] = i;
+        if (!(from in map)) map[from] = i;
+        indexMap[i] = { symbol: fullSym, from, to };
+        raw[i] = { index: i, from, to, symbol: fullSym, ...p };
+      }
+    } else {
+      // Legacy array shape
+      const pairsData = data?.pairs || data?.data?.pairs || [];
+      pairsData.forEach((p, i) => {
+        const from = String(p.from || '').toUpperCase();
+        const to = String(p.to || 'USD').toUpperCase();
+        const fullSym = `${from}/${to}`;
+        map[fullSym] = i;
+        if (!(from in map)) map[from] = i;
+        indexMap[i] = { symbol: fullSym, from, to };
+        raw[i] = { index: i, from, to, symbol: fullSym, ...p };
+      });
+    }
+    pairsCache = { map, indexMap, raw: raw.filter(Boolean) };
     pairsCacheTime = now;
     return pairsCache;
   } catch (e) {
     console.error('Failed to fetch pairs from Avantis socket API:', e.message);
-    // Fallback static mapping for common pairs
+    // Fallback static mapping for common pairs (index only approximate).
     const staticMap = {
-      'BTC/USD': 0,
-      'ETH/USD': 1,
-      'SOL/USD': 2,
-      'LINK/USD': 3,
-      'ARB/USD': 4,
-      'BNB/USD': 5,
-      'MATIC/USD': 6,
-      'OP/USD': 7,
+      'BTC/USD': 0, BTC: 0,
+      'ETH/USD': 1, ETH: 1,
+      'SOL/USD': 2, SOL: 2,
+      'LINK/USD': 3, LINK: 3,
+      'ARB/USD': 4, ARB: 4,
+      'BNB/USD': 5, BNB: 5,
+      'MATIC/USD': 6, MATIC: 6,
+      'OP/USD': 7, OP: 7,
     };
     pairsCache = { map: staticMap, indexMap: {}, raw: [] };
     pairsCacheTime = now;
@@ -212,9 +330,12 @@ async function getPairsMap() {
 
 async function pairIndexFromSymbol(symbol) {
   const { map } = await getPairsMap();
-  const idx = map[symbol.toUpperCase()];
-  if (idx === undefined) throw new Error(`Unknown pair symbol: ${symbol}`);
-  return idx;
+  const key = String(symbol || '').toUpperCase();
+  // Try direct match (BTC or BTC/USD), then quote-suffix variants
+  if (map[key] !== undefined) return map[key];
+  if (map[`${key}/USD`] !== undefined) return map[`${key}/USD`];
+  if (map[`${key}/USDC`] !== undefined) return map[`${key}/USDC`];
+  throw new Error(`Unknown pair symbol: ${symbol}`);
 }
 
 // ---------- Price feed ----------
@@ -265,7 +386,7 @@ async function ensureUsdcApproval(walletClient, amount) {
     address: USDC_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'allowance',
-    args: [address, TRADING_ADDRESS],
+    args: [address, TRADING_STORAGE_ADDRESS],
   });
 
   if (allowance >= amountRaw) return null; // Already approved
@@ -274,10 +395,15 @@ async function ensureUsdcApproval(walletClient, amount) {
     address: USDC_ADDRESS,
     abi: ERC20_ABI,
     functionName: 'approve',
-    args: [TRADING_ADDRESS, amountRaw * 100n], // Approve 100x to avoid repeated approvals
+    // Approve a large amount so the user doesn't pay gas for approval on
+    // every trade. Matches the SDK's "$100k default" approach.
+    args: [TRADING_STORAGE_ADDRESS, amountRaw * 1000n],
   });
 
   await publicClient.waitForTransactionReceipt({ hash });
+  // Brief settle delay — viem can otherwise re-use the pre-approval nonce
+  // for the next writeContract call and the RPC rejects with "nonce too low".
+  await new Promise(r => setTimeout(r, 1500));
   return hash;
 }
 
@@ -365,6 +491,7 @@ async function createMarketOrder(privateKey, {
   sl = 0,      // stop loss price (0 = none)
   reduceOnly = false,
 }) {
+  await assertBaseMainnet();
   const walletClient = walletClientFromPrivkey(privateKey);
   const trader = walletClient.account.address;
   const pairIndex = await pairIndexFromSymbol(symbol);
@@ -384,10 +511,16 @@ async function createMarketOrder(privateKey, {
   // Ensure USDC approval
   await ensureUsdcApproval(walletClient, amount);
 
+  // Next free per-pair trade slot (see getNextTradeIndex comment).
+  const tradeIndex = await getNextTradeIndex(trader, pairIndex);
+
+  // Dynamic execution fee (falls back to 0.00035 ETH).
+  const execFee = await getExecutionFeeWei();
+
   const tradeInput = {
     trader,
     pairIndex: BigInt(pairIndex),
-    index: 0n,
+    index: BigInt(tradeIndex),
     initialPosToken: 0n,
     positionSizeUSDC,
     openPrice,
@@ -398,12 +531,17 @@ async function createMarketOrder(privateKey, {
     timestamp: 0n,
   };
 
+  // Fetch fresh nonce — after the approval tx the in-memory client may still
+  // think the old nonce is current, and the RPC rejects with "nonce too low".
+  const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+
   const hash = await walletClient.writeContract({
     address: TRADING_ADDRESS,
     abi: TRADING_ABI,
     functionName: 'openTrade',
     args: [tradeInput, ORDER_TYPE.MARKET, slippageP],
-    value: EXECUTION_FEE_WEI,
+    value: execFee,
+    nonce,
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -412,6 +550,7 @@ async function createMarketOrder(privateKey, {
     tx_hash: hash,
     status: receipt.status === 'success' ? 'submitted' : 'failed',
     pair_index: pairIndex,
+    trade_index: tradeIndex,
     side: isBuy ? 'long' : 'short',
     amount,
     leverage,
@@ -428,6 +567,7 @@ async function createLimitOrder(privateKey, {
   tp = 0,
   sl = 0,
 }) {
+  await assertBaseMainnet();
   const walletClient = walletClientFromPrivkey(privateKey);
   const trader = walletClient.account.address;
   const pairIndex = await pairIndexFromSymbol(symbol);
@@ -443,10 +583,14 @@ async function createLimitOrder(privateKey, {
   // Ensure USDC approval
   await ensureUsdcApproval(walletClient, amount);
 
+  // Next free per-pair trade slot and dynamic exec fee.
+  const tradeIndex = await getNextTradeIndex(trader, pairIndex);
+  const execFee = await getExecutionFeeWei();
+
   const tradeInput = {
     trader,
     pairIndex: BigInt(pairIndex),
-    index: 0n,
+    index: BigInt(tradeIndex),
     initialPosToken: 0n,
     positionSizeUSDC,
     openPrice,
@@ -457,12 +601,15 @@ async function createLimitOrder(privateKey, {
     timestamp: 0n,
   };
 
+  const nonce = await publicClient.getTransactionCount({ address: trader, blockTag: 'pending' });
+
   const hash = await walletClient.writeContract({
     address: TRADING_ADDRESS,
     abi: TRADING_ABI,
     functionName: 'openTrade',
     args: [tradeInput, ORDER_TYPE.LIMIT, slippageP],
-    value: EXECUTION_FEE_WEI,
+    value: execFee,
+    nonce,
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -483,15 +630,17 @@ async function closePosition(privateKey, {
   trade_index,
   amount, // USDC collateral to close (full amount = full close)
 }) {
+  await assertBaseMainnet();
   const walletClient = walletClientFromPrivkey(privateKey);
   const amountRaw = parseUnits(String(amount), 6);
+  const execFee = await getExecutionFeeWei();
 
   const hash = await walletClient.writeContract({
     address: TRADING_ADDRESS,
     abi: TRADING_ABI,
     functionName: 'closeTradeMarket',
     args: [BigInt(pair_index), BigInt(trade_index), amountRaw],
-    value: EXECUTION_FEE_WEI,
+    value: execFee,
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -508,6 +657,7 @@ async function cancelLimitOrder(privateKey, {
   pair_index,
   trade_index,
 }) {
+  await assertBaseMainnet();
   const walletClient = walletClientFromPrivkey(privateKey);
 
   const hash = await walletClient.writeContract({
@@ -533,6 +683,7 @@ async function updateTpSl(privateKey, {
   take_profit = 0, // price (0 to leave unchanged)
   stop_loss = 0,   // price (0 to remove)
 }) {
+  await assertBaseMainnet();
   const walletClient = walletClientFromPrivkey(privateKey);
 
   // Fetch Pyth price update data

@@ -229,7 +229,10 @@ router.post('/orders/market', auth, async (req, res) => {
       });
     }
 
-    // Log trade
+    // Log trade (notional = collateral × leverage so main server can reward gold by volume)
+    const notionalUsd = req.dex === 'avantis'
+      ? Number(amount) * Number(leverage || 1)
+      : Number(amount); // Pacifica stores position size in USDC directly
     db.addTrade(req.playerId, {
       symbol,
       side,
@@ -238,6 +241,8 @@ router.post('/orders/market', auth, async (req, res) => {
       orderId: result.order_id || result.tx_hash,
       clientOrderId,
       status: result.error ? 'failed' : (req.dex === 'avantis' ? result.status : 'filled'),
+      dex: req.dex,
+      notional_usd: notionalUsd,
     });
 
     res.json(result);
@@ -284,6 +289,9 @@ router.post('/orders/limit', auth, async (req, res) => {
       });
     }
 
+    const notionalUsdLimit = req.dex === 'avantis'
+      ? Number(amount) * Number(leverage || 1)
+      : Number(amount);
     db.addTrade(req.playerId, {
       symbol,
       side,
@@ -293,6 +301,8 @@ router.post('/orders/limit', auth, async (req, res) => {
       orderId: result.order_id || result.tx_hash,
       clientOrderId,
       status: result.error ? 'failed' : 'open',
+      dex: req.dex,
+      notional_usd: notionalUsdLimit,
     });
 
     res.json(result);

@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const routes = require('./routes');
 
-const PORT = process.env.FUTURES_PORT || 4001;
+const PORT = process.env.FUTURES_PORT || 3999;
 
 const app = express();
 app.use(cors());

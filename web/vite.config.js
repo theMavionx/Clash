@@ -34,13 +34,13 @@ export default defineConfig({
       'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
     },
     proxy: {
-      // Futures (Avantis / Pacifica custodial) — separate server-futures on :4001.
+      // Futures (Avantis / Pacifica custodial) — separate server-futures on :3999.
       // Must be declared BEFORE '/api' because vite matches in insertion order.
       '/api/futures': {
-        target: process.env.VITE_FUTURES_PROXY || process.env.VITE_API_PROXY || 'http://localhost:4001',
+        target: process.env.VITE_FUTURES_PROXY || process.env.VITE_API_PROXY || 'http://localhost:3999',
         changeOrigin: true,
         // If VITE_FUTURES_PROXY isn't set but VITE_API_PROXY is (prod nginx),
-        // prod nginx already rewrites /api/futures → :4001, so no path rewrite.
+        // prod nginx already rewrites /api/futures → :3999, so no path rewrite.
       },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
       '/ws': {

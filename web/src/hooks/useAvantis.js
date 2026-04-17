@@ -10,6 +10,114 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 const FUTURES_API = '/api/futures';
 const HEADERS_BASE = { 'x-dex': 'avantis' };
 
+// Avantis returns values scaled by 10^10 for prices/leverage and 10^6 for USDC.
+// FuturesPanel expects Pacifica-shape — we flatten both into the same keys
+// (symbol, side 'bid'|'ask', amount, entry_price, margin) so the UI doesn't
+// need to know which DEX it came from.
+function pairIndexToSymbol(pairIdx, markets) {
+  // markets from /markets comes back as array of { pair: "BTC/USD", ... } or similar.
+  // We also keep a best-effort fallback map of index→symbol for when markets
+  // hasn't been hydrated yet.
+  const hit = Array.isArray(markets) ? markets.find(m => Number(m.index) === Number(pairIdx) || Number(m.pair_index) === Number(pairIdx)) : null;
+  if (hit) return (hit.pair || hit.symbol || '').split('/')[0].toUpperCase();
+  const fallback = { 0: 'BTC', 1: 'ETH', 2: 'SOL', 3: 'AVAX', 4: 'MATIC' };
+  return fallback[pairIdx] || `#${pairIdx}`;
+}
+
+function normalizePosition(p, markets) {
+  // Avantis trade struct (from Core API): { pairIndex, buy, initialPosToken,
+  // positionSizeUSDC, openPrice, leverage, tp, sl, index } — all scaled.
+  const pairIdx = p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex;
+  const tradeIdx = p.index ?? p.trade?.index;
+  const raw = p.trade || p;
+  const symbol = p.symbol || pairIndexToSymbol(pairIdx, markets);
+  const buy = typeof raw.buy === 'boolean' ? raw.buy : (p.side === 'long' || p.side === 'bid');
+  const collateral = Number(raw.positionSizeUSDC ?? p.collateral ?? p.margin ?? 0) / 1e6;
+  const openPrice = Number(raw.openPrice ?? p.openPrice ?? p.entry_price ?? 0) / 1e10;
+  const leverage = Number(raw.leverage ?? p.leverage ?? 1) / 1e10;
+  const tp = Number(raw.tp ?? p.tp ?? 0) / 1e10;
+  const sl = Number(raw.sl ?? p.sl ?? 0) / 1e10;
+  const notional = collateral * leverage;
+  const amount = openPrice > 0 ? notional / openPrice : 0;
+  return {
+    symbol,
+    side: buy ? 'bid' : 'ask',
+    amount: String(amount),
+    entry_price: String(openPrice),
+    margin: String(collateral),
+    leverage,
+    tp: tp || null,
+    sl: sl || null,
+    is_isolated: true, // Avantis is always isolated per-trade
+    // Extras carried through for close/cancel/tpsl:
+    pair_index: Number(pairIdx),
+    trade_index: Number(tradeIdx),
+    _raw: p,
+  };
+}
+
+function normalizeOrder(o, markets) {
+  const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
+  const tradeIdx = o.index ?? o.trade?.index;
+  const raw = o.trade || o;
+  const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
+  const buy = typeof raw.buy === 'boolean' ? raw.buy : (o.side === 'long' || o.side === 'bid');
+  const collateral = Number(raw.positionSizeUSDC ?? o.collateral ?? 0) / 1e6;
+  const price = Number(raw.openPrice ?? o.price ?? 0) / 1e10;
+  const leverage = Number(raw.leverage ?? o.leverage ?? 1) / 1e10;
+  const notional = collateral * leverage;
+  const amount = price > 0 ? notional / price : 0;
+  return {
+    symbol,
+    side: buy ? 'bid' : 'ask',
+    amount: String(amount),
+    price: String(price),
+    ip: String(price),
+    d: buy ? 'bid' : 'ask',
+    s: symbol,
+    order_id: o.order_id || o.id || tradeIdx,
+    is_isolated: true,
+    pair_index: Number(pairIdx),
+    trade_index: Number(tradeIdx),
+    _raw: o,
+  };
+}
+
+function normalizeMarkets(raw) {
+  // avantis /markets returns { pairs: [{from, to, groupIndex, ...}], count }
+  // Map to Pacifica-compatible shape so SymbolPicker / FuturesPanel can read
+  // .symbol and .max_leverage without special-casing.
+  const list = Array.isArray(raw) ? raw : (raw?.pairs || raw?.data || []);
+  return list.map((p, i) => ({
+    symbol: p.symbol || `${p.from || p.base}`.toUpperCase(),
+    pair: p.pair || `${p.from || p.base}/${p.to || p.quote}`,
+    index: i,
+    pair_index: p.index ?? i,
+    max_leverage: String(p.maxLeverage || p.max_leverage || 100),
+    lot_size: String(p.lotSize || p.lot_size || '0.0001'),
+    tick_size: String(p.tickSize || p.tick_size || '0.01'),
+    funding_rate: p.fundingRate || p.funding_rate || '0',
+    _raw: p,
+  }));
+}
+
+function normalizePrices(raw) {
+  // /prices returns { "BTC/USD": 67234.5, ... } or array of {pair, price}
+  if (Array.isArray(raw)) {
+    return raw.map(p => ({
+      symbol: (p.symbol || p.pair || '').split('/')[0].toUpperCase(),
+      mark: String(p.price || p.mark || 0),
+    }));
+  }
+  if (raw && typeof raw === 'object') {
+    return Object.entries(raw).map(([pair, price]) => ({
+      symbol: String(pair).split('/')[0].toUpperCase(),
+      mark: String(price),
+    }));
+  }
+  return [];
+}
+
 function api(path, opts = {}) {
   const token = window._playerToken;
   const headers = { ...HEADERS_BASE, ...(opts.headers || {}) };
@@ -72,7 +180,7 @@ export function useAvantis() {
     try {
       const r = await fetch(`${FUTURES_API}/markets?dex=avantis`);
       const j = await r.json();
-      const list = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const list = normalizeMarkets(j?.pairs || j?.data || j);
       setMarkets(list);
       marketsRef.current = list;
     } catch {}
@@ -82,8 +190,7 @@ export function useAvantis() {
     try {
       const r = await fetch(`${FUTURES_API}/prices?dex=avantis`);
       const j = await r.json();
-      const list = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
-      setPrices(list);
+      setPrices(normalizePrices(j?.prices || j?.data || j));
     } catch {}
   }, []);
 
@@ -100,7 +207,8 @@ export function useAvantis() {
     if (!walletAddr) return;
     try {
       const j = await apiJson('/positions');
-      const list = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const list = raw.map(p => normalizePosition(p, marketsRef.current));
       setPositions(list);
       setDataReady(true);
       window._openPositionsCount = list.length;
@@ -111,7 +219,8 @@ export function useAvantis() {
     if (!walletAddr) return;
     try {
       const j = await apiJson('/orders');
-      const list = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const raw = Array.isArray(j?.data) ? j.data : Array.isArray(j) ? j : [];
+      const list = raw.map(o => normalizeOrder(o, marketsRef.current));
       setOrders(list);
     } catch {}
   }, [walletAddr]);
