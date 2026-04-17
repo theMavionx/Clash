@@ -90,6 +90,49 @@ db.exec(`
   );
 `);
 
+// ---------- Pre-statement migrations ----------
+// These MUST run before any db.prepare() call. better-sqlite3 validates FK
+// references and column names eagerly at prepare-time — any mismatch with
+// the actual table shape throws and crashes module loading.
+
+// wallets migration: add dex/chain columns if missing (old DBs from before
+// the composite PK / multi-DEX support).
+try { db.exec("ALTER TABLE wallets ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
+try { db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'"); } catch {}
+
+// trade_history migration: add dex + notional_usd so the main server can
+// attribute gold rewards per-DEX and by traded volume.
+try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
+
+// FK-mismatch migration: old deposits/trade_history rows reference
+// wallets(player_id), but that column is no longer UNIQUE after we switched
+// wallets PK to composite (player_id, dex). SQLite validates FKs lazily at
+// prepare-time, so any statement against those tables errors with
+// "foreign key mismatch" until the FK is stripped. Fix by rebuilding the
+// tables without the FK clause.
+function rebuildTableIfHasFK(tableName) {
+  try {
+    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(tableName)?.sql || '';
+    if (!sql.includes('REFERENCES wallets')) return; // already clean
+    const newSql = sql.replace(/REFERENCES\s+wallets\s*\([^)]+\)/gi, '');
+    db.exec('PRAGMA foreign_keys = OFF;');
+    const rebuild = db.transaction(() => {
+      db.exec(`ALTER TABLE ${tableName} RENAME TO ${tableName}_old_fk;`);
+      db.exec(newSql);
+      db.exec(`INSERT INTO ${tableName} SELECT * FROM ${tableName}_old_fk;`);
+      db.exec(`DROP TABLE ${tableName}_old_fk;`);
+    });
+    rebuild();
+    db.exec('PRAGMA foreign_keys = ON;');
+    console.log(`[futures.db] Rebuilt ${tableName} without FK.`);
+  } catch (e) {
+    console.error(`[futures.db] FK rebuild for ${tableName} failed:`, e.message);
+  }
+}
+rebuildTableIfHasFK('deposits');
+rebuildTableIfHasFK('trade_history');
+
 // ---------- Prepared Statements ----------
 
 const stmts = {
@@ -186,19 +229,6 @@ module.exports = {
   getTrades,
 };
 
-// Migrate existing wallets table if dex/chain columns are missing
-try {
-  const cols = db.prepare("PRAGMA table_info(wallets)").all().map(c => c.name);
-  if (!cols.includes('dex')) {
-    db.exec("ALTER TABLE wallets ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'");
-  }
-  if (!cols.includes('chain')) {
-    db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solana'");
-  }
-} catch (e) {
-  // Columns may already exist or table was freshly created with them
-}
-
 // One-time encryption migration: any row where secret_key doesn't start with
 // our ENC_MARKER is legacy plaintext — encrypt in place.
 try {
@@ -214,36 +244,4 @@ try {
 } catch (e) {
   console.error('[futures.db] Encryption migration failed:', e.message);
 }
-
-// trade_history migration: add dex + notional_usd so the main server can
-// attribute gold rewards per-DEX and by traded volume.
-try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
-try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
-
-// FK-mismatch migration: old deposits/trade_history rows reference
-// wallets(player_id), but that column is no longer UNIQUE after we switched
-// wallets PK to composite (player_id, dex). SQLite validates FKs lazily at
-// prepare-time, so any statement against those tables errors with
-// "foreign key mismatch" until the FK is stripped. Fix by rebuilding the
-// tables without the FK clause.
-function rebuildTableIfHasFK(tableName) {
-  try {
-    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(tableName)?.sql || '';
-    if (!sql.includes('REFERENCES wallets')) return; // already clean
-    const newSql = sql.replace(/REFERENCES\s+wallets\s*\([^)]+\)/gi, '');
-    db.exec('PRAGMA foreign_keys = OFF;');
-    const rebuild = db.transaction(() => {
-      db.exec(`ALTER TABLE ${tableName} RENAME TO ${tableName}_old_fk;`);
-      db.exec(newSql);
-      db.exec(`INSERT INTO ${tableName} SELECT * FROM ${tableName}_old_fk;`);
-      db.exec(`DROP TABLE ${tableName}_old_fk;`);
-    });
-    rebuild();
-    db.exec('PRAGMA foreign_keys = ON;');
-    console.log(`[futures.db] Rebuilt ${tableName} without FK.`);
-  } catch (e) {
-    console.error(`[futures.db] FK rebuild for ${tableName} failed:`, e.message);
-  }
-}
-rebuildTableIfHasFK('deposits');
-rebuildTableIfHasFK('trade_history');
+// (Note: trade_history + FK-mismatch migrations moved above prepared statements.)
