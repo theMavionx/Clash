@@ -51,9 +51,10 @@ const STOCK_SYMBOLS = new Set([
   'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
   'JPM','BAC','GS','WFC','V','MA','CRCL',
 ]);
-// Commodities map (Avantis uses CL/NATGAS/COPPER/GOLD/SILVER; Parqet carries
-// the big ones by ticker). Unknown → letter fallback.
-const COMMODITY_SYMBOLS = new Set(['CL','COPPER','GOLD','SILVER','NATGAS','BRENT']);
+// Commodities map — only ones Parqet actually serves (verified via probe).
+// BRENT/WTI/USOILSPOT 404 there, so we skip the dead hop and go to letter
+// fallback instead. Add locally in /tokens/ if we want logos for those.
+const COMMODITY_SYMBOLS = new Set(['CL','COPPER','GOLD','SILVER','NATGAS']);
 
 // Canonicalise a display symbol (strip "/USD" pair suffix, upper-case) so
 // lookup keys are stable no matter which hook produced the value.
@@ -61,11 +62,49 @@ function canonSym(sym) {
   return String(sym || '').toUpperCase().split('/')[0].trim();
 }
 
-// Module-level caches: once a URL is known-good (or all sources failed) for a
-// symbol, NEVER hit the network again from any TokenIcon mount. This prevents
-// the 1000+ repeated 404s on re-renders / picker scrolls.
-const logoCache = new Map(); // sym → resolved URL
-const logoFailed = new Set(); // sym → definitely no logo found
+// Persisted logo cache. Module-level Maps are rehydrated from localStorage so
+// a returning user doesn't re-probe CDNs for every symbol on every page load.
+// Shape in storage: { [sym]: { url: string | null, ts: number } }
+//   url === null means "all sources 404'd — show letter fallback"
+//   url === 'string' means "this URL resolved, use it"
+// TTL = 7 days so we pick up new icons eventually without being aggressive.
+const LOGO_CACHE_KEY = 'clash_token_logos_v1';
+const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const logoCache = new Map(); // sym → url
+const logoFailed = new Set(); // sym → tried everything, no logo
+
+(function hydrateLogoCacheFromStorage() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const raw = localStorage.getItem(LOGO_CACHE_KEY);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    const now = Date.now();
+    for (const [sym, entry] of Object.entries(obj || {})) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (now - (entry.ts || 0) > LOGO_CACHE_TTL_MS) continue; // expired
+      if (entry.url) logoCache.set(sym, entry.url);
+      else logoFailed.add(sym);
+    }
+  } catch {}
+})();
+
+// Debounced writer — avoid thrashing localStorage on every image onload.
+let logoPersistTimer = null;
+function persistLogoCache() {
+  if (typeof localStorage === 'undefined') return;
+  if (logoPersistTimer) clearTimeout(logoPersistTimer);
+  logoPersistTimer = setTimeout(() => {
+    try {
+      const obj = {};
+      const now = Date.now();
+      for (const [sym, url] of logoCache) obj[sym] = { url, ts: now };
+      for (const sym of logoFailed) if (!(sym in obj)) obj[sym] = { url: null, ts: now };
+      localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(obj));
+    } catch {}
+  }, 500);
+}
 
 function tokenLogoSources(sym) {
   const s = canonSym(sym);
@@ -75,12 +114,12 @@ function tokenLogoSources(sym) {
     `/tokens/${s}.png`,
   ];
   if (STOCK_SYMBOLS.has(s) || COMMODITY_SYMBOLS.has(s)) {
-    // Parqet covers US equities and major commodities.
+    // Parqet covers US equities + major commodities (verified by probing).
     srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
   } else {
-    // Crypto: Coincap first (broad coverage, small PNGs), Spothq as backup.
+    // Crypto: Coincap PNG covers ~53% of Avantis symbols. jsDelivr/spothq
+    // added 0 extra coverage in the probe, so it was removed.
     srcs.push(`https://assets.coincap.io/assets/icons/${low}@2x.png`);
-    srcs.push(`https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@latest/svg/color/${low}.svg`);
   }
   return srcs;
 }
@@ -107,14 +146,17 @@ const TokenIcon = ({sym, size = 20}) => {
       setSrcIdx(srcIdx + 1);
     } else {
       logoFailed.add(canon);
+      persistLogoCache();
       setFailed(true);
     }
   }, [srcIdx, sources.length, canon]);
 
-  const onImgLoad = useCallback((e) => {
-    // Only cache successful remote URLs — local /tokens may change at build.
+  const onImgLoad = useCallback(() => {
     const url = sources[srcIdx];
-    if (url && !logoCache.has(canon)) logoCache.set(canon, url);
+    if (!url) return;
+    if (logoCache.get(canon) === url) return;
+    logoCache.set(canon, url);
+    persistLogoCache();
   }, [sources, srcIdx, canon]);
 
   return (
@@ -692,9 +734,20 @@ function FuturesPanel() {
   // Cleanup leverage debounce timer on unmount
   useEffect(() => () => clearTimeout(levTimerRef.current), []);
 
-  // Sync leverage from Pacifica settings when symbol changes or settings load
+  // On symbol change: clear stale input so the user doesn't accidentally fire
+  // an order sized for the previous pair. Leverage defaults to the server-
+  // tracked value (Pacifica) or clamps to the new pair's maxLev (Avantis).
   useEffect(() => {
-    if (leverageSettings[symbol]) setLeverage(leverageSettings[symbol]);
+    setAmount('');
+    setSizePct(0);
+    if (leverageSettings[symbol]) {
+      setLeverage(leverageSettings[symbol]);
+    } else {
+      // Clamp the carried-over leverage to the new pair's cap.
+      setLeverage(lev => Math.min(lev, maxLev));
+    }
+    // maxLev is derived from `symbol`, so it's safe to depend only on symbol.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, leverageSettings]);
 
   const currentPrice = useMemo(() => {
@@ -736,24 +789,37 @@ function FuturesPanel() {
   const handleLeverageChange = useCallback((val) => {
     const v = Math.min(Number(val), maxLev);
     setLeverage(v);
-    // Debounce — send to API only after 2s of no movement
+    // Pacifica has an account-level leverage endpoint — debounce + send after
+    // the slider settles. Avantis takes leverage per-trade, so we skip the
+    // round-trip entirely.
+    if (dex === 'avantis') return;
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
-  }, [maxLev, symbol, setLeverageApi]);
+  }, [maxLev, symbol, setLeverageApi, dex]);
 
   const handleTrade = useCallback(async (side) => {
-    const qty = amountInUsdc ? tokenAmount : amount;
-    if (!qty || parseFloat(qty) <= 0) return;
-    // Avantis on-chain min notional = $100. If the user's position size is
-    // below that, the tx will revert (BELOW_MIN_POS). Catch it here with a
-    // clear message so they can bump leverage or collateral.
+    // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
+    // Avantis API: 3rd arg is COLLATERAL in USDC — notional / leverage.
+    // The UI's `amount` (in USDC mode) is a NOTIONAL figure (buying power),
+    // so for Avantis we divide by leverage to get actual collateral.
+    let qty;
     if (dex === 'avantis') {
-      const collateralUsdc = amountInUsdc ? parseFloat(amount) : parseFloat(tokenAmount) * (currentPrice || 0);
-      const notional = collateralUsdc * leverage;
-      if (notional > 0 && notional < 100) {
-        alert(`Avantis requires position size ≥ $100. Yours: $${notional.toFixed(2)} (${collateralUsdc.toFixed(2)} USDC × ${leverage}x). Increase leverage or collateral.`);
+      // Notional USDC that the user wants to open:
+      const notionalUsdc = amountInUsdc
+        ? parseFloat(amount)
+        : parseFloat(tokenAmount) * (currentPrice || 0);
+      if (!notionalUsdc || notionalUsdc <= 0) return;
+      // Avantis on-chain min notional = $100. Pre-check so the user isn't
+      // hit with a BELOW_MIN_POS revert.
+      if (notionalUsdc < 100) {
+        alert(`Avantis requires position size ≥ $100. Yours: $${notionalUsdc.toFixed(2)}. Increase amount or leverage.`);
         return;
       }
+      const collateralUsdc = notionalUsdc / leverage;
+      qty = String(collateralUsdc.toFixed(6));
+    } else {
+      qty = amountInUsdc ? tokenAmount : amount;
+      if (!qty || parseFloat(qty) <= 0) return;
     }
     // Pacifica-only: flush any pending leverage change before placing the
     // order so the server sees the right leverage on fill. Avantis takes
@@ -940,11 +1006,17 @@ function FuturesPanel() {
               <div style={{fontSize: 48, fontWeight: 900, color: '#5C3A21', textAlign: 'center', padding: '10px 0'}}>{leverage}x</div>
               <input type="range" min="1" max={maxLev} value={leverage} className="grad-slider" onChange={e => handleLeverageChange(e.target.value)} style={{...S.slider, '--val': `${maxLev > 1 ? ((leverage - 1) / (maxLev - 1)) * 100 : 0}%`}} />
               <div style={S.sliderLabels}><span>1x</span><span>{Math.floor(maxLev/4)}x</span><span>{Math.floor(maxLev/2)}x</span><span>{Math.floor(maxLev*3/4)}x</span><span>{maxLev}x</span></div>
-              <div style={{display: 'flex', gap: 6, marginTop: 6}}>
-                {[1, 5, 10, 20, 50].filter(v => v <= maxLev).map(v => (
-                  <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
-                    onClick={() => handleLeverageChange(v)}>{v}x</button>
-                ))}
+              <div style={{display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap'}}>
+                {/* Presets auto-adapt: always include the pair's own maxLev as
+                    a shortcut so users can one-tap the ceiling (e.g. 75x for
+                    BTC on Avantis). Dedup + filter keeps the row tidy. */}
+                {Array.from(new Set([1, 5, 10, 25, 50, 75, 100, 200, maxLev]))
+                  .filter(v => v <= maxLev)
+                  .sort((a, b) => a - b)
+                  .map(v => (
+                    <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
+                      onClick={() => handleLeverageChange(v)}>{v}x</button>
+                  ))}
               </div>
               {leverage > maxLev * 0.5 && (
                 <div style={{fontSize: 11, color: '#E53935', fontWeight: 700, textAlign: 'center', marginTop: 4}}>

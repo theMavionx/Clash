@@ -95,18 +95,27 @@ function normalizeMarkets(raw) {
   return list.map((p, i) => {
     const from = String(p.from || p.base || '').toUpperCase();
     const to = String(p.to || p.quote || 'USD').toUpperCase();
-    const fullPair = from && to ? `${from}/${to}` : String(p.symbol || '').toUpperCase();
     // Unique display/state key. For crypto & equities (quoted in USD) the base
     // is already unique — keep "ETH", "AAPL". For FX pairs where USD itself
     // is the base (USD/JPY, USD/CAD, USD/CHF…) using just "USD" would collapse
     // all 14 into one row, so concatenate instead → "USDJPY", "USDCAD".
-    const symbol = from === 'USD' && to && to !== 'USD' ? `${from}${to}` : from || fullPair;
+    const symbol = from === 'USD' && to && to !== 'USD' ? `${from}${to}` : from;
+    // Display convention: put the traded instrument first, USD second — same
+    // as every crypto UI (BTC/USD, ETH/USD). For FX pairs where Avantis lists
+    // USD as base (USD/JPY), flip the label to JPY/USD so it fits the mental
+    // model. The on-chain pairIndex and price semantics stay unchanged.
+    const fullPair = from === 'USD' && to && to !== 'USD'
+      ? `${to}/${from}`
+      : (from && to ? `${from}/${to}` : String(p.symbol || '').toUpperCase());
+    // Icon base: for flipped FX pairs use the non-USD side (JPY, CAD…) so the
+    // token icon reflects the currency displayed first.
+    const iconBase = from === 'USD' && to && to !== 'USD' ? to : from;
     const maxLev = p.leverages?.maxLeverage ?? p.maxLeverage ?? p.max_leverage ?? 100;
     const minLev = p.pairMinLeverage ?? p.leverages?.minLeverage ?? 1;
     return {
       symbol,
-      pair: p.pair || fullPair,
-      base: from,
+      pair: fullPair, // always our computed label (with FX flip when applicable)
+      base: iconBase, // drives TokenIcon lookup
       quote: to,
       index: i,
       pair_index: p.index ?? i,
@@ -225,7 +234,17 @@ export function useAvantis() {
     try {
       const r = await fetch(`${FUTURES_API}/prices?dex=avantis`);
       const j = await r.json();
-      setPrices(normalizePrices(j?.prices || j?.data || j));
+      const fresh = normalizePrices(j?.prices || j?.data || j);
+      // Merge with previous state — Pyth occasionally omits a feed from a
+      // batch response, which on a blind replace would flash "—" in the UI.
+      // Keeping the last-known price for any symbol not present this tick is
+      // the least-surprising behaviour (still updates when Pyth returns).
+      setPrices(prev => {
+        if (!fresh.length) return prev;
+        const byKey = new Map((prev || []).map(p => [p.symbol, p]));
+        for (const p of fresh) byKey.set(p.symbol, p);
+        return Array.from(byKey.values());
+      });
     } catch {}
   }, []);
 
@@ -367,14 +386,18 @@ export function useAvantis() {
     } catch (e) { setError(e.message); }
   }, [walletAddr]);
 
-  // Avantis doesn't support changing leverage/margin-mode on open positions.
-  // Keep the functions so the FuturesPanel interface stays uniform with Pacifica.
+  // On Avantis, leverage is a per-trade argument (5th param to placeMarketOrder
+  // / placeLimitOrder) — there is no account-level "set leverage" endpoint.
+  // The UI debounces a call here when the slider moves; make it a silent no-op
+  // so the user isn't yelled at while just picking leverage.
   const setLeverage = useCallback(async () => {
-    setError('Avantis leverage is set per trade at open time — cannot change on open positions.');
+    return { ok: true };
   }, []);
 
+  // Avantis has no cross-margin mode — every trade is isolated. Silent no-op;
+  // the UI renders a read-only "Isolated" badge instead of a toggle.
   const setMarginMode = useCallback(async () => {
-    setError('Avantis does not support changing margin mode.');
+    return { ok: true };
   }, []);
 
   // Deposit = user sends USDC + ETH to their custodial Base address manually.

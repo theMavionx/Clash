@@ -531,11 +531,19 @@ async function fetchYesterdayPrices(feedIds) {
   return result;
 }
 
+// In-memory cache for /prices. Clients poll every 5s, and we don't need to
+// hammer Pyth on each call. Also holds the last-known values so transient
+// batch failures don't surface as gaps.
+let pricesCache = { data: null, ts: 0, latest: {} };
+
 async function getPrices() {
   // Avantis socket data doesn't carry live prices — only pair/group config.
   // The prices live on Pyth (Avantis's price source). For each pair we grab
   // its feedId from pairInfos, then batch-query Pyth Hermes for the latest
   // price. We return a Pacifica-compatible map: { "ETH/USD": { mark, yesterday_price } }.
+  const now = Date.now();
+  if (pricesCache.data && now - pricesCache.ts < 2000) return pricesCache.data;
+
   try {
     const { raw } = await getPairsMap();
     const feedIds = [];
@@ -548,22 +556,27 @@ async function getPrices() {
     }
     if (!feedIds.length) return {};
 
-    // Batch current prices in chunks of 25.
-    const latest = {};
+    // Start from last-known latest prices so a partial Pyth response doesn't
+    // erase existing values (Hermes occasionally omits feeds in a batch).
+    const latest = { ...pricesCache.latest };
     const chunks = [];
     for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
-    await Promise.all(chunks.map(async chunk => {
+
+    async function fetchChunk(chunk, attempt = 0) {
       const qs = chunk.map(id => `ids[]=${id}`).join('&');
       try {
         const res = await fetch(`${PYTH_HERMES}/v2/updates/price/latest?${qs}&parsed=true`);
-        if (!res.ok) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const j = await res.json();
         for (const p of (j.parsed || [])) {
           const price = Number(p.price.price) * Math.pow(10, p.price.expo);
           latest[p.id.replace(/^0x/, '')] = price;
         }
-      } catch {}
-    }));
+      } catch (e) {
+        if (attempt < 2) return fetchChunk(chunk, attempt + 1);
+      }
+    }
+    await Promise.all(chunks.map(c => fetchChunk(c)));
 
     const yesterday = await fetchYesterdayPrices(feedIds);
 
@@ -575,10 +588,12 @@ async function getPrices() {
       if (!pair || !latest[fid]) continue;
       out[pair] = { mark: latest[fid], yesterday_price: yesterday[fid] || 0 };
     }
+    pricesCache = { data: out, ts: now, latest };
     return out;
   } catch (e) {
     console.error('getPrices (avantis/pyth) failed:', e?.message || e);
-    return {};
+    // On outright failure, return whatever we had last time rather than {}.
+    return pricesCache.data || {};
   }
 }
 
