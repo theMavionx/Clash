@@ -1,9 +1,7 @@
 import { PrivyProvider } from '@privy-io/react-auth';
-import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base } from 'viem/chains';
 
-const solanaConnectors = toSolanaWalletConnectors();
 // publicnode has no SSL/cert issues and is open. api.mainnet-beta fails with
 // ERR_CERT_AUTHORITY_INVALID on some networks, breaking Privy's send-TX flow.
 const SOLANA_RPC_HTTP = 'https://solana-rpc.publicnode.com';
@@ -20,26 +18,22 @@ export default function PrivyAuthProvider({ children }) {
     <PrivyProvider
       appId={appId}
       config={{
-        // Email + external wallet. 'wallet' enables the MetaMask / Coinbase /
-        // WalletConnect / Phantom chooser inside the Privy modal — covers
-        // both EVM (Avantis) and Solana (Pacifica) identities.
-        loginMethods: ['email', 'wallet'],
+        // Email only. External wallet connections happen OUTSIDE Privy:
+        //   Pacifica → Solana wallet-adapter modal (user's own wallet)
+        //   Avantis  → custom EvmWalletModal (window.ethereum detection)
+        // This gives us full UI control and avoids Privy's "unified" modal
+        // that was hanging with ethereum-and-solana.
+        loginMethods: ['email'],
         appearance: {
           theme: 'light',
           accentColor: '#e8b830',
           logo: '/icons/icon.jpg',
-          walletChainType: 'ethereum-and-solana',
         },
-        // Auto-create BOTH embedded wallets on sign-up. Pacifica reads the
-        // Solana one, Avantis reads the Ethereum (Base) one.
+        // Auto-create BOTH embedded wallets on email sign-up. Pacifica reads
+        // the Solana one, Avantis reads the Ethereum (Base) one.
         embeddedWallets: {
           solana:   { createOnLogin: 'users-without-wallets' },
           ethereum: { createOnLogin: 'users-without-wallets' },
-        },
-        // External wallet connectors. Solana → wallet-adapter. EVM auto-
-        // detected by Privy (MetaMask/Rabby/Coinbase/WalletConnect).
-        externalWallets: {
-          solana: { connectors: solanaConnectors },
         },
         // Default EVM chain for trading = Base mainnet (Avantis runs there).
         defaultChain: base,

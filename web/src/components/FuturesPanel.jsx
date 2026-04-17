@@ -526,6 +526,7 @@ function FuturesPanel() {
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
+  const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
   const [bottomTab, setBottomTab] = useState('positions');
   const [expandedPos, setExpandedPos] = useState(null);
@@ -1389,8 +1390,54 @@ function FuturesPanel() {
           </div>
         )}
 
-        {/* Withdraw — Pacifica only. Avantis custodial withdrawals TBD. */}
-        {dex !== 'avantis' && available > 0 && (
+        {/* Withdraw — Pacifica: withdraw from vault to user's Solana wallet.
+            Avantis: ERC20 transfer from custodial Base wallet to a user-
+            supplied address. Available funds differ per flow. */}
+        {dex === 'avantis' ? (
+          (walletUsdc || 0) > 0 && (
+            <div style={S.fullCard}>
+              <div style={S.row}>
+                <span style={{...S.label, color: '#0369A1'}}>Withdraw USDC</span>
+                <span style={S.detail}>Custodial: ${(walletUsdc || 0).toFixed(2)}</span>
+              </div>
+              <input
+                type="text"
+                placeholder="Destination Base address (0x…)"
+                value={withdrawTo}
+                onChange={e => setWithdrawTo(e.target.value.trim())}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                style={{...S.input, width: '100%', padding: '8px 10px', fontSize: 12, fontFamily: 'monospace'}}
+              />
+              <div style={{display: 'flex', gap: 6, alignItems: 'stretch', marginTop: 6}}>
+                <input type="number" placeholder="Amount USDC" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
+                  style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+                <button
+                  style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}}
+                  onClick={() => setWithdrawAmt(String(Math.floor((walletUsdc || 0) * 100) / 100))}
+                >MAX</button>
+                <button
+                  style={{
+                    flex: 2, whiteSpace: 'nowrap', padding: '8px 4px',
+                    background: '#0EA5E9', color: '#fff',
+                    border: '2px solid #0284C7', borderRadius: 8,
+                    fontWeight: 900, fontSize: 12, cursor: 'pointer',
+                    boxShadow: '0 2px 0 #0284C7',
+                  }}
+                  onClick={async () => {
+                    const r = await withdraw(withdrawAmt, withdrawTo);
+                    if (!r?.error) { setWithdrawAmt(''); }
+                  }}
+                  disabled={loading || !withdrawAmt || !withdrawTo}
+                >{loading ? '...' : 'Withdraw'}</button>
+              </div>
+              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+                Sends USDC to the entered Base address. Close positions first to free locked collateral.
+              </span>
+            </div>
+          )
+        ) : (available > 0 && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
@@ -1408,7 +1455,7 @@ function FuturesPanel() {
               </button>
             </div>
           </div>
-        )}
+        ))}
 
         {/* Account stats */}
         <div style={S.fullCard}>

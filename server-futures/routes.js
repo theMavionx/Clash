@@ -467,16 +467,27 @@ router.post('/tpsl', auth, async (req, res) => {
 // ==================== WITHDRAW ====================
 
 router.post('/withdraw', auth, async (req, res) => {
-  if (req.dex === 'avantis') {
-    return res.status(400).json({ error: 'Avantis does not use a vault. Close positions to withdraw USDC to your wallet.' });
-  }
   try {
     const wallet = db.getWallet(req.playerId, req.dex);
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    const { amount } = req.body;
+    const { amount, to } = req.body;
     if (!amount || parseFloat(amount) <= 0) {
       return res.status(400).json({ error: 'amount required' });
+    }
+
+    if (req.dex === 'avantis') {
+      // For Avantis this is a plain ERC20 transfer from the custodial wallet
+      // to the user-supplied Base address.
+      const toAddress = to || '';
+      if (!/^0x[0-9a-fA-F]{40}$/.test(toAddress)) {
+        return res.status(400).json({ error: 'Valid Base destination address required' });
+      }
+      const result = await avantis.withdrawUsdc(wallet.secret_key, {
+        toAddress,
+        amount: parseFloat(amount),
+      });
+      return res.json(result);
     }
 
     const result = await pacifica.withdraw(wallet.secret_key, { amount: parseFloat(amount) });

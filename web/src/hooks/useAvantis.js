@@ -349,10 +349,35 @@ export function useAvantis() {
     return { error: 'Manual deposit required' };
   }, [walletAddr]);
 
-  const withdraw = useCallback(async () => {
-    setError('Avantis withdrawals are not yet automated. Close positions to free USDC.');
-    return { error: 'Not supported' };
-  }, []);
+  // Withdraw USDC from the custodial Base wallet to any user-specified Base
+  // address. FuturesPanel passes (amount, destinationAddress).
+  const withdraw = useCallback(async (amount, to) => {
+    if (!walletAddr) return { error: 'No wallet' };
+    if (!to || !/^0x[0-9a-fA-F]{40}$/.test(to)) {
+      setError('Enter a valid Base (0x...) destination address');
+      return { error: 'Bad address' };
+    }
+    if (!amount || parseFloat(amount) <= 0) {
+      setError('Enter a positive amount');
+      return { error: 'Bad amount' };
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await apiJson('/withdraw', {
+        method: 'POST',
+        body: { amount: String(amount), to },
+      });
+      fetchBalance();
+      fetchAccount();
+      return res;
+    } catch (e) {
+      setError(e.message);
+      return { error: e.message };
+    } finally {
+      setLoading(false);
+    }
+  }, [walletAddr, fetchBalance, fetchAccount]);
 
   const activate = useCallback(async () => {
     // Avantis /activate is a no-op on the backend — nothing to do.

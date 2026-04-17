@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { usePrivy, useWallets as usePrivyAllWallets } from '@privy-io/react-auth';
+import { usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
 import { useWallets as usePrivySolanaWallets, useCreateWallet } from '@privy-io/react-auth/solana';
+import EvmWalletModal from './EvmWalletModal';
 
 function Spinner({ label }) {
   return (
@@ -27,13 +28,17 @@ import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 // RegisterPanel is showing. This prevents deadlocks where the spinner hides
 // the login button, so the effect never fires.
 //
-// Resolves wallet address per DEX:
-//   pacifica → Solana embedded wallet (walletClientType='privy', chainType='solana')
-//   avantis  → Ethereum embedded wallet (walletClientType='privy', chainType='ethereum')
+// Resolves Privy embedded wallet address per DEX:
+//   pacifica → useWallets() from @privy-io/react-auth/solana
+//   avantis  → useWallets() from @privy-io/react-auth (EVM-only)
+//
+// NOTE: the EVM useWallets() hook returns only Ethereum wallets — no
+// `chainType` field to filter on. Previous `w.chainType === 'ethereum'`
+// filter returned empty and caused "stuck on signing in" for Avantis.
 function PrivyAutoLogin({ onLoggedIn, onStatus, dex }) {
   const { ready, authenticated, user } = usePrivy();
   const { wallets: solWallets } = usePrivySolanaWallets();
-  const { wallets: allWallets } = usePrivyAllWallets();
+  const { wallets: evmWallets } = usePrivyEvmWallets();
   const { createWallet } = useCreateWallet();
   const fired = useRef(false);
   const createAttempted = useRef(false);
@@ -56,19 +61,14 @@ function PrivyAutoLogin({ onLoggedIn, onStatus, dex }) {
     if (fired.current) return;
     if (!authenticated) return;
 
-    // Pick wallet based on selected DEX
-    let picked = null;
-    if (dex === 'avantis') {
-      // Prefer embedded EVM wallet; fall back to any connected EVM wallet.
-      const evmWallets = (allWallets || []).filter(w => w && w.chainType === 'ethereum');
-      picked = evmWallets.find(w => w.walletClientType === 'privy') || evmWallets[0];
-    } else {
-      picked = (solWallets || []).find(w => w && w.walletClientType === 'privy') || (solWallets || [])[0];
-    }
+    // Pick wallet based on selected DEX. Prefer embedded (walletClientType='privy')
+    // but fall back to any connected wallet of the right chain family.
+    const pool = dex === 'avantis' ? (evmWallets || []) : (solWallets || []);
+    const picked = pool.find(w => w && w.walletClientType === 'privy') || pool[0];
 
     if (picked && picked.address) {
       fired.current = true;
-      console.log(`[privy] ✅ firing onLoggedIn for ${dex} wallet:`, picked.address);
+      console.log(`[privy] firing onLoggedIn for ${dex} wallet:`, picked.address);
       onLoggedIn({
         wallet: picked.address,
         chain: dex === 'avantis' ? 'base' : 'solana',
@@ -76,98 +76,79 @@ function PrivyAutoLogin({ onLoggedIn, onStatus, dex }) {
       });
       return;
     }
-    // No matching wallet yet — try to create an embedded one for the chosen DEX.
-    // (Privy ignores if wallet already exists for that chain.)
-    if (!createAttempted.current && createWallet) {
+    // Email login done but no wallet yet — poke Privy to create an embedded
+    // one. The `useCreateWallet` hook from the solana entrypoint creates the
+    // Solana wallet; the EVM embedded wallet is auto-created by the provider
+    // config (`embeddedWallets.ethereum.createOnLogin`) so we only call it
+    // for the Solana path.
+    if (dex !== 'avantis' && !createAttempted.current && createWallet) {
       createAttempted.current = true;
-      console.log('[privy] 🔨 calling createWallet()...');
       createWallet()
-        .then(result => console.log('[privy] ✅ createWallet resolved:', result))
         .catch(err => {
           const msg = err?.message || '';
           if (msg.includes('already has an embedded wallet')) return;
-          console.error('[privy] ❌ createWallet rejected:', err);
+          console.error('[privy] createWallet rejected:', err);
           createAttempted.current = false;
         });
     }
-  }, [authenticated, solWallets, allWallets, user, onLoggedIn, createWallet, dex]);
+  }, [authenticated, solWallets, evmWallets, user, onLoggedIn, createWallet, dex]);
 
   return null;
 }
 
 // Sub-component that calls Privy hooks. Only rendered when VITE_PRIVY_APP_ID is set,
 // so the hooks always find a provider (rules-of-hooks-safe).
-function PrivyLoginButton({ onLoggedIn }) {
-  const { ready, authenticated, login, logout, user } = usePrivy();
-  const { wallets: solWallets } = usePrivySolanaWallets();
-  const { createWallet } = useCreateWallet();
-  const fired = useRef(false);
-  const createAttempted = useRef(false);
-
-  // Full state log — fires on every re-render of this component
-  console.log('[privy] render', {
-    ready,
-    authenticated,
-    hasCreateWallet: typeof createWallet === 'function',
-    userId: user?.id || null,
-    userEmail: user?.email?.address || null,
-    linkedAccountsCount: user?.linkedAccounts?.length || 0,
-    linkedAccountTypes: (user?.linkedAccounts || []).map(a => a.type),
-    solWalletsCount: solWallets?.length || 0,
-    solWallets: (solWallets || []).map(w => ({ addr: w?.address, type: w?.walletClientType })),
-    firedOnce: fired.current,
-    createAttempted: createAttempted.current,
-  });
-
-  useEffect(() => {
-    console.log('[privy] effect run', { authenticated, solWalletsCount: solWallets?.length, fired: fired.current, createAttempted: createAttempted.current });
-    if (fired.current) { console.log('[privy] already fired, skip'); return; }
-    if (!authenticated) { console.log('[privy] not authenticated, skip'); return; }
-
-    const w = solWallets.find(x => x && x.walletClientType === 'privy') || solWallets[0];
-    console.log('[privy] wallet lookup result:', w ? { addr: w.address, type: w.walletClientType } : 'none');
-
-    if (w && w.address) {
-      fired.current = true;
-      console.log('[privy] ✅ firing onLoggedIn with wallet:', w.address);
-      onLoggedIn({ wallet: w.address, email: user?.email?.address || null });
-      return;
-    }
-
-    if (!createAttempted.current && createWallet) {
-      createAttempted.current = true;
-      console.log('[privy] 🔨 calling createWallet()...');
-      createWallet()
-        .then(result => {
-          console.log('[privy] ✅ createWallet resolved:', result);
-        })
-        .catch(err => {
-          // Returning users already have an embedded wallet — not an error,
-          // the existing wallet was already surfaced via useWallets().
-          const msg = err?.message || '';
-          if (msg.includes('already has an embedded wallet')) return;
-          console.error('[privy] ❌ createWallet rejected:', err);
-          createAttempted.current = false;
-        });
-    } else if (!createWallet) {
-      console.warn('[privy] createWallet hook returned undefined');
-    } else {
-      console.log('[privy] createWallet already attempted, waiting for wallet to appear in useWallets()...');
-    }
-  }, [authenticated, solWallets, user, onLoggedIn, createWallet]);
+//
+// variant: 'default' → single "Login with Privy" email button
+//          'avantis' → renders two buttons: "Sign in with Email" (Privy) and
+//                      "Connect Wallet" (opens custom EvmWalletModal via
+//                      onRequestEvmConnect prop — NOT through Privy).
+//
+// Wallet detection / auto-register is handled by PrivyAutoLogin.
+function PrivyLoginButton({ variant = 'default', onRequestEvmConnect }) {
+  const { ready, authenticated, login, logout } = usePrivy();
 
   if (!ready) return null;
+
+  const handleEmail = () => {
+    if (authenticated) { logout(); return; }
+    try { login({ loginMethods: ['email'] }); } catch { login(); }
+  };
+
+  if (variant === 'avantis') {
+    return (
+      <div style={{display: 'flex', flexDirection: 'column', gap: 10, width: '100%', marginTop: 10}}>
+        <button
+          style={{...cartoonBtn('#e8b830', '#b8860b'), width: '100%', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10}}
+          onClick={handleEmail}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+            <polyline points="22,6 12,13 2,6"/>
+          </svg>
+          {authenticated ? 'LOGOUT' : 'SIGN IN WITH EMAIL'}
+        </button>
+        {!authenticated && (
+          <button
+            style={{...cartoonBtn('#0EA5E9', '#0284C7'), width: '100%', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10}}
+            onClick={onRequestEvmConnect}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="6" width="20" height="14" rx="3"/>
+              <path d="M16 14h.01"/>
+              <path d="M2 10h20"/>
+            </svg>
+            CONNECT WALLET
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <button
       style={{...cartoonBtn('#e8b830', '#b8860b'), width: '100%', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10}}
-      onClick={() => {
-        if (authenticated) {
-          logout();
-          fired.current = false;
-        } else {
-          login();
-        }
-      }}
+      onClick={handleEmail}
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
@@ -188,6 +169,7 @@ function RegisterPanel() {
   const [name, setName] = useState('');
   const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
   const [waitingForGodot, setWaitingForGodot] = useState(false);
+  const [evmModalOpen, setEvmModalOpen] = useState(false);
   // dexPicked: has the user explicitly chosen a DEX? localStorage['clash_dex_picked']
   // persists across sessions so returning users skip the picker.
   const [dexPicked, setDexPicked] = useState(() => {
@@ -220,6 +202,25 @@ function RegisterPanel() {
     sendToGodot('register', payload);
     // Safety: drop the spinner after 8s if Godot never fires `registered` —
     // otherwise a silent failure traps the user forever.
+    setTimeout(() => setWaitingForGodot(false), 8000);
+  };
+
+  // External EVM wallet connected via custom modal (not Privy). Same payload
+  // shape as the Privy email path — server treats the EVM address as identity
+  // and provisions the custodial Base trading wallet separately.
+  const handleEvmWalletConnected = ({ address, walletName }) => {
+    setEvmModalOpen(false);
+    if (triedPrivyLogin.current) return;
+    triedPrivyLogin.current = true;
+    setWaitingForGodot(true);
+    const derivedName = 'player_' + address.slice(2, 8);
+    sendToGodot('register', {
+      name: derivedName,
+      wallet: address,
+      dex: 'avantis',
+      chain: 'base',
+      walletSource: walletName || 'external',
+    });
     setTimeout(() => setWaitingForGodot(false), 8000);
   };
 
@@ -464,11 +465,23 @@ function RegisterPanel() {
                 A custodial Base wallet will be provisioned for your perps trading.
               </p>
               {privyEnabled ? (
-                <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />
+                <PrivyLoginButton
+                  variant="avantis"
+                  onRequestEvmConnect={() => setEvmModalOpen(true)}
+                />
               ) : (
-                <p style={{...styles.desc, color: '#E53935'}}>
-                  Privy is not configured — set VITE_PRIVY_APP_ID to enable Avantis login.
-                </p>
+                // Privy disabled — still allow external wallet connect.
+                <button
+                  style={{...cartoonBtn('#0EA5E9', '#0284C7'), width: '100%', textAlign: 'center', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  CONNECT WALLET
+                </button>
               )}
             </>
           )
@@ -491,7 +504,7 @@ function RegisterPanel() {
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 14h.01"/><path d="M2 10h20"/></svg>
               CONNECT WALLET
             </button>
-            {privyEnabled && <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />}
+            {privyEnabled && <PrivyLoginButton />}
           </>
         ) : (
           // ── PACIFICA PATH, step 2: wallet connected, ask name ──
@@ -522,6 +535,11 @@ function RegisterPanel() {
           </form>
         )}
       </div>
+      <EvmWalletModal
+        open={evmModalOpen}
+        onClose={() => setEvmModalOpen(false)}
+        onConnected={handleEvmWalletConnected}
+      />
     </div>
   );
 }

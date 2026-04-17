@@ -121,6 +121,16 @@ const ERC20_ABI = [
     inputs: [{ name: 'account', type: 'address' }],
     outputs: [{ type: 'uint256' }],
   },
+  {
+    name: 'transfer',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
 ];
 
 // ---------- Viem client helpers ----------
@@ -718,6 +728,48 @@ async function updateTpSl(privateKey, {
   };
 }
 
+// ---------- Withdraw ----------
+// Moves USDC from the custodial wallet to the user-supplied address on Base.
+// This is the "cash out" path — once positions are closed, the released USDC
+// sits in the custodial wallet; this function pushes it to the user's own
+// EVM wallet. Returns tx hash.
+async function withdrawUsdc(privateKey, { toAddress, amount }) {
+  await assertBaseMainnet();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(toAddress)) throw new Error('Invalid Base destination address');
+  const walletClient = walletClientFromPrivkey(privateKey);
+  const from = walletClient.account.address;
+  const amountRaw = parseUnits(String(amount), 6);
+  if (amountRaw <= 0n) throw new Error('Amount must be > 0');
+
+  // Sanity check: do we have the USDC?
+  const bal = await publicClient.readContract({
+    address: USDC_ADDRESS,
+    abi: ERC20_ABI,
+    functionName: 'balanceOf',
+    args: [from],
+  });
+  if (bal < amountRaw) {
+    throw new Error(`Insufficient USDC: have ${formatUnits(bal, 6)}, need ${amount}`);
+  }
+
+  const nonce = await publicClient.getTransactionCount({ address: from, blockTag: 'pending' });
+  const hash = await walletClient.writeContract({
+    address: USDC_ADDRESS,
+    abi: ERC20_ABI,
+    functionName: 'transfer',
+    args: [toAddress, amountRaw],
+    nonce,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  return {
+    tx_hash: hash,
+    status: receipt.status === 'success' ? 'withdrawn' : 'failed',
+    from,
+    to: toAddress,
+    amount,
+  };
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -742,4 +794,5 @@ module.exports = {
   closePosition,
   cancelLimitOrder,
   updateTpSl,
+  withdrawUsdc,
 };
