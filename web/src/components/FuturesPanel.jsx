@@ -734,21 +734,22 @@ function FuturesPanel() {
   // Cleanup leverage debounce timer on unmount
   useEffect(() => () => clearTimeout(levTimerRef.current), []);
 
-  // On symbol change: clear stale input so the user doesn't accidentally fire
-  // an order sized for the previous pair. Leverage defaults to the server-
-  // tracked value (Pacifica) or clamps to the new pair's maxLev (Avantis).
+  // On symbol change ONLY: clear stale input so the user doesn't accidentally
+  // fire an order sized for the previous pair, and clamp the carried-over
+  // leverage to the new pair's cap. We deliberately do NOT depend on
+  // leverageSettings here — that object gets a fresh reference on every
+  // fetchAccount (every ~5s), which was resetting the slider mid-drag.
+  const prevSymbolRef = useRef(symbol);
   useEffect(() => {
+    if (prevSymbolRef.current === symbol) return;
+    prevSymbolRef.current = symbol;
     setAmount('');
     setSizePct(0);
-    if (leverageSettings[symbol]) {
-      setLeverage(leverageSettings[symbol]);
-    } else {
-      // Clamp the carried-over leverage to the new pair's cap.
-      setLeverage(lev => Math.min(lev, maxLev));
-    }
-    // maxLev is derived from `symbol`, so it's safe to depend only on symbol.
+    const serverLev = leverageSettings[symbol];
+    if (serverLev) setLeverage(serverLev);
+    else setLeverage(lev => Math.min(lev, Number(maxLev) || 100));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, leverageSettings]);
+  }, [symbol]);
 
   const currentPrice = useMemo(() => {
     return prices.find(p => p.symbol === symbol)?.mark || null;
@@ -1009,14 +1010,18 @@ function FuturesPanel() {
               <div style={{display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap'}}>
                 {/* Presets auto-adapt: always include the pair's own maxLev as
                     a shortcut so users can one-tap the ceiling (e.g. 75x for
-                    BTC on Avantis). Dedup + filter keeps the row tidy. */}
-                {Array.from(new Set([1, 5, 10, 25, 50, 75, 100, 200, maxLev]))
-                  .filter(v => v <= maxLev)
-                  .sort((a, b) => a - b)
-                  .map(v => (
-                    <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
-                      onClick={() => handleLeverageChange(v)}>{v}x</button>
-                  ))}
+                    ETH on Avantis). Coerce maxLev to Number — it arrives as a
+                    string from the API, and Set dedup treats 75 !== "75". */}
+                {(() => {
+                  const cap = Number(maxLev) || 100;
+                  return Array.from(new Set([1, 5, 10, 25, 50, 75, 100, 200, cap]))
+                    .filter(v => v <= cap)
+                    .sort((a, b) => a - b)
+                    .map(v => (
+                      <button key={v} style={leverage === v ? S.levPresetActive : S.levPreset}
+                        onClick={() => handleLeverageChange(v)}>{v}x</button>
+                    ));
+                })()}
               </div>
               {leverage > maxLev * 0.5 && (
                 <div style={{fontSize: 11, color: '#E53935', fontWeight: 700, textAlign: 'center', marginTop: 4}}>
