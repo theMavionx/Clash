@@ -314,19 +314,28 @@ function RegisterPanel() {
                 }}
               >
                 <div style={{flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4}}>
-                  <img
-                    src={cfg.logo}
-                    alt={cfg.label}
-                    style={{
-                      height: 24,
-                      width: 'auto',
-                      maxWidth: '100%',
-                      objectFit: 'contain',
-                      objectPosition: 'left center',
-                      filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                      alignSelf: 'flex-start',
-                    }}
-                  />
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                    <img
+                      src={cfg.logo}
+                      alt={cfg.label}
+                      style={{
+                        height: cfg.logoIsWordmark ? 24 : 28,
+                        width: 'auto',
+                        maxWidth: '100%',
+                        objectFit: 'contain',
+                        objectPosition: 'left center',
+                        filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                      }}
+                    />
+                    {!cfg.logoIsWordmark && (
+                      <span style={{
+                        fontSize: 20, fontWeight: 900, color: '#fff',
+                        letterSpacing: '0.8px',
+                        textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+                        textTransform: 'lowercase',
+                      }}>{cfg.label.toLowerCase()}</span>
+                    )}
+                  </div>
                   <div style={{
                     fontSize: 11, fontWeight: 800,
                     color: 'rgba(255,255,255,0.88)',
@@ -365,12 +374,19 @@ function RegisterPanel() {
           src={dexCfg.logo}
           alt={dexCfg.label}
           style={{
-            height: 12,
+            height: dexCfg.logoIsWordmark ? 12 : 14,
             width: 'auto',
             objectFit: 'contain',
             filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))',
           }}
         />
+        {!dexCfg.logoIsWordmark && (
+          <span style={{
+            fontSize: 11, fontWeight: 900, color: '#fff',
+            letterSpacing: '0.8px',
+            textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+          }}>{dexCfg.label}</span>
+        )}
       </div>
       <button
         type="button"

@@ -13,6 +13,10 @@ export const DEX_CONFIG = {
     shortLabel: 'PAC',
     emoji: '🌊',
     logo: pacificaLogo,
+    // Pacifica's asset is just the circular icon (pinwheel); the wordmark
+    // is rendered as inline text next to it. Avantis ships a full
+    // horizontal lockup so we skip the extra text there.
+    logoIsWordmark: false,
     color: '#7C3AED',
     colorDark: '#5B21B6',
     colorLight: 'rgba(124,58,237,0.15)',
@@ -27,6 +31,7 @@ export const DEX_CONFIG = {
     shortLabel: 'AVT',
     emoji: '⚡',
     logo: avantisLogo,
+    logoIsWordmark: true,
     color: '#0EA5E9',
     colorDark: '#0369A1',
     colorLight: 'rgba(14,165,233,0.15)',
@@ -125,6 +130,7 @@ export function DexBadge({ dexId, size = 'sm' }) {
           filter: cfg.id === 'avantis' ? AVANTIS_BLUE_FILTER : 'none',
         }}
       />
+      {!cfg.logoIsWordmark && cfg.shortLabel}
     </span>
   );
 }

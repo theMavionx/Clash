@@ -66,7 +66,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS deposits (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    player_id    TEXT NOT NULL REFERENCES wallets(player_id),
+    player_id    TEXT NOT NULL,
     tx_signature TEXT NOT NULL UNIQUE,
     amount       REAL NOT NULL,
     token        TEXT NOT NULL DEFAULT 'USDC',
@@ -76,7 +76,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS trade_history (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    player_id      TEXT NOT NULL REFERENCES wallets(player_id),
+    player_id      TEXT NOT NULL,
     symbol         TEXT NOT NULL,
     side           TEXT NOT NULL,
     order_type     TEXT NOT NULL,
@@ -219,3 +219,31 @@ try {
 // attribute gold rewards per-DEX and by traded volume.
 try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
+
+// FK-mismatch migration: old deposits/trade_history rows reference
+// wallets(player_id), but that column is no longer UNIQUE after we switched
+// wallets PK to composite (player_id, dex). SQLite validates FKs lazily at
+// prepare-time, so any statement against those tables errors with
+// "foreign key mismatch" until the FK is stripped. Fix by rebuilding the
+// tables without the FK clause.
+function rebuildTableIfHasFK(tableName) {
+  try {
+    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?").get(tableName)?.sql || '';
+    if (!sql.includes('REFERENCES wallets')) return; // already clean
+    const newSql = sql.replace(/REFERENCES\s+wallets\s*\([^)]+\)/gi, '');
+    db.exec('PRAGMA foreign_keys = OFF;');
+    const rebuild = db.transaction(() => {
+      db.exec(`ALTER TABLE ${tableName} RENAME TO ${tableName}_old_fk;`);
+      db.exec(newSql);
+      db.exec(`INSERT INTO ${tableName} SELECT * FROM ${tableName}_old_fk;`);
+      db.exec(`DROP TABLE ${tableName}_old_fk;`);
+    });
+    rebuild();
+    db.exec('PRAGMA foreign_keys = ON;');
+    console.log(`[futures.db] Rebuilt ${tableName} without FK.`);
+  } catch (e) {
+    console.error(`[futures.db] FK rebuild for ${tableName} failed:`, e.message);
+  }
+}
+rebuildTableIfHasFK('deposits');
+rebuildTableIfHasFK('trade_history');

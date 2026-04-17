@@ -102,18 +102,28 @@ function ProfileModal({ onClose }) {
                 border: `3px solid ${cfg.borderColor}`,
                 boxShadow: `0 3px 0 ${cfg.borderColor}, 0 4px 8px rgba(0,0,0,0.2)`,
               }}>
-                {/* Official DEX wordmark — renders white on the gradient bg.
-                    Avantis SVG already ships white; Pacifica PNG stays as-is. */}
-                <img
-                  src={cfg.logo}
-                  alt={cfg.label}
-                  style={{
-                    height: 22,
-                    width: 'auto',
-                    objectFit: 'contain',
-                    filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                  }}
-                />
+                {/* Official DEX logo — Pacifica pairs icon + text label,
+                    Avantis ships the full wordmark. */}
+                <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
+                  <img
+                    src={cfg.logo}
+                    alt={cfg.label}
+                    style={{
+                      height: cfg.logoIsWordmark ? 22 : 26,
+                      width: 'auto',
+                      objectFit: 'contain',
+                      filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                    }}
+                  />
+                  {!cfg.logoIsWordmark && (
+                    <span style={{
+                      fontSize: 16, fontWeight: 900, color: '#fff',
+                      letterSpacing: '0.6px',
+                      textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+                      textTransform: 'lowercase',
+                    }}>{cfg.label.toLowerCase()}</span>
+                  )}
+                </div>
                 <div style={{flex: 1, minWidth: 0}}>
                   <div style={{
                     fontSize: 10, fontWeight: 800,
