@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, memo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { usePrivy } from '@privy-io/react-auth';
+import { usePrivy, useWallets as usePrivyAllWallets } from '@privy-io/react-auth';
 import { useWallets as usePrivySolanaWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 
 function Spinner({ label }) {
@@ -26,33 +26,58 @@ import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 // Headless — runs the Privy auto-login effect regardless of which UI branch
 // RegisterPanel is showing. This prevents deadlocks where the spinner hides
 // the login button, so the effect never fires.
-function PrivyAutoLogin({ onLoggedIn, onStatus }) {
+//
+// Resolves wallet address per DEX:
+//   pacifica → Solana embedded wallet (walletClientType='privy', chainType='solana')
+//   avantis  → Ethereum embedded wallet (walletClientType='privy', chainType='ethereum')
+function PrivyAutoLogin({ onLoggedIn, onStatus, dex }) {
   const { ready, authenticated, user } = usePrivy();
   const { wallets: solWallets } = usePrivySolanaWallets();
+  const { wallets: allWallets } = usePrivyAllWallets();
   const { createWallet } = useCreateWallet();
   const fired = useRef(false);
   const createAttempted = useRef(false);
 
   useEffect(() => { onStatus({ ready, authenticated }); }, [ready, authenticated, onStatus]);
 
-  // Reset guards when Privy logs out so re-login works without a page reload.
+  // Reset guards when Privy logs out OR when DEX changes so the user can
+  // pick the other DEX and re-auth without a page reload.
   useEffect(() => {
     if (!authenticated) {
       fired.current = false;
       createAttempted.current = false;
     }
   }, [authenticated]);
+  useEffect(() => {
+    fired.current = false;
+  }, [dex]);
 
   useEffect(() => {
     if (fired.current) return;
     if (!authenticated) return;
-    const w = (solWallets || []).find(x => x && x.walletClientType === 'privy') || (solWallets || [])[0];
-    if (w && w.address) {
+
+    // Pick wallet based on selected DEX
+    let picked = null;
+    if (dex === 'avantis') {
+      // Prefer embedded EVM wallet; fall back to any connected EVM wallet.
+      const evmWallets = (allWallets || []).filter(w => w && w.chainType === 'ethereum');
+      picked = evmWallets.find(w => w.walletClientType === 'privy') || evmWallets[0];
+    } else {
+      picked = (solWallets || []).find(w => w && w.walletClientType === 'privy') || (solWallets || [])[0];
+    }
+
+    if (picked && picked.address) {
       fired.current = true;
-      console.log('[privy] ✅ firing onLoggedIn with wallet:', w.address);
-      onLoggedIn({ wallet: w.address, email: user?.email?.address || null });
+      console.log(`[privy] ✅ firing onLoggedIn for ${dex} wallet:`, picked.address);
+      onLoggedIn({
+        wallet: picked.address,
+        chain: dex === 'avantis' ? 'base' : 'solana',
+        email: user?.email?.address || null,
+      });
       return;
     }
+    // No matching wallet yet — try to create an embedded one for the chosen DEX.
+    // (Privy ignores if wallet already exists for that chain.)
     if (!createAttempted.current && createWallet) {
       createAttempted.current = true;
       console.log('[privy] 🔨 calling createWallet()...');
@@ -65,7 +90,7 @@ function PrivyAutoLogin({ onLoggedIn, onStatus }) {
           createAttempted.current = false;
         });
     }
-  }, [authenticated, solWallets, user, onLoggedIn, createWallet]);
+  }, [authenticated, solWallets, allWallets, user, onLoggedIn, createWallet, dex]);
 
   return null;
 }
@@ -178,16 +203,19 @@ function RegisterPanel() {
     try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
   };
 
-  const handlePrivyLoggedIn = ({ wallet, email }) => {
+  const handlePrivyLoggedIn = ({ wallet, email, chain }) => {
     if (triedPrivyLogin.current) return;
     triedPrivyLogin.current = true;
     setWaitingForGodot(true);
-    // For Avantis (custodial) we don't send the Privy-Solana wallet — it would
-    // just get linked to an account the user can never trade from. Pacifica
-    // path keeps linking the Solana wallet so trading signatures work.
-    const derivedName = email ? email.split('@')[0].slice(0, 20) : ('player_' + wallet.slice(0, 6));
+    // Derive display name from email (preferred) or wallet prefix.
+    const derivedName = email
+      ? email.split('@')[0].slice(0, 20)
+      : ('player_' + (wallet || '').slice(0, 6));
+    // Pacifica: link the Solana wallet (used for trade signatures).
+    // Avantis: send the EVM address as identity; server creates a separate
+    // custodial Base wallet — the user's Privy EVM wallet is just the login.
     const payload = dex === 'avantis'
-      ? { name: derivedName, dex: 'avantis' }
+      ? { name: derivedName, wallet, dex: 'avantis', chain: chain || 'base' }
       : { name: derivedName, wallet, dex: 'pacifica' };
     sendToGodot('register', payload);
     // Safety: drop the spinner after 8s if Godot never fires `registered` —
@@ -273,7 +301,7 @@ function RegisterPanel() {
   if (authInProgress) {
     return (
       <>
-        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
+        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} dex={dex} />}
         <div style={styles.overlay}>
           <div style={styles.panel}>
             <Spinner label="Signing you in…" />
@@ -288,7 +316,7 @@ function RegisterPanel() {
   if (!dexPicked && !(isInFrame && fcUser)) {
     return (
       <div style={styles.overlay}>
-        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
+        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} dex={dex} />}
         <div style={{...styles.panel, width: 360}}>
           <div style={styles.icon}>⚔️</div>
           <h2 style={styles.title}>Choose your Perp DEX</h2>
@@ -405,50 +433,45 @@ function RegisterPanel() {
 
   return (
     <div style={styles.overlay}>
-      {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
+      {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} dex={dex} />}
       <div style={styles.panel}>
         {dexHeader}
         <div style={styles.icon}>⚔️</div>
         <h2 style={styles.title}>Join the Battle</h2>
 
         {dex === 'avantis' ? (
-          // ── AVANTIS PATH: custodial, no Solana wallet required ──
-          <form onSubmit={handleSubmit} style={styles.form}>
-            <p style={{...styles.desc, marginTop: 0}}>
-              Enter a nickname. A custodial Base wallet will be created for your perps trading.
-            </p>
-            <input
-              style={styles.input}
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Enter your name..."
-              maxLength={20}
-              autoFocus
-            />
-            <button
-              type="submit"
-              style={{...cartoonBtn('#43A047', '#2E7D32'), width: '100%', textAlign: 'center', opacity: name.trim().length < 2 ? 0.5 : 1}}
-              disabled={name.trim().length < 2}
-            >
-              PLAY
-            </button>
-            {privyEnabled && (
-              <>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  width: '100%', margin: '2px 0',
-                }}>
-                  <div style={{flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #6D4C2A, transparent)'}} />
-                  <span style={{
-                    fontSize: 10, color: '#e8b830', fontWeight: 900,
-                    letterSpacing: '1px', textShadow: '0 1px 0 rgba(0,0,0,0.5)',
-                  }}>OR EMAIL</span>
-                  <div style={{flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #6D4C2A, transparent)'}} />
-                </div>
+          // ── AVANTIS PATH: identity required (Privy email OR EVM wallet).
+          //    Farcaster miniapp doesn't yet pipe EVM chains cleanly, so we
+          //    tell FC users to switch to Pacifica instead.
+          isInFrame ? (
+            <>
+              <p style={{...styles.desc, marginTop: 0}}>
+                Avantis trading isn't available inside Farcaster yet.<br />
+                Please switch to <b>Pacifica</b> (Solana) to play here, or open the game in a regular browser.
+              </p>
+              <button
+                type="button"
+                style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center'}}
+                onClick={() => commitDex('pacifica')}
+              >
+                SWITCH TO PACIFICA
+              </button>
+            </>
+          ) : (
+            <>
+              <p style={{...styles.desc, marginTop: 0}}>
+                Sign in with email or connect a Base (EVM) wallet.<br />
+                A custodial Base wallet will be provisioned for your perps trading.
+              </p>
+              {privyEnabled ? (
                 <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />
-              </>
-            )}
-          </form>
+              ) : (
+                <p style={{...styles.desc, color: '#E53935'}}>
+                  Privy is not configured — set VITE_PRIVY_APP_ID to enable Avantis login.
+                </p>
+              )}
+            </>
+          )
         ) : !connected ? (
           // ── PACIFICA PATH, step 1: wallet not connected ──
           <>

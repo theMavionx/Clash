@@ -6,8 +6,14 @@ const elfa = require('./elfa');
 const router = express.Router();
 
 // ---------- Validation Helpers ----------
-const WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
-function isValidWallet(w) { return typeof w === 'string' && WALLET_RE.test(w); }
+const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
+const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;              // Base/Ethereum 20-byte hex
+function isValidWallet(w) {
+  return typeof w === 'string' && (SOLANA_WALLET_RE.test(w) || EVM_WALLET_RE.test(w));
+}
+// Kept as alias so older references keep working.
+const WALLET_RE = SOLANA_WALLET_RE;
+void WALLET_RE;
 
 // ---------- Auth Middleware ----------
 

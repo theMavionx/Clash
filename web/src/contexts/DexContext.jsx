@@ -95,43 +95,31 @@ export function useDex() {
 // Shared tint for Avantis (white SVG → brand blue on light backgrounds).
 const AVANTIS_BLUE_FILTER = 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)';
 
-// Standalone badge component — usable anywhere
+// Standalone DEX logo — no badge chrome, just the official mark. Size tuned
+// to sit comfortably inline next to text of the same size.
 export function DexBadge({ dexId, size = 'sm' }) {
   const cfg = DEX_CONFIG[dexId];
-  if (!cfg) return null; // unknown dex — hide badge
+  if (!cfg) return null;
   const isLg = size === 'lg';
-  const logoH = isLg ? 12 : 9;
+  // Wordmarks are wide, so we cap their height a bit smaller than icon-only
+  // logos to keep them in scale with the surrounding UI.
+  const logoH = cfg.logoIsWordmark ? (isLg ? 12 : 10) : (isLg ? 16 : 13);
 
   return (
-    <span style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: isLg ? 5 : 3,
-      padding: isLg ? '3px 9px' : '2px 6px',
-      borderRadius: isLg ? 8 : 6,
-      background: cfg.colorLight,
-      border: `1.5px solid ${cfg.borderColor}`,
-      fontSize: isLg ? 12 : 10,
-      fontWeight: 900,
-      color: cfg.color,
-      letterSpacing: '0.5px',
-      lineHeight: 1,
-      textTransform: 'uppercase',
-      flexShrink: 0,
-      userSelect: 'none',
-    }}>
-      <img
-        src={cfg.logo}
-        alt=""
-        style={{
-          height: logoH,
-          width: 'auto',
-          objectFit: 'contain',
-          filter: cfg.id === 'avantis' ? AVANTIS_BLUE_FILTER : 'none',
-        }}
-      />
-      {!cfg.logoIsWordmark && cfg.shortLabel}
-    </span>
+    <img
+      src={cfg.logo}
+      alt={cfg.label}
+      title={cfg.label}
+      style={{
+        height: logoH,
+        width: 'auto',
+        objectFit: 'contain',
+        flexShrink: 0,
+        userSelect: 'none',
+        verticalAlign: 'middle',
+        filter: cfg.id === 'avantis' ? AVANTIS_BLUE_FILTER : 'none',
+      }}
+    />
   );
 }
 

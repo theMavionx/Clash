@@ -1,6 +1,7 @@
 import { PrivyProvider } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
+import { base } from 'viem/chains';
 
 const solanaConnectors = toSolanaWalletConnectors();
 // publicnode has no SSL/cert issues and is open. api.mainnet-beta fails with
@@ -19,23 +20,30 @@ export default function PrivyAuthProvider({ children }) {
     <PrivyProvider
       appId={appId}
       config={{
-        // Only email login for now — no Twitter/Discord/wallet connectors
-        loginMethods: ['email'],
+        // Email + external wallet. 'wallet' enables the MetaMask / Coinbase /
+        // WalletConnect / Phantom chooser inside the Privy modal — covers
+        // both EVM (Avantis) and Solana (Pacifica) identities.
+        loginMethods: ['email', 'wallet'],
         appearance: {
           theme: 'light',
           accentColor: '#e8b830',
           logo: '/icons/icon.jpg',
+          walletChainType: 'ethereum-and-solana',
         },
-        // Auto-create an embedded Solana wallet when a new user signs up via email
+        // Auto-create BOTH embedded wallets on sign-up. Pacifica reads the
+        // Solana one, Avantis reads the Ethereum (Base) one.
         embeddedWallets: {
-          solana: { createOnLogin: 'users-without-wallets' },
+          solana:   { createOnLogin: 'users-without-wallets' },
+          ethereum: { createOnLogin: 'users-without-wallets' },
         },
-        // Required by Privy even if we only expose email login, because the app
-        // has Solana login enabled on the dashboard side. Empty-ish is fine —
-        // the login method list controls what the UI actually offers.
+        // External wallet connectors. Solana → wallet-adapter. EVM auto-
+        // detected by Privy (MetaMask/Rabby/Coinbase/WalletConnect).
         externalWallets: {
           solana: { connectors: solanaConnectors },
         },
+        // Default EVM chain for trading = Base mainnet (Avantis runs there).
+        defaultChain: base,
+        supportedChains: [base],
         // Needed by Privy's embedded-wallet sign-and-send UI. Without this,
         // attempting a transaction throws "No RPC configuration found for chain solana:mainnet".
         solana: {

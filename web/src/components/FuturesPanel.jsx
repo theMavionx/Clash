@@ -1333,30 +1333,64 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Deposit */}
-        <div style={S.fullCard}>
-          <div style={S.row}>
-            <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
-            {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
+        {/* Deposit — Pacifica: vault TX via wallet. Avantis: custodial address. */}
+        {dex === 'avantis' ? (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#0EA5E9'}}>Deposit USDC</span>
+              {walletUsdc !== null && <span style={S.detail}>Custodial: ${walletUsdc.toFixed(2)}</span>}
+            </div>
+            <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: 'rgba(14,165,233,0.08)',
+                border: '2px dashed rgba(14,165,233,0.35)',
+                borderRadius: 10, padding: '8px 10px',
+              }}>
+                <code style={{
+                  flex: 1, fontSize: 11, fontFamily: 'monospace',
+                  color: '#0369A1', wordBreak: 'break-all', lineHeight: 1.3,
+                }}>{walletAddr || 'loading…'}</code>
+                <button
+                  style={{
+                    ...S.btnSmall, padding: '6px 10px', fontSize: 10,
+                    background: '#0EA5E9', color: '#fff',
+                    border: '2px solid #0284C7', whiteSpace: 'nowrap',
+                  }}
+                  onClick={async () => { if (walletAddr) try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
+                  disabled={!walletAddr}
+                >COPY</button>
+              </div>
+              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
+                Send <b>USDC</b> + a little <b>ETH</b> (~0.003) to this address on the <b>Base</b> network. Balance updates automatically.
+              </span>
+            </div>
           </div>
-          <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
-            <input type="number" placeholder="Min 10 USDC" value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
-              style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
-            <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-              if (!depositAmt || parseFloat(depositAmt) < 10) return;
-              const r = await depositToPacifica(depositAmt);
-              if (!r?.error) setDepositAmt('');
-            }} disabled={loading}>
-              {loading ? '...' : 'Deposit'}
-            </button>
+        ) : (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
+              {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
+            </div>
+            <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+              <input type="number" placeholder="Min 10 USDC" value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
+                style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
+              <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
+                if (!depositAmt || parseFloat(depositAmt) < 10) return;
+                const r = await depositToPacifica(depositAmt);
+                if (!r?.error) setDepositAmt('');
+              }} disabled={loading}>
+                {loading ? '...' : 'Deposit'}
+              </button>
+            </div>
+            <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+              Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.
+            </span>
           </div>
-          <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
-            Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.
-          </span>
-        </div>
+        )}
 
-        {/* Withdraw */}
-        {available > 0 && (
+        {/* Withdraw — Pacifica only. Avantis custodial withdrawals TBD. */}
+        {dex !== 'avantis' && available > 0 && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
