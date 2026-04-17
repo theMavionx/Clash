@@ -163,64 +163,92 @@ function RegisterPanel() {
   const [name, setName] = useState('');
   const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
   const [waitingForGodot, setWaitingForGodot] = useState(false);
+  // dexPicked: has the user explicitly chosen a DEX? localStorage['clash_dex_picked']
+  // persists across sessions so returning users skip the picker.
+  const [dexPicked, setDexPicked] = useState(() => {
+    try { return localStorage.getItem('clash_dex_picked') === '1'; } catch { return false; }
+  });
   const triedWalletLogin = useRef(false);
   const triedFcLogin = useRef(false);
   const triedPrivyLogin = useRef(false);
+
+  const commitDex = (newDex) => {
+    setDex(newDex);
+    setDexPicked(true);
+    try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+  };
 
   const handlePrivyLoggedIn = ({ wallet, email }) => {
     if (triedPrivyLogin.current) return;
     triedPrivyLogin.current = true;
     setWaitingForGodot(true);
-    // Godot's _do_register tries login_by_wallet first, then registers if new.
-    const name = email ? email.split('@')[0].slice(0, 20) : ('player_' + wallet.slice(0, 6));
-    sendToGodot('register', { name, wallet });
+    // For Avantis (custodial) we don't send the Privy-Solana wallet — it would
+    // just get linked to an account the user can never trade from. Pacifica
+    // path keeps linking the Solana wallet so trading signatures work.
+    const derivedName = email ? email.split('@')[0].slice(0, 20) : ('player_' + wallet.slice(0, 6));
+    const payload = dex === 'avantis'
+      ? { name: derivedName, dex: 'avantis' }
+      : { name: derivedName, wallet, dex: 'pacifica' };
+    sendToGodot('register', payload);
     // Safety: drop the spinner after 8s if Godot never fires `registered` —
     // otherwise a silent failure traps the user forever.
     setTimeout(() => setWaitingForGodot(false), 8000);
   };
 
-  // Auto-login by wallet when connected (recovers account after cache clear).
-  // Fire-and-forget: if the wallet already has an account the server logs in
-  // and Godot fires `registered` → parent hides RegisterPanel. If not, nothing
-  // happens — user sees the name-input form below and types a name manually.
-  // We deliberately do NOT set waitingForGodot here: a 404 from /login-wallet
-  // would otherwise trap the UI in an infinite spinner.
+  // Auto-login by wallet when connected (Pacifica-only; Avantis is custodial
+  // and doesn't need a browser-side Solana wallet).
   useEffect(() => {
+    if (dex === 'avantis') return;
     if (connected && publicKey && !triedWalletLogin.current) {
       triedWalletLogin.current = true;
       sendToGodot('wallet_connected', { wallet: publicKey.toBase58() });
     }
-  }, [connected, publicKey, sendToGodot]);
+  }, [connected, publicKey, sendToGodot, dex]);
 
-  // Auto-register for Farcaster users.
-  // Wait up to 3s for the embedded Solana wallet to connect so we can register
-  // WITH the wallet — this is what links the Farcaster session to the same account
-  // the user has on desktop (otherwise two separate accounts get created).
+  // Auto-register for Farcaster users. Flow depends on picked DEX:
+  //   Pacifica → register with Farcaster's Solana wallet (used for trading)
+  //   Avantis  → register without wallet (server creates custodial Base addr)
   useEffect(() => {
     if (!isInFrame || !fcUser || triedFcLogin.current) return;
 
     const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
 
-    if (connected && publicKey) {
+    if (dex === 'avantis') {
       triedFcLogin.current = true;
-      sendToGodot('register', { name: fcName, wallet: publicKey.toBase58() });
+      sendToGodot('register', { name: fcName, dex: 'avantis' });
       return;
     }
 
-    // Wallet not ready yet — set a fallback timer so we don't hang forever
+    if (connected && publicKey) {
+      triedFcLogin.current = true;
+      sendToGodot('register', { name: fcName, wallet: publicKey.toBase58(), dex: 'pacifica' });
+      return;
+    }
+
+    // Pacifica: wait up to 3s for Farcaster's embedded Solana wallet, then
+    // fall back to registering without a wallet.
     const fallback = setTimeout(() => {
       if (triedFcLogin.current) return;
       triedFcLogin.current = true;
-      sendToGodot('register', { name: fcName });
+      sendToGodot('register', { name: fcName, dex: 'pacifica' });
     }, 3000);
     return () => clearTimeout(fallback);
-  }, [isInFrame, fcUser, connected, publicKey, sendToGodot]);
+  }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!connected || !publicKey) return;
     if (name.trim().length < 2) return;
-    sendToGodot('register', { name: name.trim(), wallet: publicKey.toBase58(), dex });
+    // Pacifica path requires a connected Solana wallet for trading signatures.
+    if (dex === 'pacifica') {
+      if (!connected || !publicKey) return;
+      sendToGodot('register', { name: name.trim(), wallet: publicKey.toBase58(), dex: 'pacifica' });
+      return;
+    }
+    // Avantis path: backend generates a custodial Base wallet. Optionally
+    // include the Solana/Privy wallet for identity but don't require it.
+    const payload = { name: name.trim(), dex: 'avantis' };
+    if (connected && publicKey) payload.wallet = publicKey.toBase58();
+    sendToGodot('register', payload);
   };
 
   // In Farcaster frame with user — auto-registering, show loading
@@ -255,14 +283,150 @@ function RegisterPanel() {
     );
   }
 
+  // Step 1: DEX picker (shown before any wallet/login). Farcaster auto-flow
+  // skips this — picks default 'pacifica' unless localStorage says otherwise.
+  if (!dexPicked && !(isInFrame && fcUser)) {
+    return (
+      <div style={styles.overlay}>
+        {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
+        <div style={{...styles.panel, width: 360}}>
+          <div style={styles.icon}>⚔️</div>
+          <h2 style={styles.title}>Choose your Perp DEX</h2>
+          <p style={styles.desc}>Your trading venue for the whole campaign.<br />You can switch any time in your profile.</p>
+          <div style={{width: '100%', display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4}}>
+            {Object.values(DEX_CONFIG).map(cfg => (
+              <button
+                key={cfg.id}
+                type="button"
+                onClick={() => commitDex(cfg.id)}
+                onMouseDown={e => { e.currentTarget.style.transform = 'translateY(2px)'; e.currentTarget.style.boxShadow = `0 2px 0 ${cfg.borderColor}, 0 3px 6px rgba(0,0,0,0.4)`; }}
+                onMouseUp={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = `0 5px 0 ${cfg.borderColor}, 0 7px 14px rgba(0,0,0,0.45)`; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = `0 5px 0 ${cfg.borderColor}, 0 7px 14px rgba(0,0,0,0.45)`; }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 14,
+                  padding: '14px 16px', borderRadius: 16,
+                  border: `3px solid ${cfg.borderColor}`,
+                  background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
+                  boxShadow: `0 5px 0 ${cfg.borderColor}, 0 7px 14px rgba(0,0,0,0.45)`,
+                  cursor: 'pointer', transition: 'transform 0.1s, box-shadow 0.1s',
+                  outline: 'none', textAlign: 'left', color: '#fff',
+                  fontFamily: 'inherit',
+                }}
+              >
+                <span style={{
+                  fontSize: 32,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>{cfg.emoji}</span>
+                <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{
+                    fontSize: 17, fontWeight: 900, color: '#fff',
+                    letterSpacing: '0.8px',
+                    textShadow: '0 2px 0 rgba(0,0,0,0.35)',
+                  }}>{cfg.label}</div>
+                  <div style={{
+                    fontSize: 11, fontWeight: 800,
+                    color: 'rgba(255,255,255,0.88)',
+                    marginTop: 2,
+                    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                  }}>
+                    {cfg.chain} · {cfg.id === 'avantis' ? 'CUSTODIAL · EMAIL' : 'SELF-CUSTODY · WALLET'}
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: 26, color: '#fff', fontWeight: 900,
+                  textShadow: '0 2px 0 rgba(0,0,0,0.3)',
+                }}>›</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Step 2: Either Pacifica (wallet-connect path) or Avantis (custodial path).
+  const dexCfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
+
+  // Small "change DEX" pill for the second screen — matches cartoon panel style
+  const dexHeader = (
+    <div style={{display: 'flex', alignItems: 'center', gap: 8, alignSelf: 'stretch', justifyContent: 'space-between'}}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '5px 10px', borderRadius: 10,
+        background: `linear-gradient(180deg, ${dexCfg.color} 0%, ${dexCfg.colorDark} 100%)`,
+        border: `2px solid ${dexCfg.borderColor}`,
+        boxShadow: `0 2px 0 ${dexCfg.borderColor}`,
+      }}>
+        <span style={{fontSize: 14, filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.35))'}}>{dexCfg.emoji}</span>
+        <span style={{
+          fontSize: 11, fontWeight: 900, color: '#fff',
+          letterSpacing: '0.8px',
+          textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+        }}>{dexCfg.label}</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => { setDexPicked(false); try { localStorage.removeItem('clash_dex_picked'); } catch {} }}
+        style={{
+          background: 'rgba(255,255,255,0.06)',
+          border: '1.5px solid #6D4C2A',
+          color: '#e8b830',
+          fontSize: 10, fontWeight: 900, letterSpacing: '0.5px',
+          cursor: 'pointer', padding: '5px 10px', borderRadius: 8,
+          textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+        }}
+      >← CHANGE</button>
+    </div>
+  );
+
   return (
     <div style={styles.overlay}>
       {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} />}
       <div style={styles.panel}>
+        {dexHeader}
         <div style={styles.icon}>⚔️</div>
         <h2 style={styles.title}>Join the Battle</h2>
 
-        {!connected ? (
+        {dex === 'avantis' ? (
+          // ── AVANTIS PATH: custodial, no Solana wallet required ──
+          <form onSubmit={handleSubmit} style={styles.form}>
+            <p style={{...styles.desc, marginTop: 0}}>
+              Enter a nickname. A custodial Base wallet will be created for your perps trading.
+            </p>
+            <input
+              style={styles.input}
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="Enter your name..."
+              maxLength={20}
+              autoFocus
+            />
+            <button
+              type="submit"
+              style={{...cartoonBtn('#43A047', '#2E7D32'), width: '100%', textAlign: 'center', opacity: name.trim().length < 2 ? 0.5 : 1}}
+              disabled={name.trim().length < 2}
+            >
+              PLAY
+            </button>
+            {privyEnabled && (
+              <>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  width: '100%', margin: '2px 0',
+                }}>
+                  <div style={{flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #6D4C2A, transparent)'}} />
+                  <span style={{
+                    fontSize: 10, color: '#e8b830', fontWeight: 900,
+                    letterSpacing: '1px', textShadow: '0 1px 0 rgba(0,0,0,0.5)',
+                  }}>OR EMAIL</span>
+                  <div style={{flex: 1, height: 1, background: 'linear-gradient(90deg, transparent, #6D4C2A, transparent)'}} />
+                </div>
+                <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />
+              </>
+            )}
+          </form>
+        ) : !connected ? (
+          // ── PACIFICA PATH, step 1: wallet not connected ──
           <>
             <p style={styles.desc}>Connect your Solana wallet to start playing</p>
             <button
@@ -283,6 +447,7 @@ function RegisterPanel() {
             {privyEnabled && <PrivyLoginButton onLoggedIn={handlePrivyLoggedIn} />}
           </>
         ) : (
+          // ── PACIFICA PATH, step 2: wallet connected, ask name ──
           <form onSubmit={handleSubmit} style={styles.form}>
             <div style={styles.walletBadge}>
               <div style={styles.dot} />
@@ -299,54 +464,6 @@ function RegisterPanel() {
               maxLength={20}
               autoFocus
             />
-
-            {/* DEX Selector */}
-            <div style={styles.dexLabel}>Choose your Perp DEX</div>
-            <div style={styles.dexSelector}>
-              {Object.values(DEX_CONFIG).map(cfg => {
-                const isSelected = dex === cfg.id;
-                return (
-                  <button
-                    key={cfg.id}
-                    type="button"
-                    onClick={() => setDex(cfg.id)}
-                    style={{
-                      flex: 1,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '10px 8px',
-                      borderRadius: 12,
-                      border: `2.5px solid ${isSelected ? cfg.color : '#4a3520'}`,
-                      background: isSelected ? cfg.colorLight : 'rgba(255,255,255,0.04)',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      outline: 'none',
-                      boxShadow: isSelected ? `0 0 12px ${cfg.color}55` : 'none',
-                    }}
-                  >
-                    <span style={{ fontSize: 22 }}>{cfg.emoji}</span>
-                    <span style={{
-                      fontSize: 12, fontWeight: 900, letterSpacing: '0.5px',
-                      color: isSelected ? cfg.color : '#888',
-                    }}>{cfg.label}</span>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700,
-                      color: isSelected ? cfg.color : '#555',
-                      opacity: 0.8,
-                    }}>{cfg.chain}</span>
-                    {isSelected && (
-                      <span style={{
-                        fontSize: 9, fontWeight: 900, padding: '1px 6px',
-                        background: cfg.color, color: '#fff', borderRadius: 4,
-                        letterSpacing: '0.5px',
-                      }}>SELECTED</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
 
             <button
               type="submit"

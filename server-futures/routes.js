@@ -8,15 +8,37 @@ const deposit = require('./deposit');
 const router = express.Router();
 
 // ---------- Auth Middleware ----------
-// Reuses x-token from game server — player_id passed via header
-// In production, validate token against game server
+// Validates x-token by reading the main game server's SQLite DB directly.
+// Both services run on the same host so cross-SQLite-file reads are cheap
+// and avoid an HTTP round-trip per futures request. Read-only, no writes.
+const Database = require('better-sqlite3');
+const path = require('path');
+
+const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
+  || path.join(__dirname, '..', 'server', 'clash.db');
+let mainDb = null;
+let playerByTokenStmt = null;
+function ensureMainDb() {
+  if (mainDb) return;
+  try {
+    mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
+    mainDb.pragma('journal_mode = WAL');
+    playerByTokenStmt = mainDb.prepare('SELECT id, name FROM players WHERE token = ?');
+  } catch (e) {
+    console.error('[futures] Failed to open main DB at', MAIN_DB_PATH, e.message);
+  }
+}
 
 function auth(req, res, next) {
-  const playerId = req.headers['x-player-id'];
-  const playerName = req.headers['x-player-name'] || 'unknown';
-  if (!playerId) return res.status(401).json({ error: 'Missing x-player-id header' });
-  req.playerId = playerId;
-  req.playerName = playerName;
+  const token = req.headers['x-token'];
+  if (!token) return res.status(401).json({ error: 'Missing x-token header' });
+  ensureMainDb();
+  if (!mainDb) return res.status(503).json({ error: 'Auth DB unavailable' });
+  let player = null;
+  try { player = playerByTokenStmt.get(token); } catch (e) { /* swallow */ }
+  if (!player) return res.status(401).json({ error: 'Invalid token' });
+  req.playerId = player.id;
+  req.playerName = player.name;
   // Resolve DEX from query param or header (default: pacifica)
   const dex = (req.query.dex || req.headers['x-dex'] || 'pacifica').toLowerCase();
   req.dex = dex === 'avantis' ? 'avantis' : 'pacifica';

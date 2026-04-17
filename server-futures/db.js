@@ -1,4 +1,5 @@
 const Database = require('better-sqlite3');
+const crypto = require('crypto');
 const path = require('path');
 
 const DB_PATH = path.join(__dirname, 'futures.db');
@@ -6,6 +7,48 @@ const db = new Database(DB_PATH);
 
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// ---------- Privkey encryption (AES-256-GCM) ----------
+// Encrypts custodial wallet secret keys at rest. The encryption key lives in
+// env CLASH_WALLET_ENCRYPTION_KEY (64 hex chars = 32 bytes). In dev we fall
+// back to a host-specific key so local runs don't crash, but in prod the
+// env var MUST be set — rotating it requires re-encrypting all rows.
+const ENC_ALGO = 'aes-256-gcm';
+const ENC_MARKER = 'enc1:'; // versioned prefix so we can migrate schemes later
+
+function getEncKey() {
+  const raw = process.env.CLASH_WALLET_ENCRYPTION_KEY;
+  if (raw && /^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('CLASH_WALLET_ENCRYPTION_KEY not set in production');
+  }
+  // Dev fallback — NOT secure, but keeps local runs unblocked.
+  return crypto.createHash('sha256').update('clash-dev-fallback').digest();
+}
+let _encKey = null;
+function encKey() { return _encKey || (_encKey = getEncKey()); }
+
+function encryptSecret(plain) {
+  if (plain.startsWith(ENC_MARKER)) return plain; // already encrypted
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(ENC_ALGO, encKey(), iv);
+  const ct = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  // Format: enc1:<iv-hex>:<tag-hex>:<ciphertext-hex>
+  return ENC_MARKER + iv.toString('hex') + ':' + tag.toString('hex') + ':' + ct.toString('hex');
+}
+
+function decryptSecret(stored) {
+  if (!stored.startsWith(ENC_MARKER)) return stored; // legacy plaintext row
+  const parts = stored.slice(ENC_MARKER.length).split(':');
+  if (parts.length !== 3) throw new Error('Malformed encrypted secret');
+  const iv = Buffer.from(parts[0], 'hex');
+  const tag = Buffer.from(parts[1], 'hex');
+  const ct = Buffer.from(parts[2], 'hex');
+  const decipher = crypto.createDecipheriv(ENC_ALGO, encKey(), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+}
 
 // ---------- Schema ----------
 
@@ -72,22 +115,34 @@ const stmts = {
 };
 
 // ---------- Wallet Functions ----------
+// secret_key is stored encrypted; getWallet transparently decrypts before
+// handing the row to callers. Callers must never write secret_key directly.
+
+function hydrateWallet(row) {
+  if (!row) return row;
+  try {
+    return { ...row, secret_key: decryptSecret(row.secret_key) };
+  } catch (e) {
+    console.error('[futures.db] Failed to decrypt secret for', row.public_key, e.message);
+    return null;
+  }
+}
 
 function getWallet(playerId, dex = 'pacifica') {
-  return stmts.getWallet.get(playerId, dex);
+  return hydrateWallet(stmts.getWallet.get(playerId, dex));
 }
 
 function createWallet(playerId, playerName, publicKey, secretKey, dex = 'pacifica', chain = 'solana') {
-  stmts.createWallet.run(playerId, playerName, publicKey, secretKey, dex, chain);
-  return stmts.getWallet.get(playerId, dex);
+  stmts.createWallet.run(playerId, playerName, publicKey, encryptSecret(secretKey), dex, chain);
+  return hydrateWallet(stmts.getWallet.get(playerId, dex));
 }
 
 function getOrCreateWallet(playerId, playerName, generateFn, dex = 'pacifica', chain = 'solana') {
-  let wallet = stmts.getWallet.get(playerId, dex);
-  if (wallet) return { wallet, created: false };
+  const existing = stmts.getWallet.get(playerId, dex);
+  if (existing) return { wallet: hydrateWallet(existing), created: false };
 
   const { publicKey, secretKey } = generateFn();
-  wallet = createWallet(playerId, playerName, publicKey, secretKey, dex, chain);
+  const wallet = createWallet(playerId, playerName, publicKey, secretKey, dex, chain);
   return { wallet, created: true };
 }
 
@@ -137,4 +192,20 @@ try {
   }
 } catch (e) {
   // Columns may already exist or table was freshly created with them
+}
+
+// One-time encryption migration: any row where secret_key doesn't start with
+// our ENC_MARKER is legacy plaintext — encrypt in place.
+try {
+  const legacy = db.prepare(`SELECT public_key, secret_key FROM wallets WHERE secret_key NOT LIKE '${ENC_MARKER}%'`).all();
+  if (legacy.length > 0) {
+    const update = db.prepare('UPDATE wallets SET secret_key = ? WHERE public_key = ?');
+    const tx = db.transaction((rows) => {
+      for (const r of rows) update.run(encryptSecret(r.secret_key), r.public_key);
+    });
+    tx(legacy);
+    console.log(`[futures.db] Encrypted ${legacy.length} legacy wallet secrets.`);
+  }
+} catch (e) {
+  console.error('[futures.db] Encryption migration failed:', e.message);
 }

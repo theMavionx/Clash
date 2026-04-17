@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 
 const DexContext = createContext(null);
 
@@ -42,6 +42,33 @@ export function DexProvider({ children }) {
     localStorage.setItem(STORAGE_KEY, newDex);
     setDexState(newDex);
   }, []);
+
+  // Once the player's token exists, fetch their server-side dex preference so
+  // returning users land on the DEX they registered with (localStorage may be
+  // stale after a cache clear or device swap).
+  const synced = useRef(false);
+  useEffect(() => {
+    if (synced.current) return;
+    const poll = setInterval(async () => {
+      const token = window._playerToken;
+      if (!token) return;
+      synced.current = true;
+      clearInterval(poll);
+      try {
+        const r = await fetch('/api/state', { headers: { 'x-token': token } });
+        if (!r.ok) return;
+        const j = await r.json();
+        if (j.dex === 'pacifica' || j.dex === 'avantis') {
+          if (j.dex !== localStorage.getItem(STORAGE_KEY)) {
+            setDex(j.dex);
+          }
+          // Mark dex as picked so the RegisterPanel picker is skipped.
+          try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+        }
+      } catch {}
+    }, 500);
+    return () => clearInterval(poll);
+  }, [setDex]);
 
   return (
     <DexContext.Provider value={{ dex, setDex, config: DEX_CONFIG[dex] }}>

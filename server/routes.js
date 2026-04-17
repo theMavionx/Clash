@@ -33,8 +33,20 @@ router.post('/client-log', (req, res) => {
 // ==================== PLAYERS ====================
 
 // Register a new player (or recover existing account by wallet)
+// Set DEX preference (pacifica | avantis). Called after register or from
+// RegisterPanel when the user switches DEX pre-connect. The value is used
+// by leaderboard badges and by /api/futures/* routing.
+router.post('/players/set-dex', auth, (req, res) => {
+  const { dex } = req.body;
+  if (dex !== 'pacifica' && dex !== 'avantis') {
+    return res.status(400).json({ error: 'dex must be "pacifica" or "avantis"' });
+  }
+  db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, req.player.id);
+  res.json({ success: true, dex });
+});
+
 router.post('/players/register', (req, res) => {
-  const { name, wallet } = req.body;
+  const { name, wallet, dex } = req.body;
 
   // If wallet provided, check if an account already exists for this wallet.
   // Multiple rows may share a wallet (legacy bug — no UNIQUE constraint). Prefer
@@ -70,8 +82,12 @@ router.post('/players/register', (req, res) => {
   if (wallet) {
     db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
   }
+  // Save DEX preference if provided (pacifica | avantis)
+  if (dex === 'pacifica' || dex === 'avantis') {
+    db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, result.id);
+  }
   const state = db.getFullPlayerState(result.id);
-  logAuth('Player registered', { name: finalName, wallet: wallet || null });
+  logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: dex || null });
   res.json({ ...state, token: result.token });
 });
 
@@ -777,7 +793,7 @@ router.post('/tutorial/complete', auth, (req, res) => {
 
 router.get('/leaderboard', (req, res) => {
   const rows = db.db.prepare(`
-    SELECT p.name, p.trophies,
+    SELECT p.name, p.trophies, p.dex,
       COALESCE((SELECT MAX(b.level) FROM buildings b WHERE b.player_id = p.id AND b.type = 'town_hall'), 1) AS level
     FROM players p
     WHERE p.trophies > 0

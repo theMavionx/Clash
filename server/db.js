@@ -60,6 +60,8 @@ try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_by TEXT`); } catch {
 try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_at TEXT`); } catch {}
 // Tutorial progress: bitmask of completed tutorial phases
 try { db.exec(`ALTER TABLE players ADD COLUMN tutorial_flags INTEGER NOT NULL DEFAULT 0`); } catch {}
+// DEX preference: 'pacifica' (Solana) or 'avantis' (Base). Chosen at register time.
+try { db.exec(`ALTER TABLE players ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'`); } catch {}
 
 // Battle replays — stores full replay data for verification and future replay viewer
 try {

@@ -4,6 +4,8 @@ import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
+import { useAvantis } from '../hooks/useAvantis';
+import { useDex } from '../contexts/DexContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
@@ -455,15 +457,23 @@ function FuturesPanel() {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const player = usePlayer();
+  const { dex } = useDex();
+  // Branch on DEX: usePacifica for Solana-signed trading, useAvantis for
+  // the custodial Base flow. Both hooks expose the same interface shape.
+  const pacificaHook = usePacifica();
+  const avantisHook = useAvantis();
+  const trading = dex === 'avantis' ? avantisHook : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
-  } = usePacifica();
-  // walletAddr covers adapter + Privy-embedded. player.wallet is the server's
-  // view (only populated once Godot re-export includes the new payload).
-  const hasWallet = !!walletAddr || connected || !!player?.wallet;
+  } = trading;
+  // For Pacifica: wallet needs adapter or Privy. For Avantis: walletAddr is
+  // the custodial Base address, provisioned on first fetch by the hook.
+  const hasWallet = dex === 'avantis'
+    ? !!walletAddr
+    : (!!walletAddr || connected || !!player?.wallet);
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -919,22 +929,61 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
-            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
-            <button
-              style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
-              onClick={() => {
-                if (inFrame) {
-                  const fc = wallets.find(w => w.adapter.name === 'Farcaster');
-                  if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
-                  else openWalletModal(true);
-                } else {
-                  openWalletModal(true);
-                }
-              }}
-            >
-              <span>CONNECT WALLET</span>
-            </button>
+            {dex === 'avantis' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
+                  border: '4px solid #0284C7',
+                  boxShadow: '0 5px 0 #0284C7, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 44,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>⚡</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Provisioning your Base wallet…</div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#0369A1', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px',
+                }}>
+                  <span className="avantis-spin-dot" style={{
+                    width: 8, height: 8, borderRadius: '50%', background: '#0EA5E9',
+                    animation: 'av-pulse 1.2s ease-in-out infinite',
+                  }} />
+                  <span>AVANTIS · BASE MAINNET</span>
+                </div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Creating a custodial Base (EVM) wallet for Avantis perps trading.<br />
+                  Takes a few seconds — we'll bring you right to the orderbook.
+                </div>
+                <style>{`@keyframes av-pulse { 0%,100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }`}</style>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
+                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
+                <button
+                  style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => {
+                    if (inFrame) {
+                      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
+                      if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
+                      else openWalletModal(true);
+                    } else {
+                      openWalletModal(true);
+                    }
+                  }}
+                >
+                  <span>CONNECT WALLET</span>
+                </button>
+              </>
+            )}
           </div>
         </div>
       </>

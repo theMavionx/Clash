@@ -148,6 +148,19 @@ server {
     # embedded-wallet creation ("Exceeded max attempts"). Godot runs single-threaded.
     add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
 
+    # Futures proxy → server-futures on port 4001 (Avantis + optional Pacifica).
+    # Must come BEFORE /api/ because nginx matches longest prefix first.
+    location /api/futures/ {
+        proxy_pass http://127.0.0.1:4001/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+
     # API proxy → backend port 4000 (gzip off — Godot web can't decompress)
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
@@ -240,21 +253,42 @@ systemctl reload nginx
 echo "[8/9] Starting services..."
 cd "$SERVER_DIR"
 
-# Generate admin key if not exists
+# Generate admin key + wallet encryption key if not exists
 if [ ! -f "$APP_DIR/.env" ]; then
     ADMIN_KEY=$(openssl rand -hex 16)
     REWARD_SECRET=$(openssl rand -hex 32)
+    WALLET_ENC_KEY=$(openssl rand -hex 32)
     cat > "$APP_DIR/.env" << EOF
 ADMIN_KEY=$ADMIN_KEY
 REWARD_SECRET=$REWARD_SECRET
 NODE_ENV=production
 ELFA_API_KEY=
+CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
+CLASH_MAIN_DB=$SERVER_DIR/clash.db
 EOF
     echo "Generated .env with ADMIN_KEY=$ADMIN_KEY"
+else
+    # Backfill missing keys on existing .env (idempotent)
+    grep -q '^CLASH_WALLET_ENCRYPTION_KEY=' "$APP_DIR/.env" || \
+        echo "CLASH_WALLET_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$APP_DIR/.env"
+    grep -q '^CLASH_MAIN_DB=' "$APP_DIR/.env" || \
+        echo "CLASH_MAIN_DB=$SERVER_DIR/clash.db" >> "$APP_DIR/.env"
 fi
 
 pm2 delete clash-api 2>/dev/null || true
 pm2 start index.js --name clash-api --env production --node-args="--env-file=$APP_DIR/.env"
+
+# ── Futures service (port 4001) — Avantis custodial trading ──
+FUTURES_DIR="$APP_DIR/server-futures"
+if [ -d "$FUTURES_DIR" ]; then
+    echo "Installing server-futures dependencies..."
+    cd "$FUTURES_DIR"
+    npm install --production --legacy-peer-deps
+    pm2 delete clash-futures 2>/dev/null || true
+    pm2 start index.js --name clash-futures --env production --node-args="--env-file=$APP_DIR/.env"
+    cd "$SERVER_DIR"
+fi
+
 pm2 save
 pm2 startup systemd -u root --hp /root 2>/dev/null || true
 

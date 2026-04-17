@@ -4,6 +4,8 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
 import { usePlayer, useResources, useBuilding, useSend } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
+import { useAvantis } from '../hooks/useAvantis';
+import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -17,7 +19,10 @@ function ProfileModal({ onClose }) {
   const { publicKey, connected, disconnect, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
-  const { account, walletAddr } = usePacifica();
+  const { dex, setDex } = useDex();
+  const pacificaHook = usePacifica();
+  const avantisHook = useAvantis();
+  const { account, walletAddr } = dex === 'avantis' ? avantisHook : pacificaHook;
   const [tradingStats, setTradingStats] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -86,6 +91,64 @@ function ProfileModal({ onClose }) {
         </div>
 
         <div style={S.body}>
+          {/* DEX selector strip — cartoon-styled, gradient tile with 3D shadow */}
+          {(() => {
+            const cfg = DEX_CONFIG[dex] || DEX_CONFIG.pacifica;
+            return (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px', borderRadius: 14,
+                background: `linear-gradient(180deg, ${cfg.color} 0%, ${cfg.colorDark} 100%)`,
+                border: `3px solid ${cfg.borderColor}`,
+                boxShadow: `0 3px 0 ${cfg.borderColor}, 0 4px 8px rgba(0,0,0,0.2)`,
+              }}>
+                <span style={{
+                  fontSize: 26,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>{cfg.emoji}</span>
+                <div style={{flex: 1, minWidth: 0}}>
+                  <div style={{
+                    fontSize: 12, fontWeight: 900, color: '#fff',
+                    letterSpacing: '0.8px',
+                    textShadow: '0 1px 0 rgba(0,0,0,0.35)',
+                  }}>TRADING ON {cfg.label}</div>
+                  <div style={{
+                    fontSize: 10, fontWeight: 800,
+                    color: 'rgba(255,255,255,0.88)',
+                    marginTop: 2, letterSpacing: '0.5px',
+                    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                  }}>
+                    {cfg.chain} · {dex === 'avantis' ? 'CUSTODIAL' : 'SELF-CUSTODY'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = dex === 'avantis' ? 'pacifica' : 'avantis';
+                    setDex(next);
+                    const token = window._playerToken;
+                    if (token) {
+                      fetch('/api/players/set-dex', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'x-token': token },
+                        body: JSON.stringify({ dex: next }),
+                      }).catch(() => {});
+                    }
+                  }}
+                  style={{
+                    background: 'rgba(0,0,0,0.25)',
+                    border: '2px solid rgba(0,0,0,0.35)',
+                    color: '#fff',
+                    fontSize: 10, fontWeight: 900,
+                    padding: '6px 10px', borderRadius: 8,
+                    cursor: 'pointer', letterSpacing: '0.8px',
+                    textShadow: '0 1px 0 rgba(0,0,0,0.4)',
+                    boxShadow: '0 2px 0 rgba(0,0,0,0.2)',
+                  }}
+                >SWITCH</button>
+              </div>
+            );
+          })()}
+
           {/* Wallet */}
           {activeWallet ? (
             <div style={S.connectedBox}>
@@ -133,11 +196,51 @@ function ProfileModal({ onClose }) {
                 <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>Farcaster Wallet</span>
               </div>
             </div>
+          ) : dex === 'avantis' ? (
+            <div style={{
+              padding: '12px 14px', borderRadius: 14,
+              background: 'linear-gradient(180deg, #E3F2FD 0%, #BBDEFB 100%)',
+              border: '3px solid #0284C7',
+              boxShadow: '0 3px 0 #0284C7, 0 4px 8px rgba(0,0,0,0.15)',
+              textAlign: 'center',
+            }}>
+              <div style={{
+                fontSize: 13, fontWeight: 900, color: '#0369A1',
+                letterSpacing: '0.5px',
+              }}>⚡ PROVISIONING BASE WALLET…</div>
+              <div style={{
+                fontSize: 11, fontWeight: 700,
+                color: '#0369A1', opacity: 0.85, marginTop: 3,
+              }}>
+                First trade creates your custodial wallet automatically.
+              </div>
+            </div>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => openWalletModal(true)}
             >CONNECT WALLET</button>
+          )}
+
+          {/* Avantis custodial deposit callout */}
+          {dex === 'avantis' && activeWallet && (
+            <div style={{
+              padding: '12px 14px', borderRadius: 14,
+              background: 'linear-gradient(180deg, #FFF3E0 0%, #FFE0B2 100%)',
+              border: '3px solid #E65100',
+              boxShadow: '0 3px 0 #E65100, 0 4px 8px rgba(0,0,0,0.15)',
+            }}>
+              <div style={{
+                fontSize: 12, fontWeight: 900, color: '#BF360C',
+                letterSpacing: '1px', marginBottom: 4,
+              }}>💰 DEPOSIT TO TRADE</div>
+              <div style={{
+                fontSize: 12, color: '#5D2A0C', fontWeight: 700,
+                lineHeight: 1.4,
+              }}>
+                Send <b>USDC</b> + a little <b>ETH</b> (for gas, ~0.003 ETH) to the address above on the <b>Base</b> network.
+              </div>
+            </div>
           )}
 
           {/* Game resources */}
