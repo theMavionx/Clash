@@ -87,18 +87,26 @@ function normalizeMarkets(raw) {
   // avantis /markets returns { pairs: [{from, to, groupIndex, ...}], count }
   // Map to Pacifica-compatible shape so SymbolPicker / FuturesPanel can read
   // .symbol and .max_leverage without special-casing.
+  //
+  // Pacifica uses symbol="BTC" (base-only). The server-side Avantis proxy
+  // emits p.symbol as the full "BTC/USD" pair — we strip it here so TokenIcon,
+  // Pyth benchmark lookup, and price matching all key off "BTC".
   const list = Array.isArray(raw) ? raw : (raw?.pairs || raw?.data || []);
-  return list.map((p, i) => ({
-    symbol: p.symbol || `${p.from || p.base}`.toUpperCase(),
-    pair: p.pair || `${p.from || p.base}/${p.to || p.quote}`,
-    index: i,
-    pair_index: p.index ?? i,
-    max_leverage: String(p.maxLeverage || p.max_leverage || 100),
-    lot_size: String(p.lotSize || p.lot_size || '0.0001'),
-    tick_size: String(p.tickSize || p.tick_size || '0.01'),
-    funding_rate: p.fundingRate || p.funding_rate || '0',
-    _raw: p,
-  }));
+  return list.map((p, i) => {
+    const fullSymbol = String(p.symbol || `${p.from || p.base || ''}/${p.to || p.quote || 'USD'}`).toUpperCase();
+    const base = String(p.from || p.base || fullSymbol.split('/')[0]).toUpperCase();
+    return {
+      symbol: base,
+      pair: p.pair || fullSymbol,
+      index: i,
+      pair_index: p.index ?? i,
+      max_leverage: String(p.maxLeverage || p.max_leverage || 100),
+      lot_size: String(p.lotSize || p.lot_size || '0.0001'),
+      tick_size: String(p.tickSize || p.tick_size || '0.01'),
+      funding_rate: p.fundingRate || p.funding_rate || '0',
+      _raw: p,
+    };
+  });
 }
 
 function normalizePrices(raw) {

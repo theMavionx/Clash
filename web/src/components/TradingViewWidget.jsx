@@ -29,7 +29,9 @@ const METALS_MAP = { GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XP
 const COMMODITIES = new Set(['CL','NATGAS','COPPER','BRENT','WTI']);
 
 function toPythSymbol(sym) {
-  const s = String(sym || '').toUpperCase();
+  // Strip any quote suffix ("APT/USD" → "APT") — some callers pass the full
+  // pair label.
+  const s = String(sym || '').toUpperCase().split('/')[0].trim();
   if (EQUITIES.has(s)) return `Equity.US.${s}/USD`;
   if (FX.has(s)) return `FX.${s}/USD`;
   if (s in METALS_MAP) return `Metal.${METALS_MAP[s]}/USD`;
