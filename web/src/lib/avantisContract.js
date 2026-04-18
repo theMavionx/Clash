@@ -114,9 +114,18 @@ export const TRADING_ABI = [
       { name: 'newSl', type: 'uint256' },
       { name: 'newTp', type: 'uint256' },
       { name: 'priceUpdateData', type: 'bytes[]' },
+      // Current on-chain signature takes a 6th arg `priceSourcing` enum:
+      //   0 = Hermes (Pyth v2 price-update-data from feed-v3)
+      //   1 = Pyth Lazer / PRO (not used by our integration)
+      // Calling the old 5-arg selector reverts with a generic
+      // "execution reverted" — this caused TP/SL to fail in Warpcast.
+      { name: 'priceSourcing', type: 'uint8' },
     ],
     outputs: [] },
 ];
+
+// Matches the `priceSourcing` enum in the 6-arg updateTpAndSl signature.
+export const PRICE_SOURCING = Object.freeze({ HERMES: 0, PRO: 1 });
 
 // ───── Scaling helpers ─────────────────────────────────────────────
 export function priceToContract(price) {

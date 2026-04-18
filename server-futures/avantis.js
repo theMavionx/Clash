@@ -89,6 +89,10 @@ const TRADING_ABI = [
       { name: '_newSl', type: 'uint256' },
       { name: '_newTP', type: 'uint256' },
       { name: 'priceUpdateData', type: 'bytes[]' },
+      // 6-arg signature post-upgrade; 0 = Hermes, 1 = Pyth Lazer. Feed-v3
+      // returns Hermes data so we pass 0. Calling the old 5-arg selector
+      // reverts with a generic "execution reverted" in Warpcast.
+      { name: 'priceSourcing', type: 'uint8' },
     ],
     outputs: [],
   },
@@ -1096,6 +1100,7 @@ async function updateTpSl(privateKey, {
         slContract,
         tpContract,
         [priceUpdateData],
+        0, // priceSourcing: 0 = Hermes (matches feed-v3 data we fetched)
       ],
       value: 1n, // 1 wei for Pyth fee
       nonce,

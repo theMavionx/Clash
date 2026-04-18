@@ -15,7 +15,9 @@ import {
   priceToContract, leverageToContract, slippageToContract, collateralToRaw,
   sideIsBuy, fetchPriceUpdateData, fetchExecutionFeeWei, fetchNextTradeIndex,
   fetchLiveMarkPrice,
-  isLinkedToOurReferrer, applyReferralCode,
+  isLinkedToOurReferrer, applyReferralCode, fetchReferralCode,
+  REFERRAL_CODE_BYTES32, REFERRAL_CODE_STRING,
+  PRICE_SOURCING,
 } from '../lib/avantisContract';
 
 const FUTURES_API = '/api/futures';
@@ -268,28 +270,67 @@ export function useAvantis() {
   // already linked to our code. Called once when the wallet becomes known
   // and again after the user submits the linkage tx.
   const fetchReferralStatus = useCallback(async () => {
-    if (!walletAddr || !publicClient) { setHasReferrer(null); return; }
+    if (!walletAddr || !publicClient) { setHasReferrer(null); return null; }
     try {
-      const linked = await isLinkedToOurReferrer(publicClient, walletAddr);
+      const storedCode = await fetchReferralCode(publicClient, walletAddr);
+      const expected = String(REFERRAL_CODE_BYTES32).toLowerCase();
+      const actual = storedCode ? String(storedCode).toLowerCase() : null;
+      const linked = actual === expected;
       setHasReferrer(linked);
-    } catch {
+      if (actual && actual !== expected) {
+        // User is linked to SOMETHING, but not our code. Could be a prior
+        // referral from another dApp, or a stale state. Log so we can
+        // diagnose without asking the user for BaseScan URLs.
+        console.info('[avantis] referral: wallet linked to', actual, '≠', expected, `(ours: "${REFERRAL_CODE_STRING}")`);
+      }
+      return actual;
+    } catch (e) {
+      console.warn('[avantis] fetchReferralStatus failed:', e?.message || e);
       setHasReferrer(null);
+      return null;
     }
   }, [walletAddr, publicClient]);
 
   // Applies our referral code. Single wallet signature; server-free. Idempotent.
   // After the tx lands we re-read the state so the UI can dismiss the prompt.
+  //
+  // Base RPC nodes can lag a few hundred ms behind the block in which the
+  // tx was mined, so the immediate readContract after waitForTransactionReceipt
+  // often returns the PRE-tx value. Retry the read up to 6× with 1s spacing;
+  // if we STILL don't see our code after ~6s, stop and surface it — likely
+  // means the tx actually failed to update state (rare, but e.g. a contract
+  // upgrade or RPC routing issue).
   const linkOurReferrer = useCallback(async () => {
     setError(null);
     try {
       if (!walletClient || !walletAddr) throw new Error('Wallet not connected');
       await ensureChain();
       const hash = await applyReferralCode(walletClient);
-      await publicClient.waitForTransactionReceipt({ hash });
-      await fetchReferralStatus();
-      return { tx_hash: hash, status: 'linked' };
+      console.info('[avantis] referral tx submitted:', hash);
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      console.info('[avantis] referral tx mined:', { status: receipt.status, block: receipt.blockNumber?.toString() });
+      if (receipt.status !== 'success') {
+        setError('Referral tx reverted on-chain');
+        return { error: 'Referral tx reverted on-chain' };
+      }
+
+      // Poll on-chain read until we see our code (or give up).
+      const expected = String(REFERRAL_CODE_BYTES32).toLowerCase();
+      for (let i = 0; i < 6; i++) {
+        await new Promise(r => setTimeout(r, i === 0 ? 500 : 1000));
+        const actual = await fetchReferralStatus();
+        if (actual && String(actual).toLowerCase() === expected) {
+          console.info('[avantis] referral linkage confirmed on-chain');
+          return { tx_hash: hash, status: 'linked' };
+        }
+      }
+      // Mined successfully but read-back mismatched — strange. Leave
+      // hasReferrer at whatever the last fetch returned.
+      console.warn('[avantis] referral read-back never showed our code after 6 attempts — check BaseScan');
+      return { tx_hash: hash, status: 'submitted_but_unverified' };
     } catch (e) {
       const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Referral link failed';
+      console.warn('[avantis] linkOurReferrer error:', msg);
       setError(String(msg).slice(0, 300));
       return { error: msg };
     }
@@ -579,9 +620,13 @@ export function useAvantis() {
       const tpContract = Number(takeProfit) > 0 ? priceToContract(Number(takeProfit)) : 0n;
       const slContract = Number(stopLoss) > 0 ? priceToContract(Number(stopLoss)) : 0n;
 
+      // 6-arg signature (contract was upgraded). `priceSourcing=0` = Hermes,
+      // matching the feed-v3 URL we fetched `priceUpdateData` from. `value`
+      // is the 1-wei Pyth fee sentinel — NOT the 0.00035 ETH execution fee
+      // (updateTpAndSl runs inline with the price update, no keeper queue).
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'updateTpAndSl',
-        args: [BigInt(pairIndex), BigInt(tradeIndex), slContract, tpContract, [priceUpdateData]],
+        args: [BigInt(pairIndex), BigInt(tradeIndex), slContract, tpContract, [priceUpdateData], PRICE_SOURCING.HERMES],
         value: 1n,
       });
       await publicClient.waitForTransactionReceipt({ hash });
