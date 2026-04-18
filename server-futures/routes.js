@@ -98,20 +98,38 @@ router.get('/wallet', auth, (req, res) => {
 // ==================== ACCOUNT INFO ====================
 
 // Get account info (balance, equity, etc.)
-router.get('/account', auth, async (req, res) => {
+// Avantis is now non-custodial: the client passes ?address=<user's wallet>
+// and we proxy Avantis Core API by that address (public data). Pacifica
+// remains custodial → uses token auth to look up the server-held keypair.
+router.get('/account', async (req, res) => {
+  const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
-    if (!wallet) return res.status(404).json({ error: 'No wallet' });
-
-    const info = req.dex === 'avantis'
-      ? await avantis.getAccountInfo(wallet.secret_key)
-      : await pacifica.getAccountInfo(wallet.secret_key);
-    res.json(info);
+    if (dex === 'avantis') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await avantis.getAccountInfoByAddress(address);
+      return res.json(info);
+    }
+    // Pacifica (custodial) — keep legacy auth-gated flow.
+    return authGate(req, res, async () => {
+      const wallet = db.getWallet(req.playerId, 'pacifica');
+      if (!wallet) return res.status(404).json({ error: 'No wallet' });
+      const info = await pacifica.getAccountInfo(wallet.secret_key);
+      res.json(info);
+    });
   } catch (e) {
     console.error('Account info error:', e);
     res.status(500).json({ error: 'Failed to get account info' });
   }
 });
+
+// Gate helper so we can run `auth` middleware inline for Pacifica-only paths
+// without turning this whole handler into middleware spaghetti.
+function authGate(req, res, next) {
+  return auth(req, res, (err) => { if (err) return; next(); });
+}
 
 // ==================== MARKET DATA ====================
 
@@ -176,15 +194,23 @@ router.get('/trades', async (req, res) => {
 
 // ==================== POSITIONS ====================
 
-router.get('/positions', auth, async (req, res) => {
+router.get('/positions', async (req, res) => {
+  const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
-    if (!wallet) return res.status(404).json({ error: 'No wallet' });
-
-    const positions = req.dex === 'avantis'
-      ? await avantis.getPositions(wallet.secret_key)
-      : await pacifica.getPositions(wallet.secret_key);
-    res.json(positions);
+    if (dex === 'avantis') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await avantis.getPositionsByAddress(address);
+      return res.json(positions);
+    }
+    return authGate(req, res, async () => {
+      const wallet = db.getWallet(req.playerId, 'pacifica');
+      if (!wallet) return res.status(404).json({ error: 'No wallet' });
+      const positions = await pacifica.getPositions(wallet.secret_key);
+      res.json(positions);
+    });
   } catch (e) {
     console.error('Positions error:', e);
     res.status(500).json({ error: 'Failed to get positions' });
@@ -193,71 +219,68 @@ router.get('/positions', auth, async (req, res) => {
 
 // ==================== ORDERS ====================
 
-router.get('/orders', auth, async (req, res) => {
+router.get('/orders', async (req, res) => {
+  const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
-    if (!wallet) return res.status(404).json({ error: 'No wallet' });
-
-    const orders = req.dex === 'avantis'
-      ? await avantis.getOpenOrders(wallet.secret_key)
-      : await pacifica.getOpenOrders(wallet.secret_key);
-    res.json(orders);
+    if (dex === 'avantis') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await avantis.getOpenOrdersByAddress(address);
+      return res.json(orders);
+    }
+    return authGate(req, res, async () => {
+      const wallet = db.getWallet(req.playerId, 'pacifica');
+      if (!wallet) return res.status(404).json({ error: 'No wallet' });
+      const orders = await pacifica.getOpenOrders(wallet.secret_key);
+      res.json(orders);
+    });
   } catch (e) {
     console.error('Orders error:', e);
     res.status(500).json({ error: 'Failed to get orders' });
   }
 });
 
-// Create market order (LONG/SHORT)
-router.post('/orders/market', auth, async (req, res) => {
+// Reject Avantis writes on the server — they're now signed client-side.
+// Middleware at the top of each write handler makes the error consistent.
+function avantisMigratedGuard(req, res, next) {
+  if (req.dex === 'avantis') {
+    return res.status(410).json({
+      error: 'Avantis is now non-custodial. Update your client — trades are signed in the user wallet.',
+      migrated: true,
+    });
+  }
+  next();
+}
+
+// Create market order (LONG/SHORT) — Pacifica only; Avantis returns 410.
+router.post('/orders/market', auth, avantisMigratedGuard, async (req, res) => {
   try {
     const wallet = db.getWallet(req.playerId, req.dex);
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    const { symbol, side, amount, leverage, slippage_percent, reduce_only, tp, sl } = req.body;
+    const { symbol, side, amount, slippage_percent, reduce_only } = req.body;
     if (!symbol || !side || !amount) {
       return res.status(400).json({ error: 'symbol, side, amount required' });
     }
 
     const clientOrderId = uuidv4();
-    let result;
+    const result = await pacifica.createMarketOrder(wallet.secret_key, {
+      symbol, side, amount,
+      slippagePercent: slippage_percent || '0.5',
+      reduceOnly: reduce_only || false,
+      clientOrderId,
+    });
 
-    if (req.dex === 'avantis') {
-      if (!leverage) return res.status(400).json({ error: 'leverage required for Avantis' });
-      result = await avantis.createMarketOrder(wallet.secret_key, {
-        symbol,
-        side,
-        amount,
-        leverage: parseFloat(leverage),
-        slippage_percent: slippage_percent || 1,
-        tp: tp || 0,
-        sl: sl || 0,
-      });
-    } else {
-      result = await pacifica.createMarketOrder(wallet.secret_key, {
-        symbol,
-        side,
-        amount,
-        slippagePercent: slippage_percent || '0.5',
-        reduceOnly: reduce_only || false,
-        clientOrderId,
-      });
-    }
-
-    // Log trade (notional = collateral × leverage so main server can reward gold by volume)
-    const notionalUsd = req.dex === 'avantis'
-      ? Number(amount) * Number(leverage || 1)
-      : Number(amount); // Pacifica stores position size in USDC directly
     db.addTrade(req.playerId, {
-      symbol,
-      side,
-      orderType: 'market',
+      symbol, side, orderType: 'market',
       amount: String(amount),
       orderId: result.order_id || result.tx_hash,
       clientOrderId,
-      status: result.error ? 'failed' : (req.dex === 'avantis' ? result.status : 'filled'),
-      dex: req.dex,
-      notional_usd: notionalUsd,
+      status: result.error ? 'failed' : 'filled',
+      dex: 'pacifica',
+      notional_usd: Number(amount),
     });
 
     res.json(result);
@@ -267,57 +290,34 @@ router.post('/orders/market', auth, async (req, res) => {
   }
 });
 
-// Create limit order
-router.post('/orders/limit', auth, async (req, res) => {
+// Create limit order — Pacifica only; Avantis returns 410.
+router.post('/orders/limit', auth, avantisMigratedGuard, async (req, res) => {
   try {
     const wallet = db.getWallet(req.playerId, req.dex);
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    const { symbol, side, price, amount, leverage, tif, reduce_only, tp, sl } = req.body;
+    const { symbol, side, price, amount, tif, reduce_only } = req.body;
     if (!symbol || !side || !price || !amount) {
       return res.status(400).json({ error: 'symbol, side, price, amount required' });
     }
 
     const clientOrderId = uuidv4();
-    let result;
+    const result = await pacifica.createLimitOrder(wallet.secret_key, {
+      symbol, side, price, amount,
+      tif: tif || 'GTC',
+      reduceOnly: reduce_only || false,
+      clientOrderId,
+    });
 
-    if (req.dex === 'avantis') {
-      if (!leverage) return res.status(400).json({ error: 'leverage required for Avantis' });
-      result = await avantis.createLimitOrder(wallet.secret_key, {
-        symbol,
-        side,
-        price: parseFloat(price),
-        amount,
-        leverage: parseFloat(leverage),
-        tp: tp || 0,
-        sl: sl || 0,
-      });
-    } else {
-      result = await pacifica.createLimitOrder(wallet.secret_key, {
-        symbol,
-        side,
-        price,
-        amount,
-        tif: tif || 'GTC',
-        reduceOnly: reduce_only || false,
-        clientOrderId,
-      });
-    }
-
-    const notionalUsdLimit = req.dex === 'avantis'
-      ? Number(amount) * Number(leverage || 1)
-      : Number(amount);
     db.addTrade(req.playerId, {
-      symbol,
-      side,
-      orderType: 'limit',
+      symbol, side, orderType: 'limit',
       amount: String(amount),
       price: String(price),
       orderId: result.order_id || result.tx_hash,
       clientOrderId,
       status: result.error ? 'failed' : 'open',
-      dex: req.dex,
-      notional_usd: notionalUsdLimit,
+      dex: 'pacifica',
+      notional_usd: Number(amount),
     });
 
     res.json(result);
@@ -327,33 +327,20 @@ router.post('/orders/limit', auth, async (req, res) => {
   }
 });
 
-// Cancel order
-router.post('/orders/cancel', auth, async (req, res) => {
+// Cancel order — Pacifica only; Avantis cancels client-side.
+router.post('/orders/cancel', auth, avantisMigratedGuard, async (req, res) => {
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
+    const wallet = db.getWallet(req.playerId, 'pacifica');
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    let result;
-    if (req.dex === 'avantis') {
-      // Avantis uses pair_index + trade_index
-      const { pair_index, trade_index } = req.body;
-      if (pair_index === undefined || trade_index === undefined) {
-        return res.status(400).json({ error: 'pair_index and trade_index required for Avantis' });
-      }
-      result = await avantis.cancelLimitOrder(wallet.secret_key, {
-        pair_index: parseInt(pair_index),
-        trade_index: parseInt(trade_index),
-      });
-    } else {
-      const { symbol, order_id, client_order_id } = req.body;
-      if (!symbol) return res.status(400).json({ error: 'symbol required' });
-      if (!order_id && !client_order_id) return res.status(400).json({ error: 'order_id or client_order_id required' });
-      result = await pacifica.cancelOrder(wallet.secret_key, {
-        symbol,
-        orderId: order_id,
-        clientOrderId: client_order_id,
-      });
-    }
+    const { symbol, order_id, client_order_id } = req.body;
+    if (!symbol) return res.status(400).json({ error: 'symbol required' });
+    if (!order_id && !client_order_id) return res.status(400).json({ error: 'order_id or client_order_id required' });
+    const result = await pacifica.cancelOrder(wallet.secret_key, {
+      symbol,
+      orderId: order_id,
+      clientOrderId: client_order_id,
+    });
 
     res.json(result);
   } catch (e) {
@@ -387,32 +374,9 @@ router.post('/orders/cancel-all', auth, async (req, res) => {
 
 // ==================== CLOSE POSITION (Avantis) ====================
 
-// Close an open position on Avantis
-router.post('/positions/close', auth, async (req, res) => {
-  try {
-    if (req.dex !== 'avantis') {
-      return res.status(400).json({ error: 'Use /orders/market with reduce_only=true for Pacifica' });
-    }
-
-    const wallet = db.getWallet(req.playerId, req.dex);
-    if (!wallet) return res.status(404).json({ error: 'No wallet' });
-
-    const { pair_index, trade_index, amount } = req.body;
-    if (pair_index === undefined || trade_index === undefined || !amount) {
-      return res.status(400).json({ error: 'pair_index, trade_index, amount required' });
-    }
-
-    const result = await avantis.closePosition(wallet.secret_key, {
-      pair_index: parseInt(pair_index),
-      trade_index: parseInt(trade_index),
-      amount: parseFloat(amount),
-    });
-
-    res.json(result);
-  } catch (e) {
-    console.error('Close position error:', e);
-    res.status(500).json({ error: e.message || 'Failed to close position' });
-  }
+// Avantis positions close client-side now. Kept as 410 for old clients.
+router.post('/positions/close', auth, avantisMigratedGuard, (req, res) => {
+  res.status(400).json({ error: 'Pacifica uses /orders/market with reduce_only=true.' });
 });
 
 // ==================== LEVERAGE ====================
@@ -438,26 +402,12 @@ router.post('/leverage', auth, async (req, res) => {
 
 // ==================== TP/SL ====================
 
-router.post('/tpsl', auth, async (req, res) => {
+router.post('/tpsl', auth, avantisMigratedGuard, async (req, res) => {
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
+    const wallet = db.getWallet(req.playerId, 'pacifica');
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    if (req.dex === 'avantis') {
-      const { pair_index, trade_index, take_profit, stop_loss } = req.body;
-      if (pair_index === undefined || trade_index === undefined) {
-        return res.status(400).json({ error: 'pair_index, trade_index required for Avantis' });
-      }
-      const result = await avantis.updateTpSl(wallet.secret_key, {
-        pair_index: parseInt(pair_index),
-        trade_index: parseInt(trade_index),
-        take_profit: take_profit ? parseFloat(take_profit) : 0,
-        stop_loss: stop_loss ? parseFloat(stop_loss) : 0,
-      });
-      return res.json(result);
-    }
-
-    // Pacifica
+    // Pacifica TP/SL (Avantis handled client-side)
     const { symbol, side, take_profit, stop_loss } = req.body;
     if (!symbol || !side) return res.status(400).json({ error: 'symbol, side required' });
 
@@ -481,40 +431,21 @@ router.post('/tpsl', auth, async (req, res) => {
 
 // ==================== WITHDRAW ====================
 
-router.post('/withdraw', auth, async (req, res) => {
+router.post('/withdraw', auth, avantisMigratedGuard, async (req, res) => {
   try {
-    const wallet = db.getWallet(req.playerId, req.dex);
+    const wallet = db.getWallet(req.playerId, 'pacifica');
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
 
-    const { amount, to } = req.body;
+    const { amount } = req.body;
     if (!amount || parseFloat(amount) <= 0) {
       return res.status(400).json({ error: 'amount required' });
     }
 
-    if (req.dex === 'avantis') {
-      // For Avantis this is a plain ERC20 transfer from the custodial wallet
-      // to the user-supplied Base address.
-      const toAddress = to || '';
-      if (!/^0x[0-9a-fA-F]{40}$/.test(toAddress)) {
-        return res.status(400).json({ error: 'Valid Base destination address required' });
-      }
-      const result = await avantis.withdrawUsdc(wallet.secret_key, {
-        toAddress,
-        amount: parseFloat(amount),
-      });
-      // Invalidate the 10s balance cache so the client's next /balance poll
-      // reflects the withdraw immediately (user could otherwise double-tap).
-      balanceCache.delete(`${req.playerId}:${req.dex}`);
-      return res.json(result);
-    }
-
     const result = await pacifica.withdraw(wallet.secret_key, { amount: parseFloat(amount) });
-    balanceCache.delete(`${req.playerId}:${req.dex}`);
+    balanceCache.delete(`${req.playerId}:pacifica`);
     res.json(result);
   } catch (e) {
     console.error('Withdraw error:', e);
-    // Viem wraps contract reverts as ContractFunctionExecutionError with the
-    // reason in .shortMessage (or nested cause). Surface that to the user.
     const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Withdrawal failed';
     res.status(500).json({ error: String(msg).slice(0, 300) });
   }
@@ -524,9 +455,46 @@ router.post('/withdraw', auth, async (req, res) => {
 
 router.get('/history', auth, (req, res) => {
   const trades = db.getTrades(req.playerId);
-  const dexFilter = req.dex;
-  // Filter by dex if we can (trades don't have a dex column yet, show all)
   res.json(trades);
+});
+
+// ==================== TRADE REPORT (non-custodial Avantis) ====================
+// Client reports a successfully-signed trade tx so volume is tracked for gold
+// rewards immediately (otherwise user waits up to the 2-min poll cycle).
+// The gold-rewards worker ALSO independently polls Avantis Core API, so this
+// is best-effort — missing reports are eventually credited.
+router.post('/trade-report', auth, (req, res) => {
+  try {
+    if (req.dex !== 'avantis') {
+      return res.status(400).json({ error: 'trade-report is avantis-only' });
+    }
+    const { tx_hash, symbol, side, amount, leverage, price, notional_usd, order_type } = req.body || {};
+    if (!tx_hash || !symbol || !side || !Number.isFinite(Number(amount))) {
+      return res.status(400).json({ error: 'tx_hash, symbol, side, amount required' });
+    }
+    const notional = Number.isFinite(Number(notional_usd))
+      ? Number(notional_usd)
+      : Number(amount) * Number(leverage || 1);
+    // Clamp to sane bounds — prevents Infinity/massive values poisoning the
+    // gold volume calc (mirrors main server's /claim-gold clamp).
+    if (!Number.isFinite(notional) || notional < 0 || notional > 10_000_000) {
+      return res.status(400).json({ error: 'notional out of range' });
+    }
+    db.addTrade(req.playerId, {
+      symbol, side, orderType: order_type || 'market',
+      amount: String(amount),
+      price: price ? String(price) : null,
+      orderId: tx_hash,
+      clientOrderId: tx_hash,
+      status: 'filled',
+      dex: 'avantis',
+      notional_usd: notional,
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Trade report error:', e);
+    res.status(500).json({ error: 'Failed to record trade' });
+  }
 });
 
 // ==================== DEPOSITS ====================

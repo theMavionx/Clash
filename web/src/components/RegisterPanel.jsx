@@ -4,6 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
 import { useWallets as usePrivySolanaWallets, useCreateWallet } from '@privy-io/react-auth/solana';
 import EvmWalletModal from './EvmWalletModal';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
 
 function Spinner({ label }) {
   return (
@@ -20,7 +21,7 @@ function Spinner({ label }) {
   );
 }
 import { useSend } from '../hooks/useGodot';
-import { useFarcaster } from '../hooks/useFarcaster';
+import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
 
@@ -165,6 +166,7 @@ function RegisterPanel() {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame, user: fcUser } = useFarcaster();
   const { dex, setDex } = useDex();
+  const { setExternalProvider: setEvmProvider } = useEvmWallet();
   const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
   const [name, setName] = useState('');
   const [privyStatus, setPrivyStatus] = useState({ ready: !privyEnabled, authenticated: false });
@@ -212,8 +214,11 @@ function RegisterPanel() {
 
   // External EVM wallet connected via custom modal (not Privy). Avantis path
   // always goes through the name-input step.
-  const handleEvmWalletConnected = ({ address, walletName }) => {
+  const handleEvmWalletConnected = ({ address, walletName, provider }) => {
     setEvmModalOpen(false);
+    // Publish the provider to EvmWalletContext so useAvantis / FuturesPanel
+    // can build a viem walletClient and sign trades from this wallet.
+    if (provider && address) setEvmProvider(provider, address);
     if (triedPrivyLogin.current) return;
     setAvantisAuth({
       wallet: address,
@@ -252,8 +257,9 @@ function RegisterPanel() {
   }, [connected, publicKey, sendToGodot, dex]);
 
   // Auto-register for Farcaster users. Flow depends on picked DEX:
-  //   Pacifica → register with Farcaster's Solana wallet (used for trading)
-  //   Avantis  → register without wallet (server creates custodial Base addr)
+  //   Pacifica → register with Farcaster's Solana wallet (sign each trade)
+  //   Avantis  → request Farcaster's EVM provider, register with that address.
+  //              Non-custodial: trades are signed via sdk.wallet.ethProvider.
   useEffect(() => {
     if (!isInFrame || !fcUser || triedFcLogin.current) return;
 
@@ -261,7 +267,26 @@ function RegisterPanel() {
 
     if (dex === 'avantis') {
       triedFcLogin.current = true;
-      sendToGodot('register', { name: fcName, dex: 'avantis' });
+      (async () => {
+        const prov = await getFarcasterEthProvider();
+        if (prov) {
+          try {
+            const accounts = await prov.request({ method: 'eth_requestAccounts' });
+            const addr = accounts && accounts[0];
+            if (addr) {
+              setEvmProvider(prov, addr);
+              sendToGodot('register', { name: fcName, wallet: addr, dex: 'avantis', chain: 'base' });
+              return;
+            }
+          } catch (e) {
+            console.warn('[farcaster] eth_requestAccounts failed:', e?.message || e);
+          }
+        }
+        // Farcaster client didn't expose an EVM provider (or user denied) →
+        // fall back to registering without a wallet. User will hit a
+        // "connect wallet" CTA in the trading UI.
+        sendToGodot('register', { name: fcName, dex: 'avantis' });
+      })();
       return;
     }
 
@@ -279,7 +304,7 @@ function RegisterPanel() {
       sendToGodot('register', { name: fcName, dex: 'pacifica' });
     }, 3000);
     return () => clearTimeout(fallback);
-  }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex]);
+  }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex, setEvmProvider]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -462,23 +487,9 @@ function RegisterPanel() {
 
         {dex === 'avantis' ? (
           // ── AVANTIS PATH: identity required (Privy email OR EVM wallet).
-          //    Farcaster miniapp doesn't yet pipe EVM chains cleanly, so we
-          //    tell FC users to switch to Pacifica instead.
-          isInFrame ? (
-            <>
-              <p style={{...styles.desc, marginTop: 0}}>
-                Avantis trading isn't available inside Farcaster yet.<br />
-                Please switch to <b>Pacifica</b> (Solana) to play here, or open the game in a regular browser.
-              </p>
-              <button
-                type="button"
-                style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center'}}
-                onClick={() => commitDex('pacifica')}
-              >
-                SWITCH TO PACIFICA
-              </button>
-            </>
-          ) : avantisAuth ? (
+          //    Farcaster now works — the useEffect above auto-requests the
+          //    frame's EVM provider. If it fails, user sees the usual CTAs.
+          avantisAuth ? (
             // Auth succeeded — user picks a display name before we register.
             <form onSubmit={submitAvantisRegister} style={styles.form}>
               <div style={styles.walletBadge}>
@@ -518,7 +529,7 @@ function RegisterPanel() {
             <>
               <p style={{...styles.desc, marginTop: 0}}>
                 Sign in with email or connect a Base (EVM) wallet.<br />
-                A custodial Base wallet will be provisioned for your perps trading.
+                Trades are signed by your own wallet — we never hold your keys.
               </p>
               {privyEnabled ? (
                 <PrivyLoginButton

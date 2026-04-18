@@ -1530,12 +1530,13 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Deposit — Pacifica: vault TX via wallet. Avantis: custodial address. */}
+        {/* Avantis is now non-custodial — no deposit/withdraw. Show a read-only
+            info card that explains funds live in the user's own wallet. */}
         {dex === 'avantis' ? (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#0EA5E9'}}>Deposit USDC</span>
-              {walletUsdc !== null && <span style={S.detail}>Custodial: ${walletUsdc.toFixed(2)}</span>}
+              <span style={{...S.label, color: '#0EA5E9'}}>Self-custody wallet</span>
+              {walletUsdc !== null && <span style={S.detail}>USDC: ${walletUsdc.toFixed(2)}</span>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
               <div style={{
@@ -1547,19 +1548,20 @@ function FuturesPanel() {
                 <code style={{
                   flex: 1, fontSize: 11, fontFamily: 'monospace',
                   color: '#0369A1', wordBreak: 'break-all', lineHeight: 1.3,
-                }}>{walletAddr || 'loading…'}</code>
-                <button
-                  style={{
-                    ...S.btnSmall, padding: '6px 10px', fontSize: 10,
-                    background: '#0EA5E9', color: '#fff',
-                    border: '2px solid #0284C7', whiteSpace: 'nowrap',
-                  }}
-                  onClick={async () => { if (walletAddr) try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
-                  disabled={!walletAddr}
-                >COPY</button>
+                }}>{walletAddr || 'connect wallet…'}</code>
+                {walletAddr && (
+                  <button
+                    style={{
+                      ...S.btnSmall, padding: '6px 10px', fontSize: 10,
+                      background: '#0EA5E9', color: '#fff',
+                      border: '2px solid #0284C7', whiteSpace: 'nowrap',
+                    }}
+                    onClick={async () => { try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
+                  >COPY</button>
+                )}
               </div>
               <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                Send <b>USDC</b> + a little <b>ETH</b> (~0.003) to this address on the <b>Base</b> network. Balance updates automatically.
+                Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>Base</b>.
               </span>
             </div>
           </div>
@@ -1586,54 +1588,9 @@ function FuturesPanel() {
           </div>
         )}
 
-        {/* Withdraw — Pacifica: withdraw from vault to user's Solana wallet.
-            Avantis: ERC20 transfer from custodial Base wallet to a user-
-            supplied address. Available funds differ per flow. */}
-        {dex === 'avantis' ? (
-          (walletUsdc || 0) > 0 && (
-            <div style={S.fullCard}>
-              <div style={S.row}>
-                <span style={{...S.label, color: '#0369A1'}}>Withdraw USDC</span>
-                <span style={S.detail}>Custodial: ${(walletUsdc || 0).toFixed(2)}</span>
-              </div>
-              <input
-                type="text"
-                placeholder="Destination Base address (0x…)"
-                value={withdrawTo}
-                onChange={e => setWithdrawTo(e.target.value.trim())}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                style={{...S.input, width: '100%', padding: '8px 10px', fontSize: 12, fontFamily: 'monospace'}}
-              />
-              <div style={{display: 'flex', gap: 6, alignItems: 'stretch', marginTop: 6}}>
-                <input type="number" placeholder="Amount USDC" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
-                  style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
-                <button
-                  style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}}
-                  onClick={() => setWithdrawAmt(String(Math.floor((walletUsdc || 0) * 100) / 100))}
-                >MAX</button>
-                <button
-                  style={{
-                    flex: 2, whiteSpace: 'nowrap', padding: '8px 4px',
-                    background: '#0EA5E9', color: '#fff',
-                    border: '2px solid #0284C7', borderRadius: 8,
-                    fontWeight: 900, fontSize: 12, cursor: 'pointer',
-                    boxShadow: '0 2px 0 #0284C7',
-                  }}
-                  onClick={async () => {
-                    const r = await withdraw(withdrawAmt, withdrawTo);
-                    if (!r?.error) { setWithdrawAmt(''); }
-                  }}
-                  disabled={loading || !withdrawAmt || !withdrawTo}
-                >{loading ? '...' : 'Withdraw'}</button>
-              </div>
-              <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
-                Sends USDC to the entered Base address. Close positions first to free locked collateral.
-              </span>
-            </div>
-          )
-        ) : (available > 0 && (
+        {/* Withdraw: Pacifica only. Avantis is non-custodial — funds already
+            in the user's own wallet, nothing to withdraw. */}
+        {dex !== 'avantis' && (available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
@@ -1651,7 +1608,7 @@ function FuturesPanel() {
               </button>
             </div>
           </div>
-        ))}
+        )}
 
         {/* Account stats */}
         <div style={S.fullCard}>

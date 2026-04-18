@@ -60,6 +60,21 @@ export function isFarcasterFrame() {
  */
 export { detectPromise as farcasterDetectPromise };
 
+// Returns the EIP-1193 provider from the Farcaster frame host (Warpcast /
+// Coinbase Wallet / other FC clients). Used to sign Avantis trades without
+// leaving the frame. Resolves to null when not in a frame.
+export async function getFarcasterEthProvider() {
+  const sdk = await initPromise;
+  if (!sdk) return null;
+  // The SDK exposes the user's connected wallet as an EIP-1193 object at
+  // `sdk.wallet.ethProvider` on FC Mini App SDK v0.1+.
+  try {
+    const prov = sdk?.wallet?.ethProvider;
+    if (!prov) return null;
+    return prov;
+  } catch { return null; }
+}
+
 export function useFarcaster() {
   const [isInFrame, setIsInFrame] = useState(false);
   const [user, setUser] = useState(null);

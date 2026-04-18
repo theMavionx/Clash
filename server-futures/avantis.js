@@ -392,8 +392,9 @@ async function getPriceUpdateData(pairIndex) {
   try {
     const res = await fetch(`${FEED_V3_URL}/v2/pairs/${pairIndex}/price-update-data`);
     const data = await res.json();
-    // Returns { core: { price_update_data: '0x...', price: ... }, pro: {...} }
-    const priceUpdateData = data.core?.price_update_data || '0x';
+    // Returns { core: { priceUpdateData: '0x...', price: ... }, pro: {...} }
+    // (was historically snake_case — keep fallback just in case).
+    const priceUpdateData = data?.core?.priceUpdateData || data?.core?.price_update_data || '0x';
     const price = data.core?.price || 0;
     return { priceUpdateData, price };
   } catch (e) {
@@ -529,26 +530,81 @@ async function getAccountInfo(privateKey) {
 
 async function getPositions(privateKey) {
   const address = addressFromPrivkey(privateKey);
+  return getPositionsByAddress(address);
+}
+
+async function getOpenOrders(privateKey) {
+  const address = addressFromPrivkey(privateKey);
+  return getOpenOrdersByAddress(address);
+}
+
+// ───── Address-keyed read helpers (non-custodial) ─────
+// Same as the privkey-keyed helpers above but take a public address. Used by
+// the read-only API endpoints that now serve the user's own wallet data.
+async function getAccountInfoByAddress(address) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error('Invalid address');
+  const [usdc, eth] = await Promise.all([getUsdcBalance(address), getEthBalance(address)]);
+  let positions = [];
+  let limitOrders = [];
+  try {
+    const res = await fetch(`${CORE_API}/user-data?trader=${address}`);
+    if (res.ok) {
+      const data = await res.json();
+      positions = data.positions || [];
+      limitOrders = data.limitOrders || [];
+    }
+  } catch {}
+
+  let marginUsed = 0;
+  for (const p of positions) {
+    // Core API flat shape: p.collateral is raw 1e6 (USDC). Older/nested
+    // shapes (p.trade.positionSizeUSDC, initialPosToken) kept as fallback.
+    let scaled = 0;
+    if (p.collateral !== undefined && p.collateral !== null) {
+      scaled = Number(p.collateral) / 1e6;
+    } else if (p.trade?.positionSizeUSDC !== undefined) {
+      scaled = Number(p.trade.positionSizeUSDC) / 1e6;
+    } else if (p.positionSizeUSDC !== undefined) {
+      scaled = Number(p.positionSizeUSDC) / 1e6;
+    } else if (p.trade?.initialPosToken) {
+      scaled = Number(p.trade.initialPosToken) / 1e6;
+    }
+    if (Number.isFinite(scaled) && scaled > 0) marginUsed += scaled;
+  }
+  let unrealisedPnl = 0;
+  for (const p of positions) {
+    const pnl = Number(p.pnl ?? p.pnlUSD ?? p.unrealised ?? 0);
+    if (Number.isFinite(pnl)) unrealisedPnl += pnl;
+  }
+  const equity = usdc + unrealisedPnl;
+  const available = Math.max(usdc - marginUsed, 0);
+  return {
+    address,
+    balance_usdc: usdc, balance_eth: eth,
+    equity, positions, limit_orders: limitOrders, unrealised_pnl: unrealisedPnl,
+    balance: usdc, account_equity: equity, available_to_withdraw: available,
+    total_margin_used: marginUsed,
+  };
+}
+
+async function getPositionsByAddress(address) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return [];
   try {
     const res = await fetch(`${CORE_API}/user-data?trader=${address}`);
     if (!res.ok) return [];
     const data = await res.json();
     return data.positions || [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-async function getOpenOrders(privateKey) {
-  const address = addressFromPrivkey(privateKey);
+async function getOpenOrdersByAddress(address) {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return [];
   try {
     const res = await fetch(`${CORE_API}/user-data?trader=${address}`);
     if (!res.ok) return [];
     const data = await res.json();
     return data.limitOrders || [];
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // ---------- Market data ----------
@@ -1034,8 +1090,11 @@ module.exports = {
   getUsdcBalance,
   getEthBalance,
   getAccountInfo,
+  getAccountInfoByAddress,
   getPositions,
+  getPositionsByAddress,
   getOpenOrders,
+  getOpenOrdersByAddress,
   getMarketInfo,
   getPrices,
   getPairsMap,

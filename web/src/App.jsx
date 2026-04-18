@@ -3,6 +3,7 @@ import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
+import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import loadingImage from './assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
 import './index.css';
@@ -64,11 +65,13 @@ export default function App() {
   return (
     <DexProvider>
       <PrivyAuthProvider>
-        <WalletProvider>
-          <GodotProvider>
-            <AppInner />
-          </GodotProvider>
-        </WalletProvider>
+        <EvmWalletProvider>
+          <WalletProvider>
+            <GodotProvider>
+              <AppInner />
+            </GodotProvider>
+          </WalletProvider>
+        </EvmWalletProvider>
       </PrivyAuthProvider>
     </DexProvider>
   );

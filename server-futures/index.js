@@ -122,6 +122,13 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Futures server running on http://0.0.0.0:${PORT}`);
-  console.log('Network: Pacifica Mainnet');
+  console.log('Network: Pacifica Mainnet + Avantis (Base, non-custodial)');
   console.log('Builder code: clashofperps');
+  // Start the Avantis gold-rewards indexer. Polls Core API every 2 min for all
+  // registered avantis traders and records newly-closed positions in trade_history.
+  try {
+    require('./avantis-rewards-worker').start();
+  } catch (e) {
+    console.error('[worker] avantis-rewards-worker failed to start:', e.message);
+  }
 });
