@@ -1543,16 +1543,30 @@ function adminAuth(req, res, next) {
 // List all players with full details (shields, wallet, last attack)
 router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare(`
-    SELECT id, name, trophies, level, gold, wood, ore, wallet,
+    SELECT id, name, trophies, level, gold, wood, ore, wallet, dex,
            shield_until, last_attacked_by, last_attacked_at, created_at
     FROM players ORDER BY trophies DESC
   `).all();
-  res.json(players.map(p => ({
-    ...p,
-    shield_active: p.shield_until && new Date(p.shield_until + 'Z') > new Date(),
-    shield_remaining: p.shield_until ? Math.max(0, Math.round((new Date(p.shield_until + 'Z') - new Date()) / 60000)) : 0,
-    buildings_count: db.db.prepare('SELECT COUNT(*) as c FROM buildings WHERE player_id = ?').get(p.id).c,
-  })));
+  // Pull per-player trading rewards in one shot so the UI can show gold
+  // earned from trading next to each row (no N+1 query).
+  const rewardsMap = {};
+  try {
+    const rewards = db.db.prepare('SELECT player_id, total_gold, total_volume, last_daily FROM trading_rewards').all();
+    for (const r of rewards) rewardsMap[r.player_id] = r;
+  } catch { /* trading_rewards missing on fresh DB */ }
+  res.json(players.map(p => {
+    const tr = rewardsMap[p.id];
+    return {
+      ...p,
+      dex: p.dex || null,
+      shield_active: p.shield_until && new Date(p.shield_until + 'Z') > new Date(),
+      shield_remaining: p.shield_until ? Math.max(0, Math.round((new Date(p.shield_until + 'Z') - new Date()) / 60000)) : 0,
+      buildings_count: db.db.prepare('SELECT COUNT(*) as c FROM buildings WHERE player_id = ?').get(p.id).c,
+      trading_gold: tr?.total_gold || 0,
+      trading_volume: tr?.total_volume || 0,
+      trading_last_daily: tr?.last_daily || null,
+    };
+  }));
 });
 
 // All battle replays with full details
@@ -1701,12 +1715,82 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   const totalOre = db.db.prepare('SELECT SUM(ore) as s FROM players').get().s || 0;
   const shielded = db.db.prepare("SELECT COUNT(*) as c FROM players WHERE shield_until > datetime('now')").get().c;
   const recentBattles = db.db.prepare("SELECT COUNT(*) as c FROM battle_replays WHERE created_at > datetime('now', '-1 hour')").get().c;
-  const topPlayers = db.db.prepare('SELECT name, trophies, gold, wood, ore FROM players ORDER BY trophies DESC LIMIT 5').all();
+  const topPlayers = db.db.prepare('SELECT name, trophies, gold, wood, ore, dex FROM players ORDER BY trophies DESC LIMIT 10').all();
+
+  // DEX breakdown — aggregate by players.dex so we can show Pacifica vs
+  // Avantis adoption / volume / gold distribution side by side. Guarded
+  // against an empty trading_rewards table on fresh DBs.
+  const byDex = db.db.prepare(`
+    SELECT COALESCE(dex, 'unknown') AS dex, COUNT(*) AS n
+    FROM players GROUP BY dex
+  `).all();
+  let rewardsByDex = [];
+  try {
+    rewardsByDex = db.db.prepare(`
+      SELECT COALESCE(p.dex, 'unknown') AS dex,
+             COUNT(r.player_id) AS traders,
+             COALESCE(SUM(r.total_gold), 0) AS total_gold,
+             COALESCE(SUM(r.total_volume), 0) AS total_volume
+      FROM trading_rewards r
+      LEFT JOIN players p ON p.id = r.player_id
+      GROUP BY p.dex
+    `).all();
+  } catch { /* trading_rewards missing */ }
+
+  // Avantis trade activity — counts from server-futures.trade_history.
+  let avantisActivity = null;
+  try {
+    const fdb = futuresDbReadonly();
+    if (fdb) {
+      const row = fdb.prepare(`
+        SELECT COUNT(*) AS trades,
+               COUNT(DISTINCT player_id) AS traders,
+               COALESCE(SUM(notional_usd), 0) AS volume
+        FROM trade_history WHERE dex = 'avantis' AND status != 'failed'
+      `).get();
+      const recent = fdb.prepare(`
+        SELECT COUNT(*) AS trades FROM trade_history
+        WHERE dex = 'avantis' AND status != 'failed' AND created_at > datetime('now', '-24 hours')
+      `).get();
+      avantisActivity = {
+        total_trades: row?.trades || 0,
+        active_traders: row?.traders || 0,
+        total_volume: row?.volume || 0,
+        trades_24h: recent?.trades || 0,
+      };
+    }
+  } catch { /* futures unavailable */ }
+
+  // Top avantis traders by volume
+  let avantisTop = [];
+  try {
+    const fdb = futuresDbReadonly();
+    if (fdb) {
+      const raw = fdb.prepare(`
+        SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
+        FROM trade_history WHERE dex = 'avantis' AND status != 'failed'
+        GROUP BY player_id ORDER BY vol DESC LIMIT 10
+      `).all();
+      // Join player name from main DB
+      const stmt = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
+      avantisTop = raw.map(r => {
+        const p = stmt.get(r.player_id) || {};
+        return { player_id: r.player_id, name: p.name || '?', wallet: p.wallet || '', volume: r.vol, trades: r.trades };
+      });
+    }
+  } catch { /* noop */ }
+
   res.json({
     players: playerCount, buildings: buildingCount, replays: replayCount,
     accepted, rejected, shielded, recentBattles,
     economy: { totalGold, totalWood, totalOre },
     topPlayers,
+    dex: {
+      players_by_dex: byDex,
+      rewards_by_dex: rewardsByDex,
+      avantis_activity: avantisActivity,
+      avantis_top: avantisTop,
+    },
     uptime: Math.floor(process.uptime()),
     memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
   });

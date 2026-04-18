@@ -5,10 +5,13 @@ import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
-// Loading splash — served from `web/public/clashofperps.PNG` at build time.
-// Using an absolute public path (not an import) lets us swap the artwork
-// without rebuilding the bundle.
-const loadingImage = '/clashofperps.PNG';
+// Loading splash assets — served directly from `web/public/` so art can be
+// swapped without rebuilding the bundle. We layer background + logo
+// separately so the logo can be hidden on narrow (phone-portrait) screens
+// while the background still fills the viewport — otherwise a
+// single-composed image either letterboxes or crops the logo.
+const splashBg = '/splash-bg.png';
+const splashLogo = '/splash-logo.png';
 import './index.css';
 
 // Lazy load heavy components — only after Farcaster SDK is ready
@@ -34,27 +37,36 @@ function FarcasterGate({ children }) {
 
   if (!ready) {
     return (
-      <div style={styles.splash}>
-        <img src={loadingImage} alt="" style={styles.splashImg} />
-        <div style={styles.splashText}>
-          {isInFrame ? 'Connecting to Farcaster...' : 'Loading...'}
-        </div>
-      </div>
+      <SplashScreen label={isInFrame ? 'Connecting to Farcaster...' : 'Loading...'} />
     );
   }
 
   return children;
 }
 
+// Responsive splash. Background image covers the whole viewport and always
+// paints. Logo overlay only appears on wider screens — on phone-portrait
+// (< 600 px wide) we hide it so the background isn't cropped around a
+// forced-centered logo. Label stays visible everywhere.
+function SplashScreen({ label }) {
+  return (
+    <div style={styles.splash}>
+      <img src={splashBg} alt="" style={styles.splashBg} />
+      <img src={splashLogo} alt="Clash of Perps" style={styles.splashLogo} className="splash-logo" />
+      <div style={styles.splashText}>{label}</div>
+      <style>{`
+        @media (max-width: 600px), (orientation: portrait) and (max-width: 800px) {
+          .splash-logo { display: none !important; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 function AppInner() {
   return (
     <FarcasterGate>
-      <Suspense fallback={
-        <div style={styles.splash}>
-          <img src={loadingImage} alt="" style={styles.splashImg} />
-          <div style={styles.splashText}>Loading game...</div>
-        </div>
-      }>
+      <Suspense fallback={<SplashScreen label="Loading game..." />}>
         <div style={styles.container}>
           <GodotCanvas />
           <GameUI />
@@ -96,18 +108,36 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    overflow: 'hidden',
   },
-  splashImg: {
+  splashBg: {
     position: 'absolute',
     top: 0, left: 0, width: '100%', height: '100%',
     objectFit: 'cover',
-    opacity: 0.7,
+    zIndex: 0,
+    userSelect: 'none',
+    pointerEvents: 'none',
+  },
+  splashLogo: {
+    position: 'relative',
+    // Scale with viewport but don't dominate — logo sits centered on the
+    // background art instead of being painted into it. max-width prevents
+    // blurry upscaling on very wide monitors.
+    width: 'min(60vw, 520px)',
+    height: 'auto',
+    zIndex: 1,
+    objectFit: 'contain',
+    userSelect: 'none',
+    pointerEvents: 'none',
+    filter: 'drop-shadow(0 6px 20px rgba(0,0,0,0.6))',
   },
   splashText: {
+    position: 'absolute',
+    bottom: '8%',
     color: '#fff',
     fontSize: 20,
     fontWeight: 900,
-    zIndex: 1,
+    zIndex: 2,
     textShadow: '0 2px 8px rgba(0,0,0,0.8)',
     fontFamily: '"Inter", "Segoe UI", sans-serif',
   },

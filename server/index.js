@@ -88,16 +88,27 @@ app.get('/api/online', (req, res) => {
   res.json(getOnlinePlayers());
 });
 
-// Trading stats dashboard
+// Trading stats dashboard — shows Pacifica (via builder API) + Avantis (via
+// futures.db) + in-game gold ledger, side by side with a DEX split.
 app.get('/trading-stats', async (req, res) => {
   const db = require('./db');
 
-  // Local stats
+  // Local stats — trading_rewards rows joined with players (incl. DEX).
   let rewards = [];
-  try { rewards = db.db.prepare('SELECT r.*, p.name FROM trading_rewards r JOIN players p ON r.player_id = p.id ORDER BY r.total_gold DESC').all(); } catch {}
-  const players = db.db.prepare('SELECT name, wallet, gold FROM players WHERE wallet IS NOT NULL ORDER BY gold DESC').all();
+  try {
+    rewards = db.db.prepare(`
+      SELECT r.*, p.name, p.dex
+      FROM trading_rewards r
+      JOIN players p ON r.player_id = p.id
+      ORDER BY r.total_gold DESC
+    `).all();
+  } catch { /* no trading_rewards yet */ }
 
-  // Pacifica stats
+  // Split rewards by DEX.
+  const pacRewards = rewards.filter(r => r.dex === 'pacifica');
+  const avtRewards = rewards.filter(r => r.dex === 'avantis');
+
+  // Pacifica public builder stats.
   let builderTrades = [], leaderboard = [];
   try {
     const [tRes, lRes] = await Promise.all([
@@ -106,11 +117,63 @@ app.get('/trading-stats', async (req, res) => {
     ]);
     builderTrades = tRes.data || [];
     leaderboard = lRes.data || [];
-  } catch {}
+  } catch { /* pacifica API down */ }
+
+  // Avantis: pull trade_history from server-futures.db (read-only). The
+  // worker indexes both client-reported trades and closes detected via
+  // Avantis Core polling; aggregating here gives us a leaderboard without
+  // scraping Avantis's own dashboard.
+  let avantisLeader = [];
+  let avantisTotals = { trades: 0, volume: 0, traders: 0, trades24h: 0 };
+  try {
+    const Database = require('better-sqlite3');
+    const path = require('path');
+    const fpath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
+    if (require('fs').existsSync(fpath)) {
+      const fdb = new Database(fpath, { readonly: true, fileMustExist: true });
+      fdb.pragma('journal_mode = WAL');
+      const totals = fdb.prepare(`
+        SELECT COUNT(*) AS trades,
+               COUNT(DISTINCT player_id) AS traders,
+               COALESCE(SUM(notional_usd), 0) AS volume
+        FROM trade_history WHERE dex='avantis' AND status != 'failed'
+      `).get();
+      const recent = fdb.prepare(`
+        SELECT COUNT(*) AS trades FROM trade_history
+        WHERE dex='avantis' AND status != 'failed' AND created_at > datetime('now', '-24 hours')
+      `).get();
+      avantisTotals = {
+        trades: totals.trades || 0,
+        volume: totals.volume || 0,
+        traders: totals.traders || 0,
+        trades24h: recent.trades || 0,
+      };
+      const rows = fdb.prepare(`
+        SELECT player_id, COUNT(*) AS trades, SUM(notional_usd) AS volume
+        FROM trade_history WHERE dex='avantis' AND status != 'failed'
+        GROUP BY player_id ORDER BY volume DESC LIMIT 25
+      `).all();
+      const nameStmt = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
+      avantisLeader = rows.map(r => {
+        const p = nameStmt.get(r.player_id) || {};
+        return {
+          name: p.name || '?',
+          wallet: p.wallet || '',
+          trades: r.trades,
+          volume: Number(r.volume) || 0,
+        };
+      });
+      fdb.close();
+    }
+  } catch (e) {
+    console.warn('[trading-stats] futures.db aggregation failed:', e.message);
+  }
 
   const totalVol = leaderboard.reduce((s,u) => s + parseFloat(u.volume_all_time||0), 0);
   const totalFees = leaderboard.reduce((s,u) => s + parseFloat(u.fees_all_time||0), 0);
   const totalGold = rewards.reduce((s,r) => s + (r.total_gold||0), 0);
+  const pacGold = pacRewards.reduce((s,r) => s + (r.total_gold||0), 0);
+  const avtGold = avtRewards.reduce((s,r) => s + (r.total_gold||0), 0);
 
   const leaderRows = leaderboard.map(u => `
     <tr>
@@ -120,15 +183,27 @@ app.get('/trading-stats', async (req, res) => {
     </tr>
   `).join('');
 
-  const rewardRows = rewards.map(r => `
+  const avantisRows = avantisLeader.map(u => `
+    <tr>
+      <td>${esc(u.name)}</td>
+      <td style="font-family:monospace">${esc(u.wallet ? u.wallet.slice(0,6)+'...'+u.wallet.slice(-4) : '—')}</td>
+      <td>$${u.volume.toFixed(2)}</td>
+      <td>${u.trades}</td>
+    </tr>
+  `).join('');
+
+  // Split gold-rewards table by DEX so they're readable side-by-side.
+  const renderRewardRow = (r) => `
     <tr>
       <td>${esc(r.name||'?')}</td>
-      <td style="font-family:monospace">${esc(r.wallet?.substring(0,8)+'...')}</td>
+      <td style="font-family:monospace">${esc(r.wallet ? (r.wallet.length > 20 ? r.wallet.slice(0,6)+'...'+r.wallet.slice(-4) : r.wallet.substring(0,10)+'...') : '—')}</td>
       <td>${r.total_gold||0}</td>
       <td>$${parseFloat(r.total_volume||0).toFixed(2)}</td>
       <td>${r.last_daily||'—'}</td>
     </tr>
-  `).join('');
+  `;
+  const pacRewardRows = pacRewards.map(renderRewardRow).join('');
+  const avtRewardRows = avtRewards.map(renderRewardRow).join('');
 
   res.send(`<!DOCTYPE html>
 <html><head>
@@ -153,25 +228,52 @@ app.get('/trading-stats', async (req, res) => {
 </head><body>
   <h1>Trading Stats</h1>
   <div class="subtitle">Builder: clashofperps | Auto-refresh 30s | <a href="/">Game Dashboard</a></div>
+
+  <h2 style="color:#a78bfa">Pacifica · Solana</h2>
   <div class="stats">
-    <div class="stat"><div class="value">${leaderboard.length}</div><div class="label">Traders</div></div>
+    <div class="stat"><div class="value" style="color:#a78bfa">${leaderboard.length}</div><div class="label">Traders</div></div>
     <div class="stat"><div class="value">$${totalVol.toFixed(0)}</div><div class="label">Total Volume</div></div>
     <div class="stat"><div class="value">$${totalFees.toFixed(4)}</div><div class="label">Builder Fees</div></div>
-    <div class="stat"><div class="value" style="color:#FFD700">${totalGold}</div><div class="label">Gold Distributed</div></div>
+    <div class="stat"><div class="value" style="color:#FFD700">${pacGold}</div><div class="label">Pacifica Gold</div></div>
     <div class="stat"><div class="value">${builderTrades.length}</div><div class="label">Total Trades</div></div>
   </div>
 
-  <h2>Pacifica Leaderboard</h2>
+  <h2 style="color:#38bdf8">Avantis · Base</h2>
+  <div class="stats">
+    <div class="stat"><div class="value" style="color:#38bdf8">${avantisTotals.traders}</div><div class="label">Traders</div></div>
+    <div class="stat"><div class="value">$${avantisTotals.volume.toFixed(0)}</div><div class="label">Total Volume</div></div>
+    <div class="stat"><div class="value" style="color:#FFD700">${avtGold}</div><div class="label">Avantis Gold</div></div>
+    <div class="stat"><div class="value">${avantisTotals.trades}</div><div class="label">Total Trades</div></div>
+    <div class="stat"><div class="value">${avantisTotals.trades24h}</div><div class="label">Trades 24h</div></div>
+  </div>
+
+  <h2 style="color:#a78bfa">Pacifica Leaderboard</h2>
   <table>
     <tr><th>Wallet</th><th>Volume</th><th>Fees</th></tr>
     ${leaderRows || '<tr><td colspan="3" style="text-align:center;color:#888">No traders yet</td></tr>'}
   </table>
 
-  <h2>Gold Rewards</h2>
+  <h2 style="color:#38bdf8">Avantis Leaderboard</h2>
+  <table>
+    <tr><th>Player</th><th>Wallet</th><th>Volume</th><th>Trades</th></tr>
+    ${avantisRows || '<tr><td colspan="4" style="text-align:center;color:#888">No Avantis trades yet</td></tr>'}
+  </table>
+
+  <h2 style="color:#a78bfa">Pacifica Gold Rewards</h2>
   <table>
     <tr><th>Player</th><th>Wallet</th><th>Gold Earned</th><th>Volume</th><th>Last Active</th></tr>
-    ${rewardRows || '<tr><td colspan="5" style="text-align:center;color:#888">No rewards claimed yet</td></tr>'}
+    ${pacRewardRows || '<tr><td colspan="5" style="text-align:center;color:#888">No Pacifica rewards yet</td></tr>'}
   </table>
+
+  <h2 style="color:#38bdf8">Avantis Gold Rewards</h2>
+  <table>
+    <tr><th>Player</th><th>Wallet</th><th>Gold Earned</th><th>Volume</th><th>Last Active</th></tr>
+    ${avtRewardRows || '<tr><td colspan="5" style="text-align:center;color:#888">No Avantis rewards yet</td></tr>'}
+  </table>
+
+  <div style="margin-top:40px;font-size:12px;color:#666;text-align:center">
+    Total gold distributed across both DEXs: <strong style="color:#FFD700">${totalGold}</strong>
+  </div>
 </body></html>`);
 });
 
@@ -248,7 +350,7 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel active" id="tab-players">
     <div class="stats" id="playerStats"></div>
     <table><thead><tr>
-      <th>Name</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Buildings</th><th>Shield</th><th>Joined</th><th>Actions</th>
+      <th>Name</th><th>DEX</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Gold</th><th>Trade Vol</th><th>Buildings</th><th>Shield</th><th>Joined</th><th>Actions</th>
     </tr></thead><tbody id="playersBody"></tbody></table>
   </div>
 
@@ -272,9 +374,18 @@ app.get('/api/admin/panel', (req, res) => {
 
   <div class="panel" id="tab-stats">
     <div class="stats" id="serverStats"></div>
-    <h2 style="color:#f59e0b;font-size:18px;margin:20px 0 12px">Top Players</h2>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">DEX Breakdown</h2>
+    <div id="dexStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Top Avantis Traders</h2>
     <table><thead><tr>
-      <th>Name</th><th>Trophies</th><th>Gold</th><th>Wood</th><th>Ore</th>
+      <th>Name</th><th>Wallet</th><th>Volume</th><th>Trades</th>
+    </tr></thead><tbody id="avantisTopBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Top Players (by Trophies)</h2>
+    <table><thead><tr>
+      <th>Name</th><th>DEX</th><th>Trophies</th><th>Gold</th><th>Wood</th><th>Ore</th>
     </tr></thead><tbody id="topPlayersBody"></tbody></table>
   </div>
 
@@ -441,21 +552,41 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s; re
 
 function renderPlayers() {
   const shielded = players.filter(p => p.shield_active).length;
+  const pacCount = players.filter(p => p.dex === 'pacifica').length;
+  const avtCount = players.filter(p => p.dex === 'avantis').length;
+  const noDex = players.filter(p => !p.dex).length;
   document.getElementById('playerStats').innerHTML =
     '<div class="stat"><div class="v">' + players.length + '</div><div class="l">Players</div></div>' +
+    '<div class="stat" style="border-color:#7C3AED"><div class="v" style="color:#a78bfa;font-size:22px">' + pacCount + '</div><div class="l">Pacifica</div></div>' +
+    '<div class="stat" style="border-color:#0EA5E9"><div class="v" style="color:#38bdf8;font-size:22px">' + avtCount + '</div><div class="l">Avantis</div></div>' +
+    (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
     '<div class="stat" style="cursor:pointer;border-color:#f59e0b" onclick="resetAllTrophies()"><div class="v" style="font-size:14px">RESET ALL</div><div class="l">Trophies</div></div>' +
     '<div class="stat" style="cursor:pointer;border-color:#34d399" onclick="addResAll()"><div class="v" style="font-size:14px;color:#34d399">+ RES ALL</div><div class="l">Add Resources</div></div>';
 
+  function dexBadge(d) {
+    if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
+    if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
+    return '<span class="badge badge-off">—</span>';
+  }
+  function fmtUSD(n) {
+    const v = Number(n) || 0;
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
+    return '$' + v.toFixed(0);
+  }
   document.getElementById('playersBody').innerHTML = players.map(p =>
     '<tr>' +
     '<td><strong>' + esc(p.name) + '</strong></td>' +
+    '<td>' + dexBadge(p.dex) + '</td>' +
     '<td>' + p.trophies + '</td>' +
     '<td>' + p.level + '</td>' +
     '<td style="color:#e8b830">' + p.gold + '</td>' +
     '<td style="color:#6ab344">' + p.wood + '</td>' +
     '<td style="color:#8a9aaa">' + p.ore + '</td>' +
+    '<td style="color:#fbbf24">' + (p.trading_gold || 0) + '</td>' +
+    '<td style="color:#9ca3af;font-size:12px">' + fmtUSD(p.trading_volume) + '</td>' +
     '<td>' + p.buildings_count + '</td>' +
     '<td>' + (p.shield_active ? '<span class="badge badge-shield">' + p.shield_remaining + 'm left</span>' : '<span class="badge badge-off">none</span>') + '</td>' +
     '<td class="mono">' + (p.created_at||'').split(' ')[0] + '</td>' +
@@ -584,8 +715,66 @@ async function loadStats() {
       '<div class="stat"><div class="v" style="color:#8a9aaa">' + Math.round(s.economy.totalOre/1000) + 'K</div><div class="l">Total Ore</div></div>' +
       '<div class="stat"><div class="v">' + Math.floor(s.uptime/60) + 'm</div><div class="l">Uptime</div></div>' +
       '<div class="stat"><div class="v">' + s.memory + 'MB</div><div class="l">Memory</div></div>';
+
+    // DEX adoption + rewards breakdown
+    function fmtUSD(n) {
+      const v = Number(n) || 0;
+      if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
+      return '$' + v.toFixed(0);
+    }
+    const dex = s.dex || {};
+    const byDex = dex.players_by_dex || [];
+    const rewards = dex.rewards_by_dex || [];
+    const rewardsMap = {};
+    for (const r of rewards) rewardsMap[r.dex] = r;
+    const avt = dex.avantis_activity;
+    function dexCard(name, color, playerCount, tradingGold, volume, extraLines) {
+      return (
+        '<div style="flex:1;min-width:240px;background:#1f2937;border:2px solid ' + color + ';border-radius:12px;padding:16px">' +
+        '<div style="color:' + color + ';font-size:14px;font-weight:800;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:10px">' + name + '</div>' +
+        '<div style="display:flex;gap:16px;margin-bottom:8px">' +
+          '<div><div style="font-size:20px;font-weight:800">' + playerCount + '</div><div style="font-size:11px;color:#6b7280">players</div></div>' +
+          '<div><div style="font-size:20px;font-weight:800;color:#fbbf24">' + tradingGold + '</div><div style="font-size:11px;color:#6b7280">trade gold</div></div>' +
+          '<div><div style="font-size:20px;font-weight:800">' + fmtUSD(volume) + '</div><div style="font-size:11px;color:#6b7280">volume</div></div>' +
+        '</div>' +
+        (extraLines || '') +
+        '</div>'
+      );
+    }
+    const pacCount = (byDex.find(x => x.dex === 'pacifica') || {}).n || 0;
+    const avtCount = (byDex.find(x => x.dex === 'avantis') || {}).n || 0;
+    const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
+    const pacRew = rewardsMap.pacifica || {};
+    const avtRew = rewardsMap.avantis || {};
+    const avtExtra = avt
+      ? '<div style="font-size:12px;color:#9ca3af;line-height:1.6">' +
+          'Trades all-time: <strong style="color:#e5e7eb">' + avt.total_trades + '</strong><br>' +
+          'Trades 24h: <strong style="color:#e5e7eb">' + avt.trades_24h + '</strong><br>' +
+          'Active traders: <strong style="color:#e5e7eb">' + avt.active_traders + '</strong>' +
+        '</div>'
+      : '<div style="font-size:12px;color:#6b7280">Futures service offline — no live Avantis data</div>';
+    document.getElementById('dexStats').innerHTML =
+      dexCard('Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, '') +
+      dexCard('Avantis · Base', '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, avtExtra) +
+      (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
+
+    document.getElementById('avantisTopBody').innerHTML = (dex.avantis_top || []).map(p =>
+      '<tr>' +
+      '<td><strong>' + esc(p.name) + '</strong></td>' +
+      '<td class="mono" style="font-size:11px">' + esc(p.wallet ? p.wallet.slice(0,6) + '...' + p.wallet.slice(-4) : '—') + '</td>' +
+      '<td>' + fmtUSD(p.volume) + '</td>' +
+      '<td>' + p.trades + '</td>' +
+      '</tr>'
+    ).join('') || '<tr><td colspan="4" style="text-align:center;color:#6b7280">No Avantis trades yet</td></tr>';
+
+    function dexBadge(d) {
+      if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
+      if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
+      return '<span class="badge badge-off">—</span>';
+    }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
-      '<tr><td><strong>' + esc(p.name) + '</strong></td><td>' + p.trophies + '</td>' +
+      '<tr><td><strong>' + esc(p.name) + '</strong></td><td>' + dexBadge(p.dex) + '</td><td>' + p.trophies + '</td>' +
       '<td style="color:#e8b830">' + p.gold + '</td><td style="color:#6ab344">' + p.wood + '</td><td style="color:#8a9aaa">' + p.ore + '</td></tr>'
     ).join('');
   } catch(e) { console.error(e); }

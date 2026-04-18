@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, memo } from 'react';
-// Loading splash — served from `web/public/clashofperps.PNG`. Public-path
-// reference instead of an asset import so the image can be swapped by
-// dropping a new file into /public without a JS rebuild.
-const loadingImage = '/clashofperps.PNG';
+// Loading splash — served from `web/public/splash-bg.png` + splash-logo.png.
+// Layered so the logo can be hidden on narrow / portrait screens while the
+// background art still fills the viewport. Public-path reference means art
+// swaps need no JS rebuild.
+const splashBg = '/splash-bg.png';
+const splashLogo = '/splash-logo.png';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy
@@ -29,15 +31,34 @@ const overlayStyle = {
   transition: 'opacity 0.5s ease',
 };
 
-const imgStyle = {
+const bgStyle = {
   position: 'absolute',
   top: 0,
   left: 0,
   width: '100%',
   height: '100%',
-  objectFit: 'cover', // Повертаємо повноцінний повноекранний вигляд
+  objectFit: 'cover',
   zIndex: -1,
   opacity: 0.9,
+  userSelect: 'none',
+  pointerEvents: 'none',
+};
+
+const logoStyle = {
+  position: 'absolute',
+  // Centered horizontally, sitting above the progress bar. `top: 12%` gives
+  // the bar room at the bottom; `min(55vw, 460px)` keeps the logo readable
+  // without dominating wide monitors.
+  top: '12%',
+  left: '50%',
+  transform: 'translateX(-50%)',
+  width: 'min(55vw, 460px)',
+  height: 'auto',
+  objectFit: 'contain',
+  zIndex: 0,
+  userSelect: 'none',
+  pointerEvents: 'none',
+  filter: 'drop-shadow(0 6px 20px rgba(0,0,0,0.6))',
 };
 
 const progressWrapperStyle = {
@@ -212,7 +233,13 @@ function GodotCanvas({ onEngineReady }) {
     <>
       {!isLoaded && (
         <div style={overlayStyle}>
-          <img src={loadingImage} alt="Loading..." style={imgStyle} />
+          <img src={splashBg} alt="" style={bgStyle} />
+          <img src={splashLogo} alt="Clash of Perps" style={logoStyle} className="godot-splash-logo" />
+          <style>{`
+            @media (max-width: 600px), (orientation: portrait) and (max-width: 800px) {
+              .godot-splash-logo { display: none !important; }
+            }
+          `}</style>
 
           {errorMsg && (
             <div style={{ position: 'absolute', top: 20, left: 20, right: 20, zIndex: 10, background: 'rgba(200,0,0,0.9)', color: '#fff', padding: 16, borderRadius: 10, fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: '40vh', overflow: 'auto' }}>

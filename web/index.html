@@ -6,9 +6,11 @@
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0" />
     <title>Clash of Perps</title>
 
-    <!-- Farcaster Mini App embed — imageUrl + splashImageUrl now point at
-         the unified `/clashofperps.PNG` so the feed card, splash, and
-         in-app loading screen all show the same artwork. -->
+    <!-- Farcaster Mini App embed — uses the pre-composited /clashofperps.PNG
+         for feed cards (bg + logo baked together). The in-app loading
+         screen layers /splash-bg.png + /splash-logo.png separately for
+         responsive display — those files are referenced in App.jsx /
+         GodotCanvas.jsx, not here. -->
     <meta property="og:title" content="Clash of Perps" />
     <meta property="og:description" content="Build, raid, trade. Clash of Clans meets DeFi." />
     <meta property="og:image" content="https://clashofperps.fun/clashofperps.PNG" />
