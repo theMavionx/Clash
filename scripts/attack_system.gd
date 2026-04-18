@@ -352,9 +352,15 @@ func _try_place_ship(hit: Vector3) -> bool:
 	var ship_data: Dictionary = _fleet[ship_idx]
 	if bs and bs.is_viewing_enemy:
 		var t: float = Time.get_ticks_msec() / 1000.0 - bs._battle_start_time
+		# Log the ACTUAL troop spawn position (post-sail), not the raw click
+		# target. The server's verifyReplay spawns troops at these coords, so
+		# they need to match where the game actually places them — otherwise
+		# server troops appear offshore and the TH survives in the sim.
+		var stop_pos_for_log: Vector3 = _ship_stop_positions[-1]
+		var spawn_pos_for_log: Vector3 = _base_troop_spawn_pos(stop_pos_for_log)
 		bs._battle_replay.append({
 			"t": t, "type": "place_ship",
-			"x": hit.x, "z": hit.z,
+			"x": spawn_pos_for_log.x, "z": spawn_pos_for_log.z,
 			"shipLevel": ship_data.get("level", 1),
 			"troops": ship_data.get("troops", []),
 		})
@@ -485,6 +491,28 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
 	return true
 
 
+## Returns the deterministic troop spawn position derived from a ship's
+## landing (stop) position. The troop deploy offset must match between
+## client and server so the replay verifier spawns troops at the same
+## place as the real game — previously we logged the raw click point
+## (`hit.x, hit.z`) which left server troops stranded offshore while
+## client troops actually appeared on the beach.
+func _base_troop_spawn_pos(stop_pos: Vector3) -> Vector3:
+	if ship_plane == null:
+		return stop_pos
+	var pb: Basis = ship_plane.global_transform.basis
+	var lat_dir: Vector3 = pb.x.normalized()
+	var sail_dir: Vector3 = pb.z.normalized()
+	sail_dir.y = 0
+	sail_dir = sail_dir.normalized()
+	var to_plane: Vector3 = (plane_center - ship_plane.get_parent().global_position).normalized()
+	if sail_dir.dot(to_plane) < 0:
+		sail_dir = -sail_dir
+	var p: Vector3 = stop_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
+	p.y = stop_pos.y
+	return p
+
+
 ## Deploys the troops loaded on this fleet ship.
 ## Each troop is spawned by name from TROOP_DEFS, staggered by troop_spawn_delay.
 func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: int) -> void:
@@ -497,8 +525,10 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 
 	var pb2: Basis = ship_plane.global_transform.basis
 	var lat_dir: Vector3 = pb2.x.normalized()
-	var spawn_pos: Vector3 = ship_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
-	spawn_pos.y = ship_pos.y
+	# `sail_dir` param kept for call-site compatibility; the spawn position
+	# is now computed by `_base_troop_spawn_pos` so the same formula feeds
+	# both the actual troop spawn AND the replay-logged coordinate.
+	var spawn_pos: Vector3 = _base_troop_spawn_pos(ship_pos)
 
 	# Get building Y and troop levels
 	var building_y: float = spawn_pos.y
