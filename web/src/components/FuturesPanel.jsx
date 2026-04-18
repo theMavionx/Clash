@@ -821,6 +821,10 @@ function FuturesPanel() {
   const pacBalance = parseFloat(account?.balance || 0);
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
+  // Avantis doesn't have a signed funding rate — the number here is the
+  // borrow-fee % per hour traders pay LPs. Relabel the badge so users
+  // don't read it as the Pacifica-style signed periodic funding rate.
+  const fundingLabel = dex === 'avantis' ? 'BORROW/h' : 'FUNDING';
 
   // Convert USDC amount to token amount, rounded to lot size
   const lotSize = useMemo(() => {
@@ -958,7 +962,7 @@ function FuturesPanel() {
             <div style={S.infoCell}><span style={S.infoCellLabel}>24h</span><span style={{...S.infoCellValue, color: change24h >= 0 ? '#4CAF50' : '#E53935'}}>{change24h >= 0 ? '+' : ''}{change24h.toFixed(2)}%</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>Volume</span><span style={S.infoCellValue}>${vol24h >= 1e6 ? (vol24h/1e6).toFixed(1)+'M' : vol24h >= 1e3 ? (vol24h/1e3).toFixed(0)+'K' : vol24h.toFixed(0)}</span></div>
             <div style={S.infoCell}><span style={S.infoCellLabel}>OI</span><span style={S.infoCellValue}>${oi >= 1e6 ? (oi/1e6).toFixed(1)+'M' : oi >= 1e3 ? (oi/1e3).toFixed(0)+'K' : oi.toFixed(0)}</span></div>
-            <div style={S.infoCell}><span style={S.infoCellLabel}>Funding</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
+            <div style={S.infoCell}><span style={S.infoCellLabel}>{dex === 'avantis' ? 'Borrow/h' : 'Funding'}</span><span style={{...S.infoCellValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>{fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%</span></div>
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
@@ -1270,10 +1274,10 @@ function FuturesPanel() {
 
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
-    // Funding rate badge (top-right of chart) — only for non-fullscreen
+    // Funding / borrow rate badge (top-right of chart).
     const fundingBadge = currentMarket ? (
       <div style={S.fundingOverlay}>
-        <span style={S.fundingOLabel}>FUNDING</span>
+        <span style={S.fundingOLabel}>{fundingLabel}</span>
         <span style={{...S.fundingOValue, color: fr >= 0 ? '#4CAF50' : '#E53935'}}>
           {fr >= 0 ? '+' : ''}{(fr * 100).toFixed(4)}%
         </span>

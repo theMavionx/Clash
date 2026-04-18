@@ -101,6 +101,52 @@ function normalizeOrder(o, markets) {
   };
 }
 
+// Avantis doesn't publish a per-pair "fundingRate" in the Pacifica sense —
+// traders pay a **borrow fee** to LPs, scaled by open-interest utilization
+// within [minBorrowFee, maxBorrowFee] bps/day. We compute the utilization-
+// weighted hourly rate from the socket-api response so the FuturesPanel
+// badge shows a meaningful number instead of the old flat 0.0000%.
+//
+//   minBF, maxBF  ← storagePairParams  (bps per day)
+//   OI.long/short ← openInterest      (USDC notional)
+//   pairMaxOI     ← cap               (USDC)
+//   util_side = OI[side] / pairMaxOI
+//   borrow_side = (minBF + (maxBF-minBF) * util_side)     (bps/day)
+//   hourly_pct  = (borrow_side / 10000) / 24 * 100        (%)
+//
+// The badge reports the MAX of long/short hourly rate — that's the worst
+// case a trader on the dominant side pays. Returned as a string to match
+// the existing `funding_rate` contract so FuturesPanel keeps working.
+function computeAvantisBorrowRatePct(pairData) {
+  try {
+    const sp = pairData?.storagePairParams || {};
+    const minBF = Number(sp.minBorrowFee || 0);
+    const rawMaxBF = Number(sp.maxBorrowFee || 0);
+    if (!(rawMaxBF > 0) && !(minBF > 0)) return 0;
+    // Avantis uses huge sentinel values for maxBorrowFee on illiquid pairs
+    // (e.g. DOGE ships 10_000_000 bps = 100_000%/day). Linear interpolation
+    // with that ceiling blows the displayed rate up to 5%/hour even at
+    // <1% utilization, which is nonsense for a trader comparing pairs.
+    // Cap the maxBF input at 500 bps/day (≈0.02%/h at 100% util) so the
+    // badge stays in a human-readable range. Positions that actually
+    // breach liquidity limits will still revert at the contract level.
+    const SANE_MAX_BF_BPS_DAY = 500;
+    const maxBF = Math.min(rawMaxBF, SANE_MAX_BF_BPS_DAY);
+    const oi = pairData?.openInterest || {};
+    const oiLong = Number(oi.long || 0);
+    const oiShort = Number(oi.short || 0);
+    const cap = Number(pairData?.pairMaxOI || 0);
+    if (cap <= 0) return minBF / 10000 / 24 * 100;
+    const utilLong = Math.min(1, oiLong / cap);
+    const utilShort = Math.min(1, oiShort / cap);
+    const rateLong = minBF + (maxBF - minBF) * utilLong;
+    const rateShort = minBF + (maxBF - minBF) * utilShort;
+    const maxBps = Math.max(rateLong, rateShort);
+    // bps/day → %/hour. 1 bps = 0.01%, /24 = per hour.
+    return maxBps / 10000 / 24 * 100;
+  } catch { return 0; }
+}
+
 function normalizeMarkets(raw) {
   const list = Array.isArray(raw) ? raw : (raw?.pairs || raw?.data || []);
   return list.map((p, i) => {
@@ -116,6 +162,13 @@ function normalizeMarkets(raw) {
     // Exact Pyth feed symbol (e.g. "Commodities.BRENTM6/USD") — TradingView
      // widget needs this to avoid guess-reconstructing from the short ticker.
     const pythSymbol = p?.feed?.attributes?.symbol || p?.pyth_symbol || null;
+    // Prefer an explicit fundingRate if upstream ever publishes one; else
+    // fall back to the computed borrow-fee proxy (as a % fraction per hour
+    // — e.g. 0.0001 = 0.01%/hour — to match Pacifica's fundingRate shape).
+    const explicit = p.fundingRate ?? p.funding_rate;
+    const fundingRate = explicit != null
+      ? String(explicit)
+      : String(computeAvantisBorrowRatePct(p) / 100); // %→fraction for UI
     return {
       symbol,
       pair: fullPair,
@@ -128,7 +181,7 @@ function normalizeMarkets(raw) {
       min_leverage: String(minLev),
       lot_size: String(p.lotSize || p.lot_size || '0.0001'),
       tick_size: String(p.tickSize || p.tick_size || '0.01'),
-      funding_rate: p.fundingRate || p.funding_rate || '0',
+      funding_rate: fundingRate,
       _raw: p,
     };
   });
