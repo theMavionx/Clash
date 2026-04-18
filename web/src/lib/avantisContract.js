@@ -122,10 +122,24 @@ export function sideIsBuy(side) {
   throw new Error(`Invalid side: ${side}`);
 }
 
+// ───── Live mark price (Pyth via Avantis feed-v3) ──────────────────
+// Market openTrade REQUIRES a live reference price in the trade struct. If
+// you pass `openPrice=0`, the Avantis keeper auto-cancels (verified live).
+// The feed-v3 response already includes the current price next to the
+// priceUpdateData payload, so this is a single request.
+export async function fetchLiveMarkPrice(pairIndex) {
+  try {
+    const res = await fetch(`${FEED_V3_URL}/v2/pairs/${pairIndex}/price-update-data`);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return Number(data?.core?.price) || 0;
+  } catch { return 0; }
+}
+
 // ───── Price update fetch (Pyth via Avantis feed-v3) ───────────────
-// openTrade needs no price data (executor updates internally). But market-
-// close / TP-SL updates DO need fresh Pyth data. Returns hex '0x...' on
-// failure so callers can bail cleanly.
+// openTrade needs no price-update-data payload (executor updates internally).
+// But market-close / TP-SL updates DO need fresh Pyth data. Returns hex
+// '0x...' on failure so callers can bail cleanly.
 export async function fetchPriceUpdateData(pairIndex) {
   // feed-v3.avantisfi.com returns { core: { priceUpdateData, price } }.
   // Historical typo: we used `price_update_data` (snake_case) for a while
@@ -170,7 +184,9 @@ export async function fetchNextTradeIndex(trader, pairIndex) {
     for (const p of positions) {
       const pi = Number(p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex);
       if (pi !== Number(pairIndex)) continue;
-      const idx = Number(p.trade?.index ?? p.index);
+      // Flat `p.index` first — that's the verified live Core API shape. Fall
+      // back to nested `p.trade.index` in case Core changes the schema.
+      const idx = Number(p.index ?? p.trade?.index);
       if (Number.isFinite(idx)) used.add(idx);
     }
     for (let i = 0; i < 100; i++) if (!used.has(i)) return i;

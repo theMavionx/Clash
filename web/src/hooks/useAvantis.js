@@ -14,6 +14,7 @@ import {
   ERC20_ABI, TRADING_ABI, ORDER_TYPE,
   priceToContract, leverageToContract, slippageToContract, collateralToRaw,
   sideIsBuy, fetchPriceUpdateData, fetchExecutionFeeWei, fetchNextTradeIndex,
+  fetchLiveMarkPrice,
 } from '../lib/avantisContract';
 
 const FUTURES_API = '/api/futures';
@@ -68,13 +69,21 @@ function normalizePosition(p, markets) {
 }
 
 function normalizeOrder(o, markets) {
+  // Avantis Core API /user-data.limitOrders shape (verified live):
+  //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, ... }
+  // Same flat scaling as positions: collateral raw 1e6, prices/leverage 1e10.
   const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
   const isBuy = o.buy ?? o.trade?.buy ?? false;
   const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
   const openPrice = Number(o.openPrice ?? o.trade?.openPrice ?? 0) / 1e10 || Number(o.price ?? 0);
-  const collateral = o.positionSizeUSDC !== undefined
-    ? Number(o.positionSizeUSDC) / 1e6
-    : (o.trade?.positionSizeUSDC !== undefined ? Number(o.trade.positionSizeUSDC) / 1e6 : 0);
+  let collateral = 0;
+  if (o.collateral !== undefined && o.collateral !== null) {
+    collateral = Number(o.collateral) / 1e6;
+  } else if (o.positionSizeUSDC !== undefined) {
+    collateral = Number(o.positionSizeUSDC) / 1e6;
+  } else if (o.trade?.positionSizeUSDC !== undefined) {
+    collateral = Number(o.trade.positionSizeUSDC) / 1e6;
+  }
   const leverage = Number(o.leverage ?? o.trade?.leverage ?? 0) / 1e10 || 1;
   return {
     symbol,
@@ -326,13 +335,18 @@ export function useAvantis() {
       const execFee = await fetchExecutionFeeWei();
       const isBuy = sideIsBuy(side);
 
+      // Avantis keeper auto-cancels MARKET trades that arrive with openPrice=0
+      // (verified live). Pass the current Pyth price as the executor reference.
+      const livePrice = await fetchLiveMarkPrice(pairIndex);
+      if (!(livePrice > 0)) throw new Error('Price feed unavailable — try again in a moment.');
+
       const tradeInput = {
         trader: walletAddr,
         pairIndex: BigInt(pairIndex),
         index: BigInt(tradeIndex),
         initialPosToken: 0n,
         positionSizeUSDC,
-        openPrice: 0n, // market: executor fills at live Pyth price
+        openPrice: priceToContract(livePrice),
         buy: isBuy,
         leverage: leverageToContract(levNum),
         tp: 0n,
