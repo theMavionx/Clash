@@ -336,7 +336,7 @@ export function useAvantis() {
       await ensureApproval(positionSizeUSDC);
 
       const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex);
-      const execFee = await fetchExecutionFeeWei();
+      const execFee = await fetchExecutionFeeWei(publicClient);
       const isBuy = sideIsBuy(side);
 
       // Avantis keeper auto-cancels MARKET trades that arrive with openPrice=0
@@ -409,7 +409,7 @@ export function useAvantis() {
       await ensureApproval(positionSizeUSDC);
 
       const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex);
-      const execFee = await fetchExecutionFeeWei();
+      const execFee = await fetchExecutionFeeWei(publicClient);
       const isBuy = sideIsBuy(side);
 
       const tradeInput = {
@@ -463,7 +463,7 @@ export function useAvantis() {
       const amt = Number(amount);
       if (!Number.isFinite(amt) || amt <= 0) throw new Error('Invalid close amount');
       const amountRaw = collateralToRaw(amt);
-      const execFee = await fetchExecutionFeeWei();
+      const execFee = await fetchExecutionFeeWei(publicClient);
 
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'closeTradeMarket',

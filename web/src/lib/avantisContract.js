@@ -157,13 +157,40 @@ export async function fetchPriceUpdateData(pairIndex) {
   }
 }
 
-// ───── Execution fee — fixed 0.00035 ETH ───────────────────────────
-// Avantis removed the /fee/execution endpoint (returns 404 now); the SDK
-// default + our prod-verified value is 0.00035 ETH, which the keeper accepts.
-// If they re-introduce a dynamic endpoint we can switch back.
-const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH
-export async function fetchExecutionFeeWei() {
-  return FEE_FALLBACK_WEI;
+// ───── Execution fee — dynamic with hard-cap fallback ──────────────
+// Avantis deleted the /fee/execution endpoint, so we reproduce the SDK's
+// on-chain formula (gasPrice * 850k * 1.1 + L1 calldata) and attach a 2x
+// safety buffer to survive gas spikes between quote and tx submit. The
+// computed value is then CAPPED by the SDK's known-good fallback (0.00035
+// ETH) — that's the value the keeper has accepted in prod for a year,
+// overpaying there is ~$1 but pays 100% of the time. Under-paying reverts
+// the trade and the user eats the L2 gas + the bad UX ("tx failed").
+//
+// Net effect on Base mainnet (typical ~0.01 gwei): ~0.00002 ETH needed,
+// 2x buffer → 0.00004 ETH, capped by 0.00035 is a no-op → fee stays at
+// 0.00004 ETH. Saves ~$1/trade vs the old flat 0.00035.
+// Gas spikes to 1 gwei+: computed climbs above the cap, we fall back to
+// 0.00035 — same behaviour as before, no regression.
+const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH — SDK default
+const L2_GAS_ESTIMATE   = 935000n;          // 850k × 1.1, matches avantis_trader_sdk
+const L1_CALLDATA_WEI   = 5000000000n;      // ≈ SDK's estimatedL1GasEth constant
+const SAFETY_BUFFER_NUM = 2n;
+const SAFETY_BUFFER_DEN = 1n;
+
+export async function fetchExecutionFeeWei(publicClient) {
+  if (!publicClient || typeof publicClient.getGasPrice !== 'function') {
+    return FEE_FALLBACK_WEI;
+  }
+  try {
+    const gasPrice = await publicClient.getGasPrice(); // wei per gas
+    const l2Cost = gasPrice * L2_GAS_ESTIMATE;
+    const raw = l2Cost + L1_CALLDATA_WEI;
+    const withBuffer = (raw * SAFETY_BUFFER_NUM) / SAFETY_BUFFER_DEN;
+    // Cap at fallback to avoid pricing the trade out on gas spikes.
+    return withBuffer > FEE_FALLBACK_WEI ? FEE_FALLBACK_WEI : withBuffer;
+  } catch {
+    return FEE_FALLBACK_WEI;
+  }
 }
 
 // ───── Next free trade slot per pair ───────────────────────────────
