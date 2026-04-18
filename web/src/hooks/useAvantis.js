@@ -15,6 +15,7 @@ import {
   priceToContract, leverageToContract, slippageToContract, collateralToRaw,
   sideIsBuy, fetchPriceUpdateData, fetchExecutionFeeWei, fetchNextTradeIndex,
   fetchLiveMarkPrice,
+  isLinkedToOurReferrer, applyReferralCode,
 } from '../lib/avantisContract';
 
 const FUTURES_API = '/api/futures';
@@ -174,6 +175,10 @@ export function useAvantis() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
+  // Referral linkage. `hasReferrer` is `true` once we confirm the wallet is
+  // linked to our code, `false` if linked to someone else / no code, `null`
+  // while the read is still in flight so the UI can show a neutral state.
+  const [hasReferrer, setHasReferrer] = useState(null);
   const marketsRef = useRef([]);
 
   const clearError = useCallback(() => setError(null), []);
@@ -245,6 +250,38 @@ export function useAvantis() {
       setOrders(list);
     } catch {}
   }, [walletAddr]);
+
+  // ───── Referral linkage ─────
+  // Reads the Avantis Referral registry to see if the current wallet is
+  // already linked to our code. Called once when the wallet becomes known
+  // and again after the user submits the linkage tx.
+  const fetchReferralStatus = useCallback(async () => {
+    if (!walletAddr || !publicClient) { setHasReferrer(null); return; }
+    try {
+      const linked = await isLinkedToOurReferrer(publicClient, walletAddr);
+      setHasReferrer(linked);
+    } catch {
+      setHasReferrer(null);
+    }
+  }, [walletAddr, publicClient]);
+
+  // Applies our referral code. Single wallet signature; server-free. Idempotent.
+  // After the tx lands we re-read the state so the UI can dismiss the prompt.
+  const linkOurReferrer = useCallback(async () => {
+    setError(null);
+    try {
+      if (!walletClient || !walletAddr) throw new Error('Wallet not connected');
+      await ensureChain();
+      const hash = await applyReferralCode(walletClient);
+      await publicClient.waitForTransactionReceipt({ hash });
+      await fetchReferralStatus();
+      return { tx_hash: hash, status: 'linked' };
+    } catch (e) {
+      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Referral link failed';
+      setError(String(msg).slice(0, 300));
+      return { error: msg };
+    }
+  }, [walletClient, walletAddr, publicClient, ensureChain, fetchReferralStatus]);
 
   // ───── Wallet balances — direct on-chain read ─────
   // USDC + ETH of the user's OWN wallet. No server round-trip.
@@ -587,6 +624,9 @@ export function useAvantis() {
     return () => clearInterval(iv);
   }, [walletAddr, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
 
+  // Referral linkage read — runs once per wallet (on-chain state, no polling).
+  useEffect(() => { fetchReferralStatus(); }, [fetchReferralStatus]);
+
   const marginModes = {};
   const leverageSettings = {};
 
@@ -625,6 +665,10 @@ export function useAvantis() {
     // Signals to UI that Avantis is now non-custodial — hides deposit/withdraw
     // panels, shows "Connect Wallet" CTA if isReady === false.
     isSelfCustody: true,
+    // Referral linkage — FuturesPanel reads these to show the "Unlock 5% off"
+    // banner until the user either signs the one-tx linkage or dismisses it.
+    hasReferrer,          // true | false | null (loading)
+    linkOurReferrer,      // async () => { tx_hash, status } | { error }
     isReady,
   };
 }

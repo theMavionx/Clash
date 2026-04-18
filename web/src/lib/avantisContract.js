@@ -9,7 +9,7 @@
 //   slippageP  × 1e10  (1% = 1e10)
 //   collateral × 1e6   (USDC native)
 
-import { parseUnits } from 'viem';
+import { parseUnits, stringToHex } from 'viem';
 
 // ───── Network ─────────────────────────────────────────────────────
 export const BASE_CHAIN_ID = 8453;
@@ -21,6 +21,15 @@ export const TRADING_ADDRESS         = '0x44914408af82bC9983bbb330e3578E1105e11d
 // integration bug that cost us hours; keep the comment.
 export const TRADING_STORAGE_ADDRESS = '0x8a311D7048c35985aa31C131B9A13e03a5f7422d';
 export const USDC_ADDRESS            = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+// GMX-style referral registry. `setTraderReferralCodeByUser(bytes32)` stores
+// our code against the caller's address; all subsequent open/close fees get
+// the referral rebate (~5%). Idempotent — can be called again to re-link.
+export const REFERRAL_ADDRESS        = '0x1A110bBA13A1f16cCa4b79758BD39290f29De82D';
+// Our code ("clashofperps") encoded as right-zero-padded 32-byte ASCII. Avantis
+// uses raw padding (GMX convention), not keccak hashing. If you ever rotate
+// the code, update this constant — nowhere else reads the string.
+export const REFERRAL_CODE_STRING    = 'clashofperps';
+export const REFERRAL_CODE_BYTES32   = stringToHex(REFERRAL_CODE_STRING, { size: 32 });
 
 // ───── Avantis endpoints ───────────────────────────────────────────
 export const CORE_API    = 'https://core.avantisfi.com';
@@ -64,6 +73,18 @@ const TRADE_INPUT_TUPLE = {
     { name: 'timestamp',        type: 'uint256' },
   ],
 };
+
+// Minimal ABI for the Avantis Referral registry. Read current linkage +
+// write a new one. The 2-arg setTraderReferralCode is handler-gated, so we
+// only expose the user-callable variant.
+export const REFERRAL_ABI = [
+  { name: 'traderReferralCodes', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'trader', type: 'address' }],
+    outputs: [{ type: 'bytes32' }] },
+  { name: 'setTraderReferralCodeByUser', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: '_code', type: 'bytes32' }],
+    outputs: [] },
+];
 
 export const TRADING_ABI = [
   { name: 'openTrade', type: 'function', stateMutability: 'payable',
@@ -218,6 +239,47 @@ export async function fetchNextTradeIndex(trader, pairIndex) {
     return 0;
   }
 }
+
+// ───── Referral linkage ────────────────────────────────────────────
+// Returns the bytes32 code the trader is currently linked to (or 0x0…00 if
+// none). Cheap on-chain read — no signing required.
+export async function fetchReferralCode(publicClient, trader) {
+  if (!publicClient || !trader) return null;
+  try {
+    const code = await publicClient.readContract({
+      address: REFERRAL_ADDRESS,
+      abi: REFERRAL_ABI,
+      functionName: 'traderReferralCodes',
+      args: [trader],
+    });
+    return code || null;
+  } catch {
+    return null;
+  }
+}
+
+// Convenience: is this trader already linked to OUR code? Compares the
+// stored bytes32 against REFERRAL_CODE_BYTES32 case-insensitively to
+// tolerate any casing quirks in RPC responses.
+export async function isLinkedToOurReferrer(publicClient, trader) {
+  const code = await fetchReferralCode(publicClient, trader);
+  if (!code) return false;
+  return String(code).toLowerCase() === String(REFERRAL_CODE_BYTES32).toLowerCase();
+}
+
+// Writes our referral code into the user's linkage. One signature. Safe to
+// call repeatedly; the Avantis contract overwrites the prior code each time
+// (not frozen after first write). Returns the tx hash.
+export async function applyReferralCode(walletClient) {
+  if (!walletClient) throw new Error('Wallet not connected');
+  return walletClient.writeContract({
+    address: REFERRAL_ADDRESS,
+    abi: REFERRAL_ABI,
+    functionName: 'setTraderReferralCodeByUser',
+    args: [REFERRAL_CODE_BYTES32],
+  });
+}
+
 
 // ───── Base chain switch helper (EIP-3326/3085) ────────────────────
 export async function ensureBaseChain(provider) {

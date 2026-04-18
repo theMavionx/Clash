@@ -613,6 +613,8 @@ function FuturesPanel() {
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
+    // Avantis-only — undefined on the Pacifica branch.
+    hasReferrer, linkOurReferrer,
   } = trading;
   // For Pacifica: wallet needs adapter or Privy. For Avantis: walletAddr is
   // the custodial Base address, provisioned on first fetch by the hook.
@@ -664,6 +666,26 @@ function FuturesPanel() {
   const [walletCopied, setWalletCopied] = useState(false);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const { setExternalProvider: setEvmProvider } = useEvmWallet();
+  // Referral banner state. Persists a "don't bug me again" flag in localStorage
+  // so users who consciously skipped linking don't see the prompt on every
+  // FuturesPanel open. Linking itself updates `hasReferrer=true` (read from
+  // the chain) which auto-hides the banner without needing the dismiss flag.
+  const REFERRAL_DISMISS_KEY = 'clash_avantis_ref_dismissed';
+  const [referralDismissed, setReferralDismissed] = useState(() => {
+    try { return localStorage.getItem(REFERRAL_DISMISS_KEY) === '1'; } catch { return false; }
+  });
+  const [referralLinking, setReferralLinking] = useState(false);
+  const handleLinkReferrer = useCallback(async () => {
+    if (!linkOurReferrer || referralLinking) return;
+    setReferralLinking(true);
+    try { await linkOurReferrer(); } finally { setReferralLinking(false); }
+  }, [linkOurReferrer, referralLinking]);
+  const handleDismissReferral = useCallback(() => {
+    setReferralDismissed(true);
+    try { localStorage.setItem(REFERRAL_DISMISS_KEY, '1'); } catch { /* storage disabled */ }
+  }, []);
+  const showReferralBanner =
+    dex === 'avantis' && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
     if (!provider || !address) return;
@@ -1727,6 +1749,49 @@ function FuturesPanel() {
             </button>
           </div>
         </div>
+        {showReferralBanner && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 12px',
+            background: 'linear-gradient(180deg, #FFF3CD 0%, #FFE69C 100%)',
+            borderBottom: '2px solid #D4A017',
+            color: '#5C3A21', fontSize: 12, fontWeight: 800,
+          }}>
+            <span style={{fontSize: 16}}>🎁</span>
+            <span style={{flex: 1, minWidth: 0}}>
+              <span style={{display: 'block'}}>Unlock 5% off every Avantis trade</span>
+              <span style={{fontSize: 10, fontWeight: 700, color: '#8a6914'}}>
+                One signature — links your wallet to our referral code.
+              </span>
+            </span>
+            <button
+              data-nodrag
+              onClick={handleLinkReferrer}
+              disabled={referralLinking}
+              style={{
+                background: referralLinking ? '#b8860b' : 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)',
+                border: '2px solid #8a6914', borderRadius: 8,
+                color: '#fff', padding: '6px 12px',
+                fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
+                cursor: referralLinking ? 'wait' : 'pointer',
+                textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {referralLinking ? 'SIGNING…' : 'UNLOCK'}
+            </button>
+            <button
+              data-nodrag
+              onClick={handleDismissReferral}
+              title="Dismiss"
+              style={{
+                background: 'transparent', border: 'none',
+                color: '#8a6914', cursor: 'pointer',
+                fontSize: 18, fontWeight: 900, padding: '0 4px', lineHeight: 1,
+              }}
+            >×</button>
+          </div>
+        )}
         <div className="futures-panel-body" style={S.body}>
           <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%'}}>
             {renderContent()}
