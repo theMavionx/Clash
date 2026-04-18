@@ -23,7 +23,7 @@
 // parent flips `showRegister=false`, unmounting the panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSend } from '../hooks/useGodot';
+import { useSend, useUI } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -56,11 +56,72 @@ export function useAuthFlow() {
   const { sendToGodot } = useSend();
   const { dex, setDex } = useDex();
   const { isInFrame, user: fcUser, loading: fcLoading } = useFarcaster();
+  const { showRegister } = useUI();
   const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
-  const { ready: privyReady, authenticated: privyAuthed, login: privyLogin } = usePrivy();
-  const { setExternalProvider: setEvmProvider } = useEvmWallet();
+  const { ready: privyReady, authenticated: privyAuthed, login: privyLogin, logout: privyLogout } = usePrivy();
+  const { setExternalProvider: setEvmProvider, disconnect: evmDisconnect } = useEvmWallet();
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
+
+  // Refs shared across effects below — declared up-front so the
+  // session-reset effect can clear them before the resolver machinery
+  // attempts to re-use stale state.
+  const lastRegisteredRef = useRef(null);
+  const fcEvmTriedRef = useRef(false);
+
+  // `readyForRegister` gates the auto-register effect so it can't fire on
+  // the SAME render where the session-reset effect detected a show_register
+  // transition. Without this gate the register effect sees stale localStorage
+  // (`dexPicked=1`) and stale EvmWalletContext (silent-reconnected old
+  // wallet) on the first render after admin-delete, fires a register with
+  // the stale wallet, and silently re-creates the account the admin just
+  // deleted. The gate is lifted in the same reset effect (setReadyForRegister
+  // is batched with the state clears, so the NEXT render has both the
+  // cleared state AND the gate lifted).
+  const [readyForRegister, setReadyForRegister] = useState(false);
+
+  // Session-invalidated reset. Godot sends `show_register` in two cases:
+  //   (a) brand-new user — nothing to clean, all flags are already clear
+  //   (b) existing user whose token became invalid (admin delete, account
+  //       purge, token expiry) — stale localStorage still says dexPicked=1
+  //       and the silent EVM reconnect may have re-hydrated an old wallet,
+  //       so resolvers would fire and silently re-register the user into a
+  //       new account they didn't ask for.
+  // We detect the transition (showRegister goes from false → true) and wipe
+  // the persisted dex + external-EVM state so the user lands on the DEX
+  // picker with a clean slate. The initial false→true transition on page
+  // load also fires, but the cleanup is idempotent (no-op on fresh state).
+  const prevShowRegisterRef = useRef(false);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    const prev = prevShowRegisterRef.current;
+    prevShowRegisterRef.current = showRegister;
+    if (!showRegister || prev) return; // only on false→true
+    // Clear picker skip so user explicitly re-chooses DEX.
+    writeDexPicked(false);
+    setDexPickedState(false);
+    // Clear any silent-reconnected external EVM wallet + its rdns memo.
+    try { evmDisconnect(); } catch { /* noop */ }
+    // Also end the Privy session. Without this, a user who was previously
+    // email-logged-in to Privy would have `privyAuthed=true` on next render,
+    // usePrivyEvmCandidate / usePrivySolanaResolver would immediately surface
+    // their old Privy wallet, and the register effect would silently re-
+    // create the account they just had invalidated. Let Privy promise settle
+    // asynchronously — we don't await because the session reset is a UI
+    // transition, not a gated operation.
+    if (privyEnabled && privyAuthed) {
+      Promise.resolve(privyLogout()).catch(() => { /* noop */ });
+    }
+    // Allow register to fire again for the next candidate.
+    lastRegisteredRef.current = null;
+    fcEvmTriedRef.current = false;
+    // Lift the register gate on the SAME batched render so the next render
+    // sees (dexPicked=false, readyForRegister=true). User must pick DEX
+    // first; register fires only after an explicit resolver candidate
+    // materialises under the new (post-reset) state.
+    setReadyForRegister(true);
+  }, [showRegister, evmDisconnect, privyEnabled, privyAuthed, privyLogout]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Resolvers: each is a hook that watches one source. useAuthFlow combines.
   const solAdapter = useSolanaAdapterResolver(isInFrame);
@@ -71,7 +132,7 @@ export function useAuthFlow() {
   // Farcaster EVM: not a hook (SDK call is imperative). We trigger it once
   // when Avantis is picked + in frame, and feed the resulting provider
   // into EvmWalletContext. Post-push it surfaces via useEvmContextResolver.
-  const fcEvmTriedRef = useRef(false);
+  // (fcEvmTriedRef is declared up-front alongside lastRegisteredRef.)
   useEffect(() => {
     if (!isInFrame || !fcUser) return;
     if (dex !== 'avantis') return;
@@ -124,10 +185,9 @@ export function useAuthFlow() {
     return null;
   }, [fcUser, candidate, privyEvm, privySol]);
 
-  // Track whether we've already fired a register for the current candidate
-  // so resolver updates (address unchanged) don't re-register endlessly.
-  // Resets on logout or when the wallet address actually changes.
-  const lastRegisteredRef = useRef(null); // last wallet we fired register for
+  // (lastRegisteredRef is declared up-front alongside fcEvmTriedRef.)
+  // It tracks the last wallet we fired register for; clears on session
+  // reset or logout so a new candidate can re-fire register.
   const [registering, setRegistering] = useState(false);
 
   // Boot grace — if FC SDK or Privy is still resolving, don't show the
@@ -170,6 +230,11 @@ export function useAuthFlow() {
   // derived state — ESLint's heuristic flag is acceptable here.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
+    // Gate on readyForRegister — prevents firing on the same render where
+    // the session-reset effect detected a transition but hasn't yet flushed
+    // the cleared dexPicked / evmContext state. See `readyForRegister`
+    // comment near the top.
+    if (!readyForRegister) return;
     if (!candidate || !suggestedName) return;
     if (lastRegisteredRef.current === candidate.wallet) return;
     lastRegisteredRef.current = candidate.wallet;
@@ -184,7 +249,7 @@ export function useAuthFlow() {
     // after 10s so the user can retry or pick a different path.
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);
-  }, [candidate, suggestedName, dex, sendToGodot]);
+  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.

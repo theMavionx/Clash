@@ -6,6 +6,7 @@ import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useG
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -20,6 +21,7 @@ function ProfileModal({ onClose }) {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
+  const { disconnect: evmDisconnect } = useEvmWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const { account, walletAddr } = dex === 'avantis' ? avantisHook : pacificaHook;
@@ -47,14 +49,18 @@ function ProfileModal({ onClose }) {
   // RegisterPanel then drives the new sign-in flow.
   const switchDex = async () => {
     // Drop the picker-remembered choice so RegisterPanel shows it again.
-    try { localStorage.removeItem('clash_dex_picked'); } catch {}
+    try { localStorage.removeItem('clash_dex_picked'); } catch { /* storage disabled */ }
     // Full logout mirrors handleDisconnect: clear Godot state, wallet adapter,
-    // Privy session, and the in-memory token. User lands on the DEX picker.
+    // Privy session, EvmWalletContext (including persisted rdns), and the
+    // in-memory token. useAuthFlow also reacts to `show_register` and does
+    // the same cleanup — doing it here belt-and-suspenders in case Godot's
+    // logout round-trip is slow.
     sendToGodot('logout');
+    try { evmDisconnect(); } catch { /* noop */ }
     if (walletSource === 'adapter') {
-      try { disconnect(); } catch {}
+      try { disconnect(); } catch { /* noop */ }
     } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
-      try { await privyLogout(); } catch {}
+      try { await privyLogout(); } catch { /* noop */ }
     }
     window._playerToken = null;
     onClose();
@@ -64,10 +70,11 @@ function ProfileModal({ onClose }) {
     // Tell Godot to drop its session + destroy all placed buildings. On next
     // login, building_system reloads fresh from the server via auth_ok.
     sendToGodot('logout');
+    try { evmDisconnect(); } catch { /* noop */ }
     if (walletSource === 'adapter') {
-      try { disconnect(); } catch {}
+      try { disconnect(); } catch { /* noop */ }
     } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
-      try { await privyLogout(); } catch {}
+      try { await privyLogout(); } catch { /* noop */ }
     }
     window._playerToken = null;
     onClose();

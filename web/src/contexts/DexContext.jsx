@@ -54,7 +54,12 @@ export function DexProvider({ children }) {
 
   // Once the player's token exists, fetch their server-side dex preference so
   // returning users land on the DEX they registered with (localStorage may be
-  // stale after a cache clear or device swap).
+  // stale after a cache clear or device swap). Note: we ONLY sync the `dex`
+  // value here, never the `clash_dex_picked` flag — that flag is owned
+  // exclusively by auth/useAuthFlow.js (commitDex / unpickDex / session
+  // reset on show_register). Touching it here used to race with
+  // useAuthFlow's admin-delete reset, causing the picker to be silently
+  // re-skipped.
   const synced = useRef(false);
   useEffect(() => {
     if (synced.current) return;
@@ -71,10 +76,8 @@ export function DexProvider({ children }) {
           if (j.dex !== localStorage.getItem(STORAGE_KEY)) {
             setDex(j.dex);
           }
-          // Mark dex as picked so the RegisterPanel picker is skipped.
-          try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
         }
-      } catch {}
+      } catch { /* network error — keep local dex */ }
     }, 500);
     return () => clearInterval(poll);
   }, [setDex]);

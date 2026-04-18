@@ -666,8 +666,24 @@ function FuturesPanel() {
   const { setExternalProvider: setEvmProvider } = useEvmWallet();
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
-    if (provider && address) setEvmProvider(provider, address, rdns);
-  }, [setEvmProvider]);
+    if (!provider || !address) return;
+    // Guard: if the player is already authenticated on a non-Avantis DEX
+    // (e.g. Pacifica with a Solana wallet) we refuse to stamp a new EVM
+    // wallet into EvmWalletContext from this panel. Doing so would leave
+    // EvmWalletContext polluted with a wallet that doesn't match the
+    // active session; on the next DEX switch (or auth reset) the stored
+    // rdns would silent-reconnect and the refactored auth flow would pick
+    // it as the Avantis candidate — effectively re-registering the user
+    // under a wallet they only ever used to peek at the orderbook.
+    // The legitimate use case (connecting an Avantis wallet from the
+    // FuturesPanel) is still allowed: dex === 'avantis'.
+    if (dex !== 'avantis') {
+      console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
+      return;
+    }
+    setEvmProvider(provider, address, rdns, 'external');
+    void walletName;
+  }, [dex, setEvmProvider]);
   const elfaSignals = useElfaSignals();
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
