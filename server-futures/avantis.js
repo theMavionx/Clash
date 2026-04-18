@@ -615,32 +615,52 @@ async function getMarketInfo() {
 }
 
 // Cache for 24h-ago prices (used to compute 24h change). Refreshed hourly.
+// Keyed by feedId. Pyth Hermes `/v2/updates/price/<unix_ts>` now 404s for
+// arbitrary historical timestamps — they only serve recent streaming data —
+// so we use Pyth Benchmarks (TradingView UDF shim) daily OHLC instead: last
+// day's CLOSE = "yesterday_price".
 let yesterdayPricesCache = null;
 let yesterdayPricesCacheTime = 0;
+const BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
 
-async function fetchYesterdayPrices(feedIds) {
+async function fetchYesterdayPrices(raw) {
   const now = Math.floor(Date.now() / 1000);
   if (yesterdayPricesCache && now * 1000 - yesterdayPricesCacheTime < 60 * 60 * 1000) {
     return yesterdayPricesCache;
   }
-  const yesterday = now - 24 * 60 * 60;
   const result = {};
-  // Hermes /v2/updates/price/<timestamp>?ids[]=... gives historical snapshot.
-  // We batch in chunks to stay under URL length limits.
-  const chunks = [];
-  for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
-  for (const chunk of chunks) {
-    try {
-      const qs = chunk.map(id => `ids[]=${id}`).join('&');
-      const res = await fetch(`${PYTH_HERMES}/v2/updates/price/${yesterday}?${qs}&parsed=true`);
-      if (!res.ok) continue;
-      const j = await res.json();
-      for (const p of (j.parsed || [])) {
-        const price = Number(p.price.price) * Math.pow(10, p.price.expo);
-        result[p.id.replace(/^0x/, '')] = price;
-      }
-    } catch {}
+  // Build jobs: one HTTP per pair. Use a concurrency limit so we don't
+  // overwhelm Pyth. Requests are keyed by feedId so the consumer can match
+  // back regardless of symbol shape. 3 days of daily OHLC is enough to pick
+  // yesterday's close (second-to-last bucket).
+  const jobs = [];
+  for (const p of raw) {
+    const fid = String(p?.feed?.feedId || '').replace(/^0x/, '').toLowerCase();
+    const pythSym = p?.feed?.attributes?.symbol; // e.g. "Crypto.ETH/USD"
+    if (!fid || !pythSym) continue;
+    jobs.push({ fid, pythSym });
   }
+
+  const CONCURRENCY = 8;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < jobs.length) {
+      const job = jobs[cursor++];
+      try {
+        const from = now - 3 * 86400;
+        const url = `${BENCHMARKS}/history?symbol=${encodeURIComponent(job.pythSym)}&resolution=D&from=${from}&to=${now}`;
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const j = await res.json();
+        if (j.s !== 'ok' || !Array.isArray(j.c) || j.c.length < 2) continue;
+        // Last entry is today's partial close; prior entry is yesterday's close.
+        const yest = Number(j.c[j.c.length - 2]);
+        if (Number.isFinite(yest) && yest > 0) result[job.fid] = yest;
+      } catch {}
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+
   yesterdayPricesCache = result;
   yesterdayPricesCacheTime = now * 1000;
   return result;
@@ -650,6 +670,12 @@ async function fetchYesterdayPrices(feedIds) {
 // hammer Pyth on each call. Also holds the last-known values so transient
 // batch failures don't surface as gaps.
 let pricesCache = { data: null, ts: 0, latest: {} };
+
+// Pyth Hermes 404s the ENTIRE batch if any single feedId is unknown. Memoize
+// bad IDs here so we skip them forever (otherwise one dead feed — e.g. FET/USD
+// that Avantis still lists but Pyth retired — blackholes 24 good feeds per
+// chunk). Split-on-404 in getPrices discovers bad IDs and feeds this set.
+const badFeedIds = new Set();
 
 async function getPrices() {
   // Avantis socket data doesn't carry live prices — only pair/group config.
@@ -666,6 +692,7 @@ async function getPrices() {
     for (const p of raw) {
       const fid = String(p?.feed?.feedId || '').replace(/^0x/, '').toLowerCase();
       if (!fid) continue;
+      if (badFeedIds.has(fid)) continue; // skip known-dead feeds
       feedIds.push(fid);
       pairByFeedId[fid] = p.symbol; // e.g. "ETH/USD"
     }
@@ -678,20 +705,41 @@ async function getPrices() {
     const chunks = [];
     for (let i = 0; i < feedIds.length; i += 25) chunks.push(feedIds.slice(i, i + 25));
 
+    // Hermes 404s the whole batch if ANY one feedId is unknown. On 404 we
+    // split the chunk in half and recurse; terminal single-ID 404 → mark as
+    // bad so we never query it again. This way one retired feed (FET/USD)
+    // doesn't blackhole the 24 good feeds sharing its chunk.
     async function fetchChunk(chunk, attempt = 0) {
+      if (!chunk.length) return;
       const qs = chunk.map(id => `ids[]=${id}`).join('&');
+      let res;
       try {
-        const res = await fetch(`${PYTH_HERMES}/v2/updates/price/latest?${qs}&parsed=true`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        res = await fetch(`${PYTH_HERMES}/v2/updates/price/latest?${qs}&parsed=true`);
+      } catch (e) {
+        if (attempt < 2) return fetchChunk(chunk, attempt + 1);
+        return;
+      }
+      if (res.ok) {
         const j = await res.json();
         for (const p of (j.parsed || [])) {
           const price = Number(p.price.price) * Math.pow(10, p.price.expo);
           const publish_time = Number(p.price.publish_time || 0);
           latest[p.id.replace(/^0x/, '')] = { price, publish_time };
         }
-      } catch (e) {
-        if (attempt < 2) return fetchChunk(chunk, attempt + 1);
+        return;
       }
+      if (res.status === 404 && chunk.length > 1) {
+        const mid = Math.floor(chunk.length / 2);
+        await fetchChunk(chunk.slice(0, mid), 0);
+        await fetchChunk(chunk.slice(mid), 0);
+        return;
+      }
+      if (res.status === 404 && chunk.length === 1) {
+        badFeedIds.add(chunk[0]);
+        console.warn('[avantis] marking feedId as dead (Pyth 404):', chunk[0]);
+        return;
+      }
+      if (attempt < 2) return fetchChunk(chunk, attempt + 1);
     }
     await Promise.all(chunks.map(c => fetchChunk(c)));
 
@@ -708,7 +756,7 @@ async function getPrices() {
       if (fid) pythSymByFid[fid] = p?.feed?.attributes?.symbol || '';
     }
 
-    const yesterday = await fetchYesterdayPrices(feedIds);
+    const yesterday = await fetchYesterdayPrices(raw);
 
     // Build the price map keyed by pair label (matches normalizePrices's
     // Object.entries split on "/" to extract base). Drop feeds that are stale

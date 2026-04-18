@@ -62,6 +62,32 @@ router.post('/players/register', (req, res) => {
       'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
     ).get(wallet);
     if (existing) {
+      // If the caller supplied a fresh name that differs from the stored one,
+      // honour it (lets users rename on re-login). Ignore auto-derived names
+      // of the form "player_xxxxxx" so we don't clobber a real saved name
+      // when the Farcaster / Privy flow re-submits the fallback.
+      const trimmed = typeof name === 'string' ? name.trim() : '';
+      const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
+      if (trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
+        // Attempt rename; if collides with another user, append digits.
+        let finalName = trimmed;
+        for (let suffix = 0; suffix <= 99; suffix++) {
+          const tryName = suffix === 0 ? finalName : finalName + suffix;
+          const clash = db.db.prepare('SELECT id FROM players WHERE name = ? AND id != ?').get(tryName, existing.id);
+          if (!clash) {
+            db.db.prepare('UPDATE players SET name = ? WHERE id = ?').run(tryName, existing.id);
+            existing.name = tryName;
+            finalName = tryName;
+            break;
+          }
+        }
+      }
+      // Also honour a dex switch on re-login (client may have changed DEX
+      // selection in profile before reconnecting).
+      if ((dex === 'pacifica' || dex === 'avantis') && existing.dex !== dex) {
+        db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, existing.id);
+        existing.dex = dex;
+      }
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
     }

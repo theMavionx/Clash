@@ -192,13 +192,13 @@ function RegisterPanel() {
 
   const handlePrivyLoggedIn = ({ wallet, email, chain }) => {
     if (triedPrivyLogin.current) return;
-    // Avantis: show a name-input step before registering (the Godot backend
-    // still short-circuits to the existing account if this wallet is already
-    // registered, so this form is only seen by new users).
+    // Avantis: show a name-input step ONLY for new wallets. Returning
+    // wallets are auto-logged-in (their name is already set in DB and won't
+    // change via register — so asking for it again is pointless UX noise).
     if (dex === 'avantis') {
-      const suggested = email ? email.split('@')[0].slice(0, 20) : '';
-      setAvantisAuth({ wallet, email, chain: chain || 'base', source: 'privy' });
-      setName(suggested);
+      checkExistingAndContinue(wallet, {
+        email, chain: chain || 'base', source: 'privy',
+      });
       return;
     }
     // Pacifica email path: register immediately with derived name — the user
@@ -212,21 +212,43 @@ function RegisterPanel() {
     setTimeout(() => setWaitingForGodot(false), 8000);
   };
 
-  // External EVM wallet connected via custom modal (not Privy). Avantis path
-  // always goes through the name-input step.
+  // Helper: probe /players/login-wallet. Pre-fills the name form with the
+  // existing account's name (if any) so a returning user can press PLAY to
+  // continue, or edit to rename. If no account exists yet, fall back to an
+  // email- or wallet-derived suggestion for first-time users.
+  const checkExistingAndContinue = async (wallet, { email = null, chain = 'base', source = 'external' } = {}) => {
+    let existingName = null;
+    try {
+      const r = await fetch('/api/players/login-wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wallet }),
+      });
+      if (r.ok) {
+        const existing = await r.json().catch(() => ({}));
+        existingName = existing?.name || null;
+      }
+    } catch {}
+    const suggested = existingName
+      || (email ? email.split('@')[0].slice(0, 20) : '');
+    setAvantisAuth({
+      wallet, email, chain, source,
+      existingName, // signals UI that this is a rename, not first-time
+    });
+    setName(suggested);
+  };
+
+  // External EVM wallet connected via custom modal (not Privy). Skip name
+  // prompt for returning wallets.
   const handleEvmWalletConnected = ({ address, walletName, provider }) => {
     setEvmModalOpen(false);
     // Publish the provider to EvmWalletContext so useAvantis / FuturesPanel
     // can build a viem walletClient and sign trades from this wallet.
     if (provider && address) setEvmProvider(provider, address);
     if (triedPrivyLogin.current) return;
-    setAvantisAuth({
-      wallet: address,
-      email: null,
-      chain: 'base',
-      source: walletName || 'external',
+    checkExistingAndContinue(address, {
+      chain: 'base', source: walletName || 'external',
     });
-    setName('');
   };
 
   // Commit the Avantis registration with the name the user typed.
@@ -491,6 +513,8 @@ function RegisterPanel() {
           //    frame's EVM provider. If it fails, user sees the usual CTAs.
           avantisAuth ? (
             // Auth succeeded — user picks a display name before we register.
+            // For returning users (existingName set) the name is pre-filled;
+            // they can press PLAY unchanged to auto-login, or edit to rename.
             <form onSubmit={submitAvantisRegister} style={styles.form}>
               <div style={styles.walletBadge}>
                 <div style={styles.dot} />
@@ -498,6 +522,15 @@ function RegisterPanel() {
                   {avantisAuth.wallet.slice(0, 6)}…{avantisAuth.wallet.slice(-4)}
                 </span>
               </div>
+              {avantisAuth.existingName ? (
+                <p style={{...styles.desc, margin: 0, fontSize: 12}}>
+                  Welcome back — press PLAY to continue, or edit to rename.
+                </p>
+              ) : (
+                <p style={{...styles.desc, margin: 0, fontSize: 12}}>
+                  Pick a display name for the leaderboard.
+                </p>
+              )}
               <input
                 style={styles.input}
                 value={name}

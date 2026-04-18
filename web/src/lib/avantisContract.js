@@ -157,16 +157,12 @@ export async function fetchPriceUpdateData(pairIndex) {
   }
 }
 
-// ───── Execution fee fetch (dynamic; falls back to 0.00035 ETH) ────
+// ───── Execution fee — fixed 0.00035 ETH ───────────────────────────
+// Avantis removed the /fee/execution endpoint (returns 404 now); the SDK
+// default + our prod-verified value is 0.00035 ETH, which the keeper accepts.
+// If they re-introduce a dynamic endpoint we can switch back.
 const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH
 export async function fetchExecutionFeeWei() {
-  try {
-    const res = await fetch(`${CORE_API}/fee/execution`);
-    if (!res.ok) return FEE_FALLBACK_WEI;
-    const data = await res.json();
-    const eth = Number(data?.eth || data?.executionFee || 0);
-    if (eth > 0 && eth < 0.01) return BigInt(Math.floor(eth * 1e18));
-  } catch {}
   return FEE_FALLBACK_WEI;
 }
 

@@ -287,10 +287,19 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "") ->
 	if not net:
 		send_to_react("error", {"message": "Network not available"})
 		return
-	# Try to recover existing account by wallet first. If found and the caller
-	# specified a different DEX than the stored one, switch it via /set-dex so
-	# the account matches the user's current intent.
-	if wallet != "":
+	# Detect auto-derived names the client sends as placeholders (e.g. when a
+	# returning user reconnects and we have no real input). Server treats these
+	# as "no rename requested" so we don't clobber the user's real saved name.
+	var is_auto_derived: bool = (
+		player_name.begins_with("player_")
+		or player_name.begins_with("fc_")
+	)
+	# If caller supplied a REAL name AND a wallet, skip the login_by_wallet
+	# shortcut and go straight to /register — the server's register handler
+	# updates the name on existing accounts when a non-auto-derived name is
+	# provided. Cheaper than two HTTP calls and enables the rename path.
+	var wants_rename: bool = wallet != "" and player_name.length() >= 2 and not is_auto_derived
+	if wallet != "" and not wants_rename:
 		var wallet_result = await net.login_by_wallet(wallet)
 		if wallet_result.has("token"):
 			if dex != "" and wallet_result.get("dex", "") != dex:

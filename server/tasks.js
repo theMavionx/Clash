@@ -1,7 +1,33 @@
 // Task system — admin-configurable quests with server-side verification.
 // Types: volume | positions | combo_volume_attack | daily_trade_gold
+//
+// Both Pacifica and Avantis trades contribute to the SAME quest/gold ledger
+// — we branch on player.dex at the fetch step and present a unified trade
+// shape to the verifiers. EVM wallets (0x..., Avantis) read from server-
+// futures.trade_history; Solana wallets hit the Pacifica API.
 
 const db = require('./db');
+const path = require('path');
+
+// Lazy read-only handle to server-futures/futures.db (same pattern as
+// routes.js claim-gold). Returns null if server-futures isn't deployed.
+let _futuresDb = null;
+function futuresDbReadonly() {
+  if (_futuresDb === 'unavailable') return null;
+  if (_futuresDb) return _futuresDb;
+  try {
+    const Database = require('better-sqlite3');
+    const fpath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
+    if (!require('fs').existsSync(fpath)) throw new Error('futures.db not found at ' + fpath);
+    _futuresDb = new Database(fpath, { readonly: true, fileMustExist: true });
+    _futuresDb.pragma('journal_mode = WAL');
+  } catch (e) {
+    console.warn('[tasks] futures.db unavailable:', e.message);
+    _futuresDb = 'unavailable';
+    return null;
+  }
+  return _futuresDb;
+}
 
 // ---------- Schema ----------
 try {
@@ -72,29 +98,17 @@ async function buildSnapshot(player, task) {
   const snap = { start_time: now, type: task.type };
 
   if (task.type === 'volume' || task.type === 'positions' || task.type === 'combo_volume_attack') {
-    // Baseline = max history_id from Pacifica (source of truth). trading_rewards.last_trade_id
-    // may be stale (if the player hasn't claimed gold yet), so we can't rely on it —
-    // it would let pre-existing trades leak into the quest progress.
-    const wallet = (player && player.wallet) || (() => {
-      try {
-        const row = db.db.prepare('SELECT wallet FROM trading_rewards WHERE player_id = ?').get(player.id);
-        return row && row.wallet;
-      } catch { return null; }
-    })();
+    // Baseline = max trade id the moment the user starts this quest. Pre-
+    // existing trades must NOT count toward progress. Source of truth depends
+    // on dex: Avantis uses local futures.db rowid, Pacifica uses their public
+    // history_id. Fall back to trading_rewards.last_trade_id if source fails
+    // (avoids a zero baseline that would leak ALL past trades).
+    const trades = await fetchWalletTrades(player);
     let baseline = 0;
-    if (wallet && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(wallet)) {
-      try {
-        const r = await fetch(`https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`);
-        const j = await r.json();
-        if (j && j.success && Array.isArray(j.data)) {
-          for (const t of j.data) {
-            const id = Number(t.history_id || 0);
-            if (id > baseline) baseline = id;
-          }
-        }
-      } catch {}
+    for (const t of trades) {
+      const id = Number(t.history_id || 0);
+      if (id > baseline) baseline = id;
     }
-    // Fallback to trading_rewards only if Pacifica fetch failed (avoids zero baseline)
     if (baseline === 0) {
       const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(player.id);
       baseline = reward ? reward.last_trade_id : 0;
@@ -121,26 +135,74 @@ async function buildSnapshot(player, task) {
 
 // Solana base58 address: 32-44 chars, no '0OIl'
 const SOLANA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
 function isSolanaWallet(w) { return typeof w === 'string' && SOLANA_RE.test(w); }
+function isEvmWallet(w) { return typeof w === 'string' && EVM_RE.test(w); }
 
 function resolveWallet(player) {
-  if (player && isSolanaWallet(player.wallet)) return player.wallet;
+  if (player && (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet))) return player.wallet;
   try {
     const row = db.db.prepare('SELECT wallet FROM trading_rewards WHERE player_id = ?').get(player.id);
-    if (row && isSolanaWallet(row.wallet)) return row.wallet;
+    if (row && (isSolanaWallet(row.wallet) || isEvmWallet(row.wallet))) return row.wallet;
   } catch {}
   return null;
 }
 
-async function fetchWalletTrades(wallet) {
+// Unified trade-fetch: routes on wallet format. EVM → local server-futures
+// trade_history; Solana → Pacifica public API. Returns a common shape:
+//   [{ history_id, symbol, side, price, amount }]
+// so verifiers don't need to branch.
+async function fetchWalletTrades(player) {
+  if (!player) return [];
+  const wallet = resolveWallet(player);
   if (!wallet) return [];
-  try {
-    const r = await fetch(
-      `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
-    );
-    const j = await r.json();
-    return (j && j.success && Array.isArray(j.data)) ? j.data : [];
-  } catch { return []; }
+
+  // Avantis (EVM): read from futures.db. trade_history stores notional_usd
+  // and amount (collateral). We synthesise (price, amount) that multiply to
+  // the notional so the volume verifier produces correct USD vol.
+  if (isEvmWallet(wallet)) {
+    const fdb = futuresDbReadonly();
+    if (!fdb) return [];
+    try {
+      // Filter by player_id AND a matching wallet in server-futures.wallets
+      // so we never leak trades between migrated/deprecated rows.
+      const rows = fdb.prepare(`
+        SELECT id, symbol, side, amount, price, notional_usd, order_type, created_at
+        FROM trade_history
+        WHERE player_id = ? AND dex = 'avantis' AND status != 'failed'
+        ORDER BY id ASC
+      `).all(player.id);
+      return rows.map(r => {
+        const notional = Number(r.notional_usd) || 0;
+        const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);
+        const amount = price > 0 ? notional / price : 0;
+        return {
+          history_id: r.id,
+          symbol: String(r.symbol || '').toUpperCase(),
+          side: r.side,            // 'long'/'short' (Pacifica expects these words — classifyTrade handles)
+          price: String(price),
+          amount: String(amount),
+          _notional: notional,
+          _order_type: r.order_type,
+        };
+      });
+    } catch (e) {
+      console.warn('[tasks] EVM trades read failed:', e.message);
+      return [];
+    }
+  }
+
+  // Pacifica (Solana): public API
+  if (isSolanaWallet(wallet)) {
+    try {
+      const r = await fetch(
+        `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
+      );
+      const j = await r.json();
+      return (j && j.success && Array.isArray(j.data)) ? j.data : [];
+    } catch { return []; }
+  }
+  return [];
 }
 
 async function verifyVolume(player, task, snap) {
@@ -149,7 +211,7 @@ async function verifyVolume(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const wallet = resolveWallet(player);
-  const trades = await fetchWalletTrades(wallet);
+  const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
   let vol = 0;
   let matched = 0;
@@ -157,10 +219,15 @@ async function verifyVolume(player, task, snap) {
     if ((t.history_id || 0) <= startId) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
-    vol += (parseFloat(t.price) || 0) * (parseFloat(t.amount) || 0);
+    // For Avantis rows we stashed notional_usd directly in _notional; for
+    // Pacifica rows we compute from price × amount.
+    const notional = Number(t._notional) > 0
+      ? Number(t._notional)
+      : (parseFloat(t.price) || 0) * (parseFloat(t.amount) || 0);
+    vol += notional;
     matched += 1;
   }
-  console.log(`[task ${task.id} volume] player=${player.name} wallet=${wallet || 'NONE'} trades_total=${trades.length} start_id=${startId} symbol=${symbol} side=${side} matched=${matched} vol=$${vol.toFixed(2)} target=$${target}`);
+  console.log(`[task ${task.id} volume] player=${player.name} wallet=${wallet || 'NONE'} dex=${player.dex || '?'} trades_total=${trades.length} start_id=${startId} symbol=${symbol} side=${side} matched=${matched} vol=$${vol.toFixed(2)} target=$${target}`);
   return { progress_value: vol, target_value: target, completed: vol >= target };
 }
 
@@ -170,7 +237,7 @@ async function verifyPositions(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
-  const trades = await fetchWalletTrades(resolveWallet(player));
+  const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
   let n = 0;
   for (const t of trades) {
@@ -191,14 +258,17 @@ async function verifyComboVolumeAttack(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
 
-  const trades = await fetchWalletTrades(resolveWallet(player));
+  const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
   let vol = 0;
   for (const t of trades) {
     if ((t.history_id || 0) <= startId) continue;
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
-    vol += (parseFloat(t.price) || 0) * (parseFloat(t.amount) || 0);
+    const notional = Number(t._notional) > 0
+      ? Number(t._notional)
+      : (parseFloat(t.price) || 0) * (parseFloat(t.amount) || 0);
+    vol += notional;
   }
 
   const winsRow = db.db.prepare(
