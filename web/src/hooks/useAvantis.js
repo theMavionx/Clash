@@ -180,6 +180,18 @@ export function useAvantis() {
   // while the read is still in flight so the UI can show a neutral state.
   const [hasReferrer, setHasReferrer] = useState(null);
   const marketsRef = useRef([]);
+  // Ref-held reference to `claimGold` so early-declared callbacks
+  // (placeMarketOrder etc.) can fire a claim after a successful trade
+  // without forward-referencing the useCallback. The ref is updated at the
+  // end of the hook body to the latest-render claimGold closure.
+  const claimGoldRef = useRef(null);
+  const scheduleClaim = useCallback((delayMs = 2500) => {
+    const t = setTimeout(() => {
+      const fn = claimGoldRef.current;
+      if (typeof fn === 'function') fn();
+    }, delayMs);
+    return () => clearTimeout(t);
+  }, []);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -410,6 +422,10 @@ export function useAvantis() {
       fetchPositions();
       fetchAccount();
       fetchBalance();
+      // Fire-and-forget gold claim. Delay 2.5s so server-side trade-report
+      // (which this hook POSTs above) lands in futures.db BEFORE
+      // /trading/claim-gold reads it.
+      scheduleClaim();
       return { tx_hash: hash, status: receipt.status === 'success' ? 'submitted' : 'failed' };
     } catch (e) {
       const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Trade failed';
@@ -418,7 +434,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchPositions, fetchAccount, fetchBalance]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Place limit order ─────
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage) => {
@@ -478,6 +494,8 @@ export function useAvantis() {
       fetchOrders();
       fetchAccount();
       fetchBalance();
+      // Limit orders ALSO generate volume credit server-side, so claim now.
+      scheduleClaim();
       return { tx_hash: hash, status: receipt.status === 'success' ? 'open' : 'failed' };
     } catch (e) {
       const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Limit order failed';
@@ -486,7 +504,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchOrders, fetchAccount, fetchBalance]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Close position (full or partial) ─────
   const closePosition = useCallback(async (symbol, side, amount, pairIndex, tradeIndex) => {
@@ -512,6 +530,11 @@ export function useAvantis() {
       fetchPositions();
       fetchAccount();
       fetchBalance();
+      // Trigger claim twice: immediately for any already-indexed volume, and
+      // again after ~8s to give the rewards-worker poll time to detect the
+      // close from Avantis Core API and record it in futures.db.
+      scheduleClaim(2500);
+      scheduleClaim(8000);
       return { tx_hash: hash, status: receipt.status === 'success' ? 'closed' : 'failed' };
     } catch (e) {
       const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Close failed';
@@ -520,7 +543,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance]);
+  }, [walletClient, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Cancel limit order ─────
   const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex) => {
@@ -607,6 +630,11 @@ export function useAvantis() {
     } catch { return null; }
   }, [walletAddr]);
 
+  // Publish the latest claimGold to the shared ref so earlier-declared
+  // callbacks (placeMarketOrder / closePosition / scheduleClaim) can
+  // invoke it without forward-referencing the useCallback.
+  claimGoldRef.current = claimGold;
+
   // ───── Startup & polling ─────
   useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
 
@@ -626,6 +654,24 @@ export function useAvantis() {
 
   // Referral linkage read — runs once per wallet (on-chain state, no polling).
   useEffect(() => { fetchReferralStatus(); }, [fetchReferralStatus]);
+
+  // Periodic claim-gold poll — catches trades that the server-side rewards
+  // worker detected (closes, worker polls Avantis Core every 2 min) after
+  // our in-hook scheduleClaim() already fired. Runs while the hook is
+  // mounted (i.e. FuturesPanel or ProfileModal is open). Claim endpoint
+  // is idempotent + rate-limited server-side so over-calling is safe.
+  useEffect(() => {
+    if (!walletAddr) return;
+    const fire = () => {
+      const fn = claimGoldRef.current;
+      if (typeof fn === 'function') fn();
+    };
+    // Fire once shortly after mount so a stale "pending claim" from a
+    // worker-polled close lands quickly.
+    const kickoff = setTimeout(fire, 3000);
+    const iv = setInterval(fire, 30_000);
+    return () => { clearTimeout(kickoff); clearInterval(iv); };
+  }, [walletAddr]);
 
   const marginModes = {};
   const leverageSettings = {};
