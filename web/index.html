@@ -2,16 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/jpeg" href="/icons/icon.jpg" />
+    <link rel="icon" type="image/png" href="/clashofperps.PNG" />
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0" />
     <title>Clash of Perps</title>
 
-    <!-- Farcaster Mini App embed -->
+    <!-- Farcaster Mini App embed — imageUrl + splashImageUrl now point at
+         the unified `/clashofperps.PNG` so the feed card, splash, and
+         in-app loading screen all show the same artwork. -->
     <meta property="og:title" content="Clash of Perps" />
     <meta property="og:description" content="Build, raid, trade. Clash of Clans meets DeFi." />
-    <meta property="og:image" content="https://clashofperps.fun/hero.jpg" />
-    <meta name="fc:miniapp" content='{"version":"1","imageUrl":"https://clashofperps.fun/hero.jpg","button":{"title":"Play Now","action":{"type":"launch_miniapp","url":"https://clashofperps.fun","name":"Clash of Perps","splashImageUrl":"https://clashofperps.fun/icons/icon.jpg","splashBackgroundColor":"#0a0b1a"}}}' />
-    <meta name="fc:frame" content='{"version":"1","imageUrl":"https://clashofperps.fun/hero.jpg","button":{"title":"Play Now","action":{"type":"launch_frame","url":"https://clashofperps.fun","name":"Clash of Perps","splashImageUrl":"https://clashofperps.fun/icons/icon.jpg","splashBackgroundColor":"#0a0b1a"}}}' />
+    <meta property="og:image" content="https://clashofperps.fun/clashofperps.PNG" />
+    <meta name="fc:miniapp" content='{"version":"1","imageUrl":"https://clashofperps.fun/clashofperps.PNG","button":{"title":"Play Now","action":{"type":"launch_miniapp","url":"https://clashofperps.fun","name":"Clash of Perps","splashImageUrl":"https://clashofperps.fun/clashofperps.PNG","splashBackgroundColor":"#0a0b1a"}}}' />
+    <meta name="fc:frame" content='{"version":"1","imageUrl":"https://clashofperps.fun/clashofperps.PNG","button":{"title":"Play Now","action":{"type":"launch_frame","url":"https://clashofperps.fun","name":"Clash of Perps","splashImageUrl":"https://clashofperps.fun/clashofperps.PNG","splashBackgroundColor":"#0a0b1a"}}}' />
 
     <!-- Godot JS loaded dynamically by GodotCanvas with cache-bust -->
 

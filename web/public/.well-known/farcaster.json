@@ -11,16 +11,16 @@
     "description": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold. Clash of Clans meets DeFi.",
     "tagline": "Build, Battle, Conquer",
     "homeUrl": "https://clashofperps.fun",
-    "iconUrl": "https://clashofperps.fun/icons/icon.jpg",
-    "imageUrl": "https://clashofperps.fun/hero.jpg",
-    "heroImageUrl": "https://clashofperps.fun/hero.jpg",
-    "splashImageUrl": "https://clashofperps.fun/icons/icon.jpg",
+    "iconUrl": "https://clashofperps.fun/clashofperps.PNG",
+    "imageUrl": "https://clashofperps.fun/clashofperps.PNG",
+    "heroImageUrl": "https://clashofperps.fun/clashofperps.PNG",
+    "splashImageUrl": "https://clashofperps.fun/clashofperps.PNG",
     "splashBackgroundColor": "#0a0b1a",
     "webhookUrl": "https://clashofperps.fun/api/webhook",
     "primaryCategory": "games",
     "tags": ["strategy", "clash", "defi", "solana", "battle"],
     "ogTitle": "Clash of Perps",
     "ogDescription": "Build your island, train troops, raid enemies. Trade on Pacifica to earn gold.",
-    "ogImageUrl": "https://clashofperps.fun/hero.jpg"
+    "ogImageUrl": "https://clashofperps.fun/clashofperps.PNG"
   }
 }

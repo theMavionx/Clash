@@ -359,7 +359,7 @@ export function useAvantis() {
   // Fire-and-forget: the server ALSO polls /user-data so even if this fails,
   // the trade will be picked up on the next worker tick. This is just a
   // nudge for instant feedback.
-  const reportTrade = useCallback(async ({ tx_hash, symbol, side, amount, leverage, price, order_type = 'market' }) => {
+  const reportTrade = useCallback(async ({ tx_hash, symbol, side, amount, leverage, price, order_type = 'market', dedup_key }) => {
     if (!walletAddr) return;
     try {
       const notional = Number(amount) * Number(leverage);
@@ -371,9 +371,13 @@ export function useAvantis() {
           address: walletAddr, tx_hash, symbol, side,
           amount: Number(amount), leverage: Number(leverage), price: price || 0,
           notional_usd: notional, order_type,
+          // Optional deterministic dedup key. Server uses it as client_order_id
+          // so the rewards-worker's later poll (using the same format) dedupes
+          // via UNIQUE index instead of landing a duplicate row.
+          ...(dedup_key ? { dedup_key } : {}),
         }),
       });
-    } catch {}
+    } catch { /* fire-and-forget */ }
   }, [walletAddr]);
 
   // ───── Client-side approval helper ─────
@@ -593,11 +597,19 @@ export function useAvantis() {
       // We tag the close with a distinct side ('close_long'/'close_short')
       // so the task verifier's classifyTrade() recognises it separately from
       // the matching open and credits it as independent volume.
+      //
+      // `dedupKey` is a deterministic id the worker can reproduce — (pair
+      // index, trade index) uniquely identify an Avantis trade per trader,
+      // and "close:" distinguishes it from an open report. UNIQUE index on
+      // client_order_id then prevents the worker's later poll from writing
+      // the same close a second time.
       const closeSide = String(side || '').toLowerCase();
       const closedSideLabel = closeSide === 'long' || closeSide === 'bid' ? 'close_long' : 'close_short';
+      const dedupKey = `avantis:close:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
       reportTrade({
         tx_hash: hash, symbol, side: closedSideLabel,
         amount: amt, leverage: closeLeverage, order_type: 'close',
+        dedup_key: dedupKey,
       });
 
       fetchPositions();

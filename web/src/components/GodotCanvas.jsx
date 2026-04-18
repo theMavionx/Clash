@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import loadingImage from '../assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
+// Loading splash — served from `web/public/clashofperps.PNG`. Public-path
+// reference instead of an asset import so the image can be swapped by
+// dropping a new file into /public without a JS rebuild.
+const loadingImage = '/clashofperps.PNG';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy

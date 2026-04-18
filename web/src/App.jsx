@@ -5,7 +5,10 @@ import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
-import loadingImage from './assets/f532cb2f-b750-48b6-a3ad-e8f92244ae88.jpg';
+// Loading splash — served from `web/public/clashofperps.PNG` at build time.
+// Using an absolute public path (not an import) lets us swap the artwork
+// without rebuilding the bundle.
+const loadingImage = '/clashofperps.PNG';
 import './index.css';
 
 // Lazy load heavy components — only after Farcaster SDK is ready

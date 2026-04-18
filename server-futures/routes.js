@@ -468,7 +468,7 @@ router.post('/trade-report', auth, (req, res) => {
     if (req.dex !== 'avantis') {
       return res.status(400).json({ error: 'trade-report is avantis-only' });
     }
-    const { tx_hash, symbol, side, amount, leverage, price, notional_usd, order_type } = req.body || {};
+    const { tx_hash, symbol, side, amount, leverage, price, notional_usd, order_type, dedup_key } = req.body || {};
     if (!tx_hash || !symbol || !side || !Number.isFinite(Number(amount))) {
       return res.status(400).json({ error: 'tx_hash, symbol, side, amount required' });
     }
@@ -495,12 +495,21 @@ router.post('/trade-report', auth, (req, res) => {
     if (!Number.isFinite(notional) || notional < 0 || notional > 10_000_000) {
       return res.status(400).json({ error: 'notional out of range' });
     }
+    // clientOrderId (used as the UNIQUE dedup key in trade_history):
+    //   • If the client supplied a deterministic `dedup_key` (e.g. the
+    //     "avantis:close:<addr>:<pair>:<idx>" shape emitted by
+    //     closePosition), use THAT — the worker reproduces the same key
+    //     when it sees the position disappear, so one of them loses the
+    //     INSERT OR IGNORE race and no duplicate row lands.
+    //   • Otherwise fall back to tx_hash, which stays unique enough for
+    //     opens (where there's no sibling source writing the same trade).
+    const clientOrderKey = dedup_key || tx_hash;
     db.addTrade(req.playerId, {
       symbol, side, orderType: order_type || 'market',
       amount: String(amount),
       price: price ? String(price) : null,
       orderId: tx_hash,
-      clientOrderId: tx_hash,
+      clientOrderId: clientOrderKey,
       status: 'filled',
       dex: 'avantis',
       notional_usd: notional,

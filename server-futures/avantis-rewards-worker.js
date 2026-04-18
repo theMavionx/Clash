@@ -9,9 +9,30 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const db = require('./db');
+const { getPairsMap } = require('./avantis');
 
 const CORE_API = 'https://core.avantisfi.com';
 const POLL_MS = 2 * 60 * 1000; // 2 minutes
+
+// Cached pair-index → symbol map. Avantis Core /user-data returns
+// `positions[i].symbol` as null/missing for some pairs, which previously
+// landed rows like "UNKNOWN 1 @ $103,051" in trade_history when the worker
+// recorded a close. Resolving from pairIndex via the canonical pairs map
+// keeps the symbol accurate on both open and close rows.
+let _pairsSymbolCache = null;
+let _pairsSymbolCacheTime = 0;
+async function resolvePairSymbol(pairIndex) {
+  const now = Date.now();
+  if (!_pairsSymbolCache || now - _pairsSymbolCacheTime > 5 * 60 * 1000) {
+    try {
+      const { indexMap } = await getPairsMap();
+      _pairsSymbolCache = indexMap || {};
+      _pairsSymbolCacheTime = now;
+    } catch { /* keep stale cache */ }
+  }
+  const entry = _pairsSymbolCache && _pairsSymbolCache[Number(pairIndex)];
+  return entry ? (entry.symbol || entry.from || null) : null;
+}
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 
@@ -73,11 +94,18 @@ async function pollOnce(mainDb) {
             ? Number(p.trade.positionSizeUSDC) / 1e6
             : 0);
       const leverage = Number(p.leverage ?? p.trade?.leverage ?? 0) / 1e10 || 1;
-      const symbol = p.symbol || (p.trade?.pairIndex !== undefined ? `#${p.trade.pairIndex}` : 'UNKNOWN');
+      const pairIdx = Number(p.pairIndex ?? p.trade?.pairIndex ?? 0);
+      // Avantis Core sometimes omits `p.symbol` on open positions — resolve
+      // from the canonical pairs map so the stored row stays readable.
+      let symbol = p.symbol;
+      if (!symbol || typeof symbol !== 'string') {
+        symbol = await resolvePairSymbol(pairIdx);
+      }
+      if (!symbol) symbol = `#${pairIdx}`;
       const side = (p.buy ?? p.trade?.buy) ? 'long' : 'short';
       richPrev.set(k, {
         collateral, leverage, notional: collateral * leverage, symbol, side,
-        pair_index: Number(p.pairIndex ?? p.trade?.pairIndex ?? 0),
+        pair_index: pairIdx,
         trade_index: Number(p.index ?? p.trade?.index ?? 0),
         opened_at: Date.now(),
       });
@@ -88,15 +116,24 @@ async function pollOnce(mainDb) {
       const info = richPrev.get(k);
       richPrev.delete(k);
       if (!info || !Number.isFinite(info.notional) || info.notional < 50) continue;
-      // Insert into trade_history. clientOrderId doubles as dedup key.
+      // Use the SAME deterministic dedup key format as the client's
+      // closePosition → reportTrade path:
+      //   avantis:close:<wallet-lower>:<pair_index>:<trade_index>
+      // The UNIQUE partial index on trade_history.client_order_id makes
+      // whichever source writes first win; the second INSERT OR IGNOREs.
+      // Prevents the previous "client + worker both recorded" double-credit.
+      const closeKey = `avantis:close:${addr}:${info.pair_index}:${info.trade_index}`;
+      // side label distinct from the open so the task verifier counts
+      // open + close as separate volume events.
+      const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
       try {
         db.addTrade(row.id, {
           symbol: info.symbol,
-          side: info.side,
-          orderType: 'market',
+          side: closeSide,
+          orderType: 'close',
           amount: String(info.collateral),
-          orderId: `closed_${addr}_${info.pair_index}_${info.trade_index}_${info.opened_at}`,
-          clientOrderId: `closed_${addr}_${info.pair_index}_${info.trade_index}_${info.opened_at}`,
+          orderId: closeKey,
+          clientOrderId: closeKey,
           status: 'filled',
           dex: 'avantis',
           notional_usd: info.notional,
