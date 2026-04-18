@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useEffect, useRef } from 'react';
-import { useSend, useBuilding } from '../hooks/useGodot';
+import { useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -81,7 +81,7 @@ const DESC_MAP = {
 
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
-  const { selectedBuilding: building } = useBuilding();
+  const { selectedBuilding: building } = useSelectedBuilding();
   const { isMobile } = useLayout();
   
   const [view, setView] = useState('ACTIONS');

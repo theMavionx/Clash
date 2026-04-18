@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
-import { useSend, useUI, useResources, useBuilding } from '../hooks/useGodot';
+import { useSend, useUI, useResources, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
@@ -294,7 +294,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
   const resources = useResources();
-  const { buildingDefs } = useBuilding();
+  const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape } = useLayout();
 
   // Count how many buildings the player can actually build right now

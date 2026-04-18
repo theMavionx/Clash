@@ -31,7 +31,7 @@ initPromise = import('@farcaster/miniapp-sdk').then(async (mod) => {
       _inMiniApp = true;
       _log('info', `Detected mini app: fid=${ctx.user.fid}, platform=${ctx?.client?.platformType || '?'}`);
     }
-  } catch {}
+  } catch { /* ctx unavailable — treat as non-miniapp */ }
 
   _resolved = true;
   _resolveDetect(_inMiniApp);
@@ -62,16 +62,24 @@ export { detectPromise as farcasterDetectPromise };
 
 // Returns the EIP-1193 provider from the Farcaster frame host (Warpcast /
 // Coinbase Wallet / other FC clients). Used to sign Avantis trades without
-// leaving the frame. Resolves to null when not in a frame.
+// leaving the frame. Resolves to null when not in a frame OR when the host
+// client hasn't exposed an EVM provider (Warpcast mobile WebView on some
+// OS/versions). Callers must handle null gracefully — don't silently register
+// a walletless account.
 export async function getFarcasterEthProvider() {
   const sdk = await initPromise;
   if (!sdk) return null;
-  // The SDK exposes the user's connected wallet as an EIP-1193 object at
-  // `sdk.wallet.ethProvider` on FC Mini App SDK v0.1+.
+  // Current SDK: getEthereumProvider() (async, may return null).
+  // Legacy: sdk.wallet.ethProvider direct property. Warpcast still ships
+  // the legacy property for back-compat — try both.
   try {
-    const prov = sdk?.wallet?.ethProvider;
-    if (!prov) return null;
-    return prov;
+    const w = sdk?.wallet;
+    if (!w) return null;
+    if (typeof w.getEthereumProvider === 'function') {
+      const prov = await w.getEthereumProvider();
+      if (prov) return prov;
+    }
+    return w.ethProvider || null;
   } catch { return null; }
 }
 
@@ -110,7 +118,7 @@ export function useFarcaster() {
       await sdkInstance.actions.openUrl(
         `https://warpcast.com/~/compose?text=${encodeURIComponent(text)}&embeds[]=${encodeURIComponent('https://clashofperps.fun')}`
       );
-    } catch {}
+    } catch { /* openUrl unsupported on this host */ }
   }, [isInFrame]);
 
   return { isInFrame, user, loading, shareCast };

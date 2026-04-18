@@ -1240,7 +1240,7 @@ function FuturesPanel() {
             {renderSymbolBar()}
             {/* Top: chart */}
             <div style={{flex: 1, position: 'relative', minHeight: 0}}>
-              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
               {fundingBadge}
             </div>
 
@@ -1258,7 +1258,7 @@ function FuturesPanel() {
           {/* Top: chart + orderbook + controls */}
           <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
-              <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+              <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
             {dex !== 'avantis' && (
               <>
@@ -1305,7 +1305,7 @@ function FuturesPanel() {
       <>
         {renderSymbolBar()}
         <div style={{...S.chartArea, position: 'relative'}}>
-          <TradingViewWidget symbol={symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
+          <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
           {fundingBadge}
         </div>
         {renderTradeControls()}

@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
-import { useSend, useBuilding } from '../hooks/useGodot';
+import { useSend, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -130,7 +130,7 @@ const ProgressBar = ({ label, value, max, gradient, showAsTime = false }) => {
 
 function BarracksPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
-  const { buildingDefs, troopLevels } = useBuilding();
+  const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
 
   const [currentIndex, setCurrentIndex] = useState(0);

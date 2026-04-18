@@ -181,17 +181,20 @@ function RegisterPanel() {
     try { return localStorage.getItem('clash_dex_picked') === '1'; } catch { return false; }
   });
   const triedWalletLogin = useRef(false);
-  const triedFcLogin = useRef(false);
-  const triedPrivyLogin = useRef(false);
+  // State (not ref) so `authInProgress` can read it during render without
+  // tripping the react-hooks/refs rule. PrivyAutoLogin's own `fired.current`
+  // guard prevents the double-fire window where a batched state update would
+  // be too slow.
+  const [triedPrivyLogin, setTriedPrivyLogin] = useState(false);
 
   const commitDex = (newDex) => {
     setDex(newDex);
     setDexPicked(true);
-    try { localStorage.setItem('clash_dex_picked', '1'); } catch {}
+    try { localStorage.setItem('clash_dex_picked', '1'); } catch { /* storage disabled */ }
   };
 
   const handlePrivyLoggedIn = ({ wallet, email, chain }) => {
-    if (triedPrivyLogin.current) return;
+    if (triedPrivyLogin) return;
     // Avantis: show a name-input step ONLY for new wallets. Returning
     // wallets are auto-logged-in (their name is already set in DB and won't
     // change via register — so asking for it again is pointless UX noise).
@@ -203,7 +206,7 @@ function RegisterPanel() {
     }
     // Pacifica email path: register immediately with derived name — the user
     // already provided trust by connecting a wallet or email account.
-    triedPrivyLogin.current = true;
+    setTriedPrivyLogin(true);
     setWaitingForGodot(true);
     const derivedName = email
       ? email.split('@')[0].slice(0, 20)
@@ -228,7 +231,7 @@ function RegisterPanel() {
         const existing = await r.json().catch(() => ({}));
         existingName = existing?.name || null;
       }
-    } catch {}
+    } catch { /* network error — treat as new user */ }
     const suggested = existingName
       || (email ? email.split('@')[0].slice(0, 20) : '');
     setAvantisAuth({
@@ -245,7 +248,7 @@ function RegisterPanel() {
     // Publish the provider to EvmWalletContext so useAvantis / FuturesPanel
     // can build a viem walletClient and sign trades from this wallet.
     if (provider && address) setEvmProvider(provider, address);
-    if (triedPrivyLogin.current) return;
+    if (triedPrivyLogin) return;
     checkExistingAndContinue(address, {
       chain: 'base', source: walletName || 'external',
     });
@@ -256,7 +259,7 @@ function RegisterPanel() {
     e?.preventDefault?.();
     if (!avantisAuth) return;
     if (name.trim().length < 2) return;
-    triedPrivyLogin.current = true;
+    setTriedPrivyLogin(true);
     setWaitingForGodot(true);
     sendToGodot('register', {
       name: name.trim(),
@@ -269,30 +272,43 @@ function RegisterPanel() {
   };
 
   // Auto-login by wallet when connected (Pacifica-only; Avantis is custodial
-  // and doesn't need a browser-side Solana wallet).
+  // and doesn't need a browser-side Solana wallet). Guard on `dexPicked` so
+  // Farcaster's auto-connected Solana wallet (autoConnect=true in
+  // WalletProvider) doesn't secretly log the user in as Pacifica before they
+  // choose their DEX.
   useEffect(() => {
     if (dex === 'avantis') return;
+    if (!dexPicked) return;
     if (connected && publicKey && !triedWalletLogin.current) {
       triedWalletLogin.current = true;
       sendToGodot('wallet_connected', { wallet: publicKey.toBase58() });
     }
-  }, [connected, publicKey, sendToGodot, dex]);
+  }, [connected, publicKey, sendToGodot, dex, dexPicked]);
 
   // Auto-register for Farcaster users. Flow depends on picked DEX:
-  //   Pacifica → register with Farcaster's Solana wallet (sign each trade)
-  //   Avantis  → request Farcaster's EVM provider, register with that address.
-  //              Non-custodial: trades are signed via sdk.wallet.ethProvider.
+  //   Pacifica → register with Farcaster's Solana wallet (sign each trade).
+  //              If no Solana wallet is exposed within ~3s, we DON'T silently
+  //              register a walletless account any more — the UI falls
+  //              through to the normal picker so the user can connect an
+  //              external wallet or pick a different DEX.
+  //   Avantis  → try sdk.wallet.getEthereumProvider() (then legacy
+  //              ethProvider). If present, request accounts and register.
+  //              If absent (Warpcast variants that don't expose EVM), we
+  //              fall through to the normal Avantis login UI (Privy email +
+  //              external wallet) instead of a silent walletless register.
+  const [fcFallback, setFcFallback] = useState(false); // pacifica FC wallet timeout
+  const [fcNoEvm, setFcNoEvm] = useState(false);       // avantis FC EVM unavailable
+  const triedFcPacifica = useRef(false);
+  const triedFcAvantis = useRef(false);
   useEffect(() => {
-    if (!isInFrame || !fcUser || triedFcLogin.current) return;
-    // Don't auto-register until the user has explicitly picked a DEX. The
-    // picker is shown above; without this guard we'd silently register
-    // under the default 'pacifica' while the picker was still on screen.
+    if (!isInFrame || !fcUser) return;
     if (!dexPicked) return;
 
     const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
 
     if (dex === 'avantis') {
-      triedFcLogin.current = true;
+      if (triedFcAvantis.current) return;
+      triedFcAvantis.current = true;
       (async () => {
         const prov = await getFarcasterEthProvider();
         if (prov) {
@@ -301,35 +317,41 @@ function RegisterPanel() {
             const addr = accounts && accounts[0];
             if (addr) {
               setEvmProvider(prov, addr);
-              sendToGodot('register', { name: fcName, wallet: addr, dex: 'avantis', chain: 'base' });
+              // Surface wallet + rename opportunity instead of silent register.
+              // checkExistingAndContinue pre-fills the saved name for returning
+              // users; new users pick their display name before PLAY.
+              checkExistingAndContinue(addr, {
+                chain: 'base', source: 'farcaster',
+              });
               return;
             }
           } catch (e) {
             console.warn('[farcaster] eth_requestAccounts failed:', e?.message || e);
           }
         }
-        // Farcaster client didn't expose an EVM provider (or user denied) →
-        // fall back to registering without a wallet. User will hit a
-        // "connect wallet" CTA in the trading UI.
-        sendToGodot('register', { name: fcName, dex: 'avantis' });
+        // No EVM provider from Farcaster host → show normal Avantis UI
+        // (Privy email + external wallet modal). User can pick how to connect.
+        setFcNoEvm(true);
       })();
       return;
     }
 
+    if (triedFcPacifica.current) return;
+
     if (connected && publicKey) {
-      triedFcLogin.current = true;
+      triedFcPacifica.current = true;
       sendToGodot('register', { name: fcName, wallet: publicKey.toBase58(), dex: 'pacifica' });
       return;
     }
 
-    // Pacifica: wait up to 3s for Farcaster's embedded Solana wallet, then
-    // fall back to registering without a wallet.
-    const fallback = setTimeout(() => {
-      if (triedFcLogin.current) return;
-      triedFcLogin.current = true;
-      sendToGodot('register', { name: fcName, dex: 'pacifica' });
+    // Pacifica: wait up to 3s for Farcaster's embedded Solana wallet. If it
+    // doesn't appear, show the normal connect UI rather than registering a
+    // walletless account (previous behaviour left the user unable to trade).
+    const fallbackTimer = setTimeout(() => {
+      if (triedFcPacifica.current) return;
+      setFcFallback(true);
     }, 3000);
-    return () => clearTimeout(fallback);
+    return () => clearTimeout(fallbackTimer);
   }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex, setEvmProvider, dexPicked]);
 
   const handleSubmit = (e) => {
@@ -348,13 +370,18 @@ function RegisterPanel() {
     sendToGodot('register', payload);
   };
 
-  // In Farcaster frame with user — auto-register spinner is shown only AFTER
-  // the DEX is picked. Before that, the picker below takes over.
-  if (isInFrame && fcUser && dexPicked) {
+  // Farcaster + DEX picked: show spinner ONLY while auto-register is in flight.
+  // If Farcaster's host doesn't expose a matching wallet (fcNoEvm for Avantis
+  // / fcFallback for Pacifica), fall through to the normal UI so the user can
+  // connect a wallet themselves. If the Avantis path already resolved and we
+  // moved to the name-input step (`avantisAuth` set), also fall through — the
+  // avantisAuth branch below renders the wallet badge + name form so the user
+  // sees exactly which wallet is being used instead of an opaque spinner.
+  if (isInFrame && fcUser && dexPicked && !avantisAuth && !fcNoEvm && !fcFallback) {
     return (
       <div style={styles.overlay}>
         <div style={styles.panel}>
-          <Spinner label={`Joining as ${fcUser.username || fcUser.displayName}…`} />
+          <Spinner label={`Joining ${dex === 'avantis' ? 'Avantis' : 'Pacifica'} as ${fcUser.username || fcUser.displayName}…`} />
         </div>
       </div>
     );
@@ -369,7 +396,7 @@ function RegisterPanel() {
     waitingForGodot ||
     connecting ||
     (privyEnabled && !privyStatus.ready) ||
-    (privyEnabled && privyStatus.authenticated && !triedPrivyLogin.current && dex !== 'avantis' && !avantisAuth);
+    (privyEnabled && privyStatus.authenticated && !triedPrivyLogin && dex !== 'avantis' && !avantisAuth);
 
   if (authInProgress) {
     return (
@@ -493,7 +520,7 @@ function RegisterPanel() {
       </div>
       <button
         type="button"
-        onClick={() => { setDexPicked(false); try { localStorage.removeItem('clash_dex_picked'); } catch {} }}
+        onClick={() => { setDexPicked(false); try { localStorage.removeItem('clash_dex_picked'); } catch { /* storage disabled */ } }}
         style={{
           background: 'rgba(255,255,255,0.06)',
           border: '1.5px solid #6D4C2A',

@@ -800,8 +800,12 @@ async function getPrices() {
       const pair = pairByFeedId[fid];
       const entry = latest[fid];
       if (!pair || !entry) continue;
+      // Dead/rolled feed: Pyth Hermes responds 200 with price=0, publish_time=0.
+      // E.g. BRENTM6 is an expired futures contract; Avantis still ships its
+      // feedId but Pyth no longer updates it. Drop instead of publishing $0.
+      if (!(entry.price > 0) || !entry.publish_time) continue;
       const isCrypto = String(pythSymByFid[fid] || '').startsWith('Crypto.');
-      if (isCrypto && entry.publish_time && (nowSec - entry.publish_time) * 1000 > STALE_MS) {
+      if (isCrypto && (nowSec - entry.publish_time) * 1000 > STALE_MS) {
         continue; // too old, show "—" rather than a dead tape
       }
       out[pair] = { mark: entry.price, yesterday_price: yesterday[fid] || 0 };

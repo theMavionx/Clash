@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { usePlayer, useBuilding } from '../hooks/useGodot';
+import { usePlayer, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { colors } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -8,7 +8,7 @@ const formatNumber = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
 function PlayerInfo({ onOpenProfile, onOpenLeaderboard }) {
   const playerState = usePlayer();
-  const { buildingDefs } = useBuilding();
+  const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape } = useLayout();
   if (!playerState) return null;
 

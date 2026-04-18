@@ -1,5 +1,5 @@
 import { useState, memo, useCallback, useMemo } from 'react';
-import { useSend, useBuilding, usePlayer, useResources } from '../hooks/useGodot';
+import { useSend, useBuildingDefs, usePlayer, useResources } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -136,7 +136,7 @@ const stopPropagation = (e) => e.stopPropagation();
 
 function ShopPanel({ onClose }) {
   const { sendToGodot } = useSend();
-  const { buildingDefs } = useBuilding();
+  const { buildingDefs } = useBuildingDefs();
   const { playerState } = usePlayer();
   const resources = useResources();
   const { isMobile } = useLayout();

@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback, useRef, createContext, useContext, us
 const SendContext = createContext(null);
 const ResourcesContext = createContext(null);
 const PlayerContext = createContext(null);
-const BuildingContext = createContext(null);
+const BuildingDefsContext = createContext(null);
+const SelectedBuildingContext = createContext(null);
 const UIContext = createContext(null);
 const TutorialContext = createContext(null);
 
@@ -226,9 +227,12 @@ export function GodotProvider({ children }) {
   const sendCtx = useMemo(() => ({ sendToGodot, setShopOpen, setFuturesOpen }), [sendToGodot, setShopOpen, setFuturesOpen]);
   const playerCtx = useMemo(() => playerState, [playerState]);
   const resourcesCtx = useMemo(() => ({ ...resources, caps: resourceCaps }), [resources, resourceCaps]);
-  const buildingCtx = useMemo(() => ({
-    buildingDefs, troopLevels, selectedBuilding,
-  }), [buildingDefs, troopLevels, selectedBuilding]);
+  const buildingDefsCtx = useMemo(() => ({
+    buildingDefs, troopLevels,
+  }), [buildingDefs, troopLevels]);
+  const selectedBuildingCtx = useMemo(() => ({
+    selectedBuilding,
+  }), [selectedBuilding]);
   const uiCtx = useMemo(() => ({
     ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
   }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
@@ -241,9 +245,11 @@ export function GodotProvider({ children }) {
     createElement(UIContext.Provider, { value: uiCtx },
       createElement(ResourcesContext.Provider, { value: resourcesCtx },
         createElement(PlayerContext.Provider, { value: playerCtx },
-          createElement(BuildingContext.Provider, { value: buildingCtx },
-            createElement(TutorialContext.Provider, { value: tutorialCtx },
-              children
+          createElement(BuildingDefsContext.Provider, { value: buildingDefsCtx },
+            createElement(SelectedBuildingContext.Provider, { value: selectedBuildingCtx },
+              createElement(TutorialContext.Provider, { value: tutorialCtx },
+                children
+              )
             )
           )
         )
@@ -256,6 +262,7 @@ export function GodotProvider({ children }) {
 export function useSend() { return useContext(SendContext); }
 export function useResources() { return useContext(ResourcesContext); }
 export function usePlayer() { return useContext(PlayerContext); }
-export function useBuilding() { return useContext(BuildingContext); }
+export function useBuildingDefs() { return useContext(BuildingDefsContext); }
+export function useSelectedBuilding() { return useContext(SelectedBuildingContext); }
 export function useUI() { return useContext(UIContext); }
 export function useTutorial() { return useContext(TutorialContext); }

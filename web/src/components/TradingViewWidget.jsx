@@ -20,11 +20,17 @@ const INTERVALS = [
 // "FX.USD/JPY" (NOTE: FX pairs keep USD as BASE, not quote, in Pyth), and
 // "Metal.XAU/USD". Our internal `symbol` key for FX is the concatenated
 // "USDJPY" to avoid colliding with USD crypto rows.
+//
+// PREFER passing `pythSymbol` directly from Avantis market data —
+// feed.attributes.symbol is authoritative. This fallback mapper is only used
+// when the exact Pyth symbol isn't available (e.g. Pacifica DEX path).
+// NOTE: REZ/AVNT/GOAT/MON/XPL are CRYPTO on Avantis (Crypto.REZ/USD etc),
+// not equities. Previously misclassified here → chart 404'd.
 const EQUITIES = new Set([
   'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
   'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
   'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
-  'JPM','BAC','GS','WFC','V','MA','CRCL','AVNT','GOAT','MON','REZ','XPL',
+  'JPM','BAC','GS','WFC','V','MA','CRCL',
 ]);
 // FX non-USD quotes (Avantis has USD/JPY, USD/CAD, …). When the symbol arrives
 // as e.g. "USDJPY" we split it into USD/JPY and build "FX.USD/JPY".
@@ -36,9 +42,11 @@ const FX_NON_USD = new Set([
 // / SILVER aliases in case the UI sends those.
 const METALS = new Set(['XAU','XAG','XPT','XPD','GOLD','SILVER']);
 const METAL_ALIAS = { GOLD: 'XAU', SILVER: 'XAG', PLATINUM: 'XPT', PALLADIUM: 'XPD' };
-// Commodities: Pyth uses "Crude Oil.{WTI|BRENT}/USD" for oil and various
-// "Commodities.XXX/USD" for others. USOILSPOT is Pyth's feed for spot WTI.
-const OIL = new Set(['WTI','BRENT','USOILSPOT']);
+// Commodities: Pyth no longer has "Crude Oil.*" symbols on benchmarks — the
+// working ones are "Commodities.USOILSPOT" (WTI spot) and
+// "Commodities.UKOILSPOT" (Brent spot). Rolled-futures contracts like
+// BRENTM6/WTIK6 are missing from benchmarks too, so we always fall through
+// to the spot symbol for charting oil.
 const COMMODITIES = new Set(['CL','NATGAS','COPPER']);
 
 function toPythSymbol(sym) {
@@ -56,12 +64,25 @@ function toPythSymbol(sym) {
 
   if (EQUITIES.has(s)) return `Equity.US.${s}/USD`;
   if (METALS.has(s)) return `Metal.${METAL_ALIAS[s] || s}/USD`;
-  if (OIL.has(s)) return `Crude Oil.${s}/USD`;
+  if (s === 'BRENT') return 'Commodities.UKOILSPOT';
+  if (s === 'WTI' || s === 'USOILSPOT') return 'Commodities.USOILSPOT';
   if (COMMODITIES.has(s)) return `Commodities.${s}/USD`;
   return `Crypto.${s}/USD`;
 }
 
-function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
+// Some Avantis Pyth symbols charge on-chain via expiring futures contracts
+// (BRENTM6, WTIK6, WTIM6) that Pyth Benchmarks doesn't serve historically.
+// Map them to the spot equivalent for charting only; pricing stays on the
+// real futures contract.
+function benchmarksFallback(pythSymbol) {
+  if (!pythSymbol) return null;
+  const s = String(pythSymbol);
+  if (/^Commodities\.BRENT/i.test(s) || /UKOIL/i.test(s)) return 'Commodities.UKOILSPOT';
+  if (/^Commodities\.WTI/i.test(s) || /USOIL/i.test(s)) return 'Commodities.USOILSPOT';
+  return null;
+}
+
+function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -119,6 +140,12 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
     setLoading(true);
     seriesRef.current.setData([]);
 
+    async function fetchBenchmarks(sym, resolution, fromSec, toSec) {
+      const url = `${PYTH_BENCHMARKS}/history?symbol=${encodeURIComponent(sym)}&resolution=${resolution}&from=${fromSec}&to=${toSec}`;
+      const r = await fetch(url);
+      return r.json();
+    }
+
     async function load() {
       const now = Date.now();
       const tf = INTERVALS.find(i => i.value === interval) || INTERVALS[1];
@@ -126,11 +153,32 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
       try {
         let candles = [];
         if (dex === 'avantis') {
-          // Pyth Benchmarks UDF: /history?symbol=Crypto.BTC/USD&resolution=5&from=SEC&to=SEC
-          const pythSym = toPythSymbol(symbol);
-          const url = `${PYTH_BENCHMARKS}/history?symbol=${encodeURIComponent(pythSym)}&resolution=${tf.pyth}&from=${Math.floor(start / 1000)}&to=${Math.floor(now / 1000)}`;
-          const res = await fetch(url);
-          const json = await res.json();
+          // Prefer the Pyth symbol from market data (authoritative); fall back
+          // to heuristic mapping if parent didn't pass it.
+          const primary = pythSymbol || toPythSymbol(symbol);
+          const fallback = benchmarksFallback(primary);
+          const toSec = Math.floor(now / 1000);
+          let fromSec = Math.floor(start / 1000);
+
+          let json = await fetchBenchmarks(primary, tf.pyth, fromSec, toSec);
+          // Rolled-futures or missing symbol → retry on the spot equivalent.
+          if (json.s === 'error' && fallback && fallback !== primary) {
+            json = await fetchBenchmarks(fallback, tf.pyth, fromSec, toSec);
+          }
+          // Equities/FX/commodities close nights + weekends. When the requested
+          // window spans only closed hours Pyth returns status=ok with <2 bars
+          // — chart looks empty. Progressively widen the window so the user
+          // sees at least last-session history. 30d caps the broadening; we
+          // don't switch resolutions mid-flight (tf buttons stay truthful).
+          const windowWidens = [3 * 86400, 14 * 86400, 30 * 86400];
+          for (const span of windowWidens) {
+            const bars = Array.isArray(json.t) ? json.t.length : 0;
+            if (bars >= 2) break;
+            fromSec = toSec - span;
+            const sym = (fallback && json.s === 'error') ? fallback : primary;
+            json = await fetchBenchmarks(sym, tf.pyth, fromSec, toSec);
+          }
+
           if (cancelled || json.s !== 'ok' || !Array.isArray(json.t)) return;
           candles = json.t.map((t, i) => ({
             time: t,
@@ -165,7 +213,7 @@ function TradingViewWidget({ symbol = 'BTC', positions = [], orders = [], curren
     load();
     const iv = window.setInterval(load, 30000);
     return () => { cancelled = true; window.clearInterval(iv); };
-  }, [symbol, interval, dex]);
+  }, [symbol, pythSymbol, interval, dex]);
 
   // Store currentPrice in a ref so price-line effect doesn't re-run on every tick
   const currentPriceRef = useRef(currentPrice);

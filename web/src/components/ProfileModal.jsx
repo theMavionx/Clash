@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
-import { usePlayer, useResources, useBuilding, useSend } from '../hooks/useGodot';
+import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
@@ -73,7 +73,7 @@ function ProfileModal({ onClose }) {
     onClose();
   };
 
-  const { buildingDefs } = useBuilding();
+  const { buildingDefs } = useBuildingDefs();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
   // Fall back to player.buildings structure only if buildingDefs isn't ready yet.
   const townHallLevel = buildingDefs?.th_level || player?.buildings?.town_hall?.level || 1;

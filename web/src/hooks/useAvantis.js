@@ -110,6 +110,9 @@ function normalizeMarkets(raw) {
     const iconBase = from === 'USD' && to && to !== 'USD' ? to : from;
     const maxLev = p.leverages?.maxLeverage ?? p.maxLeverage ?? p.max_leverage ?? 100;
     const minLev = p.pairMinLeverage ?? p.leverages?.minLeverage ?? 1;
+    // Exact Pyth feed symbol (e.g. "Commodities.BRENTM6/USD") — TradingView
+     // widget needs this to avoid guess-reconstructing from the short ticker.
+    const pythSymbol = p?.feed?.attributes?.symbol || p?.pyth_symbol || null;
     return {
       symbol,
       pair: fullPair,
@@ -117,6 +120,7 @@ function normalizeMarkets(raw) {
       quote: to,
       index: i,
       pair_index: p.index ?? i,
+      pyth_symbol: pythSymbol,
       max_leverage: String(maxLev),
       min_leverage: String(minLev),
       lot_size: String(p.lotSize || p.lot_size || '0.0001'),
