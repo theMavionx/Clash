@@ -37,46 +37,47 @@ function ProfileModal({ onClose }) {
     privyAuthed = !!p.authenticated;
   }
 
-  // Unified wallet address — wallet-adapter (Phantom etc.) or Privy-embedded.
+  // Unified wallet address — DEX-aware priority. Previously `adapterAddr`
+  // (the Solana wallet-adapter address) was first in the chain, which meant
+  // that for an Avantis user who still had a Farcaster-Solana adapter
+  // auto-connected, the profile would show their Solana address — even
+  // though the Avantis account is registered with an EVM wallet. Resolve
+  // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const activeWallet = adapterAddr || walletAddr || player?.wallet || null;
-  const walletSource = adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null);
+  const activeWallet = dex === 'avantis'
+    ? (walletAddr || player?.wallet || null)           // EVM from useAvantis
+    : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy-embedded
+  const walletSource = dex === 'avantis'
+    ? (walletAddr ? 'evm' : null)
+    : (adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null));
 
   // Switch active DEX. In our model one wallet = one account, so "switching"
   // DEX really means "log out of this account and sign in with the other
   // DEX's wallet" — which may be an existing account on that DEX or a
   // fresh register. So SWITCH = disconnect + reopen the DEX picker. The
   // RegisterPanel then drives the new sign-in flow.
-  const switchDex = async () => {
-    // Drop the picker-remembered choice so RegisterPanel shows it again.
-    try { localStorage.removeItem('clash_dex_picked'); } catch { /* storage disabled */ }
-    // Full logout mirrors handleDisconnect: clear Godot state, wallet adapter,
-    // Privy session, EvmWalletContext (including persisted rdns), and the
-    // in-memory token. useAuthFlow also reacts to `show_register` and does
-    // the same cleanup — doing it here belt-and-suspenders in case Godot's
-    // logout round-trip is slow.
+  // Shared logout teardown — covers every identity source. We always call
+  // every teardown idempotently rather than branching on walletSource,
+  // because branches silently miss hybrid cases (e.g. user is on Avantis
+  // but Privy is also authenticated from a prior Pacifica session).
+  const logoutEverything = async () => {
     sendToGodot('logout');
     try { evmDisconnect(); } catch { /* noop */ }
-    if (walletSource === 'adapter') {
-      try { disconnect(); } catch { /* noop */ }
-    } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
+    try { disconnect(); } catch { /* noop */ }
+    if (privyLogout && privyAuthed) {
       try { await privyLogout(); } catch { /* noop */ }
     }
     window._playerToken = null;
+  };
+
+  const switchDex = async () => {
+    try { localStorage.removeItem('clash_dex_picked'); } catch { /* storage disabled */ }
+    await logoutEverything();
     onClose();
   };
 
   const handleDisconnect = async () => {
-    // Tell Godot to drop its session + destroy all placed buildings. On next
-    // login, building_system reloads fresh from the server via auth_ok.
-    sendToGodot('logout');
-    try { evmDisconnect(); } catch { /* noop */ }
-    if (walletSource === 'adapter') {
-      try { disconnect(); } catch { /* noop */ }
-    } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
-      try { await privyLogout(); } catch { /* noop */ }
-    }
-    window._playerToken = null;
+    await logoutEverything();
     onClose();
   };
 
