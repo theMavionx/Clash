@@ -14,6 +14,7 @@ import { createPublicClient, createWalletClient, http, custom } from 'viem';
 import { base } from 'viem/chains';
 import { useWallets as usePrivyEvmWallets, usePrivy } from '@privy-io/react-auth';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 
 const publicClient = createPublicClient({ chain: base, transport: http() });
 
@@ -39,6 +40,49 @@ export function EvmWalletProvider({ children }) {
   // EIP-6963), 'farcaster' (sdk.wallet.getEthereumProvider), etc.
   const [externalSource, setExternalSource] = useState(null);
   const [error, setError] = useState(null);
+
+  const { isInFrame, loading: fcLoading } = useFarcaster();
+
+  // Farcaster auto-reconnect: inside a mini-app frame the EVM provider is
+  // always available via sdk.wallet.getEthereumProvider(). On a page reload
+  // where the Godot token is still valid, RegisterPanel (and therefore
+  // useAuthFlow) never mounts — so nobody calls `setEvmProvider` with the
+  // FC wallet. FuturesPanel then reads `walletAddr = undefined` from
+  // useAvantis and paints "undefined…undefined". Do the FC provider pull
+  // here so every in-frame session has a populated EvmWalletContext, even
+  // without going through the auth flow.
+  useEffect(() => {
+    if (fcLoading) return;
+    if (!isInFrame) return;
+    if (externalProvider) return; // already have one (possibly set by auth flow)
+    let cancelled = false;
+    (async () => {
+      const prov = await getFarcasterEthProvider();
+      if (cancelled || !prov) return;
+      try {
+        // Use eth_accounts (silent) first — no popup on reload. If the FC
+        // host hasn't pre-authorised this app we fall back to the explicit
+        // request, which most Warpcast clients resolve silently anyway
+        // because the app was granted EVM access on first login.
+        let accounts = [];
+        try {
+          accounts = await prov.request({ method: 'eth_accounts' });
+        } catch { /* some hosts only support eth_requestAccounts */ }
+        if (!accounts || !accounts[0]) {
+          accounts = await prov.request({ method: 'eth_requestAccounts' });
+        }
+        const addr = accounts && accounts[0];
+        if (!cancelled && addr) {
+          setExternalProvider(prov);
+          setExternalAddress(addr);
+          setExternalSource('farcaster');
+        }
+      } catch (e) {
+        console.warn('[evm-ctx] FC auto-reconnect failed:', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isInFrame, fcLoading, externalProvider]);
 
   // Silent reconnect: on mount, if we remember the rdns of the last-connected
   // wallet, listen for its EIP-6963 announcement and check if the user is
