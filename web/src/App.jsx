@@ -119,11 +119,15 @@ const styles = {
     pointerEvents: 'none',
   },
   splashLogo: {
-    position: 'relative',
-    // Scale with viewport but don't dominate — logo sits centered on the
-    // background art instead of being painted into it. max-width prevents
-    // blurry upscaling on very wide monitors.
-    width: 'min(60vw, 520px)',
+    // Absolute-positioned so the logo sits at the SAME spot across both
+    // splash layers (App.jsx FarcasterGate → GodotCanvas overlay). Before,
+    // App.jsx centered via flex (`position:relative`) and GodotCanvas used
+    // `top:12%` — the logo visibly jumped on hand-off between lazy loads.
+    position: 'absolute',
+    top: '8%',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    width: 'min(95vw, 920px)',
     height: 'auto',
     zIndex: 1,
     objectFit: 'contain',

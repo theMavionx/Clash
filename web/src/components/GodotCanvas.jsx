@@ -45,14 +45,14 @@ const bgStyle = {
 };
 
 const logoStyle = {
+  // MUST match App.jsx splashLogo exactly. Both layers show during lazy-load
+  // handoff (FarcasterGate splash → GodotCanvas overlay); any style drift
+  // makes the logo visibly jump when the second layer mounts.
   position: 'absolute',
-  // Centered horizontally, sitting above the progress bar. `top: 12%` gives
-  // the bar room at the bottom; `min(55vw, 460px)` keeps the logo readable
-  // without dominating wide monitors.
-  top: '12%',
+  top: '8%',
   left: '50%',
   transform: 'translateX(-50%)',
-  width: 'min(55vw, 460px)',
+  width: 'min(95vw, 920px)',
   height: 'auto',
   objectFit: 'contain',
   zIndex: 0,
