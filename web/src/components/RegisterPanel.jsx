@@ -284,6 +284,10 @@ function RegisterPanel() {
   //              Non-custodial: trades are signed via sdk.wallet.ethProvider.
   useEffect(() => {
     if (!isInFrame || !fcUser || triedFcLogin.current) return;
+    // Don't auto-register until the user has explicitly picked a DEX. The
+    // picker is shown above; without this guard we'd silently register
+    // under the default 'pacifica' while the picker was still on screen.
+    if (!dexPicked) return;
 
     const fcName = String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
 
@@ -326,7 +330,7 @@ function RegisterPanel() {
       sendToGodot('register', { name: fcName, dex: 'pacifica' });
     }, 3000);
     return () => clearTimeout(fallback);
-  }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex, setEvmProvider]);
+  }, [isInFrame, fcUser, connected, publicKey, sendToGodot, dex, setEvmProvider, dexPicked]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -344,8 +348,9 @@ function RegisterPanel() {
     sendToGodot('register', payload);
   };
 
-  // In Farcaster frame with user — auto-registering, show loading
-  if (isInFrame && fcUser) {
+  // In Farcaster frame with user — auto-register spinner is shown only AFTER
+  // the DEX is picked. Before that, the picker below takes over.
+  if (isInFrame && fcUser && dexPicked) {
     return (
       <div style={styles.overlay}>
         <div style={styles.panel}>
@@ -379,9 +384,11 @@ function RegisterPanel() {
     );
   }
 
-  // Step 1: DEX picker (shown before any wallet/login). Farcaster auto-flow
-  // skips this — picks default 'pacifica' unless localStorage says otherwise.
-  if (!dexPicked && !(isInFrame && fcUser)) {
+  // Step 1: DEX picker (shown before any wallet/login). Farcaster users also
+  // get to choose — earlier we auto-picked Pacifica for them which locked
+  // users into one DEX on first open. Returning users (clash_dex_picked=1
+  // in localStorage) skip the picker.
+  if (!dexPicked) {
     return (
       <div style={styles.overlay}>
         {privyEnabled && <PrivyAutoLogin onLoggedIn={handlePrivyLoggedIn} onStatus={setPrivyStatus} dex={dex} />}

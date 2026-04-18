@@ -30,10 +30,18 @@ const TABS = [
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
 
 // Format price — no decimals for big numbers, appropriate precision for small
+// Keep the result under ~8 chars so the price column doesn't push the
+// SymbolPicker table into a horizontal scrollbar. Very small prices
+// (SHIB ≈ $0.0000063) go to scientific notation; small-but-readable
+// go to 4 decimals; normal stay the same.
 const fmtPrice = (p) => {
+  if (!Number.isFinite(p) || p <= 0) return '—';
   if (p >= 1000) return p.toLocaleString(undefined, {maximumFractionDigits: 0});
   if (p >= 1) return p.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  return p.toPrecision(4);
+  if (p >= 0.01) return p.toFixed(4);
+  if (p >= 0.0001) return p.toFixed(6);
+  // Sub-cent (SHIB, POPCAT, etc.) → 3-sig-fig scientific: "6.31e-6"
+  return p.toExponential(2);
 };
 
 // Token icons — served locally from /tokens/{SYM}.png
@@ -241,8 +249,13 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         autoFocus
         style={{padding: '6px 10px', border: '2px solid #d4c8b0', borderRadius: 8, background: '#fdf8e7', fontSize: 13, fontWeight: 700, color: '#5C3A21', outline: 'none'}}
       />
-      <div className="grad-scrollbar" style={{overflowY: 'auto', flex: 1}}>
-        <table style={{width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
+      <div className="grad-scrollbar" style={{overflowY: 'auto', overflowX: 'hidden', flex: 1}}>
+        <table style={{width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 12, fontFamily: '"Inter","Segoe UI",sans-serif'}}>
+          <colgroup>
+            <col style={{width: 'auto'}} />
+            <col style={{width: '72px'}} />
+            <col style={{width: '56px'}} />
+          </colgroup>
           <thead><tr>
             <th style={SP.th}>Symbol</th>
             <th style={{...SP.th, textAlign: 'right'}}>Price</th>
@@ -273,10 +286,10 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
                   })()}
                 </div>
               </td>
-              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21'}}>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 700, fontFamily: 'monospace', color: '#5C3A21', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'clip'}}>
                 {r.mark > 0 ? fmtPrice(r.mark) : '—'}
               </td>
-              <td style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.change >= 0 ? '#4CAF50' : '#E53935'}}>
+              <td style={{...SP.td, textAlign: 'right', fontWeight: 800, fontFamily: 'monospace', color: r.change >= 0 ? '#4CAF50' : '#E53935', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden'}}>
                 {r.change >= 0 ? '+' : ''}{r.change.toFixed(2)}%
               </td>
             </tr>

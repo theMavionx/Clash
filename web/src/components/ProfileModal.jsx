@@ -19,7 +19,7 @@ function ProfileModal({ onClose }) {
   const { publicKey, connected, disconnect, select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
-  const { dex, setDex } = useDex();
+  const { dex } = useDex();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const { account, walletAddr } = dex === 'avantis' ? avantisHook : pacificaHook;
@@ -39,6 +39,26 @@ function ProfileModal({ onClose }) {
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
   const activeWallet = adapterAddr || walletAddr || player?.wallet || null;
   const walletSource = adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null);
+
+  // Switch active DEX. In our model one wallet = one account, so "switching"
+  // DEX really means "log out of this account and sign in with the other
+  // DEX's wallet" — which may be an existing account on that DEX or a
+  // fresh register. So SWITCH = disconnect + reopen the DEX picker. The
+  // RegisterPanel then drives the new sign-in flow.
+  const switchDex = async () => {
+    // Drop the picker-remembered choice so RegisterPanel shows it again.
+    try { localStorage.removeItem('clash_dex_picked'); } catch {}
+    // Full logout mirrors handleDisconnect: clear Godot state, wallet adapter,
+    // Privy session, and the in-memory token. User lands on the DEX picker.
+    sendToGodot('logout');
+    if (walletSource === 'adapter') {
+      try { disconnect(); } catch {}
+    } else if (walletSource === 'privy' && privyLogout && privyAuthed) {
+      try { await privyLogout(); } catch {}
+    }
+    window._playerToken = null;
+    onClose();
+  };
 
   const handleDisconnect = async () => {
     // Tell Godot to drop its session + destroy all placed buildings. On next
@@ -137,22 +157,11 @@ function ProfileModal({ onClose }) {
                     textShadow: '0 1px 0 rgba(0,0,0,0.35)',
                     marginTop: 1,
                   }}>
-                    {cfg.chain} · {dex === 'avantis' ? 'CUSTODIAL' : 'SELF-CUSTODY'}
+                    {cfg.chain} · SELF-CUSTODY
                   </div>
                 </div>
                 <button
-                  onClick={() => {
-                    const next = dex === 'avantis' ? 'pacifica' : 'avantis';
-                    setDex(next);
-                    const token = window._playerToken;
-                    if (token) {
-                      fetch('/api/players/set-dex', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-token': token },
-                        body: JSON.stringify({ dex: next }),
-                      }).catch(() => {});
-                    }
-                  }}
+                  onClick={switchDex}
                   style={{
                     background: 'rgba(0,0,0,0.25)',
                     border: '2px solid rgba(0,0,0,0.35)',

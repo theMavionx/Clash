@@ -148,16 +148,17 @@ function resolveWallet(player) {
   return null;
 }
 
-// Unified trade-fetch: routes on wallet format. EVM → local server-futures
-// trade_history; Solana → Pacifica public API. Returns a common shape:
-//   [{ history_id, symbol, side, price, amount }]
+// Unified trade-fetch: routes on WALLET FORMAT. In our model one wallet = one
+// account = one DEX (no cross-DEX linking), so wallet format reliably
+// determines which data source to query. Returns a common shape:
+//   [{ history_id, symbol, side, price, amount, _notional? }]
 // so verifiers don't need to branch.
 async function fetchWalletTrades(player) {
   if (!player) return [];
   const wallet = resolveWallet(player);
   if (!wallet) return [];
 
-  // Avantis (EVM): read from futures.db. trade_history stores notional_usd
+  // EVM (Avantis) → read from futures.db. trade_history stores notional_usd
   // and amount (collateral). We synthesise (price, amount) that multiply to
   // the notional so the volume verifier produces correct USD vol.
   if (isEvmWallet(wallet)) {

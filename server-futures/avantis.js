@@ -616,47 +616,80 @@ async function getMarketInfo() {
 
 // Cache for 24h-ago prices (used to compute 24h change). Refreshed hourly.
 // Keyed by feedId. Pyth Hermes `/v2/updates/price/<unix_ts>` now 404s for
-// arbitrary historical timestamps — they only serve recent streaming data —
-// so we use Pyth Benchmarks (TradingView UDF shim) daily OHLC instead: last
-// day's CLOSE = "yesterday_price".
-let yesterdayPricesCache = null;
+// arbitrary historical timestamps, so we use Pyth Benchmarks (TradingView
+// UDF shim) daily OHLC: second-to-last bucket = yesterday's close.
+//
+// Because benchmarks fires one request per symbol and can flake at peak,
+// we MERGE successful fetches into the existing cache instead of replacing,
+// and retry transient failures. A single bad response no longer blackholes
+// a feed's 24h change for an entire hour.
+let yesterdayPricesCache = {};
 let yesterdayPricesCacheTime = 0;
+// Failed-feeds memo: symbols that Pyth benchmarks legitimately doesn't have
+// (e.g. BRENTM6 when current contract is something else). Skip forever so we
+// stop hammering them. Cleared on process restart.
+const benchmarksBadSymbols = new Set();
 const BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
 
 async function fetchYesterdayPrices(raw) {
   const now = Math.floor(Date.now() / 1000);
-  if (yesterdayPricesCache && now * 1000 - yesterdayPricesCacheTime < 60 * 60 * 1000) {
-    return yesterdayPricesCache;
-  }
-  const result = {};
-  // Build jobs: one HTTP per pair. Use a concurrency limit so we don't
-  // overwhelm Pyth. Requests are keyed by feedId so the consumer can match
-  // back regardless of symbol shape. 3 days of daily OHLC is enough to pick
-  // yesterday's close (second-to-last bucket).
+  const cacheAge = now * 1000 - yesterdayPricesCacheTime;
+  const hasFullCache = Object.keys(yesterdayPricesCache).length > 0 && cacheAge < 60 * 60 * 1000;
+  if (hasFullCache) return yesterdayPricesCache;
+
+  // Build jobs for everything not already in the memoized bad-symbol set.
   const jobs = [];
   for (const p of raw) {
     const fid = String(p?.feed?.feedId || '').replace(/^0x/, '').toLowerCase();
     const pythSym = p?.feed?.attributes?.symbol; // e.g. "Crypto.ETH/USD"
     if (!fid || !pythSym) continue;
+    if (benchmarksBadSymbols.has(pythSym)) continue;
     jobs.push({ fid, pythSym });
   }
 
-  const CONCURRENCY = 8;
+  // Preserve previously-fetched values — a new fetch failure shouldn't
+  // nullify a value we had last hour.
+  const result = { ...yesterdayPricesCache };
+
+  async function fetchOne(job, attempt = 0) {
+    try {
+      const from = now - 4 * 86400; // 4d window so we get ≥2 closes even on slow rollovers
+      const url = `${BENCHMARKS}/history?symbol=${encodeURIComponent(job.pythSym)}&resolution=D&from=${from}&to=${now}`;
+      const ctrl = new AbortController();
+      const timeoutId = setTimeout(() => ctrl.abort(), 8000);
+      let res;
+      try {
+        res = await fetch(url, { signal: ctrl.signal });
+      } finally { clearTimeout(timeoutId); }
+      if (!res.ok) {
+        if (attempt < 2) return fetchOne(job, attempt + 1);
+        return;
+      }
+      const j = await res.json();
+      if (j.s === 'error') {
+        // Symbol genuinely doesn't exist on benchmarks (e.g. BRENTM6 when
+        // current futures contract has different expiry). Memoize so we
+        // don't retry for the rest of process lifetime.
+        if (/doesn't exist|does not exist/i.test(j.errmsg || '')) {
+          benchmarksBadSymbols.add(job.pythSym);
+        }
+        return;
+      }
+      if (j.s !== 'ok' || !Array.isArray(j.c) || j.c.length < 2) return;
+      const yest = Number(j.c[j.c.length - 2]);
+      if (Number.isFinite(yest) && yest > 0) result[job.fid] = yest;
+    } catch (e) {
+      if (attempt < 2) return fetchOne(job, attempt + 1);
+    }
+  }
+
+  // Higher concurrency (16) — benchmarks is fine with this, and it halves
+  // cold-start time from ~10s to ~5s on a 94-pair list.
+  const CONCURRENCY = 16;
   let cursor = 0;
   async function worker() {
     while (cursor < jobs.length) {
-      const job = jobs[cursor++];
-      try {
-        const from = now - 3 * 86400;
-        const url = `${BENCHMARKS}/history?symbol=${encodeURIComponent(job.pythSym)}&resolution=D&from=${from}&to=${now}`;
-        const res = await fetch(url);
-        if (!res.ok) continue;
-        const j = await res.json();
-        if (j.s !== 'ok' || !Array.isArray(j.c) || j.c.length < 2) continue;
-        // Last entry is today's partial close; prior entry is yesterday's close.
-        const yest = Number(j.c[j.c.length - 2]);
-        if (Number.isFinite(yest) && yest > 0) result[job.fid] = yest;
-      } catch {}
+      await fetchOne(jobs[cursor++]);
     }
   }
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
