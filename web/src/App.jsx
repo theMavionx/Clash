@@ -127,7 +127,7 @@ const styles = {
     top: '8%',
     left: '50%',
     transform: 'translateX(-50%)',
-    width: 'min(95vw, 920px)',
+    width: 'min(95vw, 1100px)',
     height: 'auto',
     zIndex: 1,
     objectFit: 'contain',
