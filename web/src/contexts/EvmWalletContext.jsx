@@ -24,6 +24,7 @@ const EvmWalletContext = createContext({
   provider: null,
   isReady: false,
   error: null,
+  source: null,
   setExternalProvider: () => {},
   disconnect: () => {},
 });
@@ -33,6 +34,10 @@ const LAST_WALLET_KEY = 'clash_last_evm_wallet_rdns';
 export function EvmWalletProvider({ children }) {
   const [externalProvider, setExternalProvider] = useState(null); // set by EvmWalletModal
   const [externalAddress, setExternalAddress] = useState(null);
+  // Tracks where externalProvider came from so auth/useAuthFlow can attribute
+  // registration to the right wallet type: 'external' (MetaMask-like via
+  // EIP-6963), 'farcaster' (sdk.wallet.getEthereumProvider), etc.
+  const [externalSource, setExternalSource] = useState(null);
   const [error, setError] = useState(null);
 
   // Silent reconnect: on mount, if we remember the rdns of the last-connected
@@ -55,6 +60,7 @@ export function EvmWalletProvider({ children }) {
         if (!cancelled && addr) {
           setExternalProvider(provider);
           setExternalAddress(addr);
+          setExternalSource('external');
         }
       } catch { /* wallet rejected silent query */ }
     };
@@ -129,6 +135,9 @@ export function EvmWalletProvider({ children }) {
   // exist — user explicitly connected their own wallet, honour that.
   const provider = externalProvider || privyProvider;
   const address = externalAddress || privyAddress;
+  // Source is authoritative for downstream consumers (auth flow, analytics).
+  // externalSource wins when both are present — matches provider/address logic.
+  const source = externalAddress ? (externalSource || 'external') : (privyAddress ? 'privy' : null);
   const isReady = !!provider && !!address;
 
   // viem walletClient bound to the selected provider. Recreated whenever the
@@ -154,6 +163,7 @@ export function EvmWalletProvider({ children }) {
   const disconnect = useCallback(() => {
     setExternalProvider(null);
     setExternalAddress(null);
+    setExternalSource(null);
     setError(null);
     try { localStorage.removeItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
   }, []);
@@ -193,9 +203,11 @@ export function EvmWalletProvider({ children }) {
     error,
     chainId: BASE_CHAIN_ID,
     ensureChain,
-    setExternalProvider: (prov, addr, rdns = null) => {
+    source,
+    setExternalProvider: (prov, addr, rdns = null, src = 'external') => {
       setExternalProvider(prov);
       setExternalAddress(addr);
+      setExternalSource(src);
       setError(null);
       // Remember the chosen wallet so the next page load can silently
       // reconnect via EIP-6963 (eth_accounts, no popup). Omit rdns for
@@ -206,7 +218,7 @@ export function EvmWalletProvider({ children }) {
       }
     },
     disconnect,
-  }), [address, walletClient, provider, isReady, error, ensureChain, disconnect]);
+  }), [address, walletClient, provider, isReady, error, source, ensureChain, disconnect]);
 
   return <EvmWalletContext.Provider value={value}>{children}</EvmWalletContext.Provider>;
 }
