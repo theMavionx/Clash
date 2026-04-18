@@ -989,6 +989,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
     if (totalGold > 0) {
       db.addResources(req.player.id, totalGold, 0, 0);
+      // Record the payout in gold_history so ProfileModal's trading-stats
+      // timeline shows the same ledger as Pacifica. Reason must contain
+      // "trade" / "profit" / "daily" / "deposit" / "volume" for the
+      // daily_trade_gold task verifier's heuristic (see tasks.js).
+      try {
+        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
+          .run(req.player.id, totalGold, reasons.join(' + ') || 'Trading reward');
+      } catch { /* non-fatal */ }
       return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex: 'avantis' });
     }
     return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex: 'avantis' });
@@ -1138,12 +1146,52 @@ try {
 router.get('/trading/stats', auth, async (req, res) => {
   const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
   const goldHistory = db.db.prepare('SELECT amount, reason, created_at FROM gold_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
-  const trades = db.db.prepare('SELECT symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
+
+  // Trade list source depends on DEX: Pacifica stores a synced copy in the
+  // main DB's `player_trades`, Avantis lives in server-futures/futures.db
+  // (trade_history). We normalise both into the same { symbol, price,
+  // amount, fee, created_at } shape so ProfileModal renders uniformly.
+  let trades = [];
+  const dex = String(req.player.dex || '').toLowerCase();
+  if (dex === 'avantis') {
+    const fdb = futuresDbReadonly();
+    if (fdb) {
+      try {
+        const rows = fdb.prepare(`
+          SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
+          FROM trade_history
+          WHERE player_id = ? AND dex = 'avantis' AND status != 'failed'
+          ORDER BY id DESC
+          LIMIT 50
+        `).all(req.player.id);
+        trades = rows.map(r => ({
+          symbol: r.symbol,
+          side: r.side,
+          // For Avantis the on-chain trade row has `amount` = collateral and
+          // `notional_usd` = amount × leverage. ProfileModal shows "price *
+          // amount" as the trade value so we surface notional_usd as the
+          // "price" column and amount=1 to keep the product correct.
+          price: String(r.notional_usd || 0),
+          amount: '1',
+          fee: 0,
+          order_type: r.order_type,
+          created_at: r.created_at,
+        }));
+      } catch (e) {
+        console.warn('[trading/stats] avantis futures.db read failed:', e.message);
+      }
+    }
+  } else {
+    trades = db.db.prepare(
+      'SELECT symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 50'
+    ).all(req.player.id);
+  }
 
   res.json({
     ...(reward || { total_volume: 0, total_gold: 0 }),
     gold_history: goldHistory,
     trades,
+    dex,
   });
 });
 

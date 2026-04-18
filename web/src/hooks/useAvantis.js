@@ -561,6 +561,16 @@ export function useAvantis() {
       const amountRaw = collateralToRaw(amt);
       const execFee = await fetchExecutionFeeWei(publicClient);
 
+      // Look up leverage from local positions state BEFORE the close lands,
+      // because after waitForTransactionReceipt the position row is gone.
+      // Notional = collateral × leverage — matches how openTrade is reported
+      // and what the task verifier / gold volume calc expects.
+      const posMatch = positions.find(p =>
+        Number(p.pair_index) === Number(pairIndex) &&
+        Number(p.trade_index) === Number(tradeIndex)
+      );
+      const closeLeverage = posMatch ? Number(posMatch.leverage) || 1 : 1;
+
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'closeTradeMarket',
         args: [BigInt(pairIndex), BigInt(tradeIndex), amountRaw],
@@ -568,12 +578,27 @@ export function useAvantis() {
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
+      // Client-side trade report — DO NOT rely on avantis-rewards-worker for
+      // closes. The worker polls every 2 min and its in-memory "seen opens"
+      // cache is lost on server restart, so fast trades and restart-spanning
+      // trades go uncredited. Reporting immediately fixes both races.
+      //
+      // We tag the close with a distinct side ('close_long'/'close_short')
+      // so the task verifier's classifyTrade() recognises it separately from
+      // the matching open and credits it as independent volume.
+      const closeSide = String(side || '').toLowerCase();
+      const closedSideLabel = closeSide === 'long' || closeSide === 'bid' ? 'close_long' : 'close_short';
+      reportTrade({
+        tx_hash: hash, symbol, side: closedSideLabel,
+        amount: amt, leverage: closeLeverage, order_type: 'close',
+      });
+
       fetchPositions();
       fetchAccount();
       fetchBalance();
-      // Trigger claim twice: immediately for any already-indexed volume, and
-      // again after ~8s to give the rewards-worker poll time to detect the
-      // close from Avantis Core API and record it in futures.db.
+      // Claim twice: immediately for the trade-report we just sent, and
+      // again ~8s later in case the worker-poll fires in between and adds
+      // its own (dedupe-safe) row.
       scheduleClaim(2500);
       scheduleClaim(8000);
       return { tx_hash: hash, status: receipt.status === 'success' ? 'closed' : 'failed' };
@@ -584,7 +609,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
+  }, [walletClient, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
 
   // ───── Cancel limit order ─────
   const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex) => {
