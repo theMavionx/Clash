@@ -114,9 +114,14 @@ app.get('/', (req, res) => {
 // API routes
 app.use('/api', routes);
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
+// Error handler — production logs compact message, dev keeps full stack.
+app.use((err, req, res, _next) => {
+  if (process.env.NODE_ENV === 'production') {
+    const firstFrame = String(err.stack || '').split('\n')[1] || '';
+    console.error(`[err] ${req.method} ${req.url} → ${err.message} ${firstFrame.trim()}`);
+  } else {
+    console.error(err.stack);
+  }
   res.status(500).json({ error: 'Internal server error' });
 });
 

@@ -119,6 +119,20 @@ try { db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solan
 // attribute gold rewards per-DEX and by traded volume.
 try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
+// Dedup: trade_history.client_order_id was nullable + non-unique, so
+// client-reported opens (order_id = tx_hash) and worker-recorded closes
+// (order_id = 'closed_...') for the same underlying trade could both land,
+// crediting gold twice. A partial UNIQUE index (NULLs allowed, dupes
+// rejected) is idempotent on existing DBs and safe for any row that
+// already has a client_order_id. Wrapped in try/catch so the migration
+// is a no-op if the index already exists.
+try {
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_history_client_order_id ON trade_history(client_order_id) WHERE client_order_id IS NOT NULL");
+} catch (e) {
+  console.warn('[futures.db] dedup index migration warning:', e.message);
+}
+// Index for /claim-gold lookup — main server reads WHERE player_id=? AND dex=? AND id>? frequently.
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_trade_history_player_dex ON trade_history(player_id, dex, id)"); } catch {}
 
 // FK-mismatch migration: old deposits/trade_history rows reference
 // wallets(player_id), but that column is no longer UNIQUE after we switched
@@ -164,8 +178,11 @@ const stmts = {
   `),
   getDeposits: db.prepare('SELECT id, tx_signature, amount, token, status, created_at FROM deposits WHERE player_id = ? ORDER BY created_at DESC LIMIT 50'),
 
+  // INSERT OR IGNORE so a duplicate client_order_id (from the UNIQUE
+  // partial index) silently drops instead of throwing. Prevents one
+  // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),

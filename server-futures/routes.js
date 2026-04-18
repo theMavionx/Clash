@@ -472,11 +472,26 @@ router.post('/trade-report', auth, (req, res) => {
     if (!tx_hash || !symbol || !side || !Number.isFinite(Number(amount))) {
       return res.status(400).json({ error: 'tx_hash, symbol, side, amount required' });
     }
-    const notional = Number.isFinite(Number(notional_usd))
-      ? Number(notional_usd)
-      : Number(amount) * Number(leverage || 1);
-    // Clamp to sane bounds — prevents Infinity/massive values poisoning the
-    // gold volume calc (mirrors main server's /claim-gold clamp).
+    // Always recompute notional from amount×leverage. Ignore the
+    // client-supplied `notional_usd` as a gold-inflation vector — previously
+    // a crafted payload could claim $10M notional on a $10 trade.
+    const amountNum = Number(amount);
+    const leverageNum = Number(leverage || 1);
+    if (!Number.isFinite(amountNum) || !Number.isFinite(leverageNum) || amountNum <= 0) {
+      return res.status(400).json({ error: 'amount / leverage out of range' });
+    }
+    const computedNotional = amountNum * leverageNum;
+    // Reject if the client-supplied notional disagrees with amount×leverage
+    // by >5% (rounding/slippage tolerance). Mismatch = tamper attempt.
+    if (Number.isFinite(Number(notional_usd)) && Number(notional_usd) > 0) {
+      const claimed = Number(notional_usd);
+      const drift = Math.abs(claimed - computedNotional) / Math.max(computedNotional, 1);
+      if (drift > 0.05) {
+        console.warn(`[trade-report] notional drift for player ${req.playerId}: claimed $${claimed.toFixed(2)} vs computed $${computedNotional.toFixed(2)}`);
+        return res.status(400).json({ error: 'notional mismatch' });
+      }
+    }
+    const notional = computedNotional;
     if (!Number.isFinite(notional) || notional < 0 || notional > 10_000_000) {
       return res.status(400).json({ error: 'notional out of range' });
     }

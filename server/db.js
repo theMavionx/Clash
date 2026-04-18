@@ -86,6 +86,24 @@ try {
   `);
 } catch {}
 
+// ---------- Indexes on hot player_id columns (tables defined above) ----------
+// Without these, /battle-log and /buildings endpoints degrade to full-table
+// scans once the DB reaches a few thousand rows. Idempotent on existing DBs.
+// Indexes for tables created elsewhere (gold_history, player_trades — routes.js;
+// player_tasks — tasks.js) are added next to their CREATE TABLE statements.
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_battle_replays_attacker ON battle_replays(attacker_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_battle_replays_defender ON battle_replays(defender_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_buildings_player ON buildings(player_id);
+    CREATE INDEX IF NOT EXISTS idx_troop_levels_player ON troop_levels(player_id);
+    CREATE INDEX IF NOT EXISTS idx_players_wallet ON players(wallet) WHERE wallet IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_players_dex ON players(dex) WHERE dex IS NOT NULL;
+  `);
+} catch (e) {
+  console.warn('[db] index migration warning:', e.message);
+}
+
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {

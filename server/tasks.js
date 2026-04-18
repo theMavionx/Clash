@@ -58,6 +58,8 @@ try {
       claimed_at TEXT,
       PRIMARY KEY (player_id, task_id)
     );
+    CREATE INDEX IF NOT EXISTS idx_player_tasks_player ON player_tasks(player_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_active ON tasks(active) WHERE active = 1;
   `);
 } catch (e) { console.error('tasks schema error', e); }
 

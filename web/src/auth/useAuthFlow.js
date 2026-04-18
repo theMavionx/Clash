@@ -236,8 +236,14 @@ export function useAuthFlow() {
     // comment near the top.
     if (!readyForRegister) return;
     if (!candidate || !suggestedName) return;
-    if (lastRegisteredRef.current === candidate.wallet) return;
-    lastRegisteredRef.current = candidate.wallet;
+    // Case-insensitive compare: EVM addresses may arrive as checksummed
+    // (0xABcd…) from one resolver and lowercased (0xabcd…) from another,
+    // and strict === would fire register twice for the same wallet.
+    // Solana base58 is case-sensitive so the lowercasing is harmless
+    // there — no Solana address has ambiguous casing.
+    const candidateKey = String(candidate.wallet).toLowerCase();
+    if (lastRegisteredRef.current === candidateKey) return;
+    lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: suggestedName, wallet: candidate.wallet, dex };
     if (dex === 'avantis') {
@@ -268,8 +274,9 @@ export function useAuthFlow() {
 
   const submitName = useCallback((name) => {
     if (!candidate || !name || name.trim().length < 2) return;
-    if (lastRegisteredRef.current === candidate.wallet) return;
-    lastRegisteredRef.current = candidate.wallet;
+    const candidateKey = String(candidate.wallet).toLowerCase();
+    if (lastRegisteredRef.current === candidateKey) return;
+    lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
     if (dex === 'avantis') {
@@ -294,6 +301,12 @@ export function useAuthFlow() {
     setRegistering(false);
     writeDexPicked(false);
     setDexPickedState(false);
+    // Clear the global token so DexContext polling / any in-flight fetch
+    // stops using a stale identity after logout. Previously only
+    // ProfileModal.logoutEverything() cleared it, so useAuthFlow.logout()
+    // left _playerToken alive and downstream calls kept using the old
+    // session until the GodotProvider itself unmounted.
+    try { if (typeof window !== 'undefined') window._playerToken = null; } catch { /* noop */ }
     sendToGodot('logout');
   }, [sendToGodot]);
 

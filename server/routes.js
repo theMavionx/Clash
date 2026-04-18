@@ -27,12 +27,36 @@ function auth(req, res, next) {
 }
 
 // ==================== CLIENT LOGS (no auth) ====================
+// Per-IP rate limit — no auth, so only the IP is usable as a key. Bucket
+// cleans up expired entries every 5 minutes to bound memory growth under
+// abuse. Previously unprotected: a flood of 10k/s could DoS the server's
+// stdout / log sink.
+const CLIENT_LOG_WINDOW_MS = 60_000;
+const CLIENT_LOG_MAX_PER_WINDOW = 30;
+const clientLogBuckets = new Map(); // ip → { count, resetAt }
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
+}, 5 * 60_000).unref?.();
 
 router.post('/client-log', (req, res) => {
+  const ip = req.headers['x-real-ip'] || req.ip || 'anon';
+  const now = Date.now();
+  const b = clientLogBuckets.get(ip);
+  if (b && b.resetAt > now) {
+    if (b.count >= CLIENT_LOG_MAX_PER_WINDOW) {
+      return res.status(429).json({ ok: false });
+    }
+    b.count++;
+  } else {
+    clientLogBuckets.set(ip, { count: 1, resetAt: now + CLIENT_LOG_WINDOW_MS });
+  }
   const { level, message, ua, url } = req.body || {};
   const ts = new Date().toISOString();
-  const ip = req.headers['x-real-ip'] || req.ip;
-  console.log(`[CLIENT ${(level || 'info').toUpperCase()}] ${ts} | ${ip} | ${(ua || '').slice(0, 80)} | ${url || ''} | ${message || ''}`);
+  // Cap message size to 1kB — a single payload can't fill the log by itself
+  // even if the rate-limit is somehow bypassed.
+  const msg = String(message || '').slice(0, 1024);
+  console.log(`[CLIENT ${(level || 'info').toUpperCase()}] ${ts} | ${ip} | ${(ua || '').slice(0, 80)} | ${String(url || '').slice(0, 200)} | ${msg}`);
   res.json({ ok: true });
 });
 
@@ -93,12 +117,18 @@ router.post('/players/register', (req, res) => {
     }
   }
 
-  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) {
     return res.status(400).json({ error: 'Name must be at least 2 characters' });
   }
-  // Try the requested name; if taken, append 1, 2, 3… until unique
-  let finalName = name.trim();
-  let result;
+  // Hard-cap name length at 30 chars to prevent accidental/malicious
+  // multi-MB names from bloating players.name (search/render overhead).
+  if (trimmed.length > 30) {
+    return res.status(400).json({ error: 'Name must be at most 30 characters' });
+  }
+  // Try the requested name; if taken, append 1, 2, 3… until unique.
+  let finalName = trimmed;
+  let result = null;
   for (let suffix = 0; suffix <= 99; suffix++) {
     const tryName = suffix === 0 ? finalName : finalName + suffix;
     try {
@@ -109,6 +139,11 @@ router.post('/players/register', (req, res) => {
       if (e.message.includes('UNIQUE') && suffix < 99) continue;
       throw e;
     }
+  }
+  // If every suffix 0..99 collided, registerPlayer never succeeded. Without
+  // this guard the subsequent .run(wallet, result.id) crashes on undefined.
+  if (!result) {
+    return res.status(409).json({ error: 'Name collision — try a different name' });
   }
   // Save wallet address if provided
   if (wallet) {
@@ -232,6 +267,11 @@ router.get('/buildings', auth, (req, res) => {
 });
 
 // Place a building
+// Grid is 20x20 cells by design (matches client grid_width/grid_height).
+// Cap coordinates server-side so a tampered client can't place buildings
+// at grid_x=-999999 — would never collide with legitimate buildings and
+// could be abused for defensive "hiding" or resource-locking exploits.
+const GRID_MAX_COORD = 40; // generous ceiling; real grids are ≤20 per axis
 router.post('/buildings/place', auth, (req, res) => {
   const { type, grid_x, grid_z, grid_index = 0 } = req.body;
   if (!type || grid_x == null || grid_z == null) {
@@ -239,6 +279,12 @@ router.post('/buildings/place', auth, (req, res) => {
   }
   if (!Number.isInteger(grid_x) || !Number.isInteger(grid_z)) {
     return res.status(400).json({ error: 'grid_x and grid_z must be integers' });
+  }
+  if (grid_x < 0 || grid_x > GRID_MAX_COORD || grid_z < 0 || grid_z > GRID_MAX_COORD) {
+    return res.status(400).json({ error: `grid_x and grid_z must be in [0, ${GRID_MAX_COORD}]` });
+  }
+  if (!Number.isInteger(grid_index) || grid_index < 0 || grid_index > 3) {
+    return res.status(400).json({ error: 'grid_index must be 0..3' });
   }
   const result = db.placeBuilding(req.player.id, type, grid_x, grid_z, grid_index);
   if (result.error) return res.status(400).json(result);
@@ -276,6 +322,9 @@ router.post('/buildings/:id/move', auth, (req, res) => {
   const grid_x = parseInt(req.body.grid_x, 10);
   const grid_z = parseInt(req.body.grid_z, 10);
   if (!Number.isInteger(grid_x) || !Number.isInteger(grid_z)) return res.status(400).json({ error: 'Valid integer grid_x and grid_z required' });
+  if (grid_x < 0 || grid_x > GRID_MAX_COORD || grid_z < 0 || grid_z > GRID_MAX_COORD) {
+    return res.status(400).json({ error: `grid_x and grid_z must be in [0, ${GRID_MAX_COORD}]` });
+  }
   const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
   if (!building) return res.status(404).json({ error: 'Building not found' });
   db.db.prepare('UPDATE buildings SET grid_x = ?, grid_z = ? WHERE id = ?').run(grid_x, grid_z, buildingId);
@@ -920,6 +969,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   const wallet = req.body.wallet || req.player.wallet;
   const dex = String(req.body.dex || req.player.dex || 'pacifica').toLowerCase();
 
+  // Auto-replace Farcaster `fc_<fid>` placeholder wallets with the real
+  // address from the request body. The placeholder is stored by older
+  // FC auto-register paths when an EVM provider wasn't yet available;
+  // left uncorrected it blocks task verifiers from finding real trades
+  // (resolveWallet returns null for non-Solana/non-EVM strings) and
+  // makes trading_rewards.wallet useless.
+  const isPlaceholderWallet = (w) => typeof w === 'string' && /^fc_/i.test(w);
+  if (isValidWallet(wallet) && isPlaceholderWallet(req.player.wallet)) {
+    try {
+      db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id);
+      db.db.prepare('UPDATE trading_rewards SET wallet = ? WHERE player_id = ?').run(wallet, req.player.id);
+      console.log(`[claim-gold] replaced placeholder ${req.player.wallet} with real wallet ${wallet} for player ${req.player.id}`);
+    } catch { /* non-fatal */ }
+  }
+
   // ── Avantis branch: count volume from server-futures.trade_history ──
   if (dex === 'avantis') {
     const fdb = futuresDbReadonly();
@@ -971,32 +1035,67 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // first real trade. Previously it was granted unconditionally on the first
     // /claim-gold call, letting a brand-new account farm 500 gold without
     // ever depositing or trading.
+    //
+    // Additional guard: audit gold_history for a prior grant. If an admin
+    // resets `trading_rewards.first_deposit=0` (or the row gets deleted and
+    // recreated), the flag-based check re-fires and the bonus pays again.
+    // Checking gold_history defends against that by making the bonus truly
+    // once-per-player.
     const hasRealTrade = creditedTrades > 0 || reward.first_trade;
-    if (!reward.first_deposit && hasRealTrade) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
-    if (!reward.first_trade && creditedTrades > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
+    const priorBonuses = db.db.prepare(
+      "SELECT reason FROM gold_history WHERE player_id = ? AND (reason LIKE '%First deposit!%' OR reason LIKE '%First trade!%')"
+    ).all(req.player.id);
+    const alreadyPaidFirstDeposit = priorBonuses.some(r => String(r.reason).includes('First deposit!'));
+    const alreadyPaidFirstTrade   = priorBonuses.some(r => String(r.reason).includes('First trade!'));
+    if (!reward.first_deposit && !alreadyPaidFirstDeposit && hasRealTrade) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
+    if (!reward.first_trade && !alreadyPaidFirstTrade && creditedTrades > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
     const today = new Date().toISOString().split('T')[0];
     if (reward.last_daily !== today && creditedTrades > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
 
-    db.db.prepare(`
-      UPDATE trading_rewards SET
-        last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
-        first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
-        first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
-        last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
-        updated_at = datetime('now')
-      WHERE player_id = ?
-    `).run(maxId, newVolume, totalGold, creditedTrades, creditedTrades, creditedTrades, today, req.player.id);
-
-    if (totalGold > 0) {
-      db.addResources(req.player.id, totalGold, 0, 0);
-      // Record the payout in gold_history so ProfileModal's trading-stats
-      // timeline shows the same ledger as Pacifica. Reason must contain
-      // "trade" / "profit" / "daily" / "deposit" / "volume" for the
-      // daily_trade_gold task verifier's heuristic (see tasks.js).
-      try {
+    // All writes wrapped in a transaction so two concurrent /claim-gold
+    // requests from the same player can't both read the same last_trade_id
+    // and double-credit overlapping trades. The transaction also guarantees
+    // the UPDATE + addResources + gold_history INSERT stay in sync (prior
+    // code's trailing try/catch on gold_history could leave total_gold
+    // incremented without a history row).
+    //
+    // Inside the transaction we re-read last_trade_id and short-circuit if
+    // it moved past our cursor — a sibling request just processed these
+    // trades. `better-sqlite3` transactions are synchronous so this
+    // "compare-and-set" is atomic.
+    const creditTxn = db.db.transaction(() => {
+      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      const expectedLastId = reward.last_trade_id || 0;
+      const actualLastId = (fresh && fresh.last_trade_id) || 0;
+      if (actualLastId !== expectedLastId) {
+        return { raced: true };
+      }
+      db.db.prepare(`
+        UPDATE trading_rewards SET
+          last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
+          first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+          last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
+          updated_at = datetime('now')
+        WHERE player_id = ?
+      `).run(maxId, newVolume, totalGold, creditedTrades, creditedTrades, creditedTrades, today, req.player.id);
+      if (totalGold > 0) {
+        db.addResources(req.player.id, totalGold, 0, 0);
+        // Record the payout in gold_history so ProfileModal's trading-stats
+        // timeline shows the same ledger as Pacifica. Reason must contain
+        // "trade" / "profit" / "daily" / "deposit" / "volume" for the
+        // daily_trade_gold task verifier's heuristic (see tasks.js).
         db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
           .run(req.player.id, totalGold, reasons.join(' + ') || 'Trading reward');
-      } catch { /* non-fatal */ }
+      }
+      return { raced: false };
+    });
+
+    const txnResult = creditTxn();
+    if (txnResult.raced) {
+      return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex: 'avantis' });
+    }
+    if (totalGold > 0) {
       return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex: 'avantis' });
     }
     return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex: 'avantis' });
@@ -1067,14 +1166,20 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reasons.push(`${newTrades.length} trades`);
     }
 
-    // First deposit bonus
-    if (!reward.first_deposit) {
+    // First deposit / first trade bonuses — once per player forever.
+    // Both the flag AND a gold_history audit must say "never paid". If an
+    // admin resets trading_rewards.first_deposit=0, the gold_history check
+    // still blocks a repeat payout.
+    const priorBonusesPac = db.db.prepare(
+      "SELECT reason FROM gold_history WHERE player_id = ? AND (reason LIKE '%First deposit!%' OR reason LIKE '%First trade!%')"
+    ).all(req.player.id);
+    const alreadyPaidFirstDepositPac = priorBonusesPac.some(r => String(r.reason).includes('First deposit!'));
+    const alreadyPaidFirstTradePac   = priorBonusesPac.some(r => String(r.reason).includes('First trade!'));
+    if (!reward.first_deposit && !alreadyPaidFirstDepositPac) {
       totalGold += GOLD_FIRST_DEPOSIT;
       reasons.push('First deposit!');
     }
-
-    // First trade bonus
-    if (!reward.first_trade && newTrades.length > 0) {
+    if (!reward.first_trade && !alreadyPaidFirstTradePac && newTrades.length > 0) {
       totalGold += GOLD_FIRST_TRADE;
       reasons.push('First trade!');
     }
@@ -1086,26 +1191,39 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reasons.push('Daily bonus');
     }
 
-    // Save all new trades to DB
-    const insertTrade = db.db.prepare('INSERT OR IGNORE INTO player_trades (player_id, history_id, symbol, price, amount, fee) VALUES (?, ?, ?, ?, ?, ?)');
-    for (const t of newTrades) {
-      insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
-    }
-
-    // Always update reward tracking (pnl_gold_pool accumulates even without gold payout)
+    // Atomic write: guard against two concurrent /claim-gold requests both
+    // reading the same last_trade_id and crediting overlapping trades.
+    // Inside the transaction we re-read the cursor — if another request
+    // advanced it, abort gracefully.
     const newVolume = newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0);
-    db.db.prepare(`
-      UPDATE trading_rewards SET
-        last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
-        first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
-        last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
-      WHERE player_id = ?
-    `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id);
-
-    if (totalGold > 0) {
-      db.addResources(req.player.id, totalGold, 0, 0);
-      const reason = reasons.join(' + ') || 'Trading reward';
-      db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
+    const creditTxnPac = db.db.transaction(() => {
+      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      const expectedLastId = reward.last_trade_id || 0;
+      const actualLastId = (fresh && fresh.last_trade_id) || 0;
+      if (actualLastId !== expectedLastId) {
+        return { raced: true };
+      }
+      const insertTrade = db.db.prepare('INSERT OR IGNORE INTO player_trades (player_id, history_id, symbol, price, amount, fee) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const t of newTrades) {
+        insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
+      }
+      db.db.prepare(`
+        UPDATE trading_rewards SET
+          last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
+          first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+          last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
+        WHERE player_id = ?
+      `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id);
+      if (totalGold > 0) {
+        db.addResources(req.player.id, totalGold, 0, 0);
+        const reason = reasons.join(' + ') || 'Trading reward';
+        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
+      }
+      return { raced: false };
+    });
+    const txnResPac = creditTxnPac();
+    if (txnResPac.raced) {
+      return res.json({ gold: 0, reason: 'Already claimed by parallel request' });
     }
 
     res.json({
@@ -1139,8 +1257,10 @@ try {
       fee          TEXT,
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    CREATE INDEX IF NOT EXISTS idx_gold_history_player ON gold_history(player_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_player_trades_player ON player_trades(player_id, created_at);
   `);
-} catch {}
+} catch { /* non-fatal on first boot */ }
 
 // Get trading reward stats + gold history + trade history from Pacifica
 router.get('/trading/stats', auth, async (req, res) => {
@@ -1292,7 +1412,9 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   const snap = tasks.parseParams(pt.snapshot);
   const result = await tasks.verifyTask(req.player, task, snap);
 
-  // Always update cached progress
+  // Always update cached progress (progress update is an independent fact,
+  // kept outside the payout txn so it lands even if the completion check
+  // fails or the atomic claim loses a race).
   db.db.prepare(
     `UPDATE player_tasks SET progress_value = ?, target_value = ?, progress = ? WHERE player_id = ? AND task_id = ?`
   ).run(result.progress_value, result.target_value, result.target_value > 0 ? Math.min(1, result.progress_value / result.target_value) : 0, req.player.id, id);
@@ -1301,19 +1423,31 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
 
-  // Payout in a transaction
+  // Atomic payout: re-check claimed_at inside the transaction so two
+  // concurrent /tasks/:id/claim calls can't both pass canClaim() and
+  // double-pay. Previously the rate-limiter's 3s gate was the only guard;
+  // two requests arriving within ~ms of each other would both credit.
   const payout = db.db.transaction(() => {
+    const latest = db.db.prepare('SELECT claimed_at FROM player_tasks WHERE player_id = ? AND task_id = ?').get(req.player.id, id);
+    // For one-shot tasks: if claimed_at already set by a racing request,
+    // abort. For repeatable tasks: if claimed_at advanced since we started,
+    // the cooldown check we did earlier is stale — abort and let user
+    // re-submit rather than risk a duplicate payout within the cooldown.
+    if (latest && latest.claimed_at && (!task.repeatable || latest.claimed_at !== pt.claimed_at)) {
+      return { raced: true };
+    }
     db.addResources(req.player.id, task.reward_gold || 0, task.reward_wood || 0, task.reward_ore || 0);
     if (task.reward_gold > 0) {
-      try {
-        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
-          .run(req.player.id, task.reward_gold, `Quest: ${task.title}`);
-      } catch {}
+      db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
+        .run(req.player.id, task.reward_gold, `Quest: ${task.title}`);
     }
     db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
-    // If repeatable with no cooldown — keep snapshot refreshed for next run? We reset via cooldown claim flow instead.
+    return { raced: false };
   });
-  payout();
+  const payoutRes = payout();
+  if (payoutRes.raced) {
+    return res.status(409).json({ error: 'Already claimed by parallel request' });
+  }
 
   try {
     logEconomy('Task claimed', { player: req.player.name, task: task.title, gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore });

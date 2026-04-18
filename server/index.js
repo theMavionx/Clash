@@ -891,8 +891,17 @@ setInterval(() => { if (KEY) loadAll(); }, 15000);
 app.use('/api', router);
 
 // Error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
+// In production, log the compact message + first stack frame — full stacks
+// reveal file paths / line numbers, which is useful for an attacker probing
+// the API but noisy in prod log aggregators. In dev (NODE_ENV !== 'production')
+// keep the full stack for local debugging.
+app.use((err, req, res, _next) => {
+  if (process.env.NODE_ENV === 'production') {
+    const firstFrame = String(err.stack || '').split('\n')[1] || '';
+    console.error(`[err] ${req.method} ${req.url} → ${err.message} ${firstFrame.trim()}`);
+  } else {
+    console.error(err.stack);
+  }
   res.status(500).json({ error: 'Internal server error' });
 });
 

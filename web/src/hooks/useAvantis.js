@@ -478,7 +478,11 @@ export function useAvantis() {
   }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Place limit order ─────
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage) => {
+  // `slippage` added as optional 7th arg (percent, e.g. 0.5). Defaults to 1%
+  // to match previous hardcoded behaviour — callers that already pass 6
+  // args continue to work unchanged. Clamped to [0.1%, 50%] inside
+  // `slippageToContract`.
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage, slippage = 1) => {
     setLoading(true);
     setError(null);
     try {
@@ -522,7 +526,7 @@ export function useAvantis() {
 
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'openTrade',
-        args: [tradeInput, ORDER_TYPE.LIMIT, slippageToContract(1)],
+        args: [tradeInput, ORDER_TYPE.LIMIT, slippageToContract(slippage)],
         value: execFee,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -557,7 +561,10 @@ export function useAvantis() {
       if (pairIndex === undefined || tradeIndex === undefined) throw new Error('Missing pair/trade index');
 
       const amt = Number(amount);
-      if (!Number.isFinite(amt) || amt <= 0) throw new Error('Invalid close amount');
+      // $0.01 floor — anything smaller is dust that reverts on-chain with
+      // a generic "execution reverted" and wastes gas. Surface a friendly
+      // error before we sign the tx.
+      if (!Number.isFinite(amt) || amt < 0.01) throw new Error('Close amount must be at least $0.01');
       const amountRaw = collateralToRaw(amt);
       const execFee = await fetchExecutionFeeWei(publicClient);
 
