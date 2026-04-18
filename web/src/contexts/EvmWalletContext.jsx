@@ -28,10 +28,69 @@ const EvmWalletContext = createContext({
   disconnect: () => {},
 });
 
+const LAST_WALLET_KEY = 'clash_last_evm_wallet_rdns';
+
 export function EvmWalletProvider({ children }) {
   const [externalProvider, setExternalProvider] = useState(null); // set by EvmWalletModal
   const [externalAddress, setExternalAddress] = useState(null);
   const [error, setError] = useState(null);
+
+  // Silent reconnect: on mount, if we remember the rdns of the last-connected
+  // wallet, listen for its EIP-6963 announcement and check if the user is
+  // still authorised (eth_accounts, NOT eth_requestAccounts — no popup). This
+  // keeps external-wallet sessions alive across page reloads, so the user
+  // doesn't see the "Connect Wallet" screen on every refresh when their
+  // wallet extension has already granted permission.
+  useEffect(() => {
+    let storedRdns = null;
+    try { storedRdns = localStorage.getItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
+    if (!storedRdns) return;
+
+    let cancelled = false;
+    const tryReconnect = async (provider) => {
+      if (cancelled || externalAddress) return;
+      try {
+        const accounts = await provider.request({ method: 'eth_accounts' });
+        const addr = accounts && accounts[0];
+        if (!cancelled && addr) {
+          setExternalProvider(provider);
+          setExternalAddress(addr);
+        }
+      } catch { /* wallet rejected silent query */ }
+    };
+
+    const onAnnounce = (e) => {
+      const d = e?.detail;
+      if (!d?.provider || !d?.info) return;
+      if ((d.info.rdns || d.info.name) === storedRdns) {
+        tryReconnect(d.provider);
+      }
+    };
+    window.addEventListener('eip6963:announceProvider', onAnnounce);
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+    // Legacy fallback: window.ethereum with matching name hint.
+    const legacyTimer = setTimeout(() => {
+      if (cancelled || externalAddress) return;
+      const eth = typeof window !== 'undefined' ? window.ethereum : null;
+      if (!eth) return;
+      const legacy = Array.isArray(eth.providers) ? eth.providers : [eth];
+      for (const p of legacy) {
+        const name = p.isMetaMask ? 'legacy.metamask'
+          : p.isCoinbaseWallet ? 'legacy.coinbasewallet'
+          : p.isRabby ? 'legacy.rabby'
+          : p.isPhantom ? 'legacy.phantom'
+          : null;
+        if (name && storedRdns.startsWith(name)) { tryReconnect(p); break; }
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('eip6963:announceProvider', onAnnounce);
+      clearTimeout(legacyTimer);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Privy embedded wallet — auto-picked when user logs in via email.
   // `usePrivyEvmWallets()` returns ONLY Ethereum wallets (no chainType filter needed).
@@ -96,6 +155,7 @@ export function EvmWalletProvider({ children }) {
     setExternalProvider(null);
     setExternalAddress(null);
     setError(null);
+    try { localStorage.removeItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
   }, []);
 
   // Listen for account / chain changes on the active provider so UI reacts
@@ -133,10 +193,17 @@ export function EvmWalletProvider({ children }) {
     error,
     chainId: BASE_CHAIN_ID,
     ensureChain,
-    setExternalProvider: (prov, addr) => {
+    setExternalProvider: (prov, addr, rdns = null) => {
       setExternalProvider(prov);
       setExternalAddress(addr);
       setError(null);
+      // Remember the chosen wallet so the next page load can silently
+      // reconnect via EIP-6963 (eth_accounts, no popup). Omit rdns for
+      // Farcaster / non-persistent sources — we don't want to try to
+      // reconnect them outside their original context.
+      if (rdns) {
+        try { localStorage.setItem(LAST_WALLET_KEY, rdns); } catch { /* storage disabled */ }
+      }
     },
     disconnect,
   }), [address, walletClient, provider, isReady, error, ensureChain, disconnect]);

@@ -9,6 +9,8 @@ import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
+import EvmWalletModal from './EvmWalletModal';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
 import OrderBook from './OrderBook';
 import TradeHistory from './TradeHistory';
 import FundingHistory from './FundingHistory';
@@ -660,6 +662,12 @@ function FuturesPanel() {
   const [showSymbolPicker, setShowSymbolPicker] = useState(false);
   const [tradeIdeaOpen, setTradeIdeaOpen] = useState(false);
   const [walletCopied, setWalletCopied] = useState(false);
+  const [evmModalOpen, setEvmModalOpen] = useState(false);
+  const { setExternalProvider: setEvmProvider } = useEvmWallet();
+  const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
+    setEvmModalOpen(false);
+    if (provider && address) setEvmProvider(provider, address, rdns);
+  }, [setEvmProvider]);
   const elfaSignals = useElfaSignals();
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
@@ -1146,6 +1154,11 @@ function FuturesPanel() {
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
             {dex === 'avantis' ? (
+              // Avantis is non-custodial — the user's own EVM wallet signs
+              // every trade. On page reload, external-wallet sessions are
+              // lost (provider lives in React state only), so this screen
+              // gives the user a direct "Connect" button instead of the
+              // old fake "provisioning custodial wallet" spinner.
               <>
                 <div style={{
                   width: 80, height: 80, borderRadius: '50%',
@@ -1159,26 +1172,32 @@ function FuturesPanel() {
                 <div style={{
                   color: '#5C3A21', fontSize: 18, fontWeight: 900,
                   textAlign: 'center', letterSpacing: '0.5px',
-                }}>Provisioning your Base wallet…</div>
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#0369A1', fontSize: 11, fontWeight: 800,
-                  letterSpacing: '0.5px',
-                }}>
-                  <span className="avantis-spin-dot" style={{
-                    width: 8, height: 8, borderRadius: '50%', background: '#0EA5E9',
-                    animation: 'av-pulse 1.2s ease-in-out infinite',
-                  }} />
-                  <span>AVANTIS · BASE MAINNET</span>
-                </div>
+                }}>Connect your Base wallet</div>
                 <div style={{
                   color: '#8a7252', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Creating a custodial Base (EVM) wallet for Avantis perps trading.<br />
-                  Takes a few seconds — we'll bring you right to the orderbook.
+                  Avantis is non-custodial — your own wallet signs each trade.<br />
+                  Nothing held on our side.
                 </div>
-                <style>{`@keyframes av-pulse { 0%,100% { opacity: 0.3; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.2); } }`}</style>
+                <button
+                  style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#0369A1', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>AVANTIS · BASE MAINNET</span>
+                </div>
               </>
             ) : (
               <>
@@ -1202,6 +1221,11 @@ function FuturesPanel() {
             )}
           </div>
         </div>
+        <EvmWalletModal
+          open={evmModalOpen}
+          onClose={() => setEvmModalOpen(false)}
+          onConnected={handleEvmConnected}
+        />
       </>
     );
   }

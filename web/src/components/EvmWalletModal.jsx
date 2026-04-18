@@ -101,7 +101,12 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
       const addr = accounts && accounts[0];
       if (!addr) throw new Error('No account returned');
       await ensureBaseChain(detail.provider);
-      onConnected({ address: addr, provider: detail.provider, walletName: detail.info?.name });
+      onConnected({
+        address: addr,
+        provider: detail.provider,
+        walletName: detail.info?.name,
+        rdns: detail.info?.rdns || detail.info?.name,
+      });
     } catch (err) {
       console.error('[evm-modal] connect failed:', err);
       const msg = err?.message || String(err);

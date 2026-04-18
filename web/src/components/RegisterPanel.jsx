@@ -243,11 +243,12 @@ function RegisterPanel() {
 
   // External EVM wallet connected via custom modal (not Privy). Skip name
   // prompt for returning wallets.
-  const handleEvmWalletConnected = ({ address, walletName, provider }) => {
+  const handleEvmWalletConnected = ({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
     // Publish the provider to EvmWalletContext so useAvantis / FuturesPanel
-    // can build a viem walletClient and sign trades from this wallet.
-    if (provider && address) setEvmProvider(provider, address);
+    // can build a viem walletClient and sign trades from this wallet. Pass
+    // rdns so the context persists it for silent reconnect on next reload.
+    if (provider && address) setEvmProvider(provider, address, rdns);
     if (triedPrivyLogin) return;
     checkExistingAndContinue(address, {
       chain: 'base', source: walletName || 'external',
