@@ -250,12 +250,17 @@ export function useAuthFlow() {
       payload.chain = candidate.chain || 'base';
       payload.walletSource = candidate.source;
     }
+    // Pipe the Farcaster FID into register so the server can adopt a prior
+    // `fc_<fid>` placeholder account instead of spawning a duplicate — keeps
+    // tutorial_flags, gold and building progress intact across FC→Avantis
+    // sign-in paths.
+    if (fcUser?.fid) payload.fid = fcUser.fid;
     sendToGodot('register', payload);
     // Safety: if Godot never acks (network partition), clear the spinner
     // after 10s so the user can retry or pick a different path.
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);
-  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot]);
+  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot, fcUser]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.
@@ -283,10 +288,11 @@ export function useAuthFlow() {
       payload.chain = candidate.chain || 'base';
       payload.walletSource = candidate.source;
     }
+    if (fcUser?.fid) payload.fid = fcUser.fid;
     sendToGodot('register', payload);
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);
-  }, [candidate, dex, sendToGodot]);
+  }, [candidate, dex, sendToGodot, fcUser]);
 
   // Trigger manual Privy login (email) — Privy renders its own modal.
   const loginWithPrivy = useCallback(() => {

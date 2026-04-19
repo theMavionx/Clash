@@ -55,7 +55,38 @@ const SHIP_EXPLOSION_FRAME_DIR: String = "res://Model/Ship/FootageCrate-Particle
 ## Sets the owning BuildingSystem node. Returns self for chaining.
 func init(building_system: Node3D) -> BSCannon:
 	bs = building_system
+	# Preload VFX textures up front — moves synchronous disk I/O out of the
+	# first-shot frame. Called from BS._ready so this runs during loading.
+	_preload_flash_textures()
+	_preload_explosion_textures()
 	return self
+
+
+## Factory for the shared "additive billboard" StandardMaterial3D. Same flags
+## for muzzle flash and explosion — Godot compiles one pipeline variant for
+## both instead of two.
+static func _make_additive_billboard_mat(tex: Texture2D, color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.no_depth_test = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	if tex:
+		mat.albedo_texture = tex
+	mat.albedo_color = color
+	return mat
+
+
+## Loads flash sprite-sheet frames. Idempotent.
+func _preload_flash_textures() -> void:
+	if not _ship_flash_textures.is_empty():
+		return
+	for path in SHIP_FLASH_FRAMES:
+		var tex = load(path)
+		if tex:
+			_ship_flash_textures.append(tex)
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -103,12 +134,8 @@ func _stop_attack_ship_waves() -> void:
 # ---------------------------------------------------------------------------
 
 func _spawn_ship_flash(pos: Vector3) -> void:
-	# Load textures once
-	if _ship_flash_textures.is_empty():
-		for path in SHIP_FLASH_FRAMES:
-			var tex = load(path)
-			if tex:
-				_ship_flash_textures.append(tex)
+	# Textures pre-loaded in init(); defensive re-call if something hits this path first.
+	_preload_flash_textures()
 	# Create or reuse flash quad
 	if not _ship_flash or not is_instance_valid(_ship_flash):
 		_ship_flash = MeshInstance3D.new()
@@ -116,17 +143,8 @@ func _spawn_ship_flash(pos: Vector3) -> void:
 		quad.size = Vector2(SHIP_FLASH_SCALE, SHIP_FLASH_SCALE)
 		quad.center_offset = Vector3(SHIP_FLASH_SCALE * 0.2, 0.0, 0.0)
 		_ship_flash.mesh = quad
-		var mat = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		mat.no_depth_test = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		if _ship_flash_textures.size() > 0:
-			mat.albedo_texture = _ship_flash_textures[0]
-		mat.albedo_color = Color(1.5, 1.2, 0.8, 1.0)
-		_ship_flash.material_override = mat
+		var first_tex: Texture2D = _ship_flash_textures[0] if _ship_flash_textures.size() > 0 else null
+		_ship_flash.material_override = _make_additive_billboard_mat(first_tex, Color(1.5, 1.2, 0.8, 1.0))
 		bs.get_tree().root.add_child(_ship_flash)
 	_ship_flash.global_position = pos
 	_ship_flash.visible = true
@@ -176,23 +194,14 @@ func _spawn_ship_explosion(pos: Vector3) -> void:
 	_preload_explosion_textures()
 	if _ship_explosion_textures.is_empty():
 		return
-	# Create or reuse explosion quad
+	# Create or reuse explosion quad — same pipeline variant as flash (shared factory).
 	if not _ship_explosion or not is_instance_valid(_ship_explosion):
 		_ship_explosion = MeshInstance3D.new()
 		var quad = QuadMesh.new()
 		quad.size = Vector2(SHIP_EXPLOSION_SCALE, SHIP_EXPLOSION_SCALE)
 		quad.center_offset = Vector3(0, SHIP_EXPLOSION_SCALE * 0.28, 0)
 		_ship_explosion.mesh = quad
-		var mat = StandardMaterial3D.new()
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-		mat.no_depth_test = true
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-		mat.albedo_texture = _ship_explosion_textures[0]
-		mat.albedo_color = Color(1.4, 1.1, 0.7, 1.0)
-		_ship_explosion.material_override = mat
+		_ship_explosion.material_override = _make_additive_billboard_mat(_ship_explosion_textures[0], Color(1.4, 1.1, 0.7, 1.0))
 		bs.get_tree().root.add_child(_ship_explosion)
 	_ship_explosion.global_position = pos
 	_ship_explosion.visible = true

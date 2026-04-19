@@ -68,6 +68,20 @@ static var _buildings_cache_frame: int = -1
 static var _building_entry_pool: Array = []  # reusable Dict pool to avoid per-frame allocation
 static var _building_entry_pool_idx: int = 0
 
+## Per-frame cache of "building_systems" group nodes — avoids repeated
+## get_nodes_in_group scans during troop deaths and other event-driven calls.
+static var _cached_bs_nodes: Array = []
+static var _bs_nodes_cache_frame: int = -1
+
+static func _get_building_systems_cached() -> Array:
+	var frame: int = Engine.get_process_frames()
+	if frame != _bs_nodes_cache_frame:
+		var tree: SceneTree = Engine.get_main_loop() as SceneTree
+		if tree:
+			_cached_bs_nodes = tree.get_nodes_in_group("building_systems")
+		_bs_nodes_cache_frame = frame
+	return _cached_bs_nodes
+
 ## Cached island bounds — center, extents, rotation (from main BuildingSystem)
 static var _island_center: Vector3 = Vector3.ZERO
 static var _island_extent_x: float = 10.0
@@ -299,6 +313,64 @@ func _setup_animations() -> void:
 
 const SLOT_OFFSETS: Array = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]
 
+
+## Static version of the _setup_animations cache-build path. Populates
+## `_anim_lib_cache[cache_key]` WITHOUT needing a real troop instance — call
+## from warmup/boot so the FIRST troop deployed at attack time pulls a
+## pre-built library instead of decoding 5 GLBs + duplicating every track.
+static func prewarm_anim_library(anim_files_list: Array) -> void:
+	if anim_files_list.is_empty():
+		return
+	var cache_key: String = ",".join(anim_files_list)
+	if _anim_lib_cache.has(cache_key):
+		return
+	var lib := AnimationLibrary.new()
+	var tree: SceneTree = Engine.get_main_loop() as SceneTree
+	if tree == null:
+		return
+	# Parent for temporary GLB instances — removed immediately after extracting
+	# animations. Scoped under the scene root so the nodes are in-tree (required
+	# by some GLB import paths) but invisible.
+	var scope := Node3D.new()
+	scope.visible = false
+	tree.root.add_child(scope)
+	for file_path in anim_files_list:
+		var res: Resource = load(file_path)
+		if res == null:
+			continue
+		var inst: Node = res.instantiate()
+		scope.add_child(inst)
+		var src: AnimationPlayer = null
+		for child in inst.get_children():
+			if child is AnimationPlayer:
+				src = child
+				break
+			# Shallow search — most GLBs put the AnimationPlayer at depth 1.
+			for grand in child.get_children():
+				if grand is AnimationPlayer:
+					src = grand
+					break
+			if src:
+				break
+		if src:
+			for anim_name in src.get_animation_list():
+				if anim_name == "RESET" or anim_name == "T-Pose":
+					continue
+				var anim: Animation = src.get_animation(anim_name)
+				if anim and not lib.has_animation(anim_name):
+					var dup: Animation = anim.duplicate()
+					if anim_name.begins_with("Running") or anim_name.begins_with("Walking") or anim_name.begins_with("Idle") or anim_name == "Cheering":
+						dup.loop_mode = Animation.LOOP_LINEAR
+					for ti in range(dup.get_track_count() - 1, -1, -1):
+						var path: String = str(dup.track_get_path(ti))
+						if ":scale" in path or ":position" in path:
+							dup.remove_track(ti)
+					lib.add_animation(anim_name, dup)
+		inst.queue_free()
+	_anim_lib_cache[cache_key] = lib
+	scope.queue_free()
+
+
 ## Animation file paths for the medium rig — shared by Knight, Mage, Barbarian.
 ## Subclasses that use this rig should assign `anim_files = MEDIUM_RIG_ANIM_FILES` in `_init_stats()`.
 const MEDIUM_RIG_ANIM_FILES: Array = [
@@ -315,27 +387,17 @@ const TARGET_AIM_Y: float = 0.05
 
 const HP_BAR_W: float = 0.12
 const HP_BAR_H: float = 0.012
-const HP_BAR_SHADER_CODE: String = "shader_type spatial;
-render_mode unshaded, blend_mix, depth_test_disabled, cull_disabled;
-uniform vec4 albedo : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform vec2 bar_size = vec2(0.12, 0.012);
-void fragment() {
-	vec2 pos = (UV - 0.5) * bar_size;
-	float r = bar_size.y * 0.45;
-	vec2 q = abs(pos) - bar_size * 0.5 + r;
-	float d = length(max(q, 0.0)) - r;
-	float aa = fwidth(d);
-	ALBEDO = albedo.rgb;
-	ALPHA = albedo.a * (1.0 - smoothstep(-aa, aa, d));
-}"
+## Shared .gdshader file — one pipeline variant for BOTH troop and building bars.
+## Previously two inline string shaders (base_troop + building_system) caused two
+## separate WebGL2 compiles on first use.
+const HP_BAR_SHADER_PATH: String = "res://shaders/hp_bar.gdshader"
 
-## Shared shader — compiled once on GPU, reused by all HP bars
+## Shared shader — compiled once on GPU, reused by all HP bars (troop + building).
 static var _hp_shader: Shader = null
 
 static func _get_hp_shader() -> Shader:
 	if _hp_shader == null:
-		_hp_shader = Shader.new()
-		_hp_shader.code = HP_BAR_SHADER_CODE
+		_hp_shader = load(HP_BAR_SHADER_PATH)
 	return _hp_shader
 
 static func _make_hp_shader_mat(color: Color, size: Vector2, priority: int) -> ShaderMaterial:
@@ -567,8 +629,9 @@ func _report_death() -> void:
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge and bridge.has_method("send_to_react"):
 		bridge.send_to_react("troop_died", {"troop_name": troop_name})
-	# Also notify server directly
-	for bs_node in get_tree().get_nodes_in_group("building_systems"):
+	# Also notify server directly (use per-frame cache; rapid death waves
+	# would otherwise rescan the scene tree once per corpse).
+	for bs_node in _get_building_systems_cached():
 		if bs_node.has_method("_on_troop_died"):
 			bs_node._on_troop_died(troop_name)
 			break

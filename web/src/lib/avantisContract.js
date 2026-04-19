@@ -76,11 +76,16 @@ const TRADE_INPUT_TUPLE = {
 
 // Minimal ABI for the Avantis Referral registry. Read current linkage +
 // write a new one. The 2-arg setTraderReferralCode is handler-gated, so we
-// only expose the user-callable variant.
+// only expose the user-callable variant. `codeOwners` lets us pre-verify
+// that our code is actually registered before prompting the user for a
+// signature — otherwise the contract reverts with "Invalid params".
 export const REFERRAL_ABI = [
   { name: 'traderReferralCodes', type: 'function', stateMutability: 'view',
     inputs: [{ name: 'trader', type: 'address' }],
     outputs: [{ type: 'bytes32' }] },
+  { name: 'codeOwners', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'code', type: 'bytes32' }],
+    outputs: [{ type: 'address' }] },
   { name: 'setTraderReferralCodeByUser', type: 'function', stateMutability: 'nonpayable',
     inputs: [{ name: '_code', type: 'bytes32' }],
     outputs: [] },
@@ -276,11 +281,41 @@ export async function isLinkedToOurReferrer(publicClient, trader) {
   return String(code).toLowerCase() === String(REFERRAL_CODE_BYTES32).toLowerCase();
 }
 
+// Returns the address that owns REFERRAL_CODE on-chain. If zero, the code has
+// not been registered yet — calling setTraderReferralCodeByUser would revert
+// with "Invalid params". Surfaces the issue before prompting for a signature.
+export async function fetchReferralCodeOwner(publicClient) {
+  if (!publicClient) return null;
+  try {
+    const owner = await publicClient.readContract({
+      address: REFERRAL_ADDRESS,
+      abi: REFERRAL_ABI,
+      functionName: 'codeOwners',
+      args: [REFERRAL_CODE_BYTES32],
+    });
+    return owner || null;
+  } catch {
+    return null;
+  }
+}
+
 // Writes our referral code into the user's linkage. One signature. Safe to
 // call repeatedly; the Avantis contract overwrites the prior code each time
 // (not frozen after first write). Returns the tx hash.
-export async function applyReferralCode(walletClient) {
+//
+// Pass `publicClient` to pre-validate the code is registered on-chain — if
+// it isn't, we throw a clear error instead of letting the wallet fire a
+// revert the user can't interpret.
+export async function applyReferralCode(walletClient, publicClient = null) {
   if (!walletClient) throw new Error('Wallet not connected');
+  if (publicClient) {
+    const owner = await fetchReferralCodeOwner(publicClient);
+    if (!owner || /^0x0+$/i.test(owner)) {
+      const err = new Error(`Referral code "${REFERRAL_CODE_STRING}" is not registered on Avantis. Ask an admin to run registerCode() on ${REFERRAL_ADDRESS}.`);
+      err.code = 'REFERRAL_CODE_NOT_REGISTERED';
+      throw err;
+    }
+  }
   return walletClient.writeContract({
     address: REFERRAL_ADDRESS,
     abi: REFERRAL_ABI,

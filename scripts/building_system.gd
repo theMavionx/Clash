@@ -541,6 +541,9 @@ func _exit_tree() -> void:
 
 func _ready() -> void:
 	add_to_group("building_systems")
+	# Preload defense-unit resources up front so the first skeleton spawn or
+	# first archer-tower load during gameplay doesn't stall the main thread.
+	_preload_defense_resources()
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
 	_cannon = BSCannon.new().init(self)
@@ -2843,6 +2846,27 @@ func _sink_ship(ship: Node3D) -> void:
 const SKELETON_MODEL = "res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb"
 const SKELETON_SCRIPT = "res://scripts/skeleton_guard.gd"
 const SKELETON_SCALE = 0.1
+const TOWER_ARCHER_SCRIPT_PATH = "res://scripts/tower_archer.gd"
+
+# ---------------------------------------------------------------------------
+# Defense unit resource cache — loaded once at boot so the first skeleton
+# spawn or first archer-tower load never triggers a synchronous `load()`
+# in the middle of gameplay. Previously each call to _spawn_tombstone_skeletons
+# or _spawn_tower_unit ran load() on the main thread (WASM hitch).
+# ---------------------------------------------------------------------------
+static var _skeleton_model_res: Resource = null
+static var _skeleton_script_res: Resource = null
+static var _tower_archer_script_res: Resource = null
+static var _tower_unit_model_cache: Dictionary = {}  # model_path → Resource
+static var _defense_preload_done: bool = false
+
+static func _preload_defense_resources() -> void:
+	if _defense_preload_done:
+		return
+	_defense_preload_done = true
+	_skeleton_model_res = load(SKELETON_MODEL)
+	_skeleton_script_res = load(SKELETON_SCRIPT)
+	_tower_archer_script_res = load(TOWER_ARCHER_SCRIPT_PATH)
 
 func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	# Remove existing tower unit if any
@@ -2853,14 +2877,22 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	var model_path = tu.get("model", "")
 	var unit_scale = tu.get("scale", 0.07)
 	var offset_y = tu.get("offset_y", 0.3)
-	var model_res = load(model_path)
+	# Cache tower-unit GLBs per unique path. First access pays load() cost at boot
+	# (via _preload_defense_resources warm-up in _ready), every subsequent spawn
+	# is a dictionary lookup — no main-thread stall on WASM.
+	var model_res: Resource = _tower_unit_model_cache.get(model_path, null)
+	if model_res == null:
+		model_res = load(model_path)
+		if model_res:
+			_tower_unit_model_cache[model_path] = model_res
 	if not model_res:
 		return
 	var unit = model_res.instantiate()
 	# Attach tower_archer script for combat behavior
-	var archer_script = load("res://scripts/tower_archer.gd")
-	if archer_script:
-		unit.set_script(archer_script)
+	if _tower_archer_script_res == null:
+		_preload_defense_resources()
+	if _tower_archer_script_res:
+		unit.set_script(_tower_archer_script_res)
 	var s = unit_scale
 	unit.scale = Vector3(s, s, s)
 	b.get("node").add_child(unit)
@@ -2886,8 +2918,12 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 			skel.queue_free()
 	# Spawn missing
 	var tomb_pos = b.node.global_position
-	var script_res = load(SKELETON_SCRIPT)
-	var model_res = load(SKELETON_MODEL)
+	# Use preloaded cache (populated in _ready → _preload_defense_resources).
+	# Defensive lazy init if something else called us before _ready ran.
+	if _skeleton_model_res == null or _skeleton_script_res == null:
+		_preload_defense_resources()
+	var script_res: Resource = _skeleton_script_res
+	var model_res: Resource = _skeleton_model_res
 	if not model_res or not script_res:
 		b["skeletons"] = alive
 		return
@@ -2915,31 +2951,15 @@ func _remove_tombstone_skeletons(b: Dictionary) -> void:
 
 const BLDG_BAR_W = 0.18
 const BLDG_BAR_H = 0.015
-const BLDG_BAR_SHADER = "shader_type spatial;
-render_mode unshaded, blend_mix, depth_test_disabled, cull_disabled;
-uniform vec4 albedo : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform vec2 bar_size = vec2(0.18, 0.015);
-void fragment() {
-	vec2 pos = (UV - 0.5) * bar_size;
-	float r = bar_size.y * 0.45;
-	vec2 q = abs(pos) - bar_size * 0.5 + r;
-	float d = length(max(q, 0.0)) - r;
-	float aa = fwidth(d);
-	ALBEDO = albedo.rgb;
-	ALPHA = albedo.a * (1.0 - smoothstep(-aa, aa, d));
-}"
 
-## Shared shader for building HP bars — compiled once on GPU
-static var _bldg_hp_shader: Shader = null
 ## Shared shader for building base outlines — compiled once on GPU, not per building
 static var _building_base_shader: Shader = null
 
 func _make_bldg_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMaterial:
-	if _bldg_hp_shader == null:
-		_bldg_hp_shader = Shader.new()
-		_bldg_hp_shader.code = BLDG_BAR_SHADER
+	# Reuse BaseTroop's shared hp_bar.gdshader — identical shader, different
+	# default uniforms. One pipeline variant instead of two on WebGL2.
 	var mat = ShaderMaterial.new()
-	mat.shader = _bldg_hp_shader
+	mat.shader = BaseTroop._get_hp_shader()
 	mat.set_shader_parameter("albedo", color)
 	mat.set_shader_parameter("bar_size", size)
 	mat.render_priority = priority
@@ -3842,9 +3862,17 @@ func _buy_troop(troop_name: String) -> void:
 	ship_troops.append(troop_name)
 	port_node.set_meta("ship_troops", ship_troops)
 	_refresh_barracks_panel()
-	# Spawn the actual combat troop model (same as attack troops)
-	var model_res: Resource = load(model_path)
-	var script_res: Resource = load(script_path)
+	# Spawn the actual combat troop model (same as attack troops).
+	# Reuse AttackSystem's cache so recruitment never re-loads GLBs that are
+	# already in memory from the attack path.
+	var troop_key: String = AttackSystem._script_to_troop_key(script_path)
+	var cached: Dictionary = AttackSystem._troop_res_cache.get(troop_key, {})
+	var model_res: Resource = cached.get("model", null)
+	var script_res: Resource = cached.get("script", null)
+	if model_res == null:
+		model_res = load(model_path)
+	if script_res == null:
+		script_res = load(script_path)
 	if model_res == null or script_res == null:
 		return
 	var troop: Node3D = model_res.instantiate()

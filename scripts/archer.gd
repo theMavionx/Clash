@@ -12,6 +12,9 @@ const POOL_SIZE: int = 8
 ## Squared hit threshold — avoids sqrt each projectile tick.
 const HIT_DIST_SQ: float = 0.05 * 0.05
 
+## Static arrow scene cache — shared across every archer instance, so only the
+## very first archer pays the load() cost (ideally during WarmupScene).
+static var _arrow_res_shared: Resource = null
 var _arrow_res: Resource = null
 var _pool: Array = []
 var _active: Array = []
@@ -57,7 +60,9 @@ func _build_pool() -> void:
 		return
 	_pool_ready = true
 	if _arrow_res == null:
-		_arrow_res = load(arrow_scene)
+		if _arrow_res_shared == null:
+			_arrow_res_shared = load(arrow_scene)
+		_arrow_res = _arrow_res_shared
 	if _arrow_res == null:
 		return
 	var scene_root = get_tree().current_scene

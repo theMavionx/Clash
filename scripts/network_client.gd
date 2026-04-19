@@ -38,7 +38,7 @@ func has_token() -> bool:
 
 # ── Registration ──────────────────────────────────────────────
 
-func register(player_name: String, wallet: String = "", dex: String = "") -> Dictionary:
+func register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
@@ -47,6 +47,11 @@ func register(player_name: String, wallet: String = "", dex: String = "") -> Dic
 		data["wallet"] = wallet
 	if dex != "":
 		data["dex"] = dex
+	# Farcaster ID lets the server adopt a prior fc_<fid> placeholder row so
+	# tutorial/gold/buildings don't reset when the user moves from auto-login
+	# to an explicit Avantis/Pacifica wallet.
+	if fid > 0:
+		data["fid"] = fid
 	var body = JSON.stringify(data)
 	http.request(SERVER_URL + "/players/register", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed

@@ -1,3 +1,4 @@
+class_name AttackSystem
 extends Node3D
 ## Attack system: press Attack → click on shipPlane → ship sails to that point.
 ## Implements: design/gdd/attack_system.md
@@ -65,6 +66,31 @@ const SHIP_TROOPS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Combat resource cache — loaded once at boot, never during combat.
+# Eliminates the first-ship-spawn / first-troop-deploy frame hitch on web
+# (WASM `load()` blocks the main thread while GLB decompresses).
+# ---------------------------------------------------------------------------
+static var _ship_model_cache: Array[Resource] = []
+static var _troop_res_cache: Dictionary = {}  # troop_name → {model, script}
+static var _combat_preload_done: bool = false
+
+## Preloads every ship model and troop (model + script) used in combat.
+## Safe to call multiple times; only runs once. Called from `_ready()`,
+## but also defensively re-callable from a loading screen if needed.
+static func _preload_combat_resources() -> void:
+	if _combat_preload_done:
+		return
+	_combat_preload_done = true
+	for path in SHIP_MODELS:
+		_ship_model_cache.append(load(path))
+	for troop_name in TROOP_DEFS.keys():
+		var tdef: Dictionary = TROOP_DEFS[troop_name]
+		_troop_res_cache[troop_name] = {
+			"model": load(tdef.model),
+			"script": load(tdef.script),
+		}
+
+# ---------------------------------------------------------------------------
 # Per-frame ships group cache — matches BaseTroop caching pattern
 # ---------------------------------------------------------------------------
 static var _cached_ships: Array = []
@@ -107,6 +133,10 @@ var _ship_markers: Array = []
 
 
 func _ready() -> void:
+	# Preload all combat GLBs and scripts before the player can trigger an attack.
+	# Running at _ready() means this cost is paid during the loading screen, not
+	# during the first ship placement or first troop deploy.
+	_preload_combat_resources()
 	ship_plane = get_node_or_null(grid_plane_path)
 	if ship_plane == null:
 		push_warning("AttackSystem: shipPlane not found")
@@ -415,7 +445,8 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
 	var ship_data: Dictionary = _fleet[ship_idx]
 	var ship_level: int = ship_data.get("level", 1)
 	var model_idx: int = clampi(ship_level - 1, 0, SHIP_MODELS.size() - 1)
-	var ship_res: Resource = load(SHIP_MODELS[model_idx])
+	# Use preloaded cache — no synchronous `load()` in the combat hot path.
+	var ship_res: Resource = _ship_model_cache[model_idx] if model_idx < _ship_model_cache.size() else null
 	if ship_res == null:
 		push_warning("AttackSystem: ship model not found for level %d" % ship_level)
 		return false
@@ -530,10 +561,11 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 	# both the actual troop spawn AND the replay-logged coordinate.
 	var spawn_pos: Vector3 = _base_troop_spawn_pos(ship_pos)
 
-	# Get building Y and troop levels
+	# Get building Y and troop levels — reuse BaseTroop's per-frame cache
+	# instead of a fresh scene-tree scan on every ship arrival.
 	var building_y: float = spawn_pos.y
 	var bs_ref: Node = null
-	for building_sys in get_tree().get_nodes_in_group("building_systems"):
+	for building_sys in BaseTroop._get_building_systems_cached():
 		if "grid_y" in building_sys:
 			building_y = building_sys.grid_y
 			bs_ref = building_sys
@@ -544,8 +576,10 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
 		if tdef.is_empty():
 			continue
-		var model_res: Resource = load(tdef.model)
-		var script_res: Resource = load(tdef.script)
+		# Pull from cache populated in _ready() — zero I/O in combat.
+		var cached: Dictionary = _troop_res_cache.get(troop_name, {})
+		var model_res: Resource = cached.get("model", null)
+		var script_res: Resource = cached.get("script", null)
 		if model_res == null or script_res == null:
 			continue
 		var troop_level: int = 1

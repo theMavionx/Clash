@@ -18,6 +18,9 @@ const ANIM_FILES = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 ]
 
+## Shared blade scene — cached so every skeleton after the first doesn't re-load.
+static var _blade_scene_res: Resource = null
+
 var detection_radius: float = 1.0
 var patrol_radius: float = 0.35
 var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
@@ -529,7 +532,9 @@ func _setup_weapon() -> void:
 	ba.bone_name = "handslot.r"
 	ba.bone_idx = bone_idx
 	sk.add_child(ba)
-	var scene_res: Resource = load(BLADE_SCENE)
+	if _blade_scene_res == null:
+		_blade_scene_res = load(BLADE_SCENE)
+	var scene_res: Resource = _blade_scene_res
 	if scene_res:
 		var blade: Node = scene_res.instantiate()
 		blade.name = "Blade"

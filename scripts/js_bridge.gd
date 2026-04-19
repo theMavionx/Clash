@@ -231,7 +231,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var tn = data.get("troop_name", "")
 				bs._upgrade_troop(tn)
 		"register":
-			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""))
+			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)))
 		"wallet_connected":
 			_try_wallet_login(data.get("wallet", ""))
 		"logout":
@@ -282,7 +282,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				bs._start_replay(replay_data, buildings_snapshot, attacker_name)
 
 
-func _do_register(player_name: String, wallet: String = "", dex: String = "") -> void:
+func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> void:
 	var net = get_node_or_null("/root/Net")
 	if not net:
 		send_to_react("error", {"message": "Network not available"})
@@ -316,7 +316,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "") ->
 	if player_name.length() < 2:
 		send_to_react("error", {"message": "Name must be at least 2 characters"})
 		return
-	var result = await net.register(player_name, wallet, dex)
+	var result = await net.register(player_name, wallet, dex, fid)
 	if result.has("error"):
 		send_to_react("error", {"message": str(result.error)})
 		return

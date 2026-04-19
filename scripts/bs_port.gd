@@ -190,7 +190,15 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 		return
 	var port_level: int = b.get("level", 1)
 	var model_idx = clampi(port_level - 1, 0, SHIP_MODELS.size() - 1)
-	var ship_res = load(SHIP_MODELS[model_idx])
+	# Share AttackSystem's already-populated cache (same paths). Avoids a second
+	# synchronous GLB decode on first port-ship spawn.
+	if AttackSystem._ship_model_cache.is_empty():
+		AttackSystem._preload_combat_resources()
+	var ship_res: Resource = null
+	if model_idx < AttackSystem._ship_model_cache.size():
+		ship_res = AttackSystem._ship_model_cache[model_idx]
+	if ship_res == null:
+		ship_res = load(SHIP_MODELS[model_idx])  # fallback
 	if ship_res == null:
 		return
 	var ship = ship_res.instantiate()

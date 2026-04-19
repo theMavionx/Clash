@@ -34,6 +34,10 @@ var _active: Array[Dictionary] = []
 var _pool_ready: bool = false
 var _arrow_res: Resource = null
 
+## Shared bow + arrow scenes — loaded once across all archer towers.
+static var _bow_scene_res: Resource = null
+static var _arrow_scene_res: Resource = null
+
 const ANIM_FILES = [
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb",
 	"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
@@ -73,7 +77,9 @@ func _setup_bow() -> void:
 	ba.bone_name = "handslot.l"
 	ba.bone_idx = bone_idx
 	sk.add_child(ba)
-	var bow_res = load(BOW_SCENE)
+	if _bow_scene_res == null:
+		_bow_scene_res = load(BOW_SCENE)
+	var bow_res = _bow_scene_res
 	if bow_res:
 		var bow = bow_res.instantiate()
 		bow.name = "Bow"
@@ -86,26 +92,38 @@ func _setup_animations() -> void:
 	anim_player.name = "TowerArcherAnim"
 	add_child(anim_player)
 	anim_player.root_node = anim_player.get_path_to(self)
-	var lib = AnimationLibrary.new()
-	for file_path in ANIM_FILES:
-		var res = load(file_path)
-		if not res:
-			continue
-		var instance = res.instantiate()
-		add_child(instance)
-		_hide_meshes(instance)
-		var src = _find_anim_player(instance)
-		if src:
-			for anim_name in src.get_animation_list():
-				if anim_name == "RESET" or anim_name == "T-Pose":
-					continue
-				var anim = src.get_animation(anim_name)
-				if anim and not lib.has_animation(anim_name):
-					var dup = anim.duplicate()
-					if anim_name.begins_with("Idle"):
-						dup.loop_mode = Animation.LOOP_LINEAR
-					lib.add_animation(anim_name, dup)
-		instance.free()
+
+	# Reuse BaseTroop._anim_lib_cache so all archer towers share one parsed
+	# AnimationLibrary. Cache key is plain joined file list — matches the key
+	# format used by BaseTroop.prewarm_anim_library() so the boot-time prewarm
+	# in warmup.gd actually hits this branch instead of rebuilding.
+	var cache_key: String = ",".join(ANIM_FILES)
+	var lib: AnimationLibrary
+	if BaseTroop._anim_lib_cache.has(cache_key):
+		lib = BaseTroop._anim_lib_cache[cache_key]
+	else:
+		lib = AnimationLibrary.new()
+		for file_path in ANIM_FILES:
+			var res = load(file_path)
+			if not res:
+				continue
+			var instance = res.instantiate()
+			add_child(instance)
+			_hide_meshes(instance)
+			var src = _find_anim_player(instance)
+			if src:
+				for anim_name in src.get_animation_list():
+					if anim_name == "RESET" or anim_name == "T-Pose":
+						continue
+					var anim = src.get_animation(anim_name)
+					if anim and not lib.has_animation(anim_name):
+						var dup = anim.duplicate()
+						if anim_name.begins_with("Idle"):
+							dup.loop_mode = Animation.LOOP_LINEAR
+						lib.add_animation(anim_name, dup)
+			instance.free()
+		BaseTroop._anim_lib_cache[cache_key] = lib
+
 	anim_player.add_animation_library("", lib)
 	if anim_player.has_animation("Idle_A"):
 		anim_player.play("Idle_A")
@@ -211,7 +229,10 @@ func _find_target() -> void:
 
 
 func _build_pool() -> void:
-	_arrow_res = load(ARROW_SCENE)
+	# Load arrow scene once; subsequent towers hit the static cache.
+	if _arrow_scene_res == null:
+		_arrow_scene_res = load(ARROW_SCENE)
+	_arrow_res = _arrow_scene_res
 	if not _arrow_res:
 		_pool_ready = true
 		return

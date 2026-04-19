@@ -43,6 +43,18 @@ const TARGET_SEARCH_INTERVAL: float = 0.15
 ## Shared materials — one for all turrets
 static var _shared_trail_mat: StandardMaterial3D = null
 static var _flash_textures: Array[Texture2D] = []  # loaded Texture2D frames
+static var _flash_textures_preloaded: bool = false
+
+## Loads muzzle-flash textures once. Called at class-level cheap enough to run
+## from every turret `_ready()`; the flag guards against re-loading.
+static func _preload_flash_textures() -> void:
+	if _flash_textures_preloaded:
+		return
+	_flash_textures_preloaded = true
+	for path in MUZZLE_FLASH_FRAMES:
+		var tex = load(path)
+		if tex:
+			_flash_textures.append(tex)
 
 ## Per-turret flash material — shared by all 6 pool slots of THIS turret only.
 ## (Cannot be global-static: concurrent turrets animate their fades independently.)
@@ -58,6 +70,9 @@ var _pool_built: int = 0       # how many pool entries created so far
 func _ready() -> void:
 	set_process(true)
 	_apply_stats()
+	# Preload muzzle-flash textures before the pool builder runs — moves the
+	# I/O off the first-fire frame.
+	_preload_flash_textures()
 	# Find actual turret model (has "RootNode"), skip base outline
 	for child in get_children():
 		if child is Node3D and not (child is AnimationPlayer):
@@ -100,12 +115,10 @@ func _ready() -> void:
 func _build_pool() -> void:
 	if _pool_ready:
 		return
-	# Load flash textures once
+	# Textures are preloaded in `_ready` via _preload_flash_textures(); safety net
+	# if someone calls _build_pool out of order.
 	if _flash_textures.is_empty():
-		for path in MUZZLE_FLASH_FRAMES:
-			var tex = load(path)
-			if tex:
-				_flash_textures.append(tex)
+		_preload_flash_textures()
 
 	# Create the per-turret flash material once (shared by all pool slots of this turret).
 	# Per-turret (not static) because concurrent turrets animate their fades independently.

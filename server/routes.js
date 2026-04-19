@@ -76,15 +76,33 @@ router.post('/players/set-dex', auth, (req, res) => {
 });
 
 router.post('/players/register', (req, res) => {
-  const { name, wallet, dex } = req.body;
+  const { name, wallet, dex, fid } = req.body;
 
   // If wallet provided, check if an account already exists for this wallet.
   // Multiple rows may share a wallet (legacy bug — no UNIQUE constraint). Prefer
   // the account with the most progress (highest trophies, then highest id/newest).
   if (wallet) {
-    const existing = db.db.prepare(
+    let existing = db.db.prepare(
       'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
     ).get(wallet);
+    // Migration path: the earlier Farcaster auto-register created players with
+    // a synthetic `fc_<fid>` wallet. If the user now logs in with their real
+    // EVM/Solana address and we have their FID, adopt the existing row rather
+    // than spawning a new duplicate — otherwise progress (gold, buildings,
+    // tutorial_flags, stats) would split across two accounts and the tutorial
+    // would appear un-completed every time the user switches sign-in paths.
+    if (!existing && fid) {
+      const placeholder = 'fc_' + String(fid);
+      const placeholderRow = db.db.prepare(
+        'SELECT * FROM players WHERE wallet = ? ORDER BY id DESC LIMIT 1'
+      ).get(placeholder);
+      if (placeholderRow) {
+        db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, placeholderRow.id);
+        placeholderRow.wallet = wallet;
+        existing = placeholderRow;
+        logAuth('FC placeholder adopted', { fid, wallet, player_id: existing.id });
+      }
+    }
     if (existing) {
       // If the caller supplied a fresh name that differs from the stored one,
       // honour it (lets users rename on re-login). Ignore auto-derived names

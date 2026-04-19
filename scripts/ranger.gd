@@ -13,6 +13,8 @@ const POOL_SIZE: int = 8
 ## Squared hit threshold — avoids sqrt each projectile tick.
 const HIT_DIST_SQ: float = 0.05 * 0.05
 
+## Static bolt scene cache — one load across every ranger in the wave.
+static var _bolt_res_shared: Resource = null
 var _bolt_res: Resource = null
 var _pool: Array = []
 var _active: Array = []
@@ -59,7 +61,9 @@ func _build_pool() -> void:
 		return
 	_pool_ready = true
 	if _bolt_res == null:
-		_bolt_res = load(bolt_scene)
+		if _bolt_res_shared == null:
+			_bolt_res_shared = load(bolt_scene)
+		_bolt_res = _bolt_res_shared
 	if _bolt_res == null:
 		return
 	var scene_root = get_tree().current_scene

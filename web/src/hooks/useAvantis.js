@@ -358,7 +358,10 @@ export function useAvantis() {
     try {
       if (!walletClient || !walletAddr) throw new Error('Wallet not connected');
       await ensureChain();
-      const hash = await applyReferralCode(walletClient);
+      // Precheck: if our code isn't registered on-chain, the contract will
+      // revert with "Invalid params" — surface that BEFORE MetaMask prompts
+      // for a signature the user would otherwise reject/blame on gas.
+      const hash = await applyReferralCode(walletClient, publicClient);
       console.info('[avantis] referral tx submitted:', hash);
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       console.info('[avantis] referral tx mined:', { status: receipt.status, block: receipt.blockNumber?.toString() });
@@ -383,6 +386,13 @@ export function useAvantis() {
       return { tx_hash: hash, status: 'submitted_but_unverified' };
     } catch (e) {
       const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Referral link failed';
+      // Special-case the precheck: clearer label and skip the noisy MetaMask
+      // revert stack (it's not a wallet error, the code just isn't on-chain).
+      if (e?.code === 'REFERRAL_CODE_NOT_REGISTERED') {
+        console.warn('[avantis] referral code not registered on-chain yet:', msg);
+        setError(String(msg).slice(0, 300));
+        return { error: msg, code: 'REFERRAL_CODE_NOT_REGISTERED' };
+      }
       console.warn('[avantis] linkOurReferrer error:', msg);
       setError(String(msg).slice(0, 300));
       return { error: msg };
