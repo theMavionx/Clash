@@ -5,6 +5,7 @@ import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
+import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
 // separately so the logo can be hidden on narrow (phone-portrait) screens
@@ -64,6 +65,10 @@ function SplashScreen({ label }) {
 }
 
 function AppInner() {
+  // Warm up the browser's image cache with every BuildingInfoPanel thumbnail
+  // while the player is still on the loading screen — otherwise the first
+  // building click cold-fetches ~1.7 MB of PNGs and freezes for ~1-2 seconds.
+  usePreloadPanelAssets();
   return (
     <FarcasterGate>
       <Suspense fallback={<SplashScreen label="Loading game..." />}>

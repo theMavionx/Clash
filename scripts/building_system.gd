@@ -1,3 +1,4 @@
+class_name BuildingSystem
 extends Node3D
 
 ## Grid-based building system (Clash of Clans style)
@@ -628,6 +629,12 @@ func _process(delta: float) -> void:
 				building_panel_hp_bar.max_value = bmax
 				building_panel_hp_bar.value = bhp
 	_update_building_hp_bars()
+	# Defensive: on some script-reload / hot-reload paths the RefCounted
+	# helpers can be freed before `_process` stops firing, producing
+	# "Nonexistent function on Nil" errors. A single-frame bail is cheaper
+	# than wrapping every call site.
+	if _cannon == null or _battle == null or _production == null:
+		return
 	_cannon.process(delta)
 	_battle.check_defeat(delta)
 	_battle.check_skeleton_respawn(delta)
@@ -1617,14 +1624,45 @@ func _begin_placement(building_id: String) -> void:
 	_show_grid()
 
 
+## Shared ghost material — one StandardMaterial3D instance across every
+## placement preview. Previously re-allocated per ghost (which meant first
+## placement compiled its pipeline variant cold on WASM).
+static var _shared_ghost_material: StandardMaterial3D = null
+
+static func _get_ghost_material() -> StandardMaterial3D:
+	if _shared_ghost_material == null:
+		_shared_ghost_material = StandardMaterial3D.new()
+		_shared_ghost_material.albedo_color = Color(0, 0.8, 0, 0.4)
+		_shared_ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_shared_ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_shared_ghost_material.no_depth_test = true
+	return _shared_ghost_material
+
+
+## Shared upgrade outline shader + material. `material_overlay` on a mesh
+## triggers a SECOND render pass with a distinct pipeline variant — caching
+## the whole thing means the compile happens once (warmup) not per upgrade.
+static var _upgrade_outline_shader: Shader = null
+static var _upgrade_outline_material: ShaderMaterial = null
+
+static func _get_upgrade_outline_material() -> ShaderMaterial:
+	if _upgrade_outline_material != null:
+		return _upgrade_outline_material
+	if _upgrade_outline_shader == null:
+		_upgrade_outline_shader = load("res://shaders/upgrade_outline.gdshader")
+	if _upgrade_outline_shader == null:
+		return null
+	_upgrade_outline_material = ShaderMaterial.new()
+	_upgrade_outline_material.shader = _upgrade_outline_shader
+	_upgrade_outline_material.set_shader_parameter("outline_color", Color(0.1, 0.6, 1.0, 1.0))
+	_upgrade_outline_material.set_shader_parameter("outline_width", 0.035)
+	return _upgrade_outline_material
+
+
 func _create_ghost() -> void:
 	var def = building_defs[current_building_id]
 
-	ghost_material = StandardMaterial3D.new()
-	ghost_material.albedo_color = Color(0, 0.8, 0, 0.4)
-	ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ghost_material.no_depth_test = true
+	ghost_material = _get_ghost_material()
 
 	ghost = _create_box_placeholder(def)
 	# Add base outline to ghost (using precise AABB) — skip for no_outline buildings
@@ -1632,10 +1670,12 @@ func _create_ghost() -> void:
 		var ghost_base = _create_building_base(def, current_building_id)
 		ghost_base.material_override = ghost_material
 		ghost.add_child(ghost_base)
-	
-	# Add model inside ghost
+
+	# Add model inside ghost — prefer preloaded scene cache over a fresh load.
 	if def.has("scene"):
-		var scene_res = load(def.scene)
+		var scene_res: Resource = _scene_res_cache.get(def.scene, null)
+		if scene_res == null:
+			scene_res = load(def.scene)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
@@ -2515,15 +2555,12 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	up_lbl.position = Vector3(0, 0.2, 0)
 	model.add_child(up_lbl)
 
-	# Start Glow on CURRENT model
-	var outline_shader = load("res://shaders/upgrade_outline.gdshader")
-	var mat: ShaderMaterial = null
+	# Start Glow on CURRENT model — reuse one shared ShaderMaterial across
+	# every upgrade so Godot compiles the overlay pipeline variant exactly
+	# once (during warmup), not on every upgrade click.
+	var mat: ShaderMaterial = _get_upgrade_outline_material()
 	var meshes: Array[MeshInstance3D] = []
-	if outline_shader:
-		mat = ShaderMaterial.new()
-		mat.shader = outline_shader
-		mat.set_shader_parameter("outline_color", Color(0.1, 0.6, 1.0, 1.0))
-		mat.set_shader_parameter("outline_width", 0.035)
+	if mat:
 		_get_all_meshes(model, meshes)
 		for m in meshes:
 			if is_instance_valid(m):
@@ -2728,15 +2765,15 @@ func remove_building(b: Dictionary) -> void:
 	# Town Hall destroyed during attack → explode TH first, then chain-destroy remaining
 	# Skip during replay — replay handles its own end screen
 	if b.id == "town_hall" and is_viewing_enemy and not _replay_active:
-		# Explode TH itself (same logic as normal building destruction below)
 		if b.has("hp_bar") and is_instance_valid(b.hp_bar):
 			b.hp_bar.queue_free()
 		var th_icon: Control = b.get("_collect_icon")
 		if is_instance_valid(th_icon):
 			th_icon.queue_free()
+		# TH gets the same puff-up + explosion + ruins sequence as any other
+		# building, so the defeat beat starts with a satisfying pop.
 		if is_instance_valid(b.node):
-			_cannon._spawn_ship_explosion(b.node.global_position)
-			_replace_with_ruins(b.node)
+			explode_building_with_swell(b.node, "town_hall")
 		placed_buildings.remove_at(idx)
 		# Then chain-destroy remaining buildings with delay
 		_on_town_hall_destroyed()
@@ -2770,58 +2807,86 @@ func remove_building(b: Dictionary) -> void:
 	if is_instance_valid(icon):
 		icon.queue_free()
 	if is_instance_valid(b.node):
-		# Find the GLB model child to swell before explosion
-		var model_child: Node3D = null
-		for child in b.node.get_children():
-			if child is Node3D and not (child is MeshInstance3D and child.material_override is ShaderMaterial) and not (child is OmniLight3D) and not (child is AnimationPlayer):
-				model_child = child
-				break
-		# Swell 5% → explosion → swap to ruins (all chained, no await)
-		var bnode_ref: Node3D = b.node
-		var swell_tw: Tween = create_tween()
-		if model_child and is_instance_valid(model_child):
-			var big_scale: Vector3 = model_child.scale * 1.05
-			swell_tw.tween_property(model_child, "scale", big_scale, 0.15).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		swell_tw.tween_callback(func():
-			if not is_instance_valid(bnode_ref):
-				return
-			# Fire bomb explosion
-			BaseTroop._preload_fire_bomb()
-			if not BaseTroop._fire_bomb_textures.is_empty():
-				var explosion: MeshInstance3D = MeshInstance3D.new()
-				var quad: QuadMesh = QuadMesh.new()
-				quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
-				explosion.mesh = quad
-				var mat: StandardMaterial3D = StandardMaterial3D.new()
-				mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-				mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-				mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-				mat.no_depth_test = true
-				mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-				mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
-				explosion.material_override = mat
-				get_tree().current_scene.add_child(explosion)
-				explosion.global_position = bnode_ref.global_position + Vector3(0, 0.35, 0)
-				var frames: Array = BaseTroop._fire_bomb_textures
-				var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
-				var tw: Tween = create_tween()
-				for fi in range(frames.size()):
-					var idx2: int = fi
-					tw.tween_callback(func():
-						if is_instance_valid(explosion):
-							(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
-					).set_delay(frame_dur if fi > 0 else 0.0)
-				tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
-				tw.chain().tween_callback(explosion.queue_free)
-			# Ports disappear entirely — other buildings get ruins
-			if b.get("id", "") == "port":
-				bnode_ref.queue_free()
-			else:
-				_replace_with_ruins(bnode_ref)
-		)
+		explode_building_with_swell(b.node, b.get("id", ""))
 	placed_buildings.remove_at(idx)
 	_deselect_building()
+
+
+## Plays the "puff up → explode + vanish" sequence for a single building.
+## Extracted so town-hall chain-destruction and normal troop-killed removal
+## share the same visual beat.
+##
+## Dramaturgy: the building inflates (0.2 s). At the peak of the inflate the
+## explosion spawns AND the building is replaced with ruins on the same frame
+## — the explosion cloud covers the swap so the player reads it as "it blew
+## up, gone". No crumple/shrink phase between puff and explosion (that felt
+## like "deflate then boom later").
+func explode_building_with_swell(bnode: Node3D, building_id: String) -> void:
+	if not is_instance_valid(bnode):
+		return
+	# Find the GLB model child to swell — skip HP bar ShaderMaterial meshes,
+	# lights, and AnimationPlayers.
+	var model_child: Node3D = null
+	for child in bnode.get_children():
+		if child is Node3D and not (child is MeshInstance3D and child.material_override is ShaderMaterial) and not (child is OmniLight3D) and not (child is AnimationPlayer):
+			model_child = child
+			break
+	var bnode_ref: Node3D = bnode
+	var tw: Tween = create_tween()
+	if model_child and is_instance_valid(model_child):
+		var puff_scale: Vector3 = model_child.scale * 1.2
+		# Single inflate — TRANS_BACK + EASE_OUT gives a cartoon "pop" feel.
+		tw.tween_property(model_child, "scale", puff_scale, 0.2).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	else:
+		# No model child → still time the explosion for ~0.2s after call.
+		tw.tween_interval(0.2)
+	# At the peak of the puff: boom + vanish happen on the same frame.
+	tw.tween_callback(func():
+		_spawn_fire_bomb_explosion(bnode_ref)
+		if not is_instance_valid(bnode_ref):
+			return
+		if building_id == "port":
+			bnode_ref.queue_free()
+		else:
+			_replace_with_ruins(bnode_ref)
+	)
+
+
+## Standalone fire-bomb explosion spawner (extracted from remove_building).
+## Uses BaseTroop's preloaded texture cache and the shared additive-billboard
+## material factory so every building death draws from the same pool.
+func _spawn_fire_bomb_explosion(at_node: Node3D) -> void:
+	if not is_instance_valid(at_node):
+		return
+	BaseTroop._preload_fire_bomb()
+	if BaseTroop._fire_bomb_textures.is_empty():
+		return
+	var explosion: MeshInstance3D = MeshInstance3D.new()
+	var quad: QuadMesh = QuadMesh.new()
+	quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
+	explosion.mesh = quad
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.no_depth_test = true
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_texture = BaseTroop._fire_bomb_textures[0]
+	explosion.material_override = mat
+	get_tree().current_scene.add_child(explosion)
+	explosion.global_position = at_node.global_position + Vector3(0, 0.35, 0)
+	var frames: Array = BaseTroop._fire_bomb_textures
+	var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
+	var tw: Tween = create_tween()
+	for fi in range(frames.size()):
+		var idx2: int = fi
+		tw.tween_callback(func():
+			if is_instance_valid(explosion):
+				(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
+		).set_delay(frame_dur if fi > 0 else 0.0)
+	tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
+	tw.chain().tween_callback(explosion.queue_free)
 
 
 # ── Tombstone Skeleton Guards ─────────────────────────────────
@@ -4149,6 +4214,21 @@ func _return_home() -> void:
 	_battle._return_home()
 
 
+## Shared arrow mesh + material — built once per session instead of per click.
+## Previously each building click allocated 4 arrow MeshInstances with a fresh
+## mesh and material, triggering pipeline compile on the first click.
+static var _move_arrow_mesh: ImmediateMesh = null
+static var _move_arrow_material: StandardMaterial3D = null
+
+static func _get_move_arrow_material() -> StandardMaterial3D:
+	if _move_arrow_material == null:
+		_move_arrow_material = StandardMaterial3D.new()
+		_move_arrow_material.albedo_color = Color(0.1, 0.95, 0.2, 1.0)
+		_move_arrow_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_move_arrow_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return _move_arrow_material
+
+
 func _show_move_arrows(b: Dictionary) -> void:
 	_hide_move_arrows()
 	var node = b.get("node")
@@ -4165,11 +4245,13 @@ func _show_move_arrows(b: Dictionary) -> void:
 	_move_arrows.position = node.position  # local to BuildingSystem
 	add_child(_move_arrows)
 
-	var arrow_mesh = _make_arrow_mesh()
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.1, 0.95, 0.2, 1.0)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Reuse shared mesh + material across every click. Arrows geometry is
+	# identical for every building; only the parent node position/rotation
+	# differs.
+	if _move_arrow_mesh == null:
+		_move_arrow_mesh = _make_arrow_mesh()
+	var arrow_mesh := _move_arrow_mesh
+	var mat := _get_move_arrow_material()
 
 	# Port can only move along the shore (X axis only)
 	var all_configs = [
@@ -4352,6 +4434,31 @@ func _end_move() -> void:
 	_move_indicator = null
 
 
+## Shared materials for the range indicator — two distinct pipeline variants
+## (fill = ALPHA + CULL_DISABLED, ring = opaque). Cached so the first
+## defense-building click doesn't cold-compile them.
+static var _range_fill_mat: StandardMaterial3D = null
+static var _range_ring_mat: StandardMaterial3D = null
+
+static func _get_range_fill_material() -> StandardMaterial3D:
+	if _range_fill_mat == null:
+		_range_fill_mat = StandardMaterial3D.new()
+		_range_fill_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
+		_range_fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_range_fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_range_fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_range_fill_mat.render_priority = 4
+	return _range_fill_mat
+
+static func _get_range_ring_material() -> StandardMaterial3D:
+	if _range_ring_mat == null:
+		_range_ring_mat = StandardMaterial3D.new()
+		_range_ring_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
+		_range_ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_range_ring_mat.render_priority = 5
+	return _range_ring_mat
+
+
 func _show_range_indicator(center: Vector3, radius: float) -> void:
 	_hide_range_indicator()
 	var y = center.y + 0.025
@@ -4375,22 +4482,11 @@ func _show_range_indicator(center: Vector3, radius: float) -> void:
 		im.surface_add_vertex(Vector3(center.x + cos(a) * radius, y, center.z + sin(a) * radius))
 	im.surface_end()
 
-	var fill_mat = StandardMaterial3D.new()
-	fill_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.28)
-	fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	fill_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	fill_mat.render_priority = 4
-
-	var ring_mat = StandardMaterial3D.new()
-	ring_mat.albedo_color = Color(1.0, 1.0, 1.0, 1.0)
-	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring_mat.render_priority = 5
-
 	_range_indicator = MeshInstance3D.new()
 	_range_indicator.mesh = im
-	_range_indicator.set_surface_override_material(0, fill_mat)
-	_range_indicator.set_surface_override_material(1, ring_mat)
+	# Shared cached materials — zero allocation on click, pipelines already warm.
+	_range_indicator.set_surface_override_material(0, _get_range_fill_material())
+	_range_indicator.set_surface_override_material(1, _get_range_ring_material())
 	get_tree().current_scene.add_child(_range_indicator)
 
 

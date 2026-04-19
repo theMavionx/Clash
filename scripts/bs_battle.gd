@@ -10,6 +10,15 @@
 
 class_name BSBattle extends RefCounted
 
+## Stored result of the latest in-flight `submit_battle_result` call.
+## Written by `_run_submit_bg`, read by `_on_town_hall_destroyed` after the
+## chain-destroy + admire delay. Because the server response almost always
+## arrives BEFORE we `await` here, a signal-based approach would race (the
+## signal would emit with no listener and the later `await` would hang).
+## The bool flag + polled process_frame loop avoids that race entirely.
+var _submit_result: Dictionary = {}
+var _submit_complete: bool = false
+
 # ---------------------------------------------------------------------------
 # Back-reference to the owning BuildingSystem node (set via init).
 # ---------------------------------------------------------------------------
@@ -78,12 +87,20 @@ func _free_home_troops_and_ships() -> void:
 					if is_instance_valid(ship):
 						ship.queue_free()
 				break
-	# Free saved ship transforms (port ships that sailed away)
+	# Free saved ship transforms for port ships that sailed away. KEEP the
+	# MainShipBase entry — we need it to restore the dock position after
+	# _return_home, since MainShipBase survives the attack cycle and is
+	# just hidden/shown rather than freed/recreated.
+	var kept_transforms: Array = []
 	for data in bs._saved_ship_transforms:
 		var ship = data.get("node")
-		if is_instance_valid(ship) and ship != bs._ship_attack_node and ship != bs._ship_base_node:
-			ship.queue_free()
-	bs._saved_ship_transforms.clear()
+		if not is_instance_valid(ship):
+			continue
+		if ship == bs._ship_attack_node or ship == bs._ship_base_node:
+			kept_transforms.append(data)
+			continue
+		ship.queue_free()
+	bs._saved_ship_transforms = kept_transforms
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +458,16 @@ func _return_home() -> void:
 		bs._ship_base_node = _r2.find_child("MainShipBase", true, false)
 	if bs._ship_attack_node:
 		bs._ship_attack_node.visible = false
+	# Restore MainShipBase (and any other saved-transform ship) to its pre-
+	# sail-away dock position. Without this the ship re-appears at the
+	# `_sail_ships_away` target (original + forward * 4) and looks teleported
+	# out into open water after victory.
+	for data in bs._saved_ship_transforms:
+		var restore_ship: Node3D = data.get("node")
+		if is_instance_valid(restore_ship):
+			restore_ship.global_position = data.pos
+			restore_ship.rotation.y = data.rot_y
+	bs._saved_ship_transforms.clear()
 	if bs._ship_base_node:
 		bs._ship_base_node.visible = true
 	for ht in bs._home_troops:
@@ -524,7 +551,8 @@ func _return_home() -> void:
 ## Handles town hall destruction: sets troops to VICTORY, then destroys
 ## remaining buildings one-by-one with staggered explosions. Victory screen
 ## shows only after the last building is gone.
-const CHAIN_DESTROY_DELAY: float = 1.5  ## seconds between each building explosion
+const CHAIN_DESTROY_DELAY: float = 0.6  ## seconds between each building explosion (puff + crumple takes ~0.4s, so 0.6 leaves a natural beat)
+const VICTORY_ADMIRE_DELAY: float = 2.5  ## seconds to hold on the ruined island before opening the victory modal
 
 func _on_town_hall_destroyed() -> void:
 	_battle_timer_active = false
@@ -564,6 +592,31 @@ func _on_town_hall_destroyed() -> void:
 	# Shuffle for random destruction order
 	remaining.shuffle()
 
+	# Count casualties NOW (troop counts are stable after the VICTORY trigger
+	# above — no new troops will spawn, and _play_victory stops them fighting).
+	# Doing it here means we can kick off the server submit in parallel with
+	# the chain-destroy animation.
+	var casualties_early: Dictionary = {}
+	for t_name in deployed_troops:
+		var lost_early: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
+		if lost_early > 0:
+			casualties_early[t_name] = lost_early
+
+	# Fire the server submit in the background so its round-trip (1-3 s)
+	# overlaps with the chain-destroy animation + admire delay instead of
+	# adding on top. GDScript won't let us capture a coroutine's return
+	# without `await`, so `_run_submit_bg` is a fire-and-forget wrapper that
+	# stores the result in `_submit_result` + sets `_submit_complete` when
+	# done. The consumer below polls that flag.
+	_submit_complete = false
+	_submit_result = {}
+	var submit_pending: bool = false
+	var net_node_early: Node = bs._net
+	var defender_id_early: String = enemy_info.get("id", "")
+	if net_node_early and net_node_early.has_token() and defender_id_early != "":
+		submit_pending = true
+		_run_submit_bg(net_node_early, defender_id_early, casualties_early)
+
 	# 3. Destroy buildings one by one with delay
 	for entry in remaining:
 		if not is_instance_valid(bs):
@@ -599,39 +652,45 @@ func _on_town_hall_destroyed() -> void:
 		var icon: Control = b.get("_collect_icon")
 		if is_instance_valid(icon):
 			icon.queue_free()
-		# Explosion + ruins (same logic as remove_building)
+		# Puff-up swell + fire-bomb explosion + ruins — same sequence used for
+		# normal troop-killed buildings, routed through BuildingSystem so both
+		# paths produce identical visuals.
 		if is_instance_valid(b.node):
 			var bnode_ref: Node3D = b.node
-			# Stop defense scripts
 			bnode_ref.set_process(false)
 			bnode_ref.set_physics_process(false)
-			bs._cannon._spawn_ship_explosion(bnode_ref.global_position)
-			if b.get("id", "") == "port":
-				bnode_ref.queue_free()
-			else:
-				bsys._replace_with_ruins(bnode_ref)
+			bsys.explode_building_with_swell(bnode_ref, b.get("id", ""))
 
 	# 4. Clear all building arrays
 	for bsys in bs._building_systems:
 		bsys.placed_buildings.clear()
 		bsys.grid.fill(false)
 
-	# 5. Count casualties and submit result
-	var casualties: Dictionary = {}
-	for t_name in deployed_troops:
-		var lost: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
-		if lost > 0:
-			casualties[t_name] = lost
-	var net_node: Node = bs._net
-	var defender_id: String = enemy_info.get("id", "")
-	if net_node and net_node.has_token() and defender_id != "":
-		var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory", casualties)
+	# 4b. Savour the destruction — let the player admire the ruined island for
+	# a beat before the victory modal covers it. Runs AFTER the cascade so
+	# every explosion is visible + settled.
+	if not is_instance_valid(bs): return
+	await bs.get_tree().create_timer(VICTORY_ADMIRE_DELAY).timeout
+	if not is_instance_valid(bs): return
+
+	# 5. Harvest the in-flight server submit. Because we kicked it off BEFORE
+	# the chain-destroy loop AND the admire delay, the round-trip almost
+	# always completes in the background — so awaiting here is typically
+	# instant. If the server IS slower than chain + admire, we eat the
+	# remaining wait here instead of showing an empty victory screen.
+	var bridge: Node = bs._bridge
+	if submit_pending:
+		# Poll until the background submit finishes — usually already done
+		# by the time we get here (server ~1-3s vs chain + admire ~6s).
+		while not _submit_complete:
+			if not is_instance_valid(bs): return
+			await bs.get_tree().process_frame
+		var result: Dictionary = _submit_result
 		if not is_instance_valid(bs): return
-		var bridge: Node = bs._bridge
 		if result.has("error"):
 			if bridge:
 				bridge.send_to_react("battle_result", {
-					"type": "victory", "loot": {}, "casualties": casualties,
+					"type": "victory", "loot": {}, "casualties": casualties_early,
 					"error": result.get("error", "") + " " + result.get("reason", ""),
 				})
 			return
@@ -646,12 +705,21 @@ func _on_town_hall_destroyed() -> void:
 					"ore": loot.get("ore", 0),
 				})
 			bridge.send_to_react("battle_result", {
-				"type": "victory", "loot": loot, "casualties": casualties,
+				"type": "victory", "loot": loot, "casualties": casualties_early,
 			})
 		return
-	var bridge2: Node = bs._bridge
-	if bridge2:
-		bridge2.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties})
+	if bridge:
+		bridge.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties_early})
+
+
+## Fire-and-forget wrapper around submit_battle_result. Void return lets the
+## caller invoke without `await` (GDScript allows calling void coroutines
+## bare). Result is stashed on the instance for the caller to pick up after
+## the chain-destroy + admire delay.
+func _run_submit_bg(net_node: Node, defender_id: String, casualties: Dictionary) -> void:
+	var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory", casualties)
+	_submit_result = result
+	_submit_complete = true
 
 
 ## Starts a replay of a recorded attack. Loads the buildings snapshot, enters

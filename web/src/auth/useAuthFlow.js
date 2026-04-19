@@ -178,10 +178,24 @@ export function useAuthFlow() {
   // Suggested display name. FC username always wins when present (matches
   // user expectation: "when I'm on Farcaster, use my FC name"). Email
   // prefix is a fallback for Privy flows outside frames.
+  //
+  // For plain external wallets (no FC, no email) we ALSO derive a placeholder
+  // `player_<walletSlice>` so the register flow never stalls on `need_name`
+  // for returning users. `js_bridge.gd:_do_register` recognises the
+  // `player_` prefix as auto-derived and routes to `login_by_wallet` first —
+  // existing accounts resolve to their stored name, brand-new ones land with
+  // this default (editable later in the profile). Without this fallback every
+  // returning MetaMask / Phantom user sees the name form even though they
+  // already have an account server-side.
   const suggestedName = useMemo(() => {
     if (fcUser) return String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
     const email = candidate?.email || privyEvm?.email || privySol?.email;
     if (email) return email.split('@')[0].slice(0, 20);
+    if (candidate?.wallet) {
+      // Strip 0x prefix for EVM; Solana base58 addresses have no prefix.
+      const raw = String(candidate.wallet).replace(/^0x/i, '');
+      return 'player_' + raw.slice(0, 6).toLowerCase();
+    }
     return null;
   }, [fcUser, candidate, privyEvm, privySol]);
 

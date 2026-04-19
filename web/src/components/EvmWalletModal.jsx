@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
-import { colors, cartoonPanel, cartoonBtn } from '../styles/theme';
+
+// Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
+// header, yellow CTA. The previous dark cartoonPanel look stood out against
+// the rest of the game UI.
 
 const BASE_CHAIN_ID_HEX = '0x2105'; // 8453
 
@@ -117,111 +120,157 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
   };
 
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 40,
-        background: 'rgba(0,0,0,0.7)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        pointerEvents: 'all',
-      }}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{
-          ...cartoonPanel,
-          width: 340, padding: 24,
-          display: 'flex', flexDirection: 'column', gap: 14,
-        }}
-      >
-        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between'}}>
-          <h3 style={{margin: 0, fontSize: 18, fontWeight: 900, color: colors.gold, textShadow: '0 2px 0 rgba(0,0,0,0.4)'}}>
-            CONNECT WALLET
-          </h3>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'transparent', border: 'none', color: '#a3906a',
-              fontSize: 22, fontWeight: 900, cursor: 'pointer', lineHeight: 1, padding: 0,
-            }}
-          >×</button>
+    <div onClick={onClose} style={M.overlay}>
+      <div onClick={e => e.stopPropagation()} style={M.panel}>
+        <div style={M.header}>
+          <span style={M.headerTitle}>CONNECT WALLET</span>
+          <button onClick={onClose} style={M.closeBtn} aria-label="Close">✖</button>
         </div>
-        <div style={{fontSize: 12, fontWeight: 700, color: '#a3906a', marginTop: -6}}>
-          Base (EVM) network · required for Avantis perps
+        <div style={M.body}>
+          <div style={M.subtitle}>
+            Base (EVM) network · required for Avantis perps
+          </div>
+
+          {providers.length === 0 ? (
+            <div style={M.empty}>
+              No EVM wallets detected in this browser.<br />
+              Install <b>MetaMask</b>, <b>Rabby</b>, or <b>Coinbase Wallet</b> and refresh.
+            </div>
+          ) : (
+            <div style={M.list}>
+              {providers.map((p) => {
+                const rdns = p.info?.rdns || p.info?.name;
+                const isConnecting = connecting === rdns;
+                return (
+                  <button
+                    key={rdns}
+                    onClick={() => handleConnect(p)}
+                    disabled={!!connecting}
+                    style={{
+                      ...M.providerBtn,
+                      ...(isConnecting ? M.providerBtnActive : null),
+                      cursor: connecting ? 'wait' : 'pointer',
+                      opacity: connecting && !isConnecting ? 0.5 : 1,
+                    }}
+                  >
+                    {p.info?.icon ? (
+                      <img src={p.info.icon} alt={p.info.name} style={M.providerIcon} />
+                    ) : (
+                      <div style={M.providerFallbackIcon}>
+                        {(p.info?.name || '?').charAt(0)}
+                      </div>
+                    )}
+                    <span style={M.providerName}>{p.info?.name || 'Wallet'}</span>
+                    {isConnecting && <span style={M.connectingLabel}>connecting…</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {error && <div style={M.error}>{error}</div>}
+
+          <button onClick={onClose} style={M.cancelBtn}>CANCEL</button>
         </div>
-
-        {providers.length === 0 ? (
-          <div style={{
-            padding: '16px 12px', borderRadius: 12,
-            background: 'rgba(255,255,255,0.04)',
-            border: '2px dashed #6D4C2A',
-            color: '#ccc', fontSize: 13, textAlign: 'center', lineHeight: 1.5,
-          }}>
-            No EVM wallets detected in this browser.<br />
-            Install <b>MetaMask</b>, <b>Rabby</b>, or <b>Coinbase Wallet</b> and refresh.
-          </div>
-        ) : (
-          <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-            {providers.map((p) => {
-              const rdns = p.info?.rdns || p.info?.name;
-              const isConnecting = connecting === rdns;
-              return (
-                <button
-                  key={rdns}
-                  onClick={() => handleConnect(p)}
-                  disabled={!!connecting}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '12px 14px', borderRadius: 12,
-                    border: '2px solid #6D4C2A',
-                    background: isConnecting
-                      ? 'rgba(232,184,48,0.15)'
-                      : 'linear-gradient(180deg, #3E2723 0%, #2C1B0E 100%)',
-                    color: '#fff', fontSize: 15, fontWeight: 800,
-                    cursor: connecting ? 'wait' : 'pointer',
-                    opacity: connecting && !isConnecting ? 0.5 : 1,
-                    textAlign: 'left', outline: 'none',
-                    transition: 'background 0.15s',
-                  }}
-                >
-                  {p.info?.icon ? (
-                    <img src={p.info.icon} alt={p.info.name} style={{width: 28, height: 28, borderRadius: 6}} />
-                  ) : (
-                    <div style={{
-                      width: 28, height: 28, borderRadius: 6,
-                      background: 'linear-gradient(135deg, #e8b830 0%, #b8860b 100%)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      fontSize: 14, fontWeight: 900, color: '#2C1B0E',
-                    }}>{(p.info?.name || '?').charAt(0)}</div>
-                  )}
-                  <span style={{flex: 1}}>{p.info?.name || 'Wallet'}</span>
-                  {isConnecting && (
-                    <span style={{fontSize: 11, fontWeight: 700, color: '#e8b830'}}>connecting…</span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {error && (
-          <div style={{
-            padding: '8px 12px', borderRadius: 8,
-            background: 'rgba(229,57,53,0.15)',
-            border: '1.5px solid #E53935',
-            color: '#ff9d9b', fontSize: 12, fontWeight: 700,
-          }}>
-            {error}
-          </div>
-        )}
-
-        <button
-          onClick={onClose}
-          style={{...cartoonBtn('#6D4C2A', '#5D4037'), width: '100%', textAlign: 'center', fontSize: 14, padding: '10px 18px'}}
-        >
-          CANCEL
-        </button>
       </div>
     </div>
   );
 }
+
+const M = {
+  overlay: {
+    position: 'fixed', inset: 0, zIndex: 40,
+    background: 'rgba(0,0,0,0.7)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    pointerEvents: 'all',
+  },
+  panel: {
+    width: 380, maxWidth: '94vw',
+    background: '#ebdaba',
+    border: '4px solid #377d9f',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
+    display: 'flex', flexDirection: 'column',
+    overflow: 'hidden',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative',
+    height: 54, background: '#4ca5d2',
+    borderBottom: '4px solid #377d9f',
+  },
+  headerTitle: {
+    fontSize: 22, fontStyle: 'italic', fontWeight: 900, color: '#fff',
+    textTransform: 'uppercase', textShadow: '0 2px 4px rgba(0,0,0,0.6)',
+    letterSpacing: 1,
+  },
+  closeBtn: {
+    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+    width: 32, height: 32, background: 'rgba(0,0,0,0.15)', border: 'none', borderRadius: 4,
+    color: '#fff', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    fontSize: 14, fontWeight: 700,
+  },
+  body: {
+    padding: '16px 20px 20px',
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+  subtitle: {
+    fontSize: 12, fontWeight: 700, color: '#5d6d75',
+    textAlign: 'center', letterSpacing: 0.3,
+  },
+  empty: {
+    padding: '18px 14px', borderRadius: 12,
+    background: 'rgba(26, 60, 79, 0.05)',
+    border: '2px dashed #377d9f',
+    color: '#5d6d75', fontSize: 13, textAlign: 'center', lineHeight: 1.5,
+  },
+  list: { display: 'flex', flexDirection: 'column', gap: 8 },
+  providerBtn: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    padding: '12px 14px', borderRadius: 12,
+    border: '2px solid #377d9f',
+    background: '#fff',
+    color: '#1a3c4f', fontSize: 15, fontWeight: 800,
+    textAlign: 'left', outline: 'none',
+    transition: 'background 0.15s, transform 0.1s',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.1)',
+    fontFamily: 'inherit',
+  },
+  providerBtnActive: {
+    background: 'rgba(251,192,45,0.25)',
+    borderColor: '#F57F17',
+  },
+  providerIcon: {
+    width: 28, height: 28, borderRadius: 6,
+  },
+  providerFallbackIcon: {
+    width: 28, height: 28, borderRadius: 6,
+    background: 'linear-gradient(135deg, #FBC02D 0%, #F57F17 100%)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 14, fontWeight: 900, color: '#fff',
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+  },
+  providerName: { flex: 1 },
+  connectingLabel: {
+    fontSize: 11, fontWeight: 700, color: '#F57F17',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  error: {
+    padding: '10px 12px', borderRadius: 10,
+    background: 'rgba(229,57,53,0.12)',
+    border: '1.5px solid #E53935',
+    color: '#c62828', fontSize: 12, fontWeight: 700,
+  },
+  cancelBtn: {
+    width: '100%',
+    padding: '11px 18px', borderRadius: 14,
+    border: 'none',
+    background: 'linear-gradient(180deg, #90a4ae 0%, #546e7a 100%)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 2px 0 rgba(255,255,255,0.3)',
+    color: '#fff',
+    fontSize: 13, fontWeight: 900, letterSpacing: 1, textTransform: 'uppercase',
+    textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+};

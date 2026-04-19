@@ -63,6 +63,9 @@ func _spawn_warmup_nodes() -> void:
 	_warmup_one_troop_glb()
 	_warmup_flag_glb()
 	_warmup_ship_glbs()
+	_warmup_ghost_material()
+	_warmup_upgrade_outline()
+	_warmup_click_indicators()
 	# Build the shared AnimationLibrary ONCE at boot so the first troop deployed
 	# during an attack skips the "load 5 GLBs + duplicate every track + strip
 	# scale/pos tracks" work that otherwise stalls the first landing.
@@ -74,6 +77,69 @@ func _spawn_warmup_nodes() -> void:
 	# this avoids 6 synchronous PNG loads on the explosion frame.
 	BaseTroop._preload_fire_bomb()
 	print("[WARMUP] fire bomb textures preloaded")
+
+
+## Pre-draws a mesh with BuildingSystem's ghost placement material (unshaded
+## + ALPHA + no_depth_test, no billboard). Covers the "green outline appears"
+## frame when player first picks a building to place.
+func _warmup_ghost_material() -> void:
+	var mat := BuildingSystem._get_ghost_material()
+	if mat == null:
+		print("[WARMUP] ghost material not available — skipped")
+		return
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.1, 0.1, 0.1)
+	mi.mesh = box
+	mi.material_override = mat
+	add_child(mi)
+	print("[WARMUP] ghost_material OK")
+
+
+## Pre-draws the range indicator fill/ring materials and the move-arrow
+## material used when the player clicks a building. Previously these were
+## allocated fresh on every click — first click paid the pipeline compile.
+func _warmup_click_indicators() -> void:
+	var fill_mat := BuildingSystem._get_range_fill_material()
+	var ring_mat := BuildingSystem._get_range_ring_material()
+	var arrow_mat := BuildingSystem._get_move_arrow_material()
+	if fill_mat == null or ring_mat == null or arrow_mat == null:
+		print("[WARMUP] click indicator mats unavailable — skipped")
+		return
+	# Use a single tiny BoxMesh for all three — we only care about triggering
+	# the pipeline compile, not about geometry fidelity.
+	for mat in [fill_mat, ring_mat, arrow_mat]:
+		var mi := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(0.05, 0.05, 0.05)
+		mi.mesh = box
+		mi.material_override = mat
+		add_child(mi)
+	print("[WARMUP] click indicators OK")
+
+
+## `material_overlay` triggers a second render pass with its own pipeline
+## variant. Without warmup, the first building upgrade click hitches while
+## the overlay pipeline compiles for every mesh in the upgraded building.
+## We warm it by stacking the overlay on top of a tiny BoxMesh here.
+func _warmup_upgrade_outline() -> void:
+	var mat := BuildingSystem._get_upgrade_outline_material()
+	if mat == null:
+		print("[WARMUP] upgrade outline shader missing — skipped")
+		return
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.1, 0.1, 0.1)
+	mi.mesh = box
+	# Main material can be anything opaque — overlay is what we actually
+	# care about compiling. Use a basic unshaded fill.
+	var base := StandardMaterial3D.new()
+	base.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	base.albedo_color = Color(0.5, 0.5, 0.5, 1.0)
+	mi.material_override = base
+	mi.material_overlay = mat
+	add_child(mi)
+	print("[WARMUP] upgrade_outline OK")
 
 
 ## Warm Godot's internal load() cache with every weapon/projectile scene used

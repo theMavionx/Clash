@@ -318,6 +318,13 @@ const SLOT_OFFSETS: Array = [-0.0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]
 ## `_anim_lib_cache[cache_key]` WITHOUT needing a real troop instance — call
 ## from warmup/boot so the FIRST troop deployed at attack time pulls a
 ## pre-built library instead of decoding 5 GLBs + duplicating every track.
+##
+## IMPORTANT: called from warmup._ready(), which runs while the parent scene
+## is still wiring its children. `add_child()` on the SceneTree root during
+## that window raises "Parent node is busy setting up children". The
+## instantiated GLB nodes are kept OUT of the tree — AnimationPlayer's
+## `get_animation_list()` and `get_animation()` both work on detached nodes,
+## they don't require tree presence.
 static func prewarm_anim_library(anim_files_list: Array) -> void:
 	if anim_files_list.is_empty():
 		return
@@ -325,33 +332,12 @@ static func prewarm_anim_library(anim_files_list: Array) -> void:
 	if _anim_lib_cache.has(cache_key):
 		return
 	var lib := AnimationLibrary.new()
-	var tree: SceneTree = Engine.get_main_loop() as SceneTree
-	if tree == null:
-		return
-	# Parent for temporary GLB instances — removed immediately after extracting
-	# animations. Scoped under the scene root so the nodes are in-tree (required
-	# by some GLB import paths) but invisible.
-	var scope := Node3D.new()
-	scope.visible = false
-	tree.root.add_child(scope)
 	for file_path in anim_files_list:
 		var res: Resource = load(file_path)
 		if res == null:
 			continue
 		var inst: Node = res.instantiate()
-		scope.add_child(inst)
-		var src: AnimationPlayer = null
-		for child in inst.get_children():
-			if child is AnimationPlayer:
-				src = child
-				break
-			# Shallow search — most GLBs put the AnimationPlayer at depth 1.
-			for grand in child.get_children():
-				if grand is AnimationPlayer:
-					src = grand
-					break
-			if src:
-				break
+		var src: AnimationPlayer = _find_anim_player_recursive(inst)
 		if src:
 			for anim_name in src.get_animation_list():
 				if anim_name == "RESET" or anim_name == "T-Pose":
@@ -366,9 +352,21 @@ static func prewarm_anim_library(anim_files_list: Array) -> void:
 						if ":scale" in path or ":position" in path:
 							dup.remove_track(ti)
 					lib.add_animation(anim_name, dup)
-		inst.queue_free()
+		# Free the detached instance; no queue_free needed since it's not in tree.
+		inst.free()
 	_anim_lib_cache[cache_key] = lib
-	scope.queue_free()
+
+
+## Recursive AnimationPlayer search — unlike `_find_anim_player` (instance
+## method), this is static so it can run during boot warmup.
+static func _find_anim_player_recursive(node: Node) -> AnimationPlayer:
+	if node is AnimationPlayer:
+		return node
+	for child in node.get_children():
+		var found := _find_anim_player_recursive(child)
+		if found:
+			return found
+	return null
 
 
 ## Animation file paths for the medium rig — shared by Knight, Mage, Barbarian.
