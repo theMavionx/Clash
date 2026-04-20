@@ -831,23 +831,54 @@ function FuturesPanel() {
     return markets.find(m => m.symbol === symbol)?.lot_size || '0.00001';
   }, [markets, symbol]);
 
+  // UX semantics (updated 2026-04):
+  //   amount (USDC mode) = MARGIN / collateral the user deposits per trade.
+  //   position size      = amount × leverage. Displayed separately so the
+  //                        trader always sees what they're risking vs the
+  //                        leveraged exposure — no more "did 20 mean $20
+  //                        margin or $20 notional?" ambiguity.
+  //   amount (token mode) = direct token quantity (no leverage applied here;
+  //                         the pair's qty itself is the exposure).
   const tokenAmount = useMemo(() => {
     if (!amount || !currentPrice) return '';
     if (!amountInUsdc) return amount;
-    const raw = parseFloat(amount) / parseFloat(currentPrice);
+    // Token qty = leveraged position / price. Previously this treated the
+    // amount as notional (no × leverage), so it mis-sized trades.
+    const raw = (parseFloat(amount) * leverage) / parseFloat(currentPrice);
     const lot = parseFloat(lotSize);
     return String(Math.floor(raw / lot) * lot);
-  }, [amount, currentPrice, amountInUsdc, lotSize]);
+  }, [amount, currentPrice, amountInUsdc, lotSize, leverage]);
 
+  // Derived display: position size in USDC (margin × leverage). Kept as a
+  // number so callers can format or gate on it without re-parsing.
+  const positionUsdc = useMemo(() => {
+    if (amountInUsdc) {
+      const m = parseFloat(amount);
+      return Number.isFinite(m) && m > 0 ? m * leverage : 0;
+    }
+    const t = parseFloat(tokenAmount);
+    const p = parseFloat(currentPrice);
+    return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
+  }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice]);
+
+  // Buying power = max possible position size = balance × leverage.
   const maxUsdc = pacBalance * leverage;
 
   const handleSizePct = useCallback((pct) => {
     setSizePct(pct);
     if (pacBalance > 0 && currentPrice) {
-      const usdcVal = (maxUsdc * pct / 100).toFixed(2);
-      setAmount(amountInUsdc ? usdcVal : String((parseFloat(usdcVal) / parseFloat(currentPrice)).toFixed(6)));
+      // Slider now sets MARGIN (a fraction of the wallet balance), not
+      // notional. 100% = full balance committed as collateral, which gives
+      // a position = balance × leverage (= old "buying power").
+      const marginVal = (pacBalance * pct / 100).toFixed(2);
+      if (amountInUsdc) {
+        setAmount(marginVal);
+      } else {
+        // Token-input mode: convert margin → token qty via leverage.
+        setAmount(String(((parseFloat(marginVal) * leverage) / parseFloat(currentPrice)).toFixed(6)));
+      }
     }
-  }, [pacBalance, currentPrice, maxUsdc, amountInUsdc]);
+  }, [pacBalance, currentPrice, amountInUsdc, leverage]);
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
@@ -870,26 +901,30 @@ function FuturesPanel() {
     tradeInFlight.current = true;
     try {
       // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
-      // Avantis API: 3rd arg is COLLATERAL in USDC — notional / leverage.
-      // The UI's `amount` (in USDC mode) is a NOTIONAL figure (buying power),
-      // so for Avantis we divide by leverage to get actual collateral.
+      // Avantis API: 3rd arg is COLLATERAL / margin in USDC.
+      // The UI's `amount` (in USDC mode) is now the MARGIN the user deposits,
+      // so `amount` IS the collateral Avantis wants. Position size = amount
+      // × leverage, which is what we gate the $100 minimum on.
       // Guard against missing/NaN currentPrice (feed blip) — would otherwise
       // produce NaN collateral and a useless on-chain revert.
       const price = parseFloat(currentPrice);
       let qty;
       if (dex === 'avantis') {
-        const notionalUsdc = amountInUsdc
-          ? parseFloat(amount)
-          : (price > 0 ? parseFloat(tokenAmount) * price : 0);
-        if (!Number.isFinite(notionalUsdc) || notionalUsdc <= 0) {
+        if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
           alert('Enter a valid amount.');
           return;
         }
-        if (notionalUsdc < 100) {
-          alert(`Avantis requires position size ≥ $100. Yours: $${notionalUsdc.toFixed(2)}. Increase amount or leverage.`);
+        if (positionUsdc < 100) {
+          alert(
+            `Avantis requires a position ≥ $100.\n` +
+            `Your position: $${positionUsdc.toFixed(2)} (margin $${(positionUsdc / leverage).toFixed(2)} × ${leverage}x).\n` +
+            `Increase margin or leverage.`
+          );
           return;
         }
-        const collateralUsdc = notionalUsdc / leverage;
+        const collateralUsdc = amountInUsdc
+          ? parseFloat(amount)
+          : (price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0);
         qty = String(collateralUsdc.toFixed(6));
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
@@ -918,7 +953,7 @@ function FuturesPanel() {
     } finally {
       tradeInFlight.current = false;
     }
-  }, [amount, tokenAmount, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -1022,7 +1057,7 @@ function FuturesPanel() {
         <div style={S.row}>
           <div style={{flex: 2, display: 'flex', flexDirection: 'column', gap: 3}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-              <span style={S.label}>Amount</span>
+              <span style={S.label}>{amountInUsdc ? 'Margin' : 'Amount'}</span>
               <button style={S.unitToggle} onClick={() => setAmountInUsdc(!amountInUsdc)}>
                 {amountInUsdc ? 'USDC' : symbol}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
@@ -1031,7 +1066,7 @@ function FuturesPanel() {
                 </svg>
               </button>
             </div>
-            <input type="number" placeholder={amountInUsdc ? '100' : '0.01'} value={amount}
+            <input type="number" placeholder={amountInUsdc ? '20' : '0.01'} value={amount}
               onChange={e => { setAmount(e.target.value); setSizePct(0); }} style={S.input} />
           </div>
           <div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 3}}>
@@ -1043,17 +1078,34 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Size slider — % of max buying power */}
+        {/* Position size readout — always on when the user has entered an
+            amount. This is the leveraged exposure Avantis/Pacifica actually
+            opens; the trader sees it explicitly instead of computing
+            amount × leverage in their head. */}
+        {amount && positionUsdc > 0 && (
+          <div style={S.positionBox}>
+            <div style={S.positionRow}>
+              <span style={S.positionLabel}>Position Size</span>
+              <span style={S.positionValue}>${positionUsdc.toFixed(2)}</span>
+            </div>
+            <div style={S.positionSub}>
+              ${(positionUsdc / leverage).toFixed(2)} margin × {leverage}x
+              {amountInUsdc && currentPrice && (
+                <> · ≈ {parseFloat(tokenAmount).toFixed(6)} {symbol}</>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Size slider — % of wallet balance committed as margin */}
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${maxUsdc.toFixed(0)} buying power
+              {sizePct}% of ${pacBalance.toFixed(2)} balance
             </span>
-            {amountInUsdc && amount && currentPrice && (
-              <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
-                ≈ {parseFloat(tokenAmount).toFixed(6)} {symbol}
-              </span>
-            )}
+            <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
+              buying power ${maxUsdc.toFixed(0)}
+            </span>
           </div>
           <input type="range" min="0" max="100" step="5" value={sizePct} className="grad-slider"
             onChange={e => handleSizePct(Number(e.target.value))} style={{...S.slider, '--val': `${sizePct}%`}} />
@@ -2205,6 +2257,28 @@ const S = {
   },
   slider: { width: '100%', cursor: 'pointer', accentColor: '#E53935' },
   sliderLabels: { display: 'flex', justifyContent: 'space-between', color: '#a3906a', fontSize: 11, fontWeight: 700 },
+  // Position-size readout — sits right below the Amount+Leverage row so the
+  // trader sees leveraged exposure before they commit.
+  positionBox: {
+    background: 'linear-gradient(180deg, #fdf8e7 0%, #f3e8c8 100%)',
+    border: '2px solid #d4c8b0', borderRadius: 10,
+    padding: '8px 12px',
+    display: 'flex', flexDirection: 'column', gap: 2,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5)',
+  },
+  positionRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+  },
+  positionLabel: {
+    fontSize: 11, fontWeight: 900, color: '#a3906a',
+    textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  positionValue: {
+    fontSize: 18, fontWeight: 900, color: '#5C3A21',
+  },
+  positionSub: {
+    fontSize: 11, fontWeight: 700, color: '#5C3A21',
+  },
   tradeBtn: { flex: 1, padding: '11px 6px', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
   tradeBtnText: { color: '#fff', fontSize: 20, fontWeight: 900, textShadow: '0 2px 0 rgba(0,0,0,0.4)' },
   // Positions
