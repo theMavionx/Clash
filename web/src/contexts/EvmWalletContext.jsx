@@ -9,7 +9,7 @@
 // is a viem wallet client bound to the user's provider — callers can
 // walletClient.writeContract(...) and a signing popup appears.
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { createPublicClient, createWalletClient, http, custom } from 'viem';
 import { base } from 'viem/chains';
 import { useWallets as usePrivyEvmWallets, usePrivy } from '@privy-io/react-auth';

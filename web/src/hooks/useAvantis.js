@@ -15,7 +15,7 @@ import {
   priceToContract, leverageToContract, slippageToContract, collateralToRaw,
   sideIsBuy, fetchPriceUpdateData, fetchExecutionFeeWei, fetchNextTradeIndex,
   fetchLiveMarkPrice,
-  isLinkedToOurReferrer, applyReferralCode, fetchReferralCode,
+  applyReferralCode, fetchReferralCode,
   REFERRAL_CODE_BYTES32, REFERRAL_CODE_STRING,
   PRICE_SOURCING,
 } from '../lib/avantisContract';
