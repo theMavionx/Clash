@@ -9,7 +9,7 @@ const FLAG_TRADE = 8;   // trading intro
 // ── Step definitions ──────────────────────────────────────────────
 const BASE_STEPS = [
   { title: 'Welcome, Commander!', text: 'Welcome to Clash of Perps! Build your island, train troops, and raid enemies. Let\'s get started.', icon: '⚔️' },
-  { title: 'Town Hall', text: 'This is your Town Hall — the heart of your base. Upgrade it to unlock new buildings and increase your power.', icon: '🏰', target: 'town-hall' },
+  { title: 'Town Hall', text: 'This is your Town Hall — the heart of your base. Upgrade it to unlock new buildings and increase your power.', icon: '🏰' },
   { title: 'Build', text: 'Tap the Build button to construct new buildings. Start with a Mine and Sawmill to produce resources.', icon: '🔨', target: 'build-btn' },
   { title: 'Collect Resources', text: 'Your Mine produces Ore and Sawmill produces Wood. Tap the collect icons above buildings to gather resources.', icon: '💰' },
 ];
@@ -51,15 +51,21 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
     : phase === 'trade' ? FLAG_TRADE
     : 0;
 
-  // Already completed this phase
-  if ((tutorialFlags & flag) !== 0 || steps.length === 0) return null;
+  // All hooks must be declared BEFORE any conditional return (Rules of Hooks).
+  // The phase→flag→steps lookup above is cheap pure-derivation; the early
+  // return that checks whether the phase is already complete is done AFTER
+  // every hook has been registered so the hook count stays stable across
+  // renders if flags update while this instance is still mounted.
+  const skip = (tutorialFlags & flag) !== 0 || steps.length === 0;
+  const step = skip ? null : steps[stepIdx];
+  const isLast = !skip && stepIdx === steps.length - 1;
 
-  const step = steps[stepIdx];
-  const isLast = stepIdx === steps.length - 1;
-
-  // Find spotlight target
+  // Find spotlight target. Clears when no step or no target.
+  // setState inside is DOM→React layout sync (external-boundary read), not
+  // derived state — acceptable use that ESLint's heuristic flags.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (!step.target) { setSpotlightRect(null); return; }
+    if (!step || !step.target) { setSpotlightRect(null); return; }
     const el = document.querySelector(`[data-tutorial="${step.target}"]`);
     if (el) {
       const r = el.getBoundingClientRect();
@@ -67,7 +73,8 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
     } else {
       setSpotlightRect(null);
     }
-  }, [stepIdx, step.target]);
+  }, [stepIdx, step?.target, step]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleNext = useCallback(() => {
     if (isLast) {
@@ -80,6 +87,9 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
   const handleSkip = useCallback(() => {
     onSkip(flag);
   }, [flag, onSkip]);
+
+  // Skip after all hooks (prevents hook-count mismatch across renders).
+  if (skip) return null;
 
   // Clip-path for spotlight hole
   const clipPath = spotlightRect

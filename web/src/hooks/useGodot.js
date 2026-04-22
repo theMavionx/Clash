@@ -35,7 +35,12 @@ export function GodotProvider({ children }) {
   const errorTimerRef = useRef(null);
   const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
   const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|null
-  const tutorialFetchedRef = useRef(false);
+  // Remember the token the last fetch was keyed on — re-fetch when it changes
+  // (logout→register, account switch, session swap). A boolean "fetched once"
+  // flag would miss these transitions and leave a fresh account with the
+  // previous account's tutorial flags (0xFF if previous one was completed),
+  // so new-account tutorials would never appear.
+  const tutorialTokenRef = useRef(null);
 
   useEffect(() => {
     window.onGodotMessage = (msg) => {
@@ -52,26 +57,45 @@ export function GodotProvider({ children }) {
           });
           if (data.token) {
             window._playerToken = data.token;
-            // Fetch tutorial progress once (Godot bridge doesn't include it).
-            // Deferred to avoid blocking render. Uses requestIdleCallback where available.
-            if (!tutorialFetchedRef.current) {
-              tutorialFetchedRef.current = true;
+            // Fetch tutorial progress per-token (Godot bridge doesn't include it).
+            // Re-fetch when the token CHANGES so logout→register and account
+            // switches hydrate the new account's flags; a plain "once" gate
+            // would leave a fresh account showing the previous session's
+            // completed state and the tutorial would silently be hidden.
+            if (tutorialTokenRef.current !== data.token) {
+              tutorialTokenRef.current = data.token;
+              const tokenForFetch = data.token;
               const doFetch = () => {
-                fetch('/api/tutorial', { headers: { 'x-token': data.token } })
+                fetch('/api/tutorial', { headers: { 'x-token': tokenForFetch } })
                   .then(r => { if (!r.ok) throw new Error(); return r.json(); })
                   .then(res => {
+                    // Stale-response guard: if another token swap happened while
+                    // this was in flight, drop the result.
+                    if (tutorialTokenRef.current !== tokenForFetch) return;
                     const flags = res.tutorial_flags ?? 0xFF;
-                    if (flags === 0xFF) return;
                     setTutorialFlags(flags);
                     if (!(flags & 1)) setTutorialPhase('base');
                     else if (!(flags & 2)) setTutorialPhase('army');
                     else if (!(flags & 8)) setTutorialPhase('trade');
+                    else setTutorialPhase(null);
                   }).catch(() => {});
               };
-              // Delay fetch so it doesn't block initial render
-              if (window.requestIdleCallback) window.requestIdleCallback(doFetch);
-              else setTimeout(doFetch, 2000);
+              // Delay fetch so it doesn't block initial render, but force
+              // firing within 800ms so a busy main thread (Godot startup,
+              // shader compile) can't indefinitely starve the tutorial load
+              // — without the `timeout` option requestIdleCallback may never
+              // fire on slow devices and the overlay would never appear.
+              if (window.requestIdleCallback) window.requestIdleCallback(doFetch, { timeout: 800 });
+              else setTimeout(doFetch, 500);
             }
+          } else {
+            // Logout (js_bridge emits empty token on _do_logout). Clear the
+            // guard + reset tutorial state so the next account's token starts
+            // fresh rather than inheriting whatever was on screen last.
+            window._playerToken = null;
+            tutorialTokenRef.current = null;
+            setTutorialFlags(0xFF);
+            setTutorialPhase(null);
           }
           break;
         case 'resources':
