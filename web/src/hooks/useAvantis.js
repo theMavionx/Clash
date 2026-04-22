@@ -444,6 +444,14 @@ export function useAvantis() {
   }, [walletAddr]);
 
   // ───── Client-side approval helper ─────
+  //
+  // Approves MAX_UINT256 (standard DEX practice) so the user sees ONE wallet
+  // popup in their lifetime on this DEX, and never again. Previously we
+  // approved `amountRaw + 1%`, which forced a fresh approval every time the
+  // collateral grew — and, worse, triggered "ERC20: transfer amount exceeds
+  // allowance" inside Farcaster's tx simulator when the approve receipt
+  // hadn't propagated to FC's RPC cache before the openTrade simulation ran.
+  // Max-approval eliminates both failure modes.
   const ensureApproval = useCallback(async (amountRaw) => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
     const allowance = await publicClient.readContract({
@@ -451,13 +459,27 @@ export function useAvantis() {
       args: [walletAddr, TRADING_STORAGE_ADDRESS],
     });
     if (allowance >= amountRaw) return null;
-    // Approve +1% cushion for fees; user will see ONE wallet popup to approve.
-    const approveAmount = (amountRaw * 101n) / 100n;
+    // uint256 max — the contract can never transfer more than the wallet
+    // balance anyway, so "infinite" is bounded in practice by the user's
+    // funds. Matches Uniswap / Aave / every major EVM DEX default.
+    const MAX_UINT256 = (1n << 256n) - 1n;
     const hash = await walletClient.writeContract({
       address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'approve',
-      args: [TRADING_STORAGE_ADDRESS, approveAmount],
+      args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
     });
     await publicClient.waitForTransactionReceipt({ hash });
+    // Poll until the freshly-approved allowance is visible to the RPC we're
+    // reading from (Farcaster's provider can lag 1-2 blocks behind the
+    // executor that mined the tx). Without this, the next simulate call can
+    // still read the OLD allowance and revert the pre-simulation.
+    for (let i = 0; i < 8; i++) {
+      const cur = await publicClient.readContract({
+        address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'allowance',
+        args: [walletAddr, TRADING_STORAGE_ADDRESS],
+      });
+      if (cur >= amountRaw) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
     return hash;
   }, [walletClient, walletAddr, publicClient]);
 
