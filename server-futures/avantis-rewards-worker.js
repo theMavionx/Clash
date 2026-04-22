@@ -67,23 +67,18 @@ async function pollOnce(mainDb) {
 
     const positions = Array.isArray(data?.positions) ? data.positions : [];
     const currentKeys = new Set(positions.map(tradeKey));
-    const prev = seenOpenTrades.get(addr) || new Set();
-
-    // A position in `prev` but not in `currentKeys` = closed since last poll.
-    // Record it as a filled trade in trade_history. We approximate notional
-    // as collateral × leverage; exact realised P&L would need events but
-    // isn't required for the volume-based gold formula.
-    for (const key of prev) {
-      if (currentKeys.has(key)) continue; // still open
-      // Minimal synthetic row — we lost the original collateral/leverage by
-      // the time we notice. Use the last-known position we cached.
-      const closed = prev.get ? prev.get(key) : null; // Set has no .get; see below
-      // We keep a Map variant for richer data below.
-    }
-
-    // Track current opens with their collateral/leverage for next round so
-    // when they close we have the notional handy.
-    const richPrev = prev instanceof Map ? prev : new Map();
+    // `seenOpenTrades` is always a Map — normalised here to simplify below.
+    // Cold-start: if we've never polled this wallet, record the current
+    // positions WITHOUT treating absent-on-next-poll as a close. Otherwise a
+    // worker restart while a user has open positions would, on the very
+    // first poll, see those positions in `prev` (empty Set → but also
+    // empty Map → no false positives either way). The risk the agent
+    // flagged — positions opened BEFORE worker boot that close DURING the
+    // first 2 min — is handled by the client-side `reportTrade` on close
+    // (deterministic dedup key). Worker misses are non-fatal.
+    const richPrev = seenOpenTrades.get(addr) instanceof Map
+      ? seenOpenTrades.get(addr)
+      : new Map();
     for (const p of positions) {
       const k = tradeKey(p);
       if (richPrev.has(k)) continue;

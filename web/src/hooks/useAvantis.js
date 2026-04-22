@@ -22,6 +22,53 @@ import {
 
 const FUTURES_API = '/api/futures';
 
+// Max time we wait for a single on-chain tx receipt before surfacing a
+// "pending too long" error. 90 s is comfortably above Base's 2 s block time
+// and typical keeper execution window; going higher just leaves the UI
+// spinner stuck if the tx was dropped from the mempool.
+const TX_TIMEOUT_MS = 90_000;
+
+// Unwraps viem revert errors to the most specific human-readable message
+// available. Traders care about reasons like "SLIPPAGE_EXCEEDED" or
+// "COLLATERAL_NOT_ACTIVE" — the top-level `shortMessage` often just says
+// "execution reverted" and hides the real cause in `.cause.cause.data`.
+function decodeTradeError(e, fallback) {
+  if (!e) return fallback || 'Trade failed';
+  // Dig into viem's nested cause chain (max 3 hops — openTrade reverts can be
+  // wrapped in Simulate + Contract + Revert error classes).
+  const chain = [e, e.cause, e.cause?.cause, e.cause?.cause?.cause].filter(Boolean);
+  for (const err of chain) {
+    // Contract-decoded revert name → most actionable.
+    if (err.data?.errorName) return String(err.data.errorName);
+    // Short reason string from Solidity `require(false, "...")`.
+    const reason = err.reason || err.shortMessage;
+    if (reason) {
+      if (/slippage/i.test(reason)) return 'Price moved past slippage — widen slippage or retry';
+      if (/allowance/i.test(reason)) return 'USDC allowance not settled yet — retry in a few seconds';
+      if (/insufficient funds/i.test(reason)) return 'Insufficient ETH on Base for gas + execution fee';
+      if (/user rejected|denied/i.test(reason)) return 'Signature cancelled';
+      return String(reason);
+    }
+  }
+  return String(e.message || fallback || 'Trade failed').slice(0, 300);
+}
+
+// Wraps waitForTransactionReceipt with a timeout so dropped txs don't leave
+// the UI spinner on forever. Throws a specific "pending too long" error the
+// caller can show with a retry hint.
+async function waitForReceiptWithTimeout(publicClient, hash) {
+  try {
+    return await publicClient.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
+  } catch (e) {
+    if (/timed? ?out|WaitForTransactionReceipt/i.test(String(e?.message || e))) {
+      const err = new Error('Transaction pending too long — check your wallet and retry');
+      err.code = 'TX_TIMEOUT';
+      throw err;
+    }
+    throw e;
+  }
+}
+
 // ───── Normalisers ────────────────────────────────────────────────
 // Avantis returns values scaled by 10^10 for prices/leverage and 10^6 for USDC.
 // FuturesPanel expects Pacifica-shape — we flatten both into the same keys
@@ -251,6 +298,22 @@ export function useAvantis() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
+  // Session generation token — bumped whenever the wallet address changes.
+  // Every trade function captures its starting generation and checks it after
+  // each await. If the wallet switched mid-flight (Privy logout, MetaMask
+  // account change, FC frame background), the in-flight closure bails out
+  // cleanly instead of signing with a stale provider or poisoning state for
+  // the new wallet. Ref so updates don't trigger re-renders.
+  const walletGenRef = useRef(0);
+  useEffect(() => {
+    walletGenRef.current += 1;
+  }, [walletAddr]);
+
+  // In-flight guard for `ensureApproval`. A double-click on LONG otherwise
+  // triggers two parallel approval promises → two MM popups → wasted gas.
+  // The second caller awaits the first's result.
+  const approvalInFlightRef = useRef(null);
+
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(() => setError(null), 10000);
@@ -385,17 +448,24 @@ export function useAvantis() {
       console.warn('[avantis] referral read-back never showed our code after 6 attempts — check BaseScan');
       return { tx_hash: hash, status: 'submitted_but_unverified' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Referral link failed';
-      // Special-case the precheck: clearer label and skip the noisy MetaMask
-      // revert stack (it's not a wallet error, the code just isn't on-chain).
+      const msg = decodeTradeError(e, 'Referral link failed');
+      // Distinguish three failure modes so the UI can react differently:
+      //   REFERRAL_CODE_NOT_REGISTERED → admin-side problem, dev-facing hint
+      //   REFERRAL_PRECHECK_RPC_FAILED → transient, suggest retry
+      //   anything else → normal error surface
       if (e?.code === 'REFERRAL_CODE_NOT_REGISTERED') {
         console.warn('[avantis] referral code not registered on-chain yet:', msg);
-        setError(String(msg).slice(0, 300));
+        setError(msg.slice(0, 300));
         return { error: msg, code: 'REFERRAL_CODE_NOT_REGISTERED' };
       }
+      if (e?.code === 'REFERRAL_PRECHECK_RPC_FAILED') {
+        console.warn('[avantis] referral precheck RPC failed:', msg);
+        setError('Network error verifying referral — try again in a moment');
+        return { error: msg, code: 'REFERRAL_PRECHECK_RPC_FAILED' };
+      }
       console.warn('[avantis] linkOurReferrer error:', msg);
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     }
   }, [walletClient, walletAddr, publicClient, ensureChain, fetchReferralStatus]);
 
@@ -454,33 +524,59 @@ export function useAvantis() {
   // Max-approval eliminates both failure modes.
   const ensureApproval = useCallback(async (amountRaw) => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
-    const allowance = await publicClient.readContract({
-      address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'allowance',
-      args: [walletAddr, TRADING_STORAGE_ADDRESS],
-    });
-    if (allowance >= amountRaw) return null;
-    // uint256 max — the contract can never transfer more than the wallet
-    // balance anyway, so "infinite" is bounded in practice by the user's
-    // funds. Matches Uniswap / Aave / every major EVM DEX default.
-    const MAX_UINT256 = (1n << 256n) - 1n;
-    const hash = await walletClient.writeContract({
-      address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'approve',
-      args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
-    });
-    await publicClient.waitForTransactionReceipt({ hash });
-    // Poll until the freshly-approved allowance is visible to the RPC we're
-    // reading from (Farcaster's provider can lag 1-2 blocks behind the
-    // executor that mined the tx). Without this, the next simulate call can
-    // still read the OLD allowance and revert the pre-simulation.
-    for (let i = 0; i < 8; i++) {
-      const cur = await publicClient.readContract({
-        address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'allowance',
-        args: [walletAddr, TRADING_STORAGE_ADDRESS],
-      });
-      if (cur >= amountRaw) break;
-      await new Promise(r => setTimeout(r, 500));
+    // Concurrency guard: if an approval is already in flight for this wallet,
+    // await its result instead of firing a parallel approve tx. Second clicker
+    // gets the first one's hash (or null) instead of a duplicate popup.
+    if (approvalInFlightRef.current) {
+      return approvalInFlightRef.current;
     }
-    return hash;
+    const run = (async () => {
+      let allowance;
+      try {
+        allowance = await publicClient.readContract({
+          address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'allowance',
+          args: [walletAddr, TRADING_STORAGE_ADDRESS],
+        });
+      } catch {
+        throw new Error('Could not read USDC allowance — RPC unavailable');
+      }
+      if (allowance >= amountRaw) return null;
+      // uint256 max — the contract can never transfer more than the wallet
+      // balance anyway, so "infinite" is bounded in practice by the user's
+      // funds. Matches Uniswap / Aave / every major EVM DEX default.
+      const MAX_UINT256 = (1n << 256n) - 1n;
+      const hash = await walletClient.writeContract({
+        address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'approve',
+        args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
+      });
+      await waitForReceiptWithTimeout(publicClient, hash);
+      // Poll until the freshly-approved allowance is visible to the RPC we're
+      // reading from (Farcaster's provider can lag 1-2 blocks behind the
+      // executor that mined the tx). If the poll exhausts without success,
+      // THROW so the caller aborts instead of firing an openTrade that would
+      // pre-simulate-revert with "exceeds allowance".
+      let visible = false;
+      for (let i = 0; i < 8; i++) {
+        try {
+          const cur = await publicClient.readContract({
+            address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'allowance',
+            args: [walletAddr, TRADING_STORAGE_ADDRESS],
+          });
+          if (cur >= amountRaw) { visible = true; break; }
+        } catch { /* transient RPC hiccup — keep polling */ }
+        await new Promise(r => setTimeout(r, 500));
+      }
+      if (!visible) {
+        throw new Error('USDC approval not yet visible on-chain — retry in a few seconds');
+      }
+      return hash;
+    })();
+    approvalInFlightRef.current = run;
+    try {
+      return await run;
+    } finally {
+      approvalInFlightRef.current = null;
+    }
   }, [walletClient, walletAddr, publicClient]);
 
   // ───── Guards ─────
@@ -494,9 +590,20 @@ export function useAvantis() {
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
     setLoading(true);
     setError(null);
+    // Capture wallet generation — if it changes during any await below, the
+    // user switched wallets mid-trade; bail out cleanly instead of signing
+    // with a stale provider.
+    const gen = walletGenRef.current;
+    const checkGen = () => {
+      if (walletGenRef.current !== gen) {
+        const err = new Error('Wallet changed during trade — please retry');
+        err.code = 'WALLET_CHANGED';
+        throw err;
+      }
+    };
     try {
       requireWallet();
-      await ensureChain();
+      await ensureChain(); checkGen();
 
       const collateralUsdc = Number(amount);
       if (!Number.isFinite(collateralUsdc) || collateralUsdc <= 0) throw new Error('Invalid amount');
@@ -508,19 +615,39 @@ export function useAvantis() {
 
       const positionSizeUSDC = collateralToRaw(collateralUsdc);
       // Min-notional $100 pre-check (saves a wallet popup + revert).
-      if (Number(collateralUsdc) * levNum < 100) {
+      if (collateralUsdc * levNum < 100) {
         throw new Error(`Avantis min position size = $100 (yours: $${(collateralUsdc * levNum).toFixed(2)})`);
       }
 
-      await ensureApproval(positionSizeUSDC);
+      // Balance sanity re-check: the user may have spent USDC in another tab
+      // between slider adjustment and click, or a tx inclusion reduced it.
+      // Fail fast with a helpful error instead of letting transferFrom revert.
+      try {
+        const liveUsdcRaw = await publicClient.readContract({
+          address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'balanceOf',
+          args: [walletAddr],
+        });
+        if (liveUsdcRaw < positionSizeUSDC) {
+          const have = Number(liveUsdcRaw) / 1e6;
+          throw new Error(`Insufficient USDC: need $${collateralUsdc.toFixed(2)}, have $${have.toFixed(2)}`);
+        }
+      } catch (balErr) {
+        if (/Insufficient USDC/.test(String(balErr?.message))) throw balErr;
+        // RPC failures aren't fatal — let transferFrom do final arbitration.
+      }
+      checkGen();
 
-      const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex);
-      const execFee = await fetchExecutionFeeWei(publicClient);
+      await ensureApproval(positionSizeUSDC); checkGen();
+
+      const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex); checkGen();
+      // Re-fetch execFee JUST before signing — if fetched earlier it could be
+      // stale after the approve+poll block (gas can spike in those seconds).
+      const execFee = await fetchExecutionFeeWei(publicClient); checkGen();
       const isBuy = sideIsBuy(side);
 
       // Avantis keeper auto-cancels MARKET trades that arrive with openPrice=0
       // (verified live). Pass the current Pyth price as the executor reference.
-      const livePrice = await fetchLiveMarkPrice(pairIndex);
+      const livePrice = await fetchLiveMarkPrice(pairIndex); checkGen();
       if (!(livePrice > 0)) throw new Error('Price feed unavailable — try again in a moment.');
 
       const tradeInput = {
@@ -542,25 +669,38 @@ export function useAvantis() {
         args: [tradeInput, ORDER_TYPE.MARKET, slippageToContract(slippage)],
         value: execFee,
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await waitForReceiptWithTimeout(publicClient, hash);
+      // Guard against reverted trades still nudging the server's reward flow.
+      const ok = receipt.status === 'success';
+      if (!ok) {
+        // The tx mined but reverted. Refresh state so UI doesn't show a
+        // non-existent position; don't claim gold for a failed trade.
+        fetchPositions();
+        fetchBalance();
+        return { tx_hash: hash, status: 'failed', error: 'Trade reverted on-chain' };
+      }
 
-      reportTrade({
+      // Deterministic dedup_key: per (wallet, pair, tradeIndex). Prevents the
+      // server-futures worker from inserting a duplicate row for this open.
+      const openDedup = `avantis:open:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
+      // Await reportTrade so the server-side /trade-report write lands before
+      // scheduleClaim fires — closes the race where a slow POST left
+      // claim-gold reading an empty futures.db.
+      await reportTrade({
         tx_hash: hash, symbol, side: isBuy ? 'long' : 'short',
         amount: collateralUsdc, leverage: levNum, order_type: 'market',
+        dedup_key: openDedup,
       });
 
       fetchPositions();
       fetchAccount();
       fetchBalance();
-      // Fire-and-forget gold claim. Delay 2.5s so server-side trade-report
-      // (which this hook POSTs above) lands in futures.db BEFORE
-      // /trading/claim-gold reads it.
       scheduleClaim();
-      return { tx_hash: hash, status: receipt.status === 'success' ? 'submitted' : 'failed' };
+      return { tx_hash: hash, status: 'submitted' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Trade failed';
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      const msg = decodeTradeError(e, 'Trade failed');
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     } finally {
       setLoading(false);
     }
@@ -574,9 +714,17 @@ export function useAvantis() {
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage, slippage = 1) => {
     setLoading(true);
     setError(null);
+    const gen = walletGenRef.current;
+    const checkGen = () => {
+      if (walletGenRef.current !== gen) {
+        const err = new Error('Wallet changed during order — please retry');
+        err.code = 'WALLET_CHANGED';
+        throw err;
+      }
+    };
     try {
       requireWallet();
-      await ensureChain();
+      await ensureChain(); checkGen();
 
       const collateralUsdc = Number(amount);
       const priceNum = Number(price);
@@ -593,10 +741,45 @@ export function useAvantis() {
         throw new Error(`Avantis min position size = $100 (yours: $${(collateralUsdc * levNum).toFixed(2)})`);
       }
 
-      await ensureApproval(positionSizeUSDC);
+      // Sanity-check limit price against live market to avoid the trader
+      // accidentally placing a short LIMIT below market (which fills worse
+      // than a market order) or a long LIMIT above market (same trap).
+      try {
+        const livePrice = await fetchLiveMarkPrice(pairIndex); checkGen();
+        if (livePrice > 0) {
+          const isBuyProbe = sideIsBuy(side);
+          const drift = Math.abs(priceNum - livePrice) / livePrice;
+          if (isBuyProbe && priceNum > livePrice * 1.01 && drift > 0.01) {
+            throw new Error(`Long limit $${priceNum} is above market $${livePrice.toFixed(2)} — use MARKET or lower the price`);
+          }
+          if (!isBuyProbe && priceNum < livePrice * 0.99 && drift > 0.01) {
+            throw new Error(`Short limit $${priceNum} is below market $${livePrice.toFixed(2)} — use MARKET or raise the price`);
+          }
+        }
+      } catch (priceCheckErr) {
+        if (/above market|below market/.test(String(priceCheckErr?.message))) throw priceCheckErr;
+        // Ignore price-feed transient failures — contract is still the source of truth.
+      }
 
-      const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex);
-      const execFee = await fetchExecutionFeeWei(publicClient);
+      // Balance re-check (same reasoning as placeMarketOrder).
+      try {
+        const liveUsdcRaw = await publicClient.readContract({
+          address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'balanceOf',
+          args: [walletAddr],
+        });
+        if (liveUsdcRaw < positionSizeUSDC) {
+          const have = Number(liveUsdcRaw) / 1e6;
+          throw new Error(`Insufficient USDC: need $${collateralUsdc.toFixed(2)}, have $${have.toFixed(2)}`);
+        }
+      } catch (balErr) {
+        if (/Insufficient USDC/.test(String(balErr?.message))) throw balErr;
+      }
+      checkGen();
+
+      await ensureApproval(positionSizeUSDC); checkGen();
+
+      const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex); checkGen();
+      const execFee = await fetchExecutionFeeWei(publicClient); checkGen();
       const isBuy = sideIsBuy(side);
 
       const tradeInput = {
@@ -618,23 +801,29 @@ export function useAvantis() {
         args: [tradeInput, ORDER_TYPE.LIMIT, slippageToContract(slippage)],
         value: execFee,
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await waitForReceiptWithTimeout(publicClient, hash);
+      if (receipt.status !== 'success') {
+        fetchOrders();
+        fetchBalance();
+        return { tx_hash: hash, status: 'failed', error: 'Limit order reverted on-chain' };
+      }
 
-      reportTrade({
+      const openDedup = `avantis:open:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
+      await reportTrade({
         tx_hash: hash, symbol, side: isBuy ? 'long' : 'short',
         amount: collateralUsdc, leverage: levNum, price: priceNum, order_type: 'limit',
+        dedup_key: openDedup,
       });
 
       fetchOrders();
       fetchAccount();
       fetchBalance();
-      // Limit orders ALSO generate volume credit server-side, so claim now.
       scheduleClaim();
-      return { tx_hash: hash, status: receipt.status === 'success' ? 'open' : 'failed' };
+      return { tx_hash: hash, status: 'open' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Limit order failed';
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      const msg = decodeTradeError(e, 'Limit order failed');
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     } finally {
       setLoading(false);
     }
@@ -644,54 +833,70 @@ export function useAvantis() {
   const closePosition = useCallback(async (symbol, side, amount, pairIndex, tradeIndex) => {
     setLoading(true);
     setError(null);
+    const gen = walletGenRef.current;
+    const checkGen = () => {
+      if (walletGenRef.current !== gen) {
+        const err = new Error('Wallet changed during close — please retry');
+        err.code = 'WALLET_CHANGED';
+        throw err;
+      }
+    };
     try {
       requireWallet();
-      await ensureChain();
+      await ensureChain(); checkGen();
       if (pairIndex === undefined || tradeIndex === undefined) throw new Error('Missing pair/trade index');
 
       const amt = Number(amount);
-      // $0.01 floor — anything smaller is dust that reverts on-chain with
-      // a generic "execution reverted" and wastes gas. Surface a friendly
-      // error before we sign the tx.
+      // $0.01 floor — anything smaller is dust that reverts on-chain.
       if (!Number.isFinite(amt) || amt < 0.01) throw new Error('Close amount must be at least $0.01');
       const amountRaw = collateralToRaw(amt);
-      const execFee = await fetchExecutionFeeWei(publicClient);
 
-      // Look up leverage from local positions state BEFORE the close lands,
-      // because after waitForTransactionReceipt the position row is gone.
-      // Notional = collateral × leverage — matches how openTrade is reported
-      // and what the task verifier / gold volume calc expects.
+      // Look up the position to pre-validate partial closes. Avantis rejects
+      // closes that leave a position with notional below its pair min ($100).
       const posMatch = positions.find(p =>
         Number(p.pair_index) === Number(pairIndex) &&
         Number(p.trade_index) === Number(tradeIndex)
       );
       const closeLeverage = posMatch ? Number(posMatch.leverage) || 1 : 1;
+      if (posMatch) {
+        const posMargin = Number(posMatch.margin) || 0;
+        const leftoverMargin = posMargin - amt;
+        const leftoverNotional = leftoverMargin * closeLeverage;
+        // Leftover above $0 but below min → contract reverts. Warn client-side.
+        if (leftoverMargin > 0.0001 && leftoverNotional < 100) {
+          throw new Error(
+            `Partial close would leave $${leftoverNotional.toFixed(2)} notional — below Avantis $100 minimum. ` +
+            `Close fully or reduce by a smaller amount.`
+          );
+        }
+      }
+
+      const execFee = await fetchExecutionFeeWei(publicClient); checkGen();
 
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'closeTradeMarket',
         args: [BigInt(pairIndex), BigInt(tradeIndex), amountRaw],
         value: execFee,
       });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      const receipt = await waitForReceiptWithTimeout(publicClient, hash);
 
-      // Client-side trade report — DO NOT rely on avantis-rewards-worker for
-      // closes. The worker polls every 2 min and its in-memory "seen opens"
-      // cache is lost on server restart, so fast trades and restart-spanning
-      // trades go uncredited. Reporting immediately fixes both races.
-      //
-      // We tag the close with a distinct side ('close_long'/'close_short')
-      // so the task verifier's classifyTrade() recognises it separately from
-      // the matching open and credits it as independent volume.
-      //
-      // `dedupKey` is a deterministic id the worker can reproduce — (pair
-      // index, trade index) uniquely identify an Avantis trade per trader,
-      // and "close:" distinguishes it from an open report. UNIQUE index on
-      // client_order_id then prevents the worker's later poll from writing
-      // the same close a second time.
+      // Refuse to credit rewards / fire reportTrade if the tx reverted.
+      // Previously any mined-but-failed close still nudged gold claim and
+      // poisoned server-side state.
+      if (receipt.status !== 'success') {
+        fetchPositions();
+        fetchBalance();
+        return { tx_hash: hash, status: 'failed', error: 'Close reverted on-chain' };
+      }
+
+      // Client-side trade report tagged with 'close_long'/'close_short' so
+      // the task verifier's classifyTrade() treats it as independent volume.
+      // dedup_key (wallet+pair+idx+"close:") lets the worker's later poll
+      // dedupe via UNIQUE index instead of inserting a duplicate.
       const closeSide = String(side || '').toLowerCase();
       const closedSideLabel = closeSide === 'long' || closeSide === 'bid' ? 'close_long' : 'close_short';
       const dedupKey = `avantis:close:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
-      reportTrade({
+      await reportTrade({
         tx_hash: hash, symbol, side: closedSideLabel,
         amount: amt, leverage: closeLeverage, order_type: 'close',
         dedup_key: dedupKey,
@@ -700,20 +905,17 @@ export function useAvantis() {
       fetchPositions();
       fetchAccount();
       fetchBalance();
-      // Claim twice: immediately for the trade-report we just sent, and
-      // again ~8s later in case the worker-poll fires in between and adds
-      // its own (dedupe-safe) row.
       scheduleClaim(2500);
       scheduleClaim(8000);
-      return { tx_hash: hash, status: receipt.status === 'success' ? 'closed' : 'failed' };
+      return { tx_hash: hash, status: 'closed' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Close failed';
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      const msg = decodeTradeError(e, 'Close failed');
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     } finally {
       setLoading(false);
     }
-  }, [walletClient, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
 
   // ───── Cancel limit order ─────
   const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex) => {
@@ -725,13 +927,13 @@ export function useAvantis() {
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'cancelOpenLimitOrder',
         args: [BigInt(pairIndex), BigInt(tradeIndex)],
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForReceiptWithTimeout(publicClient, hash);
       fetchOrders();
       return { tx_hash: hash, status: 'cancelled' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'Cancel failed';
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      const msg = decodeTradeError(e, 'Cancel failed');
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     }
   }, [walletClient, publicClient, ensureChain, fetchOrders]);
 
@@ -753,18 +955,22 @@ export function useAvantis() {
       // matching the feed-v3 URL we fetched `priceUpdateData` from. `value`
       // is the 1-wei Pyth fee sentinel — NOT the 0.00035 ETH execution fee
       // (updateTpAndSl runs inline with the price update, no keeper queue).
+      // Arg order verified against Avantis official SDK
+      // (avantis_trader_sdk/rpc/trade.py): updateTpAndSl(pair, trade,
+      // stop_loss, take_profit, [price_update_data], sourcing). Keep
+      // slContract AT POSITION 3 and tpContract AT POSITION 4.
       const hash = await walletClient.writeContract({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'updateTpAndSl',
         args: [BigInt(pairIndex), BigInt(tradeIndex), slContract, tpContract, [priceUpdateData], PRICE_SOURCING.HERMES],
         value: 1n,
       });
-      await publicClient.waitForTransactionReceipt({ hash });
+      await waitForReceiptWithTimeout(publicClient, hash);
       fetchPositions();
       return { tx_hash: hash, status: 'updated' };
     } catch (e) {
-      const msg = e?.shortMessage || e?.cause?.shortMessage || e?.message || 'TP/SL update failed';
-      setError(String(msg).slice(0, 300));
-      return { error: msg };
+      const msg = decodeTradeError(e, 'TP/SL update failed');
+      setError(msg.slice(0, 300));
+      return { error: msg, code: e?.code };
     }
   }, [walletClient, publicClient, ensureChain, fetchPositions]);
 

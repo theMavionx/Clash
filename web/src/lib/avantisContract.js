@@ -133,11 +133,19 @@ export const TRADING_ABI = [
 export const PRICE_SOURCING = Object.freeze({ HERMES: 0, PRO: 1 });
 
 // ───── Scaling helpers ─────────────────────────────────────────────
+// IMPORTANT: use `parseUnits(str, 10)` instead of `Math.floor(num * 1e10)` —
+// float64 loses precision past 15 sig figs, so e.g. `75500.1234 * 1e10`
+// serialises to 755001229999999.9 and truncates the 4th decimal. `parseUnits`
+// operates on the decimal string directly so every digit survives.
 export function priceToContract(price) {
-  return BigInt(Math.floor(Number(price) * 1e10));
+  const s = String(price ?? '').trim();
+  if (!s) return 0n;
+  try { return parseUnits(s, 10); } catch { return 0n; }
 }
 export function leverageToContract(leverage) {
-  return BigInt(Math.floor(Number(leverage) * 1e10));
+  const s = String(leverage ?? '').trim();
+  if (!s) return 0n;
+  try { return parseUnits(s, 10); } catch { return 0n; }
 }
 export function slippageToContract(percent) {
   // clamp to sane window [0.1%, 50%]
@@ -192,37 +200,53 @@ export async function fetchPriceUpdateData(pairIndex) {
   }
 }
 
-// ───── Execution fee — dynamic with hard-cap fallback ──────────────
-// Avantis deleted the /fee/execution endpoint, so we reproduce the SDK's
-// on-chain formula (gasPrice * 850k * 1.1 + L1 calldata) and attach a 2x
-// safety buffer to survive gas spikes between quote and tx submit. The
-// computed value is then CAPPED by the SDK's known-good fallback (0.00035
-// ETH) — that's the value the keeper has accepted in prod for a year,
-// overpaying there is ~$1 but pays 100% of the time. Under-paying reverts
-// the trade and the user eats the L2 gas + the bad UX ("tx failed").
+// ───── Execution fee — dynamic, FLOOR-not-CEILING ──────────────────
+// Keeper needs enough ETH to cover gas × keeper_gas_estimate + L1 calldata.
+// Previously we CAPPED at 0.00035 ETH which under-paid during gas spikes
+// (e.g. @1 gwei Base the formula wants ~0.00187 ETH, cap truncated to
+// 0.00035 → keeper auto-cancels). Now the fallback is a FLOOR — we always
+// pay at least 0.00035 ETH, and climb higher when gas prices demand.
+// Max clamp at 0.005 ETH keeps a hostile RPC (reporting 100 gwei) from
+// draining the wallet on a single trade.
 //
-// Net effect on Base mainnet (typical ~0.01 gwei): ~0.00002 ETH needed,
-// 2x buffer → 0.00004 ETH, capped by 0.00035 is a no-op → fee stays at
-// 0.00004 ETH. Saves ~$1/trade vs the old flat 0.00035.
-// Gas spikes to 1 gwei+: computed climbs above the cap, we fall back to
-// 0.00035 — same behaviour as before, no regression.
-const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH — SDK default
-const L2_GAS_ESTIMATE   = 935000n;          // 850k × 1.1, matches avantis_trader_sdk
-const L1_CALLDATA_WEI   = 5000000000n;      // ≈ SDK's estimatedL1GasEth constant
+// EIP-1559: Base is fully 1559; `getGasPrice` on a type-2 chain returns
+// the current best estimate (baseFee + a default priority). viem's
+// `estimateFeesPerGas` gives richer data (maxFeePerGas). We prefer that
+// when available and fall back to getGasPrice.
+const FEE_FALLBACK_WEI = 350000000000000n;     // 0.00035 ETH — SDK default floor
+const FEE_MAX_WEI      = 5000000000000000n;    // 0.005 ETH  — hostile-RPC safety cap
+const L2_GAS_ESTIMATE  = 935000n;              // 850k × 1.1, matches avantis_trader_sdk
+const L1_CALLDATA_WEI  = 5000000000n;          // ≈ SDK's estimatedL1GasEth constant
 const SAFETY_BUFFER_NUM = 2n;
 const SAFETY_BUFFER_DEN = 1n;
 
 export async function fetchExecutionFeeWei(publicClient) {
-  if (!publicClient || typeof publicClient.getGasPrice !== 'function') {
-    return FEE_FALLBACK_WEI;
-  }
+  if (!publicClient) return FEE_FALLBACK_WEI;
   try {
-    const gasPrice = await publicClient.getGasPrice(); // wei per gas
+    // Prefer EIP-1559 maxFeePerGas — on Base the keeper pays baseFee + priority.
+    // Fall back to legacy gasPrice on clients that don't expose estimateFeesPerGas.
+    let gasPrice;
+    if (typeof publicClient.estimateFeesPerGas === 'function') {
+      try {
+        const fees = await publicClient.estimateFeesPerGas({ chain: undefined });
+        gasPrice = fees?.maxFeePerGas || fees?.gasPrice;
+      } catch { /* fall through to getGasPrice */ }
+    }
+    if (!gasPrice && typeof publicClient.getGasPrice === 'function') {
+      gasPrice = await publicClient.getGasPrice();
+    }
+    if (!gasPrice) return FEE_FALLBACK_WEI;
+
     const l2Cost = gasPrice * L2_GAS_ESTIMATE;
     const raw = l2Cost + L1_CALLDATA_WEI;
     const withBuffer = (raw * SAFETY_BUFFER_NUM) / SAFETY_BUFFER_DEN;
-    // Cap at fallback to avoid pricing the trade out on gas spikes.
-    return withBuffer > FEE_FALLBACK_WEI ? FEE_FALLBACK_WEI : withBuffer;
+
+    // FLOOR: never pay less than the SDK default. CEILING: never more
+    // than FEE_MAX_WEI (blocks a hostile RPC).
+    let fee = withBuffer;
+    if (fee < FEE_FALLBACK_WEI) fee = FEE_FALLBACK_WEI;
+    if (fee > FEE_MAX_WEI) fee = FEE_MAX_WEI;
+    return fee;
   } catch {
     return FEE_FALLBACK_WEI;
   }
@@ -281,22 +305,19 @@ export async function isLinkedToOurReferrer(publicClient, trader) {
   return String(code).toLowerCase() === String(REFERRAL_CODE_BYTES32).toLowerCase();
 }
 
-// Returns the address that owns REFERRAL_CODE on-chain. If zero, the code has
-// not been registered yet — calling setTraderReferralCodeByUser would revert
-// with "Invalid params". Surfaces the issue before prompting for a signature.
+// Returns the address that owns REFERRAL_CODE on-chain. Throws on RPC error
+// so callers can distinguish "RPC unavailable" from "code not registered" —
+// previously both surfaced as a confusing "code not registered" message.
+// Callers that want the old swallow-all behaviour should wrap in try/catch.
 export async function fetchReferralCodeOwner(publicClient) {
   if (!publicClient) return null;
-  try {
-    const owner = await publicClient.readContract({
-      address: REFERRAL_ADDRESS,
-      abi: REFERRAL_ABI,
-      functionName: 'codeOwners',
-      args: [REFERRAL_CODE_BYTES32],
-    });
-    return owner || null;
-  } catch {
-    return null;
-  }
+  const owner = await publicClient.readContract({
+    address: REFERRAL_ADDRESS,
+    abi: REFERRAL_ABI,
+    functionName: 'codeOwners',
+    args: [REFERRAL_CODE_BYTES32],
+  });
+  return owner || null;
 }
 
 // Writes our referral code into the user's linkage. One signature. Safe to
@@ -304,12 +325,22 @@ export async function fetchReferralCodeOwner(publicClient) {
 // (not frozen after first write). Returns the tx hash.
 //
 // Pass `publicClient` to pre-validate the code is registered on-chain — if
-// it isn't, we throw a clear error instead of letting the wallet fire a
-// revert the user can't interpret.
+// it isn't, we throw a specific error instead of letting the wallet fire a
+// revert the user can't interpret. If the RPC itself is unreachable, we
+// throw a DIFFERENT error so the UI can suggest "try again" rather than
+// mis-blaming code registration.
 export async function applyReferralCode(walletClient, publicClient = null) {
   if (!walletClient) throw new Error('Wallet not connected');
   if (publicClient) {
-    const owner = await fetchReferralCodeOwner(publicClient);
+    let owner;
+    try {
+      owner = await fetchReferralCodeOwner(publicClient);
+    } catch (rpcErr) {
+      const err = new Error('Could not verify referral code — RPC unavailable, try again');
+      err.code = 'REFERRAL_PRECHECK_RPC_FAILED';
+      err.cause = rpcErr;
+      throw err;
+    }
     if (!owner || /^0x0+$/i.test(owner)) {
       const err = new Error(`Referral code "${REFERRAL_CODE_STRING}" is not registered on Avantis. Ask an admin to run registerCode() on ${REFERRAL_ADDRESS}.`);
       err.code = 'REFERRAL_CODE_NOT_REGISTERED';

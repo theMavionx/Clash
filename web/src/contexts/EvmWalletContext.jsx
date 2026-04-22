@@ -221,7 +221,12 @@ export function EvmWalletProvider({ children }) {
         // User disconnected. Clear external only — Privy lifecycle separate.
         if (externalAddress) disconnect();
       } else if (externalAddress) {
-        setExternalAddress(accounts[0]);
+        const next = accounts[0];
+        // Case-insensitive compare; MM sometimes returns a different casing
+        // across events and we don't want to storm re-renders.
+        if (String(next).toLowerCase() !== String(externalAddress).toLowerCase()) {
+          setExternalAddress(next);
+        }
       }
     };
     const onChainChanged = () => {
@@ -236,6 +241,34 @@ export function EvmWalletProvider({ children }) {
         provider.removeListener('chainChanged', onChainChanged);
       }
     };
+  }, [provider, externalAddress, disconnect]);
+
+  // Visibility listener — when the tab/FC frame becomes visible again,
+  // re-validate the active provider's current account. Backgrounded FC
+  // frames can invalidate their injected provider; this catches the case
+  // where the user returns to the tab and silently has a stale wallet.
+  useEffect(() => {
+    if (!provider || typeof provider.request !== 'function') return;
+    const onVisibility = async () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!externalAddress) return;
+      try {
+        const accounts = await provider.request({ method: 'eth_accounts' });
+        if (!accounts || !accounts.length) {
+          if (externalAddress) disconnect();
+          return;
+        }
+        const next = accounts[0];
+        if (String(next).toLowerCase() !== String(externalAddress).toLowerCase()) {
+          setExternalAddress(next);
+        }
+      } catch {
+        // Provider torn down (FC frame backgrounded then resumed).
+        if (externalAddress) disconnect();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [provider, externalAddress, disconnect]);
 
   const value = useMemo(() => ({

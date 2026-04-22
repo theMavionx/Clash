@@ -1036,6 +1036,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let maxId = reward.last_trade_id || 0;
     let newVolume = 0;
     let creditedTrades = 0;
+    // Track opens separately — "first_trade" bonus should only fire on an
+    // actual OPEN (long/short), not on a close-only sequence. Previously a
+    // user who closed a pre-reward position without ever opening a new one
+    // qualified for the 300-gold bonus. `side` values from the worker are
+    // 'long' / 'short' for opens and 'close_long' / 'close_short' for closes.
+    let creditedOpens = 0;
     for (const t of newTrades) {
       const raw = Number(t.notional_usd);
       if (!Number.isFinite(raw) || raw < SANE_MIN_NOTIONAL || raw > SANE_MAX_NOTIONAL) {
@@ -1045,6 +1051,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       newVolume += raw;
       totalGold += Math.floor(raw * GOLD_PER_USD_VOLUME);
       creditedTrades++;
+      const sideLower = String(t.side || '').toLowerCase();
+      if (sideLower === 'long' || sideLower === 'short' || sideLower === 'bid' || sideLower === 'ask') {
+        creditedOpens++;
+      }
       if (t.id > maxId) maxId = t.id;
     }
     if (creditedTrades > 0) reasons.push(`${creditedTrades} trades`);
@@ -1059,14 +1069,17 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // recreated), the flag-based check re-fires and the bonus pays again.
     // Checking gold_history defends against that by making the bonus truly
     // once-per-player.
-    const hasRealTrade = creditedTrades > 0 || reward.first_trade;
+    //
+    // first_trade gate: `creditedOpens > 0` rather than all trades, so close-
+    // only activity doesn't trigger the opening bonus.
+    const hasRealOpen = creditedOpens > 0 || reward.first_trade;
     const priorBonuses = db.db.prepare(
       "SELECT reason FROM gold_history WHERE player_id = ? AND (reason LIKE '%First deposit!%' OR reason LIKE '%First trade!%')"
     ).all(req.player.id);
     const alreadyPaidFirstDeposit = priorBonuses.some(r => String(r.reason).includes('First deposit!'));
     const alreadyPaidFirstTrade   = priorBonuses.some(r => String(r.reason).includes('First trade!'));
-    if (!reward.first_deposit && !alreadyPaidFirstDeposit && hasRealTrade) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
-    if (!reward.first_trade && !alreadyPaidFirstTrade && creditedTrades > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
+    if (!reward.first_deposit && !alreadyPaidFirstDeposit && hasRealOpen) { totalGold += GOLD_FIRST_DEPOSIT; reasons.push('First deposit!'); }
+    if (!reward.first_trade && !alreadyPaidFirstTrade && creditedOpens > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
     const today = new Date().toISOString().split('T')[0];
     if (reward.last_daily !== today && creditedTrades > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
 
@@ -1096,7 +1109,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
           updated_at = datetime('now')
         WHERE player_id = ?
-      `).run(maxId, newVolume, totalGold, creditedTrades, creditedTrades, creditedTrades, today, req.player.id);
+      `).run(maxId, newVolume, totalGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id);
       if (totalGold > 0) {
         db.addResources(req.player.id, totalGold, 0, 0);
         // Record the payout in gold_history so ProfileModal's trading-stats

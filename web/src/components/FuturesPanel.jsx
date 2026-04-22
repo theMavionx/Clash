@@ -542,7 +542,11 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
                     <td style={S.td}>{lev}x</td>
                     <td style={S.td}>
-                      <button style={S.tblCloseBtn} onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index)}>Close</button>
+                      <button
+                        style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
+                        disabled={loading}
+                        onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index)}
+                      >{loading ? '…' : 'Close'}</button>
                     </td>
                   </tr>
                 );
@@ -670,10 +674,22 @@ function FuturesPanel() {
   // so users who consciously skipped linking don't see the prompt on every
   // FuturesPanel open. Linking itself updates `hasReferrer=true` (read from
   // the chain) which auto-hides the banner without needing the dismiss flag.
-  const REFERRAL_DISMISS_KEY = 'clash_avantis_ref_dismissed';
-  const [referralDismissed, setReferralDismissed] = useState(() => {
-    try { return localStorage.getItem(REFERRAL_DISMISS_KEY) === '1'; } catch { return false; }
-  });
+  // Referral-banner dismissal is PER-WALLET. Previously a single global
+  // key meant: dismiss on wallet A → banner never reappears when user
+  // switches to wallet B (unlinked). Each wallet gets its own dismissal.
+  const referralDismissKey = useMemo(
+    () => walletAddr ? `clash_avantis_ref_dismissed:${String(walletAddr).toLowerCase()}` : null,
+    [walletAddr]
+  );
+  const [referralDismissed, setReferralDismissed] = useState(false);
+  // Load dismissal state for the CURRENT wallet. Resets when wallet changes
+  // so a fresh wallet sees the banner even if the previous one dismissed it.
+  useEffect(() => {
+    if (!referralDismissKey) { setReferralDismissed(false); return; }
+    try {
+      setReferralDismissed(localStorage.getItem(referralDismissKey) === '1');
+    } catch { setReferralDismissed(false); }
+  }, [referralDismissKey]);
   const [referralLinking, setReferralLinking] = useState(false);
   const handleLinkReferrer = useCallback(async () => {
     if (!linkOurReferrer || referralLinking) return;
@@ -682,8 +698,10 @@ function FuturesPanel() {
   }, [linkOurReferrer, referralLinking]);
   const handleDismissReferral = useCallback(() => {
     setReferralDismissed(true);
-    try { localStorage.setItem(REFERRAL_DISMISS_KEY, '1'); } catch { /* storage disabled */ }
-  }, []);
+    if (referralDismissKey) {
+      try { localStorage.setItem(referralDismissKey, '1'); } catch { /* storage disabled */ }
+    }
+  }, [referralDismissKey]);
   const showReferralBanner =
     dex === 'avantis' && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
@@ -707,6 +725,27 @@ function FuturesPanel() {
     void walletName;
   }, [dex, setEvmProvider]);
   const elfaSignals = useElfaSignals();
+  // Local validation-error state. `error` from the trading hook covers
+  // on-chain / RPC errors; `localAlert` covers client-side validation
+  // (min-notional, missing amount, partial-close dust etc.) so we don't
+  // need blocking `alert()` popups on mobile. Cleared on next trade attempt
+  // OR when the user clicks the error bar.
+  const [localAlert, setLocalAlert] = useState(null);
+  useEffect(() => {
+    if (!localAlert) return;
+    const t = setTimeout(() => setLocalAlert(null), 6000);
+    return () => clearTimeout(t);
+  }, [localAlert]);
+  // Success toast after a trade completes. Small green banner that auto-hides.
+  const [successMsg, setSuccessMsg] = useState(null);
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(null), 3000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
+  // Pending-tx state for LONG/SHORT buttons so the user sees "Signing…" then
+  // "Confirming…" instead of bare ellipsis.
+  const [tradePhase, setTradePhase] = useState(null); // 'signing' | 'confirming' | null
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
@@ -899,32 +938,46 @@ function FuturesPanel() {
   const handleTrade = useCallback(async (side) => {
     if (tradeInFlight.current) return;
     tradeInFlight.current = true;
+    setLocalAlert(null);
     try {
       // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
       // Avantis API: 3rd arg is COLLATERAL / margin in USDC.
-      // The UI's `amount` (in USDC mode) is now the MARGIN the user deposits,
-      // so `amount` IS the collateral Avantis wants. Position size = amount
-      // × leverage, which is what we gate the $100 minimum on.
-      // Guard against missing/NaN currentPrice (feed blip) — would otherwise
-      // produce NaN collateral and a useless on-chain revert.
+      // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
+      // Guard against missing/NaN currentPrice (feed blip).
       const price = parseFloat(currentPrice);
       let qty;
       if (dex === 'avantis') {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
-          alert('Enter a valid amount.');
+          setLocalAlert('Enter a valid amount.');
           return;
         }
         if (positionUsdc < 100) {
-          alert(
-            `Avantis requires a position ≥ $100.\n` +
-            `Your position: $${positionUsdc.toFixed(2)} (margin $${(positionUsdc / leverage).toFixed(2)} × ${leverage}x).\n` +
-            `Increase margin or leverage.`
+          setLocalAlert(
+            `Avantis requires a position ≥ $100. Yours: $${positionUsdc.toFixed(2)} ` +
+            `(margin $${(positionUsdc / leverage).toFixed(2)} × ${leverage}x). Increase margin or leverage.`
           );
           return;
         }
-        const collateralUsdc = amountInUsdc
-          ? parseFloat(amount)
-          : (price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0);
+        // USDC mode: compute collateral from the LOT-ROUNDED tokenAmount so
+        // the "≈ 0.00132 BTC" UI readout matches what the contract actually
+        // opens. Previously used the un-rounded `amount`, producing a trade
+        // slightly larger than displayed (margin × leverage / price was
+        // rounded down for the token qty but full for the collateral).
+        let collateralUsdc;
+        if (amountInUsdc) {
+          if (price > 0 && tokenAmount) {
+            const tokAmt = parseFloat(tokenAmount);
+            if (Number.isFinite(tokAmt) && tokAmt > 0) {
+              collateralUsdc = (tokAmt * price) / leverage;
+            } else {
+              collateralUsdc = parseFloat(amount);
+            }
+          } else {
+            collateralUsdc = parseFloat(amount);
+          }
+        } else {
+          collateralUsdc = price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0;
+        }
         qty = String(collateralUsdc.toFixed(6));
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
@@ -941,17 +994,28 @@ function FuturesPanel() {
           await setLeverageApi(symbol, leverage);
         }
       }
+      setTradePhase('signing');
+      let result;
       if (orderType === 'market') {
         // 5th arg (leverage) is only read by useAvantis; usePacifica ignores it.
-        await placeMarketOrder(symbol, side, qty, '0.5', leverage);
+        result = await placeMarketOrder(symbol, side, qty, '0.5', leverage);
       } else {
         if (!limitPrice) return;
-        await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
+        result = await placeLimitOrder(symbol, side, limitPrice, qty, 'GTC', leverage);
       }
-      setAmount('');
-      setSizePct(0);
+      setTradePhase(null);
+      if (result && !result.error) {
+        setSuccessMsg(
+          orderType === 'market'
+            ? `${side.toUpperCase()} ${symbol} opened`
+            : `${side.toUpperCase()} ${symbol} limit placed`
+        );
+        setAmount('');
+        setSizePct(0);
+      }
     } finally {
       tradeInFlight.current = false;
+      setTradePhase(null);
     }
   }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
 
@@ -1160,14 +1224,30 @@ function FuturesPanel() {
           </>
         )}
 
-        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+        {error && (
+          <div style={S.errorBar} onClick={clearError}>
+            <span>{error}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {localAlert && (
+          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
+            <span>{localAlert}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {successMsg && (
+          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+            <span>✓ {successMsg}</span>
+          </div>
+        )}
 
         <div style={S.row}>
           <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={loading}>
-            <span style={S.tradeBtnText}>{loading ? '...' : 'LONG'}</span>
+            <span style={S.tradeBtnText}>{loading ? (tradePhase === 'confirming' ? 'Confirming…' : 'Signing…') : 'LONG'}</span>
           </button>
           <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={loading}>
-            <span style={S.tradeBtnText}>{loading ? '...' : 'SHORT'}</span>
+            <span style={S.tradeBtnText}>{loading ? (tradePhase === 'confirming' ? 'Confirming…' : 'Signing…') : 'SHORT'}</span>
           </button>
         </div>
       </div>
@@ -1527,7 +1607,23 @@ function FuturesPanel() {
           );
         })}
 
-        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+        {error && (
+          <div style={S.errorBar} onClick={clearError}>
+            <span>{error}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {localAlert && (
+          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
+            <span>{localAlert}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {successMsg && (
+          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+            <span>✓ {successMsg}</span>
+          </div>
+        )}
       </div>
     );
   };
@@ -1758,7 +1854,23 @@ function FuturesPanel() {
           ))}
         </div>
 
-        {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+        {error && (
+          <div style={S.errorBar} onClick={clearError}>
+            <span>{error}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {localAlert && (
+          <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
+            <span>{localAlert}</span>
+            <span style={S.errorCloseIcon}>✕</span>
+          </div>
+        )}
+        {successMsg && (
+          <div style={S.successBar} onClick={() => setSuccessMsg(null)}>
+            <span>✓ {successMsg}</span>
+          </div>
+        )}
       </div>
     );
   };
@@ -2150,7 +2262,16 @@ const S = {
   },
   errorBar: {
     background: '#E5393520', border: '2px solid #E53935', borderRadius: 8,
-    padding: '7px 10px', color: '#B71C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center',
+    padding: '7px 10px', color: '#B71C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+  },
+  errorCloseIcon: {
+    color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7,
+  },
+  successBar: {
+    background: '#4CAF5020', border: '2px solid #4CAF50', borderRadius: 8,
+    padding: '7px 10px', color: '#2E7D32', fontSize: 12, fontWeight: 800, cursor: 'pointer',
+    textAlign: 'center',
   },
   empty: {
     display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
