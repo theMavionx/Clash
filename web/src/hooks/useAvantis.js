@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatUnits, formatEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { usePlayer } from './useGodot';
 import {
   TRADING_ADDRESS, TRADING_STORAGE_ADDRESS, USDC_ADDRESS,
   ERC20_ABI, TRADING_ABI, ORDER_TYPE,
@@ -287,6 +288,17 @@ export function useAvantis() {
   // without forward-referencing the useCallback. The ref is updated at the
   // end of the hook body to the latest-render claimGold closure.
   const claimGoldRef = useRef(null);
+
+  // Reactive player token — `window._playerToken` alone can be briefly null
+  // during logout transitions or not-yet-set right after a Farcaster auto-
+  // login, causing reportTrade/claimGold to silently 401. Read from the
+  // GodotProvider's player state (authoritative) and keep it in a ref so
+  // the existing `[walletAddr]` deps don't need to include token churn.
+  const player = usePlayer();
+  const tokenRef = useRef(null);
+  useEffect(() => {
+    tokenRef.current = player?.token || null;
+  }, [player?.token]);
   const scheduleClaim = useCallback((delayMs = 2500) => {
     const t = setTimeout(() => {
       const fn = claimGoldRef.current;
@@ -496,10 +508,18 @@ export function useAvantis() {
     if (!walletAddr) return;
     try {
       const notional = Number(amount) * Number(leverage);
-      const token = window._playerToken;
-      await fetch(`${FUTURES_API}/trade-report`, {
+      const token = tokenRef.current || window._playerToken;
+      if (!token) {
+        // Worker polling (2 min cycle) will eventually pick this trade up, but
+        // without the token the instant-feedback /trade-report path is closed
+        // and claim-gold will lag. Log so it's visible in DevTools instead of
+        // silently degrading.
+        console.warn('[useAvantis] reportTrade skipped — no token yet');
+        return;
+      }
+      const res = await fetch(`${FUTURES_API}/trade-report`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-dex': 'avantis', ...(token ? { 'x-token': token } : {}) },
+        headers: { 'Content-Type': 'application/json', 'x-dex': 'avantis', 'x-token': token },
         body: JSON.stringify({
           address: walletAddr, tx_hash, symbol, side,
           amount: Number(amount), leverage: Number(leverage), price: price || 0,
@@ -510,7 +530,13 @@ export function useAvantis() {
           ...(dedup_key ? { dedup_key } : {}),
         }),
       });
-    } catch { /* fire-and-forget */ }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        console.warn('[useAvantis] trade-report failed:', res.status, body?.error || '(no body)');
+      }
+    } catch (e) {
+      console.warn('[useAvantis] trade-report network error:', e?.message || e);
+    }
   }, [walletAddr]);
 
   // ───── Client-side approval helper ─────
@@ -991,15 +1017,22 @@ export function useAvantis() {
   // endpoint for the reward accounting.
   const claimGold = useCallback(async () => {
     if (!walletAddr) return null;
+    const token = tokenRef.current || window._playerToken;
+    if (!token) {
+      console.warn('[useAvantis] claimGold skipped — no token yet (account still loading)');
+      return null;
+    }
     try {
-      const token = window._playerToken;
-      if (!token) return null;
       const res = await fetch('/api/trading/claim-gold', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ wallet: walletAddr, dex: 'avantis' }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.warn('[useAvantis] claim-gold failed:', res.status, data?.error || data?.reason || '(no body)');
+        return data;
+      }
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
         if (window.onGodotMessage) {
@@ -1007,7 +1040,10 @@ export function useAvantis() {
         }
       }
       return data;
-    } catch { return null; }
+    } catch (e) {
+      console.warn('[useAvantis] claim-gold network error:', e?.message || e);
+      return null;
+    }
   }, [walletAddr]);
 
   // Publish the latest claimGold to the shared ref so earlier-declared

@@ -3,6 +3,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { isFarcasterFrame } from './useFarcaster';
+import { usePlayer } from './useGodot';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -132,18 +133,45 @@ export function usePacifica() {
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletAddr = publicKey?.toBase58() || privyAddr;
 
-  // Claim gold from game server (server verifies trades via Pacifica API)
+  // Reactive player token — kept in a ref so callbacks that are declared with
+  // `[walletAddr]` deps (like claimGold) don't need to recreate every time
+  // the token updates. The token itself updates via the GodotProvider state
+  // message on register/login/account-switch; `window._playerToken` is set
+  // there as well but can go briefly null during logout transitions, so this
+  // ref + window fallback is the most robust read.
+  const player = usePlayer();
+  const tokenRef = useRef(null);
+  useEffect(() => {
+    tokenRef.current = player?.token || null;
+  }, [player?.token]);
+
+  // Claim gold from game server (server verifies trades via Pacifica API).
+  // Uses the reactive `player.token` — `window._playerToken` can be stale
+  // (empty or belonging to a logged-out previous account) right after an
+  // account switch or Farcaster auto-login, causing the server to reject
+  // with 401 and the user silently seeing zero gold for trades that DO
+  // exist on Pacifica's side.
   const claimGold = useCallback(async () => {
     if (!walletAddr) return;
+    const token = tokenRef.current || window._playerToken;
+    if (!token) {
+      console.warn('[usePacifica] claimGold skipped — no token yet (account still loading)');
+      return;
+    }
     try {
-      const token = window._playerToken;
-      if (!token) return;
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ wallet: walletAddr }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // Surface the server's error reason instead of swallowing. The most
+        // common one observed on new-account flows is 401 "Invalid token"
+        // (stale token) or 400 "wallet required" (walletAddr not propagated).
+        console.warn('[usePacifica] claim-gold failed:', res.status, data?.error || data?.reason || '(no body)');
+        return data;
+      }
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
         // Update React resource bar immediately
@@ -152,7 +180,10 @@ export function usePacifica() {
         }
       }
       return data;
-    } catch { return null; }
+    } catch (e) {
+      console.warn('[usePacifica] claim-gold network error:', e?.message || e);
+      return null;
+    }
   }, [walletAddr]);
 
   // Fetch wallet USDC balance — try connection first, fallback to direct RPC
