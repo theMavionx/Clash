@@ -947,8 +947,17 @@ try {
 } catch {}
 try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pnl_gold_pool REAL NOT NULL DEFAULT 0`); } catch {}
 
-// Rate limiter for claim-gold (max 1 per 5 seconds per player)
-// Rate limiter — auto-expires old entries every 10 minutes to prevent memory leak
+// Rate limiter for claim-gold (max 1 per 250ms per player).
+// Previously 5000ms, which was hit by legitimate new-account flows: on
+// WebSocket reconnect Pacifica replays account_trades events for every open
+// position, and the client debounces each to a claimGold() call 1s later —
+// five existing trades = five calls within ~5s, so only one goes through and
+// the other four return 429. The rate limit now stops only outright spam
+// (>4/sec) while still allowing normal burst traffic. Still cheap server-
+// side (claim-gold itself is rate-protected internally by last_trade_id
+// transaction + gold_history UNIQUE dedup, so even rapid identical calls
+// can't double-credit).
+const CLAIM_COOLDOWN_MS = 250;
 const claimCooldowns = new Map();
 setInterval(() => {
   const cutoff = Date.now() - 60000;
@@ -980,7 +989,7 @@ function futuresDbReadonly() {
 router.post('/trading/claim-gold', auth, async (req, res) => {
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
-  if (lastClaim && Date.now() - lastClaim < 5000) {
+  if (lastClaim && Date.now() - lastClaim < CLAIM_COOLDOWN_MS) {
     return res.status(429).json({ gold: 0, reason: 'Please wait before claiming again' });
   }
   claimCooldowns.set(req.player.id, Date.now());
