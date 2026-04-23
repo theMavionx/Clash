@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, memo } from 'react';
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
+import { usePlayer } from '../hooks/useGodot';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -102,28 +103,41 @@ function QuestsTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [flash, setFlash] = useState(null);
+  // Subscribe to the reactive player state so this component re-runs when
+  // the token arrives. Previously we read `window._playerToken` at mount,
+  // which is a stale snapshot — in Farcaster mini-apps the SDK → auto-login
+  // → state-push chain can finish AFTER QuestsTab mounts, so the initial
+  // read was null, the early-return fired, and setLoaded(true) never ran →
+  // users saw an infinite "Loading quests…" spinner.
+  const player = usePlayer();
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
 
-  const fetchTasks = useCallback(async () => {
-    const token = window._playerToken;
-    if (!token) return;
+  const fetchTasks = useCallback(async (tok) => {
+    if (!tok) { setLoaded(true); return; }
     try {
-      const r = await fetch(`${GAME_API}/tasks`, { headers: { 'x-token': token } });
+      const r = await fetch(`${GAME_API}/tasks`, { headers: { 'x-token': tok } });
       if (!r.ok) throw new Error('status ' + r.status);
       const data = await r.json();
       setTasks(Array.isArray(data) ? data : []);
-    } catch (e) { /* swallow */ }
+    } catch (e) {
+      // Surface non-2xx so the user sees why the list is empty instead of
+      // staring at a silent "No quests available" — Farcaster users hit this
+      // when their token hasn't finished propagating and the 401 was swallowed.
+      setError('Could not load quests — ' + (e?.message || 'network error'));
+    }
     finally { setLoaded(true); }
   }, []);
 
   useEffect(() => {
-    fetchTasks();
-    const iv = setInterval(fetchTasks, 20000);
+    fetchTasks(token);
+    // Poll while mounted; also refetches whenever token changes (e.g. after
+    // auto-login completes or the user switches accounts).
+    const iv = setInterval(() => fetchTasks(token), 20000);
     return () => clearInterval(iv);
-  }, [fetchTasks]);
+  }, [fetchTasks, token]);
 
   const handleStart = useCallback(async (id) => {
-    const token = window._playerToken;
-    if (!token) return;
+    if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
     setLoading(true); setError(null);
     try {
       const r = await fetch(`${GAME_API}/tasks/${id}/start`, {
@@ -132,13 +146,12 @@ function QuestsTab() {
       });
       const j = await r.json();
       if (!r.ok) setError(j.error || 'Failed');
-      await fetchTasks();
+      await fetchTasks(token);
     } finally { setLoading(false); }
-  }, [fetchTasks]);
+  }, [fetchTasks, token]);
 
   const handleClaim = useCallback(async (id) => {
-    const token = window._playerToken;
-    if (!token) return;
+    if (!token) { setError('Not signed in yet — try again in a moment.'); return; }
     setLoading(true); setError(null);
     try {
       const r = await fetch(`${GAME_API}/tasks/${id}/claim`, {
@@ -154,9 +167,9 @@ function QuestsTab() {
       } else if (!r.ok) {
         setError(j.error || 'Failed');
       }
-      await fetchTasks();
+      await fetchTasks(token);
     } finally { setLoading(false); }
-  }, [fetchTasks]);
+  }, [fetchTasks, token]);
 
   if (!loaded) {
     return (
