@@ -178,10 +178,18 @@ var resources: Dictionary = {
 }
 
 # ── Storage Capacity (mirrors server/db.js) ───────────────────
+# MUST match server/db.js TH_BASE_CAPACITY / STORAGE_CAPACITY exactly —
+# Godot computes caps locally and pushes them to the React HUD, while the
+# server uses its own constants to cap rewards. If the two drift, the HUD
+# shows one number while the server silently caps claim-gold/task rewards
+# to a different one. Previously TH1 read 5K here vs 10K server-side, and
+# the TH2 upgrade required 6K wood — impossible to accumulate because the
+# Godot-reported cap was 5K AND Storage unlocks only after TH2, creating a
+# dead-end where a new player could never upgrade Town Hall.
 const TH_BASE_CAPACITY: Dictionary = {
-	1: {"gold": 5000, "wood": 5000, "ore": 5000},
-	2: {"gold": 10000, "wood": 10000, "ore": 10000},
-	3: {"gold": 20000, "wood": 20000, "ore": 20000},
+	1: {"gold": 10000, "wood": 10000, "ore": 10000},
+	2: {"gold": 20000, "wood": 20000, "ore": 20000},
+	3: {"gold": 40000, "wood": 40000, "ore": 40000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},

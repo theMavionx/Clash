@@ -30,8 +30,12 @@ export function GodotProvider({ children }) {
   const [battleTimer, setBattleTimer] = useState(null); // seconds remaining, null = no timer
   const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
   const [fleetInfo, setFleetInfo] = useState(null);
-  const [resourceCaps, setResourceCaps] = useState({ gold: 5000, wood: 5000, ore: 5000 });
-  const resourceCapsRef = useRef({ gold: 5000, wood: 5000, ore: 5000 });
+  // Fallback matches TH1 base capacity (server/db.js + building_system.gd).
+  // Godot pushes real caps via `resource_caps` on boot; this default only
+  // covers the first render before that message lands, so keep it in sync
+  // so the HUD never briefly shows a smaller cap than the server enforces.
+  const [resourceCaps, setResourceCaps] = useState({ gold: 10000, wood: 10000, ore: 10000 });
+  const resourceCapsRef = useRef({ gold: 10000, wood: 10000, ore: 10000 });
   const errorTimerRef = useRef(null);
   const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
   const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|null
@@ -187,7 +191,7 @@ export function GodotProvider({ children }) {
           break;
         case 'resource_caps':
           setResourceCaps(prev => {
-            const gold = data.gold || 5000, wood = data.wood || 5000, ore = data.ore || 5000;
+            const gold = data.gold || 10000, wood = data.wood || 10000, ore = data.ore || 10000;
             if (prev.gold === gold && prev.wood === wood && prev.ore === ore) return prev;
             const next = { gold, wood, ore };
             resourceCapsRef.current = next;

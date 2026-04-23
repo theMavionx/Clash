@@ -117,7 +117,7 @@ const stmts = {
   // Players
   createPlayer: db.prepare(`
     INSERT INTO players (id, name, token, gold, wood, ore)
-    VALUES (?, ?, ?, 500, 600, 600)
+    VALUES (?, ?, ?, 2000, 2000, 2000)
   `),
   getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ?`),
   getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ?`),
