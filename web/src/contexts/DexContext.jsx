@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
+import { usePlayer } from '../hooks/useGodot';
 
 const DexContext = createContext(null);
 
@@ -52,35 +53,43 @@ export function DexProvider({ children }) {
     setDexState(newDex);
   }, []);
 
-  // Once the player's token exists, fetch their server-side dex preference so
-  // returning users land on the DEX they registered with (localStorage may be
-  // stale after a cache clear or device swap). Note: we ONLY sync the `dex`
-  // value here, never the `clash_dex_picked` flag — that flag is owned
-  // exclusively by auth/useAuthFlow.js (commitDex / unpickDex / session
-  // reset on show_register). Touching it here used to race with
-  // useAuthFlow's admin-delete reset, causing the picker to be silently
-  // re-skipped.
-  const synced = useRef(false);
+  // Sync the server-side dex preference whenever the token changes (first
+  // load, and again after account switches). Previously a `synced.current`
+  // ref was latched to true after the first successful sync and never reset,
+  // so when a user logged out and signed in as a different account, the DEX
+  // UI stayed on the previous account's preference — e.g. user A's last DEX
+  // was Avantis, user B registered with Pacifica, but the whole futures
+  // panel still renders Avantis because localStorage + the never-refreshed
+  // context disagree with the server.
+  //
+  // We only sync the `dex` value here, never the `clash_dex_picked` flag —
+  // that flag is owned exclusively by auth/useAuthFlow.js (commitDex /
+  // unpickDex / session reset on show_register). Touching it here used to
+  // race with useAuthFlow's admin-delete reset.
+  const player = usePlayer();
+  const token = player?.token || null;
+  const lastSyncedToken = useRef(null);
   useEffect(() => {
-    if (synced.current) return;
-    const poll = setInterval(async () => {
-      const token = window._playerToken;
-      if (!token) return;
-      synced.current = true;
-      clearInterval(poll);
+    if (!token) { lastSyncedToken.current = null; return; }
+    if (lastSyncedToken.current === token) return;
+    lastSyncedToken.current = token;
+    let cancelled = false;
+    (async () => {
       try {
         const r = await fetch('/api/state', { headers: { 'x-token': token } });
-        if (!r.ok) return;
+        if (cancelled || !r.ok) return;
         const j = await r.json();
         if (j.dex === 'pacifica' || j.dex === 'avantis') {
-          if (j.dex !== localStorage.getItem(STORAGE_KEY)) {
-            setDex(j.dex);
-          }
+          // Compare against current React state, not localStorage — localStorage
+          // was the previous account's setting and we want the authoritative
+          // server value for THIS token to win even if it matches what's
+          // cached in storage.
+          setDex(j.dex);
         }
       } catch { /* network error — keep local dex */ }
-    }, 500);
-    return () => clearInterval(poll);
-  }, [setDex]);
+    })();
+    return () => { cancelled = true; };
+  }, [token, setDex]);
 
   return (
     <DexContext.Provider value={{ dex, setDex, config: DEX_CONFIG[dex] }}>
