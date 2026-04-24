@@ -204,6 +204,57 @@ export function useAuthFlow() {
   // reset or logout so a new candidate can re-fire register.
   const [registering, setRegistering] = useState(false);
 
+  // Silent return-probe: before showing the name form to non-FC users, ask
+  // the server whether an account already exists for this wallet. If yes,
+  // we can skip the form and auto-register under their stored name (fast-
+  // path identical to the pre-fix behaviour). If no, the form appears so
+  // the user can pick their own display name instead of being silently
+  // saddled with `bobemail` (email prefix) or `player_<hex>`.
+  //
+  // Keyed by wallet so a wallet switch re-probes. Values:
+  //   undefined → not yet probed
+  //   null      → probed, no account (show form)
+  //   string    → probed, account found with this stored name
+  const [probedNameByWallet, setProbedNameByWallet] = useState({});
+  const probeInFlightRef = useRef({});
+  useEffect(() => {
+    if (!candidate?.wallet) return;
+    if (fcUser) return; // FC users keep the existing fast-path
+    const key = String(candidate.wallet);
+    if (key in probedNameByWallet) return;
+    if (probeInFlightRef.current[key]) return;
+    probeInFlightRef.current[key] = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/players/login-wallet', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: candidate.wallet }),
+        });
+        if (r.ok) {
+          const data = await r.json();
+          setProbedNameByWallet(prev => ({ ...prev, [key]: data?.name || null }));
+        } else {
+          // 404 (no account) / 400 (invalid wallet) → treat as new user.
+          setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+        }
+      } catch {
+        // Network error — treat as new user so the UI doesn't hang on
+        // spinner forever. If they're actually returning, the name form
+        // with suggested auto-derived default still takes them through
+        // login_by_wallet on the Godot side.
+        setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+      } finally {
+        probeInFlightRef.current[key] = false;
+      }
+    })();
+  }, [candidate, fcUser, probedNameByWallet]);
+
+  // Resolved existing-account name (or null if none / not yet probed).
+  const existingAccountName = candidate?.wallet
+    ? probedNameByWallet[String(candidate.wallet)]
+    : undefined;
+
   // Boot grace — if FC SDK or Privy is still resolving, don't show the
   // manual-connect screen yet. Also a short timer after dex-pick so we
   // give auto-resolvers a chance before offering manual CTAs.
@@ -227,15 +278,41 @@ export function useAuthFlow() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Derive the rendering state.
+  //
+  // Non-Farcaster candidates follow this flow:
+  //   1. Probe `/api/players/login-wallet` (silent, see effect above).
+  //   2. If account exists → auto-register under stored name (fast-path,
+  //      user doesn't see the form — same UX as before this fix).
+  //   3. If no account → `need_name` form so user can pick their display
+  //      name instead of being silently saddled with an email-prefix or
+  //      `player_<hex>` fallback.
+  //
+  // Farcaster users always auto-register with their handle.
+  //
+  // While the probe is in flight we stay in `auto_connecting` so the UI
+  // shows the existing "Joining…" spinner rather than flickering into the
+  // name form and then straight back out.
+  const isFarcasterCandidate = !!fcUser;
+  const probeInFlight = candidate?.wallet && !isFarcasterCandidate &&
+    existingAccountName === undefined;
   const state = useMemo(() => {
     if (registering) return 'registering';
     if (booting) return 'booting';
     if (!dexPicked) return 'pick_dex';
-    if (candidate && suggestedName) return 'registering'; // about to fire
-    if (candidate && !suggestedName) return 'need_name';
+    // FC fast-path: auto-register with FC handle.
+    if (candidate && suggestedName && isFarcasterCandidate) return 'registering';
+    // Non-FC: wait for probe, then branch.
+    if (candidate && probeInFlight) return 'auto_connecting';
+    // Returning user — server already has an account for this wallet;
+    // fire register with their stored name (which is auto-derived-safe so
+    // Godot's login_by_wallet fast-path takes over and no rename happens).
+    if (candidate && existingAccountName) return 'registering';
+    // Brand-new user — prompt for a display name.
+    if (candidate) return 'need_name';
     if (!graceExpired) return 'auto_connecting';
     return 'manual_connect';
-  }, [registering, booting, dexPicked, candidate, suggestedName, graceExpired]);
+  }, [registering, booting, dexPicked, candidate, suggestedName, graceExpired,
+      isFarcasterCandidate, probeInFlight, existingAccountName]);
 
   // Effect: when we have both a candidate AND a suggested name, fire the
   // register once per (wallet+dex) pair. This is the single register call
@@ -249,7 +326,17 @@ export function useAuthFlow() {
     // the cleared dexPicked / evmContext state. See `readyForRegister`
     // comment near the top.
     if (!readyForRegister) return;
-    if (!candidate || !suggestedName) return;
+    if (!candidate) return;
+    // Gate: for non-FC users we need to wait for the return-probe before
+    // deciding which name to register with. If existingAccountName is a
+    // string → returning user (use stored name). If null → brand-new user
+    // but we still need a suggested display name. If undefined → probe
+    // still in flight; bail and let it re-run when it settles.
+    // FC users skip the probe entirely (existingAccountName stays undefined
+    // for them) and rely on suggestedName derived from their FC handle.
+    if (!fcUser && existingAccountName === undefined) return;
+    const nameToUse = existingAccountName || suggestedName;
+    if (!nameToUse) return;
     // Case-insensitive compare: EVM addresses may arrive as checksummed
     // (0xABcd…) from one resolver and lowercased (0xabcd…) from another,
     // and strict === would fire register twice for the same wallet.
@@ -259,7 +346,7 @@ export function useAuthFlow() {
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
-    const payload = { name: suggestedName, wallet: candidate.wallet, dex };
+    const payload = { name: nameToUse, wallet: candidate.wallet, dex };
     if (dex === 'avantis') {
       payload.chain = candidate.chain || 'base';
       payload.walletSource = candidate.source;
@@ -274,7 +361,8 @@ export function useAuthFlow() {
     // after 10s so the user can retry or pick a different path.
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);
-  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot, fcUser]);
+  }, [readyForRegister, candidate, suggestedName, dex, sendToGodot, fcUser,
+      existingAccountName]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Actions exposed to the UI. All auth decisions flow through here.
