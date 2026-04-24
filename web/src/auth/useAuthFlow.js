@@ -327,14 +327,22 @@ export function useAuthFlow() {
     // comment near the top.
     if (!readyForRegister) return;
     if (!candidate) return;
-    // Gate: for non-FC users we need to wait for the return-probe before
-    // deciding which name to register with. If existingAccountName is a
-    // string → returning user (use stored name). If null → brand-new user
-    // but we still need a suggested display name. If undefined → probe
-    // still in flight; bail and let it re-run when it settles.
+    // Non-FC users gate on the return-probe:
+    //   undefined → probe still in flight, bail and wait for it to settle
+    //   null      → probe says no account → brand-new user; DO NOT auto-
+    //               register — RegisterPanel renders the name form and
+    //               `submitName` (an explicit user action) fires the
+    //               register call with the name they type. Without this
+    //               guard, the effect would fall through to `suggestedName`
+    //               (email prefix like `bobemail`) and silently create the
+    //               account the user was about to name.
+    //   string    → returning user → auto-register with stored name
     // FC users skip the probe entirely (existingAccountName stays undefined
     // for them) and rely on suggestedName derived from their FC handle.
-    if (!fcUser && existingAccountName === undefined) return;
+    if (!fcUser) {
+      if (existingAccountName === undefined) return;
+      if (existingAccountName === null) return;
+    }
     const nameToUse = existingAccountName || suggestedName;
     if (!nameToUse) return;
     // Case-insensitive compare: EVM addresses may arrive as checksummed
