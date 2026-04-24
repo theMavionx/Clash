@@ -1353,6 +1353,15 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 	# Always clear existing buildings first (even if no new ones to load)
 	_destroy_all_buildings()
 	if my_buildings.is_empty():
+		# Push the empty state to React so `placed_counts` resets to {}.
+		# Without this, an account switch (logout → login as a new user with
+		# 0 buildings) would leave React holding the PREVIOUS account's
+		# placed_counts, and the shop UI would falsely show "1/1 Max built"
+		# for Mine/Sawmill/TownHall on a brand-new empty island because the
+		# early return below skipped the sync. Only the main grid needs to
+		# push — BS2/BS3 share React state via the same send_to_react.
+		if create_ui:
+			_sync_react_buildings()
 		_reveal_initial_cover()
 		return
 	for b in my_buildings:

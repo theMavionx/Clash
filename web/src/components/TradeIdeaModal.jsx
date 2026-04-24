@@ -185,12 +185,12 @@ const miniS = {
     borderRadius: 8,
     padding: 6,
     marginBottom: 12,
-    height: 160,
+    height: 140,
   },
   svg: { width: '100%', height: '100%', display: 'block' },
   loading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    height: 160, fontSize: 12, color: '#8a7252', fontWeight: 700,
+    height: 140, fontSize: 12, color: '#8a7252', fontWeight: 700,
     background: 'rgba(0,0,0,0.04)', border: '1.5px solid rgba(92,58,33,0.2)',
     borderRadius: 8, marginBottom: 12,
   },
@@ -333,13 +333,14 @@ function MetaCard({ label, value, color }) {
 const S = {
   backdrop: {
     position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-    zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+    zIndex: 10000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+    padding: '16px 16px', overflowY: 'auto',
   },
   modal: {
     background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
     border: '3px solid #5C3A21', borderRadius: 14, padding: 14,
     maxWidth: 460, width: '100%', boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
-    maxHeight: '92vh', overflowY: 'auto',
+    maxHeight: 'calc(100vh - 32px)', overflowY: 'auto',
   },
   header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 },
   title: { fontSize: 16, fontWeight: 900, color: '#5C3A21', flex: 1, margin: 0 },
