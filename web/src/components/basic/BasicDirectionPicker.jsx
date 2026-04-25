@@ -106,10 +106,12 @@ function LivePrice({ value }) {
 
 function BasicDirectionPicker({ symbol, iconSym, price, onPick }) {
   return (
-    // Grid: title / symbol-block / buttons (1fr — fill remaining height
-    // and split between UP and DOWN). Layout always perfectly fits the
-    // available height regardless of viewport.
-    <div style={{ ...shared.page, display: 'grid', gridTemplateRows: 'auto auto 1fr', gap: 8 }}>
+    // Flex column with `justifyContent: center` — content sits in the
+    // visual centre of the panel, empty space distributes equally above
+    // and below. Items keep their natural size (no stretching), so on
+    // tall mobile screens UP/DOWN buttons stay compact instead of
+    // ballooning, and on short panels nothing overflows.
+    <div style={{ ...shared.page, justifyContent: 'center' }}>
       <h2 style={S.tightTitle}>Where will it go?</h2>
 
       <motion.div
@@ -195,29 +197,21 @@ const S = {
     letterSpacing: '-0.5px',
     lineHeight: 1.05,
   },
-  // Stacked vertically — `flex: 1 + minHeight: 0` lets the row fill any
-  // remaining space AND shrink down on tight panels without forcing the
-  // outer scroll. Each button has its own flex:1 to share the row evenly.
+  // Natural size — buttons take their own height (controlled by padding +
+  // content), don't stretch to fill the panel. Looks compact on tall
+  // mobile screens instead of two giant slabs.
   btnRow: {
     display: 'flex', flexDirection: 'column', gap: 8,
-    flex: 1, justifyContent: 'stretch',
-    minHeight: 0,
   },
   bigBtn: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: 10, padding: '12px 14px',
+    gap: 10, padding: '14px 16px',
     border: 'none', borderRadius: 16,
     cursor: 'pointer',
     color: '#fff',
     fontFamily: 'inherit',
     width: '100%',
-    // flex:1 + min/max bounds — buttons share remaining row space evenly
-    // (~half each), shrinking down to 60px on cramped panels and growing
-    // up to ~110px on roomy ones. No fixed height = no overflow on short
-    // viewports.
-    flex: 1,
-    minHeight: 60,
-    maxHeight: 110,
+    height: 76,  // Fixed compact height — same on phone, tablet, desktop.
     boxSizing: 'border-box',
   },
   upBtn: {

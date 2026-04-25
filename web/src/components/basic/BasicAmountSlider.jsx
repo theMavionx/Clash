@@ -111,9 +111,11 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
   }, [dragMax, setPct]);
 
   return (
-    // Grid: title / amount-readout / pct / track / chips / spacer (1fr) /
-    // continue / back. Continue button is therefore always visible.
-    <div style={{ ...shared.page, display: 'grid', gridTemplateRows: 'auto auto auto auto auto 1fr auto auto', gap: 6 }}>
+    // Centre everything vertically — content + action sit as one block in
+    // the middle of the panel. On tall screens dead air distributes top
+    // and bottom equally; on short screens content compresses naturally
+    // around its centre.
+    <div style={{ ...shared.page, justifyContent: 'center' }}>
       <h2 style={S.tightTitle}>How much?</h2>
 
       <motion.div
@@ -158,7 +160,6 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
             ...S.thumb,
             x,
             background: directionColor,
-            borderColor: directionColor === colors.long ? colors.longDark : colors.shortDark,
           }}
         />
       </div>
@@ -178,8 +179,6 @@ function BasicAmountSlider({ direction, balance, onPick, onBack }) {
           </motion.button>
         ))}
       </div>
-
-      <div />{/* grid spacer (1fr row) */}
 
       <motion.button
         onClick={() => onPick(amount)}
@@ -237,7 +236,8 @@ const S = {
     height: 8,
     transform: 'translateY(-50%)',
     borderRadius: 4,
-    background: 'rgba(92,58,33,0.15)',
+    background: 'rgba(92,58,33,0.18)',
+    boxShadow: 'inset 0 1px 2px rgba(92,58,33,0.15)',
     pointerEvents: 'none',
   },
   trackFill: {
@@ -248,18 +248,20 @@ const S = {
     borderRadius: 4,
     pointerEvents: 'none',
     transition: 'width 0.05s linear',
+    // Subtle inset shadow gives the fill a slightly recessed look — sits
+    // visually "inside" the track instead of floating above it.
+    boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.18)',
   },
-  // Thumb is now a flex child (no `position: absolute`, no `top: 0`).
-  // Vertical position comes from the row's align-items: center; horizontal
-  // is driven by framer-motion's `x` motion value via translate.
+  // Solid circle, no border — the dark-green ring on a green-on-parchment
+  // setup created a cream "halo" optical illusion that looked broken.
+  // Now: clean coloured disc with a tight inner highlight + outer shadow.
   thumb: {
-    position: 'relative',  // for stacking above the bar (z-index)
+    position: 'relative',
     zIndex: 2,
     width: THUMB, height: THUMB,
     borderRadius: '50%',
     boxSizing: 'border-box',
-    borderWidth: 3, borderStyle: 'solid', borderColor: 'transparent',
-    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.25), inset 0 -2px 0 rgba(0,0,0,0.18)',
     cursor: 'grab',
     touchAction: 'none',
     flexShrink: 0,

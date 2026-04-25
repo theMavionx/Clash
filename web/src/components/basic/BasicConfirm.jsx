@@ -83,7 +83,7 @@ function BasicConfirm({
     // Grid layout: title (auto), card (1fr — fills + shrinks), pill (auto),
     // back (auto). The slide-to-confirm pill is therefore ALWAYS visible
     // — content above can shrink without clipping the action.
-    <div style={{ ...shared.page, display: 'grid', gridTemplateRows: showAgentBanner ? 'auto auto 1fr auto auto' : 'auto 1fr auto auto', gap: 8 }}>
+    <div style={{ ...shared.page, justifyContent: 'center' }}>
       <h2 style={S.tightTitle}>Confirm trade</h2>
 
       {showAgentBanner && bindAgent && (

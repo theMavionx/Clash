@@ -71,9 +71,8 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
   const tier = TIERS.find(x => x.id === tierId);
 
   return (
-    // Grid: title / tier-row / detail (1fr) / button / back. Button is
-    // always visible regardless of available height.
-    <div style={{ ...shared.page, display: 'grid', gridTemplateRows: 'auto auto 1fr auto auto', gap: 8 }}>
+    // Centre everything as one block — same pattern as the other steps.
+    <div style={{ ...shared.page, justifyContent: 'center' }}>
       <h2 style={S.tightTitle}>Risk multiplier</h2>
 
       <div style={S.tierRow}>
@@ -109,7 +108,7 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.15 }}
-          style={{ ...S.detailCard, minHeight: 0, overflow: 'hidden' }}
+          style={S.detailCard}
         >
           {/* Compact: multiplier + value in one row, slider, stats inline.
               Removed the standalone description and the warn box (the

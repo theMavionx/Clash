@@ -1559,6 +1559,59 @@ function FuturesPanel() {
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
 
+          // Basic mode shows a stripped-down card: ticker + UP/DOWN icon +
+          // leverage + dollar PnL + Close. No size, no entry/mark prices,
+          // no percentages, no ISO/CROSS badge — those are noise for a
+          // first-time trader who just wants "am I winning?".
+          if (isBasic) {
+            return (
+              <div key={i} style={S.posCard}>
+                <div style={S.row}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: 0}}>
+                    <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
+                    <span style={{
+                      fontSize: 12, fontWeight: 900,
+                      padding: '2px 8px', borderRadius: 6,
+                      color: '#fff',
+                      background: pos.side === 'bid'
+                        ? 'linear-gradient(180deg, #4caf50 0%, #2e7d32 100%)'
+                        : 'linear-gradient(180deg, #ef5350 0%, #c62828 100%)',
+                      letterSpacing: '0.5px',
+                      textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                    }}>
+                      {pos.side === 'bid' ? '▲ UP' : '▼ DOWN'}
+                    </span>
+                    <span style={{
+                      fontSize: 11, fontWeight: 800, color: '#a3906a',
+                      background: '#fdf8e7', padding: '2px 6px',
+                      borderRadius: 5, border: '1px solid #d4c8b0',
+                    }}>{setLev}×</span>
+                  </div>
+                  <span style={{
+                    fontSize: 18, fontWeight: 900, color: pnlColor,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    {pnlVal >= 0 ? '+' : '−'}${Math.abs(pnlVal).toFixed(2)}
+                  </span>
+                </div>
+
+                {/* Single big Close button — only action available. */}
+                <button
+                  style={{...S.btnRed, width: '100%', marginTop: 6, padding: '10px'}}
+                  onClick={() => closePosition(
+                    pos.symbol,
+                    pos.side,
+                    String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
+                    pos.pair_index, pos.trade_index,
+                  )}
+                  disabled={loading}
+                >
+                  {loading ? 'Closing…' : 'Close position'}
+                </button>
+              </div>
+            );
+          }
+
           return (
             <div key={i} style={S.posCard}>
               <div style={S.row}>
