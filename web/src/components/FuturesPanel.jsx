@@ -9,6 +9,7 @@ import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import FuturesModeSelect from './FuturesModeSelect';
 import BasicTradeFlow from './basic/BasicTradeFlow';
+import ShareTradeModal from './basic/ShareTradeModal';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
@@ -772,6 +773,12 @@ function FuturesPanel() {
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
+  // Share-trade modal — shown automatically after a successful close in
+  // Basic mode and on demand via the 📤 button next to open positions.
+  // Holds a SNAPSHOT of the position because the live `positions` array
+  // mutates the moment the close confirms, before the user has a chance
+  // to share.
+  const [shareTrade, setShareTrade] = useState(null);
   const [bottomTab, setBottomTab] = useState('positions');
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -1564,6 +1571,33 @@ function FuturesPanel() {
           // no percentages, no ISO/CROSS badge — those are noise for a
           // first-time trader who just wants "am I winning?".
           if (isBasic) {
+            // Snapshot of the trade — captured fresh each render, used by
+            // both the share button (open) and the auto-modal (close).
+            // Stored as a plain object so it survives the positions[] mutation
+            // that close triggers.
+            const snapshot = {
+              symbol: pos.symbol,
+              side: pos.side === 'bid' ? 'long' : 'short',
+              leverage: setLev,
+              entryPrice: entryP,
+              exitPrice: markP,
+              pnlUsd: pnlVal,
+              pnlPct: pnlPct,
+              isOpen: true,
+            };
+            const handleClose = async () => {
+              const finalSnapshot = { ...snapshot, isOpen: false };
+              const result = await closePosition(
+                pos.symbol, pos.side,
+                String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
+                pos.pair_index, pos.trade_index,
+              );
+              // closePosition returns the API response on success and
+              // undefined on error (catches internally + sets `error`).
+              if (result && !result.error) {
+                setShareTrade(finalSnapshot);
+              }
+            };
             return (
               <div key={i} style={S.posCard}>
                 <div style={S.row}>
@@ -1595,23 +1629,77 @@ function FuturesPanel() {
                   </span>
                 </div>
 
-                {/* Single big Close button — only action available. */}
-                <button
-                  style={{...S.btnRed, width: '100%', marginTop: 6, padding: '10px'}}
-                  onClick={() => closePosition(
-                    pos.symbol,
-                    pos.side,
-                    String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
-                    pos.pair_index, pos.trade_index,
-                  )}
-                  disabled={loading}
-                >
-                  {loading ? 'Closing…' : 'Close position'}
-                </button>
+                {/* Action row: Close (big) + Share (icon-only). Share works
+                    on the OPEN snapshot — the user wants to brag now, before
+                    the trade resolves. After Close, an auto-modal pops up
+                    with the realised result. */}
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <button
+                    style={{...S.btnRed, flex: 1, padding: '10px'}}
+                    onClick={handleClose}
+                    disabled={loading}
+                  >
+                    {loading ? 'Closing…' : 'Close position'}
+                  </button>
+                  <button
+                    style={{
+                      width: 44, padding: 0,
+                      background: 'rgba(255,255,255,0.6)',
+                      border: '2px solid #d4c8b0',
+                      borderRadius: 8,
+                      color: '#5C3A21',
+                      cursor: 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                    onClick={() => setShareTrade(snapshot)}
+                    title="Share this trade"
+                    aria-label="Share trade"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" strokeWidth="2.5"
+                         strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="18" cy="5" r="3" />
+                      <circle cx="6" cy="12" r="3" />
+                      <circle cx="18" cy="19" r="3" />
+                      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                    </svg>
+                  </button>
+                </div>
               </div>
             );
           }
 
+          // Pro path — same trade snapshot pattern as Basic, used for both
+          // the share-icon button (open position) and the auto-modal that
+          // pops on a successful close. Captured once per render so a stale
+          // positions[] (post-close) can't blank out the share image.
+          const proSnapshot = {
+            symbol: pos.symbol,
+            side: pos.side === 'bid' ? 'long' : 'short',
+            leverage: setLev,
+            entryPrice: entryP,
+            exitPrice: markP,
+            pnlUsd: pnlVal,
+            pnlPct: pnlPct,
+            isOpen: true,
+          };
+          const handleProClose = async (closeFraction) => {
+            const finalSnapshot = { ...proSnapshot, isOpen: false };
+            const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
+            const result = await closePosition(
+              pos.symbol, pos.side, String(amount),
+              pos.pair_index, pos.trade_index,
+            );
+            // closePosition returns the API response on success and undefined
+            // on error. Only show the share modal when the close was a FULL
+            // exit (closeFraction = 1) — partial closes still leave a position
+            // open and showing the modal mid-trade is confusing.
+            if (result && !result.error && closeFraction >= 1) {
+              setShareTrade(finalSnapshot);
+            }
+          };
           return (
             <div key={i} style={S.posCard}>
               <div style={S.row}>
@@ -1642,13 +1730,39 @@ function FuturesPanel() {
                 </span>
               </div>
 
-              {/* Action buttons. Basic mode hides TP/SL — risk management
-                  features are deliberately stripped from the simplified UX. */}
+              {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
+                  Pro too (per-user-request) — same icon as Basic for
+                  consistency. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
                 {!isBasic && (
                   <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
                 )}
+                <button
+                  style={{
+                    width: 32, padding: 0,
+                    background: 'rgba(255,255,255,0.6)',
+                    border: '1px solid #d4c8b0',
+                    borderRadius: 6,
+                    color: '#5C3A21',
+                    cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                  onClick={() => setShareTrade(proSnapshot)}
+                  title="Share this trade"
+                  aria-label="Share trade"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                       stroke="currentColor" strokeWidth="2.5"
+                       strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="18" cy="5" r="3" />
+                    <circle cx="6" cy="12" r="3" />
+                    <circle cx="18" cy="19" r="3" />
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+                  </svg>
+                </button>
               </div>
 
               {/* Close slider */}
@@ -1662,7 +1776,7 @@ function FuturesPanel() {
                   </div>
                   <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                   <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closePct / 100), pos.pair_index, pos.trade_index)} disabled={loading}>
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(closePct / 100)} disabled={loading}>
                     {loading ? 'Closing...' : `Close ${closePct}%`}
                   </button>
                 </div>
@@ -2167,6 +2281,11 @@ function FuturesPanel() {
           </div>
         )}
       </div>
+      <ShareTradeModal
+        open={!!shareTrade}
+        trade={shareTrade}
+        onClose={() => setShareTrade(null)}
+      />
     </>
   );
 }

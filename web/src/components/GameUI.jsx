@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
 import ResourceBar from './ResourceBar';
 import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
@@ -8,14 +8,20 @@ import BarracksPanel from './BarracksPanel';
 import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
-import FuturesPanel from './FuturesPanel';
-import ProfileModal from './ProfileModal';
 import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
-import BattleLogPanel from './BattleLogPanel';
-import LeaderboardPanel from './LeaderboardPanel';
 import TutorialOverlay from './TutorialOverlay';
 import { useSend, useUI, useSelectedBuilding, useTutorial } from '../hooks/useGodot';
+
+// Heavy components are lazy-loaded — their JS only ships to the user
+// when they actually open the relevant UI. Saves ~600KB from the
+// initial bundle (FuturesPanel pulls in TradingViewWidget +
+// lightweight-charts + all wallet-adapter pickers; the three modals
+// each have their own animation/data-fetch chunks).
+const FuturesPanel = lazy(() => import('./FuturesPanel'));
+const ProfileModal = lazy(() => import('./ProfileModal'));
+const BattleLogPanel = lazy(() => import('./BattleLogPanel'));
+const LeaderboardPanel = lazy(() => import('./LeaderboardPanel'));
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
@@ -109,21 +115,26 @@ export default function GameUI() {
         <ShopPanel onClose={handleCloseShop} />
       )}
 
-      {futuresOpen && (
-        <FuturesPanel />
-      )}
+      {/* Lazy-loaded panels — Suspense boundary renders nothing while
+          the chunk fetches (typically <100ms on a warm cache). The user
+          opened the panel deliberately so a tiny pause is acceptable. */}
+      <Suspense fallback={null}>
+        {futuresOpen && (
+          <FuturesPanel />
+        )}
 
-      {showProfile && (
-        <ProfileModal onClose={() => setShowProfile(false)} />
-      )}
+        {showProfile && (
+          <ProfileModal onClose={() => setShowProfile(false)} />
+        )}
 
-      {showBattleLog && (
-        <BattleLogPanel onClose={() => setShowBattleLog(false)} />
-      )}
+        {showBattleLog && (
+          <BattleLogPanel onClose={() => setShowBattleLog(false)} />
+        )}
 
-      {showLeaderboard && (
-        <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
-      )}
+        {showLeaderboard && (
+          <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
+        )}
+      </Suspense>
 
       {tutorialPhase && (
         <TutorialOverlay
