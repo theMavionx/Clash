@@ -1350,6 +1350,13 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 	for b in server_buildings:
 		if b.get("grid_index", 0) == my_grid_index:
 			my_buildings.append(b)
+	# Reset the ships counter before walking the new account's buildings.
+	# Without this, logging out of Alice (3 ports with ships → owned_ships=3)
+	# and back in as Bob (1 port with ship) would leave owned_ships=4 because
+	# the loop INCREMENTS rather than rebuilding the count.
+	owned_ships = 0
+	if _port:
+		_port.owned_ships = 0
 	# Always clear existing buildings first (even if no new ones to load)
 	_destroy_all_buildings()
 	if my_buildings.is_empty():
@@ -1530,6 +1537,13 @@ func _sync_react_buildings() -> void:
 		bridge.send_to_react("th_info", {"level": th_lvl, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
 
 func _load_troop_levels_from_server(server_troops: Array) -> void:
+	# Reset every known troop to level 1 BEFORE applying server values. This
+	# partial-update loop only overwrites keys present in the server payload —
+	# on account switch any troop type the new account hasn't interacted with
+	# would otherwise keep the previous account's level (e.g. Alice had
+	# Knight=3, Bob fresh has Knight=1 but server omits row → stays at 3).
+	for key in troop_levels.keys():
+		troop_levels[key] = 1
 	for t in server_troops:
 		var troop_type: String = t.get("troop_type", "")
 		var level: int = t.get("level", 1)
@@ -1544,6 +1558,15 @@ func _load_troop_levels_from_server(server_troops: Array) -> void:
 
 
 func _on_server_auth_ok(player_data: Dictionary) -> void:
+	# Reset per-account battle/cannon state BEFORE loading new buildings so
+	# an account switch (logout → login as different user) can't leave the
+	# new player mid-battle, viewing a stale enemy, or with an exhausted
+	# cannon from the previous session. Guard the helpers in case the node
+	# is still mid-construction when auth races in.
+	if _cannon and _cannon.has_method("reset"):
+		_cannon.reset()
+	if _battle and _battle.has_method("reset"):
+		_battle.reset()
 	# Apply full state from server (resources, buildings, troops)
 	if player_data.has("gold"):
 		resources.gold = player_data.gold

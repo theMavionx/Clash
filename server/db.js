@@ -62,6 +62,11 @@ try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_at TEXT`); } catch {
 try { db.exec(`ALTER TABLE players ADD COLUMN tutorial_flags INTEGER NOT NULL DEFAULT 0`); } catch {}
 // DEX preference: 'pacifica' (Solana) or 'avantis' (Base). Chosen at register time.
 try { db.exec(`ALTER TABLE players ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'`); } catch {}
+// Futures UI mode: 'basic' (simplified UI for new traders) or 'pro' (full
+// feature set). NULL = user has not chosen yet → client shows the
+// first-time selection screen before letting them trade. Selection is
+// persisted server-side so it survives device/browser swaps.
+try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 
 // Battle replays — stores full replay data for verification and future replay viewer
 try {

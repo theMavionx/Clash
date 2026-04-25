@@ -6,18 +6,18 @@ const PORT = process.env.FUTURES_PORT || 3999;
 
 const app = express();
 
-// CORS: whitelist the known game origins (local dev + the production domain).
-// Wildcard '*' was a footgun for a custodial financial API — any malicious page
-// could make credentialed cross-origin calls if it got hold of a player token.
-// Override with CLASH_CORS_ORIGINS env (comma-separated) if needed.
+// CORS: whitelist the known game origins (production domain) plus any
+// localhost / 127.0.0.1 port for local dev. Wildcard '*' was a footgun for
+// a custodial financial API — any malicious page could make credentialed
+// cross-origin calls if it got hold of a player token. Override with
+// CLASH_CORS_ORIGINS env (comma-separated) if needed.
 const DEFAULT_ORIGINS = [
   'https://clashofperps.fun',
   'https://www.clashofperps.fun',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://localhost:4173',
-  'http://127.0.0.1:5173',
 ];
+// Localhost regex matches any port — covers Vite picking 5174/5175/5176/...
+// when its default 5173 is taken, plus arbitrary preview servers.
+const LOCALHOST_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
 const ALLOWED_ORIGINS = new Set(
   (process.env.CLASH_CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
     .concat(DEFAULT_ORIGINS)
@@ -27,6 +27,7 @@ app.use(cors({
     // Allow same-origin / curl / server-to-server (no Origin header).
     if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+    if (LOCALHOST_RE.test(origin)) return cb(null, true);
     return cb(new Error(`CORS: origin '${origin}' not allowed`));
   },
   credentials: false,
@@ -61,10 +62,13 @@ function makeRateLimiter({ windowMs, max, group }) {
     next();
   };
 }
-// Trade endpoints: 30/min (≈1 every 2s, plenty for a real user).
-const tradeLimiter = makeRateLimiter({ windowMs: 60_000, max: 30, group: 'trade' });
-// Withdraw: much tighter — 5/min per player.
-const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 5, group: 'withdraw' });
+// Trade endpoints: bumped 30 → 3000 per minute (100×) per user request.
+// Withdraw: bumped 5 → 500 per minute. The on-chain layer still has its
+// own quota (RPC rate limits, gas costs) and the trading hooks debounce
+// on the client, so these are now mostly defence-in-depth against
+// runaway loops rather than a per-user gate.
+const tradeLimiter = makeRateLimiter({ windowMs: 60_000, max: 3000, group: 'trade' });
+const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 500, group: 'withdraw' });
 app.use(['/api/orders', '/api/positions/close', '/api/tpsl'], tradeLimiter);
 app.use('/api/withdraw', withdrawLimiter);
 

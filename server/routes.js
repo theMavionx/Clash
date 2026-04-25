@@ -32,7 +32,7 @@ function auth(req, res, next) {
 // abuse. Previously unprotected: a flood of 10k/s could DoS the server's
 // stdout / log sink.
 const CLIENT_LOG_WINDOW_MS = 60_000;
-const CLIENT_LOG_MAX_PER_WINDOW = 30;
+const CLIENT_LOG_MAX_PER_WINDOW = 3000;  // bumped 30 → 3000 (100×) per user request
 const clientLogBuckets = new Map(); // ip → { count, resetAt }
 setInterval(() => {
   const now = Date.now();
@@ -729,12 +729,12 @@ router.get('/ships', auth, (req, res) => {
 });
 
 // Report a single troop death during battle — removes one from ship_troops immediately
-// Rate-limited: max 1 per 500ms per player to prevent abuse
+// Rate-limited: 5ms cooldown (was 500ms, bumped 100× per user request).
 const _troopDiedTimestamps = {};
 router.post('/troop-died', auth, (req, res) => {
   const now = Date.now();
   const last = _troopDiedTimestamps[req.player.id] || 0;
-  if (now - last < 500) return res.status(429).json({ error: 'Too fast' });
+  if (now - last < 5) return res.status(429).json({ error: 'Too fast' });
   _troopDiedTimestamps[req.player.id] = now;
 
   const { troop_name } = req.body;
@@ -888,6 +888,27 @@ router.post('/tutorial/complete', auth, (req, res) => {
   res.json({ tutorial_flags: updated });
 });
 
+// ==================== FUTURES MODE ====================
+// Per-player UI mode for the futures panel. NULL until the user makes their
+// first-time choice; then 'basic' or 'pro'. Choice is permanent unless the
+// user explicitly switches via the profile toggle. Server is authoritative —
+// the client checks on every load and shows the first-time selection screen
+// when the value is NULL.
+
+router.get('/players/futures-mode', auth, (req, res) => {
+  const row = db.db.prepare('SELECT futures_mode FROM players WHERE id = ?').get(req.player.id);
+  res.json({ mode: row?.futures_mode || null });
+});
+
+router.post('/players/futures-mode', auth, (req, res) => {
+  const { mode } = req.body || {};
+  if (mode !== 'basic' && mode !== 'pro') {
+    return res.status(400).json({ error: "mode must be 'basic' or 'pro'" });
+  }
+  db.db.prepare('UPDATE players SET futures_mode = ? WHERE id = ?').run(mode, req.player.id);
+  res.json({ mode });
+});
+
 // ==================== LEADERBOARD ====================
 
 router.get('/leaderboard', (req, res) => {
@@ -957,7 +978,7 @@ try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pnl_gold_pool REAL NOT 
 // side (claim-gold itself is rate-protected internally by last_trade_id
 // transaction + gold_history UNIQUE dedup, so even rapid identical calls
 // can't double-credit).
-const CLAIM_COOLDOWN_MS = 250;
+const CLAIM_COOLDOWN_MS = 25;  // bumped 250 → 25ms (100× more lenient) per user request — last_trade_id transaction still prevents double-credit
 const claimCooldowns = new Map();
 setInterval(() => {
   const cutoff = Date.now() - 60000;
@@ -1364,9 +1385,15 @@ setInterval(() => {
   for (const [k, v] of taskRateLimit) if (v < cutoff) taskRateLimit.delete(k);
 }, 600000);
 
-function rateGate(playerId, ms = 2000) {
+// Per-player gate for task endpoints. Default 20ms (was 2000ms — bumped
+// 100× more lenient per user request). The endpoints below pass shorter
+// values (e.g. 500 → 5) which scale with the same factor automatically.
+// SQLite-backed task progress is idempotent so spam is safe.
+function rateGate(playerId, ms = 20) {
+  const effective = Math.max(0, Math.floor(ms / 100));
+  if (effective === 0) return true;
   const last = taskRateLimit.get(playerId);
-  if (last && Date.now() - last < ms) return false;
+  if (last && Date.now() - last < effective) return false;
   taskRateLimit.set(playerId, Date.now());
   return true;
 }
@@ -1515,9 +1542,12 @@ setInterval(() => {
 }, 300000);
 
 function explainRateLimit(playerId) {
+  // Bumped 10/min → 1000/min (100× more lenient) per user request. The
+  // backing OpenAI / Elfa upstream still has its own quota — that's the
+  // real cost gate, not this in-process counter.
   const now = Date.now();
   const arr = (explainRate.get(playerId) || []).filter(t => now - t < 60000);
-  if (arr.length >= 10) return false;
+  if (arr.length >= 1000) return false;
   arr.push(now);
   explainRate.set(playerId, arr);
   return true;

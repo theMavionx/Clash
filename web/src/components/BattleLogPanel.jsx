@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useCallback } from 'react';
-import { useSend } from '../hooks/useGodot';
+import { useSend, usePlayer } from '../hooks/useGodot';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
@@ -20,6 +20,8 @@ function timeAgo(dateStr) {
 
 function BattleLogPanel({ onClose }) {
   const { sendToGodot } = useSend();
+  const player = usePlayer();
+  const token = player?.token || null;
   const [battles, setBattles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
@@ -38,14 +40,26 @@ function BattleLogPanel({ onClose }) {
     }, 100);
   }, [sendToGodot, onClose]);
 
+  // Fetch battle log keyed on the reactive token. If an account-switch
+  // happens while this panel is open, the cleanup flag prevents the old
+  // account's response from landing on the new user's UI; the token
+  // dependency re-runs the effect under the new identity.
   useEffect(() => {
-    const token = window._playerToken;
-    if (!token) { setLoading(false); return; }
-    fetch('/api/battle-log', { headers: { 'x-token': token } })
-      .then(r => r.json())
-      .then(data => { setBattles(Array.isArray(data) ? data : []); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
+    if (!token) { setBattles([]); setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/battle-log', { headers: { 'x-token': token } });
+        if (cancelled) return;
+        if (!r.ok) { setBattles([]); setLoading(false); return; }
+        const data = await r.json();
+        if (cancelled) return;
+        setBattles(Array.isArray(data) ? data : []);
+      } catch { /* network error — fall through to loading=false */ }
+      finally { if (!cancelled) setLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
   const filtered = filter === 'all' ? battles : battles.filter(b => b.side === filter);
 

@@ -6,6 +6,9 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
+import { useFuturesMode } from '../contexts/FuturesModeContext';
+import FuturesModeSelect from './FuturesModeSelect';
+import BasicTradeFlow from './basic/BasicTradeFlow';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
@@ -359,7 +362,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
 // ==================== POSITIONS LIST (mobile/tab card view) ====================
 const PositionsList = memo(function PositionsList({
   positions, prices, dataReady, leverageSettings, marginModes, loading, error,
-  closePosition, setTpsl, clearError,
+  closePosition, setTpsl, clearError, isBasic,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -422,10 +425,13 @@ const PositionsList = memo(function PositionsList({
               </span>
             </div>
 
-            {/* Action buttons */}
+            {/* Action buttons. Basic mode hides TP/SL — risk management
+                features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
               <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
-              <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+              {!isBasic && (
+                <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+              )}
             </div>
 
             {/* Close slider */}
@@ -445,8 +451,9 @@ const PositionsList = memo(function PositionsList({
               </div>
             )}
 
-            {/* TP/SL */}
-            {expanded === 'tpsl' && (
+            {/* TP/SL panel — same isBasic gate so the inputs never reach
+                the DOM in Basic mode (and never get accidentally fired). */}
+            {!isBasic && expanded === 'tpsl' && (
               <div style={{...S.expandPanel, ...S.row}}>
                 <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
@@ -607,6 +614,17 @@ function FuturesPanel() {
   const { isInFrame: inFrame } = useFarcaster();
   const player = usePlayer();
   const { dex } = useDex();
+  // Per-account UI mode (basic/pro). NULL until the user picks on first
+  // entry — we use that to gate the trading UI behind the selection screen.
+  const { mode: futuresMode, needsSelection: needsModeSelection } = useFuturesMode();
+  const isBasic = futuresMode === 'basic';
+  // In Basic mode the user only opens market trades from the wizard, so
+  // limit/conditional Orders are not relevant. Hide that tab + redirect if
+  // it's somehow active (e.g. Pro→Basic switch while Orders was selected).
+  const visibleTabs = useMemo(
+    () => isBasic ? TABS.filter(t => t.id !== 'Orders') : TABS,
+    [isBasic]
+  );
   // Branch on DEX: usePacifica for Solana-signed trading, useAvantis for
   // the custodial Base flow. Both hooks expose the same interface shape.
   const pacificaHook = usePacifica();
@@ -619,6 +637,8 @@ function FuturesPanel() {
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
     // Avantis-only — undefined on the Pacifica branch.
     hasReferrer, linkOurReferrer,
+    // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
+    pacAgent, bindAgent, bindingAgent, bindAgentError,
   } = trading;
   // For Pacifica: wallet needs adapter or Privy. For Avantis: walletAddr is
   // the custodial Base address, provisioned on first fetch by the hook.
@@ -1569,10 +1589,13 @@ function FuturesPanel() {
                 </span>
               </div>
 
-              {/* Action buttons */}
+              {/* Action buttons. Basic mode hides TP/SL — risk management
+                  features are deliberately stripped from the simplified UX. */}
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
-                <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                {!isBasic && (
+                  <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                )}
               </div>
 
               {/* Close slider */}
@@ -1592,8 +1615,8 @@ function FuturesPanel() {
                 </div>
               )}
 
-              {/* TP/SL */}
-              {expanded === 'tpsl' && (
+              {/* TP/SL panel — gated on Basic mode (button is hidden too). */}
+              {!isBasic && expanded === 'tpsl' && (
                 <div style={{...S.expandPanel, ...S.row}}>
                   <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
@@ -1876,12 +1899,84 @@ function FuturesPanel() {
   };
 
   const renderContent = () => {
+    // Basic mode: replace Trade with the wizard, and redirect away from
+    // Orders if the user landed there before flipping to Basic — Orders
+    // is hidden in Basic so any attempt to render it would 404 visually.
+    if (isBasic && activeTab === 'Orders') {
+      // Side-effect inside render is mild here — setActiveTab will queue a
+      // re-render and the next pass renders Trade. Wrapped so we don't
+      // re-fire after the state already moved.
+      setTimeout(() => setActiveTab('Trade'), 0);
+      return null;
+    }
+    if (activeTab === 'Trade' && isBasic) {
+      return (
+        <BasicTradeFlow
+          markets={markets}
+          prices={prices}
+          account={account}
+          walletUsdc={walletUsdc}
+          placeMarketOrder={placeMarketOrder}
+          setLeverageApi={setLeverageApi}
+          setMarginMode={setMarginMode}
+          // Pass the current per-symbol settings so the wizard can SKIP
+          // signing setMarginMode / setLeverage when the values already
+          // match what the user picked. Returning Pacifica users with
+          // unchanged settings will see exactly one wallet popup (the
+          // trade itself) instead of three.
+          marginModes={marginModes}
+          leverageSettings={leverageSettings}
+          dex={dex}
+          setActiveTab={setActiveTab}
+          // Pacifica agent-wallet props (undefined on Avantis path).
+          pacAgent={pacAgent}
+          bindAgent={bindAgent}
+          bindingAgent={bindingAgent}
+          bindAgentError={bindAgentError}
+        />
+      );
+    }
     if (activeTab === 'Trade') return renderTrade();
     if (activeTab === 'Positions') return renderPositions();
     if (activeTab === 'Orders') return renderOrders();
     if (activeTab === 'Account') return renderAccount();
     if (activeTab === 'Quests') return <QuestsTab />;
   };
+
+  // First-time mode selection: hide the trading UI behind a parchment card
+  // until the user picks Pro vs Basic. After they pick, the choice is
+  // persisted server-side and FuturesModeContext flips `needsSelection`
+  // to false on the next render. We keep the same panel chrome (header
+  // + close button) so the user can dismiss with `Decide later` or X.
+  if (needsModeSelection) {
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Futures Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, justifyContent: 'flex-start', overflow: 'auto'}}>
+            <FuturesModeSelect onClose={handleClose} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // After mode is chosen, `futuresMode` is 'basic' or 'pro' and the trading
+  // UI below renders normally. UI customization for each mode is layered on
+  // by reading futuresMode in conditional blocks (e.g. hide TradeIdeaModal
+  // in basic, show simpler trade form, etc.) — wired later as UX is decided.
+  void futuresMode;
 
   return (
     <>
@@ -1894,7 +1989,7 @@ function FuturesPanel() {
       }}>
         <div style={S.header} onPointerDown={handlePointerDown}>
           <div className="futures-tabs-scroll" style={{display: 'flex', gap: 6, alignItems: 'center', flex: 1, minWidth: 0, overflowX: 'auto', scrollbarWidth: 'none'}}>
-            {TABS.map(t => {
+            {visibleTabs.map(t => {
               const active = activeTab === t.id;
               return (
                 <button key={t.id} onClick={() => setActiveTab(t.id)} className={`tab-btn ${active ? 'active' : ''}`} style={{...(active ? S.tabActive : S.tabInactive), flexShrink: 0}}>

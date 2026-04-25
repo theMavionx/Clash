@@ -6,6 +6,7 @@ import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useG
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
+import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
@@ -21,6 +22,7 @@ function ProfileModal({ onClose }) {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
+  const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
   const { disconnect: evmDisconnect } = useEvmWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
@@ -88,15 +90,29 @@ function ProfileModal({ onClose }) {
   const pacBalance = parseFloat(account?.balance || 0);
   const pacEquity = parseFloat(account?.account_equity || 0);
 
-  // Fetch trading reward stats
+  // Fetch trading reward stats. Keyed on the reactive player token so that
+  // if the user switches accounts while this modal is mounted (open in a
+  // tab, then logs out / logs back in as a different user), we re-fetch
+  // with the NEW token and discard any in-flight response from the old one.
+  // Previously this read `window._playerToken` once with an empty dep array,
+  // so an open ProfileModal could display Alice's gold_history + trades
+  // to Bob after an account switch — or render `{error: "Invalid token"}`
+  // as if it were stats after admin-wipe invalidated the token mid-fetch.
+  const token = player?.token || null;
   useEffect(() => {
-    const token = window._playerToken;
-    if (!token) return;
-    fetch('/api/trading/stats', { headers: { 'x-token': token } })
-      .then(r => r.json())
-      .then(d => setTradingStats(d))
-      .catch(() => {});
-  }, []);
+    if (!token) { setTradingStats(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/trading/stats', { headers: { 'x-token': token } });
+        if (cancelled) return;
+        if (!r.ok) return; // leave prior stats cleared above
+        const d = await r.json();
+        if (!cancelled) setTradingStats(d);
+      } catch { /* network error — leave stats null */ }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
   return (
     <>
@@ -184,6 +200,67 @@ function ProfileModal({ onClose }) {
               </div>
             );
           })()}
+
+          {/* Futures UI mode toggle (basic / pro). Hidden until the user
+              has made their first-time choice — once they have, this lets
+              them flip back and forth from here. Persists server-side. */}
+          {futuresMode && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 12px', borderRadius: 12,
+              background: 'rgba(92, 58, 33, 0.06)',
+              border: '2px solid rgba(92, 58, 33, 0.18)',
+            }}>
+              <div style={{flex: 1, minWidth: 0}}>
+                <div style={{
+                  fontSize: 9, fontWeight: 800, color: '#a3906a',
+                  letterSpacing: '0.6px',
+                }}>FUTURES MODE</div>
+                <div style={{
+                  fontSize: 12, fontWeight: 900, color: '#5C3A21',
+                  marginTop: 1,
+                }}>
+                  {futuresMode === 'pro' ? 'Pro — full feature set' : 'Basic — simplified UI'}
+                </div>
+              </div>
+              <div style={{display: 'flex', gap: 4, flexShrink: 0}}>
+                <button
+                  onClick={() => futuresMode !== 'basic' && setFuturesMode('basic')}
+                  disabled={futuresMode === 'basic'}
+                  style={{
+                    padding: '6px 12px', borderRadius: 8,
+                    fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
+                    cursor: futuresMode === 'basic' ? 'default' : 'pointer',
+                    background: futuresMode === 'basic'
+                      ? 'linear-gradient(180deg, #6ab344 0%, #4d7a2e 100%)'
+                      : '#e8dfc8',
+                    color: futuresMode === 'basic' ? '#fff' : '#77573d',
+                    border: futuresMode === 'basic'
+                      ? '2px solid #3a5e22'
+                      : '2px solid #d4c8b0',
+                    textShadow: futuresMode === 'basic' ? '1px 1px 0 rgba(0,0,0,0.3)' : 'none',
+                  }}
+                >BASIC</button>
+                <button
+                  onClick={() => futuresMode !== 'pro' && setFuturesMode('pro')}
+                  disabled={futuresMode === 'pro'}
+                  style={{
+                    padding: '6px 12px', borderRadius: 8,
+                    fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
+                    cursor: futuresMode === 'pro' ? 'default' : 'pointer',
+                    background: futuresMode === 'pro'
+                      ? 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)'
+                      : '#e8dfc8',
+                    color: futuresMode === 'pro' ? '#fff' : '#77573d',
+                    border: futuresMode === 'pro'
+                      ? '2px solid #0284C7'
+                      : '2px solid #d4c8b0',
+                    textShadow: futuresMode === 'pro' ? '1px 1px 0 rgba(0,0,0,0.3)' : 'none',
+                  }}
+                >PRO</button>
+              </div>
+            </div>
+          )}
 
           {/* Wallet */}
           {activeWallet ? (

@@ -3,7 +3,9 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { isFarcasterFrame } from './useFarcaster';
+import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { usePacificaAgent } from './usePacificaAgent';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -109,6 +111,12 @@ export function usePacifica() {
   const privyAddr = privyWalletObj?.address || null;
   const privyActive = !publicKey && !!privyAddr;
 
+  // Gate WS + polling on DEX. FuturesPanel instantiates BOTH hooks but only
+  // one is shown — without this gate Pacifica WS would stay subscribed and
+  // Pacifica HTTP polls would run while the user is trading on Avantis.
+  const { dex } = useDex();
+  const isActiveDex = dex === 'pacifica';
+
   const [account, setAccount] = useState(null);
   const [positions, _setPositionsRaw] = useState([]);
   const setPositions = (v) => {
@@ -132,6 +140,35 @@ export function usePacifica() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletAddr = publicKey?.toBase58() || privyAddr;
+
+  // Master-wallet sign helper used by the agent-wallet hook for the ONE
+  // popup the user ever sees: bind / revoke. Uses the same priority chain
+  // as `signedRequest` below (FC → Privy → adapter) so any wallet type
+  // can authorise the agent.
+  const masterSign = useCallback(async (msgBytes) => {
+    if (isFarcasterFrame()) {
+      const sig = await fcSignMessage(msgBytes);
+      if (sig) return sig;
+    }
+    if (privyActive && privySignMessage && privyWalletObj) {
+      const result = await privySignMessage({ message: msgBytes, wallet: privyWalletObj });
+      return result?.signature || result;
+    }
+    if (publicKey && signMessage) {
+      return await signMessage(msgBytes);
+    }
+    throw new Error('No wallet available to sign');
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj]);
+
+  const {
+    agent: pacAgent,
+    bindAgent,
+    signWithAgentKey,
+    forgetLocally: forgetAgentLocally,
+    revokeOnServer: revokeAgentOnServer,
+    binding: bindingAgent,
+    bindError: bindAgentError,
+  } = usePacificaAgent({ walletAddr, masterSign });
 
   // Reactive player token — kept in a ref so callbacks that are declared with
   // `[walletAddr]` deps (like claimGold) don't need to recreate every time
@@ -225,8 +262,37 @@ export function usePacifica() {
     setWalletUsdc(0);
   }, [walletAddr, publicKey, connection]);
 
-  // Sign & send to Pacifica API
+  // Sign & send to Pacifica API.
+  //
+  // Fast path: if the user has bound an agent wallet, sign locally with
+  // the agent's private key (no popup). Trade-class endpoints support
+  // agent-signed requests by including `agent_wallet: <pubkey>` in the
+  // body — Pacifica verifies the signature against that pubkey rather
+  // than the master.
+  //
+  // Bind, revoke, and other master-only operations bypass the agent path
+  // by calling `masterSign` directly elsewhere in this file.
   const signedRequest = useCallback(async (method, endpoint, type, payload) => {
+    // Try agent-key fast path first — covers the hot endpoints (orders,
+    // positions/tpsl, account/leverage, account/margin) without prompting.
+    if (signWithAgentKey) {
+      const headerBag = signWithAgentKey(type, payload);
+      if (headerBag) {
+        const body = { ...headerBag, ...payload };
+        const res = await fetch(`${API}${endpoint}`, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const text = await res.text();
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error(text || `API error ${res.status}`);
+        }
+      }
+    }
+
     const hasAdapter = !!(publicKey && signMessage);
     const hasPrivy = !!(privyActive && privySignMessage && privyWalletObj);
     if (!hasAdapter && !hasPrivy) throw new Error('Wallet not connected');
@@ -293,7 +359,7 @@ export function usePacifica() {
       }
       throw new Error(text || `API error ${res.status}`);
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
@@ -627,7 +693,7 @@ export function usePacifica() {
 
   // ---------- WebSocket ----------
   useEffect(() => {
-    if (!walletAddr) return;
+    if (!walletAddr || !isActiveDex) return;
 
     let ws, reconnectTimer, pingTimer, pongTimer;
     let latestPrices = null;
@@ -808,7 +874,7 @@ export function usePacifica() {
       window.removeEventListener('offline', handleOffline);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
-  }, [walletAddr]);
+  }, [walletAddr, isActiveDex]);
 
   // Fetch markets once
   useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
@@ -820,5 +886,10 @@ export function usePacifica() {
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder,
     setTpsl, setLeverage, setMarginMode,
     fetchAccount, fetchPositions, fetchOrders,
+    // Agent wallet — opt-in 1-tap trading. `pacAgent` is null until the
+    // user calls `bindAgent` (one master-wallet popup) — afterwards every
+    // signed request goes through the agent key silently.
+    pacAgent, bindAgent, bindingAgent, bindAgentError,
+    forgetAgentLocally, revokeAgentOnServer,
   };
 }

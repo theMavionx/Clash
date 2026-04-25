@@ -12,7 +12,12 @@ signal building_placed(data: Dictionary)
 signal building_upgraded(data: Dictionary)
 signal building_removed(data: Dictionary)
 
-const SERVER_URL := "https://clashofperps.fun/api"
+# API base URL. Resolved at boot — see `_resolve_server_url()`. In web builds
+# we read the current page's origin so dev (`http://localhost:5176`) hits the
+# local backend (via the Vite proxy on `/api/*` → `localhost:4000`) instead
+# of pounding the production server. Native builds (no `window`) fall back
+# to the prod URL or the `CLASH_API_URL` env override.
+var SERVER_URL := "https://clashofperps.fun/api"
 
 var token: String = ""
 var player_id: String = ""
@@ -22,10 +27,31 @@ var wallet: String = ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
+	SERVER_URL = _resolve_server_url()
+	print("[net] SERVER_URL=", SERVER_URL)
 	var cfg = ConfigFile.new()
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")
 		display_name = cfg.get_value("auth", "name", "")
+
+# Returns the API base URL appropriate for the current runtime.
+#   • Web build (browser): use `window.location.origin + "/api"`. Vite dev
+#     proxies `/api/*` → `localhost:4000` automatically; nginx in prod does
+#     the same. So one expression covers both environments cleanly.
+#   • Native build / fallback: respect `CLASH_API_URL` env var so a desktop
+#     dev session can point at any backend; otherwise default to the prod
+#     URL so the binary works out-of-the-box for end-users.
+func _resolve_server_url() -> String:
+	if OS.has_feature("web"):
+		var origin = JavaScriptBridge.eval("window.location.origin", true)
+		if origin != null:
+			var s = String(origin).strip_edges()
+			if not s.is_empty() and s.begins_with("http"):
+				return s + "/api"
+	var env_override := OS.get_environment("CLASH_API_URL")
+	if env_override != "":
+		return env_override
+	return "https://clashofperps.fun/api"
 
 func _save_token() -> void:
 	var cfg = ConfigFile.new()

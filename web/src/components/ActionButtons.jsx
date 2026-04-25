@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
-import { useSend, useUI, useResources, useBuildingDefs } from '../hooks/useGodot';
+import { useSend, useUI, useResources, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
@@ -290,6 +290,8 @@ const ShieldIcon = ({ size = 60 }) => (
 function ActionButtons({ onOpenBattleLog }) {
   const { sendToGodot, setFuturesOpen } = useSend();
   const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
+  const player = usePlayer();
+  const token = player?.token || null;
   const [showReinforce, setShowReinforce] = useState(false);
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
@@ -407,11 +409,24 @@ function ActionButtons({ onOpenBattleLog }) {
       <div style={{ ...styles.wrapRight, ...(mobile ? { bottom: 8, right: 8 } : {}) }}>
         {pendingCasualties && (
           <CustomBtn onClick={() => {
+            // Snapshot the token value at click time AND the player_id so a
+            // stale response (user switched account mid-flight) is dropped
+            // before it can paint another player's casualty list into the
+            // REINFORCE modal. Without this, clicking Reinforce then rapidly
+            // switching account left the callback free to set Bob's
+            // serverCasualties from Alice's data.
+            const fetchToken = token;
+            const fetchPlayerId = player?.player_id;
+            if (!fetchToken) { setLoadingCasualties(false); return; }
             setLoadingCasualties(true);
-            const token = window._playerToken;
-            fetch('/api/casualties', { headers: { 'x-token': token } })
-              .then(r => r.json())
+            fetch('/api/casualties', { headers: { 'x-token': fetchToken } })
+              .then(r => r.ok ? r.json() : null)
               .then(data => {
+                if (!data) return;
+                // Stale-response guard: if the player_id changed while this
+                // fetch was in flight, drop the result rather than show
+                // the old account's data to the new one.
+                if (player?.player_id !== fetchPlayerId) return;
                 if (data.total > 0) {
                   setServerCasualties(data);
                   setShowReinforce(true);

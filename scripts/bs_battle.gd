@@ -63,6 +63,31 @@ var _victory_declared: bool = false
 # Cleanup helpers
 # ---------------------------------------------------------------------------
 
+## Resets all per-account battle state to its initial values. Called from
+## BuildingSystem._on_server_auth_ok so a logout-then-login-as-different-
+## account sequence cannot leave the new user in a mid-battle state or
+## viewing a prior account's enemy. Without this, `is_viewing_enemy` or a
+## stale `enemy_info` dict could make the game think the new player is
+## still raiding someone else's island.
+func reset() -> void:
+	is_viewing_enemy = false
+	home_buildings_backup.clear()
+	home_grid_backup.clear()
+	enemy_info.clear()
+	_battle_replay.clear()
+	_battle_start_time = 0.0
+	_saved_fleet.clear()
+	_battle_timer = 0.0
+	_battle_timer_active = false
+	_replay_active = false
+	_replay_actions.clear()
+	_replay_buildings_snapshot.clear()
+	_had_troops = false
+	_skeleton_respawn_timer = 0.0
+	_victory_declared = false
+	_submit_result = {}
+	_submit_complete = false
+
 ## Frees all home troops and port ships immediately — called when switching
 ## to enemy island so they don't linger in the background.
 ## MainShipBase and MainShipAttack are never touched.

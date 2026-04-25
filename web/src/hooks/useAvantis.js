@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { formatUnits, formatEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
   TRADING_ADDRESS, TRADING_STORAGE_ADDRESS, USDC_ADDRESS,
@@ -266,6 +267,15 @@ function normalizePrices(raw) {
 
 export function useAvantis() {
   const { address: walletAddr, walletClient, publicClient, isReady, ensureChain } = useEvmWallet();
+  // Gate polling / on-chain reads on the active DEX. FuturesPanel
+  // instantiates BOTH hooks (Pacifica + Avantis) so it can switch between
+  // them at render time, but if the user is on Pacifica we shouldn't be
+  // hammering Base RPC for an Avantis account they aren't trading. Without
+  // this guard, every Pacifica user with a Privy-created EVM embedded
+  // wallet would burn their Base RPC quota (mainnet.base.org returns 429
+  // after ~10 requests/sec) just by sitting on the FuturesPanel.
+  const { dex } = useDex();
+  const isActiveDex = dex === 'avantis';
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -1055,7 +1065,7 @@ export function useAvantis() {
   useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
 
   useEffect(() => {
-    if (!walletAddr) return;
+    if (!walletAddr || !isActiveDex) return;
     const tick = () => {
       fetchAccount();
       fetchPositions();
@@ -1066,10 +1076,13 @@ export function useAvantis() {
     tick();
     const iv = setInterval(tick, 5000);
     return () => clearInterval(iv);
-  }, [walletAddr, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
+  }, [walletAddr, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
 
   // Referral linkage read — runs once per wallet (on-chain state, no polling).
-  useEffect(() => { fetchReferralStatus(); }, [fetchReferralStatus]);
+  useEffect(() => {
+    if (!isActiveDex) return;
+    fetchReferralStatus();
+  }, [isActiveDex, fetchReferralStatus]);
 
   // Periodic claim-gold poll — catches trades that the server-side rewards
   // worker detected (closes, worker polls Avantis Core every 2 min) after
@@ -1077,7 +1090,7 @@ export function useAvantis() {
   // mounted (i.e. FuturesPanel or ProfileModal is open). Claim endpoint
   // is idempotent + rate-limited server-side so over-calling is safe.
   useEffect(() => {
-    if (!walletAddr) return;
+    if (!walletAddr || !isActiveDex) return;
     const fire = () => {
       const fn = claimGoldRef.current;
       if (typeof fn === 'function') fn();
@@ -1087,7 +1100,7 @@ export function useAvantis() {
     const kickoff = setTimeout(fire, 3000);
     const iv = setInterval(fire, 30_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
-  }, [walletAddr]);
+  }, [walletAddr, isActiveDex]);
 
   const marginModes = {};
   const leverageSettings = {};

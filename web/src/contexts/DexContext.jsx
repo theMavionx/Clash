@@ -79,6 +79,11 @@ export function DexProvider({ children }) {
         const r = await fetch('/api/state', { headers: { 'x-token': token } });
         if (cancelled || !r.ok) return;
         const j = await r.json();
+        // Re-check cancelled AFTER the JSON parse: another token swap may
+        // have happened while the response was still being parsed. Without
+        // this a stale /api/state response from account A could land under
+        // account B's context and reset the DEX selector to the wrong value.
+        if (cancelled) return;
         if (j.dex === 'pacifica' || j.dex === 'avantis') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative

@@ -3,6 +3,7 @@ import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
+import { FuturesModeProvider } from './contexts/FuturesModeContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
@@ -88,7 +89,11 @@ export default function App() {
         <EvmWalletProvider>
           <WalletProvider>
             <GodotProvider>
-              <AppInner />
+              {/* FuturesModeProvider sits inside GodotProvider so it can read
+                  the player's `futures_mode` from the player state context. */}
+              <FuturesModeProvider>
+                <AppInner />
+              </FuturesModeProvider>
             </GodotProvider>
           </WalletProvider>
         </EvmWalletProvider>
