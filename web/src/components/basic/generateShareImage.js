@@ -192,30 +192,82 @@ export async function generateShareImage(trade) {
   });
 }
 
-/** Try Web Share API → fallback to download. Returns true if shared. */
-export async function shareOrDownload(blob, filename = 'clash-of-perps-trade.png') {
-  const url = URL.createObjectURL(blob);
+// True when the browser can share files (native share sheet — covers
+// Telegram, Twitter, Instagram, Save to Photos, AirDrop, etc.). Used by
+// the modal to know whether to render the big native-share button.
+export function canShareFiles() {
+  if (typeof navigator === 'undefined') return false;
+  if (!navigator.canShare) return false;
   try {
-    const file = new File([blob], filename, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({
-        files: [file],
-        title: 'My Clash of Perps trade',
-        text: 'Just closed this trade on Clash of Perps 🛡️⚔️',
-      });
-      return true;
-    }
-  } catch (e) {
-    // User cancelled OR browser doesn't support file-share — fall through.
-    if (e?.name === 'AbortError') return false;
+    // Probe with a dummy file — `canShare` returns false if files aren't
+    // supported in the current context (e.g. desktop Chrome, some iframe
+    // contexts).
+    const probe = new File([new Blob(['x'])], 'p.png', { type: 'image/png' });
+    return !!navigator.canShare({ files: [probe] });
+  } catch {
+    return false;
   }
-  // Fallback: download
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-  return true;
+}
+
+/** Open the OS native share sheet. */
+export async function nativeShare(blob, filename = 'clash-of-perps-trade.png') {
+  const file = new File([blob], filename, { type: 'image/png' });
+  try {
+    await navigator.share({
+      files: [file],
+      title: 'My Clash of Perps trade',
+      text: 'Just traded on Clash of Perps 🛡️⚔️',
+    });
+    return { ok: true };
+  } catch (e) {
+    if (e?.name === 'AbortError') return { ok: false, cancelled: true };
+    return { ok: false, error: e?.message || 'Share failed' };
+  }
+}
+
+/**
+ * Save the image — tries `<a download>` first; on iOS Safari (which
+ * silently ignores download attribute on blobs in some cases) falls back
+ * to opening in a new tab so the user can long-press → Save Image.
+ */
+export async function downloadImage(blob, filename = 'clash-of-perps-trade.png') {
+  const url = URL.createObjectURL(blob);
+  const cleanup = () => setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // iOS Safari quirk: `download` attribute is honoured only on https +
+    // not always for blobs. Open the blob in a new tab as a parallel
+    // safety net — the user can long-press to save if download did
+    // nothing visible.
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+    if (isIOS) {
+      try { window.open(url, '_blank', 'noopener'); } catch { /* popup blocked */ }
+    }
+    cleanup();
+    return { ok: true };
+  } catch (e) {
+    cleanup();
+    return { ok: false, error: e?.message || 'Download failed' };
+  }
+}
+
+/** Copy the image to clipboard — useful for Telegram/Discord paste. */
+export async function copyImage(blob) {
+  try {
+    if (!navigator.clipboard || !window.ClipboardItem) {
+      return { ok: false, error: 'Clipboard not supported' };
+    }
+    await navigator.clipboard.write([
+      new ClipboardItem({ 'image/png': blob }),
+    ]);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e?.message || 'Copy failed' };
+  }
 }

@@ -350,7 +350,7 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel active" id="tab-players">
     <div class="stats" id="playerStats"></div>
     <table><thead><tr>
-      <th>Name</th><th>DEX</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Gold</th><th>Trade Vol</th><th>Buildings</th><th>Shield</th><th>Joined</th><th>Actions</th>
+      <th>Name</th><th>DEX</th><th>UI</th><th>Wallet</th><th>Trophies</th><th>Level</th><th>Gold</th><th>Wood</th><th>Ore</th><th>Trade Gold</th><th>Trade Vol</th><th>Buildings</th><th>Shield</th><th>Joined</th><th>Actions</th>
     </tr></thead><tbody id="playersBody"></tbody></table>
   </div>
 
@@ -377,6 +377,9 @@ app.get('/api/admin/panel', (req, res) => {
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">DEX Breakdown</h2>
     <div id="dexStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
+
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Futures UI Mode</h2>
+    <div id="uiModeStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
 
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Top Avantis Traders</h2>
     <table><thead><tr>
@@ -570,6 +573,22 @@ function renderPlayers() {
     if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
     return '<span class="badge badge-off">—</span>';
   }
+  function uiBadge(m) {
+    // Per-player futures UI mode. NULL = user has not yet picked (hasn't
+    // opened the futures panel since the feature shipped).
+    if (m === 'pro')   return '<span class="badge" style="background:#0ea5e9;color:#fff">PRO</span>';
+    if (m === 'basic') return '<span class="badge" style="background:#16a34a;color:#fff">BASIC</span>';
+    return '<span class="badge badge-off">—</span>';
+  }
+  function walletShort(w) {
+    if (!w) return '<span class="badge badge-off">—</span>';
+    const s = String(w);
+    // EVM and Solana addresses are different lengths but the start/end
+    // pattern is universally readable.
+    const slice = s.length > 12 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
+    // Click-to-copy: cheap UX win, no extra deps.
+    return '<span class="mono" style="cursor:pointer;color:#bae6fd" title="' + esc(s) + '" onclick="navigator.clipboard.writeText(\\'' + esc(s) + '\\')">' + esc(slice) + '</span>';
+  }
   function fmtUSD(n) {
     const v = Number(n) || 0;
     if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
@@ -580,6 +599,8 @@ function renderPlayers() {
     '<tr>' +
     '<td><strong>' + esc(p.name) + '</strong></td>' +
     '<td>' + dexBadge(p.dex) + '</td>' +
+    '<td>' + uiBadge(p.futures_mode) + '</td>' +
+    '<td>' + walletShort(p.wallet) + '</td>' +
     '<td>' + p.trophies + '</td>' +
     '<td>' + p.level + '</td>' +
     '<td style="color:#e8b830">' + p.gold + '</td>' +
@@ -758,6 +779,30 @@ async function loadStats() {
       dexCard('Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, '') +
       dexCard('Avantis · Base', '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, avtExtra) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
+
+    // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
+    // Server returns an array like [{mode:'pro',n:5}, {mode:'basic',n:12},
+    // {mode:'none',n:107}]. Sourcing from the API guarantees stats work
+    // even if the user opens this tab before the players list loaded.
+    const uiModes = s.ui_modes || [];
+    const uiPro    = (uiModes.find(x => x.mode === 'pro')   || {}).n || 0;
+    const uiBasic  = (uiModes.find(x => x.mode === 'basic') || {}).n || 0;
+    const uiNone   = (uiModes.find(x => x.mode === 'none')  || {}).n || 0;
+    const uiTotal  = uiPro + uiBasic;  // denominator only counts players who DID pick
+    function uiCard(label, color, count, denom) {
+      const pct = denom > 0 ? Math.round((count / denom) * 100) : 0;
+      return '<div style="flex:1;min-width:180px;background:linear-gradient(180deg,' + color + '22,' + color + '0a);border:1px solid ' + color + ';border-radius:12px;padding:16px">' +
+        '<div style="font-size:13px;color:' + color + ';font-weight:700;letter-spacing:0.4px">' + label + '</div>' +
+        '<div style="font-size:32px;font-weight:900;color:#fff;margin:6px 0 2px">' + count + '</div>' +
+        '<div style="font-size:11px;color:#9ca3af">' + pct + '% of pickers</div>' +
+      '</div>';
+    }
+    document.getElementById('uiModeStats').innerHTML =
+      uiCard('Pro', '#0EA5E9', uiPro, uiTotal) +
+      uiCard('Basic', '#16a34a', uiBasic, uiTotal) +
+      (uiNone > 0
+        ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + uiNone + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">Not picked yet<br/>(haven\\'t opened futures)</div></div></div>'
+        : '');
 
     document.getElementById('avantisTopBody').innerHTML = (dex.avantis_top || []).map(p =>
       '<tr>' +

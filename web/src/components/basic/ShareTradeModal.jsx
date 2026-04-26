@@ -6,7 +6,7 @@
 
 import { memo, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { generateShareImage, shareOrDownload } from './generateShareImage';
+import { generateShareImage, canShareFiles, nativeShare, downloadImage, copyImage } from './generateShareImage';
 import { colors } from './styles';
 
 function ShareTradeModal({ open, trade, onClose }) {
@@ -46,15 +46,32 @@ function ShareTradeModal({ open, trade, onClose }) {
     };
   }, [previewUrl]);
 
-  const handleShare = async () => {
+  const [feedback, setFeedback] = useState(null); // { kind: 'ok'|'err', text }
+
+  // Compute capability ONCE per modal open (it's static per device but
+  // the feature-probe touches navigator so we don't run it on every render).
+  const [hasNativeShare] = useState(() => canShareFiles());
+
+  const runAction = async (fn, successText, autoClose = false) => {
     if (!blob || busy) return;
     setBusy(true);
+    setFeedback(null);
     try {
-      await shareOrDownload(blob);
+      const result = await fn(blob);
+      if (result.ok) {
+        setFeedback({ kind: 'ok', text: successText });
+        if (autoClose) setTimeout(() => onClose && onClose(), 1200);
+      } else if (!result.cancelled) {
+        setFeedback({ kind: 'err', text: result.error || 'Action failed' });
+      }
     } finally {
       setBusy(false);
     }
   };
+
+  const handleShare = () => runAction(nativeShare, 'Opened share sheet', true);
+  const handleSave = () => runAction(downloadImage, 'Saved to your device');
+  const handleCopy = () => runAction(copyImage, 'Copied — paste in any chat');
 
   if (!open) return null;
 
@@ -105,14 +122,63 @@ function ShareTradeModal({ open, trade, onClose }) {
           </div>
 
           <div style={S.actions}>
+            {/* Native share opens the OS share sheet (Telegram, Twitter,
+                Instagram, Save to Photos, AirDrop…). Hidden on desktop /
+                contexts that don't support file sharing — replaced with
+                Save + Copy so the user always has SOMETHING that works. */}
+            {hasNativeShare && (
+              <button
+                onClick={handleShare}
+                disabled={!blob || busy}
+                style={{ ...S.shareBtn, ...((!blob || busy) ? S.btnDisabled : {}) }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" strokeWidth="2.5"
+                     strokeLinecap="round" strokeLinejoin="round"
+                     style={{ marginRight: 6 }}>
+                  <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                  <polyline points="16 6 12 2 8 6" />
+                  <line x1="12" y1="2" x2="12" y2="15" />
+                </svg>
+                {busy ? 'Opening…' : 'Share'}
+              </button>
+            )}
             <button
-              onClick={handleShare}
+              onClick={handleSave}
               disabled={!blob || busy}
-              style={{ ...S.shareBtn, ...((!blob || busy) ? S.btnDisabled : {}) }}
+              style={{ ...S.altBtn, ...((!blob || busy) ? S.btnDisabled : {}) }}
+              title="Save to your device"
             >
-              {busy ? 'Opening…' : 'Share'}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2.5"
+                   strokeLinecap="round" strokeLinejoin="round"
+                   style={{ marginRight: 6 }}>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Save
+            </button>
+            <button
+              onClick={handleCopy}
+              disabled={!blob || busy}
+              style={{ ...S.altBtn, width: 56, padding: 0, ...((!blob || busy) ? S.btnDisabled : {}) }}
+              title="Copy image — paste in chat"
+              aria-label="Copy"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="2.5"
+                   strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
             </button>
           </div>
+          {feedback && (
+            <div style={feedback.kind === 'ok' ? S.feedbackOk : S.feedbackErr}>
+              {feedback.text}
+            </div>
+          )}
         </motion.div>
       </motion.div>
     </AnimatePresence>
@@ -190,7 +256,7 @@ const S = {
     display: 'flex', gap: 8,
   },
   shareBtn: {
-    flex: 1, padding: '12px',
+    flex: 2, padding: '12px',
     fontSize: 15, fontWeight: 900, color: '#fff',
     background: 'linear-gradient(180deg, #4caf50 0%, #2e7d32 100%)',
     borderWidth: 3, borderStyle: 'solid', borderColor: '#1b5e20',
@@ -198,8 +264,34 @@ const S = {
     letterSpacing: '0.4px',
     textShadow: '0 1px 0 rgba(0,0,0,0.3)',
     boxSizing: 'border-box',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  altBtn: {
+    flex: 1, padding: '12px',
+    fontSize: 14, fontWeight: 800, color: '#5C3A21',
+    background: '#fdf8e7',
+    borderWidth: 2, borderStyle: 'solid', borderColor: '#d4c8b0',
+    borderRadius: 12, cursor: 'pointer', fontFamily: 'inherit',
+    boxSizing: 'border-box',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   btnDisabled: {
     opacity: 0.6, cursor: 'wait',
+  },
+  feedbackOk: {
+    fontSize: 12, fontWeight: 700,
+    color: '#2e7d32',
+    background: 'rgba(76, 175, 80, 0.12)',
+    border: '1px solid #4caf50',
+    padding: '6px 10px', borderRadius: 8,
+    textAlign: 'center',
+  },
+  feedbackErr: {
+    fontSize: 12, fontWeight: 700,
+    color: '#c62828',
+    background: 'rgba(239, 83, 80, 0.12)',
+    border: '1px solid #ef5350',
+    padding: '6px 10px', borderRadius: 8,
+    textAlign: 'center',
   },
 };

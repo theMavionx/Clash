@@ -147,9 +147,7 @@ function BasicTradeFlow({
         // Each Pacifica setting (margin mode + leverage) is its own signed
         // request. To minimise wallet popups for returning users we SKIP
         // the calls when the symbol's current value already matches the
-        // intent. Result: a user who set up "isolated 2×" once and keeps
-        // re-trading the same symbol/leverage sees one popup (the trade)
-        // instead of three.
+        // intent.
         const sym = pickedToken.symbol;
         const currentIsolated = !!(marginModes && marginModes[sym]);
         if (!currentIsolated && setMarginMode) {
@@ -160,7 +158,25 @@ function BasicTradeFlow({
         const levMatches = Number.isFinite(currentLevNum)
           && Math.abs(currentLevNum - pickedLev) < 0.05;
         if (!levMatches && setLeverageApi) {
-          try { await setLeverageApi(sym, pickedLev); } catch { /* best-effort */ }
+          // setLeverageApi swallows errors internally (sets the global
+          // error state but doesn't throw). Pacifica rejects the call with
+          // 422 if the user already has an OPEN position on this symbol —
+          // we MUST detect this, otherwise we'd compute the trade size
+          // assuming the new leverage took effect and end up opening at
+          // the OLD leverage (e.g. user picked 20× but had 50× set on a
+          // prior trade — trade opens at 50× = 2.5× larger than they
+          // intended). Surface a clear error and bail.
+          const res = await setLeverageApi(sym, pickedLev);
+          // Per usePacifica.setLeverage: returns the raw API response on
+          // success, undefined on internally-caught error. A successful
+          // response has no `error` field.
+          if (!res || res.error) {
+            const reason = res?.error || 'Could not set leverage. Close any open position on this symbol first.';
+            setErrorMsg(reason);
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
         }
         const lotSize = parseFloat(pickedToken?.lot_size) || 0;
         const rawTokenAmt = (pickedAmount * pickedLev) / livePrice;

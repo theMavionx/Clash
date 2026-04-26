@@ -1614,6 +1614,7 @@ function adminAuth(req, res, next) {
 router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare(`
     SELECT id, name, trophies, level, gold, wood, ore, wallet, dex,
+           futures_mode, tutorial_flags,
            shield_until, last_attacked_by, last_attacked_at, created_at
     FROM players ORDER BY trophies DESC
   `).all();
@@ -1629,6 +1630,10 @@ router.get('/admin/players', adminAuth, (req, res) => {
     return {
       ...p,
       dex: p.dex || null,
+      // futures_mode: 'pro' | 'basic' | null. NULL means user has not yet
+      // made the first-time selection (haven't opened the futures panel
+      // since the feature shipped).
+      futures_mode: p.futures_mode || null,
       shield_active: p.shield_until && new Date(p.shield_until + 'Z') > new Date(),
       shield_remaining: p.shield_until ? Math.max(0, Math.round((new Date(p.shield_until + 'Z') - new Date()) / 60000)) : 0,
       buildings_count: db.db.prepare('SELECT COUNT(*) as c FROM buildings WHERE player_id = ?').get(p.id).c,
@@ -1794,6 +1799,16 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     SELECT COALESCE(dex, 'unknown') AS dex, COUNT(*) AS n
     FROM players GROUP BY dex
   `).all();
+
+  // Futures UI mode breakdown — Pro vs Basic vs not-yet-picked. Mirrors
+  // the byDex shape so the admin UI can render it the same way.
+  let byUiMode = [];
+  try {
+    byUiMode = db.db.prepare(`
+      SELECT COALESCE(futures_mode, 'none') AS mode, COUNT(*) AS n
+      FROM players GROUP BY futures_mode
+    `).all();
+  } catch { /* futures_mode column may not exist on a very old DB */ }
   let rewardsByDex = [];
   try {
     rewardsByDex = db.db.prepare(`
@@ -1861,6 +1876,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       avantis_activity: avantisActivity,
       avantis_top: avantisTop,
     },
+    ui_modes: byUiMode,
     uptime: Math.floor(process.uptime()),
     memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
   });
