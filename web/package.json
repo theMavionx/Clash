@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "godot:manifest": "node generate-godot-export-manifest.cjs",
+    "optimize:images": "node optimize-images.cjs",
     "watch": "node watch-export.js",
     "dev:all": "node watch-export.js & vite",
     "build": "vite build",

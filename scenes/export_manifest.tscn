@@ -1,0 +1,246 @@
+[gd_scene load_steps=121 format=3]
+
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/tower2plus_3.glb" id="1"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/tower_1.glb" id="2"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/towerplus_2.fbx" id="3"]
+[ext_resource type="PackedScene" path="res://Model/Barn/1.glb" id="4"]
+[ext_resource type="PackedScene" path="res://Model/Barn/2.glb" id="5"]
+[ext_resource type="PackedScene" path="res://Model/Barn/3.glb" id="6"]
+[ext_resource type="PackedScene" path="res://Model/BrokenModel/BrokenModel.glb" id="7"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb" id="8"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb" id="9"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb" id="10"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb" id="11"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb" id="12"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_bow.gltf" id="13"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_crossbow.gltf" id="14"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/axe_1handed.gltf" id="15"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/bow_withString.gltf" id="16"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/crossbow_1handed.gltf" id="17"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/staff.gltf" id="18"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/sword_1handed.gltf" id="19"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Barbarian.glb" id="20"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Knight.glb" id="21"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Mage.glb" id="22"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Ranger.glb" id="23"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Rogue_Hooded.glb" id="24"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb" id="25"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb" id="26"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf" id="27"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb" id="28"]
+[ext_resource type="PackedScene" path="res://Model/Island/Isl.glb" id="29"]
+[ext_resource type="PackedScene" path="res://Model/Mine/1.gltf" id="30"]
+[ext_resource type="PackedScene" path="res://Model/Port/1.glb" id="31"]
+[ext_resource type="PackedScene" path="res://Model/Port/2.glb" id="32"]
+[ext_resource type="PackedScene" path="res://Model/Port/3.glb" id="33"]
+[ext_resource type="PackedScene" path="res://Model/Sawmill/1.glb" id="34"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00001.png" id="35"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00004.png" id="36"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00007.png" id="37"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00010.png" id="38"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00013.png" id="39"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00016.png" id="40"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00019.png" id="41"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00022.png" id="42"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00025.png" id="43"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00028.png" id="44"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00031.png" id="45"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00034.png" id="46"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00037.png" id="47"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00040.png" id="48"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00043.png" id="49"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00046.png" id="50"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00049.png" id="51"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00052.png" id="52"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00055.png" id="53"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00058.png" id="54"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00061.png" id="55"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00064.png" id="56"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00067.png" id="57"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00070.png" id="58"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00073.png" id="59"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00076.png" id="60"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00079.png" id="61"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00082.png" id="62"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00085.png" id="63"]
+[ext_resource type="PackedScene" path="res://Model/Ship/MainShip/MainShip.glb" id="64"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-large_3.glb" id="65"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-medium_2.glb" id="66"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-small_1.glb" id="67"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Business Building_3.glb" id="68"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Storage House_2.glb" id="69"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Storage shed_1.glb" id="70"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/1.glb" id="71"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/2.glb" id="72"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/3.glb" id="73"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/1.gltf" id="74"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/2.gltf" id="75"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/3.gltf" id="76"]
+[ext_resource type="PackedScene" path="res://Model/Turret/scene.gltf" id="77"]
+[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png" id="78"]
+[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png" id="79"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (1).png" id="80"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (2).png" id="81"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (3).png" id="82"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (4).png" id="83"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (5).png" id="84"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505.png" id="85"]
+[ext_resource type="PackedScene" path="res://Model/flag/pirate_flag_animated.glb" id="86"]
+[ext_resource type="PackedScene" path="res://scenes/Main.tscn" id="87"]
+[ext_resource type="Script" path="res://scripts/archer.gd" id="88"]
+[ext_resource type="Script" path="res://scripts/attack_system.gd" id="89"]
+[ext_resource type="Script" path="res://scripts/barbarian.gd" id="90"]
+[ext_resource type="Script" path="res://scripts/base_troop.gd" id="91"]
+[ext_resource type="Script" path="res://scripts/bs_battle.gd" id="92"]
+[ext_resource type="Script" path="res://scripts/bs_cannon.gd" id="93"]
+[ext_resource type="Script" path="res://scripts/bs_port.gd" id="94"]
+[ext_resource type="Script" path="res://scripts/bs_production.gd" id="95"]
+[ext_resource type="Script" path="res://scripts/building_system.gd" id="96"]
+[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="97"]
+[ext_resource type="Script" path="res://scripts/cloud_transition.gd" id="98"]
+[ext_resource type="Script" path="res://scripts/game_manager.gd" id="99"]
+[ext_resource type="Script" path="res://scripts/home_troop.gd" id="100"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="101"]
+[ext_resource type="Script" path="res://scripts/js_bridge.gd" id="102"]
+[ext_resource type="Script" path="res://scripts/knight.gd" id="103"]
+[ext_resource type="Script" path="res://scripts/mage.gd" id="104"]
+[ext_resource type="Script" path="res://scripts/map_islands.gd" id="105"]
+[ext_resource type="Script" path="res://scripts/network_client.gd" id="106"]
+[ext_resource type="Script" path="res://scripts/ranger.gd" id="107"]
+[ext_resource type="Script" path="res://scripts/skeleton_guard.gd" id="108"]
+[ext_resource type="Script" path="res://scripts/tower_archer.gd" id="109"]
+[ext_resource type="Script" path="res://scripts/turret.gd" id="110"]
+[ext_resource type="Script" path="res://scripts/warmup.gd" id="111"]
+[ext_resource type="Script" path="res://scripts/world_map_camera.gd" id="112"]
+[ext_resource type="Shader" path="res://shaders/cloud.gdshader" id="113"]
+[ext_resource type="Shader" path="res://shaders/hp_bar.gdshader" id="114"]
+[ext_resource type="Shader" path="res://shaders/magic_orb.gdshader" id="115"]
+[ext_resource type="Shader" path="res://shaders/upgrade_outline.gdshader" id="116"]
+[ext_resource type="Shader" path="res://shaders/water.gdshader" id="117"]
+[ext_resource type="Texture2D" path="res://web/src/assets/resources/gold_bar.png" id="118"]
+[ext_resource type="Texture2D" path="res://web/src/assets/resources/stone_bar.png" id="119"]
+[ext_resource type="Texture2D" path="res://web/src/assets/resources/wood_bar.png" id="120"]
+
+[node name="ExportManifest" type="ResourcePreloader"]
+resources = {
+"res_001": ExtResource("1"),
+"res_002": ExtResource("2"),
+"res_003": ExtResource("3"),
+"res_004": ExtResource("4"),
+"res_005": ExtResource("5"),
+"res_006": ExtResource("6"),
+"res_007": ExtResource("7"),
+"res_008": ExtResource("8"),
+"res_009": ExtResource("9"),
+"res_010": ExtResource("10"),
+"res_011": ExtResource("11"),
+"res_012": ExtResource("12"),
+"res_013": ExtResource("13"),
+"res_014": ExtResource("14"),
+"res_015": ExtResource("15"),
+"res_016": ExtResource("16"),
+"res_017": ExtResource("17"),
+"res_018": ExtResource("18"),
+"res_019": ExtResource("19"),
+"res_020": ExtResource("20"),
+"res_021": ExtResource("21"),
+"res_022": ExtResource("22"),
+"res_023": ExtResource("23"),
+"res_024": ExtResource("24"),
+"res_025": ExtResource("25"),
+"res_026": ExtResource("26"),
+"res_027": ExtResource("27"),
+"res_028": ExtResource("28"),
+"res_029": ExtResource("29"),
+"res_030": ExtResource("30"),
+"res_031": ExtResource("31"),
+"res_032": ExtResource("32"),
+"res_033": ExtResource("33"),
+"res_034": ExtResource("34"),
+"res_035": ExtResource("35"),
+"res_036": ExtResource("36"),
+"res_037": ExtResource("37"),
+"res_038": ExtResource("38"),
+"res_039": ExtResource("39"),
+"res_040": ExtResource("40"),
+"res_041": ExtResource("41"),
+"res_042": ExtResource("42"),
+"res_043": ExtResource("43"),
+"res_044": ExtResource("44"),
+"res_045": ExtResource("45"),
+"res_046": ExtResource("46"),
+"res_047": ExtResource("47"),
+"res_048": ExtResource("48"),
+"res_049": ExtResource("49"),
+"res_050": ExtResource("50"),
+"res_051": ExtResource("51"),
+"res_052": ExtResource("52"),
+"res_053": ExtResource("53"),
+"res_054": ExtResource("54"),
+"res_055": ExtResource("55"),
+"res_056": ExtResource("56"),
+"res_057": ExtResource("57"),
+"res_058": ExtResource("58"),
+"res_059": ExtResource("59"),
+"res_060": ExtResource("60"),
+"res_061": ExtResource("61"),
+"res_062": ExtResource("62"),
+"res_063": ExtResource("63"),
+"res_064": ExtResource("64"),
+"res_065": ExtResource("65"),
+"res_066": ExtResource("66"),
+"res_067": ExtResource("67"),
+"res_068": ExtResource("68"),
+"res_069": ExtResource("69"),
+"res_070": ExtResource("70"),
+"res_071": ExtResource("71"),
+"res_072": ExtResource("72"),
+"res_073": ExtResource("73"),
+"res_074": ExtResource("74"),
+"res_075": ExtResource("75"),
+"res_076": ExtResource("76"),
+"res_077": ExtResource("77"),
+"res_078": ExtResource("78"),
+"res_079": ExtResource("79"),
+"res_080": ExtResource("80"),
+"res_081": ExtResource("81"),
+"res_082": ExtResource("82"),
+"res_083": ExtResource("83"),
+"res_084": ExtResource("84"),
+"res_085": ExtResource("85"),
+"res_086": ExtResource("86"),
+"res_087": ExtResource("87"),
+"res_088": ExtResource("88"),
+"res_089": ExtResource("89"),
+"res_090": ExtResource("90"),
+"res_091": ExtResource("91"),
+"res_092": ExtResource("92"),
+"res_093": ExtResource("93"),
+"res_094": ExtResource("94"),
+"res_095": ExtResource("95"),
+"res_096": ExtResource("96"),
+"res_097": ExtResource("97"),
+"res_098": ExtResource("98"),
+"res_099": ExtResource("99"),
+"res_100": ExtResource("100"),
+"res_101": ExtResource("101"),
+"res_102": ExtResource("102"),
+"res_103": ExtResource("103"),
+"res_104": ExtResource("104"),
+"res_105": ExtResource("105"),
+"res_106": ExtResource("106"),
+"res_107": ExtResource("107"),
+"res_108": ExtResource("108"),
+"res_109": ExtResource("109"),
+"res_110": ExtResource("110"),
+"res_111": ExtResource("111"),
+"res_112": ExtResource("112"),
+"res_113": ExtResource("113"),
+"res_114": ExtResource("114"),
+"res_115": ExtResource("115"),
+"res_116": ExtResource("116"),
+"res_117": ExtResource("117"),
+"res_118": ExtResource("118"),
+"res_119": ExtResource("119"),
+"res_120": ExtResource("120")
+}

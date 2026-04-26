@@ -19,6 +19,12 @@ server-futures/server.log
 
 # Environment
 .env
+*.orig
+.asset-backups/
+
+# Godot imports generated for web-only share images
+web/public/win.jpg.import
+web/public/lose.jpg.import
 
 # MCP
 .mcp.json

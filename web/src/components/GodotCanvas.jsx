@@ -8,6 +8,15 @@ const splashLogo = '/splash-logo.png';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy
+const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
+
+function getGodotPixelRatio() {
+  const raw = window.devicePixelRatio || 1;
+  const mem = navigator.deviceMemory || 4;
+  const narrow = Math.min(window.innerWidth, window.innerHeight) <= 600;
+  const cap = mem <= 4 || narrow ? 1.5 : 2;
+  return Math.min(raw, cap);
+}
 
 const canvasStyle = {
   width: '100%',
@@ -122,9 +131,10 @@ function GodotCanvas({ onEngineReady }) {
         return;
       }
 
-      // Server doesn't send Content-Length for Godot files; real total is ~280MB.
+      // Server may not send Content-Length for Godot files. Keep this near
+      // Work.pck + Work.wasm so the bar does not crawl after PCK trimming.
       // We scale by max-observed current so the bar fills smoothly regardless.
-      let maxDownload = 280000000;
+      let maxDownload = GODOT_DOWNLOAD_FALLBACK_BYTES;
 
       // Stage 2: pure linear time-based ramp 0 → 100 over STAGE2_MIN_MS.
       // If Godot signals "buildings loaded" before ramp finishes — we still
@@ -193,8 +203,9 @@ function GodotCanvas({ onEngineReady }) {
       const resizeCanvas = () => {
         const c = canvasRef.current;
         if (!c) return;
-        c.width = window.innerWidth * (window.devicePixelRatio || 1);
-        c.height = window.innerHeight * (window.devicePixelRatio || 1);
+        const ratio = getGodotPixelRatio();
+        c.width = Math.round(window.innerWidth * ratio);
+        c.height = Math.round(window.innerHeight * ratio);
       };
       resizeCanvas();
       window.addEventListener('resize', resizeCanvas);

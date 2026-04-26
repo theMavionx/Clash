@@ -1,11 +1,17 @@
-const { execSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const GODOT = 'C:/Users/Admin/Downloads/Godot_v4.6-stable_win64.exe/Godot_v4.6-stable_win64_console.exe';
 const PROJECT = path.resolve(__dirname, '..');
 const EXPORT_PATH = path.resolve(__dirname, 'public/godot/Work.html');
 const EXPORT_PRESET = 'Web';
+const EXPORT_MODE = process.env.GODOT_EXPORT_MODE === 'debug' ? '--export-debug' : '--export-release';
+const MANIFEST_SCRIPT = path.resolve(__dirname, 'generate-godot-export-manifest.cjs');
 
 // Directories to watch
 const WATCH_DIRS = [
@@ -23,12 +29,13 @@ function doExport() {
     return;
   }
   exporting = true;
-  console.log('\n\x1b[33m[watch]\x1b[0m Exporting Godot project...');
+  console.log(`\n\x1b[33m[watch]\x1b[0m Exporting Godot project (${EXPORT_MODE.replace('--export-', '')})...`);
   const start = Date.now();
   try {
+    execSync(`node "${MANIFEST_SCRIPT}"`, { stdio: 'inherit', timeout: 30000 });
     execSync(
-      `"${GODOT}" --headless --path "${PROJECT}" --export-debug "${EXPORT_PRESET}" "${EXPORT_PATH}"`,
-      { stdio: 'inherit', timeout: 120000 }
+      `"${GODOT}" --headless --path "${PROJECT}" ${EXPORT_MODE} "${EXPORT_PRESET}" "${EXPORT_PATH}"`,
+      { stdio: 'inherit', timeout: 600000 }
     );
     console.log(`\x1b[32m[watch]\x1b[0m Export done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   } catch (e) {
