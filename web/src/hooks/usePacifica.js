@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { isFarcasterFrame } from './useFarcaster';
 import { useDex } from '../contexts/DexContext';
@@ -689,9 +690,22 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, signedRequestWithActivation, fetchAccount]);
+  }, [walletAddr, signedRequestWithActivation, fetchAccount, fetchWalletUsdc]);
 
   // ---------- WebSocket ----------
+  const wsHandlersRef = useRef({});
+  useEffect(() => {
+    wsHandlersRef.current = {
+      fetchPrices,
+      fetchAccount,
+      fetchPositions,
+      fetchOrders,
+      fetchWalletUsdc,
+      fetchLeverageSettings,
+      claimGold,
+    };
+  }, [fetchPrices, fetchAccount, fetchPositions, fetchOrders, fetchWalletUsdc, fetchLeverageSettings, claimGold]);
+
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;
 
@@ -705,12 +719,13 @@ export function usePacifica() {
     const MAX_BACKOFF = 30000;
 
     function refetchAll() {
-      fetchPrices();
+      const h = wsHandlersRef.current;
+      h.fetchPrices?.();
       if (walletAddr) {
-        fetchAccount();
-        fetchPositions();
-        fetchOrders();
-        fetchLeverageSettings();
+        h.fetchAccount?.();
+        h.fetchPositions?.();
+        h.fetchOrders?.();
+        h.fetchLeverageSettings?.();
       }
     }
 
@@ -824,12 +839,12 @@ export function usePacifica() {
               return [...map.values()];
             });
           }
-          // Real-time: when trade happens, claim gold from server
-          if (msg.channel === 'account_trades' && msg.data) {
-            // Small delay to let Pacifica finalize the trade
-            clearTimeout(claimGoldTimer);
-            claimGoldTimer = setTimeout(claimGold, 1000);
-          }
+            // Real-time: when trade happens, claim gold from server
+            if (msg.channel === 'account_trades' && msg.data) {
+              // Small delay to let Pacifica finalize the trade
+              clearTimeout(claimGoldTimer);
+              claimGoldTimer = setTimeout(() => wsHandlersRef.current.claimGold?.(), 1000);
+            }
         } catch {}
       };
 
@@ -859,8 +874,15 @@ export function usePacifica() {
     window.addEventListener('offline', handleOffline);
 
     connect();
-    fetchPrices();
-    if (walletAddr) { fetchAccount(); fetchPositions(); fetchOrders(); fetchWalletUsdc(); fetchLeverageSettings(); }
+    const h = wsHandlersRef.current;
+    h.fetchPrices?.();
+    if (walletAddr) {
+      h.fetchAccount?.();
+      h.fetchPositions?.();
+      h.fetchOrders?.();
+      h.fetchWalletUsdc?.();
+      h.fetchLeverageSettings?.();
+    }
 
     return () => {
       cancelled = true;

@@ -510,20 +510,17 @@ export function useAvantis() {
     }
   }, [walletAddr, publicClient]);
 
-  // ───── Report a trade to server so gold-rewards worker can credit ─────
-  // Fire-and-forget: the server ALSO polls /user-data so even if this fails,
-  // the trade will be picked up on the next worker tick. This is just a
-  // nudge for instant feedback.
+  // ───── Report a trade to server for backwards-compatible telemetry ─────
+  // Rewards are credited only after the server worker sees the trade in
+  // Avantis Core API, so this endpoint cannot mint gold from client payloads.
   const reportTrade = useCallback(async ({ tx_hash, symbol, side, amount, leverage, price, order_type = 'market', dedup_key }) => {
     if (!walletAddr) return;
     try {
       const notional = Number(amount) * Number(leverage);
       const token = tokenRef.current || window._playerToken;
       if (!token) {
-        // Worker polling (2 min cycle) will eventually pick this trade up, but
-        // without the token the instant-feedback /trade-report path is closed
-        // and claim-gold will lag. Log so it's visible in DevTools instead of
-        // silently degrading.
+        // Worker polling will still pick up verified trades; log only so token
+        // propagation issues are visible in DevTools.
         console.warn('[useAvantis] reportTrade skipped — no token yet');
         return;
       }
@@ -616,11 +613,11 @@ export function useAvantis() {
   }, [walletClient, walletAddr, publicClient]);
 
   // ───── Guards ─────
-  function requireWallet() {
+  const requireWallet = useCallback(() => {
     if (!isReady || !walletClient || !walletAddr) {
       throw new Error('Connect your Base wallet to trade on Avantis');
     }
-  }
+  }, [isReady, walletClient, walletAddr]);
 
   // ───── Place market order ─────
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
@@ -740,7 +737,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, requireWallet, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Place limit order ─────
   // `slippage` added as optional 7th arg (percent, e.g. 0.5). Defaults to 1%
@@ -863,7 +860,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, requireWallet, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim]);
 
   // ───── Close position (full or partial) ─────
   const closePosition = useCallback(async (symbol, side, amount, pairIndex, tradeIndex) => {
@@ -951,7 +948,7 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
+  }, [walletClient, walletAddr, publicClient, ensureChain, requireWallet, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
 
   // ───── Cancel limit order ─────
   const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex) => {
@@ -971,7 +968,7 @@ export function useAvantis() {
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     }
-  }, [walletClient, publicClient, ensureChain, fetchOrders]);
+  }, [walletClient, publicClient, ensureChain, requireWallet, fetchOrders]);
 
   // ───── Update TP/SL ─────
   const setTpsl = useCallback(async (_symbol, _side, takeProfit, stopLoss, pairIndex, tradeIndex) => {
@@ -1008,7 +1005,7 @@ export function useAvantis() {
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     }
-  }, [walletClient, publicClient, ensureChain, fetchPositions]);
+  }, [walletClient, publicClient, ensureChain, requireWallet, fetchPositions]);
 
   // Leverage + margin mode are per-trade on Avantis (no account-level API).
   // Silent no-ops keep the FuturesPanel interface uniform with Pacifica.

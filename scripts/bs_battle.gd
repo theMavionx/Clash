@@ -278,6 +278,8 @@ func _switch_to_enemy_island() -> void:
 	_battle_timer = 0.0
 	_battle_timer_active = true
 	bs._cannon.reset()
+	if bs._rally:
+		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
 		"grid_config": {
@@ -304,6 +306,11 @@ func _switch_to_enemy_island() -> void:
 	_free_home_troops_and_ships()
 	for bsys in bs._building_systems:
 		bsys._production._hide_all_collect_icons()
+		# Deselect any home-side building before flipping to enemy view —
+		# otherwise leftover UI (move arrows, range indicator, building panel)
+		# stays parented to the BS and reappears overlaid on the enemy island
+		# at the local coordinates of the previously selected home building.
+		bsys._deselect_building()
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
@@ -383,6 +390,8 @@ func _switch_to_enemy_island_after_sail() -> void:
 	_battle_timer = 0.0
 	_battle_timer_active = true
 	bs._cannon.reset()
+	if bs._rally:
+		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
 		"grid_config": {
@@ -402,6 +411,11 @@ func _switch_to_enemy_island_after_sail() -> void:
 	_free_home_troops_and_ships()
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
 		bsys._production._hide_all_collect_icons()
+		# Deselect any home-side building before flipping to enemy view —
+		# otherwise leftover UI (move arrows, range indicator, building panel)
+		# stays parented to the BS and reappears overlaid on the enemy island
+		# at the local coordinates of the previously selected home building.
+		bsys._deselect_building()
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
@@ -476,6 +490,9 @@ func _return_home() -> void:
 	_battle_timer = 0.0
 	Engine.time_scale = 1.0
 	bs._cannon._exit_ship_cannon_mode()
+	if bs._rally:
+		bs._rally._exit_rally_mode()
+		bs._rally.reset()
 	var _r2 = bs.get_tree().root
 	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
 		bs._ship_attack_node = _r2.find_child("MainShipAttack", true, false)
@@ -722,6 +739,7 @@ func _on_town_hall_destroyed() -> void:
 		if result.has("ships"):
 			bs._apply_ships_from_server(result.get("ships", []))
 		var loot: Dictionary = result.get("loot", {})
+		var server_casualties: Dictionary = result.get("casualties", casualties_early)
 		if bridge:
 			if loot.get("gold", 0) > 0 or loot.get("wood", 0) > 0 or loot.get("ore", 0) > 0:
 				bridge.send_to_react("resources_add", {
@@ -730,7 +748,7 @@ func _on_town_hall_destroyed() -> void:
 					"ore": loot.get("ore", 0),
 				})
 			bridge.send_to_react("battle_result", {
-				"type": "victory", "loot": loot, "casualties": casualties_early,
+				"type": "victory", "loot": loot, "casualties": server_casualties,
 			})
 		return
 	if bridge:
@@ -758,6 +776,11 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	enemy_info = {"name": attacker_name, "trophies": 0, "buildings": buildings_snapshot}
 	for bsys in bs._building_systems:
 		bsys._production._hide_all_collect_icons()
+		# Deselect any home-side building before flipping to enemy view —
+		# otherwise leftover UI (move arrows, range indicator, building panel)
+		# stays parented to the BS and reappears overlaid on the enemy island
+		# at the local coordinates of the previously selected home building.
+		bsys._deselect_building()
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
@@ -800,6 +823,8 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": false})
 	bs._cannon.reset()
+	if bs._rally:
+		bs._rally.reset()
 	Engine.time_scale = 1.0
 	_replay_playback()
 
@@ -970,6 +995,8 @@ func check_defeat(delta: float) -> void:
 		# Apply authoritative post-casualty ship state from server
 		if defeat_result is Dictionary and defeat_result.has("ships"):
 			bs._apply_ships_from_server(defeat_result.get("ships", []))
+		if defeat_result is Dictionary and defeat_result.has("casualties"):
+			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
 	if not is_instance_valid(bs): return
 	var bridge_def: Node = bs._bridge
 	if bridge_def:

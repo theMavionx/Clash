@@ -10,6 +10,32 @@ const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy
 const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
 
+function loadGodotEngineScript() {
+  if (window.Engine || window.Godot) return Promise.resolve();
+  if (window.__clashGodotScriptPromise) return window.__clashGodotScriptPromise;
+
+  window.__clashGodotScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-clash-godot-script="true"]');
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.dataset.clashGodotScript = 'true';
+    script.src = `${GODOT_FILES}/Work.js${CACHE_BUST}`;
+    script.onload = resolve;
+    script.onerror = () => {
+      window.__clashGodotScriptPromise = null;
+      reject(new Error('Failed to load Godot engine script'));
+    };
+    document.body.appendChild(script);
+  });
+
+  return window.__clashGodotScriptPromise;
+}
+
 function getGodotPixelRatio() {
   const raw = window.devicePixelRatio || 1;
   const mem = navigator.deviceMemory || 4;
@@ -100,7 +126,12 @@ function GodotCanvas({ onEngineReady }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [stuck, setStuck] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
-  const lastProgressRef = useRef({ value: 0, time: Date.now() });
+  const lastProgressRef = useRef({ value: 0, time: 0 });
+  const onEngineReadyRef = useRef(onEngineReady);
+
+  useEffect(() => {
+    onEngineReadyRef.current = onEngineReady;
+  }, [onEngineReady]);
 
   // Detect if loading is stuck (same progress for 30s)
   useEffect(() => {
@@ -116,15 +147,27 @@ function GodotCanvas({ onEngineReady }) {
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
+    lastProgressRef.current = { value: 0, time: Date.now() };
+
+    let disposed = false;
+    let engine = null;
+    let resizeCanvas = null;
+    let stage2RafId = null;
+    let easeRafId = null;
+    let loadedTimeoutId = null;
+    let stage2DelayId = null;
 
     // Catch unhandled errors for mobile debug
-    const errHandler = (e) => setErrorMsg(prev => prev || String(e.message || e.reason || e));
+    const errHandler = (e) => {
+      if (disposed) return;
+      setErrorMsg(prev => prev || String(e.message || e.reason || e));
+    };
+    const rejectionHandler = (e) => errHandler({ message: e.reason });
     window.addEventListener('error', errHandler);
-    window.addEventListener('unhandledrejection', (e) => errHandler({ message: e.reason }));
+    window.addEventListener('unhandledrejection', rejectionHandler);
 
-    const script = document.createElement('script');
-    script.src = `${GODOT_FILES}/Work.js${CACHE_BUST}`;
-    script.onload = () => {
+    const startGodot = () => {
+      if (disposed) return;
       const GODOT = window.Engine || window.Godot;
       if (!GODOT) {
         console.error('Godot engine not found');
@@ -143,23 +186,24 @@ function GodotCanvas({ onEngineReady }) {
       const STAGE2_MIN_MS = 1800;
       let stage2StartTime = null;
       let stage2BuildingsDone = false;
-      let stage2RafId = null;
       const tickStage2 = () => {
-        if (stage2StartTime == null) return;
+        if (disposed || stage2StartTime == null) return;
         const elapsed = Date.now() - stage2StartTime;
         const rampValue = Math.min(100, (elapsed / STAGE2_MIN_MS) * 100);
         // Hold at 99 until buildings confirm, then allow 100.
         const value = (rampValue >= 100 && !stage2BuildingsDone) ? 99 : rampValue;
         setStageProgress(Math.round(value));
         if (value >= 100) {
-          setTimeout(() => setIsLoaded(true), 300);
+          loadedTimeoutId = setTimeout(() => {
+            if (!disposed) setIsLoaded(true);
+          }, 300);
           stage2RafId = null;
           return;
         }
         stage2RafId = requestAnimationFrame(tickStage2);
       };
       const startStage2 = () => {
-        if (stage2StartTime != null) return;
+        if (disposed || stage2StartTime != null) return;
         console.log('[load] stage2 ramp starting');
         stage2StartTime = Date.now();
         setStage(2);
@@ -168,6 +212,7 @@ function GodotCanvas({ onEngineReady }) {
       };
 
       const handleProgress = (current, total) => {
+        if (disposed) return;
         // If Content-Length arrives, use it directly. Otherwise scale against
         // the highest `current` we've seen (grow maxDownload if needed so %
         // never stalls above 99 while more bytes stream in).
@@ -186,21 +231,25 @@ function GodotCanvas({ onEngineReady }) {
 
       // Godot's stage-2 signals are noisy and fire BEFORE startGame resolves,
       // so we don't use them to drive progress — only log for diagnostics.
-      window.godotLoadingProgress = (rawPct) => {
+      const godotLoadingProgress = (rawPct) => {
         console.log('[load] stage2 signal (ignored for progress)', { rawPct });
       };
+      window.godotLoadingProgress = godotLoadingProgress;
 
       // Godot signals all buildings placed — mark done; ramp will finish to 100.
-      window.godotBuildingsLoaded = () => {
+      const godotBuildingsLoaded = () => {
+        if (disposed) return;
         if (stage2BuildingsDone) return;
         console.log('[load] stage2 complete (godotBuildingsLoaded)');
         stage2BuildingsDone = Date.now();
       };
+      window.godotBuildingsLoaded = godotBuildingsLoaded;
 
-      const engine = new GODOT({ onProgress: handleProgress });
+      engine = new GODOT({ onProgress: handleProgress });
 
       // Force canvas to fill parent on mobile
-      const resizeCanvas = () => {
+      resizeCanvas = () => {
+        if (disposed) return;
         const c = canvasRef.current;
         if (!c) return;
         const ratio = getGodotPixelRatio();
@@ -217,27 +266,51 @@ function GodotCanvas({ onEngineReady }) {
         canvasResizePolicy: 0,
         onProgress: handleProgress,
       }).then(() => {
+        if (disposed) {
+          engine?.requestQuit?.();
+          return;
+        }
         // Download finished → ease stage 1 from current% up to 100 over 500ms,
         // pause 450ms at 100%, then start stage 2.
         console.log('[load] engine.startGame resolved → easing stage 1 → 100');
         resizeCanvas();
-        if (onEngineReady) onEngineReady(engine);
+        if (onEngineReadyRef.current) onEngineReadyRef.current(engine);
         const from = lastProgressRef.current.value;
         const easeStart = Date.now();
         const easeTick = () => {
+          if (disposed) return;
           const t = Math.min(1, (Date.now() - easeStart) / 500);
           const v = Math.round(from + (100 - from) * t);
           setStageProgress(v);
-          if (t < 1) requestAnimationFrame(easeTick);
-          else setTimeout(() => startStage2(), 450);
+          if (t < 1) easeRafId = requestAnimationFrame(easeTick);
+          else stage2DelayId = setTimeout(() => startStage2(), 450);
         };
-        requestAnimationFrame(easeTick);
+        easeRafId = requestAnimationFrame(easeTick);
       }).catch(err => {
+        if (disposed) return;
         console.error('Godot start error:', err);
         setErrorMsg(String(err?.message || err));
       });
     };
-    document.body.appendChild(script);
+    loadGodotEngineScript()
+      .then(startGodot)
+      .catch(err => {
+        if (!disposed) setErrorMsg(String(err?.message || err));
+      });
+    return () => {
+      disposed = true;
+      loadedRef.current = false;
+      window.removeEventListener('error', errHandler);
+      window.removeEventListener('unhandledrejection', rejectionHandler);
+      if (resizeCanvas) window.removeEventListener('resize', resizeCanvas);
+      if (stage2RafId) cancelAnimationFrame(stage2RafId);
+      if (easeRafId) cancelAnimationFrame(easeRafId);
+      if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
+      if (stage2DelayId) clearTimeout(stage2DelayId);
+      if (window.godotLoadingProgress) window.godotLoadingProgress = null;
+      if (window.godotBuildingsLoaded) window.godotBuildingsLoaded = null;
+      try { engine?.requestQuit?.(); } catch { /* best-effort cleanup */ }
+    };
   }, []);
 
   return (

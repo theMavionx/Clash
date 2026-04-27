@@ -214,6 +214,12 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 					bs._exit_ship_cannon_mode()
 				else:
 					bs._enter_ship_cannon_mode()
+		"ship_rally_mode":
+			if bs:
+				if bs._ship_rally_mode:
+					bs._exit_ship_rally_mode()
+				else:
+					bs._enter_ship_rally_mode()
 		"select_troop":
 			var asys: Node = get_tree().current_scene.get_node_or_null("AttackSystem")
 			if asys:
@@ -401,6 +407,9 @@ func _send_full_state() -> void:
 
 func _get_building_system() -> Node:
 	var systems = _bs_cache
+	if systems.is_empty():
+		_refresh_cache()
+		systems = _bs_cache
 	# Find the main grid (not the port grid)
 	for s in systems:
 		if s.name == "BuildingSystem":

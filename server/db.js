@@ -129,11 +129,22 @@ const stmts = {
   getPlayerByWallet: db.prepare(`SELECT * FROM players WHERE wallet = ?`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
 
-  // Find enemy candidates (not self, no shield)
+  // Find enemy candidates (not self, no shield, has a town hall).
+  // The town-hall existence check excludes accounts that registered but
+  // never built a base — attacking them would land you on an empty island
+  // with nothing to destroy. Treating them as "unavailable" lets the same
+  // error message ("all bases under shield, try again later") cover both
+  // genuinely shielded targets and these orphan accounts, so the player
+  // never lands in an unwinnable empty raid.
   findEnemyCandidates: db.prepare(`
     SELECT id, name, trophies, level FROM players
     WHERE id != ?
       AND (shield_until IS NULL OR shield_until < datetime('now'))
+      AND EXISTS (
+        SELECT 1 FROM buildings
+        WHERE buildings.player_id = players.id
+          AND buildings.type = 'town_hall'
+      )
     ORDER BY RANDOM()
     LIMIT 20
   `),
@@ -646,7 +657,11 @@ function findEnemy(playerId) {
   if (!player) return { error: 'Player not found' };
   const myStrength = getBaseStrength(playerId);
   const candidates = stmts.findEnemyCandidates.all(playerId);
-  if (candidates.length === 0) return { error: 'No enemies found' };
+  // Friendly user-facing message — same wording for "everybody is shielded"
+  // and "no real bases registered yet" because from the player's POV they
+  // both mean the same thing: come back later.
+  const NO_TARGETS = 'Sorry — all bases are under shield right now. Wait a bit until their shields drop.';
+  if (candidates.length === 0) return { error: NO_TARGETS };
 
   // Pick closest base strength
   let best = null, bestDiff = Infinity;
@@ -655,7 +670,7 @@ function findEnemy(playerId) {
     const diff = Math.abs(str - myStrength);
     if (diff < bestDiff) { bestDiff = diff; best = c; }
   }
-  if (!best) return { error: 'No enemies found' };
+  if (!best) return { error: NO_TARGETS };
 
   // Repair enemy buildings before attack
   repairAllBuildings(best.id);

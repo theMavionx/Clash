@@ -363,7 +363,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
 // ==================== POSITIONS LIST (mobile/tab card view) ====================
 const PositionsList = memo(function PositionsList({
   positions, prices, dataReady, leverageSettings, marginModes, loading, error,
-  closePosition, setTpsl, clearError, isBasic,
+  closePosition, setTpsl, clearError, isBasic, dex,
 }) {
   const [expandedPos, setExpandedPos] = useState(null);
   const [closePct, setClosePct] = useState(100);
@@ -480,7 +480,7 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder, dex,
+  closePosition, cancelOrder, dex, loading,
 }) {
   // Avantis has no order-flow history or funding payments exposed via a
   // public API like Pacifica, so we hide those tabs entirely on that DEX.
@@ -1521,6 +1521,7 @@ function FuturesPanel() {
             closePosition={closePosition}
             cancelOrder={cancelOrder}
             dex={dex}
+            loading={loading}
           />
         </div>
       );

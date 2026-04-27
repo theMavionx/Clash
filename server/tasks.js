@@ -172,7 +172,8 @@ async function fetchWalletTrades(player) {
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, created_at
         FROM trade_history
-        WHERE player_id = ? AND dex = 'avantis' AND status != 'failed'
+        WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
+          AND verified_source = 'worker'
         ORDER BY id ASC
       `).all(player.id);
       return rows.map(r => {

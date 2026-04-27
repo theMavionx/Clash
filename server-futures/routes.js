@@ -459,16 +459,14 @@ router.get('/history', auth, (req, res) => {
 });
 
 // ==================== TRADE REPORT (non-custodial Avantis) ====================
-// Client reports a successfully-signed trade tx so volume is tracked for gold
-// rewards immediately (otherwise user waits up to the 2-min poll cycle).
-// The gold-rewards worker ALSO independently polls Avantis Core API, so this
-// is best-effort — missing reports are eventually credited.
+// Client reports are accepted for backwards-compatible UI flow, but they are
+// not rewardable. The worker polls Avantis Core API and records verified rows.
 router.post('/trade-report', auth, (req, res) => {
   try {
     if (req.dex !== 'avantis') {
       return res.status(400).json({ error: 'trade-report is avantis-only' });
     }
-    const { tx_hash, symbol, side, amount, leverage, price, notional_usd, order_type, dedup_key } = req.body || {};
+    const { tx_hash, symbol, side, amount, leverage, notional_usd } = req.body || {};
     if (!tx_hash || !symbol || !side || !Number.isFinite(Number(amount))) {
       return res.status(400).json({ error: 'tx_hash, symbol, side, amount required' });
     }
@@ -495,26 +493,11 @@ router.post('/trade-report', auth, (req, res) => {
     if (!Number.isFinite(notional) || notional < 0 || notional > 10_000_000) {
       return res.status(400).json({ error: 'notional out of range' });
     }
-    // clientOrderId (used as the UNIQUE dedup key in trade_history):
-    //   • If the client supplied a deterministic `dedup_key` (e.g. the
-    //     "avantis:close:<addr>:<pair>:<idx>" shape emitted by
-    //     closePosition), use THAT — the worker reproduces the same key
-    //     when it sees the position disappear, so one of them loses the
-    //     INSERT OR IGNORE race and no duplicate row lands.
-    //   • Otherwise fall back to tx_hash, which stays unique enough for
-    //     opens (where there's no sibling source writing the same trade).
-    const clientOrderKey = dedup_key || tx_hash;
-    db.addTrade(req.playerId, {
-      symbol, side, orderType: order_type || 'market',
-      amount: String(amount),
-      price: price ? String(price) : null,
-      orderId: tx_hash,
-      clientOrderId: clientOrderKey,
-      status: 'filled',
-      dex: 'avantis',
-      notional_usd: notional,
-    });
-    res.json({ ok: true });
+    // Do not write rewardable Avantis rows from the browser. A valid game token
+    // proves account ownership, not that tx_hash/amount/leverage happened on
+    // chain. The rewards worker records verified rows from Avantis Core API
+    // with verified_source='worker', and /claim-gold only credits those rows.
+    res.json({ ok: true, verified: false, credited: false, reason: 'Trade report accepted; rewards are credited after worker verification.' });
   } catch (e) {
     console.error('Trade report error:', e);
     res.status(500).json({ error: 'Failed to record trade' });

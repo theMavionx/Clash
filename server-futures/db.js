@@ -119,6 +119,7 @@ try { db.exec("ALTER TABLE wallets ADD COLUMN chain TEXT NOT NULL DEFAULT 'solan
 // attribute gold rewards per-DEX and by traded volume.
 try { db.exec("ALTER TABLE trade_history ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacifica'"); } catch {}
 try { db.exec("ALTER TABLE trade_history ADD COLUMN notional_usd REAL NOT NULL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE trade_history ADD COLUMN verified_source TEXT NOT NULL DEFAULT 'client'"); } catch {}
 // Dedup: trade_history.client_order_id was nullable + non-unique, so
 // client-reported opens (order_id = tx_hash) and worker-recorded closes
 // (order_id = 'closed_...') for the same underlying trade could both land,
@@ -182,8 +183,8 @@ const stmts = {
   // partial index) silently drops instead of throwing. Prevents one
   // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
@@ -234,12 +235,12 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0 }) {
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server' }) {
   const info = stmts.addTrade.run(
     playerId, symbol, side, orderType,
     amount, price || null,
     orderId || null, clientOrderId || null,
-    status, dex, notional_usd
+    status, dex, notional_usd, verifiedSource
   );
   return { id: info.lastInsertRowid };
 }

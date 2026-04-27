@@ -98,6 +98,29 @@ async function pollOnce(mainDb) {
       }
       if (!symbol) symbol = `#${pairIdx}`;
       const side = (p.buy ?? p.trade?.buy) ? 'long' : 'short';
+      const notional = collateral * leverage;
+      const openKey = `avantis:open:${addr}:${pairIdx}:${Number(p.index ?? p.trade?.index ?? 0)}`;
+      if (Number.isFinite(notional) && notional >= 50) {
+        try {
+          db.addTrade(row.id, {
+            symbol,
+            side,
+            orderType: 'market',
+            amount: String(collateral),
+            orderId: openKey,
+            clientOrderId: openKey,
+            status: 'filled',
+            dex: 'avantis',
+            notional_usd: notional,
+            verifiedSource: 'worker',
+          });
+          creditsQueued++;
+        } catch (e) {
+          if (!String(e.message).includes('UNIQUE')) {
+            console.error('[rewards-worker] add open trade failed:', e.message);
+          }
+        }
+      }
       richPrev.set(k, {
         collateral, leverage, notional: collateral * leverage, symbol, side,
         pair_index: pairIdx,
@@ -132,6 +155,7 @@ async function pollOnce(mainDb) {
           status: 'filled',
           dex: 'avantis',
           notional_usd: info.notional,
+          verifiedSource: 'worker',
         });
         creditsQueued++;
       } catch (e) {

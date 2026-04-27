@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useEffect, useRef, useMemo } from 'react';
+import { memo, useCallback, useState, useMemo } from 'react';
 import { useSend, useUI, useResources, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
@@ -67,6 +67,27 @@ const CannonBallIcon = ({ size = 48 }) => (
   </svg>
 );
 
+// ── Rally pointer (red grenade) icon ───────────────────────────────────────
+// Stylised cartoon grenade in the same line-art language as CannonBallIcon
+// so the two abilities feel like a matched set on the HUD.
+const RallyGrenadeIcon = ({ size = 48 }) => (
+  <svg width={size} height={size} viewBox="0 0 58 58">
+    {/* lever / spoon */}
+    <path d="M36 9 L46 5 L48 11 L40 14" fill="#c0c0c0" stroke="#1a1a1a" strokeWidth="1.6" strokeLinejoin="round"/>
+    {/* pin ring */}
+    <circle cx="48" cy="6" r="3" fill="none" stroke="#d8b54a" strokeWidth="1.6"/>
+    {/* cap / fuse housing */}
+    <rect x="22" y="10" width="14" height="7" rx="1.5" fill="#3a3a3a" stroke="#0d0d0d" strokeWidth="1.6"/>
+    {/* main body — red */}
+    <ellipse cx="29" cy="36" rx="17" ry="18" fill="#d72b1c" stroke="#5a0d05" strokeWidth="2.2"/>
+    {/* segment lines (pineapple style) */}
+    <path d="M14 26 L44 26 M14 36 L44 36 M14 46 L44 46" stroke="#7a160d" strokeWidth="1.4" opacity="0.8"/>
+    <path d="M22 20 L22 53 M29 18 L29 54 M36 20 L36 53" stroke="#7a160d" strokeWidth="1.4" opacity="0.8"/>
+    {/* highlight */}
+    <ellipse cx="22" cy="28" rx="4" ry="5" fill="rgba(255,255,255,0.22)" transform="rotate(-25 22 28)"/>
+  </svg>
+);
+
 // Map troop names to images/display info
 const TROOP_IMG_MAP = {
   knight: { img: knightImg, label: 'Knight', zoom: 1.35, offsetY: '10%' },
@@ -77,28 +98,9 @@ const TROOP_IMG_MAP = {
 };
 
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
-function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
+function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
   const { isMobile: mobile } = useLayout();
-  const [perf, setPerf] = useState({ troop_counts: {} });
-  const perfRef = useRef(perf);
   const [expandedShip, setExpandedShip] = useState(null);
-
-  useEffect(() => {
-    const h = (e) => {
-      const counts = e.detail.troop_counts || {};
-      const prev = perfRef.current;
-      const changed = Object.keys({ ...counts, ...prev.troop_counts }).some(k =>
-        (counts[k] ?? 0) !== (prev.troop_counts[k] ?? 0)
-      );
-      if (changed) {
-        const next = { troop_counts: counts };
-        perfRef.current = next;
-        setPerf(next);
-      }
-    };
-    window.addEventListener('godot-perf', h);
-    return () => window.removeEventListener('godot-perf', h);
-  }, []);
 
   // Build ship cards from fleet info
   const ships = fleetInfo?.ships || [];
@@ -218,23 +220,62 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, cannonMode, selectedTr
               <span style={hud.energyValue}>{cannonEnergy.energy}</span>
             </div>
           )}
-          <button
-            style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }}
-            onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }}
-            title="Ship Cannon"
-            onMouseOver={e => !cannonMode && (e.currentTarget.style.filter = 'brightness(1.15)')}
-            onMouseOut={e => !cannonMode && (e.currentTarget.style.filter = 'none')}
-          >
-            <CannonBallIcon size={46} />
-            
-            {/* Cost Badge on the Button */}
-            {cannonEnergy && (
-              <div style={hud.cannonCostBadge}>
-                {cannonEnergy.nextCost}
-                <span style={hud.cannonCostIcon}>⚡</span>
-              </div>
-            )}
-          </button>
+          <div style={hud.abilityRow}>
+            {(() => {
+              // Single computed flag drives both the click handler AND the
+              // styling. Keeping them separate previously meant a stale
+              // visual state could lie about whether the button responds.
+              const rallyCost = cannonEnergy?.rallyNextCost ?? 1;
+              const noEnergy = cannonEnergy && cannonEnergy.energy < rallyCost;
+              // Only energy should block arming the rally pointer. It is valid
+              // to throw a marker before troops have fully spawned; newly
+              // activated units will still read the live rally target.
+              const rallyDisabled = !rallyMode && noEnergy;
+              const tip = rallyMode
+                ? 'Click to cancel rally mode'
+                : noEnergy
+                ? `Need ${rallyCost} energy to drop a rally`
+                : 'Rally pointer — direct your troops';
+              return (
+                <button
+                  style={{
+                    ...hud.cannonBtn,
+                    ...(rallyMode ? hud.rallyActive : {}),
+                    ...(rallyDisabled ? hud.cannonDisabled : {}),
+                  }}
+                  onClick={() => { if (!rallyDisabled) onRally(); }}
+                  title={tip}
+                  onMouseOver={e => !rallyMode && !rallyDisabled && (e.currentTarget.style.filter = 'brightness(1.15)')}
+                  onMouseOut={e => !rallyMode && !rallyDisabled && (e.currentTarget.style.filter = 'none')}
+                >
+                  <RallyGrenadeIcon size={46} />
+                  {cannonEnergy && (
+                    <div style={hud.cannonCostBadge}>
+                      {rallyCost}
+                      <span style={hud.cannonCostIcon}>⚡</span>
+                    </div>
+                  )}
+                </button>
+              );
+            })()}
+            <button
+              style={{ ...hud.cannonBtn, ...(cannonMode ? hud.cannonActive : {}), ...(cannonEnergy && cannonEnergy.energy < cannonEnergy.nextCost ? hud.cannonDisabled : {}) }}
+              onClick={() => { if (!cannonEnergy || cannonEnergy.energy >= cannonEnergy.nextCost) onCannon(); }}
+              title="Ship Cannon"
+              onMouseOver={e => !cannonMode && (e.currentTarget.style.filter = 'brightness(1.15)')}
+              onMouseOut={e => !cannonMode && (e.currentTarget.style.filter = 'none')}
+            >
+              <CannonBallIcon size={46} />
+
+              {/* Cost Badge on the Button */}
+              {cannonEnergy && (
+                <div style={hud.cannonCostBadge}>
+                  {cannonEnergy.nextCost}
+                  <span style={hud.cannonCostIcon}>⚡</span>
+                </div>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </>
@@ -289,7 +330,7 @@ const ShieldIcon = ({ size = 60 }) => (
 
 function ActionButtons({ onOpenBattleLog }) {
   const { sendToGodot, setFuturesOpen } = useSend();
-  const { enemyMode, cannonMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
+  const { enemyMode, cannonMode, rallyMode, selectedTroopIdx, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer } = useUI();
   const player = usePlayer();
   const token = player?.token || null;
   const [showReinforce, setShowReinforce] = useState(false);
@@ -332,11 +373,13 @@ function ActionButtons({ onOpenBattleLog }) {
   const handleOpenShop    = useCallback(() => sendToGodot('open_shop'),        [sendToGodot]);
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
+  const handleShipRally   = useCallback(() => sendToGodot('ship_rally_mode'), [sendToGodot]);
   const handleSelectTroop = useCallback((idx) => {
     console.log('[SELECT TROOP]', idx, 'cannonMode:', cannonMode);
     if (cannonMode) sendToGodot('ship_cannon_mode'); // toggle off cannon
+    if (rallyMode) sendToGodot('ship_rally_mode');   // toggle off rally so a stale click doesn't drop a marker mid-troop-select
     sendToGodot('select_troop', { idx });
-  }, [sendToGodot, cannonMode]);
+  }, [sendToGodot, cannonMode, rallyMode]);
 
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
@@ -349,7 +392,9 @@ function ActionButtons({ onOpenBattleLog }) {
         onReturnHome={handleReturnHome}
         onSurrender={() => setShowSurrender(true)}
         onCannon={handleShipCannon}
+        onRally={handleShipRally}
         cannonMode={cannonMode}
+        rallyMode={rallyMode}
         selectedTroopIdx={selectedTroopIdx ?? 0}
         onSelectTroop={handleSelectTroop}
         cannonEnergy={cannonEnergy}
@@ -720,6 +765,14 @@ const hud = {
     borderColor: 'rgba(255,155,0,0.88)',
     boxShadow: '0 0 22px rgba(255,155,0,0.5), inset 0 0 10px rgba(255,155,0,0.12)',
     filter: 'brightness(1.18)',
+  },
+  rallyActive: {
+    borderColor: 'rgba(255,55,40,0.95)',
+    boxShadow: '0 0 22px rgba(255,55,40,0.55), inset 0 0 10px rgba(255,55,40,0.18)',
+    filter: 'brightness(1.18)',
+  },
+  abilityRow: {
+    display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 8,
   },
   cannonDisabled: {
     opacity: 0.35,

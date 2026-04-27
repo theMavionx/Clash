@@ -31,6 +31,87 @@ var _hp_fill: MeshInstance3D
 static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
 
+## Rally pointer — set by BSRally when the player drops a marker. The visual
+## marker expires quickly, but the command target stays sticky until that
+## building/guard dies, the player drops a new marker, or battle state resets.
+## Static because it's a single shared "battle command" — every troop reads
+## the same focus, including troops that spawn after the marker faded.
+static var _rally_active: bool = false
+static var _rally_pos: Vector3 = Vector3.ZERO
+static var _rally_expire_msec: int = 0
+static var _rally_target_building: Dictionary = {}
+static var _rally_target_bs: Node = null
+static var _rally_target_guard: Node3D = null
+
+static func set_rally(pos: Vector3, duration_sec: float) -> void:
+	_rally_active = true
+	_rally_pos = pos
+	_rally_expire_msec = Time.get_ticks_msec() + int(duration_sec * 1000.0)
+	_resolve_rally_target(pos)
+	_apply_rally_to_active_troops()
+
+static func clear_rally() -> void:
+	_rally_active = false
+	_rally_expire_msec = 0
+	_rally_target_building = {}
+	_rally_target_bs = null
+	_rally_target_guard = null
+
+static func _is_rally_live() -> bool:
+	return _rally_active and Time.get_ticks_msec() < _rally_expire_msec
+
+static func _resolve_rally_target(pos: Vector3) -> void:
+	_rally_target_building = {}
+	_rally_target_bs = null
+	_rally_target_guard = null
+	var nearest_dist_sq: float = INF
+
+	for entry in _get_buildings_cached():
+		var b: Dictionary = entry.b
+		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
+			continue
+		var dx: float = pos.x - entry.pos.x
+		var dz: float = pos.z - entry.pos.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_dist_sq:
+			nearest_dist_sq = d_sq
+			_rally_target_building = b
+			_rally_target_bs = entry.bs
+			_rally_target_guard = null
+
+	for guard in _get_guards_list_cached():
+		if not is_instance_valid(guard) or not guard.is_inside_tree():
+			continue
+		if guard.hp <= 0:
+			continue
+		var dx: float = pos.x - guard.global_position.x
+		var dz: float = pos.z - guard.global_position.z
+		var d_sq: float = dx * dx + dz * dz
+		if d_sq < nearest_dist_sq:
+			nearest_dist_sq = d_sq
+			_rally_target_building = {}
+			_rally_target_bs = null
+			_rally_target_guard = guard
+
+	if nearest_dist_sq == INF:
+		clear_rally()
+
+static func _has_valid_rally_target() -> bool:
+	if not _rally_active:
+		return false
+	if _rally_target_guard != null:
+		return is_instance_valid(_rally_target_guard) and _rally_target_guard.is_inside_tree() and _rally_target_guard.hp > 0
+	if _rally_target_building.size() > 0:
+		return _rally_target_building.get("hp", 0) > 0 and is_instance_valid(_rally_target_building.get("node"))
+	return false
+
+static func _apply_rally_to_active_troops() -> void:
+	if not _has_valid_rally_target():
+		return
+	for troop in _get_troops_cached():
+		if is_instance_valid(troop) and troop is BaseTroop and troop.state != State.INACTIVE and troop.state != State.VICTORY:
+			troop._apply_rally_target()
+
 ## Cached camera ref — refreshed once per frame globally
 static var _cached_camera: Camera3D = null
 static var _camera_cache_frame: int = -1
@@ -255,7 +336,7 @@ func _process(delta: float) -> void:
 	_retarget_counter += 1
 	if _retarget_counter % 10 == 0:
 		_find_next_target()
-	# Immediate guard threat check — switch if a guard is very close
+	# Immediate guard threat check — suppressed while a rally focus is locked.
 	_check_guard_threat()
 	match state:
 		State.RUNNING:
@@ -461,7 +542,51 @@ func _update_hp_bar() -> void:
 		mat.set_shader_parameter("albedo", _HP_COLORS[band])
 
 
+func _apply_rally_target() -> bool:
+	if not _rally_active:
+		return false
+	if not _has_valid_rally_target():
+		clear_rally()
+		return false
+
+	if _rally_target_guard != null:
+		if target_guard != _rally_target_guard:
+			target_guard = _rally_target_guard
+			target_building = {}
+			target_bs = null
+			_orbit_angle = 0.0
+			if state != State.RUNNING:
+				state = State.RUNNING
+				if anim_player.has_animation("Running_A"):
+					anim_player.play("Running_A")
+		elif state == State.IDLE:
+			state = State.RUNNING
+			if anim_player.has_animation("Running_A"):
+				anim_player.play("Running_A")
+		return true
+
+	if _rally_target_building.size() > 0:
+		if _rally_target_building.get("node") != target_building.get("node"):
+			target_building = _rally_target_building
+			target_bs = _rally_target_bs
+			target_guard = null
+			_orbit_angle = 0.0
+			if state != State.RUNNING:
+				state = State.RUNNING
+				if anim_player.has_animation("Running_A"):
+					anim_player.play("Running_A")
+		elif state == State.IDLE:
+			state = State.RUNNING
+			if anim_player.has_animation("Running_A"):
+				anim_player.play("Running_A")
+		return true
+
+	return false
+
+
 func _find_alternative_target() -> void:
+	if _apply_rally_target():
+		return
 	var second_dist_sq: float = INF
 	var second_b: Dictionary = {}
 	var second_bs = null
@@ -491,21 +616,28 @@ func _find_alternative_target() -> void:
 
 
 ## Scans all live buildings and skeleton guards and picks the closest one.
-## Always re-evaluates — no loyalty to old target. If the closest target
-## is the same as the current one, keeps it without resetting state.
+## Re-evaluates target unless a rally command has a live focus. If the current
+## target is still the rally target, keep it even after the marker visual fades.
+##
+## Rally focus is resolved once when the marker lands. That avoids the old
+## behavior where troops followed the marker for a few seconds, then snapped
+## back to whatever was closest to each individual troop.
 func _find_next_target() -> void:
+	if _apply_rally_target():
+		return
 	var nearest_dist_sq: float = INF
 	var nearest_b: Dictionary = {}
 	var nearest_bs_ref = null
 	var nearest_guard: Node3D = null
 	var my_pos = global_position
+	var search_pos: Vector3 = _rally_pos if _is_rally_live() else my_pos
 
 	for entry in _get_buildings_cached():
 		var b = entry.b
 		if b.get("hp", 0) <= 0 or not is_instance_valid(b.get("node")):
 			continue
-		var dx = my_pos.x - entry.pos.x
-		var dz = my_pos.z - entry.pos.z
+		var dx = search_pos.x - entry.pos.x
+		var dz = search_pos.z - entry.pos.z
 		var d_sq = dx * dx + dz * dz
 		if d_sq < nearest_dist_sq:
 			nearest_dist_sq = d_sq
@@ -518,8 +650,8 @@ func _find_next_target() -> void:
 			continue
 		if guard.hp <= 0:
 			continue
-		var dx = my_pos.x - guard.global_position.x
-		var dz = my_pos.z - guard.global_position.z
+		var dx = search_pos.x - guard.global_position.x
+		var dz = search_pos.z - guard.global_position.z
 		var d_sq = dx * dx + dz * dz
 		if d_sq < nearest_dist_sq:
 			nearest_dist_sq = d_sq
@@ -558,6 +690,10 @@ func _find_next_target() -> void:
 ## Immediate guard threat — if any guard is within GUARD_THREAT_MULT * attack_range,
 ## switch to it right now (don't wait for retarget tick).
 func _check_guard_threat() -> void:
+	if _rally_active:
+		if _has_valid_rally_target():
+			return
+		clear_rally()
 	if target_guard != null:
 		return  # already fighting a guard
 	var threat_sq: float = (attack_range * GUARD_THREAT_MULT) * (attack_range * GUARD_THREAT_MULT)

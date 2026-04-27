@@ -9,6 +9,15 @@ const SelectedBuildingContext = createContext(null);
 const UIContext = createContext(null);
 const TutorialContext = createContext(null);
 
+function shallowEqualObject(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(key => a[key] === b[key]);
+}
+
 export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [playerState, setPlayerState] = useState(null);
@@ -24,11 +33,12 @@ export function GodotProvider({ children }) {
   const [cloudVisible, setCloudVisible] = useState(false);
   const [futuresOpen, setFuturesOpen] = useState(false);
   const [cannonMode, setCannonMode] = useState(false);
+  const [rallyMode, setRallyMode] = useState(false);
   const [selectedTroopIdx, setSelectedTroopIdx] = useState(0);
   const [battleResult, setBattleResult] = useState(null);
   const [pendingCasualties, setPendingCasualties] = useState(null);
   const [battleTimer, setBattleTimer] = useState(null); // seconds remaining, null = no timer
-  const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1 });
+  const [cannonEnergy, setCannonEnergy] = useState({ energy: 10, nextCost: 1, rallyNextCost: 1 });
   const [fleetInfo, setFleetInfo] = useState(null);
   // Fallback matches TH1 base capacity (server/db.js + building_system.gd).
   // Godot pushes real caps via `resource_caps` on boot; this default only
@@ -47,7 +57,7 @@ export function GodotProvider({ children }) {
   const tutorialTokenRef = useRef(null);
 
   useEffect(() => {
-    window.onGodotMessage = (msg) => {
+    const handleGodotMessage = (msg) => {
       const { action, data } = msg;
       switch (action) {
         case 'godot_ready':
@@ -56,7 +66,7 @@ export function GodotProvider({ children }) {
         case 'state':
           setPlayerState(prev => {
             const next = { ...(prev || {}), ...data };
-            if (JSON.stringify(next) === JSON.stringify(prev)) return prev;
+            if (shallowEqualObject(next, prev)) return prev;
             return next;
           });
           if (data.token) {
@@ -123,7 +133,7 @@ export function GodotProvider({ children }) {
           break;
         case 'placed_counts':
           setBuildingDefs(prev => {
-            if (JSON.stringify(prev.placed_counts) === JSON.stringify(data)) return prev;
+            if (shallowEqualObject(prev.placed_counts, data)) return prev;
             return { ...prev, placed_counts: data };
           });
           break;
@@ -145,15 +155,19 @@ export function GodotProvider({ children }) {
         case 'enemy_mode':
           setEnemyMode(data);
           if (data.active) {
-            setCannonEnergy({ energy: 10, nextCost: 1 }); setBattleResult(null);
+            setCannonEnergy({ energy: 10, nextCost: 1, rallyNextCost: 1 }); setBattleResult(null);
+            setRallyMode(false);
           }
-          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setSelectedTroopIdx(0); }
+          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); }
           break;
         case 'troop_idx_changed':
           setSelectedTroopIdx(data.idx ?? 0);
           break;
         case 'cannon_mode':
           setCannonMode(data.active);
+          break;
+        case 'rally_mode':
+          setRallyMode(data.active);
           break;
         case 'battle_result':
           setBattleResult(data);
@@ -182,8 +196,9 @@ export function GodotProvider({ children }) {
           setCannonEnergy(prev => {
             const energy = data.energy || 0;
             const nextCost = data.next_cost || 1;
-            if (prev.energy === energy && prev.nextCost === nextCost) return prev;
-            return { energy, nextCost };
+            const rallyNextCost = data.rally_next_cost || 1;
+            if (prev.energy === energy && prev.nextCost === nextCost && prev.rallyNextCost === rallyNextCost) return prev;
+            return { energy, nextCost, rallyNextCost };
           });
           break;
         case 'fleet_info':
@@ -238,9 +253,10 @@ export function GodotProvider({ children }) {
           break;
       }
     };
+    window.onGodotMessage = handleGodotMessage;
     return () => {
-      window.onGodotMessage = null;
-      window._playerToken = null;
+      if (window.onGodotMessage === handleGodotMessage) window.onGodotMessage = null;
+      if (window._playerToken === tutorialTokenRef.current) window._playerToken = null;
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     };
   }, []);
@@ -262,8 +278,8 @@ export function GodotProvider({ children }) {
     selectedBuilding,
   }), [selectedBuilding]);
   const uiCtx = useMemo(() => ({
-    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
-  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
+    ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, setBattleResult, cannonEnergy, fleetInfo, pendingCasualties, setPendingCasualties, battleTimer
+  }), [ready, shopOpen, enemyMode, error, showRegister, collectibles, cloudVisible, futuresOpen, cannonMode, rallyMode, selectedTroopIdx, battleResult, cannonEnergy, fleetInfo, pendingCasualties, battleTimer]);
   const tutorialCtx = useMemo(() => ({
     tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase
   }), [tutorialFlags, tutorialPhase]);

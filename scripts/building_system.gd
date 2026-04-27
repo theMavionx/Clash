@@ -455,6 +455,12 @@ var _ship_cannon_mode: bool:
 	set(v):
 		if _cannon: _cannon._ship_cannon_mode = v
 
+# ── Ship rally pointer (proxied to _rally helper) ────────────
+var _ship_rally_mode: bool:
+	get: return _rally._rally_mode if _rally else false
+	set(v):
+		if _rally: _rally._rally_mode = v
+
 # ── Port / Ships ─────────────────────────────────────────────
 var port_panel: PanelContainer
 var port_vbox: VBoxContainer
@@ -534,6 +540,7 @@ var _net: Node = null
 var _bridge: Node = null
 var _building_systems: Array = []
 var _cannon: BSCannon
+var _rally: BSRally
 var _battle: BSBattle
 var _port: BSPort
 var _production: BSProduction
@@ -556,6 +563,7 @@ func _ready() -> void:
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
 	_cannon = BSCannon.new().init(self)
+	_rally = BSRally.new().init(self)
 	_battle = BSBattle.new().init(self)
 	_port = BSPort.new().init(self)
 	_production = BSProduction.new().init(self)
@@ -644,6 +652,8 @@ func _process(delta: float) -> void:
 	if _cannon == null or _battle == null or _production == null:
 		return
 	_cannon.process(delta)
+	if _rally:
+		_rally.process(delta)
 	_battle.check_defeat(delta)
 	_battle.check_skeleton_respawn(delta)
 
@@ -1565,6 +1575,8 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 	# is still mid-construction when auth races in.
 	if _cannon and _cannon.has_method("reset"):
 		_cannon.reset()
+	if _rally and _rally.has_method("reset"):
+		_rally.reset()
 	if _battle and _battle.has_method("reset"):
 		_battle.reset()
 	# Apply full state from server (resources, buildings, troops)
@@ -2042,6 +2054,30 @@ func _unhandled_input(event: InputEvent) -> void:
 						return
 			get_viewport().set_input_as_handled()
 			return
+
+		# Ship rally mode (enemy island only). Mirrors cannon-mode flow:
+		# LMB on the ground drops a rally marker, RMB cancels.
+		if is_viewing_enemy and _ship_rally_mode and event is InputEventMouseButton and event.pressed:
+			if event.button_index == MOUSE_BUTTON_RIGHT:
+				_exit_ship_rally_mode()
+				get_viewport().set_input_as_handled()
+				return
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				for bs in _building_systems:
+					var local_hit = bs._get_mouse_local()
+					if local_hit != Vector3.INF:
+						var world_hit: Vector3 = bs.to_global(local_hit)
+						# `_drop_rally` returns false if energy < cost — keep mode
+						# active so the disabled button reflects state without an
+						# accidental exit.
+						if _rally and _rally._drop_rally(world_hit):
+							_exit_ship_rally_mode()
+						get_viewport().set_input_as_handled()
+						return
+				# No ground hit (clicked off-island) — exit cleanly.
+				_exit_ship_rally_mode()
+				get_viewport().set_input_as_handled()
+				return
 
 	# Click on placed building — disabled during attack mode to prevent misclicks
 	if is_viewing_enemy:
@@ -4236,6 +4272,21 @@ func _enter_ship_cannon_mode() -> void:
 
 func _exit_ship_cannon_mode() -> void:
 	_cannon._exit_ship_cannon_mode()
+
+
+# ── Rally pointer proxies ────────────────────────────────────
+func _check_ship_rally_click(mouse_pos: Vector2) -> bool:
+	return _rally._check_ship_rally_click(mouse_pos) if _rally else false
+
+
+func _enter_ship_rally_mode() -> void:
+	if _rally:
+		_rally._enter_rally_mode()
+
+
+func _exit_ship_rally_mode() -> void:
+	if _rally:
+		_rally._exit_rally_mode()
 
 
 func _fire_ship_cannon(bdata: Dictionary) -> void:

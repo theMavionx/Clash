@@ -279,6 +279,11 @@ func _check_ship_cannon_click(mouse_pos: Vector2) -> bool:
 
 
 func _enter_ship_cannon_mode() -> void:
+	# Mutually exclusive with rally mode — both modes intercept LMB on the
+	# island, so allowing both armed at once would make the next click
+	# ambiguous. Cancel rally first, then enter cannon.
+	if bs._rally and bs._rally._rally_mode:
+		bs._rally._exit_rally_mode()
 	_ship_cannon_mode = true
 	var bridge = bs.get_node_or_null("/root/Bridge")
 	if bridge:
@@ -429,4 +434,13 @@ func _on_building_destroyed_energy() -> void:
 func _update_cannon_energy_ui() -> void:
 	var bridge: Node = bs._bridge
 	if bridge:
-		bridge.send_to_react("cannon_energy", {"energy": _cannon_energy, "next_cost": _cannon_next_cost})
+		# Rally cost is bundled into the same payload because rally and cannon
+		# share the energy pool — keeping them in one message guarantees the
+		# UI reflects both costs against the same energy snapshot, with no
+		# possible inter-message drift after a rally drop or cannon fire.
+		var rally_cost: int = bs._rally._rally_next_cost if bs._rally else 1
+		bridge.send_to_react("cannon_energy", {
+			"energy": _cannon_energy,
+			"next_cost": _cannon_next_cost,
+			"rally_next_cost": rally_cost,
+		})

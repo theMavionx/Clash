@@ -7,8 +7,32 @@ const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 const PORT = process.env.PORT || 4000;
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const DEFAULT_ORIGINS = [
+  'https://clashofperps.fun',
+  'https://www.clashofperps.fun',
+];
+const LOCALHOST_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/;
+const ALLOWED_ORIGINS = new Set(
+  (process.env.CLASH_CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean)
+    .concat(DEFAULT_ORIGINS)
+);
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.has(origin) || LOCALHOST_RE.test(origin)) return cb(null, true);
+    return cb(new Error(`CORS: origin '${origin}' not allowed`));
+  },
+  credentials: false,
+}));
+app.use(express.json({ limit: '64kb' }));
+
+function dashboardAuth(req, res, next) {
+  if (process.env.PUBLIC_DASHBOARD === '1') return next();
+  const adminKey = process.env.ADMIN_KEY || process.env.CLASH_ADMIN_KEY;
+  const provided = req.headers['x-admin-key'] || req.query.admin_key;
+  if (adminKey && provided === adminKey) return next();
+  return res.status(404).send('Not found');
+}
 
 // Request logger
 app.use((req, res, next) => {
@@ -26,7 +50,7 @@ app.use((req, res, next) => {
 // Health check — HTML page for browser
 const esc = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-app.get('/', (req, res) => {
+app.get('/', dashboardAuth, (req, res) => {
   const db = require('./db');
   const players = db.db.prepare('SELECT id, name, trophies, level, gold, wood, ore, created_at FROM players ORDER BY trophies DESC').all();
   const totalBuildings = db.db.prepare('SELECT COUNT(*) as count FROM buildings').get().count;
@@ -90,7 +114,7 @@ app.get('/api/online', (req, res) => {
 
 // Trading stats dashboard — shows Pacifica (via builder API) + Avantis (via
 // futures.db) + in-game gold ledger, side by side with a DEX split.
-app.get('/trading-stats', async (req, res) => {
+app.get('/trading-stats', dashboardAuth, async (req, res) => {
   const db = require('./db');
 
   // Local stats — trading_rewards rows joined with players (incl. DEX).
@@ -136,11 +160,11 @@ app.get('/trading-stats', async (req, res) => {
         SELECT COUNT(*) AS trades,
                COUNT(DISTINCT player_id) AS traders,
                COALESCE(SUM(notional_usd), 0) AS volume
-        FROM trade_history WHERE dex='avantis' AND status != 'failed'
+        FROM trade_history WHERE dex='avantis' AND status = 'filled' AND verified_source = 'worker'
       `).get();
       const recent = fdb.prepare(`
         SELECT COUNT(*) AS trades FROM trade_history
-        WHERE dex='avantis' AND status != 'failed' AND created_at > datetime('now', '-24 hours')
+        WHERE dex='avantis' AND status = 'filled' AND verified_source = 'worker' AND created_at > datetime('now', '-24 hours')
       `).get();
       avantisTotals = {
         trades: totals.trades || 0,
@@ -150,7 +174,7 @@ app.get('/trading-stats', async (req, res) => {
       };
       const rows = fdb.prepare(`
         SELECT player_id, COUNT(*) AS trades, SUM(notional_usd) AS volume
-        FROM trade_history WHERE dex='avantis' AND status != 'failed'
+        FROM trade_history WHERE dex='avantis' AND status = 'filled' AND verified_source = 'worker'
         GROUP BY player_id ORDER BY volume DESC LIMIT 25
       `).all();
       const nameStmt = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');

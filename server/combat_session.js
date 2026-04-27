@@ -31,6 +31,14 @@ const RETARGET_INTERVAL = 10;      // Frames between target re-evaluation (match
 const DEFENSE_SEARCH_SEC = 0.15;   // Target search interval for defenses (matches client)
 const SEPARATION_RADIUS = 0.18;    // Troop push-apart radius (matches client)
 const SEPARATION_FORCE = 0.5;      // Troop push-apart strength
+const RALLY_MAX_FLIGHT_SEC = 8.0;  // Sanity cap for client-recorded grenade flight time
+const TROOP_NAMES = {
+  knight: 'Knight',
+  mage: 'Mage',
+  barbarian: 'Barbarian',
+  archer: 'Archer',
+  ranger: 'Ranger',
+};
 
 // ---------- Helpers ----------
 
@@ -64,6 +72,50 @@ function findNearestAlive(x, z, targets) {
     if (dsq < bestDistSq) { bestDistSq = dsq; best = t; }
   }
   return best ? { target: best, distSq: bestDistSq } : null;
+}
+
+function finiteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function resolveRallyTarget(x, z, aliveBuildings, aliveGuards) {
+  let bestTarget = null;
+  let bestDistSq = Infinity;
+  let isGuard = false;
+
+  for (const b of aliveBuildings) {
+    const dsq = distSq2d(x, z, b.x, b.z);
+    if (dsq < bestDistSq) {
+      bestDistSq = dsq;
+      bestTarget = b;
+      isGuard = false;
+    }
+  }
+
+  for (const g of aliveGuards) {
+    const dsq = distSq2d(x, z, g.x, g.z);
+    if (dsq < bestDistSq) {
+      bestDistSq = dsq;
+      bestTarget = g;
+      isGuard = true;
+    }
+  }
+
+  return bestTarget ? { target: bestTarget, isGuard } : null;
+}
+
+function isRallyFocusValid(rallyFocus) {
+  return !!(rallyFocus && rallyFocus.target && rallyFocus.target.hp > 0);
+}
+
+function applyRallyFocus(troop, rallyFocus) {
+  troop._currentTarget = rallyFocus.target;
+  troop._currentTargetIsGuard = rallyFocus.isGuard;
 }
 
 // Convert grid coordinates to world coordinates
@@ -114,6 +166,11 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
 
   let cannonEnergy = CANNON_INITIAL_ENERGY;
   let cannonShotsFired = 0;
+  let rallyDropsUsed = 0;
+  let rallyFocus = null;
+  let rallyEventsAccepted = 0;
+  let rallyEventsIgnored = 0;
+  const pendingRallies = [];
 
   // Init defenses & guards from buildings
   for (const b of buildings) {
@@ -196,6 +253,32 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
           if (target.hp <= 0) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
         }
       }
+
+      if (act.type === 'rally_drop') {
+        const x = finiteNumber(act.x, NaN);
+        const z = finiteNumber(act.z, NaN);
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          rallyEventsIgnored++;
+          continue;
+        }
+
+        const cost = rallyDropsUsed + 1;
+        if (cannonEnergy < cost) {
+          // Client cannot launch without shared cannon energy. Ignore forged
+          // or desynced rally events so they do not help the server sim.
+          rallyEventsIgnored++;
+          continue;
+        }
+
+        const flightTime = clamp(finiteNumber(act.flight_time, 0), 0, RALLY_MAX_FLIGHT_SEC);
+        cannonEnergy -= cost;
+        rallyDropsUsed++;
+        rallyEventsAccepted++;
+        pendingRallies.push({
+          time: finiteNumber(act.t, time) + flightTime,
+          x, z,
+        });
+      }
     }
 
     // ── Deploy pending troops ──
@@ -230,6 +313,22 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
     const aliveBuildings = [];
     for (const b of buildings) { if (b.hp > 0) aliveBuildings.push(b); }
 
+    // Rally grenade impact. The client spends energy on launch, but troops
+    // only receive the command when the grenade lands.
+    for (let i = pendingRallies.length - 1; i >= 0; i--) {
+      if (pendingRallies[i].time <= time) {
+        const r = pendingRallies.splice(i, 1)[0];
+        rallyFocus = resolveRallyTarget(r.x, r.z, aliveBuildings, aliveGuards);
+        if (rallyFocus) {
+          for (const t of aliveTroops) applyRallyFocus(t, rallyFocus);
+        }
+      }
+    }
+
+    if (rallyFocus && !isRallyFocusValid(rallyFocus)) {
+      rallyFocus = null;
+    }
+
     // ── Troop separation (push apart overlapping troops) ──
     for (let i = 0; i < aliveTroops.length; i++) {
       for (let j = i + 1; j < aliveTroops.length; j++) {
@@ -251,6 +350,16 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
       // Retarget throttle — only search every RETARGET_INTERVAL frames (matches client)
       let target = t._currentTarget;
       let targetIsGuard = t._currentTargetIsGuard;
+
+      if (rallyFocus && !isRallyFocusValid(rallyFocus)) {
+        rallyFocus = null;
+      }
+
+      if (rallyFocus) {
+        applyRallyFocus(t, rallyFocus);
+        target = rallyFocus.target;
+        targetIsGuard = rallyFocus.isGuard;
+      } else {
 
       // Validate current target still alive
       if (target && target.hp <= 0) { target = null; t._currentTarget = null; }
@@ -287,6 +396,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
             t._currentTargetIsGuard = true;
           }
         }
+      }
+
       }
 
       if (!target) continue;
@@ -488,6 +599,12 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
   const townHallDestroyed = th ? th.hp <= 0 : false;
   const townHallHpPct = th ? Math.max(0, th.hp) / th.maxHp : 0;
   const buildingsDestroyed = buildings.filter(b => b.hp <= 0).length;
+  const casualties = {};
+  for (const t of troops) {
+    if (t.hp > 0) continue;
+    const name = TROOP_NAMES[t.type] || t.type;
+    casualties[name] = (casualties[name] || 0) + 1;
+  }
 
   // Debug info for diagnosis
   const _debug = {
@@ -496,7 +613,17 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
     _guardsAlive: guards.filter(g => g.hp > 0).length,
     _totalProjectilesFired: projectiles.length,
     _pendingSpawnsLeft: pendingSpawns.length,
+    _rallyDropsUsed: rallyDropsUsed,
+    _rallyEventsAccepted: rallyEventsAccepted,
+    _rallyEventsIgnored: rallyEventsIgnored,
+    _pendingRalliesLeft: pendingRallies.length,
+    _rallyFocus: rallyFocus ? {
+      type: rallyFocus.isGuard ? 'guard' : rallyFocus.target.type,
+      hp: rallyFocus.target.hp,
+    } : null,
+    _cannonEnergy: cannonEnergy,
     _simTimeSec: Math.round(time * 10) / 10,
+    casualties,
     _buildingHPs: buildings.map(b => ({ type: b.type, id: b.id, hp: b.hp, maxHp: b.maxHp })),
     _troopEndState: troops.map(t => ({ type: t.type, hp: t.hp, x: Math.round(t.x*100)/100, z: Math.round(t.z*100)/100 })),
   };

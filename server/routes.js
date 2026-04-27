@@ -374,6 +374,16 @@ router.delete('/buildings/:id', auth, (req, res) => {
 // Remove casualties from player's ship_troops after battle.
 // casualties = {Knight: 1, Mage: 2} — removes that many of each type across all ships.
 // Validates: casualty counts can't exceed what was actually deployed.
+const TROOP_NAME_MAP = {
+  knight: 'Knight',
+  mage: 'Mage',
+  barbarian: 'Barbarian',
+  archer: 'Archer',
+  ranger: 'Ranger',
+};
+function _normalizeTroopName(name) {
+  return TROOP_NAME_MAP[String(name || '').toLowerCase()] || String(name || '');
+}
 function _applyCasualties(playerId, casualties) {
   if (!casualties || typeof casualties !== 'object') return;
 
@@ -383,14 +393,21 @@ function _applyCasualties(playerId, casualties) {
   const deployed = {};
   for (const port of ports) {
     const troops = JSON.parse(port.ship_troops || '[]');
-    for (const t of troops) deployed[t] = (deployed[t] || 0) + 1;
+    for (const t of troops) {
+      const name = _normalizeTroopName(t);
+      deployed[name] = (deployed[name] || 0) + 1;
+    }
   }
 
   // Cap casualties to deployed counts (prevent client from claiming more losses than deployed)
   const validCasualties = {};
   for (const [name, count] of Object.entries(casualties)) {
     if (typeof count !== 'number' || count <= 0) continue;
-    validCasualties[name] = Math.min(count, deployed[name] || 0);
+    const normalized = _normalizeTroopName(name);
+    validCasualties[normalized] = Math.min(
+      (validCasualties[normalized] || 0) + count,
+      deployed[normalized] || 0
+    );
   }
 
   const remaining = { ...validCasualties };
@@ -398,8 +415,9 @@ function _applyCasualties(playerId, casualties) {
     const troops = JSON.parse(port.ship_troops || '[]');
     const filtered = [];
     for (const t of troops) {
-      if (remaining[t] && remaining[t] > 0) {
-        remaining[t]--;
+      const name = _normalizeTroopName(t);
+      if (remaining[name] && remaining[name] > 0) {
+        remaining[name]--;
       } else {
         filtered.push(t);
       }
@@ -482,10 +500,11 @@ router.post('/attack/result', auth, (req, res) => {
     reason: verification.reason,
     thHp: Math.round((verification.townHallHpPct || 0) * 100) + '%',
     ships: gameActions.filter(a => a.type === 'place_ship').length,
+    rallies: gameActions.filter(a => a.type === 'rally_drop').length,
     destroyed: verification.buildingsDestroyed,
   });
   console.log(`[BATTLE] ${claimedResult} by ${req.player.id} vs ${defender_id}: ${verification.reason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
-  console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
+  console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Rallies: ${gameActions.filter(a => a.type === 'rally_drop').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
   console.log(`[BATTLE] Actions:`, JSON.stringify(gameActions.filter(a => a.type === 'place_ship').map(a => ({t: a.t, troops: a.troops, troopType: a.troopType, x: a.x?.toFixed(2), z: a.z?.toFixed(2)}))));
   console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
@@ -512,24 +531,27 @@ router.post('/attack/result', auth, (req, res) => {
       return res.status(400).json(battleResult);
     }
     db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', verification.reason, battleResult.loot, verification);
-    // Remove casualties from attacker's ships
-    _applyCasualties(req.player.id, req.body.casualties);
+    // Remove server-simulated casualties from attacker's ships. Real-time
+    // /troop-died may already have removed some; _applyCasualties caps against
+    // the current ship state, so the final submit is idempotent.
+    _applyCasualties(req.player.id, verification.casualties);
     // Return authoritative post-casualty ship state so client can sync immediately
-    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id) });
+    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id), casualties: verification.casualties || {} });
   }
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id);
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', 'Defeat', null, verification);
 
-  // Remove casualties from attacker's ships
-  _applyCasualties(req.player.id, req.body.casualties);
+  // Remove server-simulated casualties from attacker's ships.
+  _applyCasualties(req.player.id, verification.casualties);
 
   res.json({
     success: true,
     loot: { gold: 0, wood: 0, ore: 0 },
     trophies: defeatResult.attackerTrophies,
     ships: _getShipsPayload(req.player.id),
+    casualties: verification.casualties || {},
   });
 });
 
@@ -1044,12 +1066,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
     }
     // Use last_trade_id as a rowid-threshold — avantis rows have integer PKs.
-    const newTrades = fdb.prepare(`
-      SELECT id, symbol, side, amount, notional_usd, status, created_at
-      FROM trade_history
-      WHERE player_id = ? AND dex = 'avantis' AND status != 'failed' AND id > ?
-      ORDER BY id ASC
-    `).all(req.player.id, reward.last_trade_id || 0);
+    let newTrades = [];
+    try {
+      newTrades = fdb.prepare(`
+        SELECT id, symbol, side, amount, notional_usd, status, created_at
+        FROM trade_history
+        WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
+          AND verified_source = 'worker' AND id > ?
+        ORDER BY id ASC
+      `).all(req.player.id, reward.last_trade_id || 0);
+    } catch (e) {
+      console.warn('[claim-gold] Avantis verified trade query failed:', e.message);
+      return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex: 'avantis' });
+    }
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
       return res.json({ gold: 0, reason: 'No new trades' });
@@ -1341,7 +1370,8 @@ router.get('/trading/stats', auth, async (req, res) => {
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
           FROM trade_history
-          WHERE player_id = ? AND dex = 'avantis' AND status != 'failed'
+          WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
+            AND verified_source = 'worker'
           ORDER BY id DESC
           LIMIT 50
         `).all(req.player.id);
@@ -1831,11 +1861,11 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         SELECT COUNT(*) AS trades,
                COUNT(DISTINCT player_id) AS traders,
                COALESCE(SUM(notional_usd), 0) AS volume
-        FROM trade_history WHERE dex = 'avantis' AND status != 'failed'
+        FROM trade_history WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker'
       `).get();
       const recent = fdb.prepare(`
         SELECT COUNT(*) AS trades FROM trade_history
-        WHERE dex = 'avantis' AND status != 'failed' AND created_at > datetime('now', '-24 hours')
+        WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker' AND created_at > datetime('now', '-24 hours')
       `).get();
       avantisActivity = {
         total_trades: row?.trades || 0,
@@ -1853,7 +1883,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     if (fdb) {
       const raw = fdb.prepare(`
         SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
-        FROM trade_history WHERE dex = 'avantis' AND status != 'failed'
+        FROM trade_history WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker'
         GROUP BY player_id ORDER BY vol DESC LIMIT 10
       `).all();
       // Join player name from main DB

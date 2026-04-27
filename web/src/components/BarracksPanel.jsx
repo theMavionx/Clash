@@ -134,6 +134,15 @@ function BarracksPanel({ building, onClose }) {
   const { isMobile: mobile } = useLayout();
 
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
+  const troops = buildingDefs?.troops || {};
+  const troopNames = Object.keys(troops);
+  const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
+  const currentTroopName = troopNames[safeIndex];
+  const tdef = currentTroopName ? troops[currentTroopName] : null;
+  const lvl = currentTroopName ? (troopLevels[currentTroopName] || 1) : 1;
+  const prevLvlRef = useRef(lvl);
+  const prevTroopRef = useRef(currentTroopName);
 
   // Fetch authoritative troop levels from server when panel opens
   useEffect(() => {
@@ -141,12 +150,6 @@ function BarracksPanel({ building, onClose }) {
   }, [sendToGodot]);
 
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
-
-  if (!building || !building.is_barracks) return null;
-  const troops = buildingDefs?.troops || {};
-  const troopNames = Object.keys(troops);
-  
-  if (troopNames.length === 0) return null;
   
   const handlePrev = useCallback(() => {
     setCurrentIndex(prev => (prev === 0 ? troopNames.length - 1 : prev - 1));
@@ -156,9 +159,28 @@ function BarracksPanel({ building, onClose }) {
     setCurrentIndex(prev => (prev === troopNames.length - 1 ? 0 : prev + 1));
   }, [troopNames.length]);
 
-  const currentTroopName = troopNames[currentIndex];
-  const tdef = troops[currentTroopName];
-  const lvl = troopLevels[currentTroopName] || 1;
+  useEffect(() => {
+    if (troopNames.length > 0 && currentIndex >= troopNames.length) setCurrentIndex(0);
+  }, [currentIndex, troopNames.length]);
+
+  useEffect(() => {
+    if (!currentTroopName) return;
+    let timeoutId = null;
+    if (prevTroopRef.current === currentTroopName) {
+      if (lvl > prevLvlRef.current && prevLvlRef.current !== 0) {
+        setIsAnimatingUpgrade(true);
+        timeoutId = setTimeout(() => setIsAnimatingUpgrade(false), 2000);
+      }
+    }
+    prevLvlRef.current = lvl;
+    prevTroopRef.current = currentTroopName;
+    if (timeoutId) return () => clearTimeout(timeoutId);
+  }, [lvl, currentTroopName]);
+
+  if (!building || !building.is_barracks) return null;
+  
+  if (troopNames.length === 0) return null;
+  
   const isMax = lvl >= 3;
   // costs key = current level (cost to upgrade FROM that level)
   const nextCost = !isMax && tdef?.costs?.[String(lvl)];
@@ -166,23 +188,6 @@ function BarracksPanel({ building, onClose }) {
   const maxStats = TROOP_STATS[currentTroopName]?.maxStats;
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
   const hasImage = !!UNIT_IMAGES[currentTroopName];
-
-  // Upgrading Logic & Animation
-  const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
-  const prevLvlRef = useRef(lvl);
-  const prevTroopRef = useRef(currentTroopName);
-
-  useEffect(() => {
-    if (prevTroopRef.current === currentTroopName) {
-      // If we are looking at the same troop and the level just went up
-      if (lvl > prevLvlRef.current && prevLvlRef.current !== 0) {
-        setIsAnimatingUpgrade(true);
-        setTimeout(() => setIsAnimatingUpgrade(false), 2000);
-      }
-    }
-    prevLvlRef.current = lvl;
-    prevTroopRef.current = currentTroopName;
-  }, [lvl, currentTroopName]);
 
   // Formatting cost string:
   let costStr = "Lvl Up & Get improved stats";
