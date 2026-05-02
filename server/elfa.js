@@ -84,7 +84,9 @@ async function fetchElfa(path, params = {}, opts = {}) {
     clearTimeout(timer);
     if (!r.ok) {
       console.warn(`[elfa] ${path} → ${r.status}`);
-      recordError(path, r.status, `HTTP ${r.status}`);
+      const body = await r.text().catch(() => '');
+      const detail = body ? `HTTP ${r.status}: ${body.slice(0, 300)}` : `HTTP ${r.status}`;
+      recordError(path, r.status, detail);
       return null;
     }
     return await r.json();
@@ -188,7 +190,7 @@ async function getExplain(symbol, playerName) {
       const prompt = `In 2-3 short factual sentences describe what's happening with ${sym} (crypto ticker) on social media right now — the current narrative, key events, and notable voices. Don't frame it as "why it's moving" — it may not be moving. Focus on what people are actually saying. No hype. Cite one handle if useful. ${ctxStr}`;
 
       // Elfa chat responses routinely take 5-15s server-side — default 8s timeout aborts too early.
-      const chat = await fetchElfa('/chat', {}, { method: 'POST', body: { message: prompt }, timeoutMs: 25000 });
+      const chat = await fetchElfa('/chat', {}, { method: 'POST', body: { message: prompt }, timeoutMs: 18000 });
       const msg = chat && chat.data && (chat.data.message || chat.data.response || chat.data.text);
       credits_used = (chat && chat.data && chat.data.creditsConsumed) || 0;
       recordStat(sym, {
@@ -330,11 +332,11 @@ ${ctxStr}`;
       // Up to 3 attempts — Elfa sometimes times out or returns malformed JSON.
       // Each attempt costs ~46-60 credits, but we only retry on failure so the
       // happy path still charges once.
-      const MAX_ATTEMPTS = 3;
+      const MAX_ATTEMPTS = 2;
       for (attempts = 1; attempts <= MAX_ATTEMPTS; attempts++) {
         let chat = null;
         try {
-          chat = await fetchElfa('/chat', {}, { method: 'POST', body: { message: prompt }, timeoutMs: 25000 });
+          chat = await fetchElfa('/chat', {}, { method: 'POST', body: { message: prompt }, timeoutMs: 18000 });
         } catch (e) {
           console.warn(`[elfa.trade] ${sym} attempt ${attempts}/${MAX_ATTEMPTS} fetch error: ${e.message}`);
         }

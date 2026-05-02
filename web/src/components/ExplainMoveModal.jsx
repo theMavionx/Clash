@@ -10,22 +10,48 @@ function ExplainMoveModal({ symbol, onClose }) {
 
   useEffect(() => {
     let cancelled = false;
+    const ctrl = new AbortController();
+    let timer = null;
     const token = window._playerToken;
-    if (!token || !symbol) return;
+    if (!symbol) {
+      setError('No symbol selected');
+      setLoading(false);
+      return () => { cancelled = true; ctrl.abort(); };
+    }
+    if (!token) {
+      setError('Login is still loading. Close this and try again in a moment.');
+      setLoading(false);
+      return () => { cancelled = true; ctrl.abort(); };
+    }
     setLoading(true);
     setError(null);
+    timer = setTimeout(() => ctrl.abort(), 30_000);
     fetch(`${GAME_API}/elfa/explain/${encodeURIComponent(symbol)}`, {
       headers: { 'x-token': token },
+      signal: ctrl.signal,
     })
       .then(async r => {
-        const j = await r.json();
+        const j = await r.json().catch(() => ({}));
         if (cancelled) return;
         if (!r.ok) setError(j.error || 'Failed to load explanation');
         else setData(j);
       })
-      .catch(() => { if (!cancelled) setError('Network error'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e?.name === 'AbortError'
+            ? 'Elfa is taking too long right now. Try again in a minute.'
+            : 'Network error');
+        }
+      })
+      .finally(() => {
+        if (timer) clearTimeout(timer);
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      ctrl.abort();
+    };
   }, [symbol]);
 
   return (
