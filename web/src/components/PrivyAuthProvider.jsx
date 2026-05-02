@@ -1,4 +1,5 @@
 import { PrivyProvider } from '@privy-io/react-auth';
+import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base } from 'viem/chains';
 
@@ -6,6 +7,7 @@ import { base } from 'viem/chains';
 // ERR_CERT_AUTHORITY_INVALID on some networks, breaking Privy's send-TX flow.
 const SOLANA_RPC_HTTP = 'https://solana-rpc.publicnode.com';
 const SOLANA_RPC_WS = 'wss://solana-rpc.publicnode.com';
+const solanaWalletConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
 
 // Wraps children in PrivyProvider. When VITE_PRIVY_APP_ID is unset (e.g. local dev
 // without a Privy project yet), renders children without Privy so the rest of the
@@ -38,6 +40,12 @@ export default function PrivyAuthProvider({ children }) {
         // Default EVM chain for trading = Base mainnet (Avantis runs there).
         defaultChain: base,
         supportedChains: [base],
+        externalWallets: {
+          // Privy still reads dashboard wallet-login settings even though our
+          // UI uses email-only auth. Passing Solana standard connectors keeps
+          // the SDK quiet without letting it auto-pop wallets on page load.
+          solana: { connectors: solanaWalletConnectors },
+        },
         // Needed by Privy's embedded-wallet sign-and-send UI. Without this,
         // attempting a transaction throws "No RPC configuration found for chain solana:mainnet".
         solana: {

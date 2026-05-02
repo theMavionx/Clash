@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, memo } from 'react';
 // background art still fills the viewport. Public-path reference means art
 // swaps need no JS rebuild.
 const splashBg = '/splash-bg.png';
-const splashLogo = '/splash-logo.png';
+const splashLogo = '/splash-logo.png?v=splash-art';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy

@@ -16,7 +16,7 @@ import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
 // while the background still fills the viewport — otherwise a
 // single-composed image either letterboxes or crops the logo.
 const splashBg = '/splash-bg.png';
-const splashLogo = '/splash-logo.png';
+const splashLogo = '/splash-logo.png?v=splash-art';
 import './index.css';
 
 // Lazy load heavy components — only after Farcaster SDK is ready
