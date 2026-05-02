@@ -2,6 +2,21 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
+  // Vite 8 swapped the dep optimizer from esbuild to Rolldown and
+  // tightened the CJS->ESM interop. The new behaviour drops named-export
+  // detection that Vite 7's optimizer used to do — meaning React 19's
+  // `react/jsx-runtime` (CJS) loses its `Fragment` export, and any prebundled
+  // dep that does `import { Fragment, ... } from "react/jsx-runtime"` (e.g.
+  // @aptos-labs/wallet-adapter-react) crashes at module-init.
+  //
+  // The Vite team flagged this as a breaking change and added an opt-out
+  // flag specifically for this scenario. Setting it restores Vite 7's
+  // named-export behaviour across all prebundles in one line, replacing
+  // ~70 lines of fragile rewrite-plugin + optimizeDeps include/exclude
+  // gymnastics. See https://main.vite.dev/guide/migration.
+  legacy: {
+    inconsistentCjsInterop: true,
+  },
   plugins: [
     react(),
     // Add cache headers for Godot assets in preview/production

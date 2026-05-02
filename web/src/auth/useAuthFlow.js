@@ -24,9 +24,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSend, useUI } from '../hooks/useGodot';
-import { useDex } from '../contexts/DexContext';
+import { isDexAvailableInContext, useDex } from '../contexts/DexContext';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { usePrivy } from '@privy-io/react-auth';
 import {
   useSolanaAdapterResolver,
@@ -36,6 +37,9 @@ import {
 } from './resolvers';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
+const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v1';
+const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
+const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 // How long to wait for an auto-resolver to produce a candidate before
 // revealing the manual-connect CTAs. Keeps the spinner short when the
 // user isn't authenticated anywhere; keeps the "Joining…" UX intact when
@@ -49,6 +53,47 @@ function writeDexPicked(v) {
   try {
     if (v) localStorage.setItem(DEX_PICKED_KEY, '1');
     else localStorage.removeItem(DEX_PICKED_KEY);
+  } catch { /* storage disabled */ }
+}
+
+function walletCacheKey(wallet) {
+  const raw = String(wallet || '').trim();
+  return raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
+}
+
+function readAccountProbeCache(wallet) {
+  try {
+    const key = walletCacheKey(wallet);
+    if (!key) return undefined;
+    const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
+    if (!raw) return undefined;
+    const all = JSON.parse(raw);
+    const entry = all?.[key];
+    if (!entry || typeof entry.ts !== 'number') return undefined;
+    const ttl = entry.exists ? ACCOUNT_PROBE_POSITIVE_TTL_MS : ACCOUNT_PROBE_NEGATIVE_TTL_MS;
+    if (Date.now() - entry.ts > ttl) {
+      delete all[key];
+      localStorage.setItem(ACCOUNT_PROBE_CACHE_KEY, JSON.stringify(all));
+      return undefined;
+    }
+    return entry.exists ? (entry.name || null) : null;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeAccountProbeCache(wallet, name) {
+  try {
+    const key = walletCacheKey(wallet);
+    if (!key) return;
+    const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[key] = {
+      exists: !!name,
+      name: name || '',
+      ts: Date.now(),
+    };
+    localStorage.setItem(ACCOUNT_PROBE_CACHE_KEY, JSON.stringify(all));
   } catch { /* storage disabled */ }
 }
 
@@ -79,6 +124,19 @@ export function useAuthFlow() {
   // is batched with the state clears, so the NEXT render has both the
   // cleared state AND the gate lifted).
   const [readyForRegister, setReadyForRegister] = useState(false);
+
+  // A DEX can be valid globally but unavailable in the current host. Decibel
+  // needs an Aptos wallet-standard provider (Petra/etc.), which Farcaster
+  // mini apps do not expose, so a cached Decibel choice must fall back to the
+  // picker instead of landing on an impossible connect screen.
+  useEffect(() => {
+    if (isDexAvailableInContext(dex, { isInFrame })) return;
+    setDex('pacifica');
+    writeDexPicked(false);
+    setDexPickedState(false);
+    lastRegisteredRef.current = null;
+    fcEvmTriedRef.current = false;
+  }, [dex, isInFrame, setDex]);
 
   // Session-invalidated reset. Godot sends `show_register` in two cases:
   //   (a) brand-new user — nothing to clean, all flags are already clear
@@ -128,6 +186,15 @@ export function useAuthFlow() {
   const privySol = usePrivySolanaResolver();
   const evmContext = useEvmContextResolver();
   const privyEvm = usePrivyEvmCandidate();
+  // Aptos wallet (Petra) — exposed as a candidate for Decibel registration.
+  // Inline rather than a separate resolver hook because there's exactly
+  // one source for Aptos right now (the AptosWalletContext) and adding a
+  // wrapper would just duplicate its interface.
+  const aptosWallet = useAptosWallet();
+  const aptosCandidate = useMemo(() => {
+    if (!aptosWallet?.address) return null;
+    return { wallet: aptosWallet.address, source: 'aptos' };
+  }, [aptosWallet?.address]);
 
   // Farcaster EVM: not a hook (SDK call is imperative). We trigger it once
   // when Avantis is picked + in frame, and feed the resulting provider
@@ -167,13 +234,15 @@ export function useAuthFlow() {
   // Priority (Avantis): EvmWalletContext (covers FC, external-reconnected,
   //   and Privy-resolved) → Privy EVM candidate (Privy authenticated but
   //   embedded wallet not yet materialised).
+  // Priority (Decibel): Petra (only source — no FC/Privy alternative yet).
   // Priority (Pacifica): Solana adapter (covers FC Solana auto-connect
   //   and external-connected) → Privy Solana.
   const candidate = useMemo(() => {
     if (!dexPicked) return null;
     if (dex === 'avantis') return evmContext || privyEvm || null;
+    if (dex === 'decibel') return aptosCandidate || null;
     return solAdapter || privySol || null;
-  }, [dex, dexPicked, evmContext, privyEvm, solAdapter, privySol]);
+  }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
 
   // Suggested display name. FC username always wins when present (matches
   // user expectation: "when I'm on Farcaster, use my FC name"). Email
@@ -217,11 +286,18 @@ export function useAuthFlow() {
   //   string    → probed, account found with this stored name
   const [probedNameByWallet, setProbedNameByWallet] = useState({});
   const probeInFlightRef = useRef({});
+  const probeVerifiedRef = useRef({});
   useEffect(() => {
     if (!candidate?.wallet) return;
     if (fcUser) return; // FC users keep the existing fast-path
-    const key = String(candidate.wallet);
-    if (key in probedNameByWallet) return;
+    const key = walletCacheKey(candidate.wallet);
+    const cached = readAccountProbeCache(candidate.wallet);
+    if (!(key in probedNameByWallet) && cached !== undefined) {
+      setProbedNameByWallet(prev => (
+        key in prev ? prev : { ...prev, [key]: cached }
+      ));
+    }
+    if (probeVerifiedRef.current[key]) return;
     if (probeInFlightRef.current[key]) return;
     probeInFlightRef.current[key] = true;
     (async () => {
@@ -233,9 +309,12 @@ export function useAuthFlow() {
         });
         if (r.ok) {
           const data = await r.json();
-          setProbedNameByWallet(prev => ({ ...prev, [key]: data?.name || null }));
+          const name = data?.name || null;
+          writeAccountProbeCache(candidate.wallet, name);
+          setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
         } else {
           // 404 (no account) / 400 (invalid wallet) → treat as new user.
+          writeAccountProbeCache(candidate.wallet, null);
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
         }
       } catch {
@@ -243,16 +322,20 @@ export function useAuthFlow() {
         // spinner forever. If they're actually returning, the name form
         // with suggested auto-derived default still takes them through
         // login_by_wallet on the Godot side.
-        setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+        if (cached === undefined) {
+          setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
+        }
       } finally {
+        probeVerifiedRef.current[key] = true;
         probeInFlightRef.current[key] = false;
       }
     })();
   }, [candidate, fcUser, probedNameByWallet]);
 
   // Resolved existing-account name (or null if none / not yet probed).
-  const existingAccountName = candidate?.wallet
-    ? probedNameByWallet[String(candidate.wallet)]
+  const candidateWalletKey = candidate?.wallet ? walletCacheKey(candidate.wallet) : '';
+  const existingAccountName = candidateWalletKey
+    ? probedNameByWallet[candidateWalletKey]
     : undefined;
 
   // Boot grace — if FC SDK or Privy is still resolving, don't show the
@@ -375,10 +458,11 @@ export function useAuthFlow() {
 
   // Actions exposed to the UI. All auth decisions flow through here.
   const pickDex = useCallback((newDex) => {
+    if (!isDexAvailableInContext(newDex, { isInFrame })) return;
     setDex(newDex);
     writeDexPicked(true);
     setDexPickedState(true);
-  }, [setDex]);
+  }, [isInFrame, setDex]);
 
   const unpickDex = useCallback(() => {
     writeDexPicked(false);
@@ -399,6 +483,7 @@ export function useAuthFlow() {
       payload.walletSource = candidate.source;
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;
+    writeAccountProbeCache(candidate.wallet, name.trim());
     sendToGodot('register', payload);
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);

@@ -16,6 +16,8 @@ server-futures/*.db-wal
 server-futures/*.db-shm
 server-futures/server.log
 
+# Local runtime logs
+*.log
 
 # Environment
 .env
@@ -32,3 +34,6 @@ addons/godot_mcp/
 
 # Godot Web Export
 web/public/godot/
+
+# Decibel test wallet - contains private key, never commit
+aptos-test-wallet.txt

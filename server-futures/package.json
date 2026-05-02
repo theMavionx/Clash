@@ -9,6 +9,8 @@
   },
   "type": "commonjs",
   "dependencies": {
+    "@aptos-labs/ts-sdk": "^5.2.1",
+    "@decibeltrade/sdk": "^0.6.0",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.0",
     "better-sqlite3": "^12.8.0",
@@ -18,6 +20,7 @@
     "tweetnacl": "^1.0.3",
     "uuid": "^13.0.0",
     "viem": "^2.21.0",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "zod": "^3.25.76"
   }
 }

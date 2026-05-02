@@ -3,7 +3,8 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import EvmWalletModal from './EvmWalletModal';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
-import { DEX_CONFIG } from '../contexts/DexContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
 
 // Styled to match the project's dominant Clash-of-Clans modal look (parchment
@@ -21,7 +22,8 @@ function Spinner({ label }) {
   );
 }
 
-function DexPicker({ onPick }) {
+function DexPicker({ onPick, isInFrame }) {
+  const dexOptions = getAvailableDexConfigs({ isInFrame });
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CHOOSE YOUR DEX</h3>
@@ -29,7 +31,7 @@ function DexPicker({ onPick }) {
         Your trading venue for the whole campaign. You can switch any time in profile.
       </p>
       <div style={S.dexList}>
-        {Object.values(DEX_CONFIG).map(cfg => (
+        {dexOptions.map(cfg => (
           <button
             key={cfg.id}
             type="button"
@@ -59,7 +61,11 @@ function DexPicker({ onPick }) {
                 )}
               </div>
               <div style={S.dexCardSubtitle}>
-                {cfg.chain} · {cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' : 'SELF-CUSTODY · SOLANA'}
+                {cfg.chain} · {
+                  cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
+                  'SELF-CUSTODY · SOLANA'
+                }
               </div>
             </div>
             <span style={S.dexCardChevron}>›</span>
@@ -175,6 +181,34 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
   );
 }
 
+// Decibel uses Petra (Aptos Wallet Standard) — no Privy email path because
+// Privy doesn't currently support generating embedded Aptos wallets, so we
+// only offer the explicit Petra connect.
+function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
+  return (
+    <div style={S.bodyStack}>
+      <h3 style={S.sectionTitle}>CONNECT TO DECIBEL</h3>
+      <p style={S.subtle}>
+        Connect your Aptos wallet (Petra) to start playing. Trades are signed by an
+        api-wallet on this device — you sign once, then trade silently.
+      </p>
+      <button
+        style={S.primaryBtn}
+        onClick={onConnectAptos}
+        disabled={isConnecting}
+      >
+        <WalletIcon />
+        {isConnecting ? 'CONNECTING…' : (hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA')}
+      </button>
+      {error && (
+        <div style={{ color: '#B71C1C', fontSize: 12, fontWeight: 700, textAlign: 'center' }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WalletIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -203,6 +237,7 @@ function RegisterPanel() {
   const { select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { setExternalProvider: setEvmProvider } = useEvmWallet();
+  const aptos = useAptosWallet();
 
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const handleEvmConnected = useCallback(({ address, provider, rdns }) => {
@@ -223,12 +258,16 @@ function RegisterPanel() {
       case 'booting':
         return <Spinner label="Loading…" />;
       case 'pick_dex':
-        return <DexPicker onPick={actions.pickDex} />;
+        return <DexPicker onPick={actions.pickDex} isInFrame={isInFrame} />;
       case 'auto_connecting':
         return (
           <Spinner
             label={isInFrame && fcUser
-              ? `Joining ${dex === 'avantis' ? 'Avantis' : 'Pacifica'} as ${fcUser.username || fcUser.displayName}…`
+              ? `Joining ${
+                  dex === 'avantis' ? 'Avantis' :
+                  dex === 'decibel' ? 'Decibel' :
+                  'Pacifica'
+                } as ${fcUser.username || fcUser.displayName}…`
               : 'Signing you in…'}
           />
         );
@@ -244,14 +283,27 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        return dex === 'avantis' ? (
-          <ConnectAvantis
-            onOpenEvmModal={() => setEvmModalOpen(true)}
-            onPrivyLogin={actions.loginWithPrivy}
-            privyEnabled={privyEnabled}
-            privyAuthed={privyAuthed}
-          />
-        ) : (
+        if (dex === 'avantis') {
+          return (
+            <ConnectAvantis
+              onOpenEvmModal={() => setEvmModalOpen(true)}
+              onPrivyLogin={actions.loginWithPrivy}
+              privyEnabled={privyEnabled}
+              privyAuthed={privyAuthed}
+            />
+          );
+        }
+        if (dex === 'decibel') {
+          return (
+            <ConnectDecibel
+              onConnectAptos={aptos.connect}
+              isConnecting={aptos.isConnecting}
+              hasProvider={aptos.hasProvider}
+              error={aptos.error}
+            />
+          );
+        }
+        return (
           <ConnectPacifica
             onOpenWalletModal={openSolanaConnect}
             onPrivyLogin={actions.loginWithPrivy}
@@ -271,7 +323,9 @@ function RegisterPanel() {
     if (state === 'pick_dex') return 'WELCOME';
     if (state === 'need_name') return 'YOUR NAME';
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
-    return dex === 'avantis' ? 'AVANTIS LOGIN' : 'PACIFICA LOGIN';
+    if (dex === 'avantis') return 'AVANTIS LOGIN';
+    if (dex === 'decibel') return 'DECIBEL LOGIN';
+    return 'PACIFICA LOGIN';
   })();
 
   return (

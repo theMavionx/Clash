@@ -131,13 +131,24 @@ app.use((err, req, res, _next) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Futures server running on http://0.0.0.0:${PORT}`);
-  console.log('Network: Pacifica Mainnet + Avantis (Base, non-custodial)');
+  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos)');
   console.log('Builder code: clashofperps');
-  // Start the Avantis gold-rewards indexer. Polls Core API every 2 min for all
-  // registered avantis traders and records newly-closed positions in trade_history.
+  // Start gold-rewards indexers. Avantis still needs polling. Decibel orders
+  // are submitted by this server signer, so the Decibel order route records
+  // rewardable rows synchronously; the old Decibel poller is now an optional
+  // backfill path to avoid double-counting the same volume.
   try {
     require('./avantis-rewards-worker').start();
   } catch (e) {
     console.error('[worker] avantis-rewards-worker failed to start:', e.message);
+  }
+  if (process.env.DECIBEL_REWARDS_WORKER === '1') {
+    try {
+      require('./decibel-rewards-worker').start();
+    } catch (e) {
+      console.error('[worker] decibel-rewards-worker failed to start:', e.message);
+    }
+  } else {
+    console.log('[decibel-rewards-worker] skipped (server-side order rewards are active)');
   }
 });

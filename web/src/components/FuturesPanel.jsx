@@ -5,7 +5,9 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
+import { useDecibel } from '../hooks/useDecibel';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import FuturesModeSelect from './FuturesModeSelect';
 import BasicTradeFlow from './basic/BasicTradeFlow';
@@ -221,6 +223,236 @@ const SignalIcon = ({ type, size = 14 }) => {
     </svg>
   );
   return null;
+};
+
+// Per-step "what is happening" hint. Keys match the labels we set in
+// useDecibel.js activateApiWallet — keep them in sync. Used by the
+// activate gate (full-screen, NOT a popup) to explain each Petra prompt
+// inline before the user clicks sign.
+const ACTIVATION_STEP_HINTS = {
+  'Create trading account':
+    "Petra will sign a transaction that creates your private subaccount on Decibel. This is the on-chain object that holds your USDC and your positions.",
+  'Authorize fast trading':
+    "Petra grants the Clash server signer permission to place orders for your Decibel subaccount. After this, trades go through without a Petra popup per order.",
+  'Enable builder fee routing':
+    "A 0.01% fee on each trade goes to the Clash dev wallet. Tiny vs CEX fees, and it's how we earn from this integration.",
+  'Finalising…':
+    "Reading the on-chain state to confirm everything landed. Don't refresh — this only takes a moment.",
+  'Preparing activation…':
+    'Checking your account on-chain to figure out which signatures are still needed.',
+};
+
+// Decibel deposit gate. Shown after the user has activated trading but
+// before they've moved any USDC onto the subaccount. The whole panel
+// turns into a deposit prompt — there's nothing else to do here, since
+// you can't open positions with $0 of collateral. Mirrors the activate
+// gate's full-screen "no escape until you finish" UX.
+const DecibelDepositGate = ({
+  panelRef, fullscreen, isMobile, isDragging, posRef,
+  onClose, onPointerDown,
+  walletUsdc, depositToTradingAccount, loading, error,
+}) => {
+  const [amt, setAmt] = useState('5');
+  const [busy, setBusy] = useState(false);
+  const [localErr, setLocalErr] = useState(null);
+  // Derived state for the input + submit button. Decibel's `min_size`
+  // varies per market but is roughly $1 worth at typical leverages, so $5
+  // is the sensible "starter" floor and $1 is the hard minimum we let
+  // through. Anything less just isn't enough to open a single lot on most
+  // markets without floating-point quirks rounding the size to zero.
+  const wallet = Number(walletUsdc ?? 0);
+  const amtN = Number(amt) || 0;
+  const tooSmall = amtN < 1;
+  const overWallet = amtN > wallet + 1e-9;
+  const canSubmit = !busy && !loading && !tooSmall && !overWallet && wallet > 0;
+
+  const handleDeposit = async () => {
+    setLocalErr(null);
+    if (!canSubmit) return;
+    setBusy(true);
+    try {
+      const res = await depositToTradingAccount(amtN);
+      if (res?.error) setLocalErr(res.error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <style>{animCSS}</style>
+      <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+        ...(fullscreen ? S.containerFull : S.container),
+        ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+        transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+        transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}>
+        <div style={S.header} onPointerDown={onPointerDown}>
+          <span style={S.headerTitle}>Deposit USDC to start</span>
+          <button data-nodrag onClick={onClose} style={S.closeBtn}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div style={{
+          ...S.body,
+          alignItems: 'stretch',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          padding: 0,
+        }}>
+        <div style={{
+          margin: 'auto',
+          width: '100%',
+          maxWidth: 420,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 'clamp(10px, 2vh, 16px)',
+          padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
+          flexShrink: 0,
+        }}>
+          <div style={{
+            width: 'clamp(64px, 12vh, 96px)',
+            height: 'clamp(64px, 12vh, 96px)',
+            borderRadius: '50%',
+            background: 'linear-gradient(180deg, #FFD54F 0%, #F57C00 100%)',
+            border: '4px solid #FB8C00',
+            boxShadow: '0 6px 0 #E65100, 0 10px 22px rgba(0,0,0,0.28)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 'clamp(32px, 6vh, 48px)',
+            flexShrink: 0,
+          }}>💵</div>
+          <div style={{
+            color: '#5C3A21', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900,
+            textAlign: 'center', letterSpacing: '0.4px',
+          }}>Fund your trading account</div>
+          <div style={{
+            color: '#8a7252', fontSize: 13, fontWeight: 600,
+            textAlign: 'center', maxWidth: 380, lineHeight: 1.5,
+          }}>
+            You can't trade without USDC for collateral. Deposit at least
+            <b> $5</b> from your Petra wallet to start earning real PnL plus
+            in-game gold rewards based on your trade volume.
+          </div>
+
+          {/* Wallet snapshot — what's available to deposit. */}
+          <div style={{
+            width: '100%', maxWidth: 380,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            background: '#fffbef', border: '2px solid #d4c8b0',
+            borderRadius: 12, padding: '10px 14px',
+          }}>
+            <div style={{fontSize: 12, fontWeight: 700, color: '#8a7252'}}>In your wallet</div>
+            <div style={{fontSize: 16, fontWeight: 900, color: '#5C3A21'}}>
+              ${wallet.toFixed(2)} USDC
+            </div>
+          </div>
+
+          {/* Amount input — defaults to $5. Quick-pick buttons let users
+              tap an amount instead of typing on mobile. */}
+          <div style={{width: '100%', maxWidth: 380, display: 'flex', flexDirection: 'column', gap: 8}}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#fffbef', border: '2px solid #d4c8b0',
+              borderRadius: 12, padding: '10px 14px',
+            }}>
+              <div style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>$</div>
+              <input
+                type="number" min="1" step="0.5"
+                value={amt}
+                onChange={(e) => setAmt(e.target.value)}
+                disabled={busy || loading}
+                style={{
+                  flex: 1, border: 'none', outline: 'none',
+                  background: 'transparent', fontSize: 18, fontWeight: 900,
+                  color: '#5C3A21', minWidth: 0,
+                }}
+              />
+              <div style={{fontSize: 11, fontWeight: 700, color: '#8a7252'}}>USDC</div>
+            </div>
+            <div style={{display: 'flex', gap: 6}}>
+              {[5, 10, 25, 50].filter(v => v <= wallet || v === 5).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setAmt(String(v))}
+                  disabled={busy || loading || v > wallet}
+                  style={{
+                    flex: 1, padding: '6px 0',
+                    background: amtN === v ? '#5C3A21' : '#fffbef',
+                    color: amtN === v ? '#fff' : '#5C3A21',
+                    border: '2px solid #d4c8b0', borderRadius: 8,
+                    fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                    opacity: v > wallet ? 0.4 : 1,
+                  }}
+                >${v}</button>
+              ))}
+              {wallet > 0 && (
+                <button
+                  onClick={() => setAmt(String(Math.floor(wallet * 100) / 100))}
+                  disabled={busy || loading}
+                  style={{
+                    flex: 1, padding: '6px 0',
+                    background: '#fffbef', color: '#5C3A21',
+                    border: '2px solid #d4c8b0', borderRadius: 8,
+                    fontSize: 12, fontWeight: 800, cursor: 'pointer',
+                  }}
+                >MAX</button>
+              )}
+            </div>
+          </div>
+
+          <button
+            style={{
+              ...cartoonBtn(canSubmit ? '#10B981' : '#9CA3AF', canSubmit ? '#059669' : '#6B7280'),
+              padding: '16px 36px',
+              fontSize: 16, fontWeight: 900, letterSpacing: '0.5px',
+              width: '100%', maxWidth: 380,
+              opacity: canSubmit ? 1 : 0.7,
+              cursor: canSubmit ? 'pointer' : 'not-allowed',
+            }}
+            onClick={handleDeposit}
+            disabled={!canSubmit}
+          >
+            {busy || loading
+              ? 'WAITING FOR PETRA…'
+              : tooSmall
+                ? 'MINIMUM $1'
+                : overWallet
+                  ? 'NOT ENOUGH USDC'
+                  : `DEPOSIT $${amtN.toFixed(2)}`}
+          </button>
+
+          {wallet === 0 && (
+            <div style={{
+              fontSize: 12, color: '#7a6a4a', fontWeight: 700,
+              textAlign: 'center', maxWidth: 380, padding: '10px 14px',
+              background: '#fff8d8', border: '1px solid #d4c8b0',
+              borderRadius: 8, lineHeight: 1.5,
+            }}>
+              Your Petra wallet has no USDC yet. Get USDC on Aptos via
+              a bridge (e.g. <b>Wormhole</b> or <b>LayerZero</b>) or buy
+              direct on a CEX that supports Aptos withdrawals.
+            </div>
+          )}
+
+          <div style={{
+            fontSize: 11, color: '#a3906a', fontWeight: 700,
+            textAlign: 'center', maxWidth: 320, lineHeight: 1.4,
+          }}>
+            You can withdraw any time — funds stay on Aptos under your control.
+          </div>
+          {(localErr || error) && (
+            <div style={{
+              color: '#B71C1C', fontSize: 12, fontWeight: 700,
+              textAlign: 'center', maxWidth: 380, padding: '8px 12px',
+              background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
+            }}>{localErr || error}</div>
+          )}
+        </div>
+        </div>
+      </div>
+    </>
+  );
 };
 
 // Symbol picker dropdown with logo, max leverage, price, 24h change
@@ -626,11 +858,23 @@ function FuturesPanel() {
     () => isBasic ? TABS.filter(t => t.id !== 'Orders') : TABS,
     [isBasic]
   );
-  // Branch on DEX: usePacifica for Solana-signed trading, useAvantis for
-  // the custodial Base flow. Both hooks expose the same interface shape.
+  // Branch on DEX. All three hooks expose the same interface shape so the
+  // rest of the panel doesn't have to know which chain it's on:
+  //   pacifica → Solana-signed (Privy embedded or external)
+  //   avantis  → Base/EVM, self-custody via viem
+  //   decibel  → Aptos, self-custody via Petra
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
-  const trading = dex === 'avantis' ? avantisHook : pacificaHook;
+  const decibelHook = useDecibel();
+  // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
+  // pre-connect screen. Lives outside the trading hooks because the
+  // wallet context is shared with future Aptos-using features.
+  const aptosWallet = useAptosWallet();
+  const trading = dex === 'avantis'
+    ? avantisHook
+    : dex === 'decibel'
+    ? decibelHook
+    : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
@@ -640,10 +884,18 @@ function FuturesPanel() {
     hasReferrer, linkOurReferrer,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError,
+    // Decibel-only — drives the blocking activation modal + gate screen.
+    // setupVerified is the on-chain verification: null=checking,
+    // true=delegation confirmed on-chain, false=needs activation.
+    // subaccountAddr lets the gate distinguish "fresh user" (no
+    // subaccount yet) from "returning user" (subaccount on-chain but
+    // delegation missing — usually after rejecting the delegate step).
+    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr,
   } = trading;
-  // For Pacifica: wallet needs adapter or Privy. For Avantis: walletAddr is
-  // the custodial Base address, provisioned on first fetch by the hook.
-  const hasWallet = dex === 'avantis'
+  // For Pacifica: wallet needs adapter or Privy. For Avantis/Decibel:
+  // walletAddr is the self-custody address, set when the user connected
+  // the chain-specific wallet (viem on Base, Petra on Aptos).
+  const hasWallet = dex === 'avantis' || dex === 'decibel'
     ? !!walletAddr
     : (!!walletAddr || connected || !!player?.wallet);
 
@@ -723,8 +975,16 @@ function FuturesPanel() {
       try { localStorage.setItem(referralDismissKey, '1'); } catch { /* storage disabled */ }
     }
   }, [referralDismissKey]);
+  // Avantis: referral linkage banner. Decibel: builder-fee approval banner.
+  // Avantis: referral linkage banner. Decibel runs its full activation
+  // through the dedicated gate screen (see DECIBEL ACTIVATE GATE below)
+  // — that flow already covers builder-fee approval, so the banner is
+  // redundant for Decibel and was only showing because `builderApproved`
+  // can stay false after a partial activation. Keep the banner for
+  // Avantis only.
   const showReferralBanner =
-    dex === 'avantis' && !!walletAddr && hasReferrer === false && !referralDismissed;
+    dex === 'avantis'
+    && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
     if (!provider || !address) return;
@@ -884,7 +1144,19 @@ function FuturesPanel() {
     return markets.find(m => m.symbol === symbol)?.max_leverage || 100;
   }, [markets, symbol]);
 
-  const pacBalance = parseFloat(account?.balance || 0);
+  // Trader-facing balance for the Pro panel slider / max-size calc / deposit
+  // CTA. Each DEX exposes the field under a different name; keep the legacy
+  // `pacBalance` identifier so the rest of the file doesn't have to change.
+  //   Pacifica → `balance`            (human USDC)
+  //   Decibel  → `usdc_cross_withdrawable_balance` (human USDC, REST)
+  //   Avantis  → `usdcAvailable` / `usdc` (human USDC)
+  const pacBalance = parseFloat(
+    account?.balance
+      ?? account?.usdc_cross_withdrawable_balance
+      ?? account?.usdcAvailable
+      ?? account?.usdc
+      ?? 0
+  );
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
@@ -953,7 +1225,11 @@ function FuturesPanel() {
     // Pacifica has an account-level leverage endpoint — debounce + send after
     // the slider settles. Avantis takes leverage per-trade, so we skip the
     // round-trip entirely.
-    if (dex === 'avantis') return;
+    // Pacifica is the only DEX that pushes leverage through a debounced
+    // server call — Avantis is per-trade, Decibel uses on-chain
+    // configureUserSettingsForMarket which we let the user trigger
+    // explicitly via the position's settings (not the slider). Skip both.
+    if (dex === 'avantis' || dex === 'decibel') return;
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi, dex]);
@@ -968,17 +1244,22 @@ function FuturesPanel() {
     setLocalAlert(null);
     try {
       // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
-      // Avantis API: 3rd arg is COLLATERAL / margin in USDC.
+      // Avantis & Decibel APIs: 3rd arg is COLLATERAL / margin in USDC.
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
       // Guard against missing/NaN currentPrice (feed blip).
       const price = parseFloat(currentPrice);
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel';
       let qty;
-      if (dex === 'avantis') {
+      if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
           setLocalAlert('Enter a valid amount.');
           return;
         }
-        if (positionUsdc < 100) {
+        // Avantis enforces a $100 min-notional on-chain — surface client-side
+        // so the user fixes the number before signing. Decibel has no such
+        // floor (per-market minSize varies, and the SDK reverts will surface
+        // a useful message), so we skip the 100-USDC gate for Decibel.
+        if (dex === 'avantis' && positionUsdc < 100) {
           setLocalAlert(
             `Avantis requires a position ≥ $100. Yours: $${positionUsdc.toFixed(2)} ` +
             `(margin $${(positionUsdc / leverage).toFixed(2)} × ${leverage}x). Increase margin or leverage.`
@@ -1011,9 +1292,10 @@ function FuturesPanel() {
         if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
       }
       // Pacifica-only: flush any pending leverage change before placing the
-      // order so the server sees the right leverage on fill. Avantis takes
-      // leverage per-trade as a direct argument, so no pre-flush needed.
-      if (dex !== 'avantis' && levTimerRef.current) {
+      // order so the server sees the right leverage on fill. Avantis and
+      // Decibel both take leverage per-trade (Decibel computes size from
+      // collateral × leverage / mark inside the hook), so no pre-flush.
+      if (dex === 'pacifica' && levTimerRef.current) {
         clearTimeout(levTimerRef.current);
         levTimerRef.current = null;
         const serverLev = leverageSettings[symbol];
@@ -1354,7 +1636,53 @@ function FuturesPanel() {
             </button>
           </div>
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 20}}>
-            {dex === 'avantis' ? (
+            {dex === 'decibel' ? (
+              // Decibel runs on Aptos, signed by Petra. Same self-custody
+              // story as Avantis but a different wallet ecosystem — we use
+              // AptosWalletContext directly instead of EvmWalletModal.
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #0EE8A4 0%, #059669 100%)',
+                  border: '4px solid #10B981',
+                  boxShadow: '0 5px 0 #059669, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 44,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>🔊</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Aptos wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Decibel is non-custodial — Petra signs each trade.<br />
+                  USDC for collateral, APT for gas.
+                </div>
+                <button
+                  style={{...cartoonBtn('#10B981', '#059669'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => aptosWallet.connect()}
+                  disabled={aptosWallet.isConnecting}
+                >
+                  <span>{aptosWallet.isConnecting ? 'CONNECTING…' : aptosWallet.hasProvider ? 'CONNECT PETRA' : 'INSTALL PETRA'}</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#059669', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>DECIBEL · APTOS MAINNET</span>
+                </div>
+                {aptosWallet.error && (
+                  <div style={{
+                    color: '#B71C1C', fontSize: 11, fontWeight: 700,
+                    textAlign: 'center', maxWidth: 280,
+                  }}>{aptosWallet.error}</div>
+                )}
+              </>
+            ) : dex === 'avantis' ? (
               // Avantis is non-custodial — the user's own EVM wallet signs
               // every trade. On page reload, external-wallet sessions are
               // lost (provider lives in React state only), so this screen
@@ -1431,6 +1759,323 @@ function FuturesPanel() {
     );
   }
 
+  // ==================== DECIBEL ACTIVATE GATE ====================
+  // Petra is connected but the on-chain trading setup isn't done. The gate
+  // takes over the WHOLE futures panel — no trading UI is reachable behind
+  // it. The same gate switches between two states without ever showing a
+  // popup over something else:
+  //   IDLE     → big call-to-action: explanation + step preview + huge
+  //              ACTIVATE TRADING button. The button is the only thing the
+  //              user can reasonably click here.
+  //   RUNNING  → same panel, body replaced by big spinner + current step
+  //              + "what's happening" hint + "approve in Petra" prompt.
+  //              No buttons (the user is blocked from doing anything else
+  //              until they finish or reject the Petra popup).
+  // Once activation finishes (`isReady` flips true) the gate falls away
+  // and the regular trade tabs render.
+  // Show the gate while verification is loading too — that prevents a
+  // flash of trading UI before we can confirm the on-chain delegation.
+  if (dex === 'decibel' && hasWallet && setupVerified !== true) {
+    const isRunning = !!activationStep;
+    const isChecking = setupVerified === null && !isRunning;
+    const stepHint = activationStep ? (ACTIVATION_STEP_HINTS[activationStep.label] || '') : '';
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.55}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Activating Trading…' : 'Setup Trading'}</span>
+            {/* Close button is hidden while activation is running so the
+                user can't bail out mid-signature and end up half-set-up. */}
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            // Scrollable wrapper. Avoid `justifyContent: center` here —
+            // when content overflows, flex-centering hides the top of the
+            // child (since the negative offset is unreachable by scroll).
+            // Use `margin: auto` on an inner wrapper instead so content
+            // is vertically centered when it fits, and just scrolls when
+            // it doesn't.
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+          }}>
+            <div style={{
+              margin: 'auto',
+              width: '100%',
+              maxWidth: 420,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 'clamp(10px, 2vh, 18px)',
+              padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
+              flexShrink: 0,
+            }}>
+            {isChecking ? (
+              // ── CHECKING ON-CHAIN ────────────────────────────────────
+              // Briefly shown on first connect / after refresh while we
+              // fetch the subaccount delegations from Aptos. If the server
+              // signer already has a valid delegation, the gate falls through
+              // to trading UI without ever showing the IDLE CTA below.
+              <>
+                <div style={{
+                  width: 'clamp(56px, 10vh, 88px)',
+                  height: 'clamp(56px, 10vh, 88px)',
+                  margin: '8px auto 4px',
+                  border: '6px solid #d4c8b0',
+                  borderTopColor: '#10B981',
+                  borderRadius: '50%',
+                  animation: 'act-spin 1s linear infinite',
+                  flexShrink: 0,
+                }} />
+                <div style={{
+                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800,
+                  letterSpacing: '0.12em', color: '#10B981',
+                }}>VERIFYING ON-CHAIN</div>
+                <div style={{
+                  fontSize: 'clamp(15px, 2.2vh, 18px)', fontWeight: 900, color: '#5C3A21',
+                  textAlign: 'center', maxWidth: 380, lineHeight: 1.3,
+                }}>
+                  Checking your Decibel account…
+                </div>
+                <div style={{
+                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 600, color: '#8a7252',
+                  textAlign: 'center', maxWidth: 380, lineHeight: 1.5,
+                }}>
+                  Reading your subaccount and trading delegations from Aptos.
+                  This takes a moment on first load.
+                </div>
+              </>
+            ) : isRunning ? (
+              // ── RUNNING ──────────────────────────────────────────────
+              // The user just clicked ACTIVATE. They'll see a Petra popup
+              // for each signature; we keep them informed about which one
+              // is which, what it does, and that the page must stay open.
+              <>
+                <div style={{
+                  width: 'clamp(56px, 10vh, 88px)',
+                  height: 'clamp(56px, 10vh, 88px)',
+                  margin: '8px auto 4px',
+                  border: '6px solid #d4c8b0',
+                  borderTopColor: '#10B981',
+                  borderRadius: '50%',
+                  animation: 'act-spin 1s linear infinite',
+                  flexShrink: 0,
+                }} />
+                <div style={{
+                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800, letterSpacing: '0.12em',
+                  color: '#10B981',
+                }}>
+                  {activationStep.total > 0
+                    ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
+                    : 'PREPARING'}
+                </div>
+                <div style={{
+                  fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900, color: '#5C3A21',
+                  textAlign: 'center', maxWidth: 380, lineHeight: 1.25,
+                }}>
+                  {activationStep.label}
+                </div>
+                {stepHint && (
+                  <div style={{
+                    fontSize: 13, fontWeight: 600, color: '#5C3A21',
+                    background: '#fffbef', border: '2px solid #d4c8b0',
+                    padding: '12px 16px', borderRadius: 12,
+                    lineHeight: 1.5, textAlign: 'left',
+                    maxWidth: 380, width: '100%',
+                  }}>
+                    {stepHint}
+                  </div>
+                )}
+                <div style={{
+                  fontSize: 14, fontWeight: 800, color: '#5C3A21',
+                  background: 'linear-gradient(180deg, #fff8d8, #fef3c7)',
+                  border: '2px solid #d4c8b0',
+                  padding: '12px 18px', borderRadius: 12,
+                  textAlign: 'center', maxWidth: 380, width: '100%',
+                  animation: 'act-pulse 2.4s ease-in-out infinite',
+                }}>
+                  {activationStep.total > 0 && activationStep.index > 0 && activationStep.index <= activationStep.total
+                    ? 'Open Petra and approve the request to continue.'
+                    : 'Working…'}
+                  <div style={{ fontSize: 11, color: '#a3906a', fontWeight: 700, marginTop: 4 }}>
+                    Don't close this window or refresh the page.
+                  </div>
+                </div>
+              </>
+            ) : (
+              // ── IDLE ─────────────────────────────────────────────────
+              // Two flavors based on on-chain state:
+              //   • Fresh user (no subaccount) → "First-time setup" copy
+              //     with all 4 steps and an emphasis on "one-time".
+              //   • Returning user (subaccount exists, delegation missing)
+              //     → "Account found! Authorize this device" with shorter
+              //     2-3 step list. Avoids the "but I already have an
+              //     account, why do I have to start over?" confusion.
+              <>
+                {(() => {
+                  const isReturning = !!subaccountAddr;
+                  const headline = isReturning
+                    ? 'Authorize this device'
+                    : 'Activate to start trading';
+                  const subhead = isReturning
+                    ? (apiWalletAddr
+                        ? 'We found your Decibel account and server signer. Checking the missing on-chain approvals before trading unlocks.'
+                        : 'We found your Decibel account. Authorize the Clash server signer once so trades can be signed safely server-side.')
+                    : gasSponsored
+                      ? 'You cannot open positions until setup verifies on-chain. New accounts usually need 3 one-time Petra signatures.'
+                      : 'You cannot open positions until setup verifies on-chain. New accounts usually need 3 one-time Petra signatures.';
+                  const steps = isReturning
+                    ? (gasSponsored ? [
+                        ['1', 'Authorize fast trading', 'Tells Decibel that the Clash server signer can place orders for you.'],
+                        ['2', 'Verify fee routing', 'Confirms the builder fee approval required by this integration.'],
+                      ] : [
+                        ['1', 'Check server signer', 'The server-side API wallet pays Aptos gas for order transactions.'],
+                        ['2', 'Authorize fast trading', 'Tells Decibel that the Clash server signer can place orders for you.'],
+                        ['3', 'Verify fee routing', 'Confirms the builder fee approval required by this integration.'],
+                      ])
+                    : (gasSponsored ? [
+                        ['1', 'Create trading account', 'Your subaccount on Decibel — holds USDC + positions.'],
+                        ['2', 'Authorize fast trading', 'Trades go through silently after this.'],
+                        ['3', 'Enable fee routing', 'Required builder fee approval for this integration.'],
+                      ] : [
+                        ['1', 'Create trading account', 'Your subaccount on Decibel — holds USDC + positions.'],
+                        ['2', 'Authorize fast trading', 'Trades are signed server-side after this.'],
+                        ['3', 'Enable fee routing', 'Required builder fee approval for this integration.'],
+                      ]);
+                  return (
+                    <>
+                      <div style={{
+                        width: 'clamp(64px, 12vh, 96px)',
+                        height: 'clamp(64px, 12vh, 96px)',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(180deg, #0EE8A4 0%, #059669 100%)',
+                        border: '4px solid #10B981',
+                        boxShadow: '0 6px 0 #059669, 0 10px 22px rgba(0,0,0,0.28)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 'clamp(34px, 6vh, 52px)',
+                        filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                        flexShrink: 0,
+                      }}>{isReturning ? '🔓' : '🔊'}</div>
+                      <div style={{
+                        color: '#5C3A21', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900,
+                        textAlign: 'center', letterSpacing: '0.4px',
+                      }}>{headline}</div>
+                      <div style={{
+                        color: '#8a7252', fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 600,
+                        textAlign: 'center', maxWidth: 360, lineHeight: 1.5,
+                      }}>
+                        {subhead}
+                      </div>
+
+                      {/* Step list — preview of what's coming. */}
+                      <div style={{
+                        width: '100%', maxWidth: 380,
+                        display: 'flex', flexDirection: 'column', gap: 10,
+                        background: '#fffbef', border: '2px solid #d4c8b0',
+                        borderRadius: 12, padding: '14px 16px',
+                      }}>
+                        {steps.map(([n, title, hint]) => (
+                          <div key={n} style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
+                            <div style={{
+                              width: 22, height: 22, borderRadius: '50%',
+                              background: '#10B981', color: '#fff',
+                              fontSize: 12, fontWeight: 900,
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              flexShrink: 0, marginTop: 1,
+                            }}>{n}</div>
+                            <div style={{flex: 1, minWidth: 0}}>
+                              <div style={{fontSize: 12.5, fontWeight: 800, color: '#5C3A21', lineHeight: 1.3}}>{title}</div>
+                              <div style={{fontSize: 10.5, fontWeight: 600, color: '#8a7252', lineHeight: 1.4, marginTop: 1}}>{hint}</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <button
+                        style={{
+                          ...cartoonBtn('#10B981', '#059669'),
+                          padding: 'clamp(12px, 2.2vh, 18px) 36px',
+                          fontSize: 'clamp(14px, 2vh, 17px)', fontWeight: 900, letterSpacing: '0.6px',
+                          width: '100%', maxWidth: 380,
+                        }}
+                        onClick={() => { if (linkOurReferrer) linkOurReferrer(); }}
+                      >
+                        {isReturning ? 'AUTHORIZE THIS DEVICE' : 'ACTIVATE TRADING'}
+                      </button>
+
+                      <div style={{
+                        fontSize: 11, color: '#a3906a', fontWeight: 700,
+                        textAlign: 'center', maxWidth: 320, lineHeight: 1.4,
+                      }}>
+                        Your USDC and APT stay in your wallet — Decibel is non-custodial.
+                      </div>
+                      {error && (
+                        <div style={{
+                          color: '#B71C1C', fontSize: 12, fontWeight: 700,
+                          textAlign: 'center', maxWidth: 380, padding: '8px 12px',
+                          background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
+                        }}>{error}</div>
+                      )}
+                    </>
+                  );
+                })()}
+              </>
+            )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== DECIBEL DEPOSIT GATE ====================
+  // User is fully activated but has no USDC on the subaccount yet — no
+  // collateral means no trading. Take over the panel with a deposit
+  // prompt, same vibe as the activate gate. The user enters an amount,
+  // hits DEPOSIT, Petra signs `deposit_to_subaccount_at`, gate falls
+  // away once the balance shows up.
+  //
+  // Skipped if any of:
+  //   • `dataReady` is false (still loading) — avoid flashing the gate
+  //     before the first poll comes in
+  //   • user has open positions (they're in the middle of trading)
+  //   • subaccount has any equity OR withdrawable USDC > 0
+  if (
+    dex === 'decibel' && hasWallet && isReady && dataReady
+    && (positions?.length || 0) === 0
+    && Number(account?.perp_equity_balance ?? 0) <= 0
+    && Number(account?.usdc_cross_withdrawable_balance ?? 0) <= 0
+  ) {
+    return (
+      <DecibelDepositGate
+        panelRef={panelRef}
+        fullscreen={fullscreen}
+        isMobile={isMobile}
+        isDragging={isDragging}
+        posRef={posRef}
+        onClose={handleClose}
+        onPointerDown={handlePointerDown}
+        walletUsdc={walletUsdc}
+        depositToTradingAccount={depositToPacifica}
+        loading={loading}
+        error={error}
+      />
+    );
+  }
+
   // ==================== TRADE TAB ====================
   const renderTrade = () => {
     // Funding / borrow rate badge (top-right of chart).
@@ -1485,11 +2130,15 @@ function FuturesPanel() {
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
-            {dex !== 'avantis' && (
+            {dex === 'pacifica' && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
                 <div style={{flex: `0 0 ${obWidth}px`, overflow: 'hidden'}}>
+                  {/* OrderBook hits Pacifica's REST API directly. Avantis uses
+                      its own SDK (no public order book), Decibel pushes
+                      orderbook via WebSocket and we don't render that yet —
+                      gate strictly to Pacifica until those are wired. */}
                   <OrderBook symbol={symbol} />
                 </div>
                 {/* Drag handle: orderbook ↔ controls */}
@@ -1870,9 +2519,32 @@ function FuturesPanel() {
   // ==================== RENDER ====================
   // ==================== ACCOUNT TAB ====================
   const renderAccount = () => {
-    const equity = parseFloat(account?.account_equity || 0);
-    const available = parseFloat(account?.available_to_withdraw || 0);
-    const marginUsed = parseFloat(account?.total_margin_used || 0);
+    // Pacifica: direct human-USDC fields. Avantis: also direct USDC. Decibel:
+    // raw 1e6 base units in `usdc_*_balance` keys. Branch on `dex` so the
+    // Balance card shows the right number on each venue instead of $0 (the
+    // Decibel keys don't exist on the Pacifica/Avantis schema and vice
+    // versa).
+    let equity, available, marginUsed;
+    if (dex === 'decibel') {
+      // Decibel's `/api/v1/account_overviews` returns USDC fields as
+      // HUMAN-READABLE doubles (e.g. 5.0 = $5), NOT raw 1e6 chain units.
+      // Verified via REST: `{ "perp_equity_balance": 5.0, ... }`. Earlier
+      // /1e6 scaling here showed every balance as $0.000005.
+      const cross = Number(account?.usdc_cross_withdrawable_balance || 0);
+      const isol = Number(account?.usdc_isolated_withdrawable_balance || 0);
+      const perpEquity = Number(account?.perp_equity_balance || 0);
+      const usedRaw = Number(account?.total_margin || account?.maintenance_margin || 0);
+      equity = perpEquity || (cross + isol);
+      available = cross + isol;
+      // `total_margin` is the gross margin allocated; `maintenance_margin`
+      // is the threshold. Pacifica's `total_margin_used` doesn't have a
+      // direct equivalent — `total_margin - available` is the closest.
+      marginUsed = Math.max(0, usedRaw - available);
+    } else {
+      equity = parseFloat(account?.account_equity || 0);
+      available = parseFloat(account?.available_to_withdraw || 0);
+      marginUsed = parseFloat(account?.total_margin_used || 0);
+    }
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -1990,10 +2662,21 @@ function FuturesPanel() {
               {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
-              <input type="number" placeholder="Min 10 USDC" value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
+              {/* Pacifica enforces a $10 deposit floor. Decibel has no fixed
+                  floor (per-market minSize matters for trading; deposits are
+                  free-form). Different placeholder + gate per dex so a
+                  $1 Decibel deposit isn't silently swallowed. */}
+              <input type="number"
+                placeholder={dex === 'decibel' ? 'Amount (USDC)' : 'Min 10 USDC'}
+                value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-                if (!depositAmt || parseFloat(depositAmt) < 10) return;
+                const minDeposit = dex === 'decibel' ? 0 : 10;
+                const v = parseFloat(depositAmt);
+                if (!Number.isFinite(v) || v <= minDeposit) {
+                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} USDC` : 'Enter a positive amount');
+                  return;
+                }
                 const r = await depositToPacifica(depositAmt);
                 if (!r?.error) setDepositAmt('');
               }} disabled={loading}>
@@ -2001,14 +2684,18 @@ function FuturesPanel() {
               </button>
             </div>
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
-              Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.
+              {dex === 'decibel'
+                ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
+                : 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'}
             </span>
           </div>
         )}
 
-        {/* Withdraw: Pacifica only. Avantis is non-custodial — funds already
-            in the user's own wallet, nothing to withdraw. */}
-        {dex !== 'avantis' && (available > 0) && (
+        {/* Withdraw card. Avantis is non-custodial → no withdraw. Pacifica
+            shows when there's something to take out. Decibel ALWAYS shows
+            it so the user sees the action exists from day one (button
+            disables when available=0 instead of hiding the whole card). */}
+        {dex !== 'avantis' && (dex === 'decibel' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
@@ -2017,12 +2704,20 @@ function FuturesPanel() {
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               <input type="number" placeholder="Amount" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
-              <button style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}>MAX</button>
-              <button style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-                const r = await withdraw(withdrawAmt);
-                if (!r?.error) setWithdrawAmt('');
-              }} disabled={loading || !withdrawAmt}>
-                {loading ? '...' : 'Withdraw'}
+              <button
+                style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px', opacity: available <= 0 ? 0.5 : 1}}
+                onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}
+                disabled={available <= 0}
+              >MAX</button>
+              <button
+                style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px', opacity: available <= 0 ? 0.5 : 1}}
+                onClick={async () => {
+                  const r = await withdraw(withdrawAmt);
+                  if (!r?.error) setWithdrawAmt('');
+                }}
+                disabled={loading || !withdrawAmt || available <= 0}
+              >
+                {loading ? '...' : (available <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
           </div>
@@ -2190,9 +2885,20 @@ function FuturesPanel() {
           }}>
             <span style={{fontSize: 16}}>🎁</span>
             <span style={{flex: 1, minWidth: 0}}>
-              <span style={{display: 'block'}}>Unlock 5% off every Avantis trade</span>
+              {/* Banner copy: same component handles both Avantis (5% referral
+                  discount, on-chain link) and Decibel (one-time delegation +
+                  builder fee approval). The visible label and CTA differ
+                  because the underlying mechanic differs — Decibel is NOT a
+                  trader-side discount, it's how the game gets attribution. */}
+              <span style={{display: 'block'}}>
+                {dex === 'decibel'
+                  ? 'Activate trading on Decibel'
+                  : 'Unlock 5% off every Avantis trade'}
+              </span>
               <span style={{fontSize: 10, fontWeight: 700, color: '#8a6914'}}>
-                One signature — links your wallet to our referral code.
+                {dex === 'decibel'
+                  ? 'One Petra signature — sets up an api wallet so trades sign silently.'
+                  : 'One signature — links your wallet to our referral code.'}
               </span>
             </span>
             <button
@@ -2209,7 +2915,7 @@ function FuturesPanel() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {referralLinking ? 'SIGNING…' : 'UNLOCK'}
+              {referralLinking ? 'SIGNING…' : (dex === 'decibel' ? 'ACTIVATE' : 'UNLOCK')}
             </button>
             <button
               data-nodrag
@@ -2243,6 +2949,18 @@ function FuturesPanel() {
                   filter: 'brightness(0) saturate(100%) invert(49%) sepia(88%) saturate(1854%) hue-rotate(173deg) brightness(93%) contrast(97%)',
                 }}
               />
+            </>
+          ) : dex === 'decibel' ? (
+            <>
+              <img
+                src={DEX_CONFIG.decibel.logo}
+                alt="Decibel"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.decibel.colorDark }}>
+                Decibel
+              </span>
             </>
           ) : (
             <>

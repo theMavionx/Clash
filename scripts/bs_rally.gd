@@ -265,7 +265,7 @@ func _update_rally_grenades(delta: float) -> void:
 		g.elapsed += delta
 		var t: float = clampf(g.elapsed / g.flight_time, 0.0, 1.0)
 		var flat_pos: Vector3 = g.start_pos.lerp(g.target_pos, t)
-			var arc_height: float = g.start_pos.distance_to(g.target_pos) * 0.35
+		var arc_height: float = g.start_pos.distance_to(g.target_pos) * 0.35
 		var arc_y: float = 4.0 * arc_height * t * (1.0 - t)
 		g.node.global_position = Vector3(flat_pos.x, flat_pos.y + arc_y, flat_pos.z)
 		g.node.rotate_y(delta * 9.0)

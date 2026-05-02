@@ -29,8 +29,8 @@ const ATTACK_STEPS = [
 ];
 
 const TRADE_STEPS = [
-  { title: 'Futures Trading', text: 'Trade crypto futures on Pacifica to earn Gold! Tap the Trade button to open the trading panel.', icon: '📈', target: 'trade-btn' },
-  { title: 'Earn Gold', text: 'Every $1 traded earns you 0.2 Gold. First deposit bonus: 500 Gold! Daily trading bonus: 750 Gold!', icon: '💰' },
+  { title: 'Futures Trading', text: 'Trade crypto futures to earn Gold! Tap the Trade button to open the trading panel.', icon: '📈', target: 'trade-btn' },
+  { title: 'Earn Gold', text: 'Trade volume earns Gold, with first-trade and daily bonuses paid automatically.', icon: '💰' },
 ];
 
 // ── Component ─────────────────────────────────────────────────────

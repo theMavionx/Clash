@@ -5,9 +5,11 @@ import { usePrivy } from '@privy-io/react-auth';
 import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useGodot';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
+import { useDecibel } from '../hooks/useDecibel';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -24,9 +26,16 @@ function ProfileModal({ onClose }) {
   const { dex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
   const { disconnect: evmDisconnect } = useEvmWallet();
+  const { disconnect: aptosDisconnect } = useAptosWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
-  const { account, walletAddr } = dex === 'avantis' ? avantisHook : pacificaHook;
+  const decibelHook = useDecibel();
+  const tradingHook = dex === 'avantis'
+    ? avantisHook
+    : dex === 'decibel'
+    ? decibelHook
+    : pacificaHook;
+  const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -47,10 +56,14 @@ function ProfileModal({ onClose }) {
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
   const activeWallet = dex === 'avantis'
-    ? (walletAddr || player?.wallet || null)           // EVM from useAvantis
-    : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy-embedded
+    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis
+    : dex === 'decibel'
+    ? (walletAddr || player?.wallet || null)            // Aptos from useDecibel
+    : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy
   const walletSource = dex === 'avantis'
     ? (walletAddr ? 'evm' : null)
+    : dex === 'decibel'
+    ? (walletAddr ? 'aptos' : null)
     : (adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null));
 
   // Switch active DEX. In our model one wallet = one account, so "switching"
@@ -65,6 +78,7 @@ function ProfileModal({ onClose }) {
   const logoutEverything = async () => {
     sendToGodot('logout');
     try { evmDisconnect(); } catch { /* noop */ }
+    try { aptosDisconnect(); } catch { /* noop */ }
     try { disconnect(); } catch { /* noop */ }
     if (privyLogout && privyAuthed) {
       try { await privyLogout(); } catch { /* noop */ }

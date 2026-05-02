@@ -8,12 +8,48 @@ const router = express.Router();
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;              // Base/Ethereum 20-byte hex
+const APTOS_WALLET_RE = /^0x[0-9a-fA-F]{1,64}$/;          // Aptos account, padded or not
 function isValidWallet(w) {
-  return typeof w === 'string' && (SOLANA_WALLET_RE.test(w) || EVM_WALLET_RE.test(w));
+  if (typeof w !== 'string') return false;
+  return SOLANA_WALLET_RE.test(w)
+    || EVM_WALLET_RE.test(w)
+    || (APTOS_WALLET_RE.test(w) && !EVM_WALLET_RE.test(w));
 }
 // Kept as alias so older references keep working.
 const WALLET_RE = SOLANA_WALLET_RE;
 void WALLET_RE;
+
+function normalizeAptosWallet(w) {
+  const raw = String(w || '').trim().toLowerCase();
+  if (!APTOS_WALLET_RE.test(raw) || EVM_WALLET_RE.test(raw)) return raw;
+  return `0x${raw.slice(2).padStart(64, '0')}`;
+}
+
+function walletLookupCandidates(wallet) {
+  const raw = String(wallet || '').trim();
+  const set = new Set([raw]);
+  if (APTOS_WALLET_RE.test(raw) && !EVM_WALLET_RE.test(raw)) {
+    const padded = normalizeAptosWallet(raw);
+    const unpadded = `0x${padded.slice(2).replace(/^0+/, '') || '0'}`;
+    set.add(padded);
+    set.add(unpadded);
+  }
+  return Array.from(set).filter(Boolean);
+}
+
+function getPlayerByWalletAnyForm(wallet, excludeId = null) {
+  const candidates = walletLookupCandidates(wallet);
+  const placeholders = candidates.map(() => '?').join(',');
+  const params = [...candidates];
+  let where = `wallet IN (${placeholders})`;
+  if (excludeId != null) {
+    where += ' AND id != ?';
+    params.push(excludeId);
+  }
+  return db.db.prepare(
+    `SELECT * FROM players WHERE ${where} ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1`
+  ).get(...params);
+}
 
 // ---------- Auth Middleware ----------
 
@@ -63,14 +99,20 @@ router.post('/client-log', (req, res) => {
 // ==================== PLAYERS ====================
 
 // Register a new player (or recover existing account by wallet)
-// Set DEX preference (pacifica | avantis). Called after register or from
-// RegisterPanel when the user switches DEX pre-connect. The value is used
-// by leaderboard badges and by /api/futures/* routing.
+// Set DEX preference (pacifica | avantis | decibel). Called after register
+// or from RegisterPanel when the user switches DEX pre-connect. The value
+// is used by leaderboard badges and by /api/futures/* routing.
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel']);
+function resetTradingRewardCursor(playerId) {
+  try { db.db.prepare('DELETE FROM trading_rewards WHERE player_id = ?').run(playerId); } catch {}
+}
+
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
-  if (dex !== 'pacifica' && dex !== 'avantis') {
-    return res.status(400).json({ error: 'dex must be "pacifica" or "avantis"' });
+  if (!VALID_DEXES.has(dex)) {
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis" or "decibel"' });
   }
+  if (req.player.dex !== dex) resetTradingRewardCursor(req.player.id);
   db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, req.player.id);
   res.json({ success: true, dex });
 });
@@ -82,9 +124,7 @@ router.post('/players/register', (req, res) => {
   // Multiple rows may share a wallet (legacy bug — no UNIQUE constraint). Prefer
   // the account with the most progress (highest trophies, then highest id/newest).
   if (wallet) {
-    let existing = db.db.prepare(
-      'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
-    ).get(wallet);
+    let existing = getPlayerByWalletAnyForm(wallet);
     // Migration path: the earlier Farcaster auto-register created players with
     // a synthetic `fc_<fid>` wallet. If the user now logs in with their real
     // EVM/Solana address and we have their FID, adopt the existing row rather
@@ -126,7 +166,8 @@ router.post('/players/register', (req, res) => {
       }
       // Also honour a dex switch on re-login (client may have changed DEX
       // selection in profile before reconnecting).
-      if ((dex === 'pacifica' || dex === 'avantis') && existing.dex !== dex) {
+      if (VALID_DEXES.has(dex) && existing.dex !== dex) {
+        resetTradingRewardCursor(existing.id);
         db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, existing.id);
         existing.dex = dex;
       }
@@ -167,8 +208,8 @@ router.post('/players/register', (req, res) => {
   if (wallet) {
     db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
   }
-  // Save DEX preference if provided (pacifica | avantis)
-  if (dex === 'pacifica' || dex === 'avantis') {
+  // Save DEX preference if provided (pacifica | avantis | decibel)
+  if (VALID_DEXES.has(dex)) {
     db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, result.id);
   }
   const state = db.getFullPlayerState(result.id);
@@ -190,10 +231,10 @@ router.get('/players/me', auth, (req, res) => {
 // (admin can clean it up later) to avoid destroying data on race conditions.
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
-  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
+  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
 
   const current = req.player;
-  const existing = db.db.prepare('SELECT * FROM players WHERE wallet = ? AND id != ?').get(wallet, current.id);
+  const existing = getPlayerByWalletAnyForm(wallet, current.id);
 
   if (existing) {
     // Wallet is already bound to another account — that one wins.
@@ -219,10 +260,8 @@ router.post('/players/link-wallet', auth, (req, res) => {
 // Same canonical-row rule as /register: prefer highest trophies, newest id.
 router.post('/players/login-wallet', (req, res) => {
   const { wallet } = req.body;
-  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid Solana wallet required' });
-  const player = db.db.prepare(
-    'SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1'
-  ).get(wallet);
+  if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
+  const player = getPlayerByWalletAnyForm(wallet);
   if (!player) return res.status(404).json({ error: 'No account found for this wallet' });
   const state = db.getFullPlayerState(player.id);
   res.json({ ...state, token: player.token });
@@ -966,10 +1005,18 @@ router.get('/trophies/table', (req, res) => {
 // ==================== TRADING REWARDS ====================
 
 const GOLD_PER_USD_VOLUME = 0.30;
+const GOLD_PER_USD_VOLUME_DECIBEL = 10;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
 const GOLD_DAILY_TRADE = 200;
 const GOLD_PER_10_USD_PROFIT = 150; // +150 gold per $10 positive PnL
+
+function volumeGoldForDex(dex, usdVolume) {
+  const volume = Number(usdVolume);
+  if (!Number.isFinite(volume) || volume <= 0) return 0;
+  const rate = dex === 'decibel' ? GOLD_PER_USD_VOLUME_DECIBEL : GOLD_PER_USD_VOLUME;
+  return Math.floor(volume * rate);
+}
 
 // Trading rewards table
 try {
@@ -1054,8 +1101,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     } catch { /* non-fatal */ }
   }
 
-  // ── Avantis branch: count volume from server-futures.trade_history ──
-  if (dex === 'avantis') {
+  // ── Self-custody DEXes (Avantis on Base, Decibel on Aptos) ──
+  // Both write verified rows into futures.db trade_history; the only
+  // difference is the `dex` filter. They share the same trading_rewards
+  // ledger because a player only trades on one DEX at a time (cross-DEX
+  // switch wipes the rewards row via /switch-dex).
+  if (dex === 'avantis' || dex === 'decibel') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -1065,19 +1116,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet || '');
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
     }
-    // Use last_trade_id as a rowid-threshold — avantis rows have integer PKs.
     let newTrades = [];
     try {
+      const sourceClause = dex === 'decibel'
+        ? "AND verified_source IN ('worker', 'server')"
+        : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, status, created_at
         FROM trade_history
-        WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
-          AND verified_source = 'worker' AND id > ?
+        WHERE player_id = ? AND dex = ? AND status = 'filled'
+          ${sourceClause} AND id > ?
         ORDER BY id ASC
-      `).all(req.player.id, reward.last_trade_id || 0);
+      `).all(req.player.id, dex, reward.last_trade_id || 0);
     } catch (e) {
-      console.warn('[claim-gold] Avantis verified trade query failed:', e.message);
-      return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex: 'avantis' });
+      console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
+      return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
@@ -1087,7 +1140,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // Sanity: clamp each trade's notional to a sane range so a bugged/forged
     // row (e.g. Infinity from parseFloat("1e100")) cannot mint unlimited gold.
     // Also require a realistic minimum — Avantis min notional is $100.
-    const SANE_MIN_NOTIONAL = 50;      // cushion below $100 contract floor
+    const SANE_MIN_NOTIONAL = dex === 'decibel' ? 1 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -1108,7 +1161,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         continue;
       }
       newVolume += raw;
-      totalGold += Math.floor(raw * GOLD_PER_USD_VOLUME);
+      totalGold += volumeGoldForDex(dex, raw);
       creditedTrades++;
       const sideLower = String(t.side || '').toLowerCase();
       if (sideLower === 'long' || sideLower === 'short' || sideLower === 'bid' || sideLower === 'ask') {
@@ -1183,12 +1236,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
     const txnResult = creditTxn();
     if (txnResult.raced) {
-      return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex: 'avantis' });
+      return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
     if (totalGold > 0) {
-      return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex: 'avantis' });
+      return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex });
     }
-    return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex: 'avantis' });
+    return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex });
   }
 
   // ── Pacifica branch (existing, unchanged) ──
@@ -1229,7 +1282,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // Volume rewards
     for (const t of newTrades) {
       const volume = parseFloat(t.price || 0) * parseFloat(t.amount || 0);
-      totalGold += Math.floor(volume * GOLD_PER_USD_VOLUME);
+      totalGold += volumeGoldForDex('pacifica', volume);
       if (t.history_id > maxTradeId) maxTradeId = t.history_id;
     }
 
@@ -1363,18 +1416,21 @@ router.get('/trading/stats', auth, async (req, res) => {
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
   const dex = String(req.player.dex || '').toLowerCase();
-  if (dex === 'avantis') {
+  if (dex === 'avantis' || dex === 'decibel') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
+        const sourceClause = dex === 'decibel'
+          ? "AND verified_source IN ('worker', 'server')"
+          : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
           FROM trade_history
-          WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
-            AND verified_source = 'worker'
+          WHERE player_id = ? AND dex = ? AND status = 'filled'
+            ${sourceClause}
           ORDER BY id DESC
           LIMIT 50
-        `).all(req.player.id);
+        `).all(req.player.id, dex);
         trades = rows.map(r => ({
           symbol: r.symbol,
           side: r.side,
@@ -1389,7 +1445,7 @@ router.get('/trading/stats', auth, async (req, res) => {
           created_at: r.created_at,
         }));
       } catch (e) {
-        console.warn('[trading/stats] avantis futures.db read failed:', e.message);
+        console.warn(`[trading/stats] ${dex} futures.db read failed:`, e.message);
       }
     }
   } else {

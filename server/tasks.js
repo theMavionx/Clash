@@ -138,14 +138,28 @@ async function buildSnapshot(player, task) {
 // Solana base58 address: 32-44 chars, no '0OIl'
 const SOLANA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
+// Aptos: "0x" + 32 bytes. Padded form is exactly 64 hex chars; the SDK also
+// accepts non-padded forms (1-63 hex). We accept both because Petra returns
+// the unpadded address and we don't want to drop a valid wallet for cosmetic
+// reasons. EVM_RE is checked FIRST so a 40-char hex always routes to Avantis.
+const APTOS_RE = /^0x[0-9a-fA-F]{1,64}$/;
 function isSolanaWallet(w) { return typeof w === 'string' && SOLANA_RE.test(w); }
 function isEvmWallet(w) { return typeof w === 'string' && EVM_RE.test(w); }
+function isAptosWallet(w) {
+  if (typeof w !== 'string') return false;
+  if (EVM_RE.test(w)) return false; // 40-hex is EVM, not Aptos
+  return APTOS_RE.test(w);
+}
 
 function resolveWallet(player) {
-  if (player && (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet))) return player.wallet;
+  if (player && (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet) || isAptosWallet(player.wallet))) {
+    return player.wallet;
+  }
   try {
     const row = db.db.prepare('SELECT wallet FROM trading_rewards WHERE player_id = ?').get(player.id);
-    if (row && (isSolanaWallet(row.wallet) || isEvmWallet(row.wallet))) return row.wallet;
+    if (row && (isSolanaWallet(row.wallet) || isEvmWallet(row.wallet) || isAptosWallet(row.wallet))) {
+      return row.wallet;
+    }
   } catch {}
   return null;
 }
@@ -160,22 +174,29 @@ async function fetchWalletTrades(player) {
   const wallet = resolveWallet(player);
   if (!wallet) return [];
 
-  // EVM (Avantis) → read from futures.db. trade_history stores notional_usd
-  // and amount (collateral). We synthesise (price, amount) that multiply to
-  // the notional so the volume verifier produces correct USD vol.
-  if (isEvmWallet(wallet)) {
+  // Self-custody DEXes (Avantis on Base, Decibel on Aptos) → read verified
+  // trades from futures.db. The per-DEX rewards worker writes
+  // verified_source='worker' rows; we just project them into the common shape.
+  // Both DEXes share the same trade_history columns; we filter by `dex` to
+  // separate them. Wallet-format gating selects the correct dex.
+  function isFuturesDbWallet(w) { return isEvmWallet(w) || isAptosWallet(w); }
+  if (isFuturesDbWallet(wallet)) {
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
+    const dexFilter = isEvmWallet(wallet) ? 'avantis' : 'decibel';
     try {
-      // Filter by player_id AND a matching wallet in server-futures.wallets
-      // so we never leak trades between migrated/deprecated rows.
+      // Filter by player_id AND dex so a legacy row from another DEX on the
+      // same player_id can't leak into a different verifier.
+      const sourceClause = dexFilter === 'decibel'
+        ? "AND verified_source IN ('worker', 'server')"
+        : "AND verified_source = 'worker'";
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, created_at
         FROM trade_history
-        WHERE player_id = ? AND dex = 'avantis' AND status = 'filled'
-          AND verified_source = 'worker'
+        WHERE player_id = ? AND dex = ? AND status = 'filled'
+          ${sourceClause}
         ORDER BY id ASC
-      `).all(player.id);
+      `).all(player.id, dexFilter);
       return rows.map(r => {
         const notional = Number(r.notional_usd) || 0;
         const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);
@@ -183,7 +204,7 @@ async function fetchWalletTrades(player) {
         return {
           history_id: r.id,
           symbol: String(r.symbol || '').toUpperCase(),
-          side: r.side,            // 'long'/'short' (Pacifica expects these words — classifyTrade handles)
+          side: r.side,
           price: String(price),
           amount: String(amount),
           _notional: notional,
@@ -191,7 +212,7 @@ async function fetchWalletTrades(player) {
         };
       });
     } catch (e) {
-      console.warn('[tasks] EVM trades read failed:', e.message);
+      console.warn(`[tasks] ${dexFilter} trades read failed:`, e.message);
       return [];
     }
   }

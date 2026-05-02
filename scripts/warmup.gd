@@ -59,6 +59,7 @@ func _spawn_warmup_nodes() -> void:
 	_warmup_additive_billboard_textured()
 	_warmup_turret_trail()
 	_warmup_target_ring()
+	_warmup_rally_marker()
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
 	_warmup_flag_glb()
@@ -269,6 +270,85 @@ func _warmup_target_ring() -> void:
 	mi.material_override = mat
 	add_child(mi)
 	print("[WARMUP] target_ring OK")
+
+
+## Covers BSRally's four pipeline variants in one pass: the flying grenade
+## (UNSHADED + opaque + default cull/blend), the ground ring (UNSHADED +
+## ALPHA + MIX blend + cull_disabled), the additive glow core (UNSHADED +
+## ALPHA + ADD blend + cull_disabled + no_depth_test), and the spark
+## particle (same as core but no_depth_test=false). Without this, the FIRST
+## rally drop compiles all four pipelines on the impact frame and lags
+## visibly during the grenade flight + impact burst.
+func _warmup_rally_marker() -> void:
+	# 1) Grenade body — opaque unshaded sphere. Different variant from the
+	# additive billboards below because there's no transparency / blend flag.
+	var grenade := MeshInstance3D.new()
+	var grenade_mesh := SphereMesh.new()
+	grenade_mesh.radius = 0.035
+	grenade_mesh.height = 0.07
+	grenade_mesh.radial_segments = 12
+	grenade_mesh.rings = 6
+	grenade.mesh = grenade_mesh
+	var grenade_mat := StandardMaterial3D.new()
+	grenade_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	grenade_mat.albedo_color = Color(0.8, 0.05, 0.03, 1.0)
+	grenade.material_override = grenade_mat
+	add_child(grenade)
+	# 2) Ground ring — torus with alpha-mix material (NOT additive).
+	var ring := MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.18
+	torus.outer_radius = 0.24
+	torus.rings = 32
+	torus.ring_segments = 14
+	ring.mesh = torus
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring_mat.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	ring_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ring_mat.no_depth_test = false
+	ring_mat.albedo_color = Color(1.0, 0.18, 0.12, 0.9)
+	ring.material_override = ring_mat
+	add_child(ring)
+	# 3) Additive core — small sphere, ADD blend + no_depth_test.
+	var core := MeshInstance3D.new()
+	var core_mesh := SphereMesh.new()
+	core_mesh.radius = 0.065
+	core_mesh.height = 0.13
+	core_mesh.radial_segments = 16
+	core_mesh.rings = 8
+	core.mesh = core_mesh
+	var core_mat := StandardMaterial3D.new()
+	core_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	core_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	core_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	core_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	core_mat.no_depth_test = true
+	core_mat.albedo_color = Color(1.0, 0.18, 0.12, 1.0)
+	core.material_override = core_mat
+	add_child(core)
+	# 4) Spark — same flags as the spark material on the rally CPUParticles3D
+	# but on a static MeshInstance3D. The rendering pipeline depends on
+	# material+mesh, not on whether it's spawned by a particle system, so a
+	# static instance is enough to compile the variant.
+	var spark := MeshInstance3D.new()
+	var spark_mesh := SphereMesh.new()
+	spark_mesh.radius = 0.018
+	spark_mesh.height = 0.036
+	spark_mesh.radial_segments = 8
+	spark_mesh.rings = 4
+	spark.mesh = spark_mesh
+	var spark_mat := StandardMaterial3D.new()
+	spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	spark_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	spark_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	spark_mat.no_depth_test = false
+	spark_mat.albedo_color = Color(1.0, 0.35, 0.2, 1.0)
+	spark.material_override = spark_mat
+	add_child(spark)
+	print("[WARMUP] rally_marker OK")
 
 
 ## Covers mage.gd's magic_orb.gdshader ShaderMaterial on a SphereMesh.

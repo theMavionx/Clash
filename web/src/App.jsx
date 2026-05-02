@@ -5,6 +5,9 @@ import PrivyAuthProvider from './components/PrivyAuthProvider';
 import { DexProvider } from './contexts/DexContext';
 import { FuturesModeProvider } from './contexts/FuturesModeContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
+import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
+import { Network } from '@aptos-labs/ts-sdk';
+import { AptosWalletProvider } from './contexts/AptosWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
 // Loading splash assets — served directly from `web/public/` so art can be
@@ -87,15 +90,34 @@ export default function App() {
     <DexProvider>
       <PrivyAuthProvider>
         <EvmWalletProvider>
-          <WalletProvider>
-            <GodotProvider>
-              {/* FuturesModeProvider sits inside GodotProvider so it can read
-                  the player's `futures_mode` from the player state context. */}
-              <FuturesModeProvider>
-                <AppInner />
-              </FuturesModeProvider>
-            </GodotProvider>
-          </WalletProvider>
+          {/* Aptos wallet stack for Decibel. The official AIP-62 adapter
+              auto-discovers Petra/Pontem/Martian via the wallet standard;
+              `dappConfig.aptosApiKeys` injects the Aptos Labs API key for
+              authenticated fullnode + Decibel-API access. Our shim
+              AptosWalletProvider exposes the same interface useDecibel was
+              already calling, so the rest of the app doesn't change. */}
+          <AptosWalletAdapterProvider
+            autoConnect={true}
+            dappConfig={{
+              network: Network.MAINNET,
+              aptosApiKeys: import.meta.env.VITE_APTOS_NODE_API_KEY
+                ? { mainnet: import.meta.env.VITE_APTOS_NODE_API_KEY }
+                : undefined,
+            }}
+            onError={(e) => console.warn('[aptos-adapter]', e?.message || e)}
+          >
+            <AptosWalletProvider>
+              <WalletProvider>
+                <GodotProvider>
+                  {/* FuturesModeProvider sits inside GodotProvider so it can read
+                      the player's `futures_mode` from the player state context. */}
+                  <FuturesModeProvider>
+                    <AppInner />
+                  </FuturesModeProvider>
+                </GodotProvider>
+              </WalletProvider>
+            </AptosWalletProvider>
+          </AptosWalletAdapterProvider>
         </EvmWalletProvider>
       </PrivyAuthProvider>
     </DexProvider>

@@ -152,9 +152,12 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'avantis') {
-          // Prefer the Pyth symbol from market data (authoritative); fall back
-          // to heuristic mapping if parent didn't pass it.
+        if (dex === 'avantis' || dex === 'decibel') {
+          // Avantis and Decibel both price off Pyth on-chain (per their
+          // respective docs), so chart candles come from the same Pyth
+          // benchmarks endpoint. Pacifica fetches its own REST kline.
+          // Prefer the Pyth symbol from market data (authoritative); fall
+          // back to heuristic mapping if parent didn't pass it.
           const primary = pythSymbol || toPythSymbol(symbol);
           const fallback = benchmarksFallback(primary);
           const toSec = Math.floor(now / 1000);

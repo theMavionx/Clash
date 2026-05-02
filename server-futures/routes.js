@@ -4,8 +4,12 @@ const db = require('./db');
 const pacifica = require('./pacifica');
 const avantis = require('./avantis');
 const deposit = require('./deposit');
+const decibel = require('./decibel');
 
 const router = express.Router();
+
+const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
+const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
 
 // ---------- Auth Middleware ----------
 // Validates x-token by reading the main game server's SQLite DB directly.
@@ -24,7 +28,7 @@ function ensureMainDb() {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
     mainDb.pragma('journal_mode = WAL');
     // Also pull the player's saved DEX — used to reject client-header spoof.
-    playerByTokenStmt = mainDb.prepare('SELECT id, name, dex FROM players WHERE token = ?');
+    playerByTokenStmt = mainDb.prepare('SELECT id, name, wallet, dex FROM players WHERE token = ?');
   } catch (e) {
     console.error('[futures] Failed to open main DB at', MAIN_DB_PATH, e.message);
   }
@@ -40,15 +44,15 @@ function auth(req, res, next) {
   if (!player) return res.status(401).json({ error: 'Invalid token' });
   req.playerId = player.id;
   req.playerName = player.name;
+  req.playerWallet = player.wallet;
 
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const storedDex = (player.dex === 'avantis' || player.dex === 'pacifica')
-    ? player.dex
-    : 'pacifica';
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel']);
+  const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
-  const normalizedAsked = askedDex === 'avantis' ? 'avantis' : 'pacifica';
+  const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
   if (normalizedAsked !== storedDex) {
     return res.status(409).json({
       error: `Account is registered for '${storedDex}'. Switch DEX in your profile before calling ${normalizedAsked} endpoints.`,
@@ -130,6 +134,153 @@ router.get('/account', async (req, res) => {
 function authGate(req, res, next) {
   return auth(req, res, (err) => { if (err) return; next(); });
 }
+
+function normalizeAptosAddress(addr) {
+  return decibel.normalizeAptosAddress(addr);
+}
+
+function ensureDecibel(req, res) {
+  if (req.dex !== 'decibel') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to decibel before calling Decibel endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'decibel',
+    });
+    return false;
+  }
+  return true;
+}
+
+async function requireDecibelOwnerAndSubaccount(req, res) {
+  if (!ensureDecibel(req, res)) return null;
+  const owner = normalizeAptosAddress(req.body?.owner || req.query?.owner || req.playerWallet);
+  const playerWallet = normalizeAptosAddress(req.playerWallet);
+  if (!owner || !playerWallet || owner !== playerWallet) {
+    res.status(403).json({ error: 'owner must match the wallet registered to this game account' });
+    return null;
+  }
+  const subaccount = normalizeAptosAddress(
+    req.body?.subaccountAddr || req.body?.subaccount || req.query?.subaccountAddr || req.query?.subaccount
+  );
+  if (!subaccount) {
+    res.status(400).json({ error: 'subaccountAddr required' });
+    return null;
+  }
+  const primary = normalizeAptosAddress(await decibel.getPrimarySubaccountAddr(owner));
+  if (subaccount !== primary) {
+    res.status(400).json({ error: 'subaccountAddr does not match the registered wallet primary Decibel subaccount' });
+    return null;
+  }
+  return { owner, subaccount };
+}
+
+// ==================== DECIBEL SERVER-SIDE SIGNER ====================
+
+router.get('/decibel/signer', auth, async (req, res) => {
+  try {
+    if (!ensureDecibel(req, res)) return;
+    const info = await decibel.getServerSignerInfo();
+    res.json(info);
+  } catch (e) {
+    console.error('[decibel] signer error:', e);
+    res.status(500).json({ error: e.message || 'Decibel server signer unavailable' });
+  }
+});
+
+router.post('/decibel/orders/place', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const clientOrderId = decibel.normalizeClientOrderId(req.body?.clientOrderId)
+      || decibel.newClientOrderId();
+    const orderPayload = {
+      ...req.body,
+      clientOrderId,
+      subaccountAddr: verified.subaccount,
+    };
+    const result = await decibel.placeOrder(orderPayload);
+    if (result?.success !== false) {
+      try {
+        const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
+        if (reward.rewardable) {
+          const n = Number(reward.notional_usd);
+          if (
+            Number.isFinite(n)
+            && n >= DECIBEL_MIN_REWARD_NOTIONAL_USD
+            && n <= DECIBEL_MAX_REWARD_NOTIONAL_USD
+          ) {
+            db.addTrade(req.playerId, {
+              symbol: reward.symbol,
+              side: reward.side,
+              orderType: reward.orderType,
+              amount: String(reward.amount),
+              price: String(reward.price),
+              orderId: reward.txHash || result.orderId || null,
+              clientOrderId: reward.clientOrderId,
+              status: 'filled',
+              dex: 'decibel',
+              notional_usd: n,
+              verifiedSource: 'server',
+            });
+          } else {
+            console.log(`[decibel] reward row skipped: notional ${Number.isFinite(n) ? n.toFixed(4) : String(n)} outside reward range`);
+          }
+        }
+      } catch (e) {
+        console.warn('[decibel] reward row skipped:', e.message);
+      }
+    }
+    res.json({ ...result, clientOrderId: orderPayload.clientOrderId });
+  } catch (e) {
+    console.error('[decibel] place order error:', e);
+    res.status(500).json({ error: e.message || 'Failed to place Decibel order' });
+  }
+});
+
+router.post('/decibel/orders/cancel', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const result = await decibel.cancelOrder({
+      ...req.body,
+      subaccountAddr: verified.subaccount,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error('[decibel] cancel order error:', e);
+    res.status(500).json({ error: e.message || 'Failed to cancel Decibel order' });
+  }
+});
+
+router.post('/decibel/tpsl', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const result = await decibel.placeTpSlOrderForPosition({
+      ...req.body,
+      subaccountAddr: verified.subaccount,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error('[decibel] TP/SL error:', e);
+    res.status(500).json({ error: e.message || 'Failed to update Decibel TP/SL' });
+  }
+});
+
+router.post('/decibel/leverage', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const result = await decibel.configureUserSettingsForMarket({
+      ...req.body,
+      subaccountAddr: verified.subaccount,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error('[decibel] leverage error:', e);
+    res.status(500).json({ error: e.message || 'Failed to update Decibel leverage' });
+  }
+});
 
 // ==================== MARKET DATA ====================
 
@@ -458,13 +609,15 @@ router.get('/history', auth, (req, res) => {
   res.json(trades);
 });
 
-// ==================== TRADE REPORT (non-custodial Avantis) ====================
+// ==================== TRADE REPORT (non-custodial: Avantis, Decibel) ====================
 // Client reports are accepted for backwards-compatible UI flow, but they are
-// not rewardable. The worker polls Avantis Core API and records verified rows.
+// not rewardable. The per-DEX rewards worker polls the upstream venue and
+// records `verified_source='worker'` rows that /claim-gold reads.
+const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel']);
 router.post('/trade-report', auth, (req, res) => {
   try {
-    if (req.dex !== 'avantis') {
-      return res.status(400).json({ error: 'trade-report is avantis-only' });
+    if (!TRADE_REPORT_DEXES.has(req.dex)) {
+      return res.status(400).json({ error: 'trade-report is for self-custody DEXes only' });
     }
     const { tx_hash, symbol, side, amount, leverage, notional_usd } = req.body || {};
     if (!tx_hash || !symbol || !side || !Number.isFinite(Number(amount))) {

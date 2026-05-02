@@ -51,6 +51,32 @@ const canvasStyle = {
   outline: 'none',
 };
 
+function describeGlobalError(event) {
+  const reason = event?.reason;
+  const error = event?.error || reason;
+  return String(
+    event?.message ||
+    error?.message ||
+    error ||
+    event ||
+    'Unknown loading error'
+  );
+}
+
+function formatGlobalError(event) {
+  const error = event?.error || event?.reason;
+  const source = event?.filename || event?.sourceURL;
+  const location = source
+    ? `${source}${event?.lineno ? `:${event.lineno}` : ''}${event?.colno ? `:${event.colno}` : ''}`
+    : '';
+  const message = describeGlobalError(event);
+  const stack = error?.stack && String(error.stack) !== message
+    ? String(error.stack)
+    : '';
+
+  return [message, location, stack].filter(Boolean).join('\n');
+}
+
 const overlayStyle = {
   position: 'absolute',
   top: 0,
@@ -73,7 +99,7 @@ const bgStyle = {
   width: '100%',
   height: '100%',
   objectFit: 'cover',
-  zIndex: -1,
+  zIndex: 0,
   opacity: 0.9,
   userSelect: 'none',
   pointerEvents: 'none',
@@ -103,6 +129,7 @@ const progressWrapperStyle = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
+  zIndex: 2,
 };
 
 const barContainerStyle = {
@@ -160,9 +187,9 @@ function GodotCanvas({ onEngineReady }) {
     // Catch unhandled errors for mobile debug
     const errHandler = (e) => {
       if (disposed) return;
-      setErrorMsg(prev => prev || String(e.message || e.reason || e));
+      setErrorMsg(prev => prev || formatGlobalError(e));
     };
-    const rejectionHandler = (e) => errHandler({ message: e.reason });
+    const rejectionHandler = (e) => errHandler(e);
     window.addEventListener('error', errHandler);
     window.addEventListener('unhandledrejection', rejectionHandler);
 
@@ -316,7 +343,7 @@ function GodotCanvas({ onEngineReady }) {
   return (
     <>
       {!isLoaded && (
-        <div style={overlayStyle}>
+        <div style={overlayStyle} data-clash-godot-loading="true">
           <img src={splashBg} alt="" style={bgStyle} />
           <img src={splashLogo} alt="Clash of Perps" style={logoStyle} className="godot-splash-logo" />
           <style>{`
@@ -421,7 +448,7 @@ function GodotCanvas({ onEngineReady }) {
         ref={canvasRef}
         id="godot-canvas"
         tabIndex={0}
-        style={canvasStyle}
+        style={{ ...canvasStyle, visibility: isLoaded ? 'visible' : 'hidden' }}
       />
     </>
   );

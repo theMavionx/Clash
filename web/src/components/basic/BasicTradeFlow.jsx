@@ -78,9 +78,21 @@ function BasicTradeFlow({
 
   // Available USD: prefer the on-DEX account balance; fall back to wallet
   // USDC for users who haven't deposited yet so the amount step still
-  // shows something sensible.
+  // shows something sensible. Field names differ per DEX:
+  //   Pacifica → `available_to_spend` / `balance`
+  //   Decibel  → `usdc_cross_withdrawable_balance` / `perp_equity_balance`
+  //              (snake_case, account_overviews REST shape)
+  //   Avantis  → `usdcAvailable` / `usdc`
   const balance = useMemo(() => {
-    const accBal = Number(account?.available_to_spend || account?.balance || 0);
+    const accBal = Number(
+      account?.usdc_cross_withdrawable_balance
+        ?? account?.available_to_spend
+        ?? account?.usdcAvailable
+        ?? account?.perp_equity_balance
+        ?? account?.balance
+        ?? account?.usdc
+        ?? 0
+    );
     if (accBal > 0) return accBal;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc]);
@@ -116,17 +128,19 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel';
       const sideForOpen = pickedDir === 'long'
-        ? (dex === 'avantis' ? 'long' : 'bid')
-        : (dex === 'avantis' ? 'short' : 'ask');
+        ? (isCollateralDex ? 'long' : 'bid')
+        : (isCollateralDex ? 'short' : 'ask');
 
       let result;
-      if (dex === 'avantis') {
-        // Avantis: hook takes (symbol, side, USDC collateral, slippage,
-        // leverage). Min notional is $100 — surface a clear message
-        // before signing if the user picked a sub-$100 position.
+      if (isCollateralDex) {
+        // Avantis & Decibel: hook takes (symbol, side, USDC collateral,
+        // slippage, leverage). Avantis enforces $100 min notional on-chain;
+        // Decibel has no fixed floor (per-market minSize varies, hook +
+        // SDK surface a useful revert if you go too small).
         const notional = pickedAmount * pickedLev;
-        if (notional < 100) {
+        if (dex === 'avantis' && notional < 100) {
           setErrorMsg(`Avantis min position size is $100. With $${pickedAmount.toFixed(2)} margin you need ≥${Math.ceil(100 / pickedAmount)}× leverage.`);
           submittedRef.current = false;
           setSubmitting(false);

@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
+import decibelLogo from '../assets/decibel.svg';
 import { usePlayer } from '../hooks/useGodot';
 
 const DexContext = createContext(null);
@@ -41,7 +42,38 @@ export const DEX_CONFIG = {
     chainShort: 'BASE',
     description: 'Perps on Base',
   },
+  decibel: {
+    id: 'decibel',
+    label: 'DECIBEL',
+    shortLabel: 'DCB',
+    emoji: '🔊',
+    logo: decibelLogo,
+    // Placeholder mark — pure icon, render the wordmark inline.
+    logoIsWordmark: false,
+    color: '#0EE8A4',
+    colorDark: '#059669',
+    colorLight: 'rgba(14,232,164,0.15)',
+    borderColor: '#10B981',
+    chain: 'Aptos',
+    chainShort: 'APT',
+    description: 'Perps on Aptos',
+  },
 };
+
+export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
+  if (!DEX_CONFIG[dexId]) return false;
+  // Farcaster mini apps expose Solana and, on some clients, EVM providers.
+  // Aptos wallet-standard providers such as Petra are not available there, so
+  // Decibel would leave users stuck on an impossible connect step.
+  if (isInFrame && dexId === 'decibel') return false;
+  return true;
+}
+
+export function getAvailableDexConfigs({ isInFrame = false } = {}) {
+  return Object.values(DEX_CONFIG).filter(cfg => (
+    isDexAvailableInContext(cfg.id, { isInFrame })
+  ));
+}
 
 export function DexProvider({ children }) {
   const [dex, setDexState] = useState(
@@ -84,7 +116,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
