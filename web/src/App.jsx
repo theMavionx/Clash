@@ -2,7 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react';
 import { GodotProvider } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
-import { DexProvider } from './contexts/DexContext';
+import { DexProvider, DexServerSync } from './contexts/DexContext';
 import { FuturesModeProvider } from './contexts/FuturesModeContext';
 import { EvmWalletProvider } from './contexts/EvmWalletContext';
 import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
@@ -109,6 +109,7 @@ export default function App() {
             <AptosWalletProvider>
               <WalletProvider>
                 <GodotProvider>
+                  <DexServerSync />
                   {/* FuturesModeProvider sits inside GodotProvider so it can read
                       the player's `futures_mode` from the player state context. */}
                   <FuturesModeProvider>

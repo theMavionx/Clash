@@ -69,7 +69,15 @@ function makeRateLimiter({ windowMs, max, group }) {
 // runaway loops rather than a per-user gate.
 const tradeLimiter = makeRateLimiter({ windowMs: 60_000, max: 3000, group: 'trade' });
 const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 500, group: 'withdraw' });
-app.use(['/api/orders', '/api/positions/close', '/api/tpsl'], tradeLimiter);
+app.use([
+  '/api/orders',
+  '/api/positions/close',
+  '/api/tpsl',
+  '/api/decibel/orders/place',
+  '/api/decibel/orders/cancel',
+  '/api/decibel/tpsl',
+  '/api/decibel/leverage',
+], tradeLimiter);
 app.use('/api/withdraw', withdrawLimiter);
 
 // Request logger

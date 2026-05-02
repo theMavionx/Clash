@@ -10,6 +10,18 @@ const router = express.Router();
 
 const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
 const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
+const DECIBEL_BUILDER_FEE_BPS_RAW = Number(process.env.DECIBEL_BUILDER_FEE_BPS || 1);
+const DECIBEL_BUILDER_FEE_BPS = Number.isFinite(DECIBEL_BUILDER_FEE_BPS_RAW) && DECIBEL_BUILDER_FEE_BPS_RAW > 0
+  ? DECIBEL_BUILDER_FEE_BPS_RAW
+  : 1;
+const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
+  '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
+const DECIBEL_ALLOWED_BUILDER_ADDRS = new Set(
+  String(process.env.DECIBEL_ALLOWED_BUILDER_ADDRS || process.env.DECIBEL_BUILDER_SUBACCOUNT || DEFAULT_DECIBEL_BUILDER_SUBACCOUNT)
+    .split(',')
+    .map(s => normalizeAptosAddress(s))
+    .filter(Boolean)
+);
 
 // ---------- Auth Middleware ----------
 // Validates x-token by reading the main game server's SQLite DB directly.
@@ -174,6 +186,24 @@ async function requireDecibelOwnerAndSubaccount(req, res) {
   return { owner, subaccount };
 }
 
+function requireDecibelBuilderFee(req, res) {
+  const builderAddr = normalizeAptosAddress(req.body?.builderAddr);
+  const builderFee = Number(req.body?.builderFee);
+  if (!builderAddr) {
+    res.status(400).json({ error: 'builderAddr required for Decibel order fee routing' });
+    return null;
+  }
+  if (!Number.isFinite(builderFee) || builderFee !== DECIBEL_BUILDER_FEE_BPS) {
+    res.status(400).json({ error: `builderFee must be ${DECIBEL_BUILDER_FEE_BPS} bps` });
+    return null;
+  }
+  if (DECIBEL_ALLOWED_BUILDER_ADDRS.size > 0 && !DECIBEL_ALLOWED_BUILDER_ADDRS.has(builderAddr)) {
+    res.status(400).json({ error: 'builderAddr is not an approved Clash builder subaccount' });
+    return null;
+  }
+  return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
+}
+
 // ==================== DECIBEL SERVER-SIDE SIGNER ====================
 
 router.get('/decibel/signer', auth, async (req, res) => {
@@ -191,14 +221,20 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
+    const builder = requireDecibelBuilderFee(req, res);
+    if (!builder) return;
     const clientOrderId = decibel.normalizeClientOrderId(req.body?.clientOrderId)
       || decibel.newClientOrderId();
     const orderPayload = {
       ...req.body,
+      ...builder,
       clientOrderId,
       subaccountAddr: verified.subaccount,
     };
     const result = await decibel.placeOrder(orderPayload);
+    if (result?.success === false) {
+      return res.status(400).json({ ...result, clientOrderId: orderPayload.clientOrderId });
+    }
     if (result?.success !== false) {
       try {
         const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
@@ -245,6 +281,7 @@ router.post('/decibel/orders/cancel', auth, async (req, res) => {
       ...req.body,
       subaccountAddr: verified.subaccount,
     });
+    if (result?.success === false) return res.status(400).json(result);
     res.json(result);
   } catch (e) {
     console.error('[decibel] cancel order error:', e);
@@ -260,6 +297,7 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
       ...req.body,
       subaccountAddr: verified.subaccount,
     });
+    if (result?.success === false) return res.status(400).json(result);
     res.json(result);
   } catch (e) {
     console.error('[decibel] TP/SL error:', e);
@@ -275,6 +313,7 @@ router.post('/decibel/leverage', auth, async (req, res) => {
       ...req.body,
       subaccountAddr: verified.subaccount,
     });
+    if (result?.success === false) return res.status(400).json(result);
     res.json(result);
   } catch (e) {
     console.error('[decibel] leverage error:', e);

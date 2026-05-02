@@ -263,6 +263,10 @@ ADMIN_KEY=$ADMIN_KEY
 REWARD_SECRET=$REWARD_SECRET
 NODE_ENV=production
 ELFA_API_KEY=
+DECIBEL_API_KEY=
+DECIBEL_API_WALLET_PRIVATE_KEY=
+DECIBEL_ALLOWED_BUILDER_ADDRS=
+DECIBEL_BUILDER_FEE_BPS=1
 CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
 CLASH_MAIN_DB=$SERVER_DIR/clash.db
 EOF
@@ -273,6 +277,14 @@ else
         echo "CLASH_WALLET_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$APP_DIR/.env"
     grep -q '^CLASH_MAIN_DB=' "$APP_DIR/.env" || \
         echo "CLASH_MAIN_DB=$SERVER_DIR/clash.db" >> "$APP_DIR/.env"
+    grep -q '^DECIBEL_API_KEY=' "$APP_DIR/.env" || \
+        echo "DECIBEL_API_KEY=" >> "$APP_DIR/.env"
+    grep -q '^DECIBEL_API_WALLET_PRIVATE_KEY=' "$APP_DIR/.env" || \
+        echo "DECIBEL_API_WALLET_PRIVATE_KEY=" >> "$APP_DIR/.env"
+    grep -q '^DECIBEL_ALLOWED_BUILDER_ADDRS=' "$APP_DIR/.env" || \
+        echo "DECIBEL_ALLOWED_BUILDER_ADDRS=" >> "$APP_DIR/.env"
+    grep -q '^DECIBEL_BUILDER_FEE_BPS=' "$APP_DIR/.env" || \
+        echo "DECIBEL_BUILDER_FEE_BPS=1" >> "$APP_DIR/.env"
 fi
 
 pm2 delete clash-api 2>/dev/null || true

@@ -21,7 +21,7 @@ import {
   getReadClient, getTimeInForce,
   amountToChainUnits, getPrimarySubaccountAddr,
   DECIBEL_PACKAGE_MAINNET, DECIBEL_USDC_MAINNET,
-  REFERRAL_CODE, isGasSponsored,
+  REFERRAL_CODE,
 } from '../lib/decibel';
 
 // Move function paths for the calls we route through Petra (one-time or
@@ -645,6 +645,7 @@ export function useDecibel() {
 
   const marketsRef = useRef([]);
   const claimGoldRef = useRef(null);
+  const activationInFlightRef = useRef(false);
   // Builder subaccount cache (deterministic, but resolution touches REST +
   // SDK helpers so we avoid repeating the work on every trade).
   const builderSubRef = useRef(null);
@@ -784,6 +785,7 @@ export function useDecibel() {
     setApiWalletDelegated(null);
     setSetupVerified(null);
     setActivationStep(null);
+    activationInFlightRef.current = false;
     if (address) D.log('Petra wallet connected:', address);
     else D.log('Petra wallet disconnected');
   }, [address]);
@@ -1042,6 +1044,11 @@ export function useDecibel() {
   // Trading stays gated until subaccount + gas + delegation + builder routing
   // are all known-good for the current Petra address.
   const activateApiWallet = useCallback(async () => {
+    if (activationInFlightRef.current) {
+      D.log('activate: already running, ignoring duplicate request');
+      return { status: 'pending' };
+    }
+    activationInFlightRef.current = true;
     setError(null);
     D.group('🚀 Activate trading');
     D.step('start: address =', address);
@@ -1049,6 +1056,7 @@ export function useDecibel() {
       D.warn('activate aborted: no Petra address');
       D.groupEnd();
       setError('Connect Petra first');
+      activationInFlightRef.current = false;
       return { error: 'NO_LOGIN_WALLET' };
     }
     setActivationStep({ index: 0, total: 0, label: 'Preparing activation…' });
@@ -1071,7 +1079,7 @@ export function useDecibel() {
       const signerInfo = await fetchServerSigner();
       const apiAddrPre = normalizeAptosAddress(signerInfo.public_key);
       const apiAptOcta = BigInt(String(signerInfo.apt_balance_octa || '0'));
-      const gasSponsored = !!signerInfo.gas_sponsored || isGasSponsored();
+      const gasSponsored = !!signerInfo.gas_sponsored;
       if (!gasSponsored && signerInfo.gas_ok === false) {
         throw new Error('Decibel server signer needs APT for gas. Fund the server API wallet or enable gas sponsorship.');
       }
@@ -1211,7 +1219,7 @@ export function useDecibel() {
 
       setActivationStep({ index: total, total, label: 'Finalising…' });
       D.step('finalising — re-fetching account state…');
-      const finalGasOk = isGasSponsored() || (await fetchAptBalanceOcta(apiAddr)) >= API_WALLET_READY_OCTA;
+      const finalGasOk = !!signerInfo.gas_sponsored || (await fetchAptBalanceOcta(apiAddr)) >= API_WALLET_READY_OCTA;
       const finalDelegationOk = await hasTradingDelegation(finalSub, apiAddr);
       const finalBuilderOk = !isBuilderConfigured()
         || await fetchBuilderApproval();
@@ -1228,6 +1236,7 @@ export function useDecibel() {
       setActivationStep(null);
       D.step('✅ activation complete');
       D.groupEnd();
+      activationInFlightRef.current = false;
       return { status: 'activated', apiAddr, sub: finalSub };
     } catch (e) {
       setActivationStep(null);
@@ -1235,6 +1244,7 @@ export function useDecibel() {
       D.groupEnd();
       const msg = decodeTradeError(e, 'Activation failed');
       setError(msg.slice(0, 300));
+      activationInFlightRef.current = false;
       return { error: msg };
     }
   }, [address, loginSignAndSubmit, ensureSubaccount, fetchBuilderApproval, fetchAccount, resolveBuilderSubaccount, fetchServerSigner]);
@@ -1816,7 +1826,7 @@ export function useDecibel() {
         const myAddr = normalizeAptosAddress(signerInfo.public_key);
         const delegatedOk = await hasTradingDelegation(sub, myAddr);
         const apiGasOcta = BigInt(String(signerInfo.apt_balance_octa || '0'));
-        const gasOk = !!signerInfo.gas_sponsored || isGasSponsored() || apiGasOcta >= API_WALLET_READY_OCTA;
+        const gasOk = !!signerInfo.gas_sponsored || apiGasOcta >= API_WALLET_READY_OCTA;
         const builderOk = await fetchBuilderApproval();
         const builderReady = !isBuilderConfigured() || builderOk === true;
         if (cancelled) return;
@@ -1833,7 +1843,7 @@ export function useDecibel() {
         setSetupVerified(delegatedOk && gasOk && builderReady);
       } catch (e) {
       D.warn('verify: setup check failed', e?.message || e);
-        if (!cancelled) setSetupVerified(false);
+        if (!cancelled) setSetupVerified(prev => (prev === true ? true : null));
       }
     })();
     return () => { cancelled = true; };
@@ -1901,7 +1911,7 @@ export function useDecibel() {
     // gate uses this to differentiate "first-time user" from "returning
     // user with existing account" — copy + step count differ.
     subaccountAddr,
-    gasSponsored: isGasSponsored(),
+    gasSponsored: false,
     connectWallet: connect,
   }), [
     address, account, positions, orders, prices, markets, walletUsdc, walletApt,

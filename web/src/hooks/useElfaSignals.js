@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { usePlayer } from './useGodot';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 
@@ -6,11 +7,12 @@ const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 export function useElfaSignals() {
   const [signals, setSignals] = useState({});
   const stopped = useRef(false);
+  const player = usePlayer();
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
 
   useEffect(() => {
     stopped.current = false;
     const load = async () => {
-      const token = window._playerToken;
       if (!token) return;
       try {
         const r = await fetch(`${GAME_API}/elfa/signals`, { headers: { 'x-token': token } });
@@ -22,7 +24,7 @@ export function useElfaSignals() {
     load();
     const iv = setInterval(load, 15 * 60 * 1000);
     return () => { stopped.current = true; clearInterval(iv); };
-  }, []);
+  }, [token]);
 
   return signals;
 }

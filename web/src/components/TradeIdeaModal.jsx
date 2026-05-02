@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import elfaLogo from '../assets/elfa.svg';
+import { usePlayer } from '../hooks/useGodot';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
@@ -200,6 +201,8 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const player = usePlayer();
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   // Always pull live mark from Pacifica so it's never stale/null.
   const liveMark = useLiveMark(symbol);
   const mark = (typeof currentPrice === 'number' && isFinite(currentPrice)) ? currentPrice : liveMark;
@@ -208,16 +211,25 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
     let cancelled = false;
     const ctrl = new AbortController();
     let timer = null;
-    const token = window._playerToken;
     if (!symbol) {
       setError('No symbol selected');
       setLoading(false);
       return () => { cancelled = true; ctrl.abort(); };
     }
     if (!token) {
-      setError('Login is still loading. Close this and try again in a moment.');
-      setLoading(false);
-      return () => { cancelled = true; ctrl.abort(); };
+      setLoading(true);
+      setError(null);
+      timer = setTimeout(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setError('Login is still loading. Close this and try again in a moment.');
+        }
+      }, 3500);
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+        ctrl.abort();
+      };
     }
     setLoading(true);
     setError(null);
@@ -248,7 +260,7 @@ function TradeIdeaModal({ symbol, currentPrice, onClose, onApply }) {
       if (timer) clearTimeout(timer);
       ctrl.abort();
     };
-  }, [symbol]);
+  }, [symbol, token]);
 
   const idea = data?.idea;
   const isLong = idea?.side === 'long';

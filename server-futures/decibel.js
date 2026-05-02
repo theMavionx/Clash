@@ -56,7 +56,6 @@ const DECIBEL_GAS_STATION_API_KEY = process.env.DECIBEL_GAS_STATION_API_KEY
   || '';
 const DECIBEL_API_WALLET_PRIVATE_KEY = process.env.DECIBEL_API_WALLET_PRIVATE_KEY
   || process.env.API_WALLET_PRIVATE_KEY
-  || process.env.TEST_PRIVKEY
   || '';
 const API_WALLET_READY_OCTA = BigInt(Math.round(0.2 * 1e8));
 
@@ -134,7 +133,7 @@ async function getServerAccount() {
   if (serverAccount) return serverAccount;
   const raw = String(DECIBEL_API_WALLET_PRIVATE_KEY || '').trim();
   if (!raw) {
-    throw new Error('DECIBEL_API_WALLET_PRIVATE_KEY (or API_WALLET_PRIVATE_KEY / TEST_PRIVKEY) is not set');
+    throw new Error('DECIBEL_API_WALLET_PRIVATE_KEY (or API_WALLET_PRIVATE_KEY) is not set');
   }
   const { Account, Ed25519PrivateKey } = await loadAptosSdk();
   serverAccount = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(raw) });
@@ -211,7 +210,10 @@ function roundToTickSize(price, tickSize) {
   const t = Number(tickSize);
   if (!Number.isFinite(p)) throw new Error('price must be a finite number');
   if (!Number.isFinite(t) || t <= 0) return p;
-  return Math.round(p / t) * t;
+  if (Number.isSafeInteger(p) && Number.isSafeInteger(t)) {
+    return Number((BigInt(p) / BigInt(t)) * BigInt(t));
+  }
+  return Math.floor(p / t) * t;
 }
 
 function generateReplayProtectionNonce() {
@@ -399,9 +401,12 @@ async function getServerSignerInfo() {
     public_key: address,
     chain: 'aptos',
     dex: 'decibel',
-    gas_sponsored: !!DECIBEL_GAS_STATION_API_KEY,
+    // We currently self-pay from the delegated API wallet. Do not advertise
+    // gas sponsorship until sendDecibelTx is actually wired to Aptos Gas
+    // Station; otherwise the frontend can skip the real balance check.
+    gas_sponsored: false,
     apt_balance_octa: balance.toString(),
-    gas_ok: !!DECIBEL_GAS_STATION_API_KEY || balance >= API_WALLET_READY_OCTA,
+    gas_ok: balance >= API_WALLET_READY_OCTA,
   };
 }
 

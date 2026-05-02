@@ -121,7 +121,7 @@ app.get('/trading-stats', dashboardAuth, async (req, res) => {
   let rewards = [];
   try {
     rewards = db.db.prepare(`
-      SELECT r.*, p.name, p.dex
+      SELECT r.*, p.name, p.dex AS player_dex
       FROM trading_rewards r
       JOIN players p ON r.player_id = p.id
       ORDER BY r.total_gold DESC

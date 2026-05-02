@@ -12,8 +12,12 @@ const path = require('path');
 // Lazy read-only handle to server-futures/futures.db (same pattern as
 // routes.js claim-gold). Returns null if server-futures isn't deployed.
 let _futuresDb = null;
+let _futuresDbUnavailableAt = 0;
 function futuresDbReadonly() {
-  if (_futuresDb === 'unavailable') return null;
+  if (_futuresDb === 'unavailable') {
+    if (Date.now() - _futuresDbUnavailableAt < 30_000) return null;
+    _futuresDb = null;
+  }
   if (_futuresDb) return _futuresDb;
   try {
     const Database = require('better-sqlite3');
@@ -24,6 +28,7 @@ function futuresDbReadonly() {
   } catch (e) {
     console.warn('[tasks] futures.db unavailable:', e.message);
     _futuresDb = 'unavailable';
+    _futuresDbUnavailableAt = Date.now();
     return null;
   }
   return _futuresDb;
@@ -112,7 +117,8 @@ async function buildSnapshot(player, task) {
       if (id > baseline) baseline = id;
     }
     if (baseline === 0) {
-      const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(player.id);
+      const dex = String(player.dex || 'pacifica').toLowerCase();
+      const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(player.id, dex);
       baseline = reward ? reward.last_trade_id : 0;
     }
     snap.trade_id_start = baseline;
@@ -156,7 +162,10 @@ function resolveWallet(player) {
     return player.wallet;
   }
   try {
-    const row = db.db.prepare('SELECT wallet FROM trading_rewards WHERE player_id = ?').get(player.id);
+    const dex = String(player.dex || 'pacifica').toLowerCase();
+    const row = db.db.prepare(
+      'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+    ).get(player.id, dex);
     if (row && (isSolanaWallet(row.wallet) || isEvmWallet(row.wallet) || isAptosWallet(row.wallet))) {
       return row.wallet;
     }
@@ -164,26 +173,27 @@ function resolveWallet(player) {
   return null;
 }
 
-// Unified trade-fetch: routes on WALLET FORMAT. In our model one wallet = one
-// account = one DEX (no cross-DEX linking), so wallet format reliably
-// determines which data source to query. Returns a common shape:
+// Unified trade-fetch: routes on the player's selected DEX, not just wallet
+// shape. Aptos and EVM both use 0x-looking addresses, and stale wallets from
+// a previous DEX should never pull the wrong trade source. Returns a common shape:
 //   [{ history_id, symbol, side, price, amount, _notional? }]
 // so verifiers don't need to branch.
 async function fetchWalletTrades(player) {
   if (!player) return [];
   const wallet = resolveWallet(player);
   if (!wallet) return [];
+  const dexFilter = String(player.dex || 'pacifica').toLowerCase();
 
   // Self-custody DEXes (Avantis on Base, Decibel on Aptos) → read verified
   // trades from futures.db. The per-DEX rewards worker writes
   // verified_source='worker' rows; we just project them into the common shape.
-  // Both DEXes share the same trade_history columns; we filter by `dex` to
-  // separate them. Wallet-format gating selects the correct dex.
-  function isFuturesDbWallet(w) { return isEvmWallet(w) || isAptosWallet(w); }
-  if (isFuturesDbWallet(wallet)) {
+  // Both DEXes share the same trade_history columns; we filter by player DEX
+  // and player_id so legacy rows from another integration cannot leak in.
+  if (dexFilter === 'avantis' || dexFilter === 'decibel') {
+    if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
-    const dexFilter = isEvmWallet(wallet) ? 'avantis' : 'decibel';
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
@@ -218,7 +228,7 @@ async function fetchWalletTrades(player) {
   }
 
   // Pacifica (Solana): public API
-  if (isSolanaWallet(wallet)) {
+  if (dexFilter === 'pacifica' && isSolanaWallet(wallet)) {
     try {
       const r = await fetch(
         `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`

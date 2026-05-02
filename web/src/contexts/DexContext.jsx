@@ -3,6 +3,7 @@ import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
 import decibelLogo from '../assets/decibel.svg';
 import { usePlayer } from '../hooks/useGodot';
+import { isFarcasterFrame } from '../hooks/useFarcaster';
 
 const DexContext = createContext(null);
 
@@ -77,12 +78,18 @@ export function getAvailableDexConfigs({ isInFrame = false } = {}) {
 
 export function DexProvider({ children }) {
   const [dex, setDexState] = useState(
-    () => localStorage.getItem(STORAGE_KEY) || 'pacifica'
+    () => {
+      const cached = localStorage.getItem(STORAGE_KEY) || 'pacifica';
+      return isDexAvailableInContext(cached, { isInFrame: isFarcasterFrame() }) ? cached : 'pacifica';
+    }
   );
 
   const setDex = useCallback((newDex) => {
-    localStorage.setItem(STORAGE_KEY, newDex);
-    setDexState(newDex);
+    const nextDex = isDexAvailableInContext(newDex, { isInFrame: isFarcasterFrame() })
+      ? newDex
+      : 'pacifica';
+    localStorage.setItem(STORAGE_KEY, nextDex);
+    setDexState(nextDex);
   }, []);
 
   // Sync the server-side dex preference whenever the token changes (first
@@ -133,6 +140,34 @@ export function DexProvider({ children }) {
       {children}
     </DexContext.Provider>
   );
+}
+
+export function DexServerSync() {
+  const player = usePlayer();
+  const token = player?.token || null;
+  const { setDex } = useDex();
+  const lastSyncedToken = useRef(null);
+
+  useEffect(() => {
+    if (!token) { lastSyncedToken.current = null; return; }
+    if (lastSyncedToken.current === token) return;
+    lastSyncedToken.current = token;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/state', { headers: { 'x-token': token } });
+        if (cancelled || !r.ok) return;
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel') {
+          setDex(j.dex);
+        }
+      } catch { /* network error - keep local dex */ }
+    })();
+    return () => { cancelled = true; };
+  }, [token, setDex]);
+
+  return null;
 }
 
 export function useDex() {

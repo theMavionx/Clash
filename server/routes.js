@@ -103,8 +103,27 @@ router.post('/client-log', (req, res) => {
 // or from RegisterPanel when the user switches DEX pre-connect. The value
 // is used by leaderboard badges and by /api/futures/* routing.
 const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel']);
-function resetTradingRewardCursor(playerId) {
-  try { db.db.prepare('DELETE FROM trading_rewards WHERE player_id = ?').run(playerId); } catch {}
+function currentFuturesRewardBaseline(playerId, dex) {
+  if (dex !== 'avantis' && dex !== 'decibel') return 0;
+  try {
+    const fdb = futuresDbReadonly();
+    if (!fdb) return 0;
+    const row = fdb.prepare(
+      'SELECT COALESCE(MAX(id), 0) AS last_id FROM trade_history WHERE player_id = ? AND dex = ?'
+    ).get(playerId, dex);
+    return Number(row?.last_id || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function ensureTradingRewardRow(playerId, wallet, dex, baseline = 0) {
+  try {
+    db.db.prepare(`
+      INSERT OR IGNORE INTO trading_rewards (player_id, dex, wallet, last_trade_id)
+      VALUES (?, ?, ?, ?)
+    `).run(playerId, dex, wallet || '', Math.max(0, Number(baseline) || 0));
+  } catch {}
 }
 
 router.post('/players/set-dex', auth, (req, res) => {
@@ -112,7 +131,12 @@ router.post('/players/set-dex', auth, (req, res) => {
   if (!VALID_DEXES.has(dex)) {
     return res.status(400).json({ error: 'dex must be "pacifica", "avantis" or "decibel"' });
   }
-  if (req.player.dex !== dex) resetTradingRewardCursor(req.player.id);
+  if (req.player.dex !== dex) {
+    // Preserve each DEX reward cursor. If the user switches into a DEX where
+    // they already have historical rows, baseline at the current futures.db
+    // high-water mark so old activity cannot be claimed as fresh.
+    ensureTradingRewardRow(req.player.id, req.player.wallet || '', dex, currentFuturesRewardBaseline(req.player.id, dex));
+  }
   db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, req.player.id);
   res.json({ success: true, dex });
 });
@@ -1022,7 +1046,8 @@ function volumeGoldForDex(dex, usdVolume) {
 try {
   db.db.exec(`
     CREATE TABLE IF NOT EXISTS trading_rewards (
-      player_id    TEXT PRIMARY KEY,
+      player_id    TEXT NOT NULL,
+      dex          TEXT NOT NULL DEFAULT 'pacifica',
       wallet       TEXT NOT NULL,
       last_trade_id INTEGER NOT NULL DEFAULT 0,
       total_volume REAL NOT NULL DEFAULT 0,
@@ -1031,11 +1056,55 @@ try {
       first_trade  INTEGER NOT NULL DEFAULT 0,
       last_daily   TEXT,
       pnl_gold_pool REAL NOT NULL DEFAULT 0,
-      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (player_id, dex)
     )
   `);
 } catch {}
 try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pnl_gold_pool REAL NOT NULL DEFAULT 0`); } catch {}
+try {
+  const cols = db.db.prepare('PRAGMA table_info(trading_rewards)').all();
+  const hasDex = cols.some(c => c.name === 'dex');
+  const pkCols = cols.filter(c => c.pk).sort((a, b) => a.pk - b.pk).map(c => c.name);
+  if (!hasDex || pkCols.join(',') !== 'player_id,dex') {
+    db.db.exec('DROP TABLE IF EXISTS trading_rewards_old_migrate');
+    db.db.exec('ALTER TABLE trading_rewards RENAME TO trading_rewards_old_migrate');
+    db.db.exec(`
+      CREATE TABLE trading_rewards (
+        player_id    TEXT NOT NULL,
+        dex          TEXT NOT NULL DEFAULT 'pacifica',
+        wallet       TEXT NOT NULL,
+        last_trade_id INTEGER NOT NULL DEFAULT 0,
+        total_volume REAL NOT NULL DEFAULT 0,
+        total_gold   INTEGER NOT NULL DEFAULT 0,
+        first_deposit INTEGER NOT NULL DEFAULT 0,
+        first_trade  INTEGER NOT NULL DEFAULT 0,
+        last_daily   TEXT,
+        pnl_gold_pool REAL NOT NULL DEFAULT 0,
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (player_id, dex)
+      )
+    `);
+    const oldCols = db.db.prepare('PRAGMA table_info(trading_rewards_old_migrate)').all();
+    const oldHasDex = oldCols.some(c => c.name === 'dex');
+    const dexExpr = oldHasDex
+      ? "COALESCE(NULLIF(dex, ''), (SELECT p.dex FROM players p WHERE p.id = trading_rewards_old_migrate.player_id), 'pacifica')"
+      : "COALESCE((SELECT p.dex FROM players p WHERE p.id = trading_rewards_old_migrate.player_id), 'pacifica')";
+    db.db.exec(`
+      INSERT OR REPLACE INTO trading_rewards (
+        player_id, dex, wallet, last_trade_id, total_volume, total_gold,
+        first_deposit, first_trade, last_daily, pnl_gold_pool, updated_at
+      )
+      SELECT
+        player_id, ${dexExpr}, wallet, last_trade_id, total_volume, total_gold,
+        first_deposit, first_trade, last_daily, COALESCE(pnl_gold_pool, 0), updated_at
+      FROM trading_rewards_old_migrate
+    `);
+    db.db.exec('DROP TABLE trading_rewards_old_migrate');
+  }
+} catch (e) {
+  console.warn('[trading_rewards] per-dex migration failed:', e.message);
+}
 
 // Rate limiter for claim-gold (max 1 per 250ms per player).
 // Previously 5000ms, which was hit by legitimate new-account flows: on
@@ -1059,8 +1128,12 @@ setInterval(() => {
 // for Avantis trades recorded by the futures service. Guarded so the main
 // server still works on hosts where server-futures isn't deployed.
 let _futuresDb = null;
+let _futuresDbUnavailableAt = 0;
 function futuresDbReadonly() {
-  if (_futuresDb === 'unavailable') return null;
+  if (_futuresDb === 'unavailable') {
+    if (Date.now() - _futuresDbUnavailableAt < 30_000) return null;
+    _futuresDb = null;
+  }
   if (_futuresDb) return _futuresDb;
   try {
     const Database = require('better-sqlite3');
@@ -1071,6 +1144,7 @@ function futuresDbReadonly() {
   } catch (e) {
     console.warn('[claim-gold] Avantis futures.db unavailable:', e.message);
     _futuresDb = 'unavailable';
+    _futuresDbUnavailableAt = Date.now();
     return null;
   }
   return _futuresDb;
@@ -1084,7 +1158,20 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
   claimCooldowns.set(req.player.id, Date.now());
   const wallet = req.body.wallet || req.player.wallet;
-  const dex = String(req.body.dex || req.player.dex || 'pacifica').toLowerCase();
+  const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
+    ? String(req.player.dex).toLowerCase()
+    : 'pacifica';
+  const requestedDex = req.body.dex == null ? playerDex : String(req.body.dex).toLowerCase();
+  if (!VALID_DEXES.has(requestedDex)) {
+    return res.status(400).json({ error: 'Invalid dex' });
+  }
+  if (requestedDex !== playerDex) {
+    return res.status(409).json({
+      error: `Account is registered for '${playerDex}'. Switch DEX before claiming ${requestedDex} rewards.`,
+      dex: playerDex,
+    });
+  }
+  const dex = playerDex;
 
   // Auto-replace Farcaster `fc_<fid>` placeholder wallets with the real
   // address from the request body. The placeholder is stored by older
@@ -1096,25 +1183,24 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   if (isValidWallet(wallet) && isPlaceholderWallet(req.player.wallet)) {
     try {
       db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id);
-      db.db.prepare('UPDATE trading_rewards SET wallet = ? WHERE player_id = ?').run(wallet, req.player.id);
+      db.db.prepare('UPDATE trading_rewards SET wallet = ? WHERE player_id = ? AND dex = ?').run(wallet, req.player.id, dex);
       console.log(`[claim-gold] replaced placeholder ${req.player.wallet} with real wallet ${wallet} for player ${req.player.id}`);
     } catch { /* non-fatal */ }
   }
 
   // ── Self-custody DEXes (Avantis on Base, Decibel on Aptos) ──
   // Both write verified rows into futures.db trade_history; the only
-  // difference is the `dex` filter. They share the same trading_rewards
-  // ledger because a player only trades on one DEX at a time (cross-DEX
-  // switch wipes the rewards row via /switch-dex).
+  // difference is the `dex` filter. Cursors are stored per DEX so switching
+  // between integrations cannot replay old rows for fresh gold.
   if (dex === 'avantis' || dex === 'decibel') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
     }
-    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
-      db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet || '');
-      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet || '');
+      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
     let newTrades = [];
     try {
@@ -1207,7 +1293,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // trades. `better-sqlite3` transactions are synchronous so this
     // "compare-and-set" is atomic.
     const creditTxn = db.db.transaction(() => {
-      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
       const expectedLastId = reward.last_trade_id || 0;
       const actualLastId = (fresh && fresh.last_trade_id) || 0;
       if (actualLastId !== expectedLastId) {
@@ -1220,8 +1306,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
           last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
           updated_at = datetime('now')
-        WHERE player_id = ?
-      `).run(maxId, newVolume, totalGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id);
+        WHERE player_id = ? AND dex = ?
+      `).run(maxId, newVolume, totalGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
       if (totalGold > 0) {
         db.addResources(req.player.id, totalGold, 0, 0);
         // Record the payout in gold_history so ProfileModal's trading-stats
@@ -1249,10 +1335,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
   try {
     // Get or create reward record
-    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+    let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
-      db.db.prepare('INSERT INTO trading_rewards (player_id, wallet) VALUES (?, ?)').run(req.player.id, wallet);
-      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet);
+      reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
     // Auto-link wallet to player account if missing or still a Farcaster placeholder
     // (`fc_<fid>` saved during Farcaster auto-register). Lets tasks/quests find the real wallet.
@@ -1340,7 +1426,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // advanced it, abort gracefully.
     const newVolume = newTrades.reduce((s, t) => s + parseFloat(t.price || 0) * parseFloat(t.amount || 0), 0);
     const creditTxnPac = db.db.transaction(() => {
-      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+      const fresh = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
       const expectedLastId = reward.last_trade_id || 0;
       const actualLastId = (fresh && fresh.last_trade_id) || 0;
       if (actualLastId !== expectedLastId) {
@@ -1355,8 +1441,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
           first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
           last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
-        WHERE player_id = ?
-      `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id);
+        WHERE player_id = ? AND dex = ?
+      `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id, dex);
       if (totalGold > 0) {
         db.addResources(req.player.id, totalGold, 0, 0);
         const reason = reasons.join(' + ') || 'Trading reward';
@@ -1407,7 +1493,10 @@ try {
 
 // Get trading reward stats + gold history + trade history from Pacifica
 router.get('/trading/stats', auth, async (req, res) => {
-  const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ?').get(req.player.id);
+  const dex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
+    ? String(req.player.dex).toLowerCase()
+    : 'pacifica';
+  const reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
   const goldHistory = db.db.prepare('SELECT amount, reason, created_at FROM gold_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 50').all(req.player.id);
 
   // Trade list source depends on DEX: Pacifica stores a synced copy in the
@@ -1415,7 +1504,6 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  const dex = String(req.player.dex || '').toLowerCase();
   if (dex === 'avantis' || dex === 'decibel') {
     const fdb = futuresDbReadonly();
     if (fdb) {
@@ -1575,6 +1663,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   if (!result.completed) {
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
+  const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
 
   // Atomic payout: re-check claimed_at inside the transaction so two
   // concurrent /tasks/:id/claim calls can't both pass canClaim() and
@@ -1594,7 +1683,19 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
       db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
         .run(req.player.id, task.reward_gold, `Quest: ${task.title}`);
     }
-    db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
+    if (task.repeatable) {
+      db.db.prepare(`
+        UPDATE player_tasks
+        SET claimed_at = datetime('now'),
+            snapshot = ?,
+            progress = 0,
+            progress_value = 0,
+            target_value = ?
+        WHERE player_id = ? AND task_id = ?
+      `).run(JSON.stringify(nextRepeatableSnapshot || {}), result.target_value || 0, req.player.id, id);
+    } else {
+      db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
+    }
     return { raced: false };
   });
   const payoutRes = payout();
@@ -1708,7 +1809,14 @@ router.get('/admin/players', adminAuth, (req, res) => {
   // earned from trading next to each row (no N+1 query).
   const rewardsMap = {};
   try {
-    const rewards = db.db.prepare('SELECT player_id, total_gold, total_volume, last_daily FROM trading_rewards').all();
+    const rewards = db.db.prepare(`
+      SELECT player_id,
+             COALESCE(SUM(total_gold), 0) AS total_gold,
+             COALESCE(SUM(total_volume), 0) AS total_volume,
+             MAX(last_daily) AS last_daily
+      FROM trading_rewards
+      GROUP BY player_id
+    `).all();
     for (const r of rewards) rewardsMap[r.player_id] = r;
   } catch { /* trading_rewards missing on fresh DB */ }
   res.json(players.map(p => {
@@ -1898,13 +2006,13 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   let rewardsByDex = [];
   try {
     rewardsByDex = db.db.prepare(`
-      SELECT COALESCE(p.dex, 'unknown') AS dex,
+      SELECT COALESCE(r.dex, 'unknown') AS dex,
              COUNT(r.player_id) AS traders,
              COALESCE(SUM(r.total_gold), 0) AS total_gold,
              COALESCE(SUM(r.total_volume), 0) AS total_volume
       FROM trading_rewards r
       LEFT JOIN players p ON p.id = r.player_id
-      GROUP BY p.dex
+      GROUP BY r.dex
     `).all();
   } catch { /* trading_rewards missing */ }
 

@@ -1,5 +1,6 @@
 import { useState, useEffect, memo } from 'react';
 import elfaLogo from '../assets/elfa.svg';
+import { usePlayer } from '../hooks/useGodot';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 
@@ -7,21 +8,32 @@ function ExplainMoveModal({ symbol, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const player = usePlayer();
+  const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
 
   useEffect(() => {
     let cancelled = false;
     const ctrl = new AbortController();
     let timer = null;
-    const token = window._playerToken;
     if (!symbol) {
       setError('No symbol selected');
       setLoading(false);
       return () => { cancelled = true; ctrl.abort(); };
     }
     if (!token) {
-      setError('Login is still loading. Close this and try again in a moment.');
-      setLoading(false);
-      return () => { cancelled = true; ctrl.abort(); };
+      setLoading(true);
+      setError(null);
+      timer = setTimeout(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setError('Login is still loading. Close this and try again in a moment.');
+        }
+      }, 3500);
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+        ctrl.abort();
+      };
     }
     setLoading(true);
     setError(null);
@@ -52,7 +64,7 @@ function ExplainMoveModal({ symbol, onClose }) {
       if (timer) clearTimeout(timer);
       ctrl.abort();
     };
-  }, [symbol]);
+  }, [symbol, token]);
 
   return (
     <div style={S.backdrop} onClick={onClose}>
