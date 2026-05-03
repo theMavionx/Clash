@@ -260,7 +260,7 @@ const DecibelDepositGate = ({
 
           <button
             style={{
-              ...cartoonBtn(canSubmit ? '#10B981' : '#9CA3AF', canSubmit ? '#059669' : '#6B7280'),
+              ...cartoonBtn(canSubmit ? '#DAA520' : '#9CA3AF', canSubmit ? '#B8860B' : '#6B7280'),
               padding: '16px 36px',
               fontSize: 16, fontWeight: 900, letterSpacing: '0.5px',
               width: '100%', maxWidth: 380,
@@ -1538,9 +1538,9 @@ function FuturesPanel() {
               <>
                 <div style={{
                   width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(180deg, #0EE8A4 0%, #059669 100%)',
-                  border: '4px solid #10B981',
-                  boxShadow: '0 5px 0 #059669, 0 8px 16px rgba(0,0,0,0.25)',
+                  background: 'linear-gradient(180deg, #FFE600 0%, #B8860B 100%)',
+                  border: '4px solid #DAA520',
+                  boxShadow: '0 5px 0 #B8860B, 0 8px 16px rgba(0,0,0,0.25)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   fontSize: 44,
                   filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
@@ -1557,7 +1557,7 @@ function FuturesPanel() {
                   USDC for collateral, APT for gas.
                 </div>
                 <button
-                  style={{...cartoonBtn('#10B981', '#059669'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...cartoonBtn('#DAA520', '#B8860B'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => aptosWallet.connect()}
                   disabled={aptosWallet.isConnecting}
                 >
@@ -1565,7 +1565,7 @@ function FuturesPanel() {
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
-                  color: '#059669', fontSize: 11, fontWeight: 800,
+                  color: '#B8860B', fontSize: 11, fontWeight: 800,
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>DECIBEL · APTOS MAINNET</span>
@@ -1730,14 +1730,14 @@ function FuturesPanel() {
                   height: 'clamp(56px, 10vh, 88px)',
                   margin: '8px auto 4px',
                   border: '6px solid #d4c8b0',
-                  borderTopColor: '#10B981',
+                  borderTopColor: '#DAA520',
                   borderRadius: '50%',
                   animation: 'act-spin 1s linear infinite',
                   flexShrink: 0,
                 }} />
                 <div style={{
                   fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800,
-                  letterSpacing: '0.12em', color: '#10B981',
+                  letterSpacing: '0.12em', color: '#DAA520',
                 }}>VERIFYING ON-CHAIN</div>
                 <div style={{
                   fontSize: 'clamp(15px, 2.2vh, 18px)', fontWeight: 900, color: '#5C3A21',
@@ -1764,14 +1764,14 @@ function FuturesPanel() {
                   height: 'clamp(56px, 10vh, 88px)',
                   margin: '8px auto 4px',
                   border: '6px solid #d4c8b0',
-                  borderTopColor: '#10B981',
+                  borderTopColor: '#DAA520',
                   borderRadius: '50%',
                   animation: 'act-spin 1s linear infinite',
                   flexShrink: 0,
                 }} />
                 <div style={{
                   fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800, letterSpacing: '0.12em',
-                  color: '#10B981',
+                  color: '#DAA520',
                 }}>
                   {activationStep.total > 0
                     ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
@@ -1856,9 +1856,9 @@ function FuturesPanel() {
                         width: 'clamp(64px, 12vh, 96px)',
                         height: 'clamp(64px, 12vh, 96px)',
                         borderRadius: '50%',
-                        background: 'linear-gradient(180deg, #0EE8A4 0%, #059669 100%)',
-                        border: '4px solid #10B981',
-                        boxShadow: '0 6px 0 #059669, 0 10px 22px rgba(0,0,0,0.28)',
+                        background: 'linear-gradient(180deg, #FFE600 0%, #B8860B 100%)',
+                        border: '4px solid #DAA520',
+                        boxShadow: '0 6px 0 #B8860B, 0 10px 22px rgba(0,0,0,0.28)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 'clamp(34px, 6vh, 52px)',
                         filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
@@ -1886,7 +1886,7 @@ function FuturesPanel() {
                           <div key={n} style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
                             <div style={{
                               width: 22, height: 22, borderRadius: '50%',
-                              background: '#10B981', color: '#fff',
+                              background: '#DAA520', color: '#fff',
                               fontSize: 12, fontWeight: 900,
                               display: 'flex', alignItems: 'center', justifyContent: 'center',
                               flexShrink: 0, marginTop: 1,
@@ -1901,7 +1901,7 @@ function FuturesPanel() {
 
                       <button
                         style={{
-                          ...cartoonBtn('#10B981', '#059669'),
+                          ...cartoonBtn('#DAA520', '#B8860B'),
                           padding: 'clamp(12px, 2.2vh, 18px) 36px',
                           fontSize: 'clamp(14px, 2vh, 17px)', fontWeight: 900, letterSpacing: '0.6px',
                           width: '100%', maxWidth: 380,

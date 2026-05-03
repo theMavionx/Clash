@@ -408,7 +408,7 @@ function normalizePrice(p, markets) {
 // logs by default — we want every step visible in `default` filter mode.
 const D = {
   log: (...args) => console.log('[Decibel]', ...args),
-  step: (...args) => console.log('%c[Decibel]%c', 'color:#10B981;font-weight:700', '', ...args),
+  step: (...args) => console.log('%c[Decibel]%c', 'color:#DAA520;font-weight:700', '', ...args),
   warn: (...args) => console.warn('[Decibel]', ...args),
   err: (...args) => console.error('[Decibel]', ...args),
   group: (label) => { try { console.groupCollapsed('[Decibel] ' + label); } catch { /* noop */ } },

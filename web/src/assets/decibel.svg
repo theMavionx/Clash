@@ -2,7 +2,7 @@
   <!-- Stylised "dB" sound-wave glyph. Placeholder until the official
        Decibel mark is supplied — same approach we took for Pacifica
        / Avantis assets at first integration. -->
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0EE8A4"/>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#FFE600"/>
   <path d="M16 22 V42 M16 22 H26 C32 22 32 32 26 32 H16 M16 32 H26 C33 32 33 42 26 42 H16"
         stroke="#0a0a0a" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
   <path d="M40 28 Q46 32 40 36 M44 24 Q54 32 44 40 M48 20 Q60 32 48 44"

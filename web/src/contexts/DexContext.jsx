@@ -1,7 +1,9 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import pacificaLogo from '../assets/pacifica.png';
 import avantisLogo from '../assets/avantis.svg';
-import decibelLogo from '../assets/decibel.svg';
+// Decibel uses the project favicon (yellow square with the brand mark) as its
+// official logo. Served from /public so we reference it as a root URL string.
+const decibelLogo = '/favicon.png';
 import { usePlayer } from '../hooks/useGodot';
 import { isFarcasterFrame } from '../hooks/useFarcaster';
 
@@ -51,10 +53,10 @@ export const DEX_CONFIG = {
     logo: decibelLogo,
     // Placeholder mark — pure icon, render the wordmark inline.
     logoIsWordmark: false,
-    color: '#0EE8A4',
-    colorDark: '#059669',
-    colorLight: 'rgba(14,232,164,0.15)',
-    borderColor: '#10B981',
+    color: '#FFE600',
+    colorDark: '#B8860B',
+    colorLight: 'rgba(255,230,0,0.15)',
+    borderColor: '#DAA520',
     chain: 'Aptos',
     chainShort: 'APT',
     description: 'Perps on Aptos',

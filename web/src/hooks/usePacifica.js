@@ -88,9 +88,25 @@ function getATA(owner, mint) {
 // ---------- Hook ----------
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 
+// Wallets whose signMessage is incompatible with Pacifica's Ed25519 verifier.
+// MetaMask Solana Snap pre-wraps the message before signing (adds prefix /
+// re-encodes), so the resulting signature never verifies against the raw
+// JSON bytes Pacifica reconstructs server-side. Same pain Hyperliquid/Drift
+// hit — the only fix is to refuse the wallet and route the user to Phantom.
+const PACIFICA_INCOMPATIBLE_WALLETS = new Set(['MetaMask']);
+
 export function usePacifica() {
-  const { publicKey, signMessage, sendTransaction, connected } = useWallet();
+  const { publicKey, signMessage, sendTransaction, connected, wallet } = useWallet();
   const { connection } = useConnection();
+  const adapterName = wallet?.adapter?.name || '';
+  const isIncompatibleWallet = PACIFICA_INCOMPATIBLE_WALLETS.has(adapterName);
+
+  // One-shot diagnostic on every wallet change — visible in remote consoles
+  // so we can see EXACTLY which wallet a user is on without asking.
+  useEffect(() => {
+    if (!adapterName && !publicKey) return;
+    console.log(`[Pacifica] Wallet detected: adapter="${adapterName || '(none)'}" pubkey=${publicKey?.toBase58() || '(none)'} compatible=${!isIncompatibleWallet}`);
+  }, [adapterName, publicKey, isIncompatibleWallet]);
 
   // Privy embedded-wallet integration. When PRIVY_ENABLED is false (no app id),
   // skip these hooks entirely — the provider isn't mounted, so calling them
@@ -278,25 +294,57 @@ export function usePacifica() {
   // Bind, revoke, and other master-only operations bypass the agent path
   // by calling `masterSign` directly elsewhere in this file.
   const signedRequest = useCallback(async (method, endpoint, type, payload) => {
+    // Diagnostic: log the FULL sign-context so remote-debugged users have a
+    // breadcrumb at every Pacifica call. Captures every routing decision
+    // (wallet kind, agent presence, sign sub-path) plus body+errors.
+    const inFC = isFarcasterFrame();
+    const walletKind = privyActive ? `privy:${privyWalletObj?.walletClientType || '?'}`
+      : inFC ? 'farcaster'
+      : adapterName ? `adapter:${adapterName}`
+      : 'none';
+    const hasAgentSecret = !!(signWithAgentKey && signWithAgentKey('__probe__', {}));
+    console.log(`[Pacifica] signedRequest START`, {
+      type, endpoint,
+      walletKind,
+      adapterName: adapterName || null,
+      pubkey: publicKey?.toBase58() || privyAddr || null,
+      hasAdapter: !!(publicKey && signMessage),
+      hasPrivy: !!(privyActive && privySignMessage && privyWalletObj),
+      inFarcaster: inFC,
+      hasAgentSecret,
+      isIncompatibleWallet,
+    });
     // Try agent-key fast path first — covers the hot endpoints (orders,
     // positions/tpsl, account/leverage, account/margin) without prompting.
     if (signWithAgentKey) {
-      const tryAgent = async () => {
+      const tryAgent = async (label) => {
         const headerBag = signWithAgentKey(type, payload);
-        if (!headerBag) return null;
+        if (!headerBag) {
+          console.log(`[Pacifica] agent-path SKIP (${label}): signWithAgentKey returned null — no local agent secret`);
+          return null;
+        }
         const body = { ...headerBag, ...payload };
-        const res = await fetch(`${API}${endpoint}`, {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const text = await res.text();
-        let parsed = null;
-        try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+        console.log(`[Pacifica] ${type} → ${endpoint} (path=agent, attempt=${label}, agent=${String(headerBag.agent_wallet || '').slice(0,8)}…)`);
+        let res, text, parsed = null;
+        try {
+          res = await fetch(`${API}${endpoint}`, {
+            method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          });
+          text = await res.text();
+          try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+        } catch (netErr) {
+          console.error(`[Pacifica] ${type} agent-path NETWORK ERROR`, { error: netErr?.message, sent: body });
+          throw netErr;
+        }
+        if (!res.ok || parsed?.error || parsed?.code >= 400) {
+          console.warn(`[Pacifica] ${type} agent-path FAIL status=${res.status} reason="${parsed?.error || text || '(empty)'}"`, { body: parsed ?? text, sent: body });
+        } else {
+          console.log(`[Pacifica] ${type} agent-path OK status=${res.status}`);
+        }
         return { res, text, parsed };
       };
 
-      let attempt = await tryAgent();
+      let attempt = await tryAgent('first');
       if (attempt) {
         // Server-side agent invalidation: stored secret no longer matches a
         // bound agent (cleared cache, server revoke, key rotation). Detect
@@ -306,44 +354,73 @@ export function usePacifica() {
         const agentRejected =
           attempt.res.status === 401 ||
           /invalid signature|agent[_ ]?wallet|invalid agent/i.test(errStr);
-        if (agentRejected && !rebindInFlightRef.current && bindAgent) {
-          rebindInFlightRef.current = true;
-          try {
-            forgetAgentLocally();
-            await bindAgent();           // ONE master-wallet popup
-            const retried = await tryAgent();
-            if (retried) attempt = retried;
-          } catch { /* rebind rejected — fall through to master sign */ }
-          finally { rebindInFlightRef.current = false; }
+        if (agentRejected) {
+          console.warn(`[Pacifica] agent rejected by server (status=${attempt.res.status}, err="${errStr}")`);
+          if (rebindInFlightRef.current) {
+            console.warn(`[Pacifica] rebind SKIPPED — already in flight`);
+          } else if (!bindAgent) {
+            console.warn(`[Pacifica] rebind SKIPPED — bindAgent unavailable`);
+          } else {
+            rebindInFlightRef.current = true;
+            try {
+              forgetAgentLocally();
+              console.log(`[Pacifica] rebind: calling bindAgent (master-wallet popup expected)`);
+              await bindAgent();
+              console.log(`[Pacifica] rebind: bind OK, retrying ${type}`);
+              const retried = await tryAgent('after-rebind');
+              if (retried) attempt = retried;
+            } catch (rebindErr) {
+              console.warn(`[Pacifica] rebind FAILED — falling through to master sign`, { error: rebindErr?.message, name: rebindErr?.name });
+            } finally { rebindInFlightRef.current = false; }
+          }
         }
         if (attempt) {
           if (attempt.parsed !== null) return attempt.parsed;
           throw new Error(attempt.text || `API error ${attempt.res.status}`);
         }
       }
+    } else {
+      console.log(`[Pacifica] agent-path SKIP: signWithAgentKey not exposed (hook not ready or no wallet)`);
     }
 
     const hasAdapter = !!(publicKey && signMessage);
     const hasPrivy = !!(privyActive && privySignMessage && privyWalletObj);
-    if (!hasAdapter && !hasPrivy) throw new Error('Wallet not connected');
+    if (!hasAdapter && !hasPrivy) {
+      console.error(`[Pacifica] master-path ABORT: no signing method available`, { hasAdapter, hasPrivy, adapterName, privyActive, inFC });
+      throw new Error('Wallet not connected');
+    }
+    if (hasAdapter && !hasPrivy && PACIFICA_INCOMPATIBLE_WALLETS.has(adapterName)) {
+      console.error(`[Pacifica] master-path ABORT: incompatible adapter "${adapterName}". Pacifica's Ed25519 verifier cannot verify signatures from this wallet.`);
+      throw new Error(`${adapterName} on Solana is not supported by Pacifica. Please connect Phantom or Solflare.`);
+    }
 
     const account = publicKey ? publicKey.toBase58() : privyAddr;
     const message = buildMessage(type, payload);
     const msgBytes = new TextEncoder().encode(message);
     let sigBytes;
+    let signSubpath = null;
 
     // In Farcaster frame: sign via SDK provider with base64 (bypasses broken UTF-8 path)
-    if (isFarcasterFrame()) {
-      sigBytes = await fcSignMessage(msgBytes);
+    if (inFC) {
+      signSubpath = 'farcaster-sdk';
+      console.log(`[Pacifica] master-path: signing via Farcaster SDK`);
+      try {
+        sigBytes = await fcSignMessage(msgBytes);
+      } catch (e) {
+        console.error(`[Pacifica] Farcaster signMessage threw`, { error: e?.message, name: e?.name });
+        throw e;
+      }
     }
 
     // Privy embedded wallet path (email login, no adapter)
     if (!sigBytes && privyActive && privySignMessage && privyWalletObj) {
+      signSubpath = 'privy';
+      console.log(`[Pacifica] master-path: signing via Privy embedded (silent — no popup)`);
       try {
         const result = await privySignMessage({ message: msgBytes, wallet: privyWalletObj });
-        // Privy returns { signature: Uint8Array } in recent versions; older SDK returned raw Uint8Array.
         sigBytes = result?.signature || result;
       } catch (e) {
+        console.error(`[Pacifica] Privy signMessage threw`, { error: e?.message, name: e?.name });
         if (e?.message?.includes('rejected') || e?.message?.includes('cancelled')) {
           throw new Error('Signature rejected');
         }
@@ -353,14 +430,22 @@ export function usePacifica() {
 
     // Standard wallet-adapter signMessage (Phantom, etc.)
     if (!sigBytes && hasAdapter) {
+      signSubpath = `adapter:${adapterName}`;
+      console.log(`[Pacifica] master-path: signing via adapter "${adapterName}" (popup EXPECTED — user must Approve)`);
       try {
         sigBytes = await signMessage(msgBytes);
+        console.log(`[Pacifica] master-path: adapter returned signature, ${sigBytes?.length || 0} bytes`);
       } catch (e) {
-        if (e.message?.includes('UserKeyring') || e.message?.includes('rejected')) {
-          throw new Error('Please unlock your wallet and try again');
+        console.error(`[Pacifica] adapter signMessage threw`, { error: e?.message, name: e?.name, code: e?.code, stack: e?.stack?.split('\n').slice(0,3) });
+        if (e.message?.includes('UserKeyring') || e.message?.includes('rejected') || e.message?.includes('Approval Denied') || e.message?.includes('User rejected')) {
+          throw new Error('You declined the wallet signature. Tap Approve in your wallet to enable trading.');
         }
         throw e;
       }
+    }
+    if (!sigBytes) {
+      console.error(`[Pacifica] master-path: NO signature produced (subpath=${signSubpath})`);
+      throw new Error('No signature produced');
     }
 
     const signature = bs58.encode(sigBytes);
@@ -373,6 +458,7 @@ export function usePacifica() {
       ...payload,
     };
 
+    console.log(`[Pacifica] ${type} → ${endpoint} (path=master, wallet=${walletKind})`);
     const res = await fetch(`${API}${endpoint}`, {
       method,
       headers: { 'Content-Type': 'application/json' },
@@ -381,8 +467,12 @@ export function usePacifica() {
     const text = await res.text();
     try {
       const json = JSON.parse(text);
+      if (!res.ok || json?.error || json?.code >= 400) {
+        console.warn(`[Pacifica] ${type} master-path FAIL ${res.status}`, { body: json, sent: body, signedMessage: message });
+      }
       return json;
     } catch {
+      console.warn(`[Pacifica] ${type} master-path non-JSON ${res.status}`, { body: text, sent: body, signedMessage: message });
       // Farcaster wallet signMessage is not compatible with Pacifica verification
       if (text.includes('erification failed')) {
         throw new Error('Signature verification failed. Connect Phantom or another Solana wallet to trade.');
