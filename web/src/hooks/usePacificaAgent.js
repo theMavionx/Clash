@@ -30,6 +30,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import bs58 from 'bs58';
 import { ed25519 } from '@noble/curves/ed25519';
+// Share the clock-skew compensation with usePacifica.js so agent-signed
+// timestamps stay aligned with master-signed ones. Lives in lib/ rather than
+// usePacifica to avoid a circular import.
+import { pacificaNow } from '../lib/pacificaTime';
 
 const API = 'https://api.pacifica.fi/api/v1';
 // How long we keep an agent wallet stored client-side. Pacifica itself
@@ -44,9 +48,11 @@ function storageKeyFor(master) {
   return `clash_pacifica_agent:${master}`;
 }
 
-function buildMessage(type, payload, timestamp = Date.now()) {
+function buildMessage(type, payload, timestamp = pacificaNow()) {
   // Same canonical shape Pacifica uses everywhere: sorted keys, compact
-  // JSON, header-fields plus `data: payload`.
+  // JSON, header-fields plus `data: payload`. Default timestamp goes through
+  // pacificaNow() so the offset captured from `Date` headers in usePacifica
+  // is applied here too.
   const header = { type, timestamp, expiry_window: 5000 };
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
@@ -123,7 +129,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
       const { secret, pubkey } = generateAgentKeypair();
       const agentPubkeyB58 = bs58.encode(pubkey);
 
-      const timestamp = Date.now();
+      const timestamp = pacificaNow();
       const message = buildMessage(
         'bind_agent_wallet',
         { agent_wallet: agentPubkeyB58 },
@@ -190,7 +196,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
   const signWithAgentKey = useCallback((type, payload) => {
     const cur = agentRef.current;
     if (!cur || !walletAddr) return null;
-    const timestamp = Date.now();
+    const timestamp = pacificaNow();
     const message = buildMessage(type, payload, timestamp);
     const signature = signWithAgent(cur.secret, message);
     return {
@@ -219,7 +225,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
     const cur = agentRef.current;
     if (!cur) { forgetLocally(); return true; }
     try {
-      const timestamp = Date.now();
+      const timestamp = pacificaNow();
       const message = buildMessage(
         'revoke_agent_wallet',
         { agent_wallet: cur.agentPubkey },

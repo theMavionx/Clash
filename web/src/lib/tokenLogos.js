@@ -32,12 +32,15 @@ const LOCAL_ALIASES = {
   RNDR: ['RENDER'],
   RENDER: ['RNDR'],
   WTI: ['CL'],
+  WTIOIL: ['WTI', 'CL'],
   BRENT: ['CL'],
   USOILSPOT: ['CL'],
   GOLD: ['XAU'],
   SILVER: ['XAG'],
   XAU: ['GOLD'],
   XAG: ['SILVER'],
+  // Pacifica-specific quote-suffixed perp; share the base SOL icon.
+  SOLUSDC: ['SOL'],
 };
 
 const COINGECKO_LOGOS = {

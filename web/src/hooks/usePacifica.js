@@ -7,6 +7,7 @@ import { isFarcasterFrame } from './useFarcaster';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
+import { pacificaNow, setPacificaServerTimeFromDateHeader } from '../lib/pacificaTime';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -74,7 +75,7 @@ function sortKeys(v) {
 }
 
 function buildMessage(type, payload) {
-  const header = { type, timestamp: Date.now(), expiry_window: 5000 };
+  const header = { type, timestamp: pacificaNow(), expiry_window: 5000 };
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
 
@@ -330,6 +331,7 @@ export function usePacifica() {
           res = await fetch(`${API}${endpoint}`, {
             method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
           });
+          setPacificaServerTimeFromDateHeader(res.headers.get('Date'));
           text = await res.text();
           try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
         } catch (netErr) {
@@ -337,7 +339,12 @@ export function usePacifica() {
           throw netErr;
         }
         if (!res.ok || parsed?.error || parsed?.code >= 400) {
-          console.warn(`[Pacifica] ${type} agent-path FAIL status=${res.status} reason="${parsed?.error || text || '(empty)'}"`, { body: parsed ?? text, sent: body });
+          console.warn(`[Pacifica] ${type} agent-path FAIL status=${res.status} reason="${parsed?.error || text || '(empty)'}"`, {
+            responseBody: parsed ?? text,
+            responseHeaders: Object.fromEntries(res.headers.entries()),
+            sentBodyJSON: JSON.stringify(body),
+            sentBodyObj: body,
+          });
         } else {
           console.log(`[Pacifica] ${type} agent-path OK status=${res.status}`);
         }
@@ -458,28 +465,59 @@ export function usePacifica() {
       ...payload,
     };
 
+    // Diagnostic: dump the EXACT bytes signed and the encoded signature so we
+    // can compare what the wallet signed vs. what Pacifica reconstructs server-
+    // side. Critical for diagnosing wallets (Backpack, MetaMask Snap, …) that
+    // wrap the message before signing.
+    console.log(`[Pacifica] ${type} master-path SIGNED`, {
+      signedMessage: message,
+      signedMessageLength: msgBytes.length,
+      signatureBase58: signature,
+      signatureLength: sigBytes.length,
+      account,
+      adapter: signSubpath,
+    });
     console.log(`[Pacifica] ${type} → ${endpoint} (path=master, wallet=${walletKind})`);
     const res = await fetch(`${API}${endpoint}`, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    setPacificaServerTimeFromDateHeader(res.headers.get('Date'));
     const text = await res.text();
+    const responseHeaders = Object.fromEntries(res.headers.entries());
     try {
       const json = JSON.parse(text);
       if (!res.ok || json?.error || json?.code >= 400) {
-        console.warn(`[Pacifica] ${type} master-path FAIL ${res.status}`, { body: json, sent: body, signedMessage: message });
+        console.warn(`[Pacifica] ${type} master-path FAIL ${res.status}`, {
+          responseBody: json,
+          responseHeaders,
+          sentBodyJSON: JSON.stringify(body),
+          sentBodyObj: body,
+          signedMessage: message,
+        });
       }
       return json;
     } catch {
-      console.warn(`[Pacifica] ${type} master-path non-JSON ${res.status}`, { body: text, sent: body, signedMessage: message });
+      console.warn(`[Pacifica] ${type} master-path non-JSON ${res.status}`, {
+        responseBody: text,
+        responseHeaders,
+        sentBodyJSON: JSON.stringify(body),
+        sentBodyObj: body,
+        signedMessage: message,
+      });
       // Farcaster wallet signMessage is not compatible with Pacifica verification
       if (text.includes('erification failed')) {
         throw new Error('Signature verification failed. Connect Phantom or another Solana wallet to trade.');
       }
-      throw new Error(text || `API error ${res.status}`);
+      // Pacifica sometimes responds with plain-text "Invalid message" (status
+      // 400) instead of structured JSON when the signed payload fails an
+      // upstream check — e.g. unapproved builder_code, clock-skewed timestamp,
+      // missing referral. Surface a synthetic JSON-shaped error so the
+      // activation/retry layer above can react to it instead of bailing.
+      return { error: text || `API error ${res.status}`, code: res.status, _nonJson: true };
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey, bindAgent, forgetAgentLocally]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
@@ -494,13 +532,48 @@ export function usePacifica() {
     } catch {}
   }, [walletAddr, signedRequest]);
 
-  // Auto-activate: retry on 403 — wraps signedRequest with activation fallback
+  // Auto-activate: retry on 403 OR opaque 400 — wraps signedRequest with
+  // activation fallback. Pacifica returns plain-text "Invalid message" (400)
+  // for several first-trade conditions (unapproved builder_code, missing
+  // referral claim, clock-skewed timestamp). signedRequest now surfaces those
+  // as { error, code, _nonJson:true } so we can run activation once and retry
+  // before giving up.
+  // Pacifica REQUIRES `builder_code` to be pre-approved by the master wallet
+  // before any signed trade endpoint (orders/create_market, account/leverage,
+  // …) will accept the request. Empirically: ~95% of new users never get
+  // their builder code approved (Pacifica returns 400 with various error
+  // shapes — sometimes JSON, sometimes plain text — and the lazy retry below
+  // misses the plain-text variants). So we PRE-FLIGHT activate() on the very
+  // first signed call in a session, before the actual request goes out.
+  // After preflight succeeds, every subsequent call goes direct.
   const activatedRef = useRef(false);
+  const activatingRef = useRef(null); // Promise|null — coalesce concurrent first-callers
   const signedRequestWithActivation = useCallback(async (method, endpoint, type, payload) => {
+    // Preflight: ensure builder_code + referral are claimed before the real
+    // request. Skip for the activation requests themselves to avoid recursion.
+    const isActivationCall = type === 'claim_referral_code' || type === 'approve_builder_code';
+    if (!isActivationCall && !activatedRef.current) {
+      if (!activatingRef.current) {
+        console.log(`[Pacifica] preflight activate() — first signed call (${type})`);
+        activatingRef.current = (async () => {
+          try { await activate(); }
+          finally { activatedRef.current = true; activatingRef.current = null; }
+        })();
+      }
+      await activatingRef.current;
+    }
+
     const res = await signedRequest(method, endpoint, type, payload);
-    const needsActivation = res.code === 403 || res.error?.includes('not approved') || res.error?.includes('builder code');
-    if (needsActivation && !activatedRef.current) {
-      activatedRef.current = true;
+    // Reactive safety net — if for some reason preflight didn't cover it
+    // (race with cached activatedRef from prior session, server-side state
+    // diff, etc.), still react to a 403/not-approved/builder-code reply.
+    const errStr = String(res?.error || '');
+    const needsRetryActivation =
+      res?.code === 403 ||
+      /not approved|builder code/i.test(errStr) ||
+      (res?._nonJson && res?.code === 400 && /invalid message/i.test(errStr));
+    if (needsRetryActivation && !isActivationCall) {
+      console.log(`[Pacifica] reactive activate() retry — ${type} returned ${res?.code} "${errStr}"`);
       await activate();
       return signedRequest(method, endpoint, type, payload);
     }
@@ -510,7 +583,13 @@ export function usePacifica() {
   // ---------- Market Data (public) ----------
   const fetchMarkets = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/info`).then(r => r.json());
+      const r = await fetch(`${API}/info`);
+      // Warm the clock-skew offset BEFORE any signed request fires. fetchMarkets
+      // runs on mount, so by the time the user clicks LONG/SHORT we already
+      // have an accurate Pacifica-clock baseline even if their local clock is
+      // unsynced.
+      setPacificaServerTimeFromDateHeader(r.headers.get('Date'));
+      const res = await r.json();
       if (res.data) { setMarkets(res.data); marketsRef.current = res.data; }
     } catch {}
   }, []);
