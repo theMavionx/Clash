@@ -152,7 +152,7 @@ function start() {
   let mainDb;
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
-    mainDb.pragma('journal_mode = WAL');
+    try { mainDb.pragma('journal_mode = WAL'); } catch {}
   } catch (e) {
     console.error('[decibel-rewards-worker] Cannot open main DB:', e.message, '— worker disabled.');
     return;

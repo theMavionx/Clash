@@ -12,6 +12,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
+import EvmWalletModal from './EvmWalletModal';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -25,7 +26,7 @@ function ProfileModal({ onClose }) {
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
-  const { disconnect: evmDisconnect } = useEvmWallet();
+  const { disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
   const { disconnect: aptosDisconnect } = useAptosWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
@@ -38,6 +39,7 @@ function ProfileModal({ onClose }) {
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [evmModalOpen, setEvmModalOpen] = useState(false);
 
   // Privy logout — hook only called when provider is mounted (build-time flag).
   let privyLogout = null, privyAuthed = false;
@@ -95,6 +97,11 @@ function ProfileModal({ onClose }) {
   const handleDisconnect = async () => {
     await logoutEverything();
     onClose();
+  };
+
+  const handleEvmConnected = ({ address, provider, rdns }) => {
+    setEvmModalOpen(false);
+    if (provider && address) setEvmProvider(provider, address, rdns, 'external');
   };
 
   const { buildingDefs } = useBuildingDefs();
@@ -324,24 +331,10 @@ function ProfileModal({ onClose }) {
               </div>
             </div>
           ) : dex === 'avantis' ? (
-            <div style={{
-              padding: '12px 14px', borderRadius: 14,
-              background: 'linear-gradient(180deg, #E3F2FD 0%, #BBDEFB 100%)',
-              border: '3px solid #0284C7',
-              boxShadow: '0 3px 0 #0284C7, 0 4px 8px rgba(0,0,0,0.15)',
-              textAlign: 'center',
-            }}>
-              <div style={{
-                fontSize: 13, fontWeight: 900, color: '#0369A1',
-                letterSpacing: '0.5px',
-              }}>⚡ PROVISIONING BASE WALLET…</div>
-              <div style={{
-                fontSize: 11, fontWeight: 700,
-                color: '#0369A1', opacity: 0.85, marginTop: 3,
-              }}>
-                First trade creates your custodial wallet automatically.
-              </div>
-            </div>
+            <button
+              style={{...cartoonBtn('#0284C7', '#0369A1'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT BASE WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -349,7 +342,7 @@ function ProfileModal({ onClose }) {
             >CONNECT WALLET</button>
           )}
 
-          {/* Avantis custodial deposit callout */}
+          {/* Avantis self-custody funding callout */}
           {dex === 'avantis' && activeWallet && (
             <div style={{
               padding: '12px 14px', borderRadius: 14,
@@ -452,6 +445,11 @@ function ProfileModal({ onClose }) {
           )}
         </div>
       </div>
+      <EvmWalletModal
+        open={evmModalOpen}
+        onClose={() => setEvmModalOpen(false)}
+        onConnected={handleEvmConnected}
+      />
     </>
   );
 }

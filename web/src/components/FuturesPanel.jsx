@@ -24,6 +24,7 @@ import QuestsTab from './QuestsTab';
 import TradeIdeaModal from './TradeIdeaModal';
 import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
+import TokenIcon from './TokenIcon';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -50,150 +51,6 @@ const fmtPrice = (p) => {
   if (p >= 0.0001) return p.toFixed(6);
   // Sub-cent (SHIB, POPCAT, etc.) → 3-sig-fig scientific: "6.31e-6"
   return p.toExponential(2);
-};
-
-// Token icons — served locally from /tokens/{SYM}.png
-const TOKEN_COLORS = {
-  BTC:'#F7931A',ETH:'#627EEA',SOL:'#9945FF',DOGE:'#C2A633',XRP:'#23292F',
-  SUI:'#4DA2FF',TRUMP:'#FFD700',BNB:'#F3BA2F',HYPE:'#00D4AA',ENA:'#7C3AED',
-  PAXG:'#E4CE4F',ZEC:'#F4B728',XMR:'#FF6600',AVAX:'#E84142',ADA:'#0033AD',
-  DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
-  GOLD:'#FFD700',SILVER:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
-};
-// US equities known to have Parqet logo coverage (verified by probing).
-const STOCK_SYMBOLS = new Set([
-  'AAPL','AMZN','MSFT','NVDA','TSLA','GOOGL','GOOG','META','NFLX','AMD',
-  'COIN','HOOD','MSTR','INTC','SPY','QQQ','DIS','IBM','ORCL','PYPL',
-  'PLTR','SMCI','GME','BA','WMT','MCD','SBUX','BABA','KO','PEP',
-  'JPM','BAC','GS','WFC','V','MA','CRCL',
-]);
-// Commodities map — only ones Parqet actually serves (verified via probe).
-// BRENT/WTI/USOILSPOT 404 there, so we skip the dead hop and go to letter
-// fallback instead. Add locally in /tokens/ if we want logos for those.
-const COMMODITY_SYMBOLS = new Set(['CL','COPPER','GOLD','SILVER','NATGAS']);
-
-// Canonicalise a display symbol (strip "/USD" pair suffix, upper-case) so
-// lookup keys are stable no matter which hook produced the value.
-function canonSym(sym) {
-  return String(sym || '').toUpperCase().split('/')[0].trim();
-}
-
-// Persisted logo cache. Module-level Maps are rehydrated from localStorage so
-// a returning user doesn't re-probe CDNs for every symbol on every page load.
-// Shape in storage: { [sym]: { url: string | null, ts: number } }
-//   url === null means "all sources 404'd — show letter fallback"
-//   url === 'string' means "this URL resolved, use it"
-// TTL = 7 days so we pick up new icons eventually without being aggressive.
-const LOGO_CACHE_KEY = 'clash_token_logos_v1';
-const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-const logoCache = new Map(); // sym → url
-const logoFailed = new Set(); // sym → tried everything, no logo
-
-(function hydrateLogoCacheFromStorage() {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    const raw = localStorage.getItem(LOGO_CACHE_KEY);
-    if (!raw) return;
-    const obj = JSON.parse(raw);
-    const now = Date.now();
-    for (const [sym, entry] of Object.entries(obj || {})) {
-      if (!entry || typeof entry !== 'object') continue;
-      if (now - (entry.ts || 0) > LOGO_CACHE_TTL_MS) continue; // expired
-      if (entry.url) logoCache.set(sym, entry.url);
-      else logoFailed.add(sym);
-    }
-  } catch {}
-})();
-
-// Debounced writer — avoid thrashing localStorage on every image onload.
-let logoPersistTimer = null;
-function persistLogoCache() {
-  if (typeof localStorage === 'undefined') return;
-  if (logoPersistTimer) clearTimeout(logoPersistTimer);
-  logoPersistTimer = setTimeout(() => {
-    try {
-      const obj = {};
-      const now = Date.now();
-      for (const [sym, url] of logoCache) obj[sym] = { url, ts: now };
-      for (const sym of logoFailed) if (!(sym in obj)) obj[sym] = { url: null, ts: now };
-      localStorage.setItem(LOGO_CACHE_KEY, JSON.stringify(obj));
-    } catch {}
-  }, 500);
-}
-
-function tokenLogoSources(sym) {
-  const s = canonSym(sym);
-  const low = s.toLowerCase();
-  const srcs = [
-    `/tokens/${s}.svg`,
-    `/tokens/${s}.png`,
-  ];
-  if (STOCK_SYMBOLS.has(s) || COMMODITY_SYMBOLS.has(s)) {
-    // Parqet covers US equities + major commodities (verified by probing).
-    srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
-  } else {
-    // Crypto: Coincap PNG covers ~53% of Avantis symbols. jsDelivr/spothq
-    // added 0 extra coverage in the probe, so it was removed.
-    srcs.push(`https://assets.coincap.io/assets/icons/${low}@2x.png`);
-  }
-  return srcs;
-}
-
-const TokenIcon = ({sym, size = 20}) => {
-  const canon = canonSym(sym);
-  const bg = TOKEN_COLORS[canon] || '#a3906a';
-
-  // Resolved from cache? Skip straight to the image.
-  const cached = logoCache.get(canon);
-  const [srcIdx, setSrcIdx] = useState(0);
-  const [failed, setFailed] = useState(logoFailed.has(canon));
-
-  // Rebuild sources once per symbol (not every render) to avoid thrash.
-  const sources = useMemo(() => (cached ? [cached] : tokenLogoSources(canon)), [canon, cached]);
-
-  useEffect(() => {
-    setSrcIdx(0);
-    setFailed(logoFailed.has(canon));
-  }, [canon]);
-
-  const onImgError = useCallback(() => {
-    if (srcIdx < sources.length - 1) {
-      setSrcIdx(srcIdx + 1);
-    } else {
-      logoFailed.add(canon);
-      persistLogoCache();
-      setFailed(true);
-    }
-  }, [srcIdx, sources.length, canon]);
-
-  const onImgLoad = useCallback(() => {
-    const url = sources[srcIdx];
-    if (!url) return;
-    if (logoCache.get(canon) === url) return;
-    logoCache.set(canon, url);
-    persistLogoCache();
-  }, [sources, srcIdx, canon]);
-
-  return (
-    <div style={{width: size, height: size, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden'}}>
-      {!failed ? (
-        <img
-          src={sources[srcIdx]}
-          alt=""
-          width={size}
-          height={size}
-          style={{borderRadius: '50%', objectFit: 'cover'}}
-          onError={onImgError}
-          onLoad={onImgLoad}
-        />
-      ) : (
-        <span style={{fontSize: size * 0.5, fontWeight: 900, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>
-          {canon.charAt(0)}
-        </span>
-      )}
-    </div>
-  );
 };
 
 const SignalIcon = ({ type, size = 14 }) => {
@@ -469,7 +326,7 @@ const SymbolPicker = memo(function SymbolPicker({ markets, prices, symbol, onSel
         // Prefer the human-readable pair ("USD/JPY") when present; falls back
         // to the symbol key for legacy Pacifica markets that only ship base.
         label: m.pair || m.symbol,
-        iconSym: m.base || m.symbol,
+        iconSym: m.icon_symbol || m.base || m.symbol,
         maxLev: m.max_leverage,
         mark,
         change,
@@ -881,7 +738,7 @@ function FuturesPanel() {
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer,
+    hasReferrer, linkOurReferrer, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -1266,26 +1123,11 @@ function FuturesPanel() {
           );
           return;
         }
-        // USDC mode: compute collateral from the LOT-ROUNDED tokenAmount so
-        // the "≈ 0.00132 BTC" UI readout matches what the contract actually
-        // opens. Previously used the un-rounded `amount`, producing a trade
-        // slightly larger than displayed (margin × leverage / price was
-        // rounded down for the token qty but full for the collateral).
-        let collateralUsdc;
-        if (amountInUsdc) {
-          if (price > 0 && tokenAmount) {
-            const tokAmt = parseFloat(tokenAmount);
-            if (Number.isFinite(tokAmt) && tokAmt > 0) {
-              collateralUsdc = (tokAmt * price) / leverage;
-            } else {
-              collateralUsdc = parseFloat(amount);
-            }
-          } else {
-            collateralUsdc = parseFloat(amount);
-          }
-        } else {
-          collateralUsdc = price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0;
-        }
+        // Avantis and Decibel hooks take USDC collateral directly. The token
+        // readout is display math, so do not round collateral through it.
+        const collateralUsdc = amountInUsdc
+          ? parseFloat(amount)
+          : (price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0);
         qty = String(collateralUsdc.toFixed(6));
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
@@ -1345,7 +1187,7 @@ function FuturesPanel() {
     <>
       <div style={{...S.symbolBar, ...(fullscreen ? {background: '#e8dfc8', borderBottom: '3px solid #d4c8b0'} : {})}}>
         <button style={{...S.symbolBtn, padding: '6px 10px', gap: 6, whiteSpace: 'nowrap', flexShrink: 0}} onClick={() => setShowSymbolPicker(!showSymbolPicker)} data-nodrag>
-          <TokenIcon sym={symbol} size={20} />
+          <TokenIcon sym={currentMarket?.icon_symbol || currentMarket?.base || symbol} size={20} />
           <span style={{fontSize: 15, fontWeight: 900}}>{symbol}</span>
           {(() => {
             const loaded = elfaSignals && Object.keys(elfaSignals).length > 0;
@@ -1617,6 +1459,52 @@ function FuturesPanel() {
   }, [orders, btmFilters]);
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
+
+  // ==================== WRONG AVANTIS WALLET ====================
+  if (dex === 'avantis' && walletMismatch) {
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Futures Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 16, textAlign: 'center'}}>
+            <div style={{
+              width: 58, height: 58, borderRadius: '50%',
+              background: '#F59E0B', color: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 36, fontWeight: 900,
+              boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
+            }}>!</div>
+            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>Wrong Base wallet</div>
+            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
+              This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
+            </div>
+            <button
+              style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 28px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >
+              SWITCH WALLET
+            </button>
+          </div>
+        </div>
+        <EvmWalletModal
+          open={evmModalOpen}
+          onClose={() => setEvmModalOpen(false)}
+          onConnected={handleEvmConnected}
+        />
+      </>
+    );
+  }
 
   // ==================== NOT CONNECTED (skip in Farcaster — wallet auto-connects) ====================
   if (!hasWallet && !inFrame) {

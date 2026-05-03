@@ -38,7 +38,7 @@ function ensureMainDb() {
   if (mainDb) return;
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
-    mainDb.pragma('journal_mode = WAL');
+    try { mainDb.pragma('journal_mode = WAL'); } catch {}
     // Also pull the player's saved DEX — used to reject client-header spoof.
     playerByTokenStmt = mainDb.prepare('SELECT id, name, wallet, dex FROM players WHERE token = ?');
   } catch (e) {
@@ -81,6 +81,11 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
+    if (req.dex === 'avantis') {
+      return res.status(410).json({
+        error: 'Avantis is self-custody now. Connect a Base wallet in the client instead.',
+      });
+    }
     const isAvantis = req.dex === 'avantis';
     const generateFn = isAvantis ? avantis.generateWallet : pacifica.generateWallet;
     const chain = isAvantis ? 'base' : 'solana';
@@ -106,6 +111,11 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
+  if (req.dex === 'avantis') {
+    return res.status(410).json({
+      error: 'Avantis is self-custody now. Connect a Base wallet in the client instead.',
+    });
+  }
   const wallet = db.getWallet(req.playerId, req.dex);
   if (!wallet) return res.status(404).json({ error: 'No wallet found. Call POST /wallet first.' });
   res.json({ public_key: wallet.public_key, dex: req.dex, chain: wallet.chain });
@@ -649,11 +659,83 @@ router.get('/history', auth, (req, res) => {
 });
 
 // ==================== TRADE REPORT (non-custodial: Avantis, Decibel) ====================
-// Client reports are accepted for backwards-compatible UI flow, but they are
-// not rewardable. The per-DEX rewards worker polls the upstream venue and
-// records `verified_source='worker'` rows that /claim-gold reads.
+// Client reports are accepted for backwards-compatible UI flow. Browser-only
+// payloads are not rewardable; market opens on Avantis are immediately
+// re-read from Core API and recorded as `verified_source='worker'`. Everything
+// else is picked up by the per-DEX rewards workers.
 const TRADE_REPORT_DEXES = new Set(['avantis', 'decibel']);
-router.post('/trade-report', auth, (req, res) => {
+
+function avantisCollateralUsd(row) {
+  const raw = row?.collateral ?? row?.trade?.positionSizeUSDC ?? row?.positionSizeUSDC ?? row?.trade?.initialPosToken;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > 10000 ? n / 1e6 : n;
+}
+
+function avantisLeverage(row) {
+  const n = Number(row?.leverage ?? row?.trade?.leverage ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return n > 10000 ? n / 1e10 : n;
+}
+
+function avantisBool(v) {
+  if (v === true || v === 1 || v === '1') return true;
+  if (typeof v === 'string') return v.toLowerCase() === 'true';
+  return false;
+}
+
+async function recordVerifiedAvantisOpen(req, body) {
+  const orderType = String(body.order_type || 'market').toLowerCase();
+  if (orderType !== 'market') return false;
+  const dedup = String(body.dedup_key || '').trim();
+  const m = dedup.match(/^avantis:open:(0x[0-9a-fA-F]{40}):(\d+):(\d+)$/);
+  if (!m) return false;
+  const address = String(body.address || '').trim().toLowerCase();
+  const dedupAddress = m[1].toLowerCase();
+  if (address !== dedupAddress) return false;
+  const pairIdx = Number(m[2]);
+  const tradeIdx = Number(m[3]);
+  let hit = null;
+  for (let i = 0; i < 6 && !hit; i++) {
+    const positions = await avantis.getPositionsByAddress(address);
+    hit = positions.find(p =>
+      Number(p?.pairIndex ?? p?.pair_index ?? p?.trade?.pairIndex) === pairIdx
+      && Number(p?.index ?? p?.trade?.index) === tradeIdx
+    );
+    if (!hit) await new Promise(r => setTimeout(r, 1000));
+  }
+  if (!hit) return false;
+  const collateral = avantisCollateralUsd(hit);
+  const lev = avantisLeverage(hit);
+  const notional = collateral * lev;
+  if (!Number.isFinite(notional) || notional < 50 || notional > 10_000_000) return false;
+  const side = avantisBool(hit.buy ?? hit.trade?.buy) ? 'long' : 'short';
+  let symbol = String(body.symbol || '').toUpperCase();
+  try {
+    const { indexMap } = await avantis.getPairsMap();
+    const p = indexMap?.[pairIdx];
+    if (p?.from) {
+      const from = String(p.from).toUpperCase();
+      const to = String(p.to || 'USD').toUpperCase();
+      symbol = from === 'USD' && to && to !== 'USD' ? `${from}${to}` : from;
+    }
+  } catch {}
+  db.addTrade(req.playerId, {
+    symbol,
+    side,
+    orderType: 'market',
+    amount: String(collateral),
+    orderId: dedup,
+    clientOrderId: dedup,
+    status: 'filled',
+    dex: 'avantis',
+    notional_usd: notional,
+    verifiedSource: 'worker',
+  });
+  return true;
+}
+
+router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
       return res.status(400).json({ error: 'trade-report is for self-custody DEXes only' });
@@ -685,11 +767,38 @@ router.post('/trade-report', auth, (req, res) => {
     if (!Number.isFinite(notional) || notional < 0 || notional > 10_000_000) {
       return res.status(400).json({ error: 'notional out of range' });
     }
+    if (req.dex === 'avantis') {
+      const address = String(req.body?.address || '').trim();
+      const current = String(req.playerWallet || '').trim();
+      const needsWallet = !/^0x[0-9a-fA-F]{40}$/.test(current) || /^fc_/i.test(current);
+      if (/^0x[0-9a-fA-F]{40}$/.test(address) && needsWallet) {
+        let writeDb = null;
+        try {
+          writeDb = new Database(MAIN_DB_PATH, { fileMustExist: true });
+          writeDb.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(address, req.playerId);
+          writeDb.prepare('UPDATE trading_rewards SET wallet = ? WHERE player_id = ? AND dex = ?').run(address, req.playerId, 'avantis');
+        } catch (e) {
+          console.warn('[trade-report] failed to backfill Avantis wallet:', e.message);
+        } finally {
+          try { writeDb?.close(); } catch {}
+        }
+      }
+    }
     // Do not write rewardable Avantis rows from the browser. A valid game token
     // proves account ownership, not that tx_hash/amount/leverage happened on
-    // chain. The rewards worker records verified rows from Avantis Core API
-    // with verified_source='worker', and /claim-gold only credits those rows.
-    res.json({ ok: true, verified: false, credited: false, reason: 'Trade report accepted; rewards are credited after worker verification.' });
+    // chain. For Avantis market opens we can cheaply verify against Core API
+    // immediately; everything else still waits for the polling worker.
+    const verified = req.dex === 'avantis'
+      ? await recordVerifiedAvantisOpen(req, req.body || {})
+      : false;
+    res.json({
+      ok: true,
+      verified,
+      credited: false,
+      reason: verified
+        ? 'Trade verified from Avantis Core API; rewards are ready to claim.'
+        : 'Trade report accepted; rewards are credited after worker verification.',
+    });
   } catch (e) {
     console.error('Trade report error:', e);
     res.status(500).json({ error: 'Failed to record trade' });

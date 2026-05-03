@@ -1,30 +1,5 @@
 import { memo, useRef, useEffect, useState } from 'react';
-
-// Token icons logic
-const TOKEN_COLORS = {
-  BTC:'#F7931A',ETH:'#627EEA',SOL:'#9945FF',DOGE:'#C2A633',XRP:'#23292F',
-  SUI:'#4DA2FF',TRUMP:'#FFD700',BNB:'#F3BA2F',HYPE:'#00D4AA',ENA:'#7C3AED',
-  PAXG:'#E4CE4F',ZEC:'#F4B728',XMR:'#FF6600',AVAX:'#E84142',ADA:'#0033AD',
-  DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
-  GOLD:'#FFD700',SILVER:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
-};
-const TokenIcon = ({sym, size = 20}) => {
-  const bg = TOKEN_COLORS[sym] || '#a3906a';
-  return (
-    <div style={{width: size, height: size, borderRadius: '50%', background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden'}}>
-      <img src={`/tokens/${sym}.svg`} alt="" width={size} height={size} style={{borderRadius: '50%'}}
-        onError={e => {
-          if (e.target.src.endsWith('.svg')) {
-            e.target.src = `/tokens/${sym}.png`;
-          } else {
-            e.target.style.display='none';
-            e.target.nextSibling.style.display='flex';
-          }
-        }} />
-      <span style={{display: 'none', fontSize: size * 0.5, fontWeight: 900, color: '#fff', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%'}}>{sym.charAt(0)}</span>
-    </div>
-  );
-};
+import TokenIcon from './TokenIcon';
 
 function FilterPopup({ visible, onClose, filters, onChange, symbols, showSide, sortOptions }) {
   const ref = useRef(null);

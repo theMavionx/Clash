@@ -254,16 +254,20 @@ export async function fetchExecutionFeeWei(publicClient) {
 
 // ───── Next free trade slot per pair ───────────────────────────────
 // Avantis allows up to 3 (or more) simultaneous trades per pair per trader.
-// Core API's /user-data lists current open trades; we pick the first
-// unused (0..N-1) slot. Defaults to 0 if Core is unreachable.
+// Core API's /user-data lists current open trades and pending limit orders;
+// both reserve a per-pair index. We pick the first unused slot. Defaults to 0
+// if Core is unreachable, which lets the contract be the final arbiter.
 export async function fetchNextTradeIndex(trader, pairIndex) {
   try {
     const res = await fetch(`${CORE_API}/user-data?trader=${trader}`);
     if (!res.ok) return 0;
     const data = await res.json();
-    const positions = data?.positions || [];
     const used = new Set();
-    for (const p of positions) {
+    const rows = [
+      ...(Array.isArray(data?.positions) ? data.positions : []),
+      ...(Array.isArray(data?.limitOrders) ? data.limitOrders : []),
+    ];
+    for (const p of rows) {
       const pi = Number(p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex);
       if (pi !== Number(pairIndex)) continue;
       // Flat `p.index` first — that's the verified live Core API shape. Fall

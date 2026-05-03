@@ -179,7 +179,7 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
 
 const M = {
   overlay: {
-    position: 'fixed', inset: 0, zIndex: 40,
+    position: 'fixed', inset: 0, zIndex: 1000,
     background: 'rgba(0,0,0,0.7)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     pointerEvents: 'all',

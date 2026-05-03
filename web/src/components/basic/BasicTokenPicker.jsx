@@ -2,83 +2,14 @@
 // 24h % rendered as a colored pill (green/red) so newcomers can read sentiment
 // at a glance without parsing numbers.
 
-import { memo, useMemo, useState, useEffect } from 'react';
+import { memo, useMemo, useState } from 'react';
 // eslint-disable-next-line no-unused-vars -- used as JSX namespace (`motion.button`), false positive
 import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
+import TokenIcon from '../TokenIcon';
 
 const PCT_GREEN = '#4caf50';
 const PCT_RED = '#e53935';
-
-// Brand-coloured fallback backgrounds matching the rest of the app
-// (FilterPopup / FuturesPanel use the same palette).
-const TOKEN_COLORS = {
-  BTC:'#F7931A',ETH:'#627EEA',SOL:'#9945FF',DOGE:'#C2A633',XRP:'#23292F',
-  SUI:'#4DA2FF',TRUMP:'#FFD700',BNB:'#F3BA2F',HYPE:'#00D4AA',ENA:'#7C3AED',
-  PAXG:'#E4CE4F',ZEC:'#F4B728',XMR:'#FF6600',AVAX:'#E84142',ADA:'#0033AD',
-  DOT:'#E6007A',LINK:'#2A5ADA',ARB:'#213147',OP:'#FF0420',NEAR:'#000',
-  XAU:'#FFD700',XAG:'#C0C0C0',CL:'#1a1a1a',NATGAS:'#4CAF50',
-};
-
-// Build the candidate-URL list for a symbol. Tries local first (svg/png
-// in /public/tokens/), then a public crypto CDN — covers tokens that
-// Pacifica adds dynamically without a corresponding local asset (CHIP,
-// new listings etc.) so the user sees a real logo instead of an "C"
-// fallback.
-function logoSources(sym) {
-  const s = String(sym || '').toUpperCase();
-  return [
-    `/tokens/${s}.svg`,
-    `/tokens/${s}.png`,
-    `https://assets.coincap.io/assets/icons/${s.toLowerCase()}@2x.png`,
-  ];
-}
-
-function TokenIcon({ sym, size = 28 }) {
-  const bg = TOKEN_COLORS[sym] || colors.inkFaint;
-  const sources = useMemo(() => logoSources(sym), [sym]);
-  const [idx, setIdx] = useState(0);
-  const [failed, setFailed] = useState(false);
-  // Reset state when symbol changes — TokenIcon may be reused via
-  // memoization for different tokens; without this the failed-state from
-  // a previous symbol could carry over.
-  useEffect(() => {
-    setIdx(0);
-    setFailed(false);
-  }, [sym]);
-
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%', background: bg,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      flexShrink: 0, overflow: 'hidden',
-    }}>
-      {!failed ? (
-        <img
-          src={sources[idx]}
-          alt=""
-          width={size} height={size}
-          style={{ borderRadius: '50%' }}
-          onError={() => {
-            if (idx < sources.length - 1) {
-              setIdx(idx + 1);
-            } else {
-              setFailed(true);
-            }
-          }}
-        />
-      ) : (
-        <span style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: '100%', height: '100%',
-          fontSize: size * 0.5, fontWeight: 900, color: '#fff',
-        }}>
-          {String(sym).charAt(0)}
-        </span>
-      )}
-    </div>
-  );
-}
 
 function pctColor(pct) {
   const n = Number(pct);
@@ -149,8 +80,7 @@ function BasicTokenPicker({ markets, prices, onPick }) {
         const change24h = yest > 0 ? ((mark - yest) / yest) * 100 : 0;
         return {
           symbol: m.symbol,
-          // Icon symbol = base token (e.g. "BTC" for "BTC-USD" market).
-          iconSym: m.base || m.symbol,
+          iconSym: m.icon_symbol || m.base || m.symbol,
           price: mark,
           change24h,
           volume: Number(p?.volume_24h || 0),

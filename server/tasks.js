@@ -24,7 +24,7 @@ function futuresDbReadonly() {
     const fpath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
     if (!require('fs').existsSync(fpath)) throw new Error('futures.db not found at ' + fpath);
     _futuresDb = new Database(fpath, { readonly: true, fileMustExist: true });
-    _futuresDb.pragma('journal_mode = WAL');
+    try { _futuresDb.pragma('journal_mode = WAL'); } catch {}
   } catch (e) {
     console.warn('[tasks] futures.db unavailable:', e.message);
     _futuresDb = 'unavailable';

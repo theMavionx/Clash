@@ -46,6 +46,12 @@ function tradeKey(p) {
   return `${pi}:${ti}`;
 }
 
+function coreBool(v) {
+  if (v === true || v === 1 || v === '1') return true;
+  if (typeof v === 'string') return v.toLowerCase() === 'true';
+  return false;
+}
+
 async function pollOnce(mainDb) {
   // Fetch all registered Avantis players with a wallet address.
   const rows = mainDb.prepare(
@@ -97,7 +103,7 @@ async function pollOnce(mainDb) {
         symbol = await resolvePairSymbol(pairIdx);
       }
       if (!symbol) symbol = `#${pairIdx}`;
-      const side = (p.buy ?? p.trade?.buy) ? 'long' : 'short';
+      const side = coreBool(p.buy ?? p.trade?.buy) ? 'long' : 'short';
       const notional = collateral * leverage;
       const openKey = `avantis:open:${addr}:${pairIdx}:${Number(p.index ?? p.trade?.index ?? 0)}`;
       if (Number.isFinite(notional) && notional >= 50) {
@@ -175,7 +181,7 @@ function start() {
   let mainDb;
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
-    mainDb.pragma('journal_mode = WAL');
+    try { mainDb.pragma('journal_mode = WAL'); } catch {}
   } catch (e) {
     console.error('[rewards-worker] Cannot open main DB:', e.message, '— worker disabled.');
     return;

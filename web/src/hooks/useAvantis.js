@@ -55,6 +55,11 @@ function decodeTradeError(e, fallback) {
   return String(e.message || fallback || 'Trade failed').slice(0, 300);
 }
 
+function shortAddress(addr) {
+  const s = String(addr || '');
+  return s.length > 12 ? `${s.slice(0, 6)}...${s.slice(-4)}` : s;
+}
+
 // Wraps waitForTransactionReceipt with a timeout so dropped txs don't leave
 // the UI spinner on forever. Throws a specific "pending too long" error the
 // caller can show with a retry hint.
@@ -84,6 +89,12 @@ function pairIndexToSymbol(pairIdx, markets) {
   return `#${pairIdx}`;
 }
 
+function asBool(v) {
+  if (v === true || v === 1 || v === '1') return true;
+  if (typeof v === 'string') return v.toLowerCase() === 'true';
+  return false;
+}
+
 function normalizePosition(p, markets) {
   // Avantis Core API /user-data.positions shape (confirmed via live probe):
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, sl, tp, ... }
@@ -91,7 +102,7 @@ function normalizePosition(p, markets) {
   //   collateral      → raw 1e6 (USDC)
   //   leverage/openPrice/tp/sl → raw 1e10
   const pairIdx = p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex;
-  const isBuy = p.buy ?? p.isLong ?? p.trade?.buy ?? false;
+  const isBuy = asBool(p.buy ?? p.isLong ?? p.trade?.buy ?? false);
   const symbol = p.symbol || pairIndexToSymbol(pairIdx, markets);
   const openPrice = Number(p.openPrice ?? p.trade?.openPrice ?? 0) / 1e10 || Number(p.entry_price ?? 0);
   // Collateral = USDC posted as margin. Flat field on current Core API.
@@ -125,7 +136,7 @@ function normalizeOrder(o, markets) {
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, ... }
   // Same flat scaling as positions: collateral raw 1e6, prices/leverage 1e10.
   const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
-  const isBuy = o.buy ?? o.trade?.buy ?? false;
+  const isBuy = asBool(o.buy ?? o.trade?.buy ?? false);
   const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
   const openPrice = Number(o.openPrice ?? o.trade?.openPrice ?? 0) / 1e10 || Number(o.price ?? 0);
   let collateral = 0;
@@ -196,16 +207,22 @@ function computeAvantisBorrowRatePct(pairData) {
   } catch { return 0; }
 }
 
+const FX_CODES = new Set([
+  'USD', 'EUR', 'JPY', 'GBP', 'CAD', 'CHF', 'SEK', 'AUD', 'NZD', 'SGD',
+  'TRY', 'CNH', 'INR', 'KRW', 'MXN', 'ZAR', 'BRL', 'IDR', 'TWD',
+]);
+
 function normalizeMarkets(raw) {
   const list = Array.isArray(raw) ? raw : (raw?.pairs || raw?.data || []);
   return list.map((p, i) => {
     const from = String(p.from || p.base || '').toUpperCase();
     const to = String(p.to || p.quote || 'USD').toUpperCase();
+    const isFxPair = FX_CODES.has(from) && FX_CODES.has(to) && from !== to;
     const symbol = from === 'USD' && to && to !== 'USD' ? `${from}${to}` : from;
     const fullPair = from === 'USD' && to && to !== 'USD'
       ? `${to}/${from}`
       : (from && to ? `${from}/${to}` : String(p.symbol || '').toUpperCase());
-    const iconBase = from === 'USD' && to && to !== 'USD' ? to : from;
+    const iconBase = isFxPair ? `${from}${to}` : (from === 'USD' && to && to !== 'USD' ? to : from);
     const maxLev = p.leverages?.maxLeverage ?? p.maxLeverage ?? p.max_leverage ?? 100;
     const minLev = p.pairMinLeverage ?? p.leverages?.minLeverage ?? 1;
     // Exact Pyth feed symbol (e.g. "Commodities.BRENTM6/USD") — TradingView
@@ -222,6 +239,7 @@ function normalizeMarkets(raw) {
       symbol,
       pair: fullPair,
       base: iconBase,
+      icon_symbol: iconBase,
       quote: to,
       index: i,
       pair_index: p.index ?? i,
@@ -309,6 +327,12 @@ export function useAvantis() {
   useEffect(() => {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
+  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(registeredWallet)
+    ? registeredWallet.toLowerCase()
+    : null;
+  const activeEvmWallet = walletAddr ? String(walletAddr).toLowerCase() : null;
+  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
   const scheduleClaim = useCallback((delayMs = 2500) => {
     const t = setTimeout(() => {
       const fn = claimGoldRef.current;
@@ -617,7 +641,13 @@ export function useAvantis() {
     if (!isReady || !walletClient || !walletAddr) {
       throw new Error('Connect your Base wallet to trade on Avantis');
     }
-  }, [isReady, walletClient, walletAddr]);
+    if (walletMismatch) {
+      throw new Error(
+        `Connected wallet ${shortAddress(walletAddr)} does not match this game account (${shortAddress(registeredEvmWallet)}). ` +
+        'Switch wallet or log in with the connected wallet first.'
+      );
+    }
+  }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet]);
 
   // ───── Place market order ─────
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
@@ -1137,6 +1167,8 @@ export function useAvantis() {
     // Signals to UI that Avantis is now non-custodial — hides deposit/withdraw
     // panels, shows "Connect Wallet" CTA if isReady === false.
     isSelfCustody: true,
+    walletMismatch,
+    registeredEvmWallet,
     // Referral linkage — FuturesPanel reads these to show the "Unlock 5% off"
     // banner until the user either signs the one-tx linkage or dismisses it.
     hasReferrer,          // true | false | null (loading)

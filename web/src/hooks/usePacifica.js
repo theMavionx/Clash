@@ -74,7 +74,7 @@ function sortKeys(v) {
 }
 
 function buildMessage(type, payload) {
-  const header = { type, timestamp: Date.now(), expiry_window: 30000 };
+  const header = { type, timestamp: Date.now(), expiry_window: 5000 };
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
 
@@ -340,7 +340,7 @@ export function usePacifica() {
       account,
       signature,
       timestamp: JSON.parse(message).timestamp,
-      expiry_window: 30000,
+      expiry_window: 5000,
       ...payload,
     };
 

@@ -155,7 +155,7 @@ app.get('/trading-stats', dashboardAuth, async (req, res) => {
     const fpath = process.env.CLASH_FUTURES_DB || path.join(__dirname, '..', 'server-futures', 'futures.db');
     if (require('fs').existsSync(fpath)) {
       const fdb = new Database(fpath, { readonly: true, fileMustExist: true });
-      fdb.pragma('journal_mode = WAL');
+      try { fdb.pragma('journal_mode = WAL'); } catch {}
       const totals = fdb.prepare(`
         SELECT COUNT(*) AS trades,
                COUNT(DISTINCT player_id) AS traders,

@@ -317,7 +317,7 @@ function BasicTradeFlow({
             {step === 'direction' && pickedToken && (
               <BasicDirectionPicker
                 symbol={pickedToken.symbol}
-                iconSym={pickedToken.base || pickedToken.symbol}
+                iconSym={pickedToken.icon_symbol || pickedToken.base || pickedToken.symbol}
                 price={livePrice}
                 onPick={handlePickDirection}
               />

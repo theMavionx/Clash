@@ -191,7 +191,12 @@ router.post('/players/register', (req, res) => {
       // Also honour a dex switch on re-login (client may have changed DEX
       // selection in profile before reconnecting).
       if (VALID_DEXES.has(dex) && existing.dex !== dex) {
-        resetTradingRewardCursor(existing.id);
+        ensureTradingRewardRow(
+          existing.id,
+          existing.wallet || wallet || '',
+          dex,
+          currentFuturesRewardBaseline(existing.id, dex)
+        );
         db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, existing.id);
         existing.dex = dex;
       }
@@ -1140,7 +1145,7 @@ function futuresDbReadonly() {
     const fpath = process.env.CLASH_FUTURES_DB || require('path').join(__dirname, '..', 'server-futures', 'futures.db');
     if (!require('fs').existsSync(fpath)) throw new Error('futures.db not found at ' + fpath);
     _futuresDb = new Database(fpath, { readonly: true, fileMustExist: true });
-    _futuresDb.pragma('journal_mode = WAL');
+    try { _futuresDb.pragma('journal_mode = WAL'); } catch {}
   } catch (e) {
     console.warn('[claim-gold] Avantis futures.db unavailable:', e.message);
     _futuresDb = 'unavailable';

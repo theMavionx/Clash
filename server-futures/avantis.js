@@ -466,6 +466,19 @@ async function ensureUsdcApproval(walletClient, amount) {
 
 // ---------- Account info ----------
 
+function collateralUsdFromCoreRow(row) {
+  let raw = null;
+  if (row?.collateral !== undefined && row.collateral !== null) raw = row.collateral;
+  else if (row?.trade?.positionSizeUSDC !== undefined) raw = row.trade.positionSizeUSDC;
+  else if (row?.positionSizeUSDC !== undefined) raw = row.positionSizeUSDC;
+  else if (row?.trade?.initialPosToken) raw = row.trade.initialPosToken;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  // Current Avantis Core returns raw USDC (1e6). Older probes sometimes
+  // returned already-scaled decimals, so keep a conservative fallback.
+  return n > 10000 ? n / 1e6 : n;
+}
+
 async function getAccountInfo(privateKey) {
   const address = addressFromPrivkey(privateKey);
   const [usdc, eth] = await Promise.all([
@@ -490,20 +503,9 @@ async function getAccountInfo(privateKey) {
   // on openTrade). Other shapes we see in the wild: top-level `collateral`
   // (already scaled) or `initialPosToken` (usually 0 for USDC-collateralised
   // trades — hence the earlier bug where margin_used showed as 0).
-  let marginUsed = 0;
-  for (const p of positions) {
-    let scaled = 0;
-    if (typeof p.collateral === 'number' && Number.isFinite(p.collateral)) {
-      scaled = p.collateral;
-    } else if (p.trade?.positionSizeUSDC !== undefined) {
-      scaled = Number(p.trade.positionSizeUSDC) / 1e6;
-    } else if (p.positionSizeUSDC !== undefined) {
-      scaled = Number(p.positionSizeUSDC) / 1e6;
-    } else if (p.trade?.initialPosToken) {
-      scaled = Number(p.trade.initialPosToken) / 1e6;
-    }
-    if (Number.isFinite(scaled) && scaled > 0) marginUsed += scaled;
-  }
+  const marginUsed = positions.reduce((sum, p) => sum + collateralUsdFromCoreRow(p), 0);
+  const orderMarginUsed = limitOrders.reduce((sum, o) => sum + collateralUsdFromCoreRow(o), 0);
+  const totalMarginUsed = marginUsed + orderMarginUsed;
   // Unrealised PnL — Core API surfaces per-position `pnl` (signed USDC, already
   // scaled). Sum them for equity. Missing field → treat as 0.
   let unrealisedPnl = 0;
@@ -511,8 +513,8 @@ async function getAccountInfo(privateKey) {
     const pnl = Number(p.pnl ?? p.pnlUSD ?? p.unrealised ?? 0);
     if (Number.isFinite(pnl)) unrealisedPnl += pnl;
   }
-  const equity = usdc + unrealisedPnl; // wallet USDC + open-position PnL
-  const available = Math.max(usdc - marginUsed, 0);
+  const equity = usdc + totalMarginUsed + unrealisedPnl;
+  const available = usdc;
 
   return {
     address,
@@ -528,7 +530,8 @@ async function getAccountInfo(privateKey) {
     balance: usdc,
     account_equity: equity,
     available_to_withdraw: available,
-    total_margin_used: marginUsed,
+    total_margin_used: totalMarginUsed,
+    limit_margin_used: orderMarginUsed,
   };
 }
 
@@ -559,35 +562,23 @@ async function getAccountInfoByAddress(address) {
     }
   } catch {}
 
-  let marginUsed = 0;
-  for (const p of positions) {
-    // Core API flat shape: p.collateral is raw 1e6 (USDC). Older/nested
-    // shapes (p.trade.positionSizeUSDC, initialPosToken) kept as fallback.
-    let scaled = 0;
-    if (p.collateral !== undefined && p.collateral !== null) {
-      scaled = Number(p.collateral) / 1e6;
-    } else if (p.trade?.positionSizeUSDC !== undefined) {
-      scaled = Number(p.trade.positionSizeUSDC) / 1e6;
-    } else if (p.positionSizeUSDC !== undefined) {
-      scaled = Number(p.positionSizeUSDC) / 1e6;
-    } else if (p.trade?.initialPosToken) {
-      scaled = Number(p.trade.initialPosToken) / 1e6;
-    }
-    if (Number.isFinite(scaled) && scaled > 0) marginUsed += scaled;
-  }
+  const marginUsed = positions.reduce((sum, p) => sum + collateralUsdFromCoreRow(p), 0);
+  const orderMarginUsed = limitOrders.reduce((sum, o) => sum + collateralUsdFromCoreRow(o), 0);
+  const totalMarginUsed = marginUsed + orderMarginUsed;
   let unrealisedPnl = 0;
   for (const p of positions) {
     const pnl = Number(p.pnl ?? p.pnlUSD ?? p.unrealised ?? 0);
     if (Number.isFinite(pnl)) unrealisedPnl += pnl;
   }
-  const equity = usdc + unrealisedPnl;
-  const available = Math.max(usdc - marginUsed, 0);
+  const equity = usdc + totalMarginUsed + unrealisedPnl;
+  const available = usdc;
   return {
     address,
     balance_usdc: usdc, balance_eth: eth,
     equity, positions, limit_orders: limitOrders, unrealised_pnl: unrealisedPnl,
     balance: usdc, account_equity: equity, available_to_withdraw: available,
-    total_margin_used: marginUsed,
+    total_margin_used: totalMarginUsed,
+    limit_margin_used: orderMarginUsed,
   };
 }
 
