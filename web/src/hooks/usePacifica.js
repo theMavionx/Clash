@@ -137,6 +137,10 @@ export function usePacifica() {
   const wsRef = useRef(null);
   const marketsRef = useRef([]);
   const withdrawTimerRef = useRef(null);
+  // Re-bind reentry guard for signedRequest. If Pacifica rejects a stored
+  // agent key (cleared cache, server-side revoke), we forget+rebind+retry
+  // exactly once per request to avoid infinite popup loops.
+  const rebindInFlightRef = useRef(false);
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
@@ -277,8 +281,9 @@ export function usePacifica() {
     // Try agent-key fast path first — covers the hot endpoints (orders,
     // positions/tpsl, account/leverage, account/margin) without prompting.
     if (signWithAgentKey) {
-      const headerBag = signWithAgentKey(type, payload);
-      if (headerBag) {
+      const tryAgent = async () => {
+        const headerBag = signWithAgentKey(type, payload);
+        if (!headerBag) return null;
         const body = { ...headerBag, ...payload };
         const res = await fetch(`${API}${endpoint}`, {
           method,
@@ -286,10 +291,34 @@ export function usePacifica() {
           body: JSON.stringify(body),
         });
         const text = await res.text();
-        try {
-          return JSON.parse(text);
-        } catch {
-          throw new Error(text || `API error ${res.status}`);
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
+        return { res, text, parsed };
+      };
+
+      let attempt = await tryAgent();
+      if (attempt) {
+        // Server-side agent invalidation: stored secret no longer matches a
+        // bound agent (cleared cache, server revoke, key rotation). Detect
+        // 401 or signature/agent error, then forget + rebind + retry ONCE.
+        // The rebind ref guards against infinite popup loops if rebind fails.
+        const errStr = String(attempt.parsed?.error || '');
+        const agentRejected =
+          attempt.res.status === 401 ||
+          /invalid signature|agent[_ ]?wallet|invalid agent/i.test(errStr);
+        if (agentRejected && !rebindInFlightRef.current && bindAgent) {
+          rebindInFlightRef.current = true;
+          try {
+            forgetAgentLocally();
+            await bindAgent();           // ONE master-wallet popup
+            const retried = await tryAgent();
+            if (retried) attempt = retried;
+          } catch { /* rebind rejected — fall through to master sign */ }
+          finally { rebindInFlightRef.current = false; }
+        }
+        if (attempt) {
+          if (attempt.parsed !== null) return attempt.parsed;
+          throw new Error(attempt.text || `API error ${attempt.res.status}`);
         }
       }
     }
@@ -360,7 +389,7 @@ export function usePacifica() {
       }
       throw new Error(text || `API error ${res.status}`);
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey, bindAgent, forgetAgentLocally]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {

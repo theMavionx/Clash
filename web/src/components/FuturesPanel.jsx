@@ -1145,6 +1145,13 @@ function FuturesPanel() {
           await setLeverageApi(symbol, leverage);
         }
       }
+      // Pacifica Pro mode has no agent-bind banner. Auto-bind on the first
+      // trade so the user sees ONE wallet popup (bind) instead of one popup
+      // per trade for the rest of the session. Best-effort — if bind is
+      // rejected we still try the trade through master sign.
+      if (dex === 'pacifica' && !pacAgent && bindAgent) {
+        try { await bindAgent(); } catch { /* fall through to master sign */ }
+      }
       setTradePhase('signing');
       let result;
       if (orderType === 'market') {
@@ -1168,7 +1175,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
