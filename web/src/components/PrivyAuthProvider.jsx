@@ -1,7 +1,7 @@
 import { PrivyProvider } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
-import { base } from 'viem/chains';
+import { base, arbitrum } from 'viem/chains';
 
 // publicnode has no SSL/cert issues and is open. api.mainnet-beta fails with
 // ERR_CERT_AUTHORITY_INVALID on some networks, breaking Privy's send-TX flow.
@@ -38,8 +38,15 @@ export default function PrivyAuthProvider({ children }) {
           ethereum: { createOnLogin: 'users-without-wallets' },
         },
         // Default EVM chain for trading = Base mainnet (Avantis runs there).
+        // GMX V2 sits on Arbitrum, so the embedded wallet has to be allowed
+        // to switch there too — without arbitrum in `supportedChains`, Privy
+        // rejects `wallet_switchEthereumChain` with a non-EIP-3326 error
+        // that our 4902 fallback in gmxConfig.ensureArbitrumChain doesn't
+        // catch, so every email/social-login user's GMX trade aborts in
+        // ensureChain() before the signing popup. Adding arbitrum unblocks
+        // them; defaultChain stays Base so Avantis sessions don't change UX.
         defaultChain: base,
-        supportedChains: [base],
+        supportedChains: [base, arbitrum],
         externalWallets: {
           // Privy still reads dashboard wallet-login settings even though our
           // UI uses email-only auth. Passing Solana standard connectors keeps
