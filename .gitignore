@@ -38,3 +38,16 @@ web/public/godot/
 # Decibel test wallet - contains private key, never commit
 aptos-test-wallet.txt
 backups/
+
+# Android signing keystore + the password file living next to it.
+# CRITICAL: leaking either == anyone can sign updates impersonating us
+# on the Solana dApp Store. Both must live ONLY in our password
+# manager + offline backup, NEVER in version control.
+android-keystore/
+twa/
+
+# One-shot dev scripts (SSH probes, bubblewrap drivers). They contain
+# hard-coded paths to local sensitive files (keystore path, prod SSH
+# creds piped via env) — keep them out of the repo to make leaks
+# harder when someone diffs commits.
+.tmp-*
