@@ -2,21 +2,21 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cqwl6vyk0ts01"
-path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901.png-67f488965b1151d3beabb0ba3cebd117.s3tc.ctex"
-path.etc2="res://.godot/imported/Isl_texture_pbr_20250901.png-67f488965b1151d3beabb0ba3cebd117.etc2.ctex"
+uid="uid://04gbvtv7p0at"
+path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901.webp-4f6d0b89e4c56c58be6c1ae263f7aa5b.s3tc.ctex"
+path.etc2="res://.godot/imported/Isl_texture_pbr_20250901.webp-4f6d0b89e4c56c58be6c1ae263f7aa5b.etc2.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "1e566019a29b54491474d6176ee2ece2"
+"md5": "37c9badb628070914b6309190f789d72"
 }
 
 [deps]
 
-source_file="res://Model/Island/Isl_texture_pbr_20250901.png"
-dest_files=["res://.godot/imported/Isl_texture_pbr_20250901.png-67f488965b1151d3beabb0ba3cebd117.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901.png-67f488965b1151d3beabb0ba3cebd117.etc2.ctex"]
+source_file="res://Model/Island/Isl_texture_pbr_20250901.webp"
+dest_files=["res://.godot/imported/Isl_texture_pbr_20250901.webp-4f6d0b89e4c56c58be6c1ae263f7aa5b.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901.webp-4f6d0b89e4c56c58be6c1ae263f7aa5b.etc2.ctex"]
 
 [params]
 

@@ -2,21 +2,21 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://br2jd0rvify3m"
-path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png-798fdbaf86404593f2f34412e3411243.s3tc.ctex"
-path.etc2="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png-798fdbaf86404593f2f34412e3411243.etc2.ctex"
+uid="uid://db1sc51u4fsqm"
+path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.s3tc.ctex"
+path.etc2="res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.etc2.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "8ff10dd320b52dc8998363334abaacae"
+"md5": "a4a5c2c8d01e5a7d4c82a7955fa03440"
 }
 
 [deps]
 
-source_file="res://Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png"
-dest_files=["res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png-798fdbaf86404593f2f34412e3411243.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.png-798fdbaf86404593f2f34412e3411243.etc2.ctex"]
+source_file="res://Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp"
+dest_files=["res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp-feb0761696712596dc95b2dbe778ac82.etc2.ctex"]
 
 [params]
 

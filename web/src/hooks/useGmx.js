@@ -143,7 +143,15 @@ function normalizePrice(t) {
 // Position normaliser — ApiPositionInfo → FuturesPanel shape.
 // FuturesPanel expects `{ symbol, side ('bid'|'ask'), size_usd, entry_price,
 // margin, leverage, pnl_usd, liquidation_price, mark_price, market_addr }`.
-function normalizePosition(p) {
+//
+// `marketMap` (optional) is the address → { indexTokenDecimals, baseSymbol }
+// snapshot built by ensureMarketInfoMap. Required for non-18-decimal index
+// tokens (BTC = 8 decimals, etc.) — without it `sizeInTokens` decodes
+// against the default 18 and produces values 10^10 too small (e.g. a real
+// 0.01 BTC position renders as 6e-13 BTC). When the map is missing we
+// still fall through to the sizeUsd/entryPrice quotient which is correct
+// regardless of decimals, just slightly less accurate due to PnL drift.
+function normalizePosition(p, marketMap) {
   if (!p) return null;
   // The V2 ApiPositionInfo type OMITS indexToken/longToken/shortToken
   // (those live on V1's PositionInfo). All we have is `indexName` like
@@ -165,14 +173,22 @@ function normalizePosition(p) {
   if (p?.leverage != null) {
     try { leverage = Number(BigInt(p.leverage)) / 10000; } catch {}
   }
-  if (leverage == null && sizeUsd && collateralUsd && collateralUsd > 0) {
+  if ((leverage == null || !Number.isFinite(leverage) || leverage === 0)
+      && sizeUsd && collateralUsd && collateralUsd > 0) {
     leverage = Math.round(sizeUsd / collateralUsd);
   }
   // FuturesPanel's basic-mode card calls parseFloat(pos.amount) and uses it
   // for PnL math: `(markP - entryP) * amt * dirSign`. amount = position
   // size in BASE TOKENS (not USD). GMX gives `sizeInTokens` directly; fall
   // back to sizeUsd / entryPrice when sizeInTokens is missing.
-  const indexDecimals = Number(p?.indexToken?.decimals || 18);
+  //
+  // CRITICAL: V2 ApiPositionInfo doesn't ship indexToken so we can't read
+  // decimals from there — we MUST get them from the (cached) marketMap.
+  // Defaulting to 18 produces 6e-13 values for BTC (8 decimals) and other
+  // non-18-decimal markets, which the panel then renders unreadable.
+  const marketKey = String(p?.marketAddress || '').toLowerCase();
+  const mi = marketMap?.[marketKey];
+  const indexDecimals = Number(mi?.indexTokenDecimals ?? p?.indexToken?.decimals ?? 18);
   let amount = null;
   if (p?.sizeInTokens != null) {
     try { amount = Number(formatUnits(BigInt(p.sizeInTokens), indexDecimals)); } catch {}
@@ -524,8 +540,26 @@ export function useGmx() {
     if (!walletAddr) return;
     try {
       const sdk = await ensureSdk();
-      const list = await sdk.fetchPositionsInfo({ address: walletAddr, includeRelatedOrders: false });
-      const norm = (list || []).map(normalizePosition).filter(Boolean);
+      // Pull positions and the market-info map in parallel. The map gives us
+      // index-token decimals (BTC = 8, most others = 18) which normalizePosition
+      // needs to decode `sizeInTokens` correctly. Without it BTC positions
+      // render as 6e-13 (off by 10 orders of magnitude vs the real 0.01 BTC
+      // because the default 18-decimals divisor is 10^10 too big for BTC).
+      const [list, marketMap] = await Promise.all([
+        sdk.fetchPositionsInfo({ address: walletAddr, includeRelatedOrders: false }),
+        ensureMarketInfoMap(),
+      ]);
+      const norm = (list || [])
+        .map(p => normalizePosition(p, marketMap))
+        // Filter dust positions — GMX V2 occasionally leaves sub-cent
+        // remainders after a partial-close where the remaining size sat
+        // below `minPositionSizeUsd` and the keeper auto-cancelled the
+        // close. Showing them as cards with "Size: 0.0001" (real value)
+        // or "$0.00" (display rounding) is just visual noise the user
+        // can't act on (close would re-fail at the keeper). Threshold
+        // 0.01 USD is well below any real trade and well above the
+        // floating-point junk we saw (sizes ~1e-10 USD).
+        .filter(p => p && (p.size_usd == null || p.size_usd >= 0.01));
       setPositions(norm);
       setDataReady(true);
       // Mirror Avantis side-effect: global counter feeds non-React systems
@@ -535,7 +569,7 @@ export function useGmx() {
     } catch (e) {
       console.warn('[useGmx] fetchPositions:', e?.message || e);
     }
-  }, [walletAddr, ensureSdk]);
+  }, [walletAddr, ensureSdk, ensureMarketInfoMap]);
 
   const fetchOrders = useCallback(async () => {
     if (!walletAddr) return;

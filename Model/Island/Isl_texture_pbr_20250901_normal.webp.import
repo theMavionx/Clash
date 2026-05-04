@@ -2,21 +2,21 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://wmkvgbn4pnkd"
-path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901_normal.png-f42bbb5dc5235c4f72efdc793463e892.s3tc.ctex"
-path.etc2="res://.godot/imported/Isl_texture_pbr_20250901_normal.png-f42bbb5dc5235c4f72efdc793463e892.etc2.ctex"
+uid="uid://c64yiweu2yrbv"
+path.s3tc="res://.godot/imported/Isl_texture_pbr_20250901_normal.webp-71c9714560baea14b3455ffe0475a39b.s3tc.ctex"
+path.etc2="res://.godot/imported/Isl_texture_pbr_20250901_normal.webp-71c9714560baea14b3455ffe0475a39b.etc2.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc", "etc2_astc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "1aa182155d3aae753b712b7412d16257"
+"md5": "28ae12c271c2a637dd85d22857269727"
 }
 
 [deps]
 
-source_file="res://Model/Island/Isl_texture_pbr_20250901_normal.png"
-dest_files=["res://.godot/imported/Isl_texture_pbr_20250901_normal.png-f42bbb5dc5235c4f72efdc793463e892.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901_normal.png-f42bbb5dc5235c4f72efdc793463e892.etc2.ctex"]
+source_file="res://Model/Island/Isl_texture_pbr_20250901_normal.webp"
+dest_files=["res://.godot/imported/Isl_texture_pbr_20250901_normal.webp-71c9714560baea14b3455ffe0475a39b.s3tc.ctex", "res://.godot/imported/Isl_texture_pbr_20250901_normal.webp-71c9714560baea14b3455ffe0475a39b.etc2.ctex"]
 
 [params]
 
@@ -31,7 +31,7 @@ compress/channel_pack=0
 mipmaps/generate=true
 mipmaps/limit=-1
 roughness/mode=1
-roughness/src_normal="res://OBJ/Island/Isl_texture_pbr_20250901_normal.png"
+roughness/src_normal="res://Model/Island/Isl_texture_pbr_20250901_normal.webp"
 process/channel_remap/red=0
 process/channel_remap/green=1
 process/channel_remap/blue=2
