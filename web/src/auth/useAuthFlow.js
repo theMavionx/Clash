@@ -37,7 +37,14 @@ import {
 } from './resolvers';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
-const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_account_cache_v1';
+// v2 cache: keyed by `${wallet}|${dex}` instead of just `wallet`. Per-DEX
+// account migration (server-side schema: UNIQUE(wallet, dex)) means a
+// wallet can have a different account on each DEX, so the probe answer
+// for "wallet=0xABC, dex='avantis'" is independent of "wallet=0xABC,
+// dex='gmx'". The old v1 cache (clash_wallet_account_cache_v1) gets a
+// new key here so stale wallet-only entries don't accidentally answer
+// per-DEX probes with the wrong account name.
+const ACCOUNT_PROBE_CACHE_KEY = 'clash_wallet_dex_account_cache_v2';
 const ACCOUNT_PROBE_POSITIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACCOUNT_PROBE_NEGATIVE_TTL_MS = 10 * 60 * 1000;
 // How long to wait for an auto-resolver to produce a candidate before
@@ -56,14 +63,20 @@ function writeDexPicked(v) {
   } catch { /* storage disabled */ }
 }
 
-function walletCacheKey(wallet) {
+function walletCacheKey(wallet, dex) {
   const raw = String(wallet || '').trim();
-  return raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
+  const w = raw.startsWith('0x') || raw.startsWith('0X') ? raw.toLowerCase() : raw;
+  // Always include DEX in the key — the same wallet can hold a different
+  // account per DEX after the migration to UNIQUE(wallet, dex). When dex
+  // is undefined (legacy callers, transitional code) we degrade to the
+  // wallet-only key so the cache miss surfaces a fresh probe instead of
+  // returning the wrong account.
+  return dex ? `${w}|${dex}` : w;
 }
 
-function readAccountProbeCache(wallet) {
+function readAccountProbeCache(wallet, dex) {
   try {
-    const key = walletCacheKey(wallet);
+    const key = walletCacheKey(wallet, dex);
     if (!key) return undefined;
     const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
     if (!raw) return undefined;
@@ -82,9 +95,9 @@ function readAccountProbeCache(wallet) {
   }
 }
 
-function writeAccountProbeCache(wallet, name) {
+function writeAccountProbeCache(wallet, dex, name) {
   try {
-    const key = walletCacheKey(wallet);
+    const key = walletCacheKey(wallet, dex);
     if (!key) return;
     const raw = localStorage.getItem(ACCOUNT_PROBE_CACHE_KEY);
     const all = raw ? JSON.parse(raw) : {};
@@ -113,6 +126,13 @@ export function useAuthFlow() {
   // attempts to re-use stale state.
   const lastRegisteredRef = useRef(null);
   const fcEvmTriedRef = useRef(false);
+  // Set to true by pickDex when the user explicitly switches DEX while
+  // already logged in. The session-reset useEffect (which fires on
+  // show_register=true) checks this so it skips its dexPicked-reset
+  // step — the user picked their new DEX BEFORE the logout was sent, we
+  // don't want to bounce them back to the DEX picker after the Godot
+  // side fires show_register. Cleared in the same effect after one use.
+  const intentionalDexSwitchRef = useRef(false);
 
   // `readyForRegister` gates the auto-register effect so it can't fire on
   // the SAME render where the session-reset effect detected a show_register
@@ -155,20 +175,30 @@ export function useAuthFlow() {
     const prev = prevShowRegisterRef.current;
     prevShowRegisterRef.current = showRegister;
     if (!showRegister || prev) return; // only on false→true
-    // Clear picker skip so user explicitly re-chooses DEX.
-    writeDexPicked(false);
-    setDexPickedState(false);
-    // Clear any silent-reconnected external EVM wallet + its rdns memo.
-    try { evmDisconnect(); } catch { /* noop */ }
-    // Also end the Privy session. Without this, a user who was previously
-    // email-logged-in to Privy would have `privyAuthed=true` on next render,
-    // usePrivyEvmCandidate / usePrivySolanaResolver would immediately surface
-    // their old Privy wallet, and the register effect would silently re-
-    // create the account they just had invalidated. Let Privy promise settle
-    // asynchronously — we don't await because the session reset is a UI
-    // transition, not a gated operation.
-    if (privyEnabled && privyAuthed) {
-      Promise.resolve(privyLogout()).catch(() => { /* noop */ });
+    // Skip the dexPicked-reset path when this show_register was triggered
+    // by an intentional DEX switch (pickDex called Godot logout to flip
+    // identity to the new (wallet, dex) row). The user already picked
+    // their new DEX — bouncing them to the DEX picker would erase that
+    // choice. We still let the rest of the cleanup run (clear external
+    // wallet rdns, Privy session, register-dedup ref) because we DO want
+    // a fresh register to fire against the new DEX.
+    const intentional = intentionalDexSwitchRef.current;
+    if (intentional) {
+      // Intentional DEX switch — keep the user logged in to their wallet
+      // (Privy session, MetaMask connection, FC frame provider all stay
+      // alive), just need a new player-row register on the new DEX. So
+      // we skip the picker-reset, evmDisconnect, and privyLogout.
+      intentionalDexSwitchRef.current = false;
+    } else {
+      // Session invalidated by the server (admin delete, token expiry).
+      // Wipe everything so the user lands on the DEX picker with a clean
+      // slate and must explicitly re-connect a wallet.
+      writeDexPicked(false);
+      setDexPickedState(false);
+      try { evmDisconnect(); } catch { /* noop */ }
+      if (privyEnabled && privyAuthed) {
+        Promise.resolve(privyLogout()).catch(() => { /* noop */ });
+      }
     }
     // Allow register to fire again for the next candidate.
     lastRegisteredRef.current = null;
@@ -296,8 +326,13 @@ export function useAuthFlow() {
   useEffect(() => {
     if (!candidate?.wallet) return;
     if (fcUser) return; // FC users keep the existing fast-path
-    const key = walletCacheKey(candidate.wallet);
-    const cached = readAccountProbeCache(candidate.wallet);
+    // Probe is now per-(wallet, dex). The same wallet has a separate
+    // account on each DEX, so we re-probe whenever the user switches
+    // DEX. Old code keyed by wallet alone and returned the user's
+    // Avantis name when they switched to GMX — leading to "I'm logged
+    // in as my Avantis account on GMX" confusion.
+    const key = walletCacheKey(candidate.wallet, dex);
+    const cached = readAccountProbeCache(candidate.wallet, dex);
     if (!(key in probedNameByWallet) && cached !== undefined) {
       setProbedNameByWallet(prev => (
         key in prev ? prev : { ...prev, [key]: cached }
@@ -311,16 +346,19 @@ export function useAuthFlow() {
         const r = await fetch('/api/players/login-wallet', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ wallet: candidate.wallet }),
+          body: JSON.stringify({ wallet: candidate.wallet, dex }),
         });
         if (r.ok) {
           const data = await r.json();
           const name = data?.name || null;
-          writeAccountProbeCache(candidate.wallet, name);
+          writeAccountProbeCache(candidate.wallet, dex, name);
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
         } else {
-          // 404 (no account) / 400 (invalid wallet) → treat as new user.
-          writeAccountProbeCache(candidate.wallet, null);
+          // 404 (no account on THIS DEX) / 400 (invalid wallet) → treat
+          // as new user for this DEX. They may have an account on a
+          // different DEX with the same wallet — that's fine, switching
+          // DEX in the picker will re-probe and find it.
+          writeAccountProbeCache(candidate.wallet, dex, null);
           setProbedNameByWallet(prev => ({ ...prev, [key]: null }));
         }
       } catch {
@@ -336,10 +374,10 @@ export function useAuthFlow() {
         probeInFlightRef.current[key] = false;
       }
     })();
-  }, [candidate, fcUser, probedNameByWallet]);
+  }, [candidate, dex, fcUser, probedNameByWallet]);
 
   // Resolved existing-account name (or null if none / not yet probed).
-  const candidateWalletKey = candidate?.wallet ? walletCacheKey(candidate.wallet) : '';
+  const candidateWalletKey = candidate?.wallet ? walletCacheKey(candidate.wallet, dex) : '';
   const existingAccountName = candidateWalletKey
     ? probedNameByWallet[candidateWalletKey]
     : undefined;
@@ -439,7 +477,12 @@ export function useAuthFlow() {
     // and strict === would fire register twice for the same wallet.
     // Solana base58 is case-sensitive so the lowercasing is harmless
     // there — no Solana address has ambiguous casing.
-    const candidateKey = String(candidate.wallet).toLowerCase();
+    // Key the dedup ref on (wallet, dex). Same wallet on different DEXes
+    // is now a different account — without `dex` in the key, switching
+    // from Avantis to GMX would silently no-op the GMX register because
+    // `lastRegisteredRef.current` still pointed at the wallet from the
+    // Avantis register, and the user would never get a GMX row created.
+    const candidateKey = `${String(candidate.wallet).toLowerCase()}|${dex}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -471,10 +514,26 @@ export function useAuthFlow() {
   // Actions exposed to the UI. All auth decisions flow through here.
   const pickDex = useCallback((newDex) => {
     if (!isDexAvailableInContext(newDex, { isInFrame })) return;
+    const isLoggedIn = typeof window !== 'undefined' && !!window._playerToken;
+    const switching = isLoggedIn && dexPicked && newDex !== dex;
     setDex(newDex);
     writeDexPicked(true);
     setDexPickedState(true);
-  }, [isInFrame, setDex]);
+    if (switching) {
+      // Per-DEX accounts: switching DEX while logged in means the user is
+      // changing identity to the (wallet, newDex) player row. Drop the
+      // current session token so the next render's register effect fires
+      // against the new DEX. The wallet itself stays connected — we only
+      // need a fresh player_row, not a fresh wallet.
+      lastRegisteredRef.current = null;
+      setRegistering(false);
+      try { window._playerToken = null; } catch { /* noop */ }
+      // Tell the session-reset effect to NOT bounce us to the DEX picker
+      // when Godot fires show_register=true in response to logout.
+      intentionalDexSwitchRef.current = true;
+      sendToGodot('logout');
+    }
+  }, [dex, dexPicked, isInFrame, setDex, sendToGodot]);
 
   const unpickDex = useCallback(() => {
     writeDexPicked(false);
@@ -485,7 +544,12 @@ export function useAuthFlow() {
 
   const submitName = useCallback((name) => {
     if (!candidate || !name || name.trim().length < 2) return;
-    const candidateKey = String(candidate.wallet).toLowerCase();
+    // Key the dedup ref on (wallet, dex). Same wallet on different DEXes
+    // is now a different account — without `dex` in the key, switching
+    // from Avantis to GMX would silently no-op the GMX register because
+    // `lastRegisteredRef.current` still pointed at the wallet from the
+    // Avantis register, and the user would never get a GMX row created.
+    const candidateKey = `${String(candidate.wallet).toLowerCase()}|${dex}`;
     if (lastRegisteredRef.current === candidateKey) return;
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
@@ -501,7 +565,7 @@ export function useAuthFlow() {
       payload.walletSource = candidate.source;
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;
-    writeAccountProbeCache(candidate.wallet, name.trim());
+    writeAccountProbeCache(candidate.wallet, dex, name.trim());
     sendToGodot('register', payload);
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);

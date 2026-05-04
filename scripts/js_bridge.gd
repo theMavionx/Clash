@@ -306,10 +306,15 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 	# provided. Cheaper than two HTTP calls and enables the rename path.
 	var wants_rename: bool = wallet != "" and player_name.length() >= 2 and not is_auto_derived
 	if wallet != "" and not wants_rename:
-		var wallet_result = await net.login_by_wallet(wallet)
+		# Per-DEX accounts: pass `dex` so the server returns the row that
+		# belongs to (wallet, this dex). If no row exists for this dex,
+		# login returns 404 and we fall through to /register below — that
+		# branch creates a NEW row for the new (wallet, dex) pair, which
+		# is exactly the desired "switching DEX → fresh per-DEX account"
+		# behaviour the client now relies on. set_dex is no longer needed
+		# (it's a server-side no-op now).
+		var wallet_result = await net.login_by_wallet(wallet, dex)
 		if wallet_result.has("token"):
-			if dex != "" and wallet_result.get("dex", "") != dex:
-				await net.set_dex(dex)
 			send_to_react("registered", {"success": true})
 			send_to_react("state", {
 				"player_name": net.display_name,

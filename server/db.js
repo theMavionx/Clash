@@ -109,6 +109,41 @@ try {
   console.warn('[db] index migration warning:', e.message);
 }
 
+// Per-DEX accounts migration — make `(wallet, dex)` the canonical identity
+// instead of just `wallet`. Before: switching DEX silently flipped the
+// `dex` column on the same row, so a user who registered on Avantis and
+// then picked GMX kept all the same progress (and Avantis-progress was
+// hidden once dex flipped to gmx). After: each (wallet, dex) pair is its
+// own player row, so progress on Avantis stays on the Avantis row even
+// when the user later opens GMX with the same EVM wallet.
+//
+// Pre-flight: scan for duplicate (wallet, dex) pairs that would block the
+// UNIQUE index. If any found we abort the migration with a loud warning
+// rather than silently skipping — this should never happen on prod (DB
+// audit on 2026-05-04 confirmed zero duplicates) but guards against
+// future drift. The CREATE UNIQUE INDEX is partial (WHERE wallet IS NOT
+// NULL) so wallet-less rows (Farcaster stub accounts pre-binding) don't
+// collide with each other.
+try {
+  const dupes = db.prepare(`
+    SELECT wallet, dex, COUNT(*) AS n
+    FROM players
+    WHERE wallet IS NOT NULL AND wallet != ''
+    GROUP BY wallet, dex HAVING n > 1
+  `).all();
+  if (dupes.length > 0) {
+    console.error('[db] cannot create UNIQUE (wallet, dex) — duplicates exist:', dupes);
+    console.error('[db] resolve manually before next restart; UNIQUE index NOT created');
+  } else {
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_players_wallet_dex
+        ON players(wallet, dex) WHERE wallet IS NOT NULL
+    `);
+  }
+} catch (e) {
+  console.warn('[db] (wallet, dex) UNIQUE index migration warning:', e.message);
+}
+
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
@@ -126,7 +161,16 @@ const stmts = {
   `),
   getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ?`),
   getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ?`),
-  getPlayerByWallet: db.prepare(`SELECT * FROM players WHERE wallet = ?`),
+  // wallet-only lookup kept for back-compat with code paths that don't
+  // care about DEX (e.g. legacy Farcaster placeholder migration). New
+  // code MUST use getPlayerByWalletAndDex so per-DEX accounts stay
+  // segregated. After the (wallet, dex) UNIQUE migration there can be
+  // multiple rows for the same wallet across different DEXes; this
+  // returns the highest-trophy row (matches old "canonical" semantics).
+  getPlayerByWallet: db.prepare(`SELECT * FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1`),
+  // Per-DEX wallet lookup — canonical post-migration. Each (wallet, dex)
+  // is now a UNIQUE pair so this returns at most one row.
+  getPlayerByWalletAndDex: db.prepare(`SELECT * FROM players WHERE wallet = ? AND dex = ? LIMIT 1`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
 
   // Find enemy candidates (not self, no shield, has a town hall).

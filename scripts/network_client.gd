@@ -107,11 +107,18 @@ func login() -> Dictionary:
 
 # ── Login by wallet (recover account after cache clear) ───────
 
-func login_by_wallet(wallet: String) -> Dictionary:
+func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)
 	var headers = ["Content-Type: application/json"]
-	var body = JSON.stringify({"wallet": wallet})
+	# Per-DEX accounts: each (wallet, dex) is its own player row, so the
+	# server needs `dex` to return the right account. Empty `dex` falls
+	# back to the legacy wallet-only lookup (highest-trophy account on
+	# any DEX) for back-compat with old clients during the deploy window.
+	var payload = {"wallet": wallet}
+	if dex != "":
+		payload["dex"] = dex
+	var body = JSON.stringify(payload)
 	http.request(SERVER_URL + "/players/login-wallet", headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed
 	http.queue_free()
@@ -126,9 +133,11 @@ func login_by_wallet(wallet: String) -> Dictionary:
 		auth_ok.emit(response)
 	return response
 
-# Update the player's DEX preference server-side. Used when login_by_wallet
-# recovers an existing account but the user picked a different DEX on the
-# current session.
+# DEPRECATED: DEX is now part of player identity (per-DEX accounts).
+# Kept as a no-op call for back-compat — the server endpoint also no-ops
+# and just returns the player's existing dex. Switching DEX is now done
+# by clearing the session token and re-running login_by_wallet with the
+# new dex; the React side (DexContext + useAuthFlow.pickDex) drives that.
 func set_dex(dex: String) -> Dictionary:
 	return await _http_post("/players/set-dex", {"dex": dex})
 

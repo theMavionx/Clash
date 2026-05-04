@@ -51,6 +51,33 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
   ).get(...params);
 }
 
+// Per-DEX canonical lookup. Each (wallet, dex) pair is unique post-migration,
+// so this returns at most one row. Uses the same Aptos zero-padding fan-out
+// as the wallet-only variant so a user who entered an unpadded Aptos
+// address on one device still matches their padded record from another.
+function getPlayerByWalletAndDexAnyForm(wallet, dex) {
+  const candidates = walletLookupCandidates(wallet);
+  if (!candidates.length) return null;
+  const placeholders = candidates.map(() => '?').join(',');
+  return db.db.prepare(
+    `SELECT * FROM players WHERE wallet IN (${placeholders}) AND dex = ? LIMIT 1`
+  ).get(...candidates, dex);
+}
+
+// Return ALL DEX-specific accounts a wallet owns. Used by the wallet-only
+// login probe to tell the client which DEX rows already exist so the picker
+// can grey out "create new account" hints. Sorted by trophies DESC so the
+// user's most-played DEX appears first if the client decides to fall back
+// to "any account".
+function getAllPlayersByWalletAnyForm(wallet) {
+  const candidates = walletLookupCandidates(wallet);
+  if (!candidates.length) return [];
+  const placeholders = candidates.map(() => '?').join(',');
+  return db.db.prepare(
+    `SELECT * FROM players WHERE wallet IN (${placeholders}) ORDER BY COALESCE(trophies, 0) DESC, id DESC`
+  ).all(...candidates);
+}
+
 // ---------- Auth Middleware ----------
 
 function auth(req, res, next) {
@@ -137,56 +164,61 @@ function ensureTradingRewardRow(playerId, wallet, dex, baseline = 0) {
   } catch {}
 }
 
+// /players/set-dex is now a no-op endpoint that returns the player's
+// existing DEX. Pre-migration this UPDATEd the dex column on the same
+// row, but DEX is now part of identity ((wallet, dex) UNIQUE) — switching
+// DEX means logging into a different account, handled by the client via
+// clearing its token and re-running register/login-wallet against the
+// new DEX. Keeping the endpoint as a no-op rather than deleting it
+// prevents 404s from stale clients during the deploy window; once all
+// clients are on the new auth flow we can drop it.
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
     return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel" or "gmx"' });
   }
-  if (req.player.dex !== dex) {
-    // Preserve each DEX reward cursor. If the user switches into a DEX where
-    // they already have historical rows, baseline at the current futures.db
-    // high-water mark so old activity cannot be claimed as fresh.
-    ensureTradingRewardRow(req.player.id, req.player.wallet || '', dex, currentFuturesRewardBaseline(req.player.id, dex));
+  if (dex !== req.player.dex) {
+    logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
+      player_id: req.player.id, current_dex: req.player.dex, requested_dex: dex,
+    });
   }
-  db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, req.player.id);
-  res.json({ success: true, dex });
+  res.json({ success: true, dex: req.player.dex, note: 'DEX is per-account; ignore field' });
 });
 
 router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
+  const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
 
-  // If wallet provided, check if an account already exists for this wallet.
-  // Multiple rows may share a wallet (legacy bug — no UNIQUE constraint). Prefer
-  // the account with the most progress (highest trophies, then highest id/newest).
+  // ── Per-DEX canonical lookup ────────────────────────────────────────
+  // Each (wallet, dex) is now its own player row. The user's Avantis
+  // progress and GMX progress live on separate rows even though both use
+  // the same EVM wallet. So we only treat a row as "this is your account"
+  // when BOTH the wallet AND the requested DEX match.
   if (wallet) {
-    let existing = getPlayerByWalletAnyForm(wallet);
-    // Migration path: the earlier Farcaster auto-register created players with
-    // a synthetic `fc_<fid>` wallet. If the user now logs in with their real
-    // EVM/Solana address and we have their FID, adopt the existing row rather
-    // than spawning a new duplicate — otherwise progress (gold, buildings,
-    // tutorial_flags, stats) would split across two accounts and the tutorial
-    // would appear un-completed every time the user switches sign-in paths.
+    let existing = getPlayerByWalletAndDexAnyForm(wallet, requestedDex);
+
+    // Migration path for Farcaster placeholder rows (wallet = `fc_<fid>`).
+    // Same dex must match — if the placeholder was created on Pacifica and
+    // the user is now requesting Avantis, we let the new-row branch run
+    // and the placeholder stays for the original DEX.
     if (!existing && fid) {
       const placeholder = 'fc_' + String(fid);
       const placeholderRow = db.db.prepare(
-        'SELECT * FROM players WHERE wallet = ? ORDER BY id DESC LIMIT 1'
-      ).get(placeholder);
+        'SELECT * FROM players WHERE wallet = ? AND dex = ? ORDER BY id DESC LIMIT 1'
+      ).get(placeholder, requestedDex);
       if (placeholderRow) {
         db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, placeholderRow.id);
         placeholderRow.wallet = wallet;
         existing = placeholderRow;
-        logAuth('FC placeholder adopted', { fid, wallet, player_id: existing.id });
+        logAuth('FC placeholder adopted', { fid, wallet, dex: requestedDex, player_id: existing.id });
       }
     }
+
     if (existing) {
-      // If the caller supplied a fresh name that differs from the stored one,
-      // honour it (lets users rename on re-login). Ignore auto-derived names
-      // of the form "player_xxxxxx" so we don't clobber a real saved name
-      // when the Farcaster / Privy flow re-submits the fallback.
+      // Optional rename on re-login (same as before, scoped to this row).
       const trimmed = typeof name === 'string' ? name.trim() : '';
       const looksAutoDerived = /^player_[0-9a-f]{4,}$/i.test(trimmed);
       if (trimmed.length >= 2 && !looksAutoDerived && trimmed !== existing.name) {
-        // Attempt rename; if collides with another user, append digits.
         let finalName = trimmed;
         for (let suffix = 0; suffix <= 99; suffix++) {
           const tryName = suffix === 0 ? finalName : finalName + suffix;
@@ -199,33 +231,26 @@ router.post('/players/register', (req, res) => {
           }
         }
       }
-      // Also honour a dex switch on re-login (client may have changed DEX
-      // selection in profile before reconnecting).
-      if (VALID_DEXES.has(dex) && existing.dex !== dex) {
-        ensureTradingRewardRow(
-          existing.id,
-          existing.wallet || wallet || '',
-          dex,
-          currentFuturesRewardBaseline(existing.id, dex)
-        );
-        db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, existing.id);
-        existing.dex = dex;
-      }
+      // No more dex-switching on the existing row — DEX is now part of
+      // identity. If the caller wanted a different DEX they fall through
+      // to the new-row branch above.
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
     }
   }
 
+  // ── New-row branch ──────────────────────────────────────────────────
   const trimmed = name.trim();
   if (trimmed.length < 2) {
     return res.status(400).json({ error: 'Name must be at least 2 characters' });
   }
-  // Hard-cap name length at 30 chars to prevent accidental/malicious
-  // multi-MB names from bloating players.name (search/render overhead).
   if (trimmed.length > 30) {
     return res.status(400).json({ error: 'Name must be at most 30 characters' });
   }
-  // Try the requested name; if taken, append 1, 2, 3… until unique.
+  // Try the requested name; if taken, append 1, 2, 3… until unique. This
+  // is what gives a user a fresh nick when they create a second-DEX
+  // account on the same wallet (e.g. "Player1" on Avantis, "Player11" on
+  // GMX) — same suffix mechanism that handled inter-user name clashes.
   let finalName = trimmed;
   let result = null;
   for (let suffix = 0; suffix <= 99; suffix++) {
@@ -239,21 +264,18 @@ router.post('/players/register', (req, res) => {
       throw e;
     }
   }
-  // If every suffix 0..99 collided, registerPlayer never succeeded. Without
-  // this guard the subsequent .run(wallet, result.id) crashes on undefined.
   if (!result) {
     return res.status(409).json({ error: 'Name collision — try a different name' });
   }
-  // Save wallet address if provided
   if (wallet) {
     db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
   }
-  // Save DEX preference if provided (pacifica | avantis | decibel)
-  if (VALID_DEXES.has(dex)) {
-    db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(dex, result.id);
-  }
+  // Always set dex on new rows — not just when VALID. The default
+  // 'pacifica' from the table DDL is a sensible fallback but we already
+  // normalised requestedDex above so it's guaranteed valid.
+  db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(requestedDex, result.id);
   const state = db.getFullPlayerState(result.id);
-  logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: dex || null });
+  logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
 });
 
@@ -263,25 +285,33 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
-// Link a wallet to current account. Wallet is the canonical identity — if it
-// already belongs to a different account (e.g. user plays on desktop with
-// wallet, then opens in Farcaster which auto-created a stub account), we do NOT
-// create a duplicate. Instead return the canonical account's token so the
-// client can switch sessions into it. The stub account is left intact for now
-// (admin can clean it up later) to avoid destroying data on race conditions.
+// Link a wallet to the current account. Per-DEX canonical: a wallet is
+// allowed to be bound to MULTIPLE rows as long as those rows belong to
+// different DEXes. Collision check therefore compares against rows on
+// the SAME DEX as the current account — binding a wallet that's already
+// the Avantis row of a different player still routes the client to that
+// canonical row; binding one that only collides with this user's GMX row
+// is fine.
 router.post('/players/link-wallet', auth, (req, res) => {
   const { wallet } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
 
   const current = req.player;
-  const existing = getPlayerByWalletAnyForm(wallet, current.id);
+  // Same-DEX collision check. We exclude current.id so a no-op rebind
+  // (already bound on this DEX to this user) doesn't trip the switch.
+  const existing = (() => {
+    const candidates = walletLookupCandidates(wallet);
+    if (!candidates.length) return null;
+    const placeholders = candidates.map(() => '?').join(',');
+    return db.db.prepare(
+      `SELECT * FROM players WHERE wallet IN (${placeholders}) AND dex = ? AND id != ? LIMIT 1`
+    ).get(...candidates, current.dex, current.id);
+  })();
 
   if (existing) {
-    // Wallet is already bound to another account — that one wins.
-    // Tell the client to switch its session token.
     const state = db.getFullPlayerState(existing.id);
-    logAuth('Wallet already linked to another account; returning canonical token', {
-      from_account: current.name, to_account: existing.name, wallet,
+    logAuth('Wallet already linked to another account on same DEX; returning canonical token', {
+      from_account: current.name, to_account: existing.name, wallet, dex: current.dex,
     });
     return res.json({
       success: true,
@@ -291,18 +321,25 @@ router.post('/players/link-wallet', auth, (req, res) => {
     });
   }
 
-  // No conflict — bind wallet to current account
   db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, current.id);
   res.json({ success: true, switched_account: false });
 });
 
-// Login by wallet address (recover account after cache clear).
-// Same canonical-row rule as /register: prefer highest trophies, newest id.
+// Login by wallet address. Per-DEX canonical: caller MUST pass `dex` so we
+// can match the right row. Without dex we fall back to "any account this
+// wallet owns" for back-compat with old clients (returns highest-trophy
+// row). New clients always send dex — see useAuthFlow.js.
 router.post('/players/login-wallet', (req, res) => {
-  const { wallet } = req.body;
+  const { wallet, dex } = req.body;
   if (!wallet || !isValidWallet(wallet)) return res.status(400).json({ error: 'Valid wallet required' });
-  const player = getPlayerByWalletAnyForm(wallet);
-  if (!player) return res.status(404).json({ error: 'No account found for this wallet' });
+
+  let player;
+  if (VALID_DEXES.has(dex)) {
+    player = getPlayerByWalletAndDexAnyForm(wallet, dex);
+  } else {
+    player = getPlayerByWalletAnyForm(wallet);
+  }
+  if (!player) return res.status(404).json({ error: 'No account found for this wallet on this DEX' });
   const state = db.getFullPlayerState(player.id);
   res.json({ ...state, token: player.token });
 });

@@ -37,3 +37,4 @@ web/public/godot/
 
 # Decibel test wallet - contains private key, never commit
 aptos-test-wallet.txt
+backups/
