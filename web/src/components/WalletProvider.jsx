@@ -1,9 +1,35 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
+import {
+  SolanaMobileWalletAdapter,
+  createDefaultAuthorizationResultCache,
+  createDefaultAddressSelector,
+  createDefaultWalletNotFoundHandler,
+} from '@solana-mobile/wallet-adapter-mobile';
 import { farcasterDetectPromise } from '../hooks/useFarcaster';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
+
+// Mobile Wallet Adapter — registered for every session but only resolves
+// to "Installed" on Saga/Seeker (devices with the Solana Mobile Stack
+// intent handler). On every other host the adapter sits in NotDetected
+// state and never appears in the wallet picker, so plain Android / iOS /
+// desktop users see no behaviour change.
+//
+// `appIdentity` is what shows up in the Seed Vault confirmation popup
+// when the user first authorises the dapp — name + icon + uri.
+const SEEKER_MWA_ADAPTER = new SolanaMobileWalletAdapter({
+  addressSelector: createDefaultAddressSelector(),
+  appIdentity: {
+    name: 'Clash of Perps',
+    uri: 'https://clashofperps.fun',
+    icon: '/icons/icon-512.png',
+  },
+  authorizationResultCache: createDefaultAuthorizationResultCache(),
+  chain: 'solana:mainnet',
+  onWalletNotFound: createDefaultWalletNotFoundHandler(),
+});
 
 const RPC_LIST = [
   'https://solana-rpc.publicnode.com',
@@ -88,7 +114,13 @@ function useFarcasterWalletReady() {
 }
 
 export default function WalletProvider({ children }) {
-  const wallets = useMemo(() => [], []);
+  // Always include the MWA adapter. Standard Solana wallets (Phantom,
+  // Solflare, Backpack) auto-register themselves via the Wallet Standard
+  // dispatch event so we don't list them statically. MWA doesn't follow
+  // the wallet-standard discovery path on every device, so we pass it in
+  // explicitly — harmless on non-Solana-Mobile devices because its
+  // readyState stays NotDetected.
+  const wallets = useMemo(() => [SEEKER_MWA_ADAPTER], []);
   const rpc = useBestRpc();
   const { ready, inFrame } = useFarcasterWalletReady();
 

@@ -6,6 +6,7 @@ import avantisLogo from '../assets/avantis.svg';
 const decibelLogo = '/favicon.png';
 import { usePlayer } from '../hooks/useGodot';
 import { isFarcasterFrame } from '../hooks/useFarcaster';
+import { isSolanaMobileSync } from '../hooks/useSolanaMobile';
 
 const DexContext = createContext(null);
 
@@ -81,8 +82,16 @@ export const DEX_CONFIG = {
   },
 };
 
-export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
+export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
   if (!DEX_CONFIG[dexId]) return false;
+  // Solana Saga / Seeker: lock to Pacifica only. The phone's Seed Vault
+  // (the secure-enclave-backed key store) holds a Solana keypair, and
+  // the Mobile Wallet Adapter protocol is Solana-native — there's no
+  // first-class flow for signing Base/Arbitrum/Aptos transactions through
+  // it. Surfacing Avantis/GMX/Decibel here would either dead-end on a
+  // missing wallet adapter, or silently fall through to Privy email login
+  // which defeats the point of buying a Solana phone. Hide them outright.
+  if (isSolanaMobile && dexId !== 'pacifica') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
@@ -99,22 +108,28 @@ export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
   return true;
 }
 
-export function getAvailableDexConfigs({ isInFrame = false } = {}) {
+export function getAvailableDexConfigs({ isInFrame = false, isSolanaMobile = false } = {}) {
   return Object.values(DEX_CONFIG).filter(cfg => (
-    isDexAvailableInContext(cfg.id, { isInFrame })
+    isDexAvailableInContext(cfg.id, { isInFrame, isSolanaMobile })
   ));
 }
 
 export function DexProvider({ children }) {
+  // On Saga/Seeker the synchronous detection cache is populated on first
+  // useSolanaMobile() call (or the App.jsx boot sequence). We use it here
+  // so the initial DEX selection from localStorage never lands on a DEX
+  // we're going to hide a render later.
   const [dex, setDexState] = useState(
     () => {
       const cached = localStorage.getItem(STORAGE_KEY) || 'pacifica';
-      return isDexAvailableInContext(cached, { isInFrame: isFarcasterFrame() }) ? cached : 'pacifica';
+      const ctx = { isInFrame: isFarcasterFrame(), isSolanaMobile: isSolanaMobileSync() };
+      return isDexAvailableInContext(cached, ctx) ? cached : 'pacifica';
     }
   );
 
   const setDex = useCallback((newDex) => {
-    const nextDex = isDexAvailableInContext(newDex, { isInFrame: isFarcasterFrame() })
+    const ctx = { isInFrame: isFarcasterFrame(), isSolanaMobile: isSolanaMobileSync() };
+    const nextDex = isDexAvailableInContext(newDex, ctx)
       ? newDex
       : 'pacifica';
     localStorage.setItem(STORAGE_KEY, nextDex);

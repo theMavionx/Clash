@@ -23,11 +23,13 @@
 // parent flips `showRegister=false`, unmounting the panel.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useSend, useUI } from '../hooks/useGodot';
 import { isDexAvailableInContext, useDex } from '../contexts/DexContext';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { usePrivy } from '@privy-io/react-auth';
 import {
   useSolanaAdapterResolver,
@@ -114,6 +116,15 @@ export function useAuthFlow() {
   const { sendToGodot } = useSend();
   const { dex, setDex } = useDex();
   const { isInFrame, user: fcUser, loading: fcLoading } = useFarcaster();
+  // Solana Mobile (Saga / Seeker) detection — used to lock the user into
+  // the Pacifica-only flow and auto-trigger MWA wallet connection. `ready`
+  // gates the auto-pick effect so we don't briefly render the DEX picker.
+  const { isSolanaMobile, ready: smReady } = useSolanaMobile();
+  // Direct handle on the Solana wallet adapter so we can fire the MWA
+  // `select + connect` programmatically — without it the user would have
+  // to tap the wallet picker even though we know exactly which adapter
+  // (Mobile Wallet Adapter) we want on Saga/Seeker.
+  const solWallet = useSolWallet();
   const { showRegister } = useUI();
   const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
   const { ready: privyReady, authenticated: privyAuthed, login: privyLogin, logout: privyLogout } = usePrivy();
@@ -148,15 +159,58 @@ export function useAuthFlow() {
   // A DEX can be valid globally but unavailable in the current host. Decibel
   // needs an Aptos wallet-standard provider (Petra/etc.), which Farcaster
   // mini apps do not expose, so a cached Decibel choice must fall back to the
-  // picker instead of landing on an impossible connect screen.
+  // picker instead of landing on an impossible connect screen. Saga/Seeker
+  // is the same story for every non-Pacifica DEX (no MWA flow for Base /
+  // Arbitrum / Aptos signing).
   useEffect(() => {
-    if (isDexAvailableInContext(dex, { isInFrame })) return;
+    const ctx = { isInFrame, isSolanaMobile };
+    if (isDexAvailableInContext(dex, ctx)) return;
     setDex('pacifica');
     writeDexPicked(false);
     setDexPickedState(false);
     lastRegisteredRef.current = null;
     fcEvmTriedRef.current = false;
-  }, [dex, isInFrame, setDex]);
+  }, [dex, isInFrame, isSolanaMobile, setDex]);
+
+  // Saga/Seeker auto-pick: skip the DEX picker entirely. The user can
+  // only trade Pacifica on this device anyway (the only DEX visible to
+  // them per `isDexAvailableInContext`), so showing the picker would be
+  // a redundant tap. Same effect as the user manually clicking Pacifica.
+  // We don't change `dex` if it already is 'pacifica' (DexProvider's
+  // localStorage default + the guard above already cover that).
+  useEffect(() => {
+    if (!smReady || !isSolanaMobile) return;
+    if (dex !== 'pacifica') setDex('pacifica');
+    if (!readDexPicked()) {
+      writeDexPicked(true);
+      setDexPickedState(true);
+    }
+  }, [smReady, isSolanaMobile, dex, setDex]);
+
+  // Saga/Seeker auto-connect: once the page settles + Pacifica is picked,
+  // programmatically select + connect the Mobile Wallet Adapter. The OS
+  // shows the Seed Vault confirmation; one tap and the user's pubkey is
+  // available. Without this the user would still have to open the wallet
+  // modal and click MWA themselves. Idempotent — only runs while
+  // `solWallet.connecting` is false and we don't already have a pubkey.
+  const seekerAutoConnectTriedRef = useRef(false);
+  useEffect(() => {
+    if (!smReady || !isSolanaMobile) return;
+    if (seekerAutoConnectTriedRef.current) return;
+    if (!solWallet || solWallet.connected || solWallet.connecting) return;
+    if (!solWallet.select || !solWallet.connect) return;
+    seekerAutoConnectTriedRef.current = true;
+    // The adapter name is "Mobile Wallet Adapter". Stable across SDK
+    // versions and matches what `SolanaMobileWalletAdapter` registers as.
+    try { solWallet.select('Mobile Wallet Adapter'); } catch { /* noop */ }
+    Promise.resolve(solWallet.connect()).catch(e => {
+      // User dismissed the Seed Vault prompt, or no MWA host actually
+      // present (we trusted the readyState check but the device rejected).
+      // Don't retry on the same device — they can manually connect via
+      // the wallet modal as a fallback.
+      console.warn('[useAuthFlow] Seeker auto-connect failed:', e?.message || e);
+    });
+  }, [smReady, isSolanaMobile, solWallet]);
 
   // Session-invalidated reset. Godot sends `show_register` in two cases:
   //   (a) brand-new user — nothing to clean, all flags are already clear
