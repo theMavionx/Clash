@@ -8,19 +8,11 @@ import { memo, useState, useRef, useEffect } from 'react';
 import { motion, useMotionValue, useTransform, animate } from 'framer-motion';
 import { colors, shared } from './styles';
 import AgentApprovalBanner from './AgentApprovalBanner';
+import { fmtPrice } from '../../lib/fmtPrice';
 
 const TRACK_H = 64;
 const THUMB_PAD = 4;
 const THUMB_SIZE = TRACK_H - THUMB_PAD * 2; // 56
-
-function fmtPrice(p) {
-  const n = Number(p);
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  if (n >= 1) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (n >= 0.01) return n.toFixed(4);
-  return n.toFixed(6);
-}
 
 function fmtUsd(n) {
   const v = Math.max(0, Number(n) || 0);

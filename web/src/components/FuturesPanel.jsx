@@ -6,6 +6,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
+import { useGmx } from '../hooks/useGmx';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -41,16 +42,26 @@ const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
 // Format price — no decimals for big numbers, appropriate precision for small
 // Keep the result under ~8 chars so the price column doesn't push the
 // SymbolPicker table into a horizontal scrollbar. Very small prices
-// (SHIB ≈ $0.0000063) go to scientific notation; small-but-readable
-// go to 4 decimals; normal stay the same.
+// Sub-tenth-of-a-cent prices (SHIB ≈ $0.0000063, mSATS ≈ $0.0000000153)
+// use the DefiLlama / Dexscreener "subscript-zero" notation:
+//   $0.0₇153  = "zero point, 7 zeros, then 153"  (= $0.0000000153)
+// More readable than scientific (`1.53e-8`) for non-traders, more
+// information-dense than plain `0.000000` (which loses precision entirely).
+const SUBSCRIPT_DIGITS = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉'];
+function subscriptN(n) {
+  return String(n).split('').map(d => SUBSCRIPT_DIGITS[Number(d)] || d).join('');
+}
 const fmtPrice = (p) => {
   if (!Number.isFinite(p) || p <= 0) return '—';
   if (p >= 1000) return p.toLocaleString(undefined, {maximumFractionDigits: 0});
   if (p >= 1) return p.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
   if (p >= 0.01) return p.toFixed(4);
   if (p >= 0.0001) return p.toFixed(6);
-  // Sub-cent (SHIB, POPCAT, etc.) → 3-sig-fig scientific: "6.31e-6"
-  return p.toExponential(2);
+  // Subscript notation. exp=-8 for 1.53e-8 → zerosAfterDecimal=7 → "0.0₇153".
+  const exp = Math.floor(Math.log10(p));
+  const zeros = -exp - 1;
+  const sig = Math.round(p * Math.pow(10, zeros + 3));
+  return `0.0${subscriptN(zeros)}${String(sig).padStart(3, '0')}`;
 };
 
 const SignalIcon = ({ type, size = 14 }) => {
@@ -439,7 +450,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
               <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
             </div>
             <div style={S.row}>
-              <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
+              <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>
               <span style={S.detail}>Amount: {amt}</span>
             </div>
           </div>
@@ -506,7 +517,7 @@ const PositionsList = memo(function PositionsList({
             </div>
             <div style={S.row}>
               <span style={S.detail}>Size: {pos.amount} <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span></span>
-              <span style={S.detail}>Entry: ${parseFloat(pos.entry_price).toLocaleString()}</span>
+              <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
             </div>
             <div style={S.row}>
               <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
@@ -633,8 +644,8 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{p.symbol}</td>
                     <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
                     <td style={S.td}>{p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${tblPosValue.toFixed(2)})</span></td>
-                    <td style={S.td}>${entryPrice.toLocaleString()}</td>
-                    <td style={S.td}>{markPrice ? `$${markPrice.toLocaleString()}` : '—'}</td>
+                    <td style={S.td}>${fmtPrice(entryPrice)}</td>
+                    <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
                     <td style={S.td}>{lev}x</td>
@@ -675,7 +686,7 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{sym}</td>
                     <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
                     <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
-                    <td style={S.td}>${price.toLocaleString()}</td>
+                    <td style={S.td}>${fmtPrice(price)}</td>
                     <td style={S.td}>{amt}</td>
                     <td style={S.td}>
                       <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>Cancel</button>
@@ -715,14 +726,16 @@ function FuturesPanel() {
     () => isBasic ? TABS.filter(t => t.id !== 'Orders') : TABS,
     [isBasic]
   );
-  // Branch on DEX. All three hooks expose the same interface shape so the
+  // Branch on DEX. All four hooks expose the same interface shape so the
   // rest of the panel doesn't have to know which chain it's on:
   //   pacifica → Solana-signed (Privy embedded or external)
   //   avantis  → Base/EVM, self-custody via viem
   //   decibel  → Aptos, self-custody via Petra
+  //   gmx      → Arbitrum/EVM, self-custody via viem (Phase 1: read-only)
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
+  const gmxHook = useGmx();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -731,6 +744,8 @@ function FuturesPanel() {
     ? avantisHook
     : dex === 'decibel'
     ? decibelHook
+    : dex === 'gmx'
+    ? gmxHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
@@ -752,7 +767,7 @@ function FuturesPanel() {
   // For Pacifica: wallet needs adapter or Privy. For Avantis/Decibel:
   // walletAddr is the self-custody address, set when the user connected
   // the chain-specific wallet (viem on Base, Petra on Aptos).
-  const hasWallet = dex === 'avantis' || dex === 'decibel'
+  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx'
     ? !!walletAddr
     : (!!walletAddr || connected || !!player?.wallet);
 
@@ -1086,7 +1101,7 @@ function FuturesPanel() {
     // server call — Avantis is per-trade, Decibel uses on-chain
     // configureUserSettingsForMarket which we let the user trigger
     // explicitly via the position's settings (not the slider). Skip both.
-    if (dex === 'avantis' || dex === 'decibel') return;
+    if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') return;
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi, dex]);
@@ -1105,7 +1120,7 @@ function FuturesPanel() {
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
       // Guard against missing/NaN currentPrice (feed blip).
       const price = parseFloat(currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -1223,12 +1238,18 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' ? (
-            // Avantis has no cross margin — every position is isolated per-trade.
-            // Render a read-only badge rather than a clickable toggle.
+          {dex === 'avantis' || dex === 'gmx' ? (
+            // Avantis and GMX V2 are isolated-only at the protocol level —
+            // every position is its own market+collateral unit, there is no
+            // cross-margin pool to share collateral across positions. Render
+            // a read-only badge instead of a toggle that pretends to switch
+            // (the previous clickable toggle did nothing on GMX because
+            // setMarginMode is a no-op there).
             <div
               style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
-              title="Avantis uses isolated margin per trade (no cross mode)"
+              title={dex === 'gmx'
+                ? 'GMX V2 uses isolated margin per position (no cross mode)'
+                : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
               <span style={{color: '#FF9800', fontWeight: 900}}>Isolated</span>
             </div>
@@ -1467,8 +1488,8 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
-  // ==================== WRONG AVANTIS WALLET ====================
-  if (dex === 'avantis' && walletMismatch) {
+  // ==================== WRONG EVM WALLET (Avantis & GMX share EvmWalletContext) ====================
+  if ((dex === 'avantis' || dex === 'gmx') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -1621,6 +1642,50 @@ function FuturesPanel() {
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>AVANTIS · BASE MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'gmx' ? (
+              // GMX is non-custodial on Arbitrum. Same EVM wallet plumbing
+              // as Avantis (EvmWalletModal → viem walletClient), with an
+              // explicit "Phase 1: read-only" hint until writes ship.
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #4F46E5 0%, #3730A3 100%)',
+                  border: '4px solid #4338CA',
+                  boxShadow: '0 5px 0 #3730A3, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 44,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>🟣</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Arbitrum wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  GMX is non-custodial — your own wallet signs each trade.<br />
+                  Read-only preview while we finish trade integration.
+                </div>
+                <button
+                  style={{...cartoonBtn('#4F46E5', '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#3730A3', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>GMX · ARBITRUM MAINNET</span>
                 </div>
               </>
             ) : (
@@ -2266,7 +2331,7 @@ function FuturesPanel() {
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Size: {pos.amount} <span style={{color: '#a3906a'}}>(${posValueUsd.toFixed(2)})</span></span>
-                <span style={S.detail}>Entry: ${parseFloat(pos.entry_price).toLocaleString()}</span>
+                <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
@@ -2401,7 +2466,7 @@ function FuturesPanel() {
                 <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Price: ${parseFloat(price).toLocaleString()}</span>
+                <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>
                 <span style={S.detail}>Amount: {amt}</span>
               </div>
             </div>
@@ -2515,42 +2580,53 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Avantis is now non-custodial — no deposit/withdraw. Show a read-only
-            info card that explains funds live in the user's own wallet. */}
-        {dex === 'avantis' ? (
+        {/* Avantis & GMX are non-custodial — no deposit/withdraw. Show a
+            read-only info card that explains funds live in the user's own
+            wallet. Per-DEX accent colour + chain copy keeps the brand
+            consistent (Avantis blue / Base, GMX purple / Arbitrum). */}
+        {(dex === 'avantis' || dex === 'gmx') ? (() => {
+          const isGmx = dex === 'gmx';
+          const accentLight = isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isGmx ? '#4338CA' : '#0284C7';
+          const chainName = isGmx ? 'Arbitrum' : 'Base';
+          return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#0EA5E9'}}>Self-custody wallet</span>
+              <span style={{...S.label, color: accentLight}}>Self-custody wallet</span>
               {walletUsdc !== null && <span style={S.detail}>USDC: ${walletUsdc.toFixed(2)}</span>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
-                background: 'rgba(14,165,233,0.08)',
-                border: '2px dashed rgba(14,165,233,0.35)',
+                background: accentBg,
+                border: `2px dashed ${accentBorder}`,
                 borderRadius: 10, padding: '8px 10px',
               }}>
                 <code style={{
                   flex: 1, fontSize: 11, fontFamily: 'monospace',
-                  color: '#0369A1', wordBreak: 'break-all', lineHeight: 1.3,
+                  color: accentDark, wordBreak: 'break-all', lineHeight: 1.3,
                 }}>{walletAddr || 'connect wallet…'}</code>
                 {walletAddr && (
                   <button
                     style={{
                       ...S.btnSmall, padding: '6px 10px', fontSize: 10,
-                      background: '#0EA5E9', color: '#fff',
-                      border: '2px solid #0284C7', whiteSpace: 'nowrap',
+                      background: accentLight, color: '#fff',
+                      border: `2px solid ${accentBtnBorder}`, whiteSpace: 'nowrap',
                     }}
                     onClick={async () => { try { await navigator.clipboard.writeText(walletAddr); } catch {} }}
                   >COPY</button>
                 )}
               </div>
               <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>Base</b>.
+                Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.
               </span>
             </div>
           </div>
-        ) : (
+          );
+        })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
@@ -2586,11 +2662,11 @@ function FuturesPanel() {
           </div>
         )}
 
-        {/* Withdraw card. Avantis is non-custodial → no withdraw. Pacifica
-            shows when there's something to take out. Decibel ALWAYS shows
-            it so the user sees the action exists from day one (button
+        {/* Withdraw card. Avantis & GMX are non-custodial → no withdraw.
+            Pacifica shows when there's something to take out. Decibel ALWAYS
+            shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && (dex === 'decibel' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && (dex === 'decibel' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
@@ -2855,6 +2931,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.decibel.colorDark }}>
                 Decibel
+              </span>
+            </>
+          ) : dex === 'gmx' ? (
+            <>
+              <img
+                src={DEX_CONFIG.gmx.logo}
+                alt="GMX"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmx.colorDark }}>
+                GMX
               </span>
             </>
           ) : (
@@ -3287,7 +3375,12 @@ const S = {
   posCard: {
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,
     padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 5,
-    flex: '0 1 380px',
+    // `flex: 0 0 auto` keeps the card sized to its content. Older value
+    // `0 1 380px` set flex-basis=380px which, inside a column flex parent,
+    // becomes a 380px MIN HEIGHT — fine for positions cards (size + entry +
+    // mark + leverage + PnL fill the space), but order cards have only 2
+    // rows so they ballooned with empty whitespace below.
+    flex: '0 0 auto',
   },
   fullCard: {
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12,

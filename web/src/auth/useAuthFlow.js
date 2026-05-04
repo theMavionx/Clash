@@ -239,7 +239,13 @@ export function useAuthFlow() {
   //   and external-connected) → Privy Solana.
   const candidate = useMemo(() => {
     if (!dexPicked) return null;
-    if (dex === 'avantis') return evmContext || privyEvm || null;
+    // Avantis (Base) and GMX (Arbitrum) both source from the same EVM wallet
+    // context. The wallet address is the same on every EVM chain — the chain
+    // switch happens at tx time via ensureChain(). Privy embedded EVM works
+    // for both because the wallet itself is chain-agnostic; only the
+    // walletClient transport gets re-bound per-DEX (see EvmWalletContext
+    // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
+    if (dex === 'avantis' || dex === 'gmx') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
     return solAdapter || privySol || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
@@ -438,8 +444,14 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
-    if (dex === 'avantis') {
-      payload.chain = candidate.chain || 'base';
+    if (dex === 'avantis' || dex === 'gmx') {
+      // Chain is dex-driven, NOT taken from candidate.chain — the Privy
+      // resolver hard-codes 'base' regardless of which DEX is active, so
+      // trusting candidate.chain would mis-tag GMX registrations as Base.
+      // The wallet address itself is identical on every EVM chain so the
+      // server can later look up trade history on the right chain via this
+      // tag.
+      payload.chain = dex === 'gmx' ? 'arbitrum' : 'base';
       payload.walletSource = candidate.source;
     }
     // Pipe the Farcaster FID into register so the server can adopt a prior
@@ -478,8 +490,14 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
-    if (dex === 'avantis') {
-      payload.chain = candidate.chain || 'base';
+    if (dex === 'avantis' || dex === 'gmx') {
+      // Chain is dex-driven, NOT taken from candidate.chain — the Privy
+      // resolver hard-codes 'base' regardless of which DEX is active, so
+      // trusting candidate.chain would mis-tag GMX registrations as Base.
+      // The wallet address itself is identical on every EVM chain so the
+      // server can later look up trade history on the right chain via this
+      // tag.
+      payload.chain = dex === 'gmx' ? 'arbitrum' : 'base';
       payload.walletSource = candidate.source;
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;

@@ -63,6 +63,7 @@ function DexPicker({ onPick, isInFrame }) {
               <div style={S.dexCardSubtitle}>
                 {cfg.chain} · {
                   cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
                 }
@@ -160,12 +161,20 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
   );
 }
 
-function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed }) {
+function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'avantis' }) {
+  // Both Avantis (Base) and GMX (Arbitrum) flow through the same EVM modal +
+  // Privy email path. The Privy embedded wallet is chain-agnostic at the
+  // address level — the same 0xABC… works on every EVM chain; we just
+  // ensureChain(targetId) before each tx. So Privy "sign in with email"
+  // gives the user an Arbitrum-ready wallet for GMX exactly the same way
+  // it gives a Base-ready wallet for Avantis.
+  const venue = dex === 'gmx' ? 'GMX' : 'AVANTIS';
+  const chainName = dex === 'gmx' ? 'Arbitrum' : 'Base';
   return (
     <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO AVANTIS</h3>
+      <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
       <p style={S.subtle}>
-        Sign in with email or connect a Base wallet. Trades are signed by your own wallet — we never hold your keys.
+        Sign in with email or connect a {chainName} wallet. Trades are signed by your own wallet — we never hold your keys.
       </p>
       {privyEnabled && (
         <button style={S.primaryBtn} onClick={onPrivyLogin}>
@@ -266,6 +275,7 @@ function RegisterPanel() {
               ? `Joining ${
                   dex === 'avantis' ? 'Avantis' :
                   dex === 'decibel' ? 'Decibel' :
+                  dex === 'gmx' ? 'GMX' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
               : 'Signing you in…'}
@@ -283,9 +293,10 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis') {
+        if (dex === 'avantis' || dex === 'gmx') {
           return (
             <ConnectAvantis
+              dex={dex}
               onOpenEvmModal={() => setEvmModalOpen(true)}
               onPrivyLogin={actions.loginWithPrivy}
               privyEnabled={privyEnabled}
@@ -325,6 +336,7 @@ function RegisterPanel() {
     if (state === 'registering' || state === 'auto_connecting' || state === 'booting') return 'LOADING';
     if (dex === 'avantis') return 'AVANTIS LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
+    if (dex === 'gmx') return 'GMX LOGIN';
     return 'PACIFICA LOGIN';
   })();
 

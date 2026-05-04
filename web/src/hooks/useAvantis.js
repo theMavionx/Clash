@@ -1089,7 +1089,10 @@ export function useAvantis() {
   claimGoldRef.current = claimGold;
 
   // ───── Startup & polling ─────
-  useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
+  // Gate on active DEX — FuturesPanel mounts ALL hooks; without this
+  // Avantis was hitting its markets endpoint for every GMX/Decibel/Pacifica
+  // user too. Mirror useGmx + (post-fix) useDecibel.
+  useEffect(() => { if (isActiveDex) fetchMarkets(); }, [isActiveDex, fetchMarkets]);
 
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;

@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
-const LOGO_CACHE_KEY = 'clash_token_logos_v2';
+// v3 = invalidate cached "failed" entries from before we added local PNGs
+// for MSATS / MET / SYRUP / BRENTOIL aliases. Stale logoFailed entries from
+// v2 prevented the icon from re-trying after the assets shipped. Bump
+// whenever new local /tokens/* are added so users force a fresh probe.
+const LOGO_CACHE_KEY = 'clash_token_logos_v3';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();
@@ -73,13 +77,19 @@ export default function TokenIcon({ sym, size = 20, fallbackColor, style }) {
     persistLogoCache();
   }, [sources, srcIdx, canon]);
 
+  // Background colour is only meaningful for the letter-fallback bubble
+  // (we need a coloured disc behind the white letter so it's readable).
+  // Real logos already include their own brand background — wrapping them
+  // in our circle just adds a useless grey ring (most visible on PNGs that
+  // ship with their own coloured plate, e.g. IP, OM, several CG-sourced
+  // tokens). Drop the bg when an image is rendering.
   return (
     <div
       style={{
         width: size,
         height: size,
         borderRadius: '50%',
-        background: bg,
+        background: failed ? bg : 'transparent',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',

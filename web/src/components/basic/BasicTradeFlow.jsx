@@ -128,7 +128,7 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx';
       const sideForOpen = pickedDir === 'long'
         ? (isCollateralDex ? 'long' : 'bid')
         : (isCollateralDex ? 'short' : 'ask');

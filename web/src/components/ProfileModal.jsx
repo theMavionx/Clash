@@ -6,6 +6,7 @@ import { usePlayer, useResources, useBuildingDefs, useSend } from '../hooks/useG
 import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
+import { useGmx } from '../hooks/useGmx';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -31,10 +32,13 @@ function ProfileModal({ onClose }) {
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
+  const gmxHook = useGmx();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
     ? decibelHook
+    : dex === 'gmx'
+    ? gmxHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -57,12 +61,12 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const activeWallet = dex === 'avantis'
-    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis
+  const activeWallet = (dex === 'avantis' || dex === 'gmx')
+    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis/useGmx
     : dex === 'decibel'
     ? (walletAddr || player?.wallet || null)            // Aptos from useDecibel
     : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy
-  const walletSource = dex === 'avantis'
+  const walletSource = (dex === 'avantis' || dex === 'gmx')
     ? (walletAddr ? 'evm' : null)
     : dex === 'decibel'
     ? (walletAddr ? 'aptos' : null)
@@ -335,6 +339,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#0284C7', '#0369A1'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT BASE WALLET</button>
+          ) : dex === 'gmx' ? (
+            <button
+              style={{...cartoonBtn('#4F46E5', '#3730A3'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT ARBITRUM WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}

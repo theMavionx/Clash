@@ -34,6 +34,11 @@ const LOCAL_ALIASES = {
   WTI: ['CL'],
   WTIOIL: ['WTI', 'CL'],
   BRENT: ['CL'],
+  // BRENTOIL is the GMX V2 symbol for Brent crude perp. There's no
+  // dedicated local Brent logo — the canonical crude-oil mark `CL` (West
+  // Texas Intermediate, also our `BRENT` and `WTI` fallback) reads as
+  // "this is an oil market" without ambiguity.
+  BRENTOIL: ['BRENT', 'WTI', 'CL'],
   USOILSPOT: ['CL'],
   GOLD: ['XAU'],
   SILVER: ['XAG'],

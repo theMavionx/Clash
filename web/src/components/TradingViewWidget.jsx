@@ -152,7 +152,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'avantis' || dex === 'decibel') {
+        if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') {
           // Avantis and Decibel both price off Pyth on-chain (per their
           // respective docs), so chart candles come from the same Pyth
           // benchmarks endpoint. Pacifica fetches its own REST kline.

@@ -10,13 +10,63 @@
 // walletClient.writeContract(...) and a signing popup appears.
 
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
-import { createPublicClient, createWalletClient, http, custom } from 'viem';
-import { base } from 'viem/chains';
+import { createPublicClient, createWalletClient, http, custom, fallback } from 'viem';
+import { base, arbitrum } from 'viem/chains';
 import { useWallets as usePrivyEvmWallets, usePrivy } from '@privy-io/react-auth';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 
+// Default public client stays on Base (back-compat for Avantis call sites).
+// Arbitrum-aware callers grab the chain-specific client via getPublicClient(chainId).
+//
+// Arbitrum publicClient uses viem's `fallback()` over the rotation of
+// same-origin proxies (see ARBITRUM_RPC_URLS in lib/gmxConfig). When any
+// upstream returns a network error or 429/404 (free-tier rate limit), viem
+// auto-retries the next URL. With Alchemy env override the list collapses
+// to a single URL so fallback overhead is negligible.
+//
+// `batch.multicall.batchSize` is CRITICAL on Arbitrum: viem's default is
+// 1024 BYTES of calldata per multicall HTTP request, NOT 1024 calls. GMX
+// SDK's getMarketsInfo packs ~300 reads (~60KB calldata) per Multicall3
+// aggregate3 — at 1024B/batch that explodes into ~30 separate eth_call
+// requests, then ×4 inner Promise.all branches (= getMarketsValues +
+// getMarketsConfigs + getClaimableFundingData + getMarketsConstants) means
+// a single getMarketsInfo() fires 100-500 HTTP requests in parallel,
+// instantly overwhelming any single RPC endpoint and tripping per-call
+// timeouts that surface as `Cannot mix BigInt and other types` (the SDK
+// reducer hits `undefined / bigint` when a sub-call returns no data).
+//
+// Bumping to 30_000 bytes coalesces the same 60KB into ~2 chunks, taking
+// the per-refresh request count from ~500 to ~10. We also keep `wait: 50`
+// so any code path that uses `readContract` (instead of `multicall`
+// directly) still gets auto-batched into multicall3 within the 50ms window.
 const publicClient = createPublicClient({ chain: base, transport: http() });
+const arbitrumPublicClient = createPublicClient({
+  chain: arbitrum,
+  // Per-call HTTP timeout = 15s. Default is 10s (fine for Alchemy paid),
+  // but the public-RPC fallbacks occasionally take 8-12s to respond under
+  // multicall load; 15s leaves headroom without letting a hung request
+  // cascade. retryCount: 1 means viem auto-retries the same URL once on
+  // 429/network error before falling over to the next URL in fallback().
+  transport: fallback(
+    ARBITRUM_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+  batch: { multicall: { wait: 50, batchSize: 30_000 } },
+});
+
+// chainId → viem chain object map. Centralized so adding the next EVM DEX is
+// a single-line edit instead of a hunt through the codebase.
+const CHAIN_BY_ID = {
+  [BASE_CHAIN_ID]: base,
+  [ARBITRUM_CHAIN_ID]: arbitrum,
+};
+
+const PUBLIC_CLIENT_BY_ID = {
+  [BASE_CHAIN_ID]: publicClient,
+  [ARBITRUM_CHAIN_ID]: arbitrumPublicClient,
+};
 
 const EvmWalletContext = createContext({
   address: null,
@@ -195,12 +245,34 @@ export function EvmWalletProvider({ children }) {
     });
   }, [provider, address]);
 
-  // Chain-switch helper — ensures the wallet is on Base before a write.
-  // Idempotent; safe to call before every tx. Exposed via context.
-  const ensureChain = useCallback(async () => {
+  // Chain-switch helper — defaults to Base for back-compat with existing
+  // Avantis call sites. New callers should pass the chainId they need.
+  const ensureChain = useCallback(async (targetChainId = BASE_CHAIN_ID) => {
     if (!provider) throw new Error('No EVM wallet connected');
-    await ensureBaseChain(provider);
+    if (Number(targetChainId) === ARBITRUM_CHAIN_ID) {
+      await ensureArbitrumChain(provider);
+    } else {
+      await ensureBaseChain(provider);
+    }
   }, [provider]);
+
+  // Build a viem walletClient bound to a SPECIFIC chain. GMX needs Arbitrum
+  // chain in its walletClient or sdk.orders.long() will misroute to Base.
+  // We only build on demand (no useMemo cache) since callers pass the
+  // chainId per-trade — plus the SDK caches its own internal client anyway.
+  const getWalletClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
+    if (!provider || !address) return null;
+    const chain = CHAIN_BY_ID[Number(targetChainId)] || base;
+    return createWalletClient({
+      account: address,
+      chain,
+      transport: custom(provider),
+    });
+  }, [provider, address]);
+
+  const getPublicClient = useCallback((targetChainId = BASE_CHAIN_ID) => {
+    return PUBLIC_CLIENT_BY_ID[Number(targetChainId)] || publicClient;
+  }, []);
 
   // Disconnect for the custom modal path. Privy disconnect is managed by
   // Privy itself (logout button in RegisterPanel).
@@ -280,6 +352,10 @@ export function EvmWalletProvider({ children }) {
     error,
     chainId: BASE_CHAIN_ID,
     ensureChain,
+    // Chain-specific factories — GMX (Arbitrum) and any future EVM DEX
+    // grab their own chain-bound clients without disturbing Avantis.
+    getWalletClient,
+    getPublicClient,
     source,
     setExternalProvider: (prov, addr, rdns = null, src = 'external') => {
       setExternalProvider(prov);
@@ -295,7 +371,7 @@ export function EvmWalletProvider({ children }) {
       }
     },
     disconnect,
-  }), [address, walletClient, provider, isReady, error, source, ensureChain, disconnect]);
+  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, disconnect]);
 
   return <EvmWalletContext.Provider value={value}>{children}</EvmWalletContext.Provider>;
 }

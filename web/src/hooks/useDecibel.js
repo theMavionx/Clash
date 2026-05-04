@@ -1755,7 +1755,13 @@ export function useDecibel() {
 
   // ───── Effects ─────
 
-  useEffect(() => { fetchMarkets(); }, [fetchMarkets]);
+  // Gate fetchMarkets on the active DEX. FuturesPanel mounts ALL three
+  // hooks (Pacifica + Avantis + Decibel + GMX) for the cross-DEX branch
+  // pattern, so without this gate Decibel was loading 26 markets via
+  // Aptos SDK every time a GMX/Avantis user opened the panel — wasteful
+  // network calls + Aptos node API quota burn. Same pattern usePacifica
+  // and useGmx already use.
+  useEffect(() => { if (isActiveDex) fetchMarkets(); }, [isActiveDex, fetchMarkets]);
 
   useEffect(() => {
     if (!address || !isActiveDex) return;

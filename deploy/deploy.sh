@@ -161,6 +161,63 @@ server {
         gzip off;
     }
 
+    # Arbitrum RPC proxy for GMX SDK reads. Routed server-side so the
+    # Alchemy API key never ships in the browser bundle and MetaMask's
+    # injected.js content script can't intercept the call (it scans
+    # browser fetches for known RPC hosts and re-routes them through its
+    # own provider, stripping ACAO and breaking CORS). Same-origin
+    # localhost-style paths aren't in MM's intercept list.
+    location /rpc/arb-alchemy {
+        proxy_pass https://arb-mainnet.g.alchemy.com/v2/_wtFjwex46SgJDz2fx2c6;
+        proxy_http_version 1.1;
+        proxy_set_header Host arb-mainnet.g.alchemy.com;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+    # Anonymous Arbitrum RPC fallback chain — used when env override
+    # is not set. Pocket Network primary (most generous), then
+    # OnFinality / publicnode / tenderly. 1rpc.io kept last (250
+    # req/IP/day cap). Path layout matches web/vite.config.js so the
+    # production bundle's same VITE_ARBITRUM_RPC_URL env override works
+    # against either Vite or nginx without rebuilding.
+    location /rpc/arb-pokt {
+        proxy_pass https://arb-pokt.nodies.app/;
+        proxy_http_version 1.1;
+        proxy_set_header Host arb-pokt.nodies.app;
+        proxy_ssl_server_name on;
+        gzip off;
+    }
+    location /rpc/arb-onfinality {
+        proxy_pass https://arbitrum.api.onfinality.io/public;
+        proxy_http_version 1.1;
+        proxy_set_header Host arbitrum.api.onfinality.io;
+        proxy_ssl_server_name on;
+        gzip off;
+    }
+    location /rpc/arb-public {
+        proxy_pass https://arbitrum-one.publicnode.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Host arbitrum-one.publicnode.com;
+        proxy_ssl_server_name on;
+        gzip off;
+    }
+    location /rpc/arb-tenderly {
+        proxy_pass https://arbitrum.gateway.tenderly.co/;
+        proxy_http_version 1.1;
+        proxy_set_header Host arbitrum.gateway.tenderly.co;
+        proxy_ssl_server_name on;
+        gzip off;
+    }
+    location /rpc/arb {
+        proxy_pass https://1rpc.io/arb;
+        proxy_http_version 1.1;
+        proxy_set_header Host 1rpc.io;
+        proxy_ssl_server_name on;
+        gzip off;
+    }
+
     # API proxy → backend port 4000 (gzip off — Godot web can't decompress)
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;

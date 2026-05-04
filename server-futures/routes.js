@@ -5,6 +5,7 @@ const pacifica = require('./pacifica');
 const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
+const gmx = require('./gmx');
 
 const router = express.Router();
 
@@ -61,7 +62,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -136,6 +137,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await avantis.getAccountInfoByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'gmx') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await gmx.getAccountByAddress(address);
       return res.json(info);
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
@@ -336,8 +345,8 @@ router.post('/decibel/leverage', auth, async (req, res) => {
 router.get('/markets', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
-    const info = dex === 'avantis'
-      ? await avantis.getMarketInfo()
+    const info = dex === 'avantis' ? await avantis.getMarketInfo()
+      : dex === 'gmx' ? await gmx.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -348,8 +357,8 @@ router.get('/markets', async (req, res) => {
 router.get('/prices', async (req, res) => {
   const dex = (req.query.dex || 'pacifica').toLowerCase();
   try {
-    const prices = dex === 'avantis'
-      ? await avantis.getPrices()
+    const prices = dex === 'avantis' ? await avantis.getPrices()
+      : dex === 'gmx' ? await gmx.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -405,6 +414,14 @@ router.get('/positions', async (req, res) => {
       const positions = await avantis.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'gmx') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await gmx.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -428,6 +445,14 @@ router.get('/orders', async (req, res) => {
         return res.status(400).json({ error: 'address query param required' });
       }
       const orders = await avantis.getOpenOrdersByAddress(address);
+      return res.json(orders);
+    }
+    if (dex === 'gmx') {
+      const address = String(req.query.address || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await gmx.getOrdersByAddress(address);
       return res.json(orders);
     }
     return authGate(req, res, async () => {

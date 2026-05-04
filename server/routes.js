@@ -99,12 +99,23 @@ router.post('/client-log', (req, res) => {
 // ==================== PLAYERS ====================
 
 // Register a new player (or recover existing account by wallet)
-// Set DEX preference (pacifica | avantis | decibel). Called after register
-// or from RegisterPanel when the user switches DEX pre-connect. The value
-// is used by leaderboard badges and by /api/futures/* routing.
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel']);
+// Set DEX preference (pacifica | avantis | decibel | gmx). Called after
+// register or from RegisterPanel when the user switches DEX pre-connect.
+// The value is used by leaderboard badges and by /api/futures/* routing.
+// Without `gmx` in this set, the registration handler silently drops the
+// requested dex on the floor and the player_row keeps its DEFAULT
+// 'pacifica' — which is exactly the bug that produced phantom Pacifica
+// accounts whenever a user picked GMX in the picker (the chosen DEX never
+// reached the database).
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx']);
+// DEXes whose trade history is indexed by the futures rewards worker into
+// the trade_history table (server-futures/futures.db). GMX joins this group
+// in Phase 3 once the indexer wakes up; until then the rewards worker has
+// no GMX rows to baseline against, so we keep it out of this set even
+// though VALID_DEXES already accepts it.
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel']);
 function currentFuturesRewardBaseline(playerId, dex) {
-  if (dex !== 'avantis' && dex !== 'decibel') return 0;
+  if (!REWARD_INDEXED_DEXES.has(dex)) return 0;
   try {
     const fdb = futuresDbReadonly();
     if (!fdb) return 0;
@@ -129,7 +140,7 @@ function ensureTradingRewardRow(playerId, wallet, dex, baseline = 0) {
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis" or "decibel"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel" or "gmx"' });
   }
   if (req.player.dex !== dex) {
     // Preserve each DEX reward cursor. If the user switches into a DEX where
@@ -1193,11 +1204,15 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     } catch { /* non-fatal */ }
   }
 
-  // ── Self-custody DEXes (Avantis on Base, Decibel on Aptos) ──
-  // Both write verified rows into futures.db trade_history; the only
-  // difference is the `dex` filter. Cursors are stored per DEX so switching
-  // between integrations cannot replay old rows for fresh gold.
-  if (dex === 'avantis' || dex === 'decibel') {
+  // ── Self-custody DEXes (Avantis on Base, Decibel on Aptos, GMX on
+  // Arbitrum) ── Both Avantis and Decibel already write verified rows into
+  // futures.db trade_history via their dedicated rewards-workers; GMX rides
+  // the same query but has no worker yet (Phase 3). Until the GMX events
+  // indexer ships, the trade_history query returns 0 rows and the user
+  // simply gets "No new trades" — that's the desired no-op, NOT a fall-
+  // through to the Pacifica branch which would 400 with "wallet required"
+  // or worse, hit Pacifica's REST with a non-Solana address.
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });

@@ -60,6 +60,66 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/futures/, '/api'),
       },
+      // Arbitrum RPC proxy — workaround for MetaMask's `injected.js` content
+      // script. MM scans browser fetch() calls for known RPC URLs (Infura,
+      // Alchemy, public chain endpoints like 1rpc.io / arb1.arbitrum.io) and
+      // tries to route them through its own provider. Its proxy strips
+      // Access-Control-Allow-Origin, so the browser refuses the response
+      // with "No 'Access-Control-Allow-Origin' header is present" even
+      // though the upstream RPC sends it. Routing the same JSON-RPC through
+      // `localhost:5176/rpc/...` looks like a regular API call to MM (it
+      // doesn't intercept localhost paths), and Vite's proxy strips Origin
+      // server-side so the upstream sees a clean request. Same trick the
+      // gmx-interface itself uses in production.
+      //
+      // Multiple upstreams so the client can `fallback()` between them when
+      // any one hits its free-tier rate limit (1rpc.io and BlastAPI both
+      // ration aggressively under multicall load; switching providers is
+      // cheaper than asking the user to buy a paid endpoint).
+      // PRIMARY (when configured): Alchemy paid endpoint, server-side proxy
+      // so the API key NEVER ships in the browser bundle. The path
+      // `/rpc/arb-alchemy` is what `web/.env` points VITE_ARBITRUM_RPC_URL
+      // at; the actual `https://arb-mainnet.g.alchemy.com/v2/<key>` URL
+      // lives only in this file and never reaches the client.
+      // 100M compute units / month free = far beyond what testing burns.
+      '/rpc/arb-alchemy': {
+        target: 'https://arb-mainnet.g.alchemy.com',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/v2/_wtFjwex46SgJDz2fx2c6',
+      },
+      // Anonymous Arbitrum RPC pool — used only when env override is unset.
+      // PRIMARY = Pocket Network public node (arb-pokt.nodies.app) — most
+      // generous anonymous endpoint under multicall load. publicnode +
+      // onfinality + tenderly round out the pool so a transient ration
+      // on one rotates to the next via viem `fallback()`. 1rpc.io is the
+      // only one with a strict 250-req/IP/day cap so it's last.
+      // For production stability the right answer is the Alchemy proxy
+      // above; this rotation is a stop-gap for dev without a key.
+      '/rpc/arb-pokt': {
+        target: 'https://arb-pokt.nodies.app',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/',
+      },
+      '/rpc/arb-onfinality': {
+        target: 'https://arbitrum.api.onfinality.io',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/public',
+      },
+      '/rpc/arb-public': {
+        target: 'https://arbitrum-one.publicnode.com',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/',
+      },
+      '/rpc/arb-tenderly': {
+        target: 'https://arbitrum.gateway.tenderly.co',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/',
+      },
+      '/rpc/arb': {
+        target: 'https://1rpc.io',
+        changeOrigin: true, secure: true,
+        rewrite: () => '/arb',
+      },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
       '/ws': {
         target: process.env.VITE_WS_PROXY || 'ws://localhost:4000',

@@ -61,6 +61,24 @@ export const DEX_CONFIG = {
     chainShort: 'APT',
     description: 'Perps on Aptos',
   },
+  gmx: {
+    id: 'gmx',
+    label: 'GMX',
+    shortLabel: 'GMX',
+    emoji: '🟣',
+    // Served from /public so we reference it as a root URL string. Phase 1
+    // ships a placeholder — replace web/public/gmx.png with the official
+    // GMX brand asset (purple G mark) when adding the integration to prod.
+    logo: '/gmx.png',
+    logoIsWordmark: false,
+    color: '#4F46E5',
+    colorDark: '#3730A3',
+    colorLight: 'rgba(79,70,229,0.15)',
+    borderColor: '#4338CA',
+    chain: 'Arbitrum',
+    chainShort: 'ARB',
+    description: 'Perps on Arbitrum',
+  },
 };
 
 export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
@@ -69,6 +87,11 @@ export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
   if (isInFrame && dexId === 'decibel') return false;
+  // GMX needs an Arbitrum-capable EVM provider. Most FC hosts only inject the
+  // base/origin chain into their Solana frame and don't expose a generic EVM
+  // provider, so default to hidden inside frames. We can revisit per-host if
+  // a Warpcast-on-Arbitrum frame integration ever ships.
+  if (isInFrame && dexId === 'gmx') return false;
   return true;
 }
 
@@ -125,7 +148,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -161,7 +184,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

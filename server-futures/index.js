@@ -159,4 +159,13 @@ app.listen(PORT, '0.0.0.0', () => {
   } else {
     console.log('[decibel-rewards-worker] skipped (server-side order rewards are active)');
   }
+  // GMX events worker — polls subsquid for OrderExecuted events of every
+  // registered GMX wallet and writes verified rows into trade_history. Same
+  // pattern as Avantis; the trade_history.client_order_id UNIQUE index
+  // dedups against any future client-side reportTrade path.
+  try {
+    require('./gmx-rewards-worker').start();
+  } catch (e) {
+    console.error('[worker] gmx-rewards-worker failed to start:', e.message);
+  }
 });

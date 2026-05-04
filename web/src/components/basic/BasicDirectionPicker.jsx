@@ -5,15 +5,7 @@ import { memo, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
 import TokenIcon from '../TokenIcon';
-
-function fmtPrice(p) {
-  const n = Number(p);
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  if (n >= 1) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (n >= 0.01) return n.toFixed(4);
-  return n.toFixed(6);
-}
+import { fmtPrice } from '../../lib/fmtPrice';
 
 // Live-ticker price: animates briefly when value changes, color-flashes
 // green/red depending on direction. setState-in-effect is intentional —

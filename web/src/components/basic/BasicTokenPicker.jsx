@@ -7,6 +7,7 @@ import { memo, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
 import TokenIcon from '../TokenIcon';
+import { fmtPrice } from '../../lib/fmtPrice';
 
 const PCT_GREEN = '#4caf50';
 const PCT_RED = '#e53935';
@@ -16,15 +17,6 @@ function pctColor(pct) {
   if (!Number.isFinite(n)) return colors.inkFaint;
   if (n === 0) return colors.inkFaint;
   return n > 0 ? PCT_GREEN : PCT_RED;
-}
-
-function fmtPrice(p) {
-  const n = Number(p);
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  if (n >= 1000) return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-  if (n >= 1) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (n >= 0.01) return n.toFixed(4);
-  return n.toFixed(6);
 }
 
 function fmtPct(p) {
