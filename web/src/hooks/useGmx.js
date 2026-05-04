@@ -16,7 +16,7 @@
 //   4. server-futures/gmx.js for trade-history indexer + claim-gold
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { formatUnits, parseUnits } from 'viem';
+import { formatUnits, parseUnits, stringToHex, zeroHash } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
@@ -28,7 +28,21 @@ import {
   MAX_UINT256,
   ARBITRUM_USDC_NATIVE,
   ARBITRUM_USDC_DECIMALS,
+  GMX_REFERRAL_STORAGE,
+  GMX_REFERRAL_CODE,
+  REFERRAL_STORAGE_ABI,
 } from '../lib/gmxConfig';
+
+// Encode the affiliate code as a right-padded bytes32 once at module load.
+// "clashofperps" is 12 bytes ASCII → padded with 20 null bytes to fit the
+// bytes32 slot the contract takes. Same encoding ethers.formatBytes32String
+// produces, which is what the official GMX UI uses.
+const REFERRAL_CODE_BYTES32 = stringToHex(GMX_REFERRAL_CODE, { size: 32 });
+// Per-wallet localStorage key for "we already attempted to bind this code"
+// — covers both success ('1') and rejection ('rejected:<ts>') so we don't
+// keep prompting on every trade. Wallet-keyed because a user might add a
+// second wallet later that hasn't been bound yet.
+const REFERRAL_BOUND_KEY = (addr) => `clash_gmx_ref_set_${String(addr).toLowerCase()}`;
 
 // ───── Decimal scaling constants ─────
 // GMX expresses USD-denominated values in 30 decimals everywhere. Tokens
@@ -631,6 +645,79 @@ export function useGmx() {
   }, [walletAddr, getWalletClient, getPublicClient]);
 
   /**
+   * Bind the GMX affiliate code "clashofperps" to the connected wallet on
+   * `ReferralStorage.setTraderReferralCodeByUser`. One-time per wallet:
+   * once on chain, every future order this trader places automatically
+   * credits the affiliate with 5% (Tier 1) of trading fees. The contract
+   * pulls the code from on-chain storage at order-execution time, so we
+   * don't need to attach `referralCode` to each prepareOrder request.
+   *
+   * Best-effort:
+   *   • If the trader already has OUR code on file → no-op.
+   *   • If they have a DIFFERENT code → respect it (some other affiliate
+   *     onboarded them first), don't override.
+   *   • If they have no code → fire one signing popup. On success we cache
+   *     '1' to skip future probes; on rejection we cache 'rejected:<ts>'
+   *     so the trade still proceeds and we don't prompt again on this
+   *     device until localStorage clears.
+   *
+   * Never throws — referral binding is bonus revenue, not a trade gate.
+   */
+  const ensureReferralCodeBound = useCallback(async () => {
+    if (!walletAddr) return;
+    let cached = null;
+    try { cached = localStorage.getItem(REFERRAL_BOUND_KEY(walletAddr)); } catch { /* storage disabled */ }
+    if (cached) return;
+
+    const wc = getWalletClient(ARBITRUM_CHAIN_ID);
+    const pc = getPublicClient(ARBITRUM_CHAIN_ID);
+    if (!wc || !pc) return;
+
+    try {
+      // Read existing code first to avoid pointless popups + respect any
+      // affiliate the user signed up under previously on app.gmx.io.
+      const result = await pc.readContract({
+        address: GMX_REFERRAL_STORAGE,
+        abi: REFERRAL_STORAGE_ABI,
+        functionName: 'getTraderReferralCode',
+        args: [walletAddr],
+      });
+      // viem returns named-tuple as array. result[0] = code (bytes32).
+      const currentCode = Array.isArray(result) ? result[0] : result?.code;
+      if (currentCode === REFERRAL_CODE_BYTES32) {
+        try { localStorage.setItem(REFERRAL_BOUND_KEY(walletAddr), '1'); } catch {}
+        return;
+      }
+      if (currentCode && currentCode !== zeroHash) {
+        // Already bound to a different affiliate — don't override.
+        console.log('[useGmx] wallet already has a different referral code, not overriding');
+        try { localStorage.setItem(REFERRAL_BOUND_KEY(walletAddr), 'other'); } catch {}
+        return;
+      }
+
+      // No code yet — bind ours. Single signing popup.
+      console.log(`[useGmx] binding GMX referral code "${GMX_REFERRAL_CODE}" → ${REFERRAL_CODE_BYTES32}`);
+      const hash = await wc.writeContract({
+        address: GMX_REFERRAL_STORAGE,
+        abi: REFERRAL_STORAGE_ABI,
+        functionName: 'setTraderReferralCodeByUser',
+        args: [REFERRAL_CODE_BYTES32],
+        account: walletAddr,
+      });
+      const receipt = await pc.waitForTransactionReceipt({ hash, timeout: TX_TIMEOUT_MS });
+      if (receipt.status === 'success') {
+        console.log(`[useGmx] referral code bound in block ${receipt.blockNumber}`);
+        try { localStorage.setItem(REFERRAL_BOUND_KEY(walletAddr), '1'); } catch {}
+      }
+    } catch (e) {
+      // User rejection, network error, or contract revert — don't block
+      // the trade. Cache so we don't keep popping up the same dialog.
+      console.warn('[useGmx] ensureReferralCodeBound failed (continuing without):', e?.shortMessage || e?.message || e);
+      try { localStorage.setItem(REFERRAL_BOUND_KEY(walletAddr), `rejected:${Date.now()}`); } catch {}
+    }
+  }, [walletAddr, getWalletClient, getPublicClient]);
+
+  /**
    * Find a V2-API-recognised position by base symbol + side. Used by
    * close/TP-SL paths that need the rich position fields (sizeInUsd,
    * indexName/poolName, collateralTokenAddress) the V2 /positions endpoint
@@ -713,6 +800,12 @@ export function useGmx() {
       // approved, otherwise pops one signature for an infinite approve.
       await ensureUsdcAllowance(payAmount);
 
+      // First-trade affiliate bind. Idempotent (cached in localStorage +
+      // checked on-chain), best-effort (never throws). Sequenced AFTER
+      // approve so a user who's already approved gets just one extra
+      // popup the very first time and zero on subsequent trades.
+      await ensureReferralCodeBound();
+
       const prepared = await apiSdk.prepareOrder({
         kind: 'increase',
         symbol: marketSymbol,
@@ -760,7 +853,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders]);
+  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders]);
 
   /**
    * Limit order = increase order with `orderType: 'limit'` and a trigger
@@ -793,6 +886,7 @@ export function useGmx() {
       const isLong = side === 'bid' || side === 'long';
 
       await ensureUsdcAllowance(payAmount);
+      await ensureReferralCodeBound();
 
       const prepared = await apiSdk.prepareOrder({
         kind: 'increase',
@@ -821,7 +915,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, sendPreparedClassicTx, fetchOrders]);
+  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchOrders]);
 
   /**
    * Cancel a pending order via V2 prepareCancelOrder + classic send.

@@ -73,6 +73,43 @@ export const GMX_EXCHANGE_ROUTER = '0x1C3fa76e6E1088bCE750f23a5BFcffa1efEF6A41';
 export const ARBITRUM_USDC_NATIVE = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 export const ARBITRUM_USDC_DECIMALS = 6;
 
+// ── GMX Referral / Affiliate ──
+// GMX has a permissionless on-chain affiliate program: an affiliate
+// registers a code with `ReferralStorage.registerCode(bytes32)`, and
+// each trader who calls `setTraderReferralCodeByUser(bytes32)` then has
+// that code attached to ALL their future orders. Tier 1 affiliates earn
+// 5% of those traders' protocol fees (claimable via the referrals page).
+//
+// Setup is one tx per trader, fired transparently on their first open
+// order — see useGmx.ensureReferralCodeBound. Binding is permanent on
+// chain so subsequent sessions skip the popup. If the trader rejects
+// the signature, the trade still proceeds (referral is bonus revenue,
+// not a gate), and we don't re-prompt on this device until they clear
+// localStorage.
+//
+// Affiliate address: 0x412A02Ba415e5969596E6f0A35f9439760a3468F
+// Affiliate code:   "clashofperps"
+// Trader URL:       https://app.gmx.io/#/trade/?ref=clashofperps
+//
+// ReferralStorage on Arbitrum is the canonical contract listed in the
+// GMX docs (https://docs.gmx.io/docs/referrals).
+export const GMX_REFERRAL_STORAGE = '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
+export const GMX_REFERRAL_CODE = 'clashofperps';
+
+// Minimal ABI — only the two methods we touch. `getTraderReferralCode`
+// returns `(bytes32 code, address referrer)`; we use it to skip the
+// signing popup when the trader already has OUR code (or any code) on
+// file. `setTraderReferralCodeByUser` is the trader-side bind: stores
+// the code under msg.sender, no permissioning, idempotent.
+export const REFERRAL_STORAGE_ABI = [
+  { type: 'function', name: 'setTraderReferralCodeByUser', stateMutability: 'nonpayable',
+    inputs: [{ name: '_code', type: 'bytes32' }],
+    outputs: [] },
+  { type: 'function', name: 'getTraderReferralCode', stateMutability: 'view',
+    inputs: [{ name: '_account', type: 'address' }],
+    outputs: [{ name: 'code', type: 'bytes32' }, { name: 'referrer', type: 'address' }] },
+];
+
 // Minimal ERC20 ABI — only the bits we need to read allowance and call
 // approve. Avoids pulling viem's bigger ABI package for one function.
 export const ERC20_ABI = [
