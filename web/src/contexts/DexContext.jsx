@@ -87,11 +87,15 @@ export function isDexAvailableInContext(dexId, { isInFrame = false } = {}) {
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
   if (isInFrame && dexId === 'decibel') return false;
-  // GMX needs an Arbitrum-capable EVM provider. Most FC hosts only inject the
-  // base/origin chain into their Solana frame and don't expose a generic EVM
-  // provider, so default to hidden inside frames. We can revisit per-host if
-  // a Warpcast-on-Arbitrum frame integration ever ships.
-  if (isInFrame && dexId === 'gmx') return false;
+  // GMX (Arbitrum) inside Farcaster frames: the modern @farcaster/miniapp-sdk
+  // exposes a generic EIP-1193 provider via `wallet.getEthereumProvider()`
+  // that forwards `wallet_switchEthereumChain` to the host wallet (Warpcast,
+  // Base App, etc.). Warpcast supports arbitrary EVM chains including
+  // Arbitrum; Base App historically restricts to Base. We let the picker
+  // show GMX in all FC contexts now — if the host wallet rejects the chain
+  // switch, ensureArbitrumChain() in gmxConfig surfaces the error inline at
+  // trade time rather than silently hiding the entire DEX. Better UX than
+  // "GMX exists but you can't see it" for the 90% of FC users on Warpcast.
   return true;
 }
 
