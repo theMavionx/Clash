@@ -3,8 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/jpeg" href="/icons/icon.jpg" />
-    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1.0, viewport-fit=cover" />
     <title>Clash of Perps</title>
+
+    <!-- PWA + TWA installability. The manifest below is what Bubblewrap
+         reads when generating the Android APK for the Solana Seeker dApp
+         Store; theme-color paints the Android status-bar / address bar
+         to match the splash so the wrapper looks native. apple-touch-icon
+         covers iOS Add-to-Home-Screen which doesn't read the manifest. -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0a0b1a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Clash of Perps" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 
     <!-- Farcaster Mini App embed — uses the pre-composited /clashofperps.PNG
          for feed cards (bg + logo baked together). The in-app loading
