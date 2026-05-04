@@ -80,12 +80,32 @@ function getAllPlayersByWalletAnyForm(wallet) {
 
 // ---------- Auth Middleware ----------
 
+// In-memory throttle so the heartbeat UPDATE doesn't fire on every single
+// authenticated request — the polling cycle hits /api/state, /api/futures/*,
+// /api/tasks etc. several times per second per active user. Bumping at most
+// once per 60s per player is enough resolution for the admin "online now"
+// (5-min window) + "active 24h" / "active 7d" counters, and keeps the
+// players table out of the WAL hot path.
+const _lastSeenBumpAt = new Map(); // playerId -> Date.now()
+const LAST_SEEN_THROTTLE_MS = 60_000;
+
 function auth(req, res, next) {
   const token = req.headers['x-token'];
   if (!token) return res.status(401).json({ error: 'Missing x-token header' });
   const player = db.authenticatePlayer(token);
   if (!player) return res.status(401).json({ error: 'Invalid token' });
   req.player = player;
+  // Heartbeat — bumps last_seen_at server-side. Powers the admin panel's
+  // online/active counters (replaces the never-wired WebSocket path).
+  // Throttled per-player so a chatty client doesn't write-amp the table.
+  try {
+    const now = Date.now();
+    const prev = _lastSeenBumpAt.get(player.id) || 0;
+    if (now - prev >= LAST_SEEN_THROTTLE_MS) {
+      _lastSeenBumpAt.set(player.id, now);
+      db.stmts.bumpPlayerLastSeen.run(player.id);
+    }
+  } catch { /* never block auth on a write failure */ }
   next();
 }
 
@@ -1859,7 +1879,8 @@ router.get('/admin/players', adminAuth, (req, res) => {
   const players = db.db.prepare(`
     SELECT id, name, trophies, level, gold, wood, ore, wallet, dex,
            futures_mode, tutorial_flags,
-           shield_until, last_attacked_by, last_attacked_at, created_at
+           shield_until, last_attacked_by, last_attacked_at, created_at,
+           last_seen_at
     FROM players ORDER BY trophies DESC
   `).all();
   // Pull per-player trading rewards in one shot so the UI can show gold
@@ -1878,6 +1899,12 @@ router.get('/admin/players', adminAuth, (req, res) => {
   } catch { /* trading_rewards missing on fresh DB */ }
   res.json(players.map(p => {
     const tr = rewardsMap[p.id];
+    // Online = heartbeat within the past 5 min. Same window as the
+    // /admin/stats counter so the row badge agrees with the headline
+    // number. SQLite returns last_seen_at as "YYYY-MM-DD HH:MM:SS" UTC
+    // which `new Date(... + 'Z')` parses correctly cross-browser.
+    const lastSeenMs = p.last_seen_at ? new Date(p.last_seen_at + 'Z').getTime() : 0;
+    const ageMs = lastSeenMs ? (Date.now() - lastSeenMs) : Infinity;
     return {
       ...p,
       dex: p.dex || null,
@@ -1891,6 +1918,15 @@ router.get('/admin/players', adminAuth, (req, res) => {
       trading_gold: tr?.total_gold || 0,
       trading_volume: tr?.total_volume || 0,
       trading_last_daily: tr?.last_daily || null,
+      // Heartbeat-derived presence flags. Computed server-side so the
+      // panel JS doesn't have to re-implement the same time math 5 places.
+      online: ageMs <= 5 * 60 * 1000,
+      active_24h: ageMs <= 24 * 60 * 60 * 1000,
+      active_7d:  ageMs <= 7 * 24 * 60 * 60 * 1000,
+      // Surface the raw last-seen so the panel can render "5 min ago"
+      // tooltips. null when player has never been seen on the new column
+      // (fresh accounts or accounts that haven't logged in since deploy).
+      last_seen_age_sec: lastSeenMs ? Math.floor(ageMs / 1000) : null,
     };
   }));
 });
@@ -2073,59 +2109,107 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     `).all();
   } catch { /* trading_rewards missing */ }
 
-  // Avantis trade activity — counts from server-futures.trade_history.
-  let avantisActivity = null;
+  // Per-DEX trade activity from server-futures.trade_history. We compute
+  // the same shape (total_trades / active_traders / total_volume /
+  // trades_24h) for every DEX whose worker indexes into the futures DB.
+  // Pacifica is intentionally absent from this set — it's custodial and
+  // the futures worker doesn't index its trades the same way; Pacifica
+  // activity comes through the on-chain Solana RPC path elsewhere.
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx'];
+  const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
+  const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   try {
     const fdb = futuresDbReadonly();
     if (fdb) {
-      const row = fdb.prepare(`
+      const totals = fdb.prepare(`
         SELECT COUNT(*) AS trades,
                COUNT(DISTINCT player_id) AS traders,
                COALESCE(SUM(notional_usd), 0) AS volume
-        FROM trade_history WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker'
-      `).get();
+        FROM trade_history WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
+      `);
       const recent = fdb.prepare(`
         SELECT COUNT(*) AS trades FROM trade_history
-        WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker' AND created_at > datetime('now', '-24 hours')
-      `).get();
-      avantisActivity = {
-        total_trades: row?.trades || 0,
-        active_traders: row?.traders || 0,
-        total_volume: row?.volume || 0,
-        trades_24h: recent?.trades || 0,
-      };
+        WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
+          AND created_at > datetime('now', '-24 hours')
+      `);
+      const top = fdb.prepare(`
+        SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
+        FROM trade_history WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
+        GROUP BY player_id ORDER BY vol DESC LIMIT 10
+      `);
+      const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
+      for (const dex of ACTIVITY_DEXES) {
+        const tot = totals.get(dex) || {};
+        const rec = recent.get(dex) || {};
+        dexActivity[dex] = {
+          total_trades: tot.trades || 0,
+          active_traders: tot.traders || 0,
+          total_volume: tot.volume || 0,
+          trades_24h: rec.trades || 0,
+        };
+        const raw = top.all(dex);
+        dexTop[dex] = raw.map(r => {
+          const p = nameLookup.get(r.player_id) || {};
+          return {
+            player_id: r.player_id,
+            name: p.name || '?',
+            wallet: p.wallet || '',
+            volume: r.vol,
+            trades: r.trades,
+          };
+        });
+      }
     }
   } catch { /* futures unavailable */ }
 
-  // Top avantis traders by volume
-  let avantisTop = [];
-  try {
-    const fdb = futuresDbReadonly();
-    if (fdb) {
-      const raw = fdb.prepare(`
-        SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
-        FROM trade_history WHERE dex = 'avantis' AND status = 'filled' AND verified_source = 'worker'
-        GROUP BY player_id ORDER BY vol DESC LIMIT 10
-      `).all();
-      // Join player name from main DB
-      const stmt = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
-      avantisTop = raw.map(r => {
-        const p = stmt.get(r.player_id) || {};
-        return { player_id: r.player_id, name: p.name || '?', wallet: p.wallet || '', volume: r.vol, trades: r.trades };
-      });
-    }
-  } catch { /* noop */ }
+  // Active-player counters from the heartbeat column. "Online now" =
+  // last_seen within the past 5 minutes (matches how the auth middleware
+  // throttles bumps to once per 60s — at 5 min the worst-case staleness
+  // is ~6 min, plenty for live admin oversight). 24h / 7d are the
+  // standard MAU-style retention buckets.
+  const activeQ = db.db.prepare(`
+    SELECT
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes')  THEN 1 END) AS online_now,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-24 hours')   THEN 1 END) AS active_24h,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-7 days')     THEN 1 END) AS active_7d,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-30 days')    THEN 1 END) AS active_30d
+    FROM players WHERE last_seen_at IS NOT NULL
+  `).get();
+
+  // Same buckets sliced by DEX so the panel can show "active Pacifica
+  // players today" vs "active GMX players today" and we can spot when a
+  // newly-added DEX is actually getting traction.
+  const activeByDex = db.db.prepare(`
+    SELECT COALESCE(dex, 'unknown') AS dex,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-5 minutes')  THEN 1 END) AS online_now,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-24 hours')   THEN 1 END) AS active_24h,
+      COUNT(CASE WHEN last_seen_at > datetime('now', '-7 days')     THEN 1 END) AS active_7d
+    FROM players WHERE last_seen_at IS NOT NULL
+    GROUP BY dex
+  `).all();
 
   res.json({
     players: playerCount, buildings: buildingCount, replays: replayCount,
     accepted, rejected, shielded, recentBattles,
     economy: { totalGold, totalWood, totalOre },
     topPlayers,
+    activity: {
+      online_now: activeQ?.online_now || 0,
+      active_24h: activeQ?.active_24h || 0,
+      active_7d:  activeQ?.active_7d  || 0,
+      active_30d: activeQ?.active_30d || 0,
+      by_dex: activeByDex,
+    },
     dex: {
       players_by_dex: byDex,
       rewards_by_dex: rewardsByDex,
-      avantis_activity: avantisActivity,
-      avantis_top: avantisTop,
+      // New unified shape: per-DEX activity + top traders. Old
+      // `avantis_activity` / `avantis_top` kept as aliases for one release
+      // so the deployed admin panel doesn't blank out mid-deploy.
+      activity_by_dex: dexActivity,
+      top_by_dex: dexTop,
+      avantis_activity: dexActivity.avantis || null,
+      avantis_top: dexTop.avantis || [],
     },
     ui_modes: byUiMode,
     uptime: Math.floor(process.uptime()),

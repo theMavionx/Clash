@@ -67,6 +67,14 @@ try { db.exec(`ALTER TABLE players ADD COLUMN dex TEXT NOT NULL DEFAULT 'pacific
 // first-time selection screen before letting them trade. Selection is
 // persisted server-side so it survives device/browser swaps.
 try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
+// Last-seen heartbeat: bumped to `datetime('now')` by the `auth` middleware
+// on every authenticated API call. Drives the admin panel's "Online now"
+// (last_seen_at > now-5min), "Active 24h", and "Active 7d" counters.
+// Replaces the WebSocket-based `getOnlinePlayers()` path which was never
+// wired up on the client (Godot/React app doesn't open the /ws socket),
+// so the WS clients map stayed empty and admin always showed everyone
+// offline.
+try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
 
 // Battle replays — stores full replay data for verification and future replay viewer
 try {
@@ -104,6 +112,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_troop_levels_player ON troop_levels(player_id);
     CREATE INDEX IF NOT EXISTS idx_players_wallet ON players(wallet) WHERE wallet IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_players_dex ON players(dex) WHERE dex IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_players_last_seen ON players(last_seen_at) WHERE last_seen_at IS NOT NULL;
   `);
 } catch (e) {
   console.warn('[db] index migration warning:', e.message);
@@ -172,6 +181,11 @@ const stmts = {
   // is now a UNIQUE pair so this returns at most one row.
   getPlayerByWalletAndDex: db.prepare(`SELECT * FROM players WHERE wallet = ? AND dex = ? LIMIT 1`),
   getPlayerById: db.prepare(`SELECT * FROM players WHERE id = ?`),
+  // Heartbeat — fired on every authenticated API call by the auth
+  // middleware. Idempotent (single UPDATE), no event sourcing needed.
+  // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
+  // datetime() comparisons work directly.
+  bumpPlayerLastSeen: db.prepare(`UPDATE players SET last_seen_at = datetime('now') WHERE id = ?`),
 
   // Find enemy candidates (not self, no shield, has a town hall).
   // The town-hall existence check excludes accounts that registered but
@@ -872,6 +886,12 @@ function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, clai
 
 module.exports = {
   db,
+  // Re-export the prepared-statement bag so route code can call
+  // pre-compiled queries without re-preparing them per request. Currently
+  // only `bumpPlayerLastSeen` is consumed externally; expand carefully —
+  // each new entry duplicates state that the existing `db.db.prepare`
+  // call sites can already construct on demand.
+  stmts,
   BUILDING_DEFS,
   TH_UNLOCK,
   TH_MAX_COUNT,
