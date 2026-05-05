@@ -38,6 +38,7 @@ const TABS = [
 ];
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
+const PACIFICA_MIN_NOTIONAL_USD = 10;
 
 // Format price — no decimals for big numbers, appropriate precision for small
 // Keep the result under ~8 chars so the price column doesn't push the
@@ -546,7 +547,7 @@ const PositionsList = memo(function PositionsList({
                 </div>
                 <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                 <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
-                <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closePct / 100), pos.pair_index, pos.trade_index)} disabled={loading}>
+                  <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closePct / 100), pos.pair_index, pos.trade_index, closePct >= 100)} disabled={loading}>
                   {loading ? 'Closing...' : `Close ${closePct}%`}
                 </button>
               </div>
@@ -653,7 +654,7 @@ const BottomPanel = memo(function BottomPanel({
                       <button
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
                         disabled={loading}
-                        onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index)}
+                        onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index, true)}
                       >{loading ? '…' : 'Close'}</button>
                     </td>
                   </tr>
@@ -1147,6 +1148,17 @@ function FuturesPanel() {
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
         if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
+        if (dex === 'pacifica') {
+          const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : price;
+          const orderNotional = parseFloat(qty) * orderPrice;
+          if (!Number.isFinite(orderNotional) || orderNotional < PACIFICA_MIN_NOTIONAL_USD) {
+            setLocalAlert(
+              `Pacifica requires a position >= $${PACIFICA_MIN_NOTIONAL_USD}. Yours: ` +
+              `$${Number.isFinite(orderNotional) ? orderNotional.toFixed(2) : '0.00'}. Increase margin or leverage.`
+            );
+            return;
+          }
+        }
       }
       // Pacifica-only: flush any pending leverage change before placing the
       // order so the server sees the right leverage on fill. Avantis and
@@ -2207,7 +2219,7 @@ function FuturesPanel() {
               const result = await closePosition(
                 pos.symbol, pos.side,
                 String(dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)),
-                pos.pair_index, pos.trade_index,
+                pos.pair_index, pos.trade_index, true,
               );
               // closePosition returns the API response on success and
               // undefined on error (catches internally + sets `error`).
@@ -2307,7 +2319,7 @@ function FuturesPanel() {
             const amount = (dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closeFraction;
             const result = await closePosition(
               pos.symbol, pos.side, String(amount),
-              pos.pair_index, pos.trade_index,
+              pos.pair_index, pos.trade_index, closeFraction >= 1,
             );
             // closePosition returns the API response on success and undefined
             // on error. Only show the share modal when the close was a FULL

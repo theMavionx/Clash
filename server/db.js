@@ -76,6 +76,55 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
 
+// Tournaments — admin-curated competitions per DEX. While a player is
+// joined ("active in tournament"), their main `players.trophies` is
+// FROZEN (reads still happen, writes from battle/quest paths skip them
+// for the joined player). Tournament-only counters live in
+// `tournament_participants` and rank players by an admin-chosen sort
+// key (pnl_usd / trophies / volume / gold). Boosts are multipliers
+// applied to the in-tournament counters; main account stats see the
+// unboosted (zero) delta. Leaderboard is real-time read from the
+// participant rows; tournament ends → status flips to 'ended', writes
+// stop, leaderboard becomes a frozen historical record.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tournaments (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      name         TEXT NOT NULL,
+      description  TEXT,
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx')),
+      start_at     TEXT NOT NULL,                        -- ISO datetime
+      end_at       TEXT,                                  -- nullable (open-ended)
+      gold_boost   REAL NOT NULL DEFAULT 1.0,
+      trophy_boost REAL NOT NULL DEFAULT 1.0,
+      sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold')),
+      status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
+  `);
+} catch (e) { console.warn('[db] tournaments migration:', e.message); }
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tournament_participants (
+      tournament_id    INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      player_id        TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      joined_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      left_at          TEXT,                              -- soft leave (nulled = active)
+      trophies         INTEGER NOT NULL DEFAULT 0,
+      gold             INTEGER NOT NULL DEFAULT 0,        -- gold "won" inside the tournament window for boost-leaderboard. Real gold still goes to players.gold normally.
+      trades_count     INTEGER NOT NULL DEFAULT 0,
+      volume_usd       REAL NOT NULL DEFAULT 0,
+      pnl_usd          REAL NOT NULL DEFAULT 0,
+      last_activity_at TEXT,
+      PRIMARY KEY (tournament_id, player_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tp_player_active ON tournament_participants(player_id, left_at);
+    CREATE INDEX IF NOT EXISTS idx_tp_leaderboard ON tournament_participants(tournament_id, pnl_usd DESC);
+  `);
+} catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
+
 // Battle replays — stores full replay data for verification and future replay viewer
 try {
   db.exec(`
@@ -249,7 +298,120 @@ const stmts = {
   repairBuilding: db.prepare(`UPDATE buildings SET hp = max_hp WHERE id = ? AND player_id = ?`),
   setShipOnPort: db.prepare(`UPDATE buildings SET has_ship = 1 WHERE id = ? AND player_id = ?`),
   setShield: db.prepare(`UPDATE players SET shield_until = ?, last_attacked_by = ?, last_attacked_at = datetime('now') WHERE id = ?`),
+
+  // Tournaments — used by battle paths to detect whether a player is
+  // currently joined to an active tournament for their DEX. When yes,
+  // main `players.trophies` writes are skipped and the delta is routed
+  // (with boost) into `tournament_participants.trophies` instead.
+  // Joins with `players.dex` to enforce per-DEX scoping; `left_at IS NULL`
+  // means the participant is still active (didn't soft-leave).
+  // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
+  getActiveTournamentForPlayer: db.prepare(`
+    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost, t.sort_by
+    FROM tournament_participants p
+    JOIN tournaments t ON t.id = p.tournament_id AND t.dex = (SELECT dex FROM players WHERE id = p.player_id)
+    WHERE p.player_id = ?
+      AND p.left_at IS NULL
+      AND t.status = 'active'
+      AND (t.end_at IS NULL OR t.end_at > datetime('now'))
+      AND t.start_at <= datetime('now')
+    ORDER BY t.id DESC
+    LIMIT 1
+  `),
+  bumpTournamentTrophies: db.prepare(`
+    UPDATE tournament_participants
+    SET trophies = MAX(0, trophies + ?), last_activity_at = datetime('now')
+    WHERE tournament_id = ? AND player_id = ?
+  `),
+  bumpTournamentGold: db.prepare(`
+    UPDATE tournament_participants
+    SET gold = gold + ?, last_activity_at = datetime('now')
+    WHERE tournament_id = ? AND player_id = ?
+  `),
+  bumpTournamentTrade: db.prepare(`
+    UPDATE tournament_participants
+    SET trades_count = trades_count + ?,
+        volume_usd = volume_usd + ?,
+        pnl_usd = pnl_usd + ?,
+        last_activity_at = datetime('now')
+    WHERE tournament_id = ? AND player_id = ?
+  `),
 };
+
+// ── Tournament: trophy freeze helper ──────────────────────────────────
+// Returns the active tournament row for `playerId` if the player has
+// joined an active tournament for their DEX. Null when no active
+// tournament — battle/quest paths fall back to normal main-stat writes.
+// The query is cached (prepared statement above) so this is sub-ms even
+// in the inner battle loop.
+function getPlayerActiveTournament(playerId) {
+  if (!playerId) return null;
+  return stmts.getActiveTournamentForPlayer.get(playerId) || null;
+}
+
+// Apply a trophy delta to the right destination:
+//   - Player NOT in active tournament  → players.trophies += delta (existing behaviour)
+//   - Player IS  in active tournament  → tournament_participants.trophies += boosted delta;
+//                                        players.trophies UNCHANGED (frozen).
+// `delta` may be negative (battle loss). Negative deltas skip the boost
+// — boosts are positive incentives only, you don't get "extra punished"
+// in a 2× trophy boost tournament.
+//
+// Used by `battleVictoryTxn` and `battleDefeat`. Preserves the previous
+// "trophies clamps to zero" behaviour by capping main updates and
+// relying on `MAX(0, ...)` in `bumpTournamentTrophies` for the
+// participant counter.
+function applyTrophyDelta(playerId, delta) {
+  if (!playerId || !delta) return;
+  const t = getPlayerActiveTournament(playerId);
+  if (t) {
+    const boosted = delta > 0
+      ? Math.round(delta * Number(t.trophy_boost || 1))
+      : delta;
+    stmts.bumpTournamentTrophies.run(boosted, t.tournament_id, playerId);
+    return;
+  }
+  // No tournament — apply to main, clamping at zero like the legacy code.
+  const cur = stmts.getPlayerById.get(playerId)?.trophies || 0;
+  const next = Math.max(0, cur + delta);
+  stmts.updateTrophies.run(next, playerId);
+}
+
+// Apply tournament gold_boost to a base gold reward and record the boosted
+// amount in tournament_participants.gold for the leaderboard.
+//   - Returns the gold amount the caller should actually credit to
+//     `players.gold` (boosted when in tournament, original otherwise).
+//   - The caller still owns the players.gold update via addResources();
+//     this helper only handles the boost math + leaderboard bookkeeping.
+//   - Negative or zero deltas pass through unchanged (boosts are positive
+//     incentives only — same policy as applyTrophyDelta).
+function applyGoldReward(playerId, baseGold) {
+  const amount = Number(baseGold) || 0;
+  if (!playerId || amount <= 0) return amount;
+  const t = getPlayerActiveTournament(playerId);
+  if (!t) return amount;
+  const boosted = Math.round(amount * Number(t.gold_boost || 1));
+  stmts.bumpTournamentGold.run(boosted, t.tournament_id, playerId);
+  return boosted;
+}
+
+// Track filled trades in the active tournament leaderboard. No-op outside
+// tournaments. Volume and pnl are already-vetted USD numbers from the
+// caller's per-trade clamp loop, summed across `count` trades.
+function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1) {
+  if (!playerId) return;
+  const c = Number(count) || 0;
+  if (c <= 0) return;
+  const t = getPlayerActiveTournament(playerId);
+  if (!t) return;
+  stmts.bumpTournamentTrade.run(
+    c,
+    Number(volumeUsd) || 0,
+    Number(pnlUsd) || 0,
+    t.tournament_id,
+    playerId
+  );
+}
 
 // ---------- Building Definitions (mirroring Godot) ----------
 
@@ -814,13 +976,20 @@ const SHIELD_HOURS = 6; // 6-hour shield after being raided
 const ATTACK_COOLDOWN_HOURS = 1; // can't attack same player for 1 hour
 
 function battleDefeat(attackerId, defenderId) {
-  const attacker = stmts.getPlayerById.get(attackerId);
-  const defender = stmts.getPlayerById.get(defenderId);
-  const newAttackerTrophies = Math.max(0, (attacker?.trophies || 0) - TROPHY_LOSS);
-  const newDefenderTrophies = (defender?.trophies || 0) + TROPHY_WIN;
-  stmts.updateTrophies.run(newAttackerTrophies, attackerId);
-  stmts.updateTrophies.run(newDefenderTrophies, defenderId);
-  return { attackerTrophies: newAttackerTrophies, defenderTrophies: newDefenderTrophies };
+  // Trophy deltas route through applyTrophyDelta so per-player tournament
+  // freeze is honoured: a tournament-joined player's main `players.trophies`
+  // stays put, and the delta is funneled (with optional positive-only
+  // boost) into `tournament_participants.trophies` instead.
+  applyTrophyDelta(attackerId, -TROPHY_LOSS);
+  applyTrophyDelta(defenderId,  TROPHY_WIN);
+  // Return current main trophies for backwards-compat with callers that
+  // displayed them in the response. For tournament-frozen players these
+  // numbers are deliberately stale (matching "main is frozen during
+  // tournament") — the panel reads tournament counters separately.
+  return {
+    attackerTrophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
+    defenderTrophies: stmts.getPlayerById.get(defenderId)?.trophies || 0,
+  };
 }
 
 const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
@@ -852,18 +1021,22 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
   const shieldUntil = new Date(Date.now() + SHIELD_HOURS * 3600000).toISOString().replace('T', ' ').slice(0, 19);
   stmts.setShield.run(shieldUntil, attackerId, defenderId);
 
-  // PvP trophies — attacker gains, defender loses
-  const attacker = stmts.getPlayerById.get(attackerId);
-  const newAttackerTrophies = (attacker?.trophies || 0) + TROPHY_WIN;
-  const newDefenderTrophies = Math.max(0, (defender.trophies || 0) - TROPHY_LOSS);
-  stmts.updateTrophies.run(newAttackerTrophies, attackerId);
-  stmts.updateTrophies.run(newDefenderTrophies, defenderId);
+  // PvP trophies — attacker gains, defender loses. Routed through
+  // applyTrophyDelta so a tournament-joined player has their main
+  // trophies frozen and the delta credited (with boost on positive
+  // delta) to their tournament_participants row instead.
+  applyTrophyDelta(attackerId,  TROPHY_WIN);
+  applyTrophyDelta(defenderId, -TROPHY_LOSS);
 
   return {
     success: true,
     loot: { gold: lootGold, wood: lootWood, ore: lootOre },
     attacker_resources: getResources(attackerId),
-    trophies: newAttackerTrophies,
+    // Re-read main trophies for response. For attacker frozen by a
+    // tournament this stays at the pre-battle value (the tournament
+    // counter took the increment); the futures/HUD UI reads tournament
+    // standings via the dedicated /api/tournaments/:id/me endpoint.
+    trophies: stmts.getPlayerById.get(attackerId)?.trophies || 0,
   };
 });
 
@@ -918,6 +1091,13 @@ module.exports = {
   buyShip,
   battleVictory,
   battleDefeat,
+  // Tournament hooks — exported so server/routes.js claim-gold path and
+  // server-futures rewards-workers can credit volume / pnl into
+  // tournament_participants alongside the normal flow.
+  getPlayerActiveTournament,
+  applyTrophyDelta,
+  applyGoldReward,
+  recordTournamentTrade,
   getResourceCaps,
   storeReplay,
   TROPHY_TABLE,

@@ -366,6 +366,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab active" onclick="switchTab('players')">Players</div>
     <div class="tab" onclick="switchTab('replays')">Battle Replays</div>
     <div class="tab" onclick="switchTab('tasks')">Tasks</div>
+    <div class="tab" onclick="switchTab('tournaments')">Tournaments</div>
     <div class="tab" onclick="switchTab('elfa')">Elfa</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
@@ -433,6 +434,56 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>ID</th><th>Type</th><th>Title</th><th>Params</th><th>Reward</th><th>Active</th><th>Repeat</th><th>Started</th><th>Claimed</th><th>Rate</th><th>Avg %</th><th>Last Claim</th><th>Actions</th>
     </tr></thead><tbody id="tasksBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-tournaments">
+    <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap">
+      <div style="flex:1;min-width:340px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
+        <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Create Tournament</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <label style="font-size:11px;color:#9ca3af">Name<input id="tn_name" placeholder="e.g. Spring Cup" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">DEX
+            <select id="tn_dex" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="pacifica">Pacifica</option>
+              <option value="avantis">Avantis</option>
+              <option value="decibel">Decibel</option>
+              <option value="gmx">GMX</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Start (UTC, optional)<input id="tn_start" placeholder="2026-05-04 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">End (UTC, optional)<input id="tn_end" placeholder="2026-05-11 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Gold boost (×)<input id="tn_gold" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Trophy boost (×)<input id="tn_trophy" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Sort by
+            <select id="tn_sort" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="pnl_usd">PnL (USD)</option>
+              <option value="trophies">Trophies</option>
+              <option value="volume_usd">Volume (USD)</option>
+              <option value="gold">Gold</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:#9ca3af">Status
+            <select id="tn_status" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="active">Active</option>
+              <option value="draft">Draft</option>
+              <option value="ended">Ended</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn" style="margin-top:10px" onclick="createTournament()">Create</button>
+      </div>
+      <div style="flex:2;min-width:380px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
+        <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Live Leaderboard</h3>
+        <div id="tn_lb_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament below to view its leaderboard.</div>
+        <table style="font-size:12px"><thead><tr>
+          <th>#</th><th>Player</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
+        </tr></thead><tbody id="tn_lb_body"></tbody></table>
+      </div>
+    </div>
+    <table><thead><tr>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Start</th><th>End</th><th>Gold×</th><th>Trophy×</th><th>Sort</th><th>Players</th><th>Actions</th>
+    </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-elfa">
@@ -1153,6 +1204,118 @@ async function deleteTask(id) {
   loadTasks();
 }
 
+// ---------- Tournaments admin ----------
+let TOURNAMENTS_CACHE = [];
+let TOURNAMENT_LB_ID = null;
+
+async function loadTournaments() {
+  try {
+    const d = await api('/admin/tournaments');
+    TOURNAMENTS_CACHE = d.tournaments || [];
+    renderTournaments();
+    if (TOURNAMENT_LB_ID) loadTournamentLeaderboard(TOURNAMENT_LB_ID);
+  } catch(e) { console.error(e); }
+}
+
+function renderTournaments() {
+  const body = document.getElementById('tournamentsBody');
+  if (!body) return;
+  if (TOURNAMENTS_CACHE.length === 0) {
+    body.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet — create one above</td></tr>';
+    return;
+  }
+  body.innerHTML = TOURNAMENTS_CACHE.map(t => {
+    const statusBadge = t.status === 'active' ? '<span style="color:#34d399">ACTIVE</span>'
+      : t.status === 'draft' ? '<span style="color:#9ca3af">DRAFT</span>'
+      : '<span style="color:#6b7280">ENDED</span>';
+    return '<tr>'
+      + '<td>' + t.id + '</td>'
+      + '<td>' + esc(t.name) + (t.description ? '<div style="font-size:10px;color:#9ca3af">' + esc(t.description) + '</div>' : '') + '</td>'
+      + '<td>' + esc(t.dex) + '</td>'
+      + '<td>' + statusBadge + '</td>'
+      + '<td style="font-size:11px">' + esc(t.start_at || '') + '</td>'
+      + '<td style="font-size:11px">' + esc(t.end_at || '∞') + '</td>'
+      + '<td>' + t.gold_boost + '×</td>'
+      + '<td>' + t.trophy_boost + '×</td>'
+      + '<td>' + esc(t.sort_by) + '</td>'
+      + '<td>' + (t.participants || 0) + '</td>'
+      + '<td>'
+      +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
+      +   (t.status === 'active' ? '<button class="btn" onclick="endTournament(' + t.id + ')">End</button> ' : '')
+      +   '<button class="btn" onclick="deleteTournament(' + t.id + ')" style="background:#7f1d1d">Delete</button>'
+      + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+async function createTournament() {
+  const body = {
+    name: document.getElementById('tn_name').value.trim(),
+    description: document.getElementById('tn_desc').value.trim(),
+    dex: document.getElementById('tn_dex').value,
+    start_at: document.getElementById('tn_start').value.trim() || undefined,
+    end_at: document.getElementById('tn_end').value.trim() || undefined,
+    gold_boost: parseFloat(document.getElementById('tn_gold').value) || 1,
+    trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
+    sort_by: document.getElementById('tn_sort').value,
+    status: document.getElementById('tn_status').value,
+  };
+  if (!body.name) { alert('Name required'); return; }
+  const r = await fetch('/api/admin/tournaments', {
+    method: 'POST',
+    headers: { 'x-admin-key': KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || 'Failed'); return; }
+  document.getElementById('tn_name').value = '';
+  document.getElementById('tn_desc').value = '';
+  document.getElementById('tn_start').value = '';
+  document.getElementById('tn_end').value = '';
+  loadTournaments();
+}
+
+async function endTournament(id) {
+  if (!confirm('Force-end tournament #' + id + '? Players keep their stats but it stops accepting trophies/gold.')) return;
+  await fetch('/api/admin/tournaments/' + id + '/end', { method: 'POST', headers: { 'x-admin-key': KEY } });
+  loadTournaments();
+}
+
+async function deleteTournament(id) {
+  if (!confirm('Delete tournament #' + id + ' (also wipes participants)?')) return;
+  await fetch('/api/admin/tournaments/' + id, { method: 'DELETE', headers: { 'x-admin-key': KEY } });
+  if (TOURNAMENT_LB_ID === id) {
+    TOURNAMENT_LB_ID = null;
+    document.getElementById('tn_lb_meta').textContent = 'Pick a tournament below to view its leaderboard.';
+    document.getElementById('tn_lb_body').innerHTML = '';
+  }
+  loadTournaments();
+}
+
+async function loadTournamentLeaderboard(id) {
+  TOURNAMENT_LB_ID = id;
+  try {
+    // Public endpoint — no admin key needed; goes through nginx /api proxy.
+    const r = await fetch('/api/tournaments/' + id + '/leaderboard?limit=50');
+    const j = await r.json();
+    if (!r.ok) { alert(j.error || 'Failed'); return; }
+    const t = j.tournament;
+    document.getElementById('tn_lb_meta').textContent =
+      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · sort: ' + j.sort_by + ' · ' + (j.leaderboard.length) + ' players';
+    document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
+      return '<tr>'
+        + '<td>' + r.rank + '</td>'
+        + '<td>' + esc(r.name || (r.wallet || '').slice(0, 8)) + '</td>'
+        + '<td>' + r.trophies + '</td>'
+        + '<td>' + r.gold + '</td>'
+        + '<td>' + r.trades_count + '</td>'
+        + '<td>$' + Math.round(r.volume_usd || 0).toLocaleString() + '</td>'
+        + '<td style="color:' + ((r.pnl_usd || 0) >= 0 ? '#34d399' : '#fca5a5') + '">$' + (r.pnl_usd || 0).toFixed(2) + '</td>'
+        + '</tr>';
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
 // ---------- Elfa admin ----------
 let ELFA_CACHE = { stats: [], errors: [], has_key: false };
 
@@ -1216,6 +1379,7 @@ switchTab = function(name) {
   if (name === 'logs') loadLogs();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
+  if (name === 'tournaments') loadTournaments();
   if (name === 'elfa') loadElfa();
 };
 

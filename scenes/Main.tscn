@@ -1,10 +1,10 @@
 [gd_scene format=3 uid="uid://dosexdc7fxdx0"]
 
-[ext_resource type="PackedScene" uid="uid://bt2voohr3otgb" path="res://Model/Island/Isl.glb" id="1_uu6xs"]
-[ext_resource type="Script" uid="uid://vikmob2bagbn" path="res://scripts/camera_rig.gd" id="2_cam"]
-[ext_resource type="Shader" uid="uid://w1c5sjoqq7u4" path="res://shaders/water.gdshader" id="3_cm0pq"]
-[ext_resource type="Script" uid="uid://56cxsu5s20t6" path="res://scripts/building_system.gd" id="4_cm0pq"]
-[ext_resource type="Script" uid="uid://df6gm7o36dvf7" path="res://scripts/attack_system.gd" id="5_vcsgt"]
+[ext_resource type="PackedScene" uid="uid://bgghwmgkhv3sv" path="res://Model/Island/Isl.glb" id="1_uu6xs"]
+[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="2_cam"]
+[ext_resource type="Shader" path="res://shaders/water.gdshader" id="3_cm0pq"]
+[ext_resource type="Script" path="res://scripts/building_system.gd" id="4_cm0pq"]
+[ext_resource type="Script" path="res://scripts/attack_system.gd" id="5_vcsgt"]
 [ext_resource type="PackedScene" uid="uid://cl3mm08tunr88" path="res://Model/Ship/MainShip/MainShip.glb" id="16_cvmbd"]
 [ext_resource type="Script" path="res://scripts/warmup.gd" id="17_warmup"]
 

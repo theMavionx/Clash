@@ -7,7 +7,7 @@ import { isFarcasterFrame } from './useFarcaster';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
-import { pacificaNow, setPacificaServerTimeFromDateHeader } from '../lib/pacificaTime';
+import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -44,15 +44,69 @@ const API = 'https://api.pacifica.fi/api/v1';
 const WS_URL = 'wss://ws.pacifica.fi/ws';
 const BUILDER_CODE = 'clashofperps';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
+const ACTIVATION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AGENT_SIGNED_TYPES = new Set([
+  'create_market_order',
+  'create_order',
+  'cancel_order',
+  'set_position_tpsl',
+  'update_leverage',
+  'update_margin_mode',
+]);
+
+function activationCacheKey(walletAddr) {
+  return walletAddr ? `clash_pacifica_activated:${walletAddr}` : null;
+}
+
+function readActivationCache(walletAddr) {
+  const key = activationCacheKey(walletAddr);
+  if (!key || typeof localStorage === 'undefined') return false;
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return false;
+    const entry = JSON.parse(raw);
+    if (!entry?.ts || Date.now() - entry.ts > ACTIVATION_CACHE_TTL_MS) {
+      localStorage.removeItem(key);
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function writeActivationCache(walletAddr) {
+  const key = activationCacheKey(walletAddr);
+  if (!key || typeof localStorage === 'undefined') return;
+  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now() })); } catch {}
+}
+
+function clearActivationCache(walletAddr) {
+  const key = activationCacheKey(walletAddr);
+  if (!key || typeof localStorage === 'undefined') return;
+  try { localStorage.removeItem(key); } catch {}
+}
 
 // Gold rewards are calculated server-side via POST /trading/claim-gold
 
-// Round down to lot size (avoids floating point errors)
-function roundToLot(amount, lotSize) {
+// Round to lot size. Opens use floor so we never submit more size than the UI
+// showed. Full closes use ceil with a tiny epsilon; Pacifica positions can
+// arrive as 0.119999999 for a 0.12 lot-aligned position, and floor would close
+// 0.11 then leave dust that needs another signed reduce-only order.
+function roundToLot(amount, lotSize, mode = 'floor') {
   if (!lotSize) return String(amount);
+  const n = parseFloat(amount);
   const lot = parseFloat(lotSize);
+  if (!Number.isFinite(n) || !Number.isFinite(lot) || lot <= 0) return String(amount);
   const decimals = (lotSize.toString().split('.')[1] || '').length;
-  return (Math.floor(parseFloat(amount) / lot) * lot).toFixed(decimals);
+  const units = n / lot;
+  const nearestUnits = Math.round(units);
+  const roundedUnits = Math.abs(units - nearestUnits) <= 1e-6
+    ? nearestUnits
+    : mode === 'ceil'
+      ? Math.ceil(units)
+      : Math.floor(units);
+  return (roundedUnits * lot).toFixed(decimals);
 }
 
 // Pacifica on-chain deposit constants
@@ -154,6 +208,9 @@ export function usePacifica() {
   const wsRef = useRef(null);
   const marketsRef = useRef([]);
   const withdrawTimerRef = useRef(null);
+  const signedOpInFlightRef = useRef(new Map());
+  const activatedRef = useRef(false);
+  const activatingRef = useRef(null);
   // Re-bind reentry guard for signedRequest. If Pacifica rejects a stored
   // agent key (cleared cache, server-side revoke), we forget+rebind+retry
   // exactly once per request to avoid infinite popup loops.
@@ -162,6 +219,29 @@ export function usePacifica() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
   const walletAddr = publicKey?.toBase58() || privyAddr;
+
+  useEffect(() => {
+    activatedRef.current = readActivationCache(walletAddr);
+  }, [walletAddr]);
+
+  const runSignedOnce = useCallback((key, fn, holdMs = 0) => {
+    const map = signedOpInFlightRef.current;
+    if (map.has(key)) {
+      console.warn(`[Pacifica] duplicate signed op ignored while pending: ${key}`);
+      return map.get(key);
+    }
+    const p = Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        const clear = () => {
+          if (map.get(key) === p) map.delete(key);
+        };
+        if (holdMs > 0) setTimeout(clear, holdMs);
+        else clear();
+      });
+    map.set(key, p);
+    return p;
+  }, []);
 
   // Master-wallet sign helper used by the agent-wallet hook for the ONE
   // popup the user ever sees: bind / revoke. Uses the same priority chain
@@ -303,7 +383,8 @@ export function usePacifica() {
       : inFC ? 'farcaster'
       : adapterName ? `adapter:${adapterName}`
       : 'none';
-    const hasAgentSecret = !!(signWithAgentKey && signWithAgentKey('__probe__', {}));
+    const canUseAgent = AGENT_SIGNED_TYPES.has(type);
+    const hasAgentSecret = !!(canUseAgent && signWithAgentKey && signWithAgentKey('__probe__', {}));
     console.log(`[Pacifica] signedRequest START`, {
       type, endpoint,
       walletKind,
@@ -317,7 +398,7 @@ export function usePacifica() {
     });
     // Try agent-key fast path first — covers the hot endpoints (orders,
     // positions/tpsl, account/leverage, account/margin) without prompting.
-    if (signWithAgentKey) {
+    if (canUseAgent && signWithAgentKey) {
       const tryAgent = async (label) => {
         const headerBag = signWithAgentKey(type, payload);
         if (!headerBag) {
@@ -331,7 +412,7 @@ export function usePacifica() {
           res = await fetch(`${API}${endpoint}`, {
             method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
           });
-          setPacificaServerTimeFromDateHeader(res.headers.get('Date'));
+          setPacificaServerTimeFromResponse(res, `${type}:agent`);
           text = await res.text();
           try { parsed = JSON.parse(text); } catch { /* non-JSON body */ }
         } catch (netErr) {
@@ -357,12 +438,13 @@ export function usePacifica() {
         // bound agent (cleared cache, server revoke, key rotation). Detect
         // 401 or signature/agent error, then forget + rebind + retry ONCE.
         // The rebind ref guards against infinite popup loops if rebind fails.
-        const errStr = String(attempt.parsed?.error || '');
+        const errStr = String(attempt.parsed?.error || attempt.text || '');
         const agentRejected =
           attempt.res.status === 401 ||
-          /invalid signature|agent[_ ]?wallet|invalid agent/i.test(errStr);
+          /verification failed|invalid signature|agent[_ ]?wallet|invalid agent/i.test(errStr);
         if (agentRejected) {
           console.warn(`[Pacifica] agent rejected by server (status=${attempt.res.status}, err="${errStr}")`);
+          let retried = null;
           if (rebindInFlightRef.current) {
             console.warn(`[Pacifica] rebind SKIPPED — already in flight`);
           } else if (!bindAgent) {
@@ -374,18 +456,25 @@ export function usePacifica() {
               console.log(`[Pacifica] rebind: calling bindAgent (master-wallet popup expected)`);
               await bindAgent();
               console.log(`[Pacifica] rebind: bind OK, retrying ${type}`);
-              const retried = await tryAgent('after-rebind');
-              if (retried) attempt = retried;
+              retried = await tryAgent('after-rebind');
             } catch (rebindErr) {
               console.warn(`[Pacifica] rebind FAILED — falling through to master sign`, { error: rebindErr?.message, name: rebindErr?.name });
             } finally { rebindInFlightRef.current = false; }
           }
+          const retryErrStr = String(retried?.parsed?.error || retried?.text || '');
+          const retryRejected = retried && (
+            retried.res.status === 401 ||
+            /verification failed|invalid signature|agent[_ ]?wallet|invalid agent/i.test(retryErrStr)
+          );
+          attempt = retried && !retryRejected ? retried : null;
         }
         if (attempt) {
           if (attempt.parsed !== null) return attempt.parsed;
           throw new Error(attempt.text || `API error ${attempt.res.status}`);
         }
       }
+    } else if (!canUseAgent) {
+      console.log(`[Pacifica] agent-path SKIP: ${type} requires master signature`);
     } else {
       console.log(`[Pacifica] agent-path SKIP: signWithAgentKey not exposed (hook not ready or no wallet)`);
     }
@@ -483,7 +572,7 @@ export function usePacifica() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    setPacificaServerTimeFromDateHeader(res.headers.get('Date'));
+    setPacificaServerTimeFromResponse(res, `${type}:master`);
     const text = await res.text();
     const responseHeaders = Object.fromEntries(res.headers.entries());
     try {
@@ -521,49 +610,51 @@ export function usePacifica() {
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
-    if (!walletAddr) return;
+    if (!walletAddr) return false;
+    // Referral-code claim is optional and currently returns "Invalid message"
+    // for Privy users, costing an extra master signature before every first
+    // trade. The required part for Pacifica trading is builder-code approval.
     try {
-      await signedRequest('POST', '/referral/user/code/claim', 'claim_referral_code', { code: 'Vip' });
-    } catch {}
-    try {
-      await signedRequest('POST', '/account/builder_codes/approve', 'approve_builder_code', {
+      const res = await signedRequest('POST', '/account/builder_codes/approve', 'approve_builder_code', {
         builder_code: BUILDER_CODE, max_fee_rate: '0.001',
       });
+      const ok = !res?.error && !(res?.code >= 400);
+      if (ok) writeActivationCache(walletAddr);
+      return ok;
     } catch {}
+    return false;
   }, [walletAddr, signedRequest]);
 
-  // Auto-activate: retry on 403 OR opaque 400 — wraps signedRequest with
-  // activation fallback. Pacifica returns plain-text "Invalid message" (400)
-  // for several first-trade conditions (unapproved builder_code, missing
-  // referral claim, clock-skewed timestamp). signedRequest now surfaces those
-  // as { error, code, _nonJson:true } so we can run activation once and retry
-  // before giving up.
-  // Pacifica REQUIRES `builder_code` to be pre-approved by the master wallet
-  // before any signed trade endpoint (orders/create_market, account/leverage,
-  // …) will accept the request. Empirically: ~95% of new users never get
-  // their builder code approved (Pacifica returns 400 with various error
-  // shapes — sometimes JSON, sometimes plain text — and the lazy retry below
-  // misses the plain-text variants). So we PRE-FLIGHT activate() on the very
-  // first signed call in a session, before the actual request goes out.
-  // After preflight succeeds, every subsequent call goes direct.
-  const activatedRef = useRef(false);
-  const activatingRef = useRef(null); // Promise|null — coalesce concurrent first-callers
+  // Auto-activate: open-trade endpoints need builder_code approved once by
+  // the master wallet. Cache that per wallet and skip preflight for reduce-only
+  // closes, because an existing position already implies the account can trade.
+  // If Pacifica still replies "not approved" / "Invalid message", reactively
+  // approve once and retry.
   const signedRequestWithActivation = useCallback(async (method, endpoint, type, payload) => {
     // Preflight: ensure builder_code + referral are claimed before the real
     // request. Skip for the activation requests themselves to avoid recursion.
     const isActivationCall = type === 'claim_referral_code' || type === 'approve_builder_code';
-    if (!isActivationCall && !activatedRef.current) {
+    const isReduceOnlyClose = type === 'create_market_order' && payload?.reduce_only === true;
+    const needsBuilderActivation = payload?.builder_code === BUILDER_CODE && !isReduceOnlyClose;
+    if (!isActivationCall && needsBuilderActivation && !activatedRef.current) {
       if (!activatingRef.current) {
         console.log(`[Pacifica] preflight activate() — first signed call (${type})`);
         activatingRef.current = (async () => {
-          try { await activate(); }
-          finally { activatedRef.current = true; activatingRef.current = null; }
+          try {
+            const ok = await activate();
+            activatedRef.current = ok || readActivationCache(walletAddr);
+          }
+          finally { activatingRef.current = null; }
         })();
       }
       await activatingRef.current;
     }
 
     const res = await signedRequest(method, endpoint, type, payload);
+    if (!res?.error && !(res?.code >= 400) && needsBuilderActivation) {
+      activatedRef.current = true;
+      writeActivationCache(walletAddr);
+    }
     // Reactive safety net — if for some reason preflight didn't cover it
     // (race with cached activatedRef from prior session, server-side state
     // diff, etc.), still react to a 403/not-approved/builder-code reply.
@@ -573,22 +664,25 @@ export function usePacifica() {
       /not approved|builder code/i.test(errStr) ||
       (res?._nonJson && res?.code === 400 && /invalid message/i.test(errStr));
     if (needsRetryActivation && !isActivationCall) {
+      clearActivationCache(walletAddr);
+      activatedRef.current = false;
       console.log(`[Pacifica] reactive activate() retry — ${type} returned ${res?.code} "${errStr}"`);
-      await activate();
+      const ok = await activate();
+      activatedRef.current = ok || readActivationCache(walletAddr);
       return signedRequest(method, endpoint, type, payload);
     }
     return res;
-  }, [signedRequest, activate]);
+  }, [signedRequest, activate, walletAddr]);
 
   // ---------- Market Data (public) ----------
   const fetchMarkets = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/info`);
+      const r = await fetch(`${API}/info`, { cache: 'no-store' });
       // Warm the clock-skew offset BEFORE any signed request fires. fetchMarkets
       // runs on mount, so by the time the user clicks LONG/SHORT we already
       // have an accurate Pacifica-clock baseline even if their local clock is
       // unsynced.
-      setPacificaServerTimeFromDateHeader(r.headers.get('Date'));
+      setPacificaServerTimeFromResponse(r, 'info');
       const res = await r.json();
       if (res.data) { setMarkets(res.data); marketsRef.current = res.data; }
     } catch {}
@@ -741,135 +835,156 @@ export function usePacifica() {
   // ---------- Trading ----------
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {
     if (!walletAddr) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
-      const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', {
-        symbol, side, amount: roundToLot(amount, lot),
-        slippage_percent: String(slippage || '0.5'),
-        reduce_only: false,
-        builder_code: BUILDER_CODE,
-      });
-      if (res.error) throw new Error(res.error);
-      fetchPositions();
-      fetchOrders();
-      fetchAccount();
-      return res;
-    } catch (e) {
-      setError(e.message);
-      return { error: e.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount]);
+    const opKey = `open-market:${walletAddr}:${symbol}:${side}:${amount}:${slippage || '0.5'}`;
+    return runSignedOnce(opKey, async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
+        const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', {
+          symbol, side, amount: roundToLot(amount, lot),
+          slippage_percent: String(slippage || '0.5'),
+          reduce_only: false,
+          builder_code: BUILDER_CODE,
+        });
+        if (res.error) throw new Error(res.error);
+        fetchPositions();
+        fetchOrders();
+        fetchAccount();
+        return res;
+      } catch (e) {
+        setError(e.message);
+        return { error: e.message };
+      } finally {
+        setLoading(false);
+      }
+    });
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount, runSignedOnce]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif) => {
     if (!walletAddr) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
-      const tick = marketsRef.current.find(m => m.symbol === symbol)?.tick_size;
-      const res = await signedRequestWithActivation('POST', '/orders/create', 'create_order', {
-        symbol, side, price: tick ? roundToLot(price, tick) : String(price), amount: roundToLot(amount, lot),
-        tif: tif || 'GTC', reduce_only: false,
-        builder_code: BUILDER_CODE,
-      });
-      if (res.error) throw new Error(res.error);
-      fetchOrders();
-      fetchAccount();
-      return res;
-    } catch (e) {
-      setError(e.message);
-      return { error: e.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [walletAddr, signedRequestWithActivation, fetchOrders, fetchAccount]);
+    const opKey = `open-limit:${walletAddr}:${symbol}:${side}:${price}:${amount}:${tif || 'GTC'}`;
+    return runSignedOnce(opKey, async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
+        const tick = marketsRef.current.find(m => m.symbol === symbol)?.tick_size;
+        const res = await signedRequestWithActivation('POST', '/orders/create', 'create_order', {
+          symbol, side, price: tick ? roundToLot(price, tick) : String(price), amount: roundToLot(amount, lot),
+          tif: tif || 'GTC', reduce_only: false,
+          builder_code: BUILDER_CODE,
+        });
+        if (res.error) throw new Error(res.error);
+        fetchOrders();
+        fetchAccount();
+        return res;
+      } catch (e) {
+        setError(e.message);
+        return { error: e.message };
+      } finally {
+        setLoading(false);
+      }
+    });
+  }, [walletAddr, signedRequestWithActivation, fetchOrders, fetchAccount, runSignedOnce]);
 
-  const closePosition = useCallback(async (symbol, side, amount) => {
+  const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, fullClose = false) => {
     if (!walletAddr) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const closeSide = side === 'bid' ? 'ask' : 'bid';
-      const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
-      const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', {
-        symbol, side: closeSide, amount: roundToLot(amount, lot),
-        slippage_percent: '1', reduce_only: true,
-        builder_code: BUILDER_CODE,
-      });
-      if (res.error) throw new Error(res.error);
-      fetchPositions();
-      fetchAccount();
-      return res;
-    } catch (e) {
-      setError(e.message);
-      return { error: e.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchAccount]);
+    const opKey = `close:${walletAddr}:${symbol}:${side}`;
+    return runSignedOnce(opKey, async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const closeSide = side === 'bid' ? 'ask' : 'bid';
+        const lot = marketsRef.current.find(m => m.symbol === symbol)?.lot_size;
+        const roundedAmount = roundToLot(amount, lot, fullClose ? 'ceil' : 'floor');
+        if (!Number.isFinite(Number(roundedAmount)) || Number(roundedAmount) <= 0) {
+          throw new Error('Close amount is below this market lot size');
+        }
+        const res = await signedRequestWithActivation('POST', '/orders/create_market', 'create_market_order', {
+          symbol, side: closeSide, amount: roundedAmount,
+          slippage_percent: '1', reduce_only: true,
+          builder_code: BUILDER_CODE,
+        });
+        if (res.error) throw new Error(res.error);
+        fetchPositions();
+        fetchAccount();
+        return res;
+      } catch (e) {
+        setError(e.message);
+        return { error: e.message };
+      } finally {
+        setLoading(false);
+      }
+    }, 8000);
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchAccount, runSignedOnce]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return;
-    try {
-      const res = await signedRequestWithActivation('POST', '/orders/cancel', 'cancel_order', { symbol, order_id: orderId });
-      if (res.error) throw new Error(res.error);
-      fetchOrders();
-      return res;
-    } catch (e) { setError(e.message); }
-  }, [walletAddr, signedRequestWithActivation, fetchOrders]);
+    return runSignedOnce(`cancel:${walletAddr}:${symbol}:${orderId}`, async () => {
+      try {
+        const res = await signedRequestWithActivation('POST', '/orders/cancel', 'cancel_order', { symbol, order_id: orderId });
+        if (res.error) throw new Error(res.error);
+        fetchOrders();
+        return res;
+      } catch (e) { setError(e.message); return { error: e.message }; }
+    }, 3000);
+  }, [walletAddr, signedRequestWithActivation, fetchOrders, runSignedOnce]);
 
   const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss) => {
     if (!walletAddr) return;
-    try {
-      const payload = { symbol, side, builder_code: BUILDER_CODE };
-      if (takeProfit) payload.take_profit = { stop_price: takeProfit };
-      if (stopLoss) payload.stop_loss = { stop_price: stopLoss };
-      const res = await signedRequestWithActivation('POST', '/positions/tpsl', 'set_position_tpsl', payload);
-      if (res.error) throw new Error(res.error);
-      return res;
-    } catch (e) { setError(e.message); }
-  }, [walletAddr, signedRequestWithActivation]);
+    return runSignedOnce(`tpsl:${walletAddr}:${symbol}:${side}`, async () => {
+      try {
+        const payload = { symbol, side, builder_code: BUILDER_CODE };
+        if (takeProfit) payload.take_profit = { stop_price: takeProfit };
+        if (stopLoss) payload.stop_loss = { stop_price: stopLoss };
+        const res = await signedRequestWithActivation('POST', '/positions/tpsl', 'set_position_tpsl', payload);
+        if (res.error) throw new Error(res.error);
+        return res;
+      } catch (e) { setError(e.message); return { error: e.message }; }
+    });
+  }, [walletAddr, signedRequestWithActivation, runSignedOnce]);
 
   const setLeverage = useCallback(async (symbol, leverage) => {
     if (!walletAddr) return;
-    try {
-      // Cap at symbol's actual max (Pacifica rejects otherwise with InvalidLeverage).
-      const mkt = marketsRef.current.find(m => m.symbol === symbol);
-      const maxLev = mkt?.max_leverage ? Number(mkt.max_leverage) : 50;
-      const capped = Math.max(1, Math.min(Number(leverage), maxLev));
-      const res = await signedRequestWithActivation('POST', '/account/leverage', 'update_leverage', {
-        symbol, leverage: capped,
-      });
-      if (res.error) {
-        if (res.code === 422) throw new Error('Close your ' + symbol + ' position first (can only increase leverage)');
-        if (/InvalidLeverage/i.test(res.error)) {
-          throw new Error(`Leverage ${capped}x not accepted by Pacifica (max for ${symbol} is ${maxLev}x). Close open position first.`);
+    return runSignedOnce(`leverage:${walletAddr}:${symbol}`, async () => {
+      try {
+        // Cap at symbol's actual max (Pacifica rejects otherwise with InvalidLeverage).
+        const mkt = marketsRef.current.find(m => m.symbol === symbol);
+        const maxLev = mkt?.max_leverage ? Number(mkt.max_leverage) : 50;
+        const capped = Math.max(1, Math.min(Number(leverage), maxLev));
+        const res = await signedRequestWithActivation('POST', '/account/leverage', 'update_leverage', {
+          symbol, leverage: capped,
+        });
+        if (res.error) {
+          if (res.code === 422) throw new Error('Close your ' + symbol + ' position first (can only increase leverage)');
+          if (/InvalidLeverage/i.test(res.error)) {
+            throw new Error(`Leverage ${capped}x not accepted by Pacifica (max for ${symbol} is ${maxLev}x). Close open position first.`);
+          }
+          throw new Error(res.error);
         }
-        throw new Error(res.error);
-      }
-      fetchLeverageSettings();
-      return res;
-    } catch (e) { setError(e.message); }
-  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings]);
+        fetchLeverageSettings();
+        return res;
+      } catch (e) { setError(e.message); return { error: e.message }; }
+    });
+  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings, runSignedOnce]);
 
   const setMarginMode = useCallback(async (symbol, isIsolated) => {
     if (!walletAddr) return;
-    try {
-      const res = await signedRequestWithActivation('POST', '/account/margin', 'update_margin_mode', {
-        symbol, is_isolated: isIsolated,
-      });
-      if (res.error) {
-        if (res.code === 422) throw new Error('Close your ' + symbol + ' position first to change margin mode');
-        throw new Error(res.error);
-      }
-      fetchLeverageSettings();
-      return res;
-    } catch (e) { setError(e.message); }
-  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings]);
+    return runSignedOnce(`margin:${walletAddr}:${symbol}`, async () => {
+      try {
+        const res = await signedRequestWithActivation('POST', '/account/margin', 'update_margin_mode', {
+          symbol, is_isolated: isIsolated,
+        });
+        if (res.error) {
+          if (res.code === 422) throw new Error('Close your ' + symbol + ' position first to change margin mode');
+          throw new Error(res.error);
+        }
+        fetchLeverageSettings();
+        return res;
+      } catch (e) { setError(e.message); return { error: e.message }; }
+    });
+  }, [walletAddr, signedRequestWithActivation, fetchLeverageSettings, runSignedOnce]);
 
   const withdraw = useCallback(async (amount) => {
     if (!walletAddr) return;

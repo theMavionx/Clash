@@ -28,6 +28,20 @@ func init(building_system: Node3D) -> BSProduction:
 	bs = building_system
 	return self
 
+func _load_collect_texture(res_type: String) -> Texture2D:
+	var tex_path: String = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
+	if ResourceLoader.exists(tex_path):
+		var imported_tex := ResourceLoader.load(tex_path) as Texture2D
+		if imported_tex:
+			return imported_tex
+
+	# React imports these same PNGs from web/src. Godot can pack them as raw
+	# files without .import metadata, so ResourceLoader.exists() may be false.
+	var image := Image.new()
+	if image.load(tex_path) == OK:
+		return ImageTexture.create_from_image(image)
+	return null
+
 # ── Production tick ────────────────────────────────────────────
 
 ## Advance stored resources for every production building by one second's worth
@@ -152,8 +166,7 @@ func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary)
 	tex_rect.offset_right  = -10
 	tex_rect.offset_bottom = -10
 	tex_rect.mouse_filter  = Control.MOUSE_FILTER_IGNORE
-	var tex_path: String = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
-	var tex = load(tex_path)
+	var tex := _load_collect_texture(res_type)
 	if tex:
 		tex_rect.texture = tex
 	btn.add_child(tex_rect)
@@ -193,8 +206,7 @@ func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
 ## Spawn multiple flying resource icons that travel from the building toward the
 ## matching HUD counter label.
 func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void:
-	var tex_path: String = COLLECT_ICON_TEXTURES.get(res_type, COLLECT_ICON_TEXTURES["gold"])
-	var tex = load(tex_path)
+	var tex := _load_collect_texture(res_type)
 	if not tex:
 		return
 

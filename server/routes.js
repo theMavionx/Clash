@@ -1285,7 +1285,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         ? "AND verified_source IN ('worker', 'server')"
         : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
-        SELECT id, symbol, side, amount, notional_usd, status, created_at
+        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
           ${sourceClause} AND id > ?
@@ -1310,6 +1310,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     const reasons = [];
     let maxId = reward.last_trade_id || 0;
     let newVolume = 0;
+    let newPnl = 0;
     let creditedTrades = 0;
     // Track opens separately — "first_trade" bonus should only fire on an
     // actual OPEN (long/short), not on a close-only sequence. Previously a
@@ -1324,6 +1325,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         continue;
       }
       newVolume += raw;
+      // pnl is per-close trade in trade_history; opens have it null/0. Sum
+      // across credited trades so the tournament leaderboard shows realised
+      // pnl across the claim window. Clamp to a sane band so a malformed
+      // row can't poison the cumulative total.
+      const pnlRaw = Number(t.pnl);
+      if (Number.isFinite(pnlRaw) && pnlRaw > -SANE_MAX_NOTIONAL && pnlRaw < SANE_MAX_NOTIONAL) {
+        newPnl += pnlRaw;
+      }
       totalGold += volumeGoldForDex(dex, raw);
       creditedTrades++;
       const sideLower = String(t.side || '').toLowerCase();
@@ -1374,8 +1383,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const expectedLastId = reward.last_trade_id || 0;
       const actualLastId = (fresh && fresh.last_trade_id) || 0;
       if (actualLastId !== expectedLastId) {
-        return { raced: true };
+        return { raced: true, paid: 0 };
       }
+      // Tournament boost: if the player is in an active tournament for this
+      // DEX, the gold credit is multiplied by gold_boost (and the boosted
+      // amount is recorded in tournament_participants.gold). Outside any
+      // tournament this returns the original number — same as the legacy
+      // behaviour.
+      const paidGold = totalGold > 0 ? db.applyGoldReward(req.player.id, totalGold) : 0;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
@@ -1384,25 +1399,32 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
           updated_at = datetime('now')
         WHERE player_id = ? AND dex = ?
-      `).run(maxId, newVolume, totalGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
-      if (totalGold > 0) {
-        db.addResources(req.player.id, totalGold, 0, 0);
+      `).run(maxId, newVolume, paidGold, creditedOpens, creditedOpens, creditedTrades, today, req.player.id, dex);
+      if (paidGold > 0) {
+        db.addResources(req.player.id, paidGold, 0, 0);
         // Record the payout in gold_history so ProfileModal's trading-stats
         // timeline shows the same ledger as Pacifica. Reason must contain
         // "trade" / "profit" / "daily" / "deposit" / "volume" for the
         // daily_trade_gold task verifier's heuristic (see tasks.js).
         db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)')
-          .run(req.player.id, totalGold, reasons.join(' + ') || 'Trading reward');
+          .run(req.player.id, paidGold, reasons.join(' + ') || 'Trading reward');
       }
-      return { raced: false };
+      // Tournament leaderboard: track every credited trade's volume + pnl
+      // so volume_usd / pnl_usd / trades_count update in lockstep with the
+      // gold credit. No-op outside tournaments. Bumping inside the txn
+      // keeps the leaderboard atomic with the gold ledger.
+      if (creditedTrades > 0) {
+        db.recordTournamentTrade(req.player.id, newVolume, newPnl, creditedTrades);
+      }
+      return { raced: false, paid: paidGold };
     });
 
     const txnResult = creditTxn();
     if (txnResult.raced) {
       return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
-    if (totalGold > 0) {
-      return res.json({ gold: totalGold, reason: reasons.join(' + ') || 'Trading reward', dex });
+    if (txnResult.paid > 0) {
+      return res.json({ gold: txnResult.paid, reason: reasons.join(' + ') || 'Trading reward', dex });
     }
     return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex });
   }
@@ -1437,6 +1459,11 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
       return res.json({ gold: 0, reason: 'No new trades' });
     }
+    // Pacifica trade history is fill-level: one user order can appear as
+    // several history_id rows with the same order_id. Sum fill volume/PnL, but
+    // count unique order_id values for "trades" bonuses and leaderboards.
+    const tradeEventKey = (t) => String(t.order_id || t.client_order_id || t.history_id || '');
+    const uniqueTradeCount = new Set(newTrades.map(tradeEventKey).filter(Boolean)).size;
 
     let totalGold = 0;
     const reasons = [];
@@ -1468,8 +1495,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       reasons.push(`+$${(chunks * 10).toFixed(0)} profit`);
     }
 
-    if (newTrades.length > 0) {
-      reasons.push(`${newTrades.length} trades`);
+    if (uniqueTradeCount > 0) {
+      reasons.push(`${uniqueTradeCount} trades`);
     }
 
     // First deposit / first trade bonuses — once per player forever.
@@ -1485,14 +1512,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       totalGold += GOLD_FIRST_DEPOSIT;
       reasons.push('First deposit!');
     }
-    if (!reward.first_trade && !alreadyPaidFirstTradePac && newTrades.length > 0) {
+    if (!reward.first_trade && !alreadyPaidFirstTradePac && uniqueTradeCount > 0) {
       totalGold += GOLD_FIRST_TRADE;
       reasons.push('First trade!');
     }
 
     // Daily bonus
     const today = new Date().toISOString().split('T')[0];
-    if (reward.last_daily !== today && newTrades.length > 0) {
+    if (reward.last_daily !== today && uniqueTradeCount > 0) {
       totalGold += GOLD_DAILY_TRADE;
       reasons.push('Daily bonus');
     }
@@ -1507,25 +1534,44 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const expectedLastId = reward.last_trade_id || 0;
       const actualLastId = (fresh && fresh.last_trade_id) || 0;
       if (actualLastId !== expectedLastId) {
-        return { raced: true };
+        return { raced: true, paid: 0 };
       }
       const insertTrade = db.db.prepare('INSERT OR IGNORE INTO player_trades (player_id, history_id, symbol, price, amount, fee) VALUES (?, ?, ?, ?, ?, ?)');
       for (const t of newTrades) {
         insertTrade.run(req.player.id, t.history_id, t.symbol || '?', t.price || '0', t.amount || '0', t.builder_fee || '0');
       }
+      // Tournament boost: gold credit is multiplied by gold_boost when the
+      // player is in an active Pacifica tournament. The boosted amount
+      // also lands in tournament_participants.gold for the leaderboard.
+      const paidGold = totalGold > 0 ? db.applyGoldReward(req.player.id, totalGold) : 0;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
           first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
           last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
         WHERE player_id = ? AND dex = ?
-      `).run(maxTradeId, newVolume, totalGold, newTrades.length, today, pnlPool, req.player.id, dex);
-      if (totalGold > 0) {
-        db.addResources(req.player.id, totalGold, 0, 0);
+      `).run(maxTradeId, newVolume, paidGold, uniqueTradeCount, today, pnlPool, req.player.id, dex);
+      if (paidGold > 0) {
+        db.addResources(req.player.id, paidGold, 0, 0);
         const reason = reasons.join(' + ') || 'Trading reward';
-        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, totalGold, reason);
+        db.db.prepare('INSERT INTO gold_history (player_id, amount, reason) VALUES (?, ?, ?)').run(req.player.id, paidGold, reason);
       }
-      return { raced: false };
+      // Tournament leaderboard: bump trades_count + volume_usd + pnl_usd
+      // in lockstep with the gold credit. closePnl already excludes losses
+      // (only positive realized PnL counts) but leaderboards typically
+      // want NET pnl — recompute the signed sum here.
+      if (uniqueTradeCount > 0) {
+        let netPnl = 0;
+        for (const t of newTrades) {
+          const side = (t.side || '').toLowerCase();
+          if (side.includes('close')) {
+            const v = parseFloat(t.realized_pnl || t.pnl || 0);
+            if (Number.isFinite(v)) netPnl += v;
+          }
+        }
+        db.recordTournamentTrade(req.player.id, newVolume, netPnl, uniqueTradeCount);
+      }
+      return { raced: false, paid: paidGold };
     });
     const txnResPac = creditTxnPac();
     if (txnResPac.raced) {
@@ -1533,9 +1579,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
 
     res.json({
-      gold: Math.floor(totalGold),
+      gold: Math.floor(txnResPac.paid),
       reason: reasons.join(' + ') || 'No new rewards',
-      total_gold_earned: (reward.total_gold || 0) + totalGold,
+      total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
     });
   } catch (e) {
     console.error('Claim gold error:', e);
@@ -2400,6 +2446,261 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
   db.db.prepare('DELETE FROM troop_levels').run();
   db.db.prepare('DELETE FROM players').run();
   res.json({ wiped: true });
+});
+
+// ==================== TOURNAMENTS ====================
+//
+// Tournaments are admin-curated per-DEX competitions. Players can join one
+// active tournament for their DEX at a time. While joined:
+//   - Trophies earned from battles are routed into tournament_participants
+//     (with optional trophy_boost) and players.trophies stays FROZEN. This
+//     is the "freeze" mechanic the user asked for.
+//   - Gold earned from /claim-gold is multiplied by gold_boost and the
+//     boosted amount lands in both players.gold and tournament_participants.gold.
+//   - Volume + pnl + trades_count are tracked in tournament_participants
+//     for the leaderboard.
+// Tournament state is per-DEX: a Pacifica player can't join a GMX
+// tournament. This is enforced by the JOIN against players.dex inside
+// getActiveTournamentForPlayer and explicitly checked at /join time.
+
+function tournamentRowToPublic(t) {
+  return {
+    id: t.id,
+    name: t.name,
+    description: t.description || '',
+    dex: t.dex,
+    start_at: t.start_at,
+    end_at: t.end_at,
+    gold_boost: Number(t.gold_boost),
+    trophy_boost: Number(t.trophy_boost),
+    sort_by: t.sort_by,
+    status: t.status,
+    created_at: t.created_at,
+  };
+}
+
+// List all live tournaments visible to players (active, not yet ended).
+// We show every DEX's tournaments — the client filters/sorts by the
+// player's own DEX. Admin gets full list (incl. drafts) via the admin
+// endpoint below.
+router.get('/tournaments', (req, res) => {
+  const rows = db.db.prepare(`
+    SELECT * FROM tournaments
+    WHERE status = 'active'
+      AND start_at <= datetime('now')
+      AND (end_at IS NULL OR end_at > datetime('now'))
+    ORDER BY id DESC
+  `).all();
+  res.json({ tournaments: rows.map(tournamentRowToPublic) });
+});
+
+// Player's current tournament context: the active tournament for their DEX
+// (if any) plus their participation row. UI uses this to decide whether to
+// show "Join" or "Leave + leaderboard" on the trophy button.
+router.get('/tournaments/me', auth, (req, res) => {
+  const dex = req.player.dex;
+  const t = db.db.prepare(`
+    SELECT * FROM tournaments
+    WHERE dex = ? AND status = 'active'
+      AND start_at <= datetime('now')
+      AND (end_at IS NULL OR end_at > datetime('now'))
+    ORDER BY id DESC LIMIT 1
+  `).get(dex);
+  if (!t) return res.json({ tournament: null, joined: false });
+  const me = db.db.prepare(`
+    SELECT * FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(t.id, req.player.id);
+  res.json({
+    tournament: tournamentRowToPublic(t),
+    joined: !!(me && me.left_at === null),
+    me: me ? {
+      trophies: me.trophies,
+      gold: me.gold,
+      trades_count: me.trades_count,
+      volume_usd: me.volume_usd,
+      pnl_usd: me.pnl_usd,
+      joined_at: me.joined_at,
+      left_at: me.left_at,
+    } : null,
+  });
+});
+
+// Join a tournament. Player can only join their own DEX's tournament. If
+// they have a stale soft-leave row from a previous join we re-activate it
+// (preserving counters? — no, reset to zero since the user explicitly
+// left). The tournament must currently be live.
+router.post('/tournaments/:id/join', auth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  if (t.status !== 'active') return res.status(400).json({ error: 'tournament not active' });
+  if (t.dex !== req.player.dex) return res.status(403).json({ error: 'tournament is for a different DEX' });
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  if (t.end_at && t.end_at <= now) return res.status(400).json({ error: 'tournament has ended' });
+  // Insert or re-activate. Reset counters on re-join — explicitly leaving
+  // means the player accepts losing their slot's stats.
+  db.db.prepare(`
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0)
+    ON CONFLICT(tournament_id, player_id) DO UPDATE SET
+      joined_at = datetime('now'),
+      left_at = NULL,
+      trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
+      last_activity_at = datetime('now')
+  `).run(tid, req.player.id);
+  res.json({ ok: true, joined: true });
+});
+
+// Soft leave: sets left_at so getActiveTournamentForPlayer stops returning
+// this row. Keeps the historical counters around so we can show "your
+// previous score in tournament X" later if we want to.
+router.post('/tournaments/:id/leave', auth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const r = db.db.prepare(`
+    UPDATE tournament_participants SET left_at = datetime('now')
+    WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
+  `).run(tid, req.player.id);
+  res.json({ ok: true, left: r.changes > 0 });
+});
+
+// Real-time leaderboard for a tournament. Public endpoint — no auth, anyone
+// can spectate. Sort column comes from the tournament's `sort_by` setting,
+// not the request, so spectators can't game the ordering by sending crafted
+// params.
+router.get('/tournaments/:id/leaderboard', (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  // Whitelist sort columns to defend against future schema drift.
+  const SORT_COLS = {
+    pnl_usd: 'tp.pnl_usd',
+    trophies: 'tp.trophies',
+    volume_usd: 'tp.volume_usd',
+    gold: 'tp.gold',
+  };
+  const col = SORT_COLS[t.sort_by] || 'tp.pnl_usd';
+  const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const rows = db.db.prepare(`
+    SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd,
+           p.name, p.wallet
+    FROM tournament_participants tp
+    JOIN players p ON p.id = tp.player_id
+    WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+    ORDER BY ${col} DESC, tp.trades_count DESC, tp.player_id ASC
+    LIMIT ?
+  `).all(tid, limit);
+  res.json({
+    tournament: tournamentRowToPublic(t),
+    sort_by: t.sort_by,
+    leaderboard: rows.map((r, i) => ({
+      rank: i + 1,
+      player_id: r.player_id,
+      name: r.name,
+      wallet: r.wallet,
+      trophies: r.trophies,
+      gold: r.gold,
+      trades_count: r.trades_count,
+      volume_usd: r.volume_usd,
+      pnl_usd: r.pnl_usd,
+    })),
+  });
+});
+
+// ── Admin tournament management ───────────────────────────────────────
+
+// List ALL tournaments (incl. drafts and ended) for the admin panel.
+router.get('/admin/tournaments', adminAuth, (req, res) => {
+  const rows = db.db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
+  // Attach participant count per tournament for the admin list view.
+  const counts = db.db.prepare(`
+    SELECT tournament_id, COUNT(*) AS players
+    FROM tournament_participants
+    WHERE left_at IS NULL
+    GROUP BY tournament_id
+  `).all();
+  const countMap = {};
+  for (const c of counts) countMap[c.tournament_id] = c.players;
+  res.json({
+    tournaments: rows.map(t => ({
+      ...tournamentRowToPublic(t),
+      participants: countMap[t.id] || 0,
+    })),
+  });
+});
+
+// Create a tournament. start_at defaults to now, end_at is optional, boosts
+// default to 1.0 (no boost), sort_by defaults to pnl_usd.
+router.post('/admin/tournaments', adminAuth, (req, res) => {
+  const { name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status } = req.body || {};
+  if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+  if (!['pacifica', 'avantis', 'decibel', 'gmx'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
+  const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
+  const sortCol = SORT_COLS.includes(sort_by) ? sort_by : 'pnl_usd';
+  const STATUSES = ['active', 'ended', 'draft'];
+  const stat = STATUSES.includes(status) ? status : 'active';
+  // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
+  const gb = Math.max(0.1, Math.min(10, Number(gold_boost) || 1));
+  const tb = Math.max(0.1, Math.min(10, Number(trophy_boost) || 1));
+  const startIso = start_at && typeof start_at === 'string'
+    ? start_at
+    : new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const endIso = end_at && typeof end_at === 'string' ? end_at : null;
+  const r = db.db.prepare(`
+    INSERT INTO tournaments (name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(name.trim(), (description || '').toString().slice(0, 500), dex, startIso, endIso, gb, tb, sortCol, stat);
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(r.lastInsertRowid);
+  res.json({ ok: true, tournament: tournamentRowToPublic(t) });
+});
+
+// Patch tournament fields. All fields optional; only sent ones get updated.
+router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'not found' });
+  const { name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status } = req.body || {};
+  const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
+  const STATUSES = ['active', 'ended', 'draft'];
+  const next = {
+    name: name && typeof name === 'string' ? name.trim() : t.name,
+    description: description !== undefined ? String(description).slice(0, 500) : t.description,
+    start_at: start_at && typeof start_at === 'string' ? start_at : t.start_at,
+    end_at: end_at === null ? null : (end_at && typeof end_at === 'string' ? end_at : t.end_at),
+    gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
+    trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
+    sort_by: SORT_COLS.includes(sort_by) ? sort_by : t.sort_by,
+    status: STATUSES.includes(status) ? status : t.status,
+  };
+  db.db.prepare(`
+    UPDATE tournaments SET name = ?, description = ?, start_at = ?, end_at = ?,
+                            gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?
+    WHERE id = ?
+  `).run(next.name, next.description, next.start_at, next.end_at, next.gold_boost, next.trophy_boost, next.sort_by, next.status, tid);
+  const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  res.json({ ok: true, tournament: tournamentRowToPublic(updated) });
+});
+
+// Force-end a tournament: sets status='ended' so it disappears from
+// `getActiveTournamentForPlayer` immediately. Counters stay around so the
+// admin can still inspect the leaderboard.
+router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  db.db.prepare("UPDATE tournaments SET status = 'ended' WHERE id = ?").run(tid);
+  res.json({ ok: true });
+});
+
+// Delete a tournament (and its participants via ON DELETE CASCADE).
+router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  db.db.prepare('DELETE FROM tournaments WHERE id = ?').run(tid);
+  res.json({ ok: true });
 });
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

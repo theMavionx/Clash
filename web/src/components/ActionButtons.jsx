@@ -6,6 +6,7 @@ import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335
 import chartIcon from '../assets/resources/chart.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
+import TournamentPanel from './TournamentPanel';
 
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
@@ -317,6 +318,28 @@ function ReplayHUD({ onReturnHome }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────
+// ── Crossed swords icon for tournament button ─────────────────────────────
+const CrossedSwordsIcon = ({ size = 50 }) => (
+  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
+    {/* Sword 1: top-left → bottom-right */}
+    <g transform="rotate(45 32 32)">
+      <rect x="30" y="6" width="4" height="36" fill="#e6e6e6" stroke="#5a5a5a" strokeWidth="1.5" />
+      <polygon points="32,2 35,8 29,8" fill="#f0f0f0" stroke="#5a5a5a" strokeWidth="1.5" />
+      <rect x="24" y="42" width="16" height="3.5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
+      <rect x="29" y="45" width="6" height="12" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
+      <circle cx="32" cy="59" r="3.5" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.5" />
+    </g>
+    {/* Sword 2: top-right → bottom-left */}
+    <g transform="rotate(-45 32 32)">
+      <rect x="30" y="6" width="4" height="36" fill="#e6e6e6" stroke="#5a5a5a" strokeWidth="1.5" />
+      <polygon points="32,2 35,8 29,8" fill="#f0f0f0" stroke="#5a5a5a" strokeWidth="1.5" />
+      <rect x="24" y="42" width="16" height="3.5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
+      <rect x="29" y="45" width="6" height="12" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="1.5" />
+      <circle cx="32" cy="59" r="3.5" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.5" />
+    </g>
+  </svg>
+);
+
 // ── Shield icon for defense log ───────────────────────────────────────────
 const ShieldIcon = ({ size = 60 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
@@ -336,6 +359,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const [showReinforce, setShowReinforce] = useState(false);
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
+  const [showTournament, setShowTournament] = useState(false);
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape } = useLayout();
@@ -493,12 +517,16 @@ function ActionButtons({ onOpenBattleLog }) {
             <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
           </CustomBtn>
         )}
+        <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
+          <CrossedSwordsIcon size={mobile ? 38 : 50} />
+        </CustomBtn>
         <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
           {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
           <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
           <span style={styles.btnLabel}>TRADE</span>
         </CustomBtn>
       </div>
+      {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
       {showReinforce && (serverCasualties || pendingCasualties) && (
         <ReinforceModal
           casualties={serverCasualties?.casualties || pendingCasualties}

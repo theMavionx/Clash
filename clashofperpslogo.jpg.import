@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://drqf7sx1jkvr4"
-path="res://.godot/imported/FootageCrate-Particle_Explosion_Small-00010.png-cdabe0a6ec6a98423076e54727fd5607.ctex"
+uid="uid://b7a54tqh5k0es"
+path="res://.godot/imported/clashofperpslogo.jpg-a0e05d684dec22b33229015de6de8a17.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00010.png"
-dest_files=["res://.godot/imported/FootageCrate-Particle_Explosion_Small-00010.png-cdabe0a6ec6a98423076e54727fd5607.ctex"]
+source_file="res://clashofperpslogo.jpg"
+dest_files=["res://.godot/imported/clashofperpslogo.jpg-a0e05d684dec22b33229015de6de8a17.ctex"]
 
 [params]
 

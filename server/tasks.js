@@ -285,8 +285,12 @@ async function verifyPositions(player, task, snap) {
   const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
   let n = 0;
+  const seenOrders = new Set();
   for (const t of trades) {
     if ((t.history_id || 0) <= startId) continue;
+    const orderKey = String(t.order_id || t.client_order_id || t.history_id || '');
+    if (orderKey && seenOrders.has(orderKey)) continue;
+    if (orderKey) seenOrders.add(orderKey);
     if (!matchesSymbol(t.symbol, symbol)) continue;
     if (!matchesSide(t.side, side)) continue;
     const c = classifyTrade(t.side);

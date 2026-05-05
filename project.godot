@@ -15,7 +15,7 @@ run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 boot_splash/bg_color=Color(0.039215688, 0.043137256, 0.101960786, 0.5058824)
 boot_splash/show_image=false
-config/icon="uid://c5fvqkwwo7vk1"
+config/icon="res://clashofperpslogo.jpg"
 
 [autoload]
 
