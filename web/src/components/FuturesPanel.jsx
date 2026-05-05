@@ -2161,7 +2161,14 @@ function FuturesPanel() {
       );
     }
     return (
-      <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
+      // Stack positions vertically so every card stretches to the panel's
+      // full width. Earlier `flexWrap: 'wrap'` + `flex: '0 0 auto'` on each
+      // card auto-sized them by content — markets with longer Size strings
+      // (e.g. "186.4830769386677") rendered visibly wider than markets
+      // with short numbers (e.g. "0.00617758"), giving the position list
+      // a ragged staircase look. Column + stretch (the default
+      // `align-items` for column flex) gives a clean uniform list.
+      <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {positions.map((pos, i) => {
           const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
           const entryP = parseFloat(pos.entry_price);
