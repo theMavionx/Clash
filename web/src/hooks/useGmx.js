@@ -206,6 +206,12 @@ function normalizePosition(p, marketMap) {
     liquidation_price: fmtPriceUsd(p?.liquidationPrice),
     margin: collateralUsd,
     leverage,
+    // GMX V2 is isolated-only at the protocol level — every position is
+    // its own market+collateral unit, no cross-margin pool. The panel's
+    // CROSS/ISOLATED badge falls back to "CROSS" when this flag is unset
+    // (the legacy default for Pacifica), so without `is_isolated: true`
+    // every GMX card showed "CROSS" which is structurally impossible.
+    is_isolated: true,
     // V2 uses `pnl`; V1 PositionInfo has the same name. Older code paths
     // expected `pnlUsd` — not present in either. Read `pnl` and fall
     // through if the SDK ever renames.
@@ -1005,7 +1011,7 @@ export function useGmx() {
    * every recent listing — so the position lookup returned undefined and
    * the close errored with "No open <side> <symbol> position".
    */
-  const closePosition = useCallback(async (symbol, side, sizePct = 100) => {
+  const closePosition = useCallback(async (symbol, side, _sizePctOrAmount = 100) => {
     if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
     tradeInFlightRef.current = true;
     setLoading(true);
@@ -1034,14 +1040,24 @@ export function useGmx() {
         throw new Error(`Unknown collateral token ${pos.collateralTokenAddress} (token registry stale)`);
       }
 
-      const pct = Math.max(1, Math.min(100, Number(sizePct) || 100));
-      // sizeInUsd is in 30-decimal USD. BigInt has no fractional ops, so
-      // route the percentage through 1e4 basis points (100% → 10000 bps).
-      const sizeBp = BigInt(Math.round(pct * 100));
-      const closeSizeUsd = (BigInt(pos.sizeInUsd) * sizeBp) / 10_000n;
+      // ── ALWAYS FULL CLOSE ──
+      // Earlier versions tried to interpret the 3rd argument as a percentage
+      // (0–100). FuturesPanel passes different shapes per DEX:
+      //   - Avantis:    parseFloat(pos.margin)   — USD value
+      //   - Pacifica:   parseFloat(pos.amount)   — USD value too
+      //   - GMX (us):   parseFloat(pos.amount)   — BASE TOKENS (e.g. 3.5 SOL,
+      //                                             0.0061 BTC, 186 0G)
+      // Treating "3.5" as "3.5%" closed only $10 of a $300 SOL position;
+      // 0.0061 clamped to the 1% floor of $5; 186 maxed at 100%. So the
+      // user reported "Close button only closes $20 each time".
+      // Until the panel gains a clean per-DEX closePct contract we treat
+      // every Close click on GMX as full close (matches user intent — they
+      // press a "Close" button, expect it gone). Partial close goes through
+      // the future Pro-mode slider when that ships with explicit pct.
+      const closeSizeUsd = BigInt(pos.sizeInUsd);
 
-      console.log(`[useGmx] closePosition (V2 classic) ${isLong ? 'LONG' : 'SHORT'} ${target} ${pct}%`, {
-        marketSymbol, sizeInUsd: String(pos.sizeInUsd), closeSizeUsd: String(closeSizeUsd), collateralToken: collateralSym,
+      console.log(`[useGmx] closePosition (V2 classic, FULL) ${isLong ? 'LONG' : 'SHORT'} ${target}`, {
+        marketSymbol, sizeInUsd: String(pos.sizeInUsd), collateralToken: collateralSym,
       });
 
       const prepared = await apiSdk.prepareOrder({
@@ -1061,13 +1077,35 @@ export function useGmx() {
       const hash = await sendPreparedClassicTx(prepared);
       console.log(`[useGmx] closePosition tx submitted: ${hash}`);
 
-      // Keeper executes the decrease in 1-3s; refresh state and let polling
-      // catch the close. We don't poll-confirm here because partial closes
-      // don't make the position disappear, just shrink — relying on size
-      // diff would be brittle.
+      // Keeper executes the decrease in 1-3s. Poll positions API for ~12s
+      // and refresh the local state each time so the closed card disappears
+      // promptly instead of lingering until the next 5s polling cycle.
+      // Without this, the user clicks Close, sees the card stay on screen
+      // for up to 5s, and starts thinking the close failed — leading to
+      // double-clicks and tradeInFlightRef nuisance errors.
       fetchAccount();
-      fetchPositions();
       fetchOrders();
+      const closedAtSize = BigInt(pos.sizeInUsd);
+      const start = Date.now();
+      while (Date.now() - start < 12_000) {
+        await new Promise(r => setTimeout(r, 1500));
+        try {
+          const fresh = await apiSdk.fetchPositionsInfo({ address: walletAddr, includeRelatedOrders: false });
+          const stillOpen = (fresh || []).find(p => {
+            const base = String(p?.indexName || '').split(/[\/-]/)[0].trim().toUpperCase();
+            return base === target && Boolean(p?.isLong) === isLong;
+          });
+          // Close confirmed when (a) position is gone OR (b) sizeInUsd
+          // dropped (partial-close edge case the keeper sometimes does
+          // when full close hits a per-market position-size floor).
+          if (!stillOpen || BigInt(stillOpen.sizeInUsd || 0) < closedAtSize) {
+            break;
+          }
+        } catch { /* keep polling */ }
+      }
+      // Final sync — pulls the now-empty positions list into React state
+      // so the card disappears from the panel.
+      fetchPositions();
       return { success: true, txHash: hash };
     } catch (e) {
       const msg = decodeWriteError(e, 'GMX close failed');

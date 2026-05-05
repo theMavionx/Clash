@@ -156,11 +156,11 @@ router.post('/client-log', (req, res) => {
 // reached the database).
 const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx']);
 // DEXes whose trade history is indexed by the futures rewards worker into
-// the trade_history table (server-futures/futures.db). GMX joins this group
-// in Phase 3 once the indexer wakes up; until then the rewards worker has
-// no GMX rows to baseline against, so we keep it out of this set even
-// though VALID_DEXES already accepts it.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel']);
+// the trade_history table (server-futures/futures.db). GMX joined Phase 3
+// once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
+// rows with verified_source='worker'); we now include it in this set so
+// quest progression and per-DEX baselines pick up GMX trades.
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx']);
 function currentFuturesRewardBaseline(playerId, dex) {
   if (!REWARD_INDEXED_DEXES.has(dex)) return 0;
   try {

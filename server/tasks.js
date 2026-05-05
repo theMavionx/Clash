@@ -184,19 +184,29 @@ async function fetchWalletTrades(player) {
   if (!wallet) return [];
   const dexFilter = String(player.dex || 'pacifica').toLowerCase();
 
-  // Self-custody DEXes (Avantis on Base, Decibel on Aptos) → read verified
-  // trades from futures.db. The per-DEX rewards worker writes
-  // verified_source='worker' rows; we just project them into the common shape.
-  // Both DEXes share the same trade_history columns; we filter by player DEX
-  // and player_id so legacy rows from another integration cannot leak in.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel') {
+  // Self-custody DEXes (Avantis/Base, Decibel/Aptos, GMX/Arbitrum) →
+  // read verified trades from futures.db. The per-DEX rewards worker
+  // writes verified_source='worker' rows; we just project them into the
+  // common shape. All three DEXes share the same trade_history columns;
+  // we filter by player DEX and player_id so legacy rows from another
+  // integration cannot leak in.
+  // Earlier this branch listed only avantis+decibel — GMX users were
+  // routed to the "pacifica" Solana-API branch below, which silently
+  // returned [] because their wallet is EVM not base58. Net effect: zero
+  // quest progress for every GMX trade despite the worker indexing them
+  // correctly. Adding 'gmx' wires the verifier into the same path.
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
+      // Decibel allows server-recorded rows because its on-chain indexer
+      // has a longer settling delay; Avantis + GMX trust only worker rows
+      // (subsquid/GraphQL-verified) since the worker confirms on-chain.
       const sourceClause = dexFilter === 'decibel'
         ? "AND verified_source IN ('worker', 'server')"
         : "AND verified_source = 'worker'";
