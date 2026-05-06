@@ -219,6 +219,20 @@ server {
     }
 
     # API proxy → backend port 4000 (gzip off — Godot web can't decompress)
+    # Public client-log ingestion is non-critical and can be abused for DoS.
+    # Drop it at nginx so it cannot consume backend or upstream connections.
+    location = /api/client-log {
+        access_log off;
+        add_header Cache-Control "no-store" always;
+        return 204;
+    }
+
+    location = /api/client-log/ {
+        access_log off;
+        add_header Cache-Control "no-store" always;
+        return 204;
+    }
+
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
         proxy_http_version 1.1;

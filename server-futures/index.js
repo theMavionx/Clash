@@ -137,8 +137,8 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Futures server running on http://0.0.0.0:${PORT}`);
+app.listen(PORT, '127.0.0.1', () => {
+  console.log(`Futures server running on http://127.0.0.1:${PORT}`);
   console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos)');
   console.log('Builder code: clashofperps');
   // Start gold-rewards indexers. Avantis still needs polling. Decibel orders

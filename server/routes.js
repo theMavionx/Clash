@@ -122,6 +122,12 @@ setInterval(() => {
   for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
 }, 5 * 60_000).unref?.();
 
+// Public client-log ingestion is non-critical and can be abused for DoS.
+// Terminate all methods before the legacy POST handler below.
+router.all('/client-log', (_req, res) => {
+  res.status(204).end();
+});
+
 router.post('/client-log', (req, res) => {
   const ip = req.headers['x-real-ip'] || req.ip || 'anon';
   const now = Date.now();

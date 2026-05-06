@@ -1415,7 +1415,7 @@ const server = http.createServer(app);
 // WebSocket on same server
 setupWebSocket(server);
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Clash server running on http://0.0.0.0:${PORT}`);
-  console.log(`WebSocket available at ws://0.0.0.0:${PORT}/ws`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Clash server running on http://127.0.0.1:${PORT}`);
+  console.log(`WebSocket available at ws://127.0.0.1:${PORT}/ws`);
 });
