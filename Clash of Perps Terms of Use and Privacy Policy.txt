@@ -1,0 +1,36 @@
+﻿1. Terms of Use
+Clash of Perps Terms of Use
+Last Updated: May 6, 2026
+Welcome to Clash of Perps (“the Game”), a gamified perpetual futures trading experience built on Solana and powered by Pacifica.
+By accessing or using Clash of Perps (clashofperps.fun or the Solana Seeker mobile app), you agree to be bound by these Terms of Use. If you do not agree, please do not use the Game.
+1. Eligibility
+You must be at least 18 years old (or the legal age of majority in your jurisdiction) to use Clash of Perps. You are solely responsible for complying with all applicable laws in your jurisdiction.
+2. No Financial Advice
+Clash of Perps is a gaming and entertainment platform. All trading activity occurs on Pacifica. We do not provide financial, investment, or trading advice. All trades are executed at your own risk.
+3. In-Game Assets & Gold
+Gold is a virtual in-game currency with no real-world monetary value. It cannot be redeemed for fiat or cryptocurrency.
+4. User Conduct
+You agree not to use cheats, bots, exploits, harass other players, or manipulate leaderboards.
+5. Risk Disclosure
+Perpetual futures trading carries significant risk of loss. You are solely responsible for any losses incurred while trading on Pacifica.
+6. Termination
+We reserve the right to suspend or terminate accounts for violations of these terms.
+Contact
+For questions or support, reach out to: xaitoshi@gmail.com
+________________
+
+
+2. Privacy Policy
+Clash of Perps Privacy Policy
+Last Updated: May 6, 2026
+Clash of Perps respects your privacy. This Privacy Policy explains how we collect, use, and protect your information.
+Information We Collect
+* Wallet address and on-chain trading data
+* Email (via Privy) and Farcaster account (if used)
+* Gameplay data (gold, raids, trophies, etc.)
+How We Use Your Information
+To operate the game, leaderboards, events, and improve user experience.
+Third Parties
+We work with Privy (auth), Pacifica (trading), and Elfa AI (sentiment). We do not sell your data.
+Contact Us
+For privacy questions or data requests, please email: xaitoshi@gmail.com
