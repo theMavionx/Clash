@@ -5,6 +5,11 @@ const elfa = require('./elfa');
 
 const router = express.Router();
 
+// Temporary lenient battle mode: still runs server-side replay verification and
+// logs/stores all mismatch diagnostics, but does not block player rewards unless
+// explicitly re-enabled with BATTLE_REPLAY_STRICT=1.
+const STRICT_BATTLE_REPLAY_VERIFICATION = process.env.BATTLE_REPLAY_STRICT === '1';
+
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;              // Base/Ethereum 20-byte hex
@@ -603,17 +608,25 @@ router.post('/attack/result', auth, (req, res) => {
   // Extract grid_config from battle_start action
   const battleStartAction = actions.find(a => a.type === 'battle_start');
   const gridConfig = battleStartAction?.grid_config;
+  const gridConfigs = battleStartAction?.grid_configs;
   const gameActions = actions.filter(a => a.type !== 'battle_start');
 
   // Basic validation
   const shipActions = gameActions.filter(a => a.type === 'place_ship');
+  const replayWarnings = [];
   if (claimedResult === 'victory' && shipActions.length === 0) {
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'No ships', null, null);
-    return res.status(403).json({ error: 'No ships deployed' });
+    replayWarnings.push('No ships deployed');
+    if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'No ships', null, null);
+      return res.status(403).json({ error: 'No ships deployed' });
+    }
   }
   if (shipActions.length > 5) {
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Too many ships', null, null);
-    return res.status(403).json({ error: 'Too many ships in replay' });
+    replayWarnings.push(`Too many ships in replay (${shipActions.length})`);
+    if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Too many ships', null, null);
+      return res.status(403).json({ error: 'Too many ships in replay' });
+    }
   }
 
   // Cap troop levels to server-verified values (prevent level spoofing)
@@ -634,35 +647,52 @@ router.post('/attack/result', auth, (req, res) => {
     actions: gameActions,
     claimedResult,
     gridConfig,
+    gridConfigs,
     serverTroopLevels,
   });
 
-  logBattle(`${claimedResult} ${verification.valid ? 'ACCEPTED' : 'REJECTED'}`, {
+  const replayReasonParts = [...replayWarnings, verification.reason].filter(Boolean);
+  const replayReason = replayReasonParts.join(' | ') || 'No reason';
+  const replayStatus = verification.valid
+    ? (replayWarnings.length ? 'REPLAY_WARNING' : 'ACCEPTED')
+    : (STRICT_BATTLE_REPLAY_VERIFICATION ? 'REJECTED' : 'SIM_MISMATCH_ALLOWED');
+  const storedAcceptReason = replayStatus === 'ACCEPTED'
+    ? verification.reason
+    : `${replayStatus}: ${replayReason}`;
+
+  logBattle(`${claimedResult} ${replayStatus}`, {
     attacker: req.player.id, defender: defender_id,
-    reason: verification.reason,
+    reason: replayReason,
     thHp: Math.round((verification.townHallHpPct || 0) * 100) + '%',
     ships: gameActions.filter(a => a.type === 'place_ship').length,
     rallies: gameActions.filter(a => a.type === 'rally_drop').length,
     destroyed: verification.buildingsDestroyed,
   });
-  console.log(`[BATTLE] ${claimedResult} by ${req.player.id} vs ${defender_id}: ${verification.reason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
+  console.log(`[BATTLE] ${claimedResult} ${replayStatus} by ${req.player.id} vs ${defender_id}: ${replayReason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
   console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Rallies: ${gameActions.filter(a => a.type === 'rally_drop').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
   console.log(`[BATTLE] Actions:`, JSON.stringify(gameActions.filter(a => a.type === 'place_ship').map(a => ({t: a.t, troops: a.troops, troopType: a.troopType, x: a.x?.toFixed(2), z: a.z?.toFixed(2)}))));
   console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
+  if (gridConfigs) console.log(`[BATTLE] Grids:`, JSON.stringify(gridConfigs));
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
   console.log(`[BATTLE] Defender buildings:`, defenderBuildings.length, defenderBuildings.map(b => `${b.type}:lv${b.level}:hp${b.hp}`).join(', '));
 
   if (!verification.valid) {
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', verification.reason, null, verification);
-    // Debug info logged server-side only — never expose sim internals to client
-    console.log('[SIM REJECT]', JSON.stringify({
+    const simDebug = {
+      reason: replayReason,
       troopsSpawned: verification._troopsSpawned,
       troopsAlive: verification._troopsAlive,
       guardsAlive: verification._guardsAlive,
       simTimeSec: verification._simTimeSec,
       buildingsDestroyed: verification.buildingsDestroyed,
-    }));
-    return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
+      strict: STRICT_BATTLE_REPLAY_VERIFICATION,
+    };
+    // Debug info logged server-side only — never expose sim internals to client
+    if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, verification);
+      console.log('[SIM REJECT]', JSON.stringify(simDebug));
+      return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
+    }
+    console.log('[SIM MISMATCH ALLOWED]', JSON.stringify(simDebug));
   }
 
   // Victory verified — grant loot
@@ -672,7 +702,7 @@ router.post('/attack/result', auth, (req, res) => {
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
       return res.status(400).json(battleResult);
     }
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', verification.reason, battleResult.loot, verification);
+    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, verification);
     // Remove server-simulated casualties from attacker's ships. Real-time
     // /troop-died may already have removed some; _applyCasualties caps against
     // the current ship state, so the final submit is idempotent.
@@ -683,7 +713,7 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Defeat — attacker loses trophies, defender gains
   const defeatResult = db.battleDefeat(req.player.id, defender_id);
-  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', 'Defeat', null, verification);
+  db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
 
   // Remove server-simulated casualties from attacker's ships.
   _applyCasualties(req.player.id, verification.casualties);

@@ -32,6 +32,30 @@ func init(building_system: Node3D) -> BSBattle:
 	bs = building_system
 	return self
 
+
+func _grid_config_for(bsys: Node) -> Dictionary:
+	return {
+		"grid_width": bsys.grid_width,
+		"grid_height": bsys.grid_height,
+		"cell_size": bsys.cell_size,
+		"grid_extent_x": bsys.grid_extent_x,
+		"grid_extent_z": bsys.grid_extent_z,
+		"grid_center_x": bsys.grid_center.x,
+		"grid_center_z": bsys.grid_center.z,
+		"grid_rotation": bsys.grid_rotation,
+	}
+
+
+func _battle_grid_configs() -> Dictionary:
+	var configs: Dictionary = {}
+	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
+		if not bsys.has_method("_get_grid_index"):
+			continue
+		configs[str(bsys._get_grid_index())] = _grid_config_for(bsys)
+	if configs.is_empty():
+		configs["0"] = _grid_config_for(bs)
+	return configs
+
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -282,6 +306,7 @@ func _switch_to_enemy_island() -> void:
 		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
+		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
 			"grid_height": bs.grid_height,
@@ -394,6 +419,7 @@ func _switch_to_enemy_island_after_sail() -> void:
 		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
+		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
 			"grid_height": bs.grid_height,

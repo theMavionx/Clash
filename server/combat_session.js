@@ -83,6 +83,21 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function isValidGridConfig(gc) {
+  return !!(gc && Number(gc.cell_size) > 0);
+}
+
+function normalizeGridConfigs(gridConfig, gridConfigs) {
+  const configs = {};
+  if (gridConfigs && typeof gridConfigs === 'object') {
+    for (const [idx, gc] of Object.entries(gridConfigs)) {
+      if (isValidGridConfig(gc)) configs[String(idx)] = gc;
+    }
+  }
+  if (isValidGridConfig(gridConfig)) configs['0'] = configs['0'] || gridConfig;
+  return configs;
+}
+
 function resolveRallyTarget(x, z, aliveBuildings, aliveGuards) {
   let bestTarget = null;
   let bestDistSq = Infinity;
@@ -135,8 +150,10 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
 
 // ---------- Replay Verifier ----------
 
-function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, serverTroopLevels }) {
-  if (!gridConfig || !gridConfig.cell_size || gridConfig.cell_size <= 0) {
+function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, gridConfigs, serverTroopLevels }) {
+  const gridConfigMap = normalizeGridConfigs(gridConfig, gridConfigs);
+  const defaultGridConfig = gridConfigMap['0'] || Object.values(gridConfigMap)[0];
+  if (!isValidGridConfig(defaultGridConfig)) {
     return { valid: false, reason: 'Missing or invalid grid_config' };
   }
   if (!actions || !Array.isArray(actions)) {
@@ -147,10 +164,13 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, s
   const buildings = defenderBuildings.map(b => {
     const def = BUILDING_DEFS[b.type];
     const size = def?.size || [2, 2];
-    const pos = gridToWorld(b.grid_x, b.grid_z, size[0], size[1], gridConfig);
+    const gridIndex = b.grid_index ?? b.gridIndex ?? 0;
+    const gc = gridConfigMap[String(gridIndex)] || defaultGridConfig;
+    const pos = gridToWorld(b.grid_x, b.grid_z, size[0], size[1], gc);
     return {
       id: b.id, type: b.type, level: b.level,
       hp: b.hp, maxHp: b.max_hp,
+      gridIndex,
       x: pos.x, z: pos.z,
     };
   });
