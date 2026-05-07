@@ -1102,7 +1102,7 @@ function FuturesPanel() {
     // server call — Avantis is per-trade, Decibel uses on-chain
     // configureUserSettingsForMarket which we let the user trigger
     // explicitly via the position's settings (not the slider). Skip both.
-    if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') return;
+    if (dex === 'pacifica' || dex === 'avantis' || dex === 'decibel' || dex === 'gmx') return;
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
   }, [maxLev, symbol, setLeverageApi, dex]);
@@ -1164,12 +1164,20 @@ function FuturesPanel() {
       // order so the server sees the right leverage on fill. Avantis and
       // Decibel both take leverage per-trade (Decibel computes size from
       // collateral × leverage / mark inside the hook), so no pre-flush.
-      if (dex === 'pacifica' && levTimerRef.current) {
-        clearTimeout(levTimerRef.current);
-        levTimerRef.current = null;
+      if (dex === 'pacifica') {
+        if (levTimerRef.current) {
+          clearTimeout(levTimerRef.current);
+          levTimerRef.current = null;
+        }
         const serverLev = leverageSettings[symbol];
-        if (leverage !== serverLev) {
-          await setLeverageApi(symbol, leverage);
+        const serverLevNum = serverLev != null ? Number(serverLev) : NaN;
+        const levMatches = Number.isFinite(serverLevNum) && Math.abs(serverLevNum - leverage) < 0.05;
+        if (!levMatches) {
+          const levRes = await setLeverageApi(symbol, leverage);
+          if (!levRes || levRes.error) {
+            setLocalAlert(levRes?.error || 'Could not set leverage. Close any open position on this symbol first.');
+            return;
+          }
         }
       }
       // Pacifica Pro mode has no agent-bind banner. Auto-bind on the first
@@ -3177,18 +3185,28 @@ const animCSS = `
 
 `;
 
+const DESKTOP_PANEL_WIDTH = 'clamp(400px, 30vw, 620px)';
+const DESKTOP_PANEL_GUTTER = 'clamp(12px, 1.25vw, 24px)';
+
 const S = {
   containerFull: {
     position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%',
     background: '#e8dfc8', border: '0px solid #d4c8b0', borderRadius: 0,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
     boxShadow: '0 0 0 rgba(0,0,0,0)', fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxSizing: 'border-box',
   },
   container: {
-    position: 'fixed', top: 20, right: 20, bottom: 150, width: 400, maxWidth: 'calc(100vw - 16px)',
+    position: 'fixed',
+    top: DESKTOP_PANEL_GUTTER,
+    right: DESKTOP_PANEL_GUTTER,
+    bottom: 150,
+    width: DESKTOP_PANEL_WIDTH,
+    maxWidth: 'calc(100vw - 32px)',
     background: '#e8dfc8', border: '6px solid #d4c8b0', borderRadius: 24,
     display: 'flex', flexDirection: 'column', pointerEvents: 'auto', overflow: 'hidden', zIndex: 100,
     boxShadow: '0 10px 30px rgba(0,0,0,0.4)', fontFamily: '"Inter","Segoe UI",sans-serif',
+    boxSizing: 'border-box',
   },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',

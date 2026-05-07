@@ -325,6 +325,14 @@ export function usePacifica() {
     }
   }, [walletAddr]);
 
+  const scheduleClaimGold = useCallback(() => {
+    // Pacifica trade history can lag the order response by a moment. Claim
+    // twice so market opens/closes still credit gold + tournaments even if
+    // the account_trades websocket event is missed while the tab is asleep.
+    setTimeout(() => { claimGold(); }, 1500);
+    setTimeout(() => { claimGold(); }, 6000);
+  }, [claimGold]);
+
   // Fetch wallet USDC balance — try connection first, fallback to direct RPC
   const fetchWalletUsdc = useCallback(async () => {
     if (!walletAddr) return;
@@ -851,6 +859,7 @@ export function usePacifica() {
         fetchPositions();
         fetchOrders();
         fetchAccount();
+        scheduleClaimGold();
         return res;
       } catch (e) {
         setError(e.message);
@@ -859,7 +868,7 @@ export function usePacifica() {
         setLoading(false);
       }
     });
-  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount, runSignedOnce]);
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchOrders, fetchAccount, scheduleClaimGold, runSignedOnce]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif) => {
     if (!walletAddr) return;
@@ -891,6 +900,9 @@ export function usePacifica() {
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex, _tradeIndex, fullClose = false) => {
     if (!walletAddr) return;
     const opKey = `close:${walletAddr}:${symbol}:${side}`;
+    if (signedOpInFlightRef.current.has(opKey)) {
+      return { error: 'Close already in progress' };
+    }
     return runSignedOnce(opKey, async () => {
       setLoading(true);
       setError(null);
@@ -909,6 +921,7 @@ export function usePacifica() {
         if (res.error) throw new Error(res.error);
         fetchPositions();
         fetchAccount();
+        scheduleClaimGold();
         return res;
       } catch (e) {
         setError(e.message);
@@ -917,7 +930,7 @@ export function usePacifica() {
         setLoading(false);
       }
     }, 8000);
-  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchAccount, runSignedOnce]);
+  }, [walletAddr, signedRequestWithActivation, fetchPositions, fetchAccount, scheduleClaimGold, runSignedOnce]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return;
@@ -1039,6 +1052,7 @@ export function usePacifica() {
         h.fetchPositions?.();
         h.fetchOrders?.();
         h.fetchLeverageSettings?.();
+        h.claimGold?.();
       }
     }
 

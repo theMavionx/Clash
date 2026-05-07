@@ -1470,6 +1470,11 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // count unique order_id values for "trades" bonuses and leaderboards.
     const tradeEventKey = (t) => String(t.order_id || t.client_order_id || t.history_id || '');
     const uniqueTradeCount = new Set(newTrades.map(tradeEventKey).filter(Boolean)).size;
+    const isPacificaClose = (t) => String(t.side || '').toLowerCase().includes('close');
+    const isPacificaOpen = (t) => !isPacificaClose(t);
+    const uniqueOpenTradeCount = new Set(
+      newTrades.filter(isPacificaOpen).map(tradeEventKey).filter(Boolean)
+    ).size;
 
     let totalGold = 0;
     const reasons = [];
@@ -1514,11 +1519,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     ).all(req.player.id);
     const alreadyPaidFirstDepositPac = priorBonusesPac.some(r => String(r.reason).includes('First deposit!'));
     const alreadyPaidFirstTradePac   = priorBonusesPac.some(r => String(r.reason).includes('First trade!'));
-    if (!reward.first_deposit && !alreadyPaidFirstDepositPac) {
+    const hasRealPacificaOpen = uniqueOpenTradeCount > 0 || reward.first_trade;
+    if (!reward.first_deposit && !alreadyPaidFirstDepositPac && hasRealPacificaOpen) {
       totalGold += GOLD_FIRST_DEPOSIT;
       reasons.push('First deposit!');
     }
-    if (!reward.first_trade && !alreadyPaidFirstTradePac && uniqueTradeCount > 0) {
+    if (!reward.first_trade && !alreadyPaidFirstTradePac && uniqueOpenTradeCount > 0) {
       totalGold += GOLD_FIRST_TRADE;
       reasons.push('First trade!');
     }
@@ -1553,10 +1559,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
-          first_deposit = 1, first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
-          last_daily = ?, pnl_gold_pool = ?, updated_at = datetime('now')
+          first_deposit = CASE WHEN ? > 0 OR first_trade = 1 THEN 1 ELSE first_deposit END,
+          first_trade = CASE WHEN ? > 0 THEN 1 ELSE first_trade END,
+          last_daily = CASE WHEN ? > 0 THEN ? ELSE last_daily END,
+          pnl_gold_pool = ?, updated_at = datetime('now')
         WHERE player_id = ? AND dex = ?
-      `).run(maxTradeId, newVolume, paidGold, uniqueTradeCount, today, pnlPool, req.player.id, dex);
+      `).run(maxTradeId, newVolume, paidGold, uniqueOpenTradeCount, uniqueOpenTradeCount, uniqueTradeCount, today, pnlPool, req.player.id, dex);
       if (paidGold > 0) {
         db.addResources(req.player.id, paidGold, 0, 0);
         const reason = reasons.join(' + ') || 'Trading reward';
@@ -2025,6 +2033,48 @@ router.get('/admin/wallets/:wallet/accounts', adminAuth, (req, res) => {
     'SELECT id, name, trophies, wallet, created_at FROM players WHERE wallet = ? ORDER BY COALESCE(trophies, 0) DESC, id DESC'
   ).all(req.params.wallet);
   res.json({ wallet: req.params.wallet, count: rows.length, accounts: rows });
+});
+
+// Per-player trading debug: dumps trading_rewards (per dex), gold_history,
+// and player_trades. Used to diagnose "task progress = 0" / "gold not
+// crediting" reports without shelling into prod. Read-only.
+router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
+  const playerId = req.params.id;
+  const player = db.db.prepare(
+    'SELECT id, name, wallet, dex, futures_mode, created_at, last_seen_at FROM players WHERE id = ? OR name = ? LIMIT 1'
+  ).get(playerId, playerId);
+  if (!player) return res.status(404).json({ error: 'Player not found' });
+  let rewards = [];
+  try {
+    rewards = db.db.prepare(
+      'SELECT * FROM trading_rewards WHERE player_id = ? ORDER BY dex'
+    ).all(player.id);
+  } catch {}
+  let goldHistory = [];
+  try {
+    goldHistory = db.db.prepare(
+      'SELECT amount, reason, created_at FROM gold_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 200'
+    ).all(player.id);
+  } catch {}
+  let trades = [];
+  try {
+    trades = db.db.prepare(
+      'SELECT history_id, symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 200'
+    ).all(player.id);
+  } catch {}
+  res.json({
+    player,
+    rewards,
+    rewards_summary: {
+      total_volume: rewards.reduce((s, r) => s + Number(r.total_volume || 0), 0),
+      total_gold: rewards.reduce((s, r) => s + Number(r.total_gold || 0), 0),
+      gold_history_count: goldHistory.length,
+      gold_history_sum: goldHistory.reduce((s, r) => s + Number(r.amount || 0), 0),
+      cached_trades_count: trades.length,
+    },
+    gold_history: goldHistory,
+    cached_trades: trades,
+  });
 });
 
 router.delete('/admin/players/:name', adminAuth, (req, res) => {

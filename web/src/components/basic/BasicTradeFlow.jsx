@@ -20,6 +20,7 @@ import BasicConfirm from './BasicConfirm';
 import { colors, shared } from './styles';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
+const PACIFICA_MIN_NOTIONAL_USD = 10;
 
 // Slide animation between steps. We slide horizontally to reinforce the
 // "checkout flow" mental model (forward = right, back = left).
@@ -76,9 +77,9 @@ function BasicTradeFlow({
     return Number(p?.mid || p?.mark || 0);
   }, [pickedToken, prices]);
 
-  // Available USD: prefer the on-DEX account balance; fall back to wallet
-  // USDC for users who haven't deposited yet so the amount step still
-  // shows something sensible. Field names differ per DEX:
+  // Available USD: prefer the on-DEX trading balance. For Pacifica, wallet
+  // USDC is not spendable until deposited into Pacifica, so do not fall back
+  // to walletUsdc there. Field names differ per DEX:
   //   Pacifica → `available_to_spend` / `balance`
   //   Decibel  → `usdc_cross_withdrawable_balance` / `perp_equity_balance`
   //              (snake_case, account_overviews REST shape)
@@ -94,8 +95,9 @@ function BasicTradeFlow({
         ?? 0
     );
     if (accBal > 0) return accBal;
+    if (dex === 'pacifica') return 0;
     return Number(walletUsdc || 0);
-  }, [account, walletUsdc]);
+  }, [account, walletUsdc, dex]);
 
   const goto = useCallback((next, dir = 1) => {
     setDirection(dir);
@@ -165,7 +167,14 @@ function BasicTradeFlow({
         const sym = pickedToken.symbol;
         const currentIsolated = !!(marginModes && marginModes[sym]);
         if (!currentIsolated && setMarginMode) {
-          try { await setMarginMode(sym, true); } catch { /* best-effort */ }
+          const marginRes = await setMarginMode(sym, true);
+          if (!marginRes || marginRes.error) {
+            const reason = marginRes?.error || 'Could not set isolated margin. Close any open position on this symbol first.';
+            setErrorMsg(reason);
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
         }
         const currentLev = leverageSettings && leverageSettings[sym];
         const currentLevNum = currentLev != null ? Number(currentLev) : NaN;
@@ -199,6 +208,16 @@ function BasicTradeFlow({
           : rawTokenAmt;
         if (tokenAmt <= 0) {
           setErrorMsg(`Amount too small — minimum is one ${pickedToken.symbol} lot (${lotSize}).`);
+          submittedRef.current = false;
+          setSubmitting(false);
+          return;
+        }
+        const finalNotional = tokenAmt * livePrice;
+        if (!Number.isFinite(finalNotional) || finalNotional < PACIFICA_MIN_NOTIONAL_USD) {
+          setErrorMsg(
+            `Pacifica requires a position >= $${PACIFICA_MIN_NOTIONAL_USD}. Yours: ` +
+            `$${Number.isFinite(finalNotional) ? finalNotional.toFixed(2) : '0.00'}. Increase amount or leverage.`
+          );
           submittedRef.current = false;
           setSubmitting(false);
           return;

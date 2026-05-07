@@ -80,12 +80,13 @@ function matchesSymbol(tradeSymbol, wantSymbol) {
   return (tradeSymbol || '').toUpperCase() === wantSymbol.toUpperCase();
 }
 
-// Pacifica trade side: "open_long"/"open_short"/"close_long"/"close_short" OR "buy"/"sell"/contains close.
+// Pacifica trade side: "bid"/"ask", "open_long"/"open_short",
+// "close_long"/"close_short" OR "buy"/"sell"/contains close.
 function classifyTrade(tradeSide) {
   const s = (tradeSide || '').toLowerCase();
   const isClose = s.includes('close');
-  const isLong = s.includes('long') || s === 'buy' || s.includes('buy');
-  const isShort = s.includes('short') || s === 'sell' || s.includes('sell');
+  const isLong = s.includes('long') || s === 'buy' || s.includes('buy') || s === 'bid';
+  const isShort = s.includes('short') || s === 'sell' || s.includes('sell') || s === 'ask';
   return { isClose, isLong, isShort, isOpen: !isClose };
 }
 
