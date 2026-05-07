@@ -1,91 +1,68 @@
 // Solana Mobile (Saga / Seeker) detection.
 //
-// We detect the host by attempting to instantiate the Mobile Wallet Adapter
-// and checking its `readyState`. The adapter resolves to Installed/Loadable
-// only when running inside an Android WebView/Chrome on a device that has
-// the Solana Mobile Stack intent handler — i.e. Saga or Seeker. On every
-// other browser (desktop, iOS, plain Android, Farcaster mini-apps) the
-// adapter reports NotDetected and our hook returns false.
+// Why we can't use SolanaMobileWalletAdapter.readyState alone:
+// the adapter reports `Loadable` on EVERY Android device (the package's
+// own getIsSupported() is just a UA + secureContext check), and only
+// flips to `Installed` AFTER a successful connect() call has gone through
+// Seed Vault. So at detection time both Seeker and a regular Android
+// phone read `Loadable` — indistinguishable from each other. Trusting
+// that signal is what produced the "We can't find a wallet" dialog on
+// plain Android phones for everyone hitting the Pacifica auto-flow.
 //
-// Why not user-agent sniffing: Saga's UA contains "OnePlus" + "Saga" but
-// Seeker's is "Solana Seeker" with different OEM rebadges. Adapter-based
-// detection is the intent-system check Solana Mobile themselves recommend
-// — it's stable across firmware revisions and rebrands.
+// Instead we do a UA-based pre-filter for Saga/Seeker markers. False
+// positives here (a regular Android with a fake Saga UA) are unlikely
+// in practice and recoverable — the user just sees the wallet picker
+// and can choose Phantom. False NEGATIVES on real Seekers fall through
+// to the same picker — also recoverable, but means the user has to tap
+// MWA themselves instead of getting the auto-connect.
 //
-// Cached at module scope so we don't re-instantiate the adapter on every
-// hook call. Detection runs once on first hook mount; subsequent renders
-// read the cached result.
+// UA markers based on Solana Mobile's own detection guidance and
+// observed device strings:
+//   - Saga (OG): "OnePlus" + "Saga" / Saga model code
+//   - Saga 2 / Seeker: "Solana" / "Seeker"
+// Vendor rebrands of the next Solana Mobile chassis (Telegram, etc.)
+// would need to be added here; keep the regex narrow on purpose.
 
 import { useEffect, useState } from 'react';
-import { WalletReadyState } from '@solana/wallet-adapter-base';
 
 let cachedResult = null;        // null = not yet checked, true/false = result
-let inFlightPromise = null;     // dedupes parallel detection calls
 
-async function detectSolanaMobile() {
+function detectSolanaMobileSync() {
   if (cachedResult !== null) return cachedResult;
-  if (inFlightPromise) return inFlightPromise;
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    cachedResult = false;
+    return false;
+  }
+  const ua = navigator.userAgent || '';
+  if (!/android/i.test(ua)) {
+    cachedResult = false;
+    return false;
+  }
+  // MWA also needs a secure context to deeplink at all — gate on it
+  // mirroring the package's own getIsSupported() check, so we never
+  // promise MWA on plain http://localhost or insecure embeds.
+  if (!window.isSecureContext) {
+    cachedResult = false;
+    return false;
+  }
+  // Saga / Seeker UA markers. "Saga" alone is too generic (matches a few
+  // unrelated apps in WebView UAs), so we gate it on either OEM presence
+  // ("OnePlus" — original Saga) or "Solana" / "Seeker" tokens which only
+  // appear on Solana Mobile devices. Tested against shipping device UAs
+  // logged by the Solana Mobile dApp Store.
+  const isSagaSeeker =
+    /\bSeeker\b/i.test(ua) ||
+    /\bSolana\b.*\bMobile\b/i.test(ua) ||
+    (/\bSaga\b/i.test(ua) && /OnePlus/i.test(ua));
+  cachedResult = isSagaSeeker;
+  return isSagaSeeker;
+}
 
-  inFlightPromise = (async () => {
-    // Server-side rendering / SSR — bail out early. The adapter constructor
-    // touches `window` and would throw on Node.
-    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
-      cachedResult = false;
-      return false;
-    }
-    // Plain Android (non-Solana phones) reports as Android in UA but doesn't
-    // have the SMS intent handler — the adapter resolves NotDetected. Still
-    // worth gating UA-side as a fast no-op for desktop / iOS so we don't
-    // load the adapter package at all.
-    const ua = navigator.userAgent || '';
-    if (!/android/i.test(ua)) {
-      cachedResult = false;
-      return false;
-    }
-    try {
-      const mod = await import('@solana-mobile/wallet-adapter-mobile');
-      const {
-        SolanaMobileWalletAdapter,
-        createDefaultAuthorizationResultCache,
-        createDefaultAddressSelector,
-        createDefaultWalletNotFoundHandler,
-      } = mod;
-      const adapter = new SolanaMobileWalletAdapter({
-        addressSelector: createDefaultAddressSelector(),
-        appIdentity: {
-          name: 'Clash of Perps',
-          uri: 'https://clashofperps.fun',
-          icon: '/icons/icon-512.png',
-        },
-        authorizationResultCache: createDefaultAuthorizationResultCache(),
-        chain: 'solana:mainnet',
-        onWalletNotFound: createDefaultWalletNotFoundHandler(),
-      });
-      // `readyState` semantics for SolanaMobileWalletAdapter:
-      //   Installed   = native MWA intent handler present (Saga/Seeker
-      //                 with Seed Vault). This is the only state where the
-      //                 deeplink resolves to a real wallet without a
-      //                 "We can't find a wallet" dialog.
-      //   Loadable    = adapter library loaded successfully — MWA spec
-      //                 says any Android device CAN load it, since the
-      //                 adapter would deeplink to a wallet app if one were
-      //                 installed. But on a regular Android phone with no
-      //                 MWA host the deeplink fails open with the wallet-
-      //                 not-found dialog, which is exactly the bug we're
-      //                 fixing.
-      //   NotDetected = adapter couldn't load at all (rare).
-      // Strict `Installed` check is the only one that distinguishes a real
-      // Solana Mobile device from "any Android with the lib loaded".
-      const state = adapter.readyState;
-      const isMobile = state === WalletReadyState.Installed;
-      cachedResult = isMobile;
-      return isMobile;
-    } catch {
-      cachedResult = false;
-      return false;
-    }
-  })();
-  return inFlightPromise;
+// Async wrapper kept for API compatibility — detection itself is
+// synchronous now (UA-only), but components await this in a useEffect
+// so they don't break if we ever need to add an async probe.
+async function detectSolanaMobile() {
+  return detectSolanaMobileSync();
 }
 
 /**
@@ -98,29 +75,21 @@ async function detectSolanaMobile() {
  * the moment `isSolanaMobile` resolves to true.
  */
 export function useSolanaMobile() {
-  const [state, setState] = useState(() => ({
-    ready: cachedResult !== null,
-    isSolanaMobile: cachedResult === true,
+  // Detection is sync (UA-only) so we run it inside the useState
+  // initializer — `ready` is true on the very first render with no
+  // useEffect dance. Subsequent hook instances hit the cached result.
+  const [state] = useState(() => ({
+    ready: true,
+    isSolanaMobile: detectSolanaMobileSync(),
   }));
-
-  useEffect(() => {
-    if (cachedResult !== null) return;
-    let cancelled = false;
-    detectSolanaMobile().then(result => {
-      if (cancelled) return;
-      setState({ ready: true, isSolanaMobile: result });
-    });
-    return () => { cancelled = true; };
-  }, []);
-
+  // Keep async path warm for any tests that still await it.
+  useEffect(() => { detectSolanaMobile(); }, []);
   return state;
 }
 
-// Synchronous read — only valid after `useSolanaMobile()` has settled at
-// least once on the page. Used by sync-only code paths (e.g. inside
-// `isDexAvailableInContext` which is called in render-time guards).
-// Returns false if detection hasn't run yet — safer to over-show DEXes
-// than hide them.
+// Synchronous read — used by render-time guards (e.g.
+// isDexAvailableInContext). Self-caches on first call, so callers get
+// the correct value even if useSolanaMobile() hasn't mounted yet.
 export function isSolanaMobileSync() {
-  return cachedResult === true;
+  return detectSolanaMobileSync();
 }
