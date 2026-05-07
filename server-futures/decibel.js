@@ -571,6 +571,27 @@ async function fetchMarkets() {
   }
 }
 
+// Best-effort mark price for a market by address. Used by the rewards
+// worker to estimate realized PnL on a close-detection event (the close
+// itself isn't observable from /account_positions; we approximate as
+// `size * (mark - entry)`, signed by side). Falls back through several
+// field-name variants Decibel has used over time.
+async function fetchMarketMarkUsd(marketAddr) {
+  if (!marketAddr) return 0;
+  try {
+    const list = await fetchMarkets();
+    const target = String(marketAddr).toLowerCase();
+    const m = list.find(r => String(r?.market_addr || r?.market || '').toLowerCase() === target);
+    if (!m) return 0;
+    const candidates = [m.mark_price, m.oracle_price, m.index_price, m.last_price, m.price];
+    for (const c of candidates) {
+      const n = Number(c);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return 0;
+  } catch { return 0; }
+}
+
 // Fetches the canonical subaccount address(es) for a master Aptos wallet.
 // SDK 0.6.0 reads `/api/v1/subaccounts?owner=<addr>` and returns
 // `[{subaccount_address, primary_account_address, is_primary, is_active}]`.
@@ -678,6 +699,7 @@ module.exports = {
   configureUserSettingsForMarket,
   rewardInfoFromPlaceOrder,
   fetchMarkets,
+  fetchMarketMarkUsd,
   fetchUserSubaccounts,
   fetchAccountPositions,
   tradeKey,

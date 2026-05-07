@@ -174,28 +174,13 @@ const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx']);
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
 const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx']);
-function currentFuturesRewardBaseline(playerId, dex) {
-  if (!REWARD_INDEXED_DEXES.has(dex)) return 0;
-  try {
-    const fdb = futuresDbReadonly();
-    if (!fdb) return 0;
-    const row = fdb.prepare(
-      'SELECT COALESCE(MAX(id), 0) AS last_id FROM trade_history WHERE player_id = ? AND dex = ?'
-    ).get(playerId, dex);
-    return Number(row?.last_id || 0);
-  } catch {
-    return 0;
-  }
-}
-
-function ensureTradingRewardRow(playerId, wallet, dex, baseline = 0) {
-  try {
-    db.db.prepare(`
-      INSERT OR IGNORE INTO trading_rewards (player_id, dex, wallet, last_trade_id)
-      VALUES (?, ?, ?, ?)
-    `).run(playerId, dex, wallet || '', Math.max(0, Number(baseline) || 0));
-  } catch {}
-}
+// (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
+// helpers — dead code surfaced by audit. The intended use was to seed
+// `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
+// player wouldn't credit historical trades, but the helpers were never
+// wired into any code path. /claim-gold and the task verifier now read
+// trade_history rows above `last_trade_id` directly, defaulting to 0
+// (legacy behaviour). If we ever need to backfill, restore from git.)
 
 // /players/set-dex is now a no-op endpoint that returns the player's
 // existing DEX. Pre-migration this UPDATEd the dex column on the same
@@ -1140,7 +1125,11 @@ router.get('/trophies/table', (req, res) => {
 // ==================== TRADING REWARDS ====================
 
 const GOLD_PER_USD_VOLUME = 0.30;
-const GOLD_PER_USD_VOLUME_DECIBEL = 10;
+// Decibel was 10× — 33× the Pacifica rate. Combined with a $1 min-notional
+// floor, that turned the DEX into a self-trade gold farm. Pulled to parity
+// with Pacifica for the v2 economy. If we ever need to incentivise Decibel
+// liquidity again, do it via a tournament gold_boost, not a base-rate cliff.
+const GOLD_PER_USD_VOLUME_DECIBEL = 0.30;
 const GOLD_FIRST_DEPOSIT = 500;
 const GOLD_FIRST_TRADE = 300;
 const GOLD_DAILY_TRADE = 200;
@@ -1571,14 +1560,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
     let newTrades = [];
     try {
-      const sourceClause = dex === 'decibel'
-        ? "AND verified_source IN ('worker', 'server')"
-        : "AND verified_source = 'worker'";
+      // Worker-only source. The earlier `verified_source IN ('worker','server')`
+      // for Decibel was a hole — `'server'` rows are written by the
+      // /decibel/orders/place proxy IMMEDIATELY when the SDK call returns
+      // success=true, which only means "Aptos sequencer accepted the
+      // signed payload". The order can still revert/cancel/under-fill on
+      // chain. With $1 min-notional + 10× gold rate (both also fixed in
+      // this commit), that became a gold farm. Worker-only means we wait
+      // until the rewards-worker confirms the trade landed.
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
-          ${sourceClause} AND id > ?
+          AND verified_source = 'worker' AND id > ?
         ORDER BY id ASC
       `).all(req.player.id, dex, reward.last_trade_id || 0);
     } catch (e) {
@@ -1594,8 +1588,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
     // Sanity: clamp each trade's notional to a sane range so a bugged/forged
     // row (e.g. Infinity from parseFloat("1e100")) cannot mint unlimited gold.
-    // Also require a realistic minimum — Avantis min notional is $100.
-    const SANE_MIN_NOTIONAL = dex === 'decibel' ? 1 : 50;
+    // Decibel was at $1 — too low because Decibel min_size per market lets
+    // self-traded $1 fills count as legitimate. Bumped to $10 to match
+    // a sensible micro-trade floor across all four DEXes.
+    const SANE_MIN_NOTIONAL = dex === 'decibel' ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -2363,6 +2359,23 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
       'SELECT history_id, symbol, price, amount, fee, created_at FROM player_trades WHERE player_id = ? ORDER BY created_at DESC LIMIT 200'
     ).all(player.id);
   } catch {}
+  // For self-custody DEXes (Avantis/Decibel/GMX) trades live in
+  // futures.db, not the main player_trades table. Read them too so the
+  // admin can diagnose "why is my Decibel gold not crediting" without
+  // SSHing into the server.
+  let futuresTrades = [];
+  try {
+    const fdb = futuresDbReadonly();
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx')) {
+      futuresTrades = fdb.prepare(
+        `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
+         FROM trade_history WHERE player_id = ? AND dex = ?
+         ORDER BY id DESC LIMIT 200`
+      ).all(player.id, player.dex);
+    }
+  } catch (e) {
+    console.warn(`[admin/trading-debug] futures.db read failed:`, e.message);
+  }
   res.json({
     player,
     rewards,
@@ -2372,9 +2385,11 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
       gold_history_count: goldHistory.length,
       gold_history_sum: goldHistory.reduce((s, r) => s + Number(r.amount || 0), 0),
       cached_trades_count: trades.length,
+      futures_trades_count: futuresTrades.length,
     },
     gold_history: goldHistory,
     cached_trades: trades,
+    futures_trades: futuresTrades,
   });
 });
 
@@ -2395,13 +2410,24 @@ router.delete('/admin/players/:name', adminAuth, (req, res) => {
   }
 });
 
-// Reset a player (keep account, clear buildings & reset resources)
+// Reset a player (keep account, clear buildings & reset resources).
+// Also wipes trading state — cursor + first-bonus flags + tournament
+// participation rows + cached trades — so the player starts cleanly.
+// Without this clear the cursor stays at MAX(history_id) at reset
+// time, so the very next trade would fail to register (its history_id
+// is OLDER than the cursor) and one-time bonuses (first_deposit,
+// first_trade) couldn't be re-earned.
 router.post('/admin/players/:name/reset', adminAuth, (req, res) => {
   const player = db.db.prepare('SELECT id FROM players WHERE name = ?').get(req.params.name);
   if (!player) return res.status(404).json({ error: 'Player not found' });
   db.db.prepare('DELETE FROM buildings WHERE player_id = ?').run(player.id);
   db.db.prepare('UPDATE players SET gold = 4000, wood = 4000, ore = 4000, trophies = 0 WHERE id = ?').run(player.id);
   db.db.prepare('UPDATE troop_levels SET level = 1 WHERE player_id = ?').run(player.id);
+  try { db.db.prepare('DELETE FROM trading_rewards WHERE player_id = ?').run(player.id); } catch {}
+  try { db.db.prepare('DELETE FROM player_trades WHERE player_id = ?').run(player.id); } catch {}
+  try { db.db.prepare('DELETE FROM player_tasks WHERE player_id = ?').run(player.id); } catch {}
+  try { db.db.prepare('DELETE FROM tournament_participants WHERE player_id = ?').run(player.id); } catch {}
+  try { db.db.prepare('DELETE FROM pacifica_agents WHERE player_id = ?').run(player.id); } catch {}
   res.json({ reset: req.params.name });
 });
 

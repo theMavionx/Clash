@@ -150,14 +150,21 @@ app.listen(PORT, '127.0.0.1', () => {
   } catch (e) {
     console.error('[worker] avantis-rewards-worker failed to start:', e.message);
   }
-  if (process.env.DECIBEL_REWARDS_WORKER === '1') {
+  // Decibel worker is now ALWAYS-ON. Server-side `'server'` source rows
+  // are no longer accepted by the credit pipeline (they were unverified
+  // pre-fill and let users farm gold for orders that didn't land), so
+  // the only path to credit a Decibel trade is the worker confirming
+  // the position appeared/disappeared on-chain via account_positions.
+  // The opt-in env flag is left for emergency disable: set
+  // DECIBEL_REWARDS_WORKER=0 to skip.
+  if (process.env.DECIBEL_REWARDS_WORKER !== '0') {
     try {
       require('./decibel-rewards-worker').start();
     } catch (e) {
       console.error('[worker] decibel-rewards-worker failed to start:', e.message);
     }
   } else {
-    console.log('[decibel-rewards-worker] skipped (server-side order rewards are active)');
+    console.log('[decibel-rewards-worker] skipped (DECIBEL_REWARDS_WORKER=0)');
   }
   // GMX events worker — polls subsquid for OrderExecuted events of every
   // registered GMX wallet and writes verified rows into trade_history. Same

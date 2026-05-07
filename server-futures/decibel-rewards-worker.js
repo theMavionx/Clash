@@ -22,7 +22,10 @@ const db = require('./db');
 const decibel = require('./decibel');
 
 const POLL_MS = 2 * 60 * 1000; // 2 minutes
-const MIN_NOTIONAL_USD = 1;    // Decibel test accounts can trade small size.
+// Bumped from $1 → $10 to match server/routes.js SANE_MIN_NOTIONAL.
+// $1 trades on Decibel are cheap enough that a script could self-trade
+// $1 in a loop and farm gold; $10 is the floor across all four DEXes.
+const MIN_NOTIONAL_USD = 10;
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -84,6 +87,12 @@ async function pollOnce(mainDb) {
       const isLong = decibel.positionIsLong(p);
       const market = decibel.positionMarket(p);
       const side = isLong ? 'long' : 'short';
+      // Entry price + abs size needed at CLOSE time so we can estimate
+      // realized PnL = sizeAbs * (mark - entry) signed by side. Without
+      // these the PnL column stays NULL and the tournament leaderboard's
+      // pnl_usd column is permanently zero for Decibel users.
+      const entryPrice = Number(p?.entry_price ?? p?.entryPrice ?? 0);
+      const sizeAbs = Math.abs(Number(p?.size ?? 0));
 
       const openKey = `decibel:open:${addr}:${market}:${isLong ? 'L' : 'S'}`;
       if (Number.isFinite(notional) && notional >= MIN_NOTIONAL_USD) {
@@ -110,11 +119,24 @@ async function pollOnce(mainDb) {
       richPrev.set(k, {
         collateral, leverage, notional, symbol, side,
         market, isLong,
+        entryPrice, sizeAbs,
         opened_at: Date.now(),
       });
     }
 
     // ── Detect closes (positions that vanished since last poll) ──
+    // PHANTOM-CLOSE GUARD: if the REST call failed/returned empty AND we
+    // had positions last tick, every previously-seen position would be
+    // misclassified as closed → fake close rows + double-counted volume.
+    // Skip the whole close-detection pass on a likely-dropped poll.
+    const pollLooksDropped = positions.length === 0 && richPrev.size > 0;
+    if (pollLooksDropped) {
+      // Don't mutate richPrev — keep the prior positions as still-open so
+      // the next poll can confirm the real state instead of writing a
+      // burst of phantom closes.
+      seenOpenTrades.set(addr, richPrev);
+      continue;
+    }
     for (const k of Array.from(richPrev.keys())) {
       if (currentKeys.has(k)) continue;
       const info = richPrev.get(k);
@@ -122,6 +144,25 @@ async function pollOnce(mainDb) {
       if (!info || !Number.isFinite(info.notional) || info.notional < MIN_NOTIONAL_USD) continue;
       const closeKey = `decibel:close:${addr}:${info.market}:${info.isLong ? 'L' : 'S'}`;
       const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
+      // Best-effort PnL estimate: sizeAbs * (mark - entry), signed.
+      // Mark is fetched from /api/v1/markets (10-min cached, so this is
+      // cheap). The estimate is approximate — actual close fill may
+      // diverge by slippage — but it's enough to populate the tournament
+      // leaderboard and the per-$10-profit gold pool. For accurate values
+      // we'd need to query Decibel's user trade-history endpoint per
+      // close, which is a bigger refactor for marginal precision.
+      let pnl = null;
+      try {
+        if (info.entryPrice > 0 && info.sizeAbs > 0) {
+          const mark = await decibel.fetchMarketMarkUsd(info.market);
+          if (mark > 0) {
+            const rawPnl = info.sizeAbs * (mark - info.entryPrice) * (info.isLong ? 1 : -1);
+            if (Number.isFinite(rawPnl)) pnl = rawPnl.toFixed(6);
+          }
+        }
+      } catch (e) {
+        console.warn(`[decibel-rewards-worker] mark fetch failed for ${info.symbol}:`, e.message);
+      }
       try {
         db.addTrade(row.id, {
           symbol: info.symbol,
@@ -134,6 +175,7 @@ async function pollOnce(mainDb) {
           dex: 'decibel',
           notional_usd: info.notional,
           verifiedSource: 'worker',
+          pnl,
         });
         creditsQueued++;
       } catch (e) {

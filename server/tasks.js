@@ -150,17 +150,30 @@ async function buildSnapshot(player, task) {
 // Solana base58 address: 32-44 chars, no '0OIl'
 const SOLANA_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const EVM_RE = /^0x[0-9a-fA-F]{40}$/;
-// Aptos: "0x" + 32 bytes. Padded form is exactly 64 hex chars; the SDK also
-// accepts non-padded forms (1-63 hex). We accept both because Petra returns
-// the unpadded address and we don't want to drop a valid wallet for cosmetic
-// reasons. EVM_RE is checked FIRST so a 40-char hex always routes to Avantis.
-const APTOS_RE = /^0x[0-9a-fA-F]{1,64}$/;
+// Aptos: "0x" + 32 bytes. The Aptos SDK normalises to padded 64-hex form,
+// but raw chain calls also accept short forms (leading-zero stripped).
+// We canonicalise to 64-hex by padding before matching, so the regex
+// accepts ONLY the canonical 64-hex AND (a 40-char hex like EVM is
+// rejected explicitly so a malformed/short EVM wallet doesn't slip
+// through here).
+//
+// The earlier `1..64` window let any 0x-prefixed hex of length 1-39 OR
+// 41-64 pass as Aptos — we now require exactly 64 hex chars after
+// padding, matching what the Aptos type system itself uses.
+const APTOS_RE = /^0x[0-9a-fA-F]{64}$/;
+function padAptos(w) {
+  if (typeof w !== 'string' || !w.startsWith('0x')) return w;
+  const hex = w.slice(2);
+  if (hex.length === 64) return w;
+  if (hex.length < 64) return '0x' + hex.padStart(64, '0');
+  return w;
+}
 function isSolanaWallet(w) { return typeof w === 'string' && SOLANA_RE.test(w); }
 function isEvmWallet(w) { return typeof w === 'string' && EVM_RE.test(w); }
 function isAptosWallet(w) {
   if (typeof w !== 'string') return false;
   if (EVM_RE.test(w)) return false; // 40-hex is EVM, not Aptos
-  return APTOS_RE.test(w);
+  return APTOS_RE.test(padAptos(w));
 }
 
 // Resolve which wallet to query upstream APIs with. Order:
@@ -234,17 +247,17 @@ async function fetchWalletTrades(player, opts = {}) {
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
-      // Decibel allows server-recorded rows because its on-chain indexer
-      // has a longer settling delay; Avantis + GMX trust only worker rows
-      // (subsquid/GraphQL-verified) since the worker confirms on-chain.
-      const sourceClause = dexFilter === 'decibel'
-        ? "AND verified_source IN ('worker', 'server')"
-        : "AND verified_source = 'worker'";
+      // Worker-only source for ALL self-custody DEXes. Earlier comment
+      // claimed Decibel needed `'server'` because of indexer delay — that
+      // was wrong. The 'server' rows are written eagerly by the place-order
+      // proxy on API success (no on-chain confirmation), and accepting
+      // them in the verifier let users earn quest progress for orders
+      // that never actually filled. Worker confirms on-chain, full stop.
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
-          ${sourceClause}
+          AND verified_source = 'worker'
         ORDER BY id ASC
       `).all(player.id, dexFilter);
       return rows.map(r => {

@@ -183,8 +183,8 @@ const stmts = {
   // partial index) silently drops instead of throwing. Prevents one
   // duplicate report from crashing the request handler.
   addTrade: db.prepare(`
-    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR IGNORE INTO trade_history (player_id, symbol, side, order_type, amount, price, order_id, client_order_id, status, dex, notional_usd, verified_source, pnl)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   updateTradeStatus: db.prepare('UPDATE trade_history SET status = ?, pnl = ? WHERE id = ?'),
   getTrades: db.prepare('SELECT * FROM trade_history WHERE player_id = ? ORDER BY created_at DESC LIMIT 100'),
@@ -235,12 +235,13 @@ function getDeposits(playerId) {
 
 // ---------- Trade Functions ----------
 
-function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server' }) {
+function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, clientOrderId, status = 'pending', dex = 'pacifica', notional_usd = 0, verifiedSource = 'server', pnl = null }) {
   const info = stmts.addTrade.run(
     playerId, symbol, side, orderType,
     amount, price || null,
     orderId || null, clientOrderId || null,
-    status, dex, notional_usd, verifiedSource
+    status, dex, notional_usd, verifiedSource,
+    pnl != null ? String(pnl) : null
   );
   return { id: info.lastInsertRowid };
 }
