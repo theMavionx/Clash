@@ -585,9 +585,18 @@ export function useAuthFlow() {
       // Tell the session-reset effect to NOT bounce us to the DEX picker
       // when Godot fires show_register=true in response to logout.
       intentionalDexSwitchRef.current = true;
+      // If we were on Decibel and we're leaving it, drop the Petra
+      // connection — useDecibel keeps polling Aptos REST as long as
+      // address is set, which wastes RPC quota and shows ghost balances
+      // in stale tabs after the user has logically switched DEX.
+      // ProfileModal already calls aptosDisconnect on logout-everything,
+      // but the in-place pickDex switch missed it.
+      if (dex === 'decibel' && newDex !== 'decibel') {
+        try { aptosWallet.disconnect?.(); } catch { /* noop */ }
+      }
       sendToGodot('logout');
     }
-  }, [dex, dexPicked, isInFrame, setDex, sendToGodot]);
+  }, [dex, dexPicked, isInFrame, setDex, sendToGodot, aptosWallet]);
 
   const unpickDex = useCallback(() => {
     writeDexPicked(false);

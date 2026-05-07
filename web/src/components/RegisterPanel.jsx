@@ -194,6 +194,16 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
 // Privy doesn't currently support generating embedded Aptos wallets, so we
 // only offer the explicit Petra connect.
 function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
+  // When no Petra provider is detected, the CTA should send the user to
+  // the install page — clicking onConnectAptos in that state was a no-op
+  // / threw, leaving the user on a dead button.
+  const handleClick = () => {
+    if (!hasProvider) {
+      try { window.open('https://petra.app/', '_blank', 'noopener,noreferrer'); } catch {}
+      return;
+    }
+    onConnectAptos();
+  };
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO DECIBEL</h3>
@@ -203,7 +213,7 @@ function ConnectDecibel({ onConnectAptos, isConnecting, hasProvider, error }) {
       </p>
       <button
         style={S.primaryBtn}
-        onClick={onConnectAptos}
+        onClick={handleClick}
         disabled={isConnecting}
       >
         <WalletIcon />

@@ -901,11 +901,16 @@ export function useDecibel() {
     }
   }, [address, ensureSubaccount]);
 
+  // Mirror the most recent positions list into a ref so callbacks like
+  // setMarginMode can read current state without inflating their dep
+  // array (and the consequent re-creation chain). Updated alongside
+  // setPositions inside fetchPositions.
+  const positionsRef = useRef([]);
   const fetchPositions = useCallback(async () => {
     if (!address) return;
     try {
       const sub = await ensureSubaccount();
-      if (!sub) { setPositions([]); setDataReady(true); return; }
+      if (!sub) { setPositions([]); positionsRef.current = []; setDataReady(true); return; }
       const read = await getReadClient();
       const list = await withTimeout(
         read.userPositions.getByAddr({ subAddr: sub }),
@@ -919,6 +924,7 @@ export function useDecibel() {
           norm.map(p => `${p.symbol} ${p.side} ${p.amount}@$${p.entry_price}`).join(' | '));
       }
       setPositions(norm);
+      positionsRef.current = norm;
       setDataReady(true);
       window._openPositionsCount = norm.length;
     } catch (e) {
@@ -1510,7 +1516,7 @@ export function useDecibel() {
   // Close = reduceOnly IOC at slipped live mark. `amount` is base units
   // (the position's quantity to close, NOT collateral) — same semantics as
   // Pacifica. FuturesPanel passes `pos.amount` for non-Avantis branches.
-  const closePosition = useCallback(async (symbol, side, amount) => {
+  const closePosition = useCallback(async (symbol, side, amount, slippagePct = 1) => {
     setLoading(true);
     setError(null);
     try {
@@ -1531,7 +1537,14 @@ export function useDecibel() {
         return p ? Number(p.mark) : 0;
       })();
       if (!(livePrice > 0)) throw new Error('Price feed unavailable — try again in a moment');
-      const slipPrice = closeIsBuy ? livePrice * 1.01 : livePrice * 0.99;
+      // Slippage: previously hardcoded ±1% for every close. On a fast-moving
+      // alt with 5%+ legitimate slip needs the order would always abort
+      // with EORDER_SIZE_TOO_SMALL_OR_PRICE_OUT_OF_BOUND and the user got
+      // stuck on a losing position. Now accepts caller-provided pct,
+      // clamped to [0.1%, 50%]. Default 1% preserves prior behaviour for
+      // callers that don't pass it.
+      const slipBp = Math.max(0.1, Math.min(50, Number(slippagePct) || 1)) / 100;
+      const slipPrice = closeIsBuy ? livePrice * (1 + slipBp) : livePrice * (1 - slipBp);
       const size = assertTradableSize(sizeToChainUnits(amt, market), market);
 
       const builderArgs = await builderFields();
@@ -1627,27 +1640,65 @@ export function useDecibel() {
     }
   }, [requireServerSigner, ensureSubaccount, fetchPositions, tpslOnServer]);
 
-  const setLeverage = useCallback(async (symbol, lev) => {
+  // Decibel `configureUserSettingsForMarket` is one transaction with
+  // BOTH leverage and margin-mode (cross/isolated). To avoid duplicate
+  // on-chain work and to honour user choice in the UI, we cache the
+  // last-applied (lev, isCross) per symbol and skip the server call
+  // when both already match. Diff-checking + 800 ms debounce live in
+  // FuturesPanel's slider handler — this hook just guards a redundant
+  // call against position-level state if the cache is fresh.
+  const lastAppliedSettingsRef = useRef(new Map()); // symbol -> {lev, isCross}
+  const setLeverage = useCallback(async (symbol, lev, opts = {}) => {
     try {
       requireServerSigner();
       const market = marketsRef.current.find(m => m.symbol === symbol);
       if (!market || !market.market_addr) return { ok: true };
       const sub = await ensureSubaccount();
       if (!sub) return { ok: true };
-      await leverageOnServer({
+      const userLev = Math.max(1, Math.min(50, Number(lev) || 1));
+      // isCross defaults to FALSE (isolated) — matches the historical
+      // hardcoded behaviour for any caller that doesn't pass it. New
+      // callers (FuturesPanel margin toggle, Activate flow) pass the
+      // real value.
+      const isCross = !!opts.isCross;
+      // Skip if we already pushed this exact (lev, isCross) for this
+      // symbol within the same session. The server config-tx is
+      // idempotent — re-sending wastes builder gas + Aptos sequencer
+      // capacity for nothing.
+      const cached = lastAppliedSettingsRef.current.get(symbol);
+      if (cached && cached.lev === userLev && cached.isCross === isCross) {
+        return { ok: true, cached: true };
+      }
+      const res = await leverageOnServer({
         marketAddr: market.market_addr,
         subaccountAddr: sub,
-        isCross: false,
-        userLeverage: Math.max(1, Math.min(50, Number(lev) || 1)),
+        isCross,
+        userLeverage: userLev,
       });
-      return { ok: true };
+      lastAppliedSettingsRef.current.set(symbol, { lev: userLev, isCross });
+      return { ok: true, ...res };
     } catch (e) {
       console.warn('[useDecibel] setLeverage:', e?.message || e);
       return { ok: false, error: e?.message };
     }
   }, [requireServerSigner, ensureSubaccount, leverageOnServer]);
 
-  const setMarginMode = useCallback(async () => ({ ok: true }), []);
+  // Margin-mode toggle: keep the symbol's current leverage but flip
+  // cross↔isolated. Pulls leverage from the open position if any, or
+  // falls back to the symbol's last applied lev, or 1×. Used to be a
+  // silent no-op stub — UI was lying to users about a margin mode
+  // they could "toggle" but never change.
+  const setMarginMode = useCallback(async (symbol, isolated) => {
+    try {
+      const pos = positionsRef.current.find(p => p.symbol === symbol);
+      const cachedLev = lastAppliedSettingsRef.current.get(symbol)?.lev || 0;
+      const lev = Number(pos?.leverage) || cachedLev || 1;
+      return await setLeverage(symbol, lev, { isCross: !isolated });
+    } catch (e) {
+      console.warn('[useDecibel] setMarginMode:', e?.message || e);
+      return { ok: false, error: e?.message };
+    }
+  }, [setLeverage]);
 
   // Deposit / withdraw flow uses Petra directly (login wallet → trading
   // subaccount). We can't use the api wallet here — moving funds is an

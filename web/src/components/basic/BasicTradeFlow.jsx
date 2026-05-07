@@ -83,17 +83,22 @@ function BasicTradeFlow({
   // in drawdown even though account_equity is still positive. Wallet USDC
   // is not spendable until deposited into Pacifica, so do not fall back
   // to walletUsdc there.
+  //
+  // Priority order matches FuturesPanel.pacBalance, so Pro and Basic
+  // disagree about a balance only when the account object literally
+  // exposes different fields (which it doesn't on any current DEX).
   //   Pacifica → `available_to_spend` (free margin under unified margin)
   //   Decibel  → `usdc_cross_withdrawable_balance` / `perp_equity_balance`
   //   Avantis  → `usdcAvailable` / `usdc`
+  //   GMX      → `usdc`
   const balance = useMemo(() => {
     const accBal = Math.max(0, Number(
       account?.available_to_spend                  // Pacifica unified margin
         ?? account?.usdc_cross_withdrawable_balance // Decibel
         ?? account?.usdcAvailable                   // Avantis
+        ?? account?.usdc                            // GMX
         ?? account?.perp_equity_balance             // Decibel fallback
         ?? account?.balance                         // last-resort
-        ?? account?.usdc                            // GMX
         ?? 0
     ));
     if (accBal > 0) return accBal;

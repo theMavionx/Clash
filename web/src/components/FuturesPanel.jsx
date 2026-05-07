@@ -620,7 +620,7 @@ const BottomPanel = memo(function BottomPanel({
   btmSymbols, sortOptionsForTab, hasActiveFilters,
   filteredPositions, filteredOrders,
   prices, walletAddr, dataReady, leverageSettings,
-  closePosition, cancelOrder, dex, loading,
+  closePosition, cancelOrder, dex, loading, historyAccountAddr, markets,
 }) {
   // Avantis has no order-flow history or funding payments exposed via a
   // public API like Pacifica, so we hide those tabs entirely on that DEX.
@@ -738,10 +738,22 @@ const BottomPanel = memo(function BottomPanel({
           ) : <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>{!dataReady ? 'Loading...' : hasActiveFilters ? 'No orders match filters' : 'No open orders'}</div>
         )}
         {bottomTab === 'history' && dex !== 'avantis' && (
-          <TradeHistory walletAddr={walletAddr} filters={btmFilters} />
+          <TradeHistory
+            walletAddr={walletAddr}
+            accountAddr={historyAccountAddr}
+            dex={dex}
+            markets={markets}
+            filters={btmFilters}
+          />
         )}
         {bottomTab === 'funding' && dex !== 'avantis' && (
-          <FundingHistory walletAddr={walletAddr} filters={btmFilters} />
+          <FundingHistory
+            walletAddr={walletAddr}
+            accountAddr={historyAccountAddr}
+            dex={dex}
+            markets={markets}
+            filters={btmFilters}
+          />
         )}
       </div>
     </div>
@@ -975,12 +987,21 @@ function FuturesPanel() {
   const obWidthRef = useRef(obWidth);
   obWidthRef.current = obWidth;
 
+  const clampBottomHeight = useCallback((height) => {
+    const body = panelRef.current?.querySelector?.('.futures-panel-body');
+    const availableH = body?.clientHeight || panelRef.current?.clientHeight || window.innerHeight;
+    const minTopH = window.innerWidth < 900 ? 180 : 220;
+    const maxBottomH = Math.max(90, Math.min(500, availableH - minTopH));
+    return Math.max(60, Math.min(maxBottomH, height));
+  }, []);
+
   const dragBottom = useCallback((e) => {
     const startY = e.touches ? e.touches[0].clientY : e.clientY;
     const startH = bottomHRef.current;
     const onMove = (ev) => {
       const moveY = ev.touches ? ev.touches[0].clientY : ev.clientY;
-      setBottomH(Math.max(60, Math.min(500, startH - (moveY - startY))));
+      ev.preventDefault?.();
+      setBottomH(clampBottomHeight(startH - (moveY - startY)));
     };
     const onUp = () => { 
       window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); 
@@ -991,7 +1012,7 @@ function FuturesPanel() {
     document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', onMove); window.addEventListener('mouseup', onUp);
     window.addEventListener('touchmove', onMove, {passive: false}); window.addEventListener('touchend', onUp);
-  }, []);
+  }, [clampBottomHeight]);
 
   const dragOb = useCallback((e) => {
     const startX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -1218,17 +1239,31 @@ function FuturesPanel() {
     clearTradeFeedback();
     const v = Math.min(Number(val), maxLev);
     setLeverage(v);
-    // Pacifica has an account-level leverage endpoint — debounce + send after
-    // the slider settles. Avantis takes leverage per-trade, so we skip the
-    // round-trip entirely.
-    // Pacifica is the only DEX that pushes leverage through a debounced
-    // server call — Avantis is per-trade, Decibel uses on-chain
-    // configureUserSettingsForMarket which we let the user trigger
-    // explicitly via the position's settings (not the slider). Skip both.
-    if (dex === 'pacifica' || dex === 'avantis' || dex === 'decibel' || dex === 'gmx') return;
+    // Avantis + GMX take leverage per-trade (passed in placeOrder call),
+    // so no leverage tx ever runs from the slider. Skip cleanly.
+    if (dex === 'avantis' || dex === 'gmx') return;
+    // Pacifica + Decibel BOTH push leverage to the server — Pacifica via
+    // its account-level /leverage endpoint, Decibel via Aptos
+    // configureUserSettingsForMarket. Both want the slider drag debounced
+    // so we don't fire one tx per slider tick (Decibel was firing every
+    // tick before this fix). The hook's setLeverage call is also
+    // idempotent-cached on (symbol, lev, isCross), so a no-op repeat is
+    // free anyway.
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
-    levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
-  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex]);
+    levTimerRef.current = setTimeout(() => {
+      // For Decibel, pass current symbol's isCross from the open position
+      // (preserves the user's prior margin-mode choice rather than always
+      // forcing isolated like the old code did). Falls back to isolated
+      // when no position exists yet (matches Decibel default).
+      if (dex === 'decibel') {
+        const pos = positions.find(p => String(p.symbol || '').toUpperCase() === String(symbol).toUpperCase());
+        const isCross = pos ? !pos.is_isolated : false;
+        setLeverageApi(symbol, v, { isCross });
+      } else {
+        setLeverageApi(symbol, v);
+      }
+    }, 800);
+  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex, positions]);
 
   // Synchronous double-click guard. React's `loading` state is async, so a
   // second click can land between dispatch-1 and React committing the button's
@@ -2270,18 +2305,18 @@ function FuturesPanel() {
       }
 
       return (
-        <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
+        <div style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
           {renderSymbolBar()}
           {/* Top: chart + orderbook + controls */}
-          <div style={{display: 'flex', flex: 1, overflow: 'hidden'}}>
-            <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, position: 'relative'}}>
+          <div style={{display: 'flex', flex: '1 1 auto', minHeight: 0, overflow: 'hidden'}}>
+            <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
             {dex === 'pacifica' && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
-                <div style={{flex: `0 0 ${obWidth}px`, overflow: 'hidden'}}>
+                <div style={{flex: `0 0 ${obWidth}px`, minHeight: 0, overflow: 'hidden'}}>
                   {/* OrderBook hits Pacifica's REST API directly. Avantis uses
                       its own SDK (no public order book), Decibel pushes
                       orderbook via WebSocket and we don't render that yet —
@@ -2292,7 +2327,7 @@ function FuturesPanel() {
                 <div style={S.dragHandleV} onMouseDown={dragOb} />
               </>
             )}
-            <div style={{flex: 1, minWidth: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
+            <div style={{flex: '1 1 0', minWidth: 0, minHeight: 0, overflow: 'hidden'}}>{renderTradeControls()}</div>
           </div>
           {/* Drag handle: top ↔ bottom */}
           <div style={S.dragHandleH} onMouseDown={dragBottom} />
@@ -2312,6 +2347,8 @@ function FuturesPanel() {
             filteredOrders={filteredOrders}
             prices={prices}
             walletAddr={walletAddr}
+            historyAccountAddr={dex === 'decibel' ? subaccountAddr : walletAddr}
+            markets={markets}
             dataReady={dataReady}
             leverageSettings={leverageSettings}
             closePosition={closePosition}
@@ -2533,6 +2570,26 @@ function FuturesPanel() {
                   {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
                 </span>
               </div>
+              {/* Liquidation price row — visible on every venue that ships
+                  it through the position normaliser. Reading the figure
+                  off the card was raised in the audit as a critical UX
+                  hazard for any leveraged trader. We colour it red as a
+                  passive warning when the mark sits within ±10% of liq. */}
+              {(() => {
+                const liq = parseFloat(pos.liquidation_price || 0);
+                if (!(liq > 0)) return null;
+                const distPct = markP > 0 ? Math.abs(markP - liq) / markP * 100 : 100;
+                const danger = distPct < 10;
+                return (
+                  <div style={S.row}>
+                    <span style={{ ...S.detail, color: danger ? '#E53935' : '#a3906a' }}>
+                      Liq: ${fmtPrice(liq)}
+                      {markP > 0 && <span style={{ marginLeft: 6, fontWeight: 700 }}>({distPct.toFixed(1)}% away)</span>}
+                    </span>
+                    <span style={S.detail} />
+                  </div>
+                );
+              })()}
 
               {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
                   Pro too (per-user-request) — same icon as Basic for
@@ -2687,13 +2744,17 @@ function FuturesPanel() {
       const cross = Number(account?.usdc_cross_withdrawable_balance || 0);
       const isol = Number(account?.usdc_isolated_withdrawable_balance || 0);
       const perpEquity = Number(account?.perp_equity_balance || 0);
-      const usedRaw = Number(account?.total_margin || account?.maintenance_margin || 0);
+      // `total_margin` is the gross margin allocated to open positions.
+      // The earlier formula subtracted `available` (free margin) from it,
+      // double-counting and producing a wrong number once a position
+      // existed (Margin Used would underread by the free-margin value).
+      // total_margin IS Margin Used directly. Fall back to maintenance_margin
+      // (the liquidation threshold) only when total_margin is missing.
+      const totalMargin = Number(account?.total_margin || 0);
+      const maintMargin = Number(account?.maintenance_margin || 0);
       equity = perpEquity || (cross + isol);
       available = cross + isol;
-      // `total_margin` is the gross margin allocated; `maintenance_margin`
-      // is the threshold. Pacifica's `total_margin_used` doesn't have a
-      // direct equivalent — `total_margin - available` is the closest.
-      marginUsed = Math.max(0, usedRaw - available);
+      marginUsed = Math.max(0, totalMargin || maintMargin);
     } else {
       equity = parseFloat(account?.account_equity || 0);
       available = parseFloat(account?.available_to_withdraw || 0);
@@ -3098,7 +3159,7 @@ function FuturesPanel() {
           </div>
         )}
         <div className="futures-panel-body" style={S.body}>
-          <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%'}}>
+          <div key={activeTab} style={{animation: 'fadeIn 0.25s ease-out', display: 'flex', flexDirection: 'column', gap: 10, height: '100%', minHeight: 0}}>
             {renderContent()}
           </div>
         </div>
@@ -3403,6 +3464,7 @@ const S = {
   body: {
     flex: 1, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto', overflowX: 'hidden', background: '#fdf8e7', scrollbarWidth: 'none',
+    minHeight: 0,
   },
   pacificaFooter: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
