@@ -1199,6 +1199,46 @@ try {
     CREATE INDEX IF NOT EXISTS idx_pacifica_agents_player ON pacifica_agents(player_id);
   `);
 } catch {}
+
+// One-shot legacy migration: older client builds POSTed `wallet=<agent>`
+// to /trading/claim-gold (instead of `wallet=<master>, agent_wallet=<agent>`),
+// so trading_rewards.wallet ended up holding the agent pubkey while
+// players.wallet held the master. New code expects wallet=master and
+// agent_wallet=agent — without this fix-up, fetchPacificaAllTrades only
+// queries the master (which Pacifica returns [] for) and every Privy
+// user's task progress stays stuck at 0 even though they've been
+// trading. Idempotent: re-runs are safe, only flips rows that still
+// have wallet != players.wallet.
+try {
+  const legacyRows = db.db.prepare(`
+    SELECT tr.player_id, tr.wallet AS tr_wallet, p.wallet AS player_wallet
+    FROM trading_rewards tr
+    JOIN players p ON p.id = tr.player_id
+    WHERE tr.dex = 'pacifica'
+      AND tr.wallet IS NOT NULL AND LENGTH(tr.wallet) > 0
+      AND p.wallet IS NOT NULL AND LENGTH(p.wallet) > 0
+      AND tr.wallet != p.wallet
+  `).all();
+  if (legacyRows.length > 0) {
+    const insertAgent = db.db.prepare('INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)');
+    const setAgentHint = db.db.prepare(`UPDATE trading_rewards SET agent_wallet = ?
+      WHERE player_id = ? AND dex = 'pacifica'
+        AND (agent_wallet IS NULL OR LENGTH(agent_wallet) = 0)`);
+    const restoreMaster = db.db.prepare(`UPDATE trading_rewards SET wallet = ?
+      WHERE player_id = ? AND dex = 'pacifica'`);
+    const txn = db.db.transaction((rows) => {
+      for (const r of rows) {
+        insertAgent.run(r.player_id, r.tr_wallet);
+        setAgentHint.run(r.tr_wallet, r.player_id);
+        restoreMaster.run(r.player_wallet, r.player_id);
+      }
+    });
+    txn(legacyRows);
+    console.log(`[boot] migrated ${legacyRows.length} legacy pacifica trading_rewards rows (wallet was agent, now master + pacifica_agents row)`);
+  }
+} catch (e) {
+  console.warn(`[boot] pacifica legacy migration skipped:`, e.message);
+}
 // `pacifica_builder_approved` — server-side mirror of the client's 30-day
 // localStorage activation cache. If localStorage gets cleared (incognito,
 // browser cleanup, Privy iframe context) we used to ask the user to
