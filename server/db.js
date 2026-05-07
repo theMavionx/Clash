@@ -372,12 +372,14 @@ function applyTrophyDelta(playerId, delta) {
       ? Math.round(delta * Number(t.trophy_boost || 1))
       : delta;
     stmts.bumpTournamentTrophies.run(boosted, t.tournament_id, playerId);
+    console.log(`[trophy] player=${playerId.slice(0,8)} TOURNAMENT t=${t.tournament_id} delta=${delta} boosted=${boosted} (main FROZEN)`);
     return;
   }
   // No tournament — apply to main, clamping at zero like the legacy code.
   const cur = stmts.getPlayerById.get(playerId)?.trophies || 0;
   const next = Math.max(0, cur + delta);
   stmts.updateTrophies.run(next, playerId);
+  console.log(`[trophy] player=${playerId.slice(0,8)} MAIN ${cur} ${delta>=0?'+':''}${delta} -> ${next}`);
 }
 
 // Apply tournament gold_boost to a base gold reward and record the boosted
@@ -395,6 +397,7 @@ function applyGoldReward(playerId, baseGold) {
   if (!t) return amount;
   const boosted = Math.round(amount * Number(t.gold_boost || 1));
   stmts.bumpTournamentGold.run(boosted, t.tournament_id, playerId);
+  console.log(`[gold-boost] player=${playerId.slice(0,8)} t=${t.tournament_id} base=${amount} boost=${t.gold_boost}x -> ${boosted}`);
   return boosted;
 }
 

@@ -1301,8 +1301,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
+    console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> NO NEW TRADES (returning 0)`);
       return res.json({ gold: 0, reason: 'No new trades' });
     }
 
@@ -1427,11 +1429,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
 
     const txnResult = creditTxn();
     if (txnResult.raced) {
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> RACED (parallel claim)`);
       return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
     if (txnResult.paid > 0) {
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
       return res.json({ gold: txnResult.paid, reason: reasons.join(' + ') || 'Trading reward', dex });
     }
+    console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
     return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex });
   }
 
@@ -1452,17 +1457,22 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
 
     // Fetch trades from Pacifica (verified source of truth)
-    const tradesRes = await fetch(
-      `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
-    );
+    const pacUrl = `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`;
+    const t0 = Date.now();
+    const tradesRes = await fetch(pacUrl);
     const tradesData = await tradesRes.json();
+    const apiMs = Date.now() - t0;
+    const apiCount = (tradesData && Array.isArray(tradesData.data)) ? tradesData.data.length : 0;
+    console.log(`[claim-gold pacifica] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} api_status=${tradesRes.status} api_success=${tradesData.success} api_count=${apiCount} api_ms=${apiMs} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
     if (!tradesData.success || !tradesData.data) {
+      console.warn(`[claim-gold pacifica] player=${req.player.name} -> Pacifica API returned no data (success=${tradesData.success})`);
       return res.json({ gold: 0, reason: 'No trades found' });
     }
 
     // Filter only new trades (after last_trade_id)
     const newTrades = tradesData.data.filter(t => t.history_id > reward.last_trade_id);
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      console.log(`[claim-gold pacifica] player=${req.player.name} -> NO NEW TRADES (api_total=${apiCount}, all <= last_trade_id=${reward.last_trade_id})`);
       return res.json({ gold: 0, reason: 'No new trades' });
     }
     // Pacifica trade history is fill-level: one user order can appear as
@@ -1589,8 +1599,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     });
     const txnResPac = creditTxnPac();
     if (txnResPac.raced) {
+      console.log(`[claim-gold pacifica] player=${req.player.name} -> RACED (parallel claim)`);
       return res.json({ gold: 0, reason: 'Already claimed by parallel request' });
     }
+    console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.paid > 0 ? 'PAID' : 'ZERO'} gold=${txnResPac.paid} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
 
     res.json({
       gold: Math.floor(txnResPac.paid),
@@ -1598,7 +1610,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
     });
   } catch (e) {
-    console.error('Claim gold error:', e);
+    console.error(`[claim-gold pacifica] player=${req.player.name} ERROR:`, e.message, e.stack);
     res.status(500).json({ error: 'Failed to claim rewards' });
   }
 });
@@ -1747,12 +1759,14 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
 
   const existing = tasks.getPlayerTask(req.player.id, id);
   if (existing && !existing.claimed_at) {
+    console.log(`[task ${id} start] player=${req.player.name} -> ALREADY_STARTED`);
     return res.json({ ok: true, already_started: true });
   }
   // Repeatable + claimed: check cooldown before allowing re-start
   if (existing && existing.claimed_at) {
     const check = tasks.canClaim(existing, task);
     if (!check.ok && check.reason && check.reason.startsWith('Cooldown')) {
+      console.log(`[task ${id} start] player=${req.player.name} -> COOLDOWN ${check.reason}`);
       return res.status(429).json({ error: check.reason });
     }
   }
@@ -1762,6 +1776,7 @@ router.post('/tasks/:id/start', auth, async (req, res) => {
     `INSERT OR REPLACE INTO player_tasks (player_id, task_id, snapshot, progress, progress_value, target_value, started_at, claimed_at)
      VALUES (?, ?, ?, 0, 0, 0, datetime('now'), NULL)`
   ).run(req.player.id, id, JSON.stringify(snap));
+  console.log(`[task ${id} start] player=${req.player.name} (${req.player.dex}) -> STARTED ${task.title || task.type}`);
   res.json({ ok: true, started: true });
 });
 
@@ -1798,6 +1813,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   ).run(result.progress_value, result.target_value, result.target_value > 0 ? Math.min(1, result.progress_value / result.target_value) : 0, req.player.id, id);
 
   if (!result.completed) {
+    console.log(`[task ${id} claim] player=${req.player.name} -> NOT_COMPLETED progress=${result.progress_value}/${result.target_value} breakdown=${JSON.stringify(result.breakdown||{})}`);
     return res.json({ ok: false, completed: false, progress_value: result.progress_value, target_value: result.target_value, breakdown: result.breakdown });
   }
   const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
@@ -1837,8 +1853,10 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   });
   const payoutRes = payout();
   if (payoutRes.raced) {
+    console.log(`[task ${id} claim] player=${req.player.name} -> RACED (parallel claim)`);
     return res.status(409).json({ error: 'Already claimed by parallel request' });
   }
+  console.log(`[task ${id} claim] player=${req.player.name} -> PAID gold=${task.reward_gold||0} wood=${task.reward_wood||0} ore=${task.reward_ore||0} (${task.title})`);
 
   try {
     logEconomy('Task claimed', { player: req.player.name, task: task.title, gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore });
@@ -2712,6 +2730,7 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
       trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
       last_activity_at = datetime('now')
   `).run(tid, req.player.id);
+  console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase });
 });
 
@@ -2725,6 +2744,7 @@ router.post('/tournaments/:id/leave', auth, (req, res) => {
     UPDATE tournament_participants SET left_at = datetime('now')
     WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
   `).run(tid, req.player.id);
+  console.log(`[tournament ${tid} leave] player=${req.player.name} -> ${r.changes > 0 ? 'LEFT' : 'NO_OP_was_not_joined'}`);
   res.json({ ok: true, left: r.changes > 0 });
 });
 

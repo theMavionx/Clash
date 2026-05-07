@@ -117,12 +117,15 @@ async function buildSnapshot(player, task) {
       const id = Number(t.history_id || 0);
       if (id > baseline) baseline = id;
     }
+    let baselineSource = trades.length > 0 ? 'fetched_trades' : 'none';
     if (baseline === 0) {
       const dex = String(player.dex || 'pacifica').toLowerCase();
       const reward = db.db.prepare('SELECT last_trade_id FROM trading_rewards WHERE player_id = ? AND dex = ?').get(player.id, dex);
       baseline = reward ? reward.last_trade_id : 0;
+      baselineSource = reward ? 'trading_rewards.last_trade_id' : 'zero_default';
     }
     snap.trade_id_start = baseline;
+    console.log(`[tasks] snapshot task=${task.id} (${task.title || task.type}) player=${player.name} dex=${player.dex} baseline=${baseline} source=${baselineSource} fetched_count=${trades.length}`);
   }
   if (task.type === 'combo_volume_attack') {
     const winsRow = db.db.prepare(
@@ -241,13 +244,25 @@ async function fetchWalletTrades(player) {
   // Pacifica (Solana): public API
   if (dexFilter === 'pacifica' && isSolanaWallet(wallet)) {
     try {
+      const t0 = Date.now();
       const r = await fetch(
         `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
       );
       const j = await r.json();
-      return (j && j.success && Array.isArray(j.data)) ? j.data : [];
-    } catch { return []; }
+      const ms = Date.now() - t0;
+      const rows = (j && j.success && Array.isArray(j.data)) ? j.data : [];
+      // Trace every Pacifica fetch — when this returns 0 for a wallet that
+      // /admin/players claims has trading_volume>0, that's the smoking-gun
+      // signal that Pacifica's own API doesn't recognize the wallet (e.g.
+      // user trading from a different sub-account).
+      console.log(`[tasks] pacifica fetch player=${player.name} wallet=${(wallet||'').slice(0,10)} status=${r.status} success=${j.success} count=${rows.length} ms=${ms}`);
+      return rows;
+    } catch (e) {
+      console.warn(`[tasks] pacifica fetch FAILED player=${player.name} wallet=${(wallet||'').slice(0,10)}:`, e.message);
+      return [];
+    }
   }
+  console.log(`[tasks] no fetch path for dex=${dexFilter} wallet_type=${wallet ? (isEvmWallet(wallet)?'evm':isAptosWallet(wallet)?'aptos':isSolanaWallet(wallet)?'solana':'unknown') : 'NONE'} player=${player.name}`);
   return [];
 }
 
@@ -298,6 +313,7 @@ async function verifyPositions(player, task, snap) {
     if (!countClose && c.isClose) continue;
     n += 1;
   }
+  console.log(`[task ${task.id} positions] player=${player.name} dex=${player.dex} trades_total=${trades.length} start_id=${startId} symbol=${symbol} side=${side} matched=${n} target=${target}`);
   return { progress_value: n, target_value: target, completed: n >= target };
 }
 

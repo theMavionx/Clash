@@ -1300,8 +1300,17 @@ function FuturesPanel() {
     </>
   );
 
-  const renderTradeControls = () => (
-    <div style={{display: 'flex', flexDirection: 'column', gap: 8, ...(fullscreen ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'} : {})}}>
+  const renderTradeControls = ({ compactMobile = false, parentScroll = false } = {}) => (
+    <div style={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: compactMobile ? 6 : 8,
+      minWidth: 0,
+      ...(fullscreen && !parentScroll
+        ? {width: '100%', overflowY: 'auto', overflowX: 'hidden', padding: 10, scrollbarWidth: 'none'}
+        : {}),
+      ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
+    }}>
 
       {/* Deposit/Withdraw row */}
       {pacBalance === 0 && (
@@ -1317,8 +1326,8 @@ function FuturesPanel() {
           <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => setOrderType('limit')}>Limit</button>
         </div>
 
-        <div style={S.row}>
-          <div style={{flex: 2, display: 'flex', flexDirection: 'column', gap: 3}}>
+        <div style={{...S.row, alignItems: 'stretch'}}>
+          <div style={{flex: compactMobile ? '1 1 auto' : 2, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
               <span style={S.label}>{amountInUsdc ? 'Margin' : 'Amount'}</span>
               <button style={S.unitToggle} onClick={() => setAmountInUsdc(!amountInUsdc)}>
@@ -1332,7 +1341,7 @@ function FuturesPanel() {
             <input type="number" placeholder={amountInUsdc ? '20' : '0.01'} value={amount}
               onChange={e => { setAmount(e.target.value); setSizePct(0); }} style={S.input} />
           </div>
-          <div style={{flex: 1, display: 'flex', flexDirection: 'column', gap: 3}}>
+          <div style={{flex: compactMobile ? '0 0 92px' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <span style={S.label}>Leverage</span>
             <button style={S.levBtn} onClick={() => setShowLeverage(!showLeverage)}>
               {leverage}x
@@ -2086,17 +2095,27 @@ function FuturesPanel() {
     if (fullscreen) {
       if (isMobile) {
         return (
-          <div style={{display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden'}}>
+          <div style={{display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden'}}>
             {renderSymbolBar()}
             {/* Top: chart */}
-            <div style={{flex: 1, position: 'relative', minHeight: 0}}>
+            <div style={{flex: '0 1 clamp(220px, 38vh, 360px)', position: 'relative', minHeight: 180}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
               {fundingBadge}
             </div>
 
             {/* Bottom: Trade controls */}
-            <div style={{flexShrink: 0, paddingBottom: 10, background: '#e8dfc8', borderTop: '2px solid #d4c8b0'}}>
-              {renderTradeControls()}
+            <div style={{
+              flex: '1 1 auto',
+              minHeight: 0,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              WebkitOverflowScrolling: 'touch',
+              overscrollBehavior: 'contain',
+              paddingBottom: 'max(10px, env(safe-area-inset-bottom))',
+              background: '#e8dfc8',
+              borderTop: '2px solid #d4c8b0',
+            }}>
+              {renderTradeControls({ compactMobile: true, parentScroll: true })}
             </div>
           </div>
         );
@@ -3265,6 +3284,7 @@ const S = {
   input: {
     background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
     padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 700, outline: 'none',
+    width: '100%', boxSizing: 'border-box', minWidth: 0,
   },
   errorBar: {
     background: '#E5393520', border: '2px solid #E53935', borderRadius: 8,
@@ -3329,6 +3349,7 @@ const S = {
   tradeBox: {
     display: 'flex', flexDirection: 'column', gap: 10, background: '#e8dfc8',
     padding: 12, borderRadius: 14, border: '3px solid #d4c8b0',
+    minWidth: 0, boxSizing: 'border-box',
   },
   typeBtn: {
     flex: 1, padding: '7px', background: '#d4c8b0', border: '2px solid #bba882',
@@ -3377,6 +3398,7 @@ const S = {
     width: '100%', background: '#fff', border: '3px solid #d4c8b0', borderRadius: 10,
     padding: '9px 10px', color: '#333', fontSize: 15, fontWeight: 800, cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    boxSizing: 'border-box', minWidth: 0,
   },
   sliderBox: {
     background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 10,
@@ -3406,7 +3428,7 @@ const S = {
   positionSub: {
     fontSize: 11, fontWeight: 700, color: '#5C3A21',
   },
-  tradeBtn: { flex: 1, padding: '11px 6px', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  tradeBtn: { flex: 1, minWidth: 0, padding: '11px 6px', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' },
   tradeBtnText: { color: '#fff', fontSize: 20, fontWeight: 900, textShadow: '0 2px 0 rgba(0,0,0,0.4)' },
   // Positions
   posCard: {
