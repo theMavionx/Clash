@@ -1,49 +1,147 @@
-import { memo, useState, useEffect } from 'react';
+import { memo, useEffect, useState } from 'react';
+import { getReadClient } from '../lib/decibel';
 
-const API = 'https://api.pacifica.fi/api/v1';
+const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
+const READ_TIMEOUT_MS = 8000;
 
-function FundingHistory({ walletAddr, filters }) {
+function timeMs(value) {
+  if (typeof value === 'number') return value > 1e12 ? value : value * 1000;
+  const parsed = new Date(value || 0).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function findMarket(markets, identifier) {
+  const id = String(identifier || '').toLowerCase();
+  if (!id || !Array.isArray(markets)) return null;
+  return markets.find(m =>
+    String(m.market_addr || '').toLowerCase() === id ||
+    String(m.market_name || '').toLowerCase() === id ||
+    String(m.symbol || '').toLowerCase() === id
+  ) || null;
+}
+
+function decibelSymbol(row, markets) {
+  const m = findMarket(markets, row.market);
+  if (m?.symbol) return m.symbol;
+  const raw = String(row.market_name || row.market || '');
+  return raw.includes('-') ? raw.split('-')[0].toUpperCase() : raw.slice(0, 8).toUpperCase();
+}
+
+function normalizeDecibelFunding(row, markets) {
+  const rawFunding = Number(row.realized_funding_amount || 0);
+  const signedFunding = row.is_rebate ? Math.abs(rawFunding) : -Math.abs(rawFunding);
+  const action = String(row.action || '');
+  return {
+    ...row,
+    _dex: 'decibel',
+    id: `${row.transaction_unix_ms || ''}:${row.market || ''}:${row.action || ''}:${row.size || ''}`,
+    symbol: decibelSymbol(row, markets),
+    side: action.toLowerCase().includes('long') ? 'bid' : 'ask',
+    payout: signedFunding,
+    rate: null,
+    amount: row.size,
+    fee: row.fee_amount,
+    created_at: row.transaction_unix_ms,
+  };
+}
+
+function displayNumber(value, digits = 6) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [], filters }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    if (!walletAddr) { setLoading(false); return; }
+    const addr = dex === 'decibel' ? accountAddr : (accountAddr || walletAddr);
+    if (!addr) {
+      setPayments([]);
+      setError('');
+      setLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), READ_TIMEOUT_MS);
+    let cancelled = false;
+
     setLoading(true);
-    fetch(`${API}/funding/history?account=${walletAddr}`)
-      .then(r => r.json())
-      .then(d => { if (d.data) setPayments(d.data); })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [walletAddr]);
+    setError('');
+
+    async function load() {
+      try {
+        if (dex === 'decibel') {
+          const read = await getReadClient();
+          const res = await read.userFundingHistory.getByAddr({
+            subAddr: addr,
+            limit: 100,
+            offset: 0,
+            fetchOptions: { signal: controller.signal },
+          });
+          if (!cancelled) setPayments((res?.items || []).map(p => normalizeDecibelFunding(p, markets)));
+          return;
+        }
+
+        const r = await fetch(`${PACIFICA_API}/funding/history?account=${addr}`, {
+          signal: controller.signal,
+        });
+        const d = await r.json();
+        if (!cancelled) setPayments(Array.isArray(d.data) ? d.data : []);
+      } catch (e) {
+        if (!cancelled && e?.name !== 'AbortError') {
+          setPayments([]);
+          setError(e?.message || 'Could not load funding history');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [walletAddr, accountAddr, dex, markets]);
 
   let filtered = payments;
 
-  // Symbol filter
   if (filters?.symbol && filters.symbol !== 'All') {
     filtered = filtered.filter(p => (p.symbol || '').toUpperCase().includes(filters.symbol.toUpperCase()));
   }
 
-  // Side filter
   if (filters?.side && filters.side !== 'All') {
     const wantBid = filters.side === 'Long';
-    filtered = filtered.filter(p => wantBid ? p.side === 'bid' : p.side === 'ask');
+    filtered = filtered.filter(p => {
+      const side = String(p.side || p.action || '').toLowerCase();
+      return wantBid
+        ? side === 'bid' || side.includes('long')
+        : side === 'ask' || side.includes('short');
+    });
   }
 
-  // Sort
   const sortBy = filters?.sortBy || 'time';
   const dir = filters?.sortDir === 'asc' ? 1 : -1;
   filtered = [...filtered].sort((a, b) => {
-    if (sortBy === 'time') { const ta = typeof a.created_at === 'number' ? a.created_at : new Date(a.created_at||0).getTime(); const tb = typeof b.created_at === 'number' ? b.created_at : new Date(b.created_at||0).getTime(); return dir * (tb - ta); }
+    if (sortBy === 'time') return dir * (timeMs(b.created_at) - timeMs(a.created_at));
     if (sortBy === 'symbol') return dir * (a.symbol || '').localeCompare(b.symbol || '');
     if (sortBy === 'amount') return dir * (Math.abs(parseFloat(b.payout || 0)) - Math.abs(parseFloat(a.payout || 0)));
     return 0;
   });
 
   if (loading) {
-    return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>Loading...</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>Loading...</div>;
+  }
+  if (error) {
+    return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    return <div style={{padding: 20, textAlign: 'center', color: '#a3906a'}}>No funding payments</div>;
+    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {dex === 'decibel' ? 'Decibel ' : ''}funding payments</div>;
   }
 
   return (
@@ -55,26 +153,28 @@ function FundingHistory({ walletAddr, filters }) {
         <th style={S.th}>Rate</th>
         <th style={S.th}>Payment</th>
         <th style={S.th}>Position</th>
+        {dex === 'decibel' && <th style={S.th}>Fee</th>}
       </tr></thead>
       <tbody>
         {filtered.slice(0, 100).map((p, i) => {
-          const payout = parseFloat(p.payout || 0);
-          const rate = parseFloat(p.rate || 0);
+          const payout = Number(p.payout || 0);
+          const rate = Number(p.rate);
           const color = payout >= 0 ? '#4CAF50' : '#E53935';
-          const rateColor = rate >= 0 ? '#4CAF50' : '#E53935';
-          const side = (p.side || '').toLowerCase();
+          const side = String(p.side || p.action || '').toLowerCase();
           const isLong = side === 'bid' || side.includes('long');
-          // created_at is unix ms timestamp
-          const ts = typeof p.created_at === 'number' && p.created_at > 1e12 ? p.created_at : (p.created_at ? new Date(p.created_at).getTime() : 0);
-          const time = ts ? new Date(ts).toLocaleString([], {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+          const ts = timeMs(p.created_at);
+          const time = ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
           return (
-            <tr key={i} style={S.tr}>
+            <tr key={p.id || i} style={S.tr}>
               <td style={S.td}>{time}</td>
-              <td style={S.td}>{p.symbol || '—'}</td>
-              <td style={{...S.td, color: isLong ? '#4CAF50' : '#E53935', fontWeight: 800}}>{isLong ? 'LONG' : 'SHORT'}</td>
-              <td style={{...S.td, color: rateColor}}>{rate >= 0 ? '+' : ''}{(rate * 100).toFixed(4)}%</td>
-              <td style={{...S.td, color, fontWeight: 800}}>{payout >= 0 ? '+' : ''}${payout.toFixed(6)}</td>
-              <td style={S.td}>{p.amount || '—'}</td>
+              <td style={S.td}>{p.symbol || '-'}</td>
+              <td style={{ ...S.td, color: isLong ? '#4CAF50' : '#E53935', fontWeight: 800 }}>{isLong ? 'LONG' : 'SHORT'}</td>
+              <td style={{ ...S.td, color: Number.isFinite(rate) ? (rate >= 0 ? '#4CAF50' : '#E53935') : '#a3906a' }}>
+                {Number.isFinite(rate) ? `${rate >= 0 ? '+' : ''}${(rate * 100).toFixed(4)}%` : '-'}
+              </td>
+              <td style={{ ...S.td, color, fontWeight: 800 }}>{payout >= 0 ? '+' : '-'}${Math.abs(payout).toFixed(6)}</td>
+              <td style={S.td}>{displayNumber(p.amount, 6)}</td>
+              {dex === 'decibel' && <td style={S.td}>${Number(p.fee || 0).toFixed(4)}</td>}
             </tr>
           );
         })}

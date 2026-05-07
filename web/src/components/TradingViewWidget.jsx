@@ -288,7 +288,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
   }, [positions, orders, symbol]);
 
   return (
-    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ width: '100%', height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {/* Timeframe selector */}
       <div style={S.tfBar}>
         {INTERVALS.map(tf => (
@@ -301,7 +301,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           </button>
         ))}
       </div>
-      <div style={{ flex: 1, position: 'relative' }}>
+      <div style={{ flex: '1 1 auto', minHeight: 0, position: 'relative' }}>
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
         {loading && (
           <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(253, 248, 231, 0.7)'}}>
