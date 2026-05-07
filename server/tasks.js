@@ -265,29 +265,104 @@ async function fetchWalletTrades(player) {
     }
   }
 
-  // Pacifica (Solana): public API
-  if (dexFilter === 'pacifica' && isSolanaWallet(wallet)) {
+  // Pacifica (Solana): public API. Pacifica indexes /v1/trades/history by
+  // SIGNER pubkey, and a player's trades are typically signed by an agent
+  // (auto-bound on first trade, rotates every time the user re-binds — any
+  // localStorage clear / browser switch / incognito triggers a fresh
+  // bind). The master rarely signs trades directly, so querying master
+  // alone returns [] for most users. We aggregate trades from EVERY
+  // signer the player has ever used (master + every historical agent),
+  // dedupe by history_id, and return the merged set.
+  if (dexFilter === 'pacifica') {
+    return fetchPacificaAllTrades(player);
+  }
+  console.log(`[tasks] no fetch path for dex=${dexFilter} wallet_type=${wallet ? (isEvmWallet(wallet)?'evm':isAptosWallet(wallet)?'aptos':isSolanaWallet(wallet)?'solana':'unknown') : 'NONE'} player=${player.name}`);
+  return [];
+}
+
+// Aggregate Pacifica trades across every pubkey the player has ever
+// signed under. Returns a merged + deduped list sorted ascending by
+// history_id — the format every downstream verifier already expects.
+//
+// Why this is needed: Pacifica binds an EPHEMERAL agent keypair (stored
+// in browser localStorage) on first trade. Every subsequent trade is
+// signed by THAT agent — Pacifica's trade history endpoint filters by
+// signer, so trades never appear under master. When the user clears
+// localStorage and re-binds, a NEW agent is generated; their old trades
+// are still on Pacifica under the OLD agent. Without aggregation, every
+// re-bind silently abandons the residue of unclaimed trades from the
+// previous agent.
+//
+// Inputs:
+//   - players.wallet (master) — included if it's a valid Solana pubkey.
+//     Some Phantom users sign trades directly with master (rejected the
+//     bind popup), so master IS sometimes the signer.
+//   - pacifica_agents (append-only) — every agent the player has ever
+//     POSTed via /api/pacifica/agent. Composite PK keeps it idempotent
+//     so re-POSTing the same agent doesn't grow the list.
+//
+// Performance: 1 + N parallel fetches per call, where N = number of
+// historical agents (typically 1, occasionally 2-3 for users who reset
+// their browser between sessions). Pacifica's REST is fast (~100-200ms)
+// so even 5 concurrent fetches stay well under the gateway timeout.
+async function fetchPacificaAllTrades(player) {
+  const master = isSolanaWallet(player.wallet) ? player.wallet : null;
+  let agents = [];
+  try {
+    const rows = db.db.prepare(
+      'SELECT agent_wallet FROM pacifica_agents WHERE player_id = ? ORDER BY bound_at ASC'
+    ).all(player.id);
+    agents = rows.map(r => r.agent_wallet).filter(isSolanaWallet);
+  } catch (e) {
+    // Table doesn't exist yet (pre-migration server) or DB error; carry on
+    // with master-only behaviour rather than failing the verifier.
+    console.warn(`[pacifica fetch] pacifica_agents read failed:`, e.message);
+  }
+
+  // De-dupe pubkeys in case master == agent or the same agent was ever
+  // POSTed twice with different casing. Filter out empty entries.
+  const queryList = [...new Set([master, ...agents].filter(Boolean))];
+  if (queryList.length === 0) {
+    console.log(`[pacifica fetch] player=${player.name} -> NO valid wallet to query`);
+    return [];
+  }
+
+  // Parallel fan-out. Each fetch is wrapped so one slow/failing endpoint
+  // doesn't poison the merged result.
+  const results = await Promise.all(queryList.map(async (account) => {
+    const t0 = Date.now();
     try {
-      const t0 = Date.now();
       const r = await fetch(
-        `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`
+        `https://api.pacifica.fi/api/v1/trades/history?account=${account}&builder_code=clashofperps`
       );
       const j = await r.json();
       const ms = Date.now() - t0;
       const rows = (j && j.success && Array.isArray(j.data)) ? j.data : [];
-      // Trace every Pacifica fetch — when this returns 0 for a wallet that
-      // /admin/players claims has trading_volume>0, that's the smoking-gun
-      // signal that Pacifica's own API doesn't recognize the wallet (e.g.
-      // user trading from a different sub-account).
-      console.log(`[tasks] pacifica fetch player=${player.name} wallet=${(wallet||'').slice(0,10)} status=${r.status} success=${j.success} count=${rows.length} ms=${ms}`);
+      const role = account === master ? 'MASTER' : 'AGENT';
+      console.log(`[pacifica fetch] player=${player.name} ${role}=${account.slice(0,10)} status=${r.status} success=${j.success} count=${rows.length} ms=${ms}`);
       return rows;
     } catch (e) {
-      console.warn(`[tasks] pacifica fetch FAILED player=${player.name} wallet=${(wallet||'').slice(0,10)}:`, e.message);
+      const ms = Date.now() - t0;
+      console.warn(`[pacifica fetch] player=${player.name} account=${account.slice(0,10)} FAILED ms=${ms}:`, e.message);
       return [];
     }
+  }));
+
+  // Merge + dedupe by history_id. A trade has a unique history_id across
+  // all of Pacifica, so dedupe is just "first one wins".
+  const seen = new Set();
+  const merged = [];
+  for (const batch of results) {
+    for (const t of batch) {
+      const key = String(t.history_id || '');
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(t);
+    }
   }
-  console.log(`[tasks] no fetch path for dex=${dexFilter} wallet_type=${wallet ? (isEvmWallet(wallet)?'evm':isAptosWallet(wallet)?'aptos':isSolanaWallet(wallet)?'solana':'unknown') : 'NONE'} player=${player.name}`);
-  return [];
+  merged.sort((a, b) => Number(a.history_id || 0) - Number(b.history_id || 0));
+  console.log(`[pacifica fetch] player=${player.name} merged=${merged.length} from ${queryList.length} accounts (master=${master ? 'yes' : 'no'}, agents=${agents.length})`);
+  return merged;
 }
 
 async function verifyVolume(player, task, snap) {
@@ -470,4 +545,5 @@ module.exports = {
   getPlayerTask,
   upsertPlayerTask,
   canClaim,
+  fetchPacificaAllTrades,
 };
