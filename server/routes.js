@@ -1,4 +1,6 @@
 const express = require('express');
+const nacl = require('tweetnacl');
+const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
@@ -1207,19 +1209,34 @@ try {
 // agent_wallet=agent — without this fix-up, fetchPacificaAllTrades only
 // queries the master (which Pacifica returns [] for) and every Privy
 // user's task progress stays stuck at 0 even though they've been
-// trading. Idempotent: re-runs are safe, only flips rows that still
-// have wallet != players.wallet.
+// trading.
+//
+// CRITICAL — this migration uses heuristic `wallet != players.wallet` to
+// detect the legacy shape. After the migration ran once, the same query
+// is unsafe: a user who legitimately switched master (Phantom → Privy
+// or vice-versa via account-switch flow) will trigger a false positive,
+// inserting the OLD master into pacifica_agents as if it were an agent.
+// We gate on a meta flag so this runs exactly once, ever.
 try {
-  const legacyRows = db.db.prepare(`
-    SELECT tr.player_id, tr.wallet AS tr_wallet, p.wallet AS player_wallet
-    FROM trading_rewards tr
-    JOIN players p ON p.id = tr.player_id
-    WHERE tr.dex = 'pacifica'
-      AND tr.wallet IS NOT NULL AND LENGTH(tr.wallet) > 0
-      AND p.wallet IS NOT NULL AND LENGTH(p.wallet) > 0
-      AND tr.wallet != p.wallet
-  `).all();
-  if (legacyRows.length > 0) {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS server_meta (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  const META_KEY = 'pacifica_legacy_agent_migration_v1';
+  const done = db.db.prepare('SELECT value FROM server_meta WHERE key = ?').get(META_KEY);
+  if (!done) {
+    const legacyRows = db.db.prepare(`
+      SELECT tr.player_id, tr.wallet AS tr_wallet, p.wallet AS player_wallet
+      FROM trading_rewards tr
+      JOIN players p ON p.id = tr.player_id
+      WHERE tr.dex = 'pacifica'
+        AND tr.wallet IS NOT NULL AND LENGTH(tr.wallet) > 0
+        AND p.wallet IS NOT NULL AND LENGTH(p.wallet) > 0
+        AND tr.wallet != p.wallet
+    `).all();
     const insertAgent = db.db.prepare('INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)');
     const setAgentHint = db.db.prepare(`UPDATE trading_rewards SET agent_wallet = ?
       WHERE player_id = ? AND dex = 'pacifica'
@@ -1234,7 +1251,9 @@ try {
       }
     });
     txn(legacyRows);
-    console.log(`[boot] migrated ${legacyRows.length} legacy pacifica trading_rewards rows (wallet was agent, now master + pacifica_agents row)`);
+    db.db.prepare('INSERT OR REPLACE INTO server_meta (key, value) VALUES (?, ?)')
+      .run(META_KEY, String(legacyRows.length));
+    console.log(`[boot] one-shot migration: flipped ${legacyRows.length} legacy pacifica trading_rewards rows (wallet was agent → master + pacifica_agents). Will not run again.`);
   }
 } catch (e) {
   console.warn(`[boot] pacifica legacy migration skipped:`, e.message);
@@ -1307,43 +1326,137 @@ setInterval(() => {
   for (const [k, v] of claimCooldowns) { if (v < cutoff) claimCooldowns.delete(k); }
 }, 600000);
 
-// Persist Pacifica agent_wallet immediately after the client binds it.
-// Stored in TWO places:
-//   1. pacifica_agents (append-only) — every agent the player has ever
-//      bound, so /claim-gold can query each one and not lose trades that
-//      happened under a previous agent (rebind is common: any localStorage
-//      clear, browser switch, or incognito session triggers a fresh bind).
-//   2. trading_rewards.agent_wallet — latest agent only, used as a hot-
-//      path hint for log lines.
-// Without (1), if a user trades on agent_v1, clears localStorage, rebinds
-// to agent_v2, then the trades from agent_v1 that hadn't been claimed yet
-// are silently abandoned because the server only knows about agent_v2.
+// ── Solana base58 pubkey validator (exact 32-byte = 43-44 base58 chars).
+// Used by /pacifica/agent and /trading/claim-gold to gate any wallet
+// pubkey that the client passes. The earlier 32-44 char regex was too
+// permissive — a 32-char base58 string is only ~24 bytes, definitely
+// not a Solana ed25519 pubkey, but used to pass.
+function isValidSolanaPubkey(s) {
+  if (typeof s !== 'string') return false;
+  if (s.length < 43 || s.length > 44) return false;
+  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return false;
+  try {
+    const bytes = bs58.decode(s);
+    return bytes.length === 32;
+  } catch { return false; }
+}
+
+// Canonical message form Pacifica's bind_agent_wallet uses (matches the
+// client at usePacificaAgent.js:buildMessage). Sorted keys + compact JSON
+// so signature reproduces byte-for-byte across client/server.
+function pacificaCanonicalMessage(type, payload, timestamp, expiryWindow) {
+  const sortKeys = (v) => {
+    if (Array.isArray(v)) return v.map(sortKeys);
+    if (v && typeof v === 'object') {
+      return Object.keys(v).sort().reduce((a, k) => { a[k] = sortKeys(v[k]); return a; }, {});
+    }
+    return v;
+  };
+  return JSON.stringify(sortKeys({ type, timestamp, expiry_window: expiryWindow, data: payload }));
+}
+
+// Verify ed25519 signature with master pubkey. nacl.sign.detached.verify
+// returns boolean; we never throw on bad input, just return false.
+function verifyMasterSignature({ message, signatureB58, accountB58 }) {
+  try {
+    const msg = new TextEncoder().encode(message);
+    const sig = bs58.decode(signatureB58);
+    const pub = bs58.decode(accountB58);
+    if (sig.length !== 64 || pub.length !== 32) return false;
+    return nacl.sign.detached.verify(msg, sig, pub);
+  } catch { return false; }
+}
+
+// Cap on agents tracked per player. New binds beyond this evict the
+// oldest by bound_at — keeps fan-out cost bounded and the table from
+// growing unboundedly under spam. Real users rebind <5 times in a year;
+// 10 covers a couple of years of sessions.
+const PACIFICA_AGENTS_CAP = 10;
+
+// Persist Pacifica agent_wallet AFTER signature-verified bind. The client
+// binds once with `bind_agent_wallet` signed by the master keypair; we
+// reuse the SAME signed body to prove ownership server-side. Without
+// signature verification, anyone with a game token could POST a stranger's
+// agent pubkey and have our server credit their gold from the stranger's
+// trade history.
+//
+// Body: { account, agent_wallet, signature, timestamp, expiry_window }
+// — exact shape Pacifica's /agent/bind expects.
 router.post('/pacifica/agent', auth, (req, res) => {
   if (req.player.dex !== 'pacifica') {
     return res.status(400).json({ error: 'agent only applies to pacifica accounts' });
   }
-  const agent = typeof req.body.agent_wallet === 'string' ? req.body.agent_wallet.trim() : '';
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agent)) {
-    return res.status(400).json({ error: 'invalid agent_wallet (expected base58 Solana pubkey)' });
+  const { account, agent_wallet, signature, timestamp, expiry_window } = req.body || {};
+
+  // Strict pubkey validation (32-byte ed25519 → 43-44 base58 chars).
+  if (!isValidSolanaPubkey(account))      return res.status(400).json({ error: 'invalid account pubkey' });
+  if (!isValidSolanaPubkey(agent_wallet)) return res.status(400).json({ error: 'invalid agent_wallet pubkey' });
+  if (typeof signature !== 'string' || signature.length < 64) {
+    return res.status(400).json({ error: 'signature required' });
   }
-  const wallet = typeof req.body.wallet === 'string' ? req.body.wallet : (req.player.wallet || '');
-  // Append into the historical ledger (idempotent — composite PK).
-  try {
+
+  // The signed message is unauthenticated otherwise — bound the timestamp
+  // window so a stale captured signature can't be replayed forever. 5 min
+  // is the same window Pacifica accepts at /agent/bind itself, so the same
+  // body that worked on Pacifica still works here.
+  const tsNum = Number(timestamp);
+  const expiry = Number(expiry_window) || 5000;
+  const now = Date.now();
+  if (!Number.isFinite(tsNum) || Math.abs(now - tsNum) > 5 * 60 * 1000) {
+    return res.status(400).json({ error: 'timestamp out of window (max 5 min skew)' });
+  }
+
+  // The CRITICAL check: account in the signed body must match
+  // players.wallet. Without this, player A could submit player B's signed
+  // bind body (publicly observable on Pacifica's network) and have OUR
+  // server attribute B's agent to A's player_id, then claim-gold against
+  // B's trade history.
+  if (req.player.wallet !== account) {
+    return res.status(403).json({ error: 'signed account does not match player.wallet' });
+  }
+
+  // Rebuild the exact message Pacifica signs and verify the master sig.
+  const message = pacificaCanonicalMessage(
+    'bind_agent_wallet',
+    { agent_wallet },
+    tsNum,
+    expiry,
+  );
+  if (!verifyMasterSignature({ message, signatureB58: signature, accountB58: account })) {
+    return res.status(403).json({ error: 'invalid signature' });
+  }
+
+  const txn = db.db.transaction(() => {
     db.db.prepare(`
       INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)
-    `).run(req.player.id, agent);
-  } catch (e) {
-    console.warn(`[pacifica/agent] historical insert failed:`, e.message);
+    `).run(req.player.id, agent_wallet);
+    // Cap enforcement — drop oldest binds beyond PACIFICA_AGENTS_CAP. Keeps
+    // fetchPacificaAllTrades fan-out bounded and blocks /pacifica/agent
+    // spam from growing the table unbounded.
+    db.db.prepare(`
+      DELETE FROM pacifica_agents
+      WHERE player_id = ?
+        AND agent_wallet IN (
+          SELECT agent_wallet FROM pacifica_agents
+          WHERE player_id = ?
+          ORDER BY bound_at DESC, agent_wallet ASC
+          LIMIT -1 OFFSET ?
+        )
+    `).run(req.player.id, req.player.id, PACIFICA_AGENTS_CAP);
+    db.db.prepare(`
+      INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet)
+      VALUES (?, 'pacifica', ?, ?)
+      ON CONFLICT(player_id, dex) DO UPDATE SET agent_wallet = excluded.agent_wallet
+    `).run(req.player.id, account, agent_wallet);
+  });
+  try { txn(); } catch (e) {
+    console.warn(`[pacifica/agent] persist failed:`, e.message);
+    return res.status(500).json({ error: 'failed to persist' });
   }
-  // Upsert the latest hint into trading_rewards.
-  db.db.prepare(`
-    INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet)
-    VALUES (?, 'pacifica', ?, ?)
-    ON CONFLICT(player_id, dex) DO UPDATE SET agent_wallet = excluded.agent_wallet
-  `).run(req.player.id, wallet, agent);
+
   const totalAgents = db.db.prepare('SELECT COUNT(*) AS n FROM pacifica_agents WHERE player_id = ?').get(req.player.id)?.n || 0;
-  console.log(`[pacifica/agent] player=${req.player.name} master=${(wallet||'').slice(0,10)} agent=${agent.slice(0,10)} -> persisted (total agents tracked: ${totalAgents})`);
-  res.json({ ok: true, agent_wallet: agent, total_agents: totalAgents });
+  console.log(`[pacifica/agent] player=${req.player.name} master=${account.slice(0,10)} agent=${agent_wallet.slice(0,10)} sig=ok -> persisted (total agents tracked: ${totalAgents}/${PACIFICA_AGENTS_CAP})`);
+  res.json({ ok: true, agent_wallet, total_agents: totalAgents });
 });
 
 // Server-side mirror of the client's localStorage `clash_pacifica_activated`
@@ -1393,14 +1506,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     return res.status(429).json({ gold: 0, reason: 'Please wait before claiming again' });
   }
   claimCooldowns.set(req.player.id, Date.now());
-  const wallet = req.body.wallet || req.player.wallet;
-  // Pacifica agent wallet (auto-bound on first trade) — Pacifica indexes
-  // /v1/trades/history by signer pubkey, so once the agent is bound the
-  // master returns []. Client passes agent_wallet here so we can both
-  // (a) use it for the API query in this request and (b) persist it for
-  // future task verifier runs that don't see the body.
-  const agentWalletRaw = typeof req.body.agent_wallet === 'string' ? req.body.agent_wallet : null;
-  const agentWallet = agentWalletRaw && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agentWalletRaw) ? agentWalletRaw : null;
+  // Wallet is ALWAYS the player's master from auth — body.wallet is no
+  // longer trusted, since it allowed impersonation (set body.wallet to
+  // a stranger's pubkey, server queries Pacifica with the stranger's
+  // address, you receive credit for their trade volume).
+  // For Farcaster placeholders ("fc_<fid>"), body.wallet may be the only
+  // way to learn the real wallet; we accept it ONLY in that placeholder
+  // case and only when it's a valid pubkey.
+  const isFcPlaceholder = (w) => typeof w === 'string' && /^fc_/i.test(w);
+  let wallet = req.player.wallet;
+  if (isFcPlaceholder(wallet) && typeof req.body.wallet === 'string' && isValidWallet(req.body.wallet)) {
+    wallet = req.body.wallet;
+  }
+  // Agent_wallet from body is NO LONGER persisted — only the dedicated
+  // /pacifica/agent endpoint (signature-verified) can add to the agent
+  // ledger. Fan-out for this claim still uses persisted agents.
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
@@ -1608,25 +1728,17 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   if (!wallet) return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
 
   try {
-    // Get or create reward record
+    // Get or create reward record. Agents are managed exclusively by the
+    // signature-verified /pacifica/agent endpoint now, so we never write
+    // agent_wallet from this body.
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
-      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet) VALUES (?, ?, ?, ?)').run(req.player.id, dex, wallet, agentWallet);
+      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet);
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
-    } else if (agentWallet && reward.agent_wallet !== agentWallet) {
-      try { db.db.prepare('UPDATE trading_rewards SET agent_wallet = ? WHERE player_id = ? AND dex = ?').run(agentWallet, req.player.id, dex); } catch {}
-      reward.agent_wallet = agentWallet;
     }
-    // Append the body's agent into the historical ledger so a future
-    // localStorage clear + rebind doesn't lose this session's trades.
-    // Idempotent — composite PK keeps duplicates out.
-    if (agentWallet) {
-      try {
-        db.db.prepare('INSERT OR IGNORE INTO pacifica_agents (player_id, agent_wallet) VALUES (?, ?)').run(req.player.id, agentWallet);
-      } catch {}
-    }
-    // Auto-link wallet to player account if missing or still a Farcaster placeholder.
-    if (isValidWallet(wallet) && (!isValidWallet(req.player.wallet))) {
+    // Auto-link wallet to player account ONLY when going from FC placeholder
+    // to real wallet — never accept body.wallet as an arbitrary override.
+    if (isFcPlaceholder(req.player.wallet) && isValidWallet(wallet)) {
       try { db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id); } catch {}
     }
 
@@ -1636,9 +1748,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // helper merges + dedupes by history_id.
     const playerForFetch = { ...req.player, wallet };
     const t0 = Date.now();
-    const allTrades = await tasks.fetchPacificaAllTrades(playerForFetch);
+    const allTrades = await tasks.fetchPacificaAllTrades(playerForFetch, { since: reward.last_trade_id || 0 });
     const apiMs = Date.now() - t0;
-    console.log(`[claim-gold pacifica] player=${req.player.name} id=${req.player.id} master=${(wallet||'').slice(0,10)} agent=${(reward.agent_wallet||'').slice(0,10)||'-'} body_agent=${(agentWallet||'').slice(0,10)||'-'} last_trade_id=${reward.last_trade_id||0} merged_count=${allTrades.length} total_ms=${apiMs} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
+    console.log(`[claim-gold pacifica] player=${req.player.name} id=${req.player.id} master=${(wallet||'').slice(0,10)} agent=${(reward.agent_wallet||'').slice(0,10)||'-'} last_trade_id=${reward.last_trade_id||0} merged_count=${allTrades.length} total_ms=${apiMs} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
 
     // Filter only new trades (after last_trade_id) from the merged set.
     const newTrades = allTrades.filter(t => t.history_id > reward.last_trade_id);

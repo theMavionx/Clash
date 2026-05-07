@@ -311,16 +311,16 @@ export function usePacifica() {
       console.warn('[usePacifica] claimGold skipped — no token yet (account still loading)');
       return;
     }
-    // Pacifica indexes trade history by signer pubkey. Once an agent is
-    // bound, Pacifica returns trades under the AGENT, not the master.
-    // Pass agent_wallet so the server queries the right account and the
-    // task verifier persists it for next time.
-    const agentPubkey = pacAgent?.agentPubkey || null;
+    // Body intentionally minimal: server uses req.player.wallet from auth
+    // and pacifica_agents (signature-verified ledger) for fan-out. We
+    // used to pass agent_wallet here too, but that route was an
+    // unverified write into the agents ledger — moved exclusively to
+    // /pacifica/agent which checks the master signature.
     try {
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ wallet: walletAddr, agent_wallet: agentPubkey }),
+        body: JSON.stringify({ wallet: walletAddr }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -342,7 +342,7 @@ export function usePacifica() {
       console.warn('[usePacifica] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr, pacAgent]);
+  }, [walletAddr]);
 
   const scheduleClaimGold = useCallback(() => {
     // Pacifica trade history can lag the order response by a moment. Claim

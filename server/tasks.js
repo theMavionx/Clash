@@ -111,7 +111,9 @@ async function buildSnapshot(player, task) {
     // on dex: Avantis uses local futures.db rowid, Pacifica uses their public
     // history_id. Fall back to trading_rewards.last_trade_id if source fails
     // (avoids a zero baseline that would leak ALL past trades).
-    const trades = await fetchWalletTrades(player);
+    // Snapshot only needs the MAX history_id, so first page (200 trades) is
+    // enough — pass firstPageOnly to skip multi-page walks.
+    const trades = await fetchWalletTrades(player, { firstPageOnly: true });
     let baseline = 0;
     for (const t of trades) {
       const id = Number(t.history_id || 0);
@@ -206,7 +208,7 @@ function resolveWallet(player) {
 // a previous DEX should never pull the wrong trade source. Returns a common shape:
 //   [{ history_id, symbol, side, price, amount, _notional? }]
 // so verifiers don't need to branch.
-async function fetchWalletTrades(player) {
+async function fetchWalletTrades(player, opts = {}) {
   if (!player) return [];
   const wallet = resolveWallet(player);
   if (!wallet) return [];
@@ -274,7 +276,7 @@ async function fetchWalletTrades(player) {
   // signer the player has ever used (master + every historical agent),
   // dedupe by history_id, and return the merged set.
   if (dexFilter === 'pacifica') {
-    return fetchPacificaAllTrades(player);
+    return fetchPacificaAllTrades(player, opts);
   }
   console.log(`[tasks] no fetch path for dex=${dexFilter} wallet_type=${wallet ? (isEvmWallet(wallet)?'evm':isAptosWallet(wallet)?'aptos':isSolanaWallet(wallet)?'solana':'unknown') : 'NONE'} player=${player.name}`);
   return [];
@@ -293,59 +295,92 @@ async function fetchWalletTrades(player) {
 // re-bind silently abandons the residue of unclaimed trades from the
 // previous agent.
 //
+// Pagination: Pacifica defaults to limit=100 per page with cursor-based
+// continuation (`next_cursor` + `has_more`). For active scalpers a single
+// claim window can easily exceed 100 trades, so we page up to MAX_PAGES
+// or until we cross `since` (the caller's already-credited high water
+// mark). Without this, every claim above 100 fresh trades silently
+// truncates the credit.
+//
+// Fan-out cap: limited to PACIFICA_FETCH_FANOUT_CAP newest agents +
+// master. The /pacifica/agent endpoint already evicts old binds beyond
+// 10 agents per player, but this is a second line of defense that
+// bounds Pacifica REST RPS even if the cap there is bypassed.
+//
 // Inputs:
 //   - players.wallet (master) — included if it's a valid Solana pubkey.
 //     Some Phantom users sign trades directly with master (rejected the
 //     bind popup), so master IS sometimes the signer.
-//   - pacifica_agents (append-only) — every agent the player has ever
-//     POSTed via /api/pacifica/agent. Composite PK keeps it idempotent
-//     so re-POSTing the same agent doesn't grow the list.
-//
-// Performance: 1 + N parallel fetches per call, where N = number of
-// historical agents (typically 1, occasionally 2-3 for users who reset
-// their browser between sessions). Pacifica's REST is fast (~100-200ms)
-// so even 5 concurrent fetches stay well under the gateway timeout.
-async function fetchPacificaAllTrades(player) {
+//   - pacifica_agents (append-only, capped at 10 by /pacifica/agent).
+const PACIFICA_PAGE_LIMIT = 200;
+const PACIFICA_MAX_PAGES = 8;
+const PACIFICA_FETCH_FANOUT_CAP = 6; // master + up to 5 agents
+
+async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA_MAX_PAGES) {
+  const collected = [];
+  let cursor = null;
+  let crossedSince = false;
+  for (let page = 0; page < maxPages; page++) {
+    const params = new URLSearchParams({ account, limit: String(PACIFICA_PAGE_LIMIT) });
+    if (cursor) params.set('cursor', cursor);
+    const t0 = Date.now();
+    let r, j;
+    try {
+      r = await fetch(`https://api.pacifica.fi/api/v1/trades/history?${params.toString()}`);
+      j = await r.json();
+    } catch (e) {
+      console.warn(`[pacifica fetch] ${label} page=${page} FAILED:`, e.message);
+      break;
+    }
+    const ms = Date.now() - t0;
+    const data = (j && j.success && Array.isArray(j.data)) ? j.data : [];
+    if (page === 0) {
+      console.log(`[pacifica fetch] ${label} status=${r.status} success=${j?.success} page0_count=${data.length} ms=${ms} cursor=${j?.next_cursor ? 'yes' : '-'}`);
+    }
+    for (const t of data) {
+      const id = Number(t.history_id) || 0;
+      if (since > 0 && id <= since) { crossedSince = true; continue; }
+      collected.push(t);
+    }
+    // Stop conditions: hit the high-water mark (no point going older), or
+    // server says no more pages, or no cursor.
+    if (crossedSince) break;
+    if (!j?.has_more || !j?.next_cursor) break;
+    cursor = j.next_cursor;
+  }
+  if (collected.length > 0 || crossedSince) {
+    console.log(`[pacifica fetch] ${label} -> ${collected.length} trades after history_id>${since}${crossedSince ? ' (stopped on since)' : ''}`);
+  }
+  return collected;
+}
+
+async function fetchPacificaAllTrades(player, opts = {}) {
+  const since = Number(opts.since) || 0;
+  const maxPages = opts.firstPageOnly ? 1 : PACIFICA_MAX_PAGES;
   const master = isSolanaWallet(player.wallet) ? player.wallet : null;
   let agents = [];
   try {
     const rows = db.db.prepare(
-      'SELECT agent_wallet FROM pacifica_agents WHERE player_id = ? ORDER BY bound_at ASC'
-    ).all(player.id);
+      // Newest agents first — if we're capped, the most-recent ones are
+      // the most likely to hold uncredited trades.
+      'SELECT agent_wallet FROM pacifica_agents WHERE player_id = ? ORDER BY bound_at DESC LIMIT ?'
+    ).all(player.id, PACIFICA_FETCH_FANOUT_CAP);
     agents = rows.map(r => r.agent_wallet).filter(isSolanaWallet);
   } catch (e) {
-    // Table doesn't exist yet (pre-migration server) or DB error; carry on
-    // with master-only behaviour rather than failing the verifier.
     console.warn(`[pacifica fetch] pacifica_agents read failed:`, e.message);
   }
 
-  // De-dupe pubkeys in case master == agent or the same agent was ever
-  // POSTed twice with different casing. Filter out empty entries.
-  const queryList = [...new Set([master, ...agents].filter(Boolean))];
+  const queryList = [...new Set([master, ...agents].filter(Boolean))]
+    .slice(0, PACIFICA_FETCH_FANOUT_CAP);
   if (queryList.length === 0) {
     console.log(`[pacifica fetch] player=${player.name} -> NO valid wallet to query`);
     return [];
   }
 
-  // Parallel fan-out. Each fetch is wrapped so one slow/failing endpoint
-  // doesn't poison the merged result.
   const results = await Promise.all(queryList.map(async (account) => {
-    const t0 = Date.now();
-    try {
-      const r = await fetch(
-        `https://api.pacifica.fi/api/v1/trades/history?account=${account}&builder_code=clashofperps`
-      );
-      const j = await r.json();
-      const ms = Date.now() - t0;
-      const rows = (j && j.success && Array.isArray(j.data)) ? j.data : [];
-      const role = account === master ? 'MASTER' : 'AGENT';
-      console.log(`[pacifica fetch] player=${player.name} ${role}=${account.slice(0,10)} status=${r.status} success=${j.success} count=${rows.length} ms=${ms}`);
-      return rows;
-    } catch (e) {
-      const ms = Date.now() - t0;
-      console.warn(`[pacifica fetch] player=${player.name} account=${account.slice(0,10)} FAILED ms=${ms}:`, e.message);
-      return [];
-    }
+    const role = account === master ? 'MASTER' : 'AGENT';
+    const label = `player=${player.name} ${role}=${account.slice(0,10)}`;
+    return fetchPacificaPaginated(account, since, label, maxPages);
   }));
 
   // Merge + dedupe by history_id. A trade has a unique history_id across
@@ -371,8 +406,11 @@ async function verifyVolume(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const wallet = resolveWallet(player);
-  const trades = await fetchWalletTrades(player);
+  // Pass `since` so the Pacifica fetch can stop paging once it crosses
+  // the snapshot baseline — for an active trader with thousands of
+  // trades this avoids walking all of history just to count the last few.
   const startId = snap.trade_id_start || 0;
+  const trades = await fetchWalletTrades(player, { since: startId });
   let vol = 0;
   let matched = 0;
   for (const t of trades) {
@@ -397,8 +435,8 @@ async function verifyPositions(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
   const countClose = !!p.count_close; // default: count openings only
-  const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
+  const trades = await fetchWalletTrades(player, { since: startId });
   let n = 0;
   const seenOrders = new Set();
   for (const t of trades) {
@@ -423,8 +461,8 @@ async function verifyComboVolumeAttack(player, task, snap) {
   const symbol = p.symbol || 'any';
   const side = p.side || 'any';
 
-  const trades = await fetchWalletTrades(player);
   const startId = snap.trade_id_start || 0;
+  const trades = await fetchWalletTrades(player, { since: startId });
   let vol = 0;
   for (const t of trades) {
     if ((t.history_id || 0) <= startId) continue;
