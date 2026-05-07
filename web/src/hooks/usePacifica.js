@@ -284,6 +284,20 @@ export function usePacifica() {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
 
+  // Hydrate the builder_code activation flag from server state. localStorage
+  // is the primary cache (faster, sticks across reloads on this device),
+  // but if it gets cleared (incognito, browser cleanup, Privy iframe reset)
+  // the server-persisted flag tells us not to re-pop the approve_builder_code
+  // popup — we already approved on a prior session.
+  useEffect(() => {
+    if (!walletAddr) return;
+    if (activatedRef.current) return;
+    if (player?.pacifica_builder_approved) {
+      activatedRef.current = true;
+      writeActivationCache(walletAddr);
+    }
+  }, [walletAddr, player?.pacifica_builder_approved]);
+
   // Claim gold from game server (server verifies trades via Pacifica API).
   // Uses the reactive `player.token` — `window._playerToken` can be stale
   // (empty or belonging to a logged-out previous account) right after an
@@ -297,11 +311,16 @@ export function usePacifica() {
       console.warn('[usePacifica] claimGold skipped — no token yet (account still loading)');
       return;
     }
+    // Pacifica indexes trade history by signer pubkey. Once an agent is
+    // bound, Pacifica returns trades under the AGENT, not the master.
+    // Pass agent_wallet so the server queries the right account and the
+    // task verifier persists it for next time.
+    const agentPubkey = pacAgent?.agentPubkey || null;
     try {
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ wallet: walletAddr }),
+        body: JSON.stringify({ wallet: walletAddr, agent_wallet: agentPubkey }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -323,7 +342,7 @@ export function usePacifica() {
       console.warn('[usePacifica] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr]);
+  }, [walletAddr, pacAgent]);
 
   const scheduleClaimGold = useCallback(() => {
     // Pacifica trade history can lag the order response by a moment. Claim
@@ -627,7 +646,23 @@ export function usePacifica() {
         builder_code: BUILDER_CODE, max_fee_rate: '0.001',
       });
       const ok = !res?.error && !(res?.code >= 400);
-      if (ok) writeActivationCache(walletAddr);
+      if (ok) {
+        writeActivationCache(walletAddr);
+        // Mirror to server so we don't re-approve on the next session if
+        // localStorage is cleared (incognito, browser cleanup, Privy iframe
+        // context resets). The server stores `pacifica_builder_approved=1`
+        // on the player row and the client hydrates activatedRef from it
+        // via player_state on init.
+        try {
+          const token = tokenRef.current || window._playerToken;
+          if (token) {
+            fetch(`${GAME_API}/pacifica/builder-approved`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-token': token },
+            }).catch(() => { /* non-fatal */ });
+          }
+        } catch {}
+      }
       return ok;
     } catch {}
     return false;

@@ -161,12 +161,36 @@ function isAptosWallet(w) {
   return APTOS_RE.test(w);
 }
 
+// Resolve which wallet to query upstream APIs with. Order:
+//   1. Pacifica AGENT wallet (if bound) — Pacifica's /v1/trades/history
+//      indexes by signer pubkey, and once a user binds an agent every
+//      trade is signed by that agent. Querying with master returns []
+//      even for active traders. The agent is stored in
+//      trading_rewards.agent_wallet by /claim-gold / /pacifica/agent.
+//   2. trading_rewards.wallet — last wallet that successfully claimed
+//      gold for this player+dex. For non-Pacifica DEXes this matches
+//      players.wallet; for legacy Pacifica accounts it may differ.
+//   3. players.wallet — the master wallet stored on the account row.
 function resolveWallet(player) {
-  if (player && (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet) || isAptosWallet(player.wallet))) {
+  if (!player) return null;
+  const dex = String(player.dex || 'pacifica').toLowerCase();
+  // Pacifica-specific: prefer the bound agent over the master, because
+  // the master's trade history endpoint is silent in the agent-signed
+  // flow that Privy users go through automatically.
+  if (dex === 'pacifica') {
+    try {
+      const row = db.db.prepare(
+        'SELECT agent_wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
+      ).get(player.id, dex);
+      if (row && isSolanaWallet(row.agent_wallet)) {
+        return row.agent_wallet;
+      }
+    } catch {}
+  }
+  if (isSolanaWallet(player.wallet) || isEvmWallet(player.wallet) || isAptosWallet(player.wallet)) {
     return player.wallet;
   }
   try {
-    const dex = String(player.dex || 'pacifica').toLowerCase();
     const row = db.db.prepare(
       'SELECT wallet FROM trading_rewards WHERE player_id = ? AND dex = ?'
     ).get(player.id, dex);

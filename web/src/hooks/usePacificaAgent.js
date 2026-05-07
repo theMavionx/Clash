@@ -181,6 +181,24 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
       const next = { agentPubkey: agentPubkeyB58, createdAt, secret };
       agentRef.current = next;
       setAgent({ agentPubkey: agentPubkeyB58, createdAt });
+
+      // Persist the agent pubkey to our own server so the task verifier
+      // can route Pacifica trade-history queries through it. Pacifica
+      // indexes /v1/trades/history by signer pubkey, so without this the
+      // server queries with the master and gets [] for every Privy user.
+      // Best-effort — if the client has no game token yet (race during
+      // login) we skip; the next /claim-gold call also persists the
+      // agent in its body, so this is a soft optimisation.
+      try {
+        const token = window._playerToken;
+        if (token) {
+          fetch('/api/pacifica/agent', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-token': token },
+            body: JSON.stringify({ agent_wallet: agentPubkeyB58, wallet: walletAddr }),
+          }).catch(() => { /* non-fatal */ });
+        }
+      } catch { /* non-fatal */ }
       return { agentPubkey: agentPubkeyB58 };
     } catch (e) {
       setBindError(e?.message || String(e));

@@ -1171,6 +1171,21 @@ try {
   `);
 } catch {}
 try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN pnl_gold_pool REAL NOT NULL DEFAULT 0`); } catch {}
+// `agent_wallet` — Pacifica's bind_agent_wallet pubkey for the player's
+// session. Pacifica indexes /v1/trades/history by the SIGNER pubkey, and
+// once a Privy user binds an agent (auto on first trade) the agent signs
+// every subsequent trade — so trade history shows up under the agent
+// address, NOT the master pubkey we have in players.wallet. Without this
+// column, /claim-gold and the task verifier query Pacifica with master
+// and get back an empty array even though the user has been trading.
+try { db.db.exec(`ALTER TABLE trading_rewards ADD COLUMN agent_wallet TEXT`); } catch {}
+// `pacifica_builder_approved` — server-side mirror of the client's 30-day
+// localStorage activation cache. If localStorage gets cleared (incognito,
+// browser cleanup, Privy iframe context) we used to ask the user to
+// re-approve the builder code on every fresh trade flow. Persisting it
+// server-side means the client can hydrate its activatedRef from the
+// player state and skip the redundant approve_builder_code call.
+try { db.db.exec(`ALTER TABLE players ADD COLUMN pacifica_builder_approved INTEGER NOT NULL DEFAULT 0`); } catch {}
 try {
   const cols = db.db.prepare('PRAGMA table_info(trading_rewards)').all();
   const hasDex = cols.some(c => c.name === 'dex');
@@ -1232,6 +1247,45 @@ setInterval(() => {
   for (const [k, v] of claimCooldowns) { if (v < cutoff) claimCooldowns.delete(k); }
 }, 600000);
 
+// Persist Pacifica agent_wallet immediately after the client binds it.
+// We store it in trading_rewards.agent_wallet so the task verifier (which
+// doesn't see the /claim-gold body) can route Pacifica queries through
+// the agent pubkey rather than the master. Without this, every Privy
+// user's tasks stay at 0 progress no matter how much they trade.
+router.post('/pacifica/agent', auth, (req, res) => {
+  if (req.player.dex !== 'pacifica') {
+    return res.status(400).json({ error: 'agent only applies to pacifica accounts' });
+  }
+  const agent = typeof req.body.agent_wallet === 'string' ? req.body.agent_wallet.trim() : '';
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agent)) {
+    return res.status(400).json({ error: 'invalid agent_wallet (expected base58 Solana pubkey)' });
+  }
+  const wallet = typeof req.body.wallet === 'string' ? req.body.wallet : (req.player.wallet || '');
+  // Upsert so first-time binders create their row, repeat binders rotate
+  // the cached agent. Composite PK is (player_id, dex) so we never collide
+  // across DEXes for the same player.
+  db.db.prepare(`
+    INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet)
+    VALUES (?, 'pacifica', ?, ?)
+    ON CONFLICT(player_id, dex) DO UPDATE SET agent_wallet = excluded.agent_wallet
+  `).run(req.player.id, wallet, agent);
+  console.log(`[pacifica/agent] player=${req.player.name} master=${(wallet||'').slice(0,10)} agent=${agent.slice(0,10)} -> persisted`);
+  res.json({ ok: true, agent_wallet: agent });
+});
+
+// Server-side mirror of the client's localStorage `clash_pacifica_activated`
+// flag. Pacifica's builder_code approval is one-time-per-account but the
+// client used to forget that whenever localStorage was cleared (incognito,
+// browser cleanup, Privy iframe context). The client now hydrates this
+// flag from the player state on init and skips the redundant
+// approve_builder_code preflight.
+router.post('/pacifica/builder-approved', auth, (req, res) => {
+  if (req.player.dex !== 'pacifica') return res.status(400).json({ error: 'pacifica only' });
+  db.db.prepare('UPDATE players SET pacifica_builder_approved = 1 WHERE id = ?').run(req.player.id);
+  console.log(`[pacifica/builder-approved] player=${req.player.name} -> persisted`);
+  res.json({ ok: true });
+});
+
 // Claim gold — server verifies trades via Pacifica API
 // Lazy-open server-futures DB (read-only) so this endpoint can credit gold
 // for Avantis trades recorded by the futures service. Guarded so the main
@@ -1267,6 +1321,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   }
   claimCooldowns.set(req.player.id, Date.now());
   const wallet = req.body.wallet || req.player.wallet;
+  // Pacifica agent wallet (auto-bound on first trade) — Pacifica indexes
+  // /v1/trades/history by signer pubkey, so once the agent is bound the
+  // master returns []. Client passes agent_wallet here so we can both
+  // (a) use it for the API query in this request and (b) persist it for
+  // future task verifier runs that don't see the body.
+  const agentWalletRaw = typeof req.body.agent_wallet === 'string' ? req.body.agent_wallet : null;
+  const agentWallet = agentWalletRaw && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(agentWalletRaw) ? agentWalletRaw : null;
   const playerDex = VALID_DEXES.has(String(req.player.dex || '').toLowerCase())
     ? String(req.player.dex).toLowerCase()
     : 'pacifica';
@@ -1470,15 +1531,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex });
   }
 
-  // ── Pacifica branch (existing, unchanged) ──
+  // ── Pacifica branch ──
   if (!wallet) return res.status(400).json({ error: 'wallet required — connect wallet in profile' });
 
   try {
     // Get or create reward record
     let reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     if (!reward) {
-      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet);
+      db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet, agent_wallet) VALUES (?, ?, ?, ?)').run(req.player.id, dex, wallet, agentWallet);
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
+    } else if (agentWallet && reward.agent_wallet !== agentWallet) {
+      // Persist the (possibly new) agent so the task verifier can pick it
+      // up on its next run without needing the body. Re-binding generates
+      // a new agent pubkey, so this row gets overwritten on each rebind.
+      try { db.db.prepare('UPDATE trading_rewards SET agent_wallet = ? WHERE player_id = ? AND dex = ?').run(agentWallet, req.player.id, dex); } catch {}
+      reward.agent_wallet = agentWallet;
     }
     // Auto-link wallet to player account if missing or still a Farcaster placeholder
     // (`fc_<fid>` saved during Farcaster auto-register). Lets tasks/quests find the real wallet.
@@ -1486,14 +1553,22 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       try { db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, req.player.id); } catch {}
     }
 
-    // Fetch trades from Pacifica (verified source of truth)
-    const pacUrl = `https://api.pacifica.fi/api/v1/trades/history?account=${wallet}&builder_code=clashofperps`;
+    // Fetch trades from Pacifica. Pacifica's /v1/trades/history filters by
+    // signer pubkey — once a Privy user binds an agent (auto on first
+    // trade) every subsequent trade is signed by that agent, so master
+    // returns [] even when the user is actively trading. Use agent when
+    // we have one cached (from this body, or persisted from a prior call),
+    // fall back to master for users who never bound (e.g. Phantom users
+    // who clicked-through every trade popup).
+    const pacApiAccount = agentWallet || reward.agent_wallet || wallet;
+    const usingAgent = pacApiAccount !== wallet;
+    const pacUrl = `https://api.pacifica.fi/api/v1/trades/history?account=${pacApiAccount}&builder_code=clashofperps`;
     const t0 = Date.now();
     const tradesRes = await fetch(pacUrl);
     const tradesData = await tradesRes.json();
     const apiMs = Date.now() - t0;
     const apiCount = (tradesData && Array.isArray(tradesData.data)) ? tradesData.data.length : 0;
-    console.log(`[claim-gold pacifica] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} api_status=${tradesRes.status} api_success=${tradesData.success} api_count=${apiCount} api_ms=${apiMs} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
+    console.log(`[claim-gold pacifica] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} agent=${(reward.agent_wallet||'').slice(0,10)||'-'} querying=${usingAgent?'AGENT':'MASTER'} last_trade_id=${reward.last_trade_id||0} api_status=${tradesRes.status} api_success=${tradesData.success} api_count=${apiCount} api_ms=${apiMs} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
     if (!tradesData.success || !tradesData.data) {
       console.warn(`[claim-gold pacifica] player=${req.player.name} -> Pacifica API returned no data (success=${tradesData.success})`);
       return res.json({ gold: 0, reason: 'No trades found' });
