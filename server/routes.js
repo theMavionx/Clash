@@ -2469,18 +2469,99 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
 // tournament. This is enforced by the JOIN against players.dex inside
 // getActiveTournamentForPlayer and explicitly checked at /join time.
 
+function nowSql() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function cleanSqlDate(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  return s
+    .replace(/[zZ]$/, '')
+    .replace(/\s*UTC$/i, '')
+    .replace('T', ' ')
+    .trim();
+}
+
+function normalizeTournamentDate(v, fieldName, { nullable = true } = {}) {
+  const s = cleanSqlDate(v);
+  if (!s) {
+    if (nullable) return null;
+    throw new Error(`${fieldName} required`);
+  }
+  const withSeconds = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(s) ? `${s}:00` : s;
+  if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(withSeconds)) {
+    throw new Error(`${fieldName} must be YYYY-MM-DD HH:mm:ss UTC`);
+  }
+  return withSeconds;
+}
+
+function parseBool(v) {
+  return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
+}
+
+function validateTournamentWindow({ start_at, end_at, registration_opens_at, registration_closes_at }) {
+  if (end_at && end_at <= start_at) return 'end_at must be after start_at';
+  const registrationClose = registration_closes_at || start_at;
+  if (registration_closes_at && registration_closes_at > start_at) {
+    return 'registration_closes_at must be before or equal to start_at';
+  }
+  if (registration_opens_at && registration_opens_at >= registrationClose) {
+    return 'registration_opens_at must be before registration close';
+  }
+  return null;
+}
+
+function tournamentPhase(t, now = nowSql()) {
+  if (!t) return null;
+  if (t.status === 'ended') return 'ended';
+  if (t.status === 'draft') return 'draft';
+  const start = cleanSqlDate(t.start_at);
+  const end = cleanSqlDate(t.end_at);
+  if (end && end <= now) return 'ended';
+  if (start && start > now) {
+    return Number(t.preregistration_enabled || 0) ? 'preregistration' : 'scheduled';
+  }
+  return 'live';
+}
+
+function isTournamentPreregOpen(t, now = nowSql()) {
+  if (!t || !Number(t.preregistration_enabled || 0)) return false;
+  if (tournamentPhase(t, now) !== 'preregistration') return false;
+  const opens = cleanSqlDate(t.registration_opens_at);
+  const closes = cleanSqlDate(t.registration_closes_at) || cleanSqlDate(t.start_at);
+  if (opens && opens > now) return false;
+  if (closes && closes <= now) return false;
+  return true;
+}
+
+function canJoinTournament(t, now = nowSql()) {
+  const phase = tournamentPhase(t, now);
+  if (phase === 'preregistration') return isTournamentPreregOpen(t, now);
+  if (phase === 'live') return !Number(t.preregistration_enabled || 0);
+  return false;
+}
+
 function tournamentRowToPublic(t) {
+  const now = nowSql();
+  const phase = tournamentPhase(t, now);
   return {
     id: t.id,
     name: t.name,
     description: t.description || '',
     dex: t.dex,
-    start_at: t.start_at,
-    end_at: t.end_at,
+    start_at: cleanSqlDate(t.start_at),
+    end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
     trophy_boost: Number(t.trophy_boost),
     sort_by: t.sort_by,
     status: t.status,
+    phase,
+    preregistration_enabled: !!Number(t.preregistration_enabled || 0),
+    registration_opens_at: cleanSqlDate(t.registration_opens_at),
+    registration_closes_at: cleanSqlDate(t.registration_closes_at),
+    can_join: canJoinTournament(t, now),
     created_at: t.created_at,
   };
 }
@@ -2493,9 +2574,15 @@ router.get('/tournaments', (req, res) => {
   const rows = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
-      AND start_at <= datetime('now')
-      AND (end_at IS NULL OR end_at > datetime('now'))
-    ORDER BY id DESC
+      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (
+        replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+        OR preregistration_enabled = 1
+      )
+    ORDER BY
+      CASE WHEN replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now') THEN 0 ELSE 1 END,
+      replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
+      id DESC
   `).all();
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
@@ -2508,18 +2595,28 @@ router.get('/tournaments/me', auth, (req, res) => {
   const t = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE dex = ? AND status = 'active'
-      AND start_at <= datetime('now')
-      AND (end_at IS NULL OR end_at > datetime('now'))
-    ORDER BY id DESC LIMIT 1
+      AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND (
+        replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+        OR preregistration_enabled = 1
+      )
+    ORDER BY
+      CASE WHEN replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now') THEN 0 ELSE 1 END,
+      replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
+      id DESC
+    LIMIT 1
   `).get(dex);
-  if (!t) return res.json({ tournament: null, joined: false });
+  if (!t) return res.json({ tournament: null, joined: false, phase: null, can_join: false });
+  const pub = tournamentRowToPublic(t);
   const me = db.db.prepare(`
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
   res.json({
-    tournament: tournamentRowToPublic(t),
+    tournament: pub,
     joined: !!(me && me.left_at === null),
+    phase: pub.phase,
+    can_join: pub.can_join,
     me: me ? {
       trophies: me.trophies,
       gold: me.gold,
@@ -2543,8 +2640,17 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   if (!t) return res.status(404).json({ error: 'tournament not found' });
   if (t.status !== 'active') return res.status(400).json({ error: 'tournament not active' });
   if (t.dex !== req.player.dex) return res.status(403).json({ error: 'tournament is for a different DEX' });
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  if (t.end_at && t.end_at <= now) return res.status(400).json({ error: 'tournament has ended' });
+  const now = nowSql();
+  if (cleanSqlDate(t.end_at) && cleanSqlDate(t.end_at) <= now) return res.status(400).json({ error: 'tournament has ended' });
+  const phase = tournamentPhase(t, now);
+  if (phase === 'scheduled') return res.status(400).json({ error: 'pre-registration is not open' });
+  if (phase === 'live' && Number(t.preregistration_enabled || 0)) {
+    return res.status(400).json({ error: 'registration is closed' });
+  }
+  if (phase === 'preregistration' && !isTournamentPreregOpen(t, now)) {
+    return res.status(400).json({ error: 'pre-registration is closed' });
+  }
+  if (!canJoinTournament(t, now)) return res.status(400).json({ error: 'tournament is not joinable' });
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
   db.db.prepare(`
@@ -2556,7 +2662,7 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
       trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
       last_activity_at = datetime('now')
   `).run(tid, req.player.id);
-  res.json({ ok: true, joined: true });
+  res.json({ ok: true, joined: true, phase });
 });
 
 // Soft leave: sets left_at so getActiveTournamentForPlayer stops returning
@@ -2623,17 +2729,19 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
   const rows = db.db.prepare('SELECT * FROM tournaments ORDER BY id DESC').all();
   // Attach participant count per tournament for the admin list view.
   const counts = db.db.prepare(`
-    SELECT tournament_id, COUNT(*) AS players
+    SELECT tournament_id,
+           COUNT(player_id) AS players,
+           SUM(CASE WHEN player_id IS NOT NULL AND left_at IS NULL THEN 1 ELSE 0 END) AS active_players
     FROM tournament_participants
-    WHERE left_at IS NULL
     GROUP BY tournament_id
   `).all();
   const countMap = {};
-  for (const c of counts) countMap[c.tournament_id] = c.players;
+  for (const c of counts) countMap[c.tournament_id] = c;
   res.json({
     tournaments: rows.map(t => ({
       ...tournamentRowToPublic(t),
-      participants: countMap[t.id] || 0,
+      participants: countMap[t.id]?.active_players || 0,
+      registered: countMap[t.id]?.players || 0,
     })),
   });
 });
@@ -2641,7 +2749,10 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 // Create a tournament. start_at defaults to now, end_at is optional, boosts
 // default to 1.0 (no boost), sort_by defaults to pnl_usd.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
-  const { name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status } = req.body || {};
+  const {
+    name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    preregistration_enabled, registration_opens_at, registration_closes_at,
+  } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   if (!['pacifica', 'avantis', 'decibel', 'gmx'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
   const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
@@ -2651,14 +2762,49 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
   const gb = Math.max(0.1, Math.min(10, Number(gold_boost) || 1));
   const tb = Math.max(0.1, Math.min(10, Number(trophy_boost) || 1));
-  const startIso = start_at && typeof start_at === 'string'
-    ? start_at
-    : new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const endIso = end_at && typeof end_at === 'string' ? end_at : null;
+  let startIso, endIso, registrationOpenIso, registrationCloseIso;
+  try {
+    startIso = start_at && typeof start_at === 'string'
+      ? normalizeTournamentDate(start_at, 'start_at', { nullable: false })
+      : nowSql();
+    endIso = end_at && typeof end_at === 'string' ? normalizeTournamentDate(end_at, 'end_at') : null;
+    registrationOpenIso = registration_opens_at && typeof registration_opens_at === 'string'
+      ? normalizeTournamentDate(registration_opens_at, 'registration_opens_at')
+      : null;
+    registrationCloseIso = registration_closes_at && typeof registration_closes_at === 'string'
+      ? normalizeTournamentDate(registration_closes_at, 'registration_closes_at')
+      : null;
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  const windowError = validateTournamentWindow({
+    start_at: startIso,
+    end_at: endIso,
+    registration_opens_at: registrationOpenIso,
+    registration_closes_at: registrationCloseIso,
+  });
+  if (windowError) return res.status(400).json({ error: windowError });
+  const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
-    INSERT INTO tournaments (name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(name.trim(), (description || '').toString().slice(0, 500), dex, startIso, endIso, gb, tb, sortCol, stat);
+    INSERT INTO tournaments (
+      name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+      preregistration_enabled, registration_opens_at, registration_closes_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    name.trim(),
+    (description || '').toString().slice(0, 500),
+    dex,
+    startIso,
+    endIso,
+    gb,
+    tb,
+    sortCol,
+    stat,
+    prereg,
+    registrationOpenIso,
+    registrationCloseIso
+  );
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(r.lastInsertRowid);
   res.json({ ok: true, tournament: tournamentRowToPublic(t) });
 });
@@ -2669,24 +2815,70 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
-  const { name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status } = req.body || {};
+  const {
+    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    preregistration_enabled, registration_opens_at, registration_closes_at,
+  } = req.body || {};
   const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
   const STATUSES = ['active', 'ended', 'draft'];
+  let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt;
+  try {
+    nextStartAt = start_at !== undefined
+      ? normalizeTournamentDate(start_at, 'start_at', { nullable: false })
+      : cleanSqlDate(t.start_at);
+    nextEndAt = end_at === null || end_at === ''
+      ? null
+      : (end_at !== undefined ? normalizeTournamentDate(end_at, 'end_at') : cleanSqlDate(t.end_at));
+    nextRegistrationOpensAt = registration_opens_at === null || registration_opens_at === ''
+      ? null
+      : (registration_opens_at !== undefined ? normalizeTournamentDate(registration_opens_at, 'registration_opens_at') : cleanSqlDate(t.registration_opens_at));
+    nextRegistrationClosesAt = registration_closes_at === null || registration_closes_at === ''
+      ? null
+      : (registration_closes_at !== undefined ? normalizeTournamentDate(registration_closes_at, 'registration_closes_at') : cleanSqlDate(t.registration_closes_at));
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+  const windowError = validateTournamentWindow({
+    start_at: nextStartAt,
+    end_at: nextEndAt,
+    registration_opens_at: nextRegistrationOpensAt,
+    registration_closes_at: nextRegistrationClosesAt,
+  });
+  if (windowError) return res.status(400).json({ error: windowError });
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
-    start_at: start_at && typeof start_at === 'string' ? start_at : t.start_at,
-    end_at: end_at === null ? null : (end_at && typeof end_at === 'string' ? end_at : t.end_at),
+    start_at: nextStartAt,
+    end_at: nextEndAt,
     gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
     trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
     sort_by: SORT_COLS.includes(sort_by) ? sort_by : t.sort_by,
     status: STATUSES.includes(status) ? status : t.status,
+    preregistration_enabled: preregistration_enabled !== undefined
+      ? (parseBool(preregistration_enabled) ? 1 : 0)
+      : Number(t.preregistration_enabled || 0),
+    registration_opens_at: nextRegistrationOpensAt,
+    registration_closes_at: nextRegistrationClosesAt,
   };
   db.db.prepare(`
     UPDATE tournaments SET name = ?, description = ?, start_at = ?, end_at = ?,
-                            gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?
+                            gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?,
+                            preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
-  `).run(next.name, next.description, next.start_at, next.end_at, next.gold_boost, next.trophy_boost, next.sort_by, next.status, tid);
+  `).run(
+    next.name,
+    next.description,
+    next.start_at,
+    next.end_at,
+    next.gold_boost,
+    next.trophy_boost,
+    next.sort_by,
+    next.status,
+    next.preregistration_enabled,
+    next.registration_opens_at,
+    next.registration_closes_at,
+    tid
+  );
   const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   res.json({ ok: true, tournament: tournamentRowToPublic(updated) });
 });

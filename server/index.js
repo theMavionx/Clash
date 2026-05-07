@@ -453,6 +453,11 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Start (UTC, optional)<input id="tn_start" placeholder="2026-05-04 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">End (UTC, optional)<input id="tn_end" placeholder="2026-05-11 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
+            <input id="tn_prereg" type="checkbox" style="width:auto;margin:0"> Pre-registration
+          </label>
+          <label style="font-size:11px;color:#9ca3af">Registration opens<input id="tn_reg_open" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Registration closes<input id="tn_reg_close" placeholder="defaults to start" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Gold boost (×)<input id="tn_gold" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Trophy boost (×)<input id="tn_trophy" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Sort by
@@ -482,7 +487,7 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Start</th><th>End</th><th>Gold×</th><th>Trophy×</th><th>Sort</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Sort</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -1221,24 +1226,33 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet — create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet — create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
     const statusBadge = t.status === 'active' ? '<span style="color:#34d399">ACTIVE</span>'
       : t.status === 'draft' ? '<span style="color:#9ca3af">DRAFT</span>'
       : '<span style="color:#6b7280">ENDED</span>';
+    const phaseColor = t.phase === 'live' ? '#34d399'
+      : t.phase === 'preregistration' ? '#60a5fa'
+      : t.phase === 'scheduled' ? '#fbbf24'
+      : '#9ca3af';
+    const reg = t.preregistration_enabled
+      ? 'ON' + (t.registration_closes_at ? '<div style="font-size:10px;color:#9ca3af">until ' + esc(t.registration_closes_at) + '</div>' : '')
+      : 'OFF';
     return '<tr>'
       + '<td>' + t.id + '</td>'
       + '<td>' + esc(t.name) + (t.description ? '<div style="font-size:10px;color:#9ca3af">' + esc(t.description) + '</div>' : '') + '</td>'
       + '<td>' + esc(t.dex) + '</td>'
       + '<td>' + statusBadge + '</td>'
+      + '<td><span style="color:' + phaseColor + '">' + esc(t.phase || '') + '</span></td>'
       + '<td style="font-size:11px">' + esc(t.start_at || '') + '</td>'
       + '<td style="font-size:11px">' + esc(t.end_at || '∞') + '</td>'
+      + '<td style="font-size:11px">' + reg + '</td>'
       + '<td>' + t.gold_boost + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
       + '<td>' + esc(t.sort_by) + '</td>'
-      + '<td>' + (t.participants || 0) + '</td>'
+      + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
       +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
       +   (t.status === 'active' ? '<button class="btn" onclick="endTournament(' + t.id + ')">End</button> ' : '')
@@ -1255,6 +1269,9 @@ async function createTournament() {
     dex: document.getElementById('tn_dex').value,
     start_at: document.getElementById('tn_start').value.trim() || undefined,
     end_at: document.getElementById('tn_end').value.trim() || undefined,
+    preregistration_enabled: document.getElementById('tn_prereg').checked,
+    registration_opens_at: document.getElementById('tn_reg_open').value.trim() || undefined,
+    registration_closes_at: document.getElementById('tn_reg_close').value.trim() || undefined,
     gold_boost: parseFloat(document.getElementById('tn_gold').value) || 1,
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
     sort_by: document.getElementById('tn_sort').value,
@@ -1272,6 +1289,9 @@ async function createTournament() {
   document.getElementById('tn_desc').value = '';
   document.getElementById('tn_start').value = '';
   document.getElementById('tn_end').value = '';
+  document.getElementById('tn_prereg').checked = false;
+  document.getElementById('tn_reg_open').value = '';
+  document.getElementById('tn_reg_close').value = '';
   loadTournaments();
 }
 
@@ -1301,7 +1321,7 @@ async function loadTournamentLeaderboard(id) {
     if (!r.ok) { alert(j.error || 'Failed'); return; }
     const t = j.tournament;
     document.getElementById('tn_lb_meta').textContent =
-      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · sort: ' + j.sort_by + ' · ' + (j.leaderboard.length) + ' players';
+      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + j.sort_by + ' · ' + (j.leaderboard.length) + ' players';
     document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
       return '<tr>'
         + '<td>' + r.rank + '</td>'

@@ -103,6 +103,9 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
   `);
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN preregistration_enabled INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
 } catch (e) { console.warn('[db] tournaments migration:', e.message); }
 
 try {
@@ -313,8 +316,8 @@ const stmts = {
     WHERE p.player_id = ?
       AND p.left_at IS NULL
       AND t.status = 'active'
-      AND (t.end_at IS NULL OR t.end_at > datetime('now'))
-      AND t.start_at <= datetime('now')
+      AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     ORDER BY t.id DESC
     LIMIT 1
   `),

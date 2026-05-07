@@ -32,6 +32,10 @@ function TournamentPanel({ onClose }) {
   const t = me?.tournament || null;
   const joined = !!me?.joined;
   const myStats = me?.me || null;
+  const phase = t?.phase || me?.phase || null;
+  const preregistration = phase === 'preregistration';
+  const live = phase === 'live';
+  const canJoin = !!me?.can_join;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t });
   const [busy, setBusy] = useState(false);
 
@@ -42,14 +46,17 @@ function TournamentPanel({ onClose }) {
   }, [board, player?.player_id]);
 
   const handleJoin = async () => {
-    if (!t || busy) return;
+    if (!t || busy || !canJoin) return;
     setBusy(true);
     await join(t.id);
     setBusy(false);
   };
   const handleLeave = async () => {
     if (!t || busy) return;
-    if (!confirm('Leave tournament? Your tournament trophies and stats will reset if you re-join later.')) return;
+    const message = preregistration
+      ? 'Cancel tournament pre-registration?'
+      : 'Leave tournament? Your tournament trophies and stats will reset if you re-join later.';
+    if (!confirm(message)) return;
     setBusy(true);
     await leave(t.id);
     setBusy(false);
@@ -77,7 +84,7 @@ function TournamentPanel({ onClose }) {
               <div style={S.emptyIcon}>🏆</div>
               <div style={S.emptyTitle}>No tournament running</div>
               <div style={S.emptySub}>
-                There's no live tournament for {String(dex || '').toUpperCase()} right now.<br />
+                There's no live or upcoming tournament for {String(dex || '').toUpperCase()} right now.<br />
                 Check back soon!
               </div>
             </div>
@@ -90,19 +97,38 @@ function TournamentPanel({ onClose }) {
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
                   <span style={S.tag}>Sort: {t.sort_by}</span>
+                  <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
+                  {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
+                  {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
+                  {preregistration && t.registration_closes_at && <span style={S.tag}>Reg closes {fmtDate(t.registration_closes_at)}</span>}
                   {t.end_at && <span style={S.tag}>Ends {fmtDate(t.end_at)}</span>}
                 </div>
               </div>
 
               {!joined && (
-                <button style={S.joinBtn} onClick={handleJoin} disabled={busy}>
-                  {busy ? 'JOINING…' : 'JOIN TOURNAMENT'}
+                <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
+                  {busy ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                 </button>
               )}
 
-              {joined && myStats && (
+              {joined && preregistration && (
+                <div style={S.myCard}>
+                  <div style={S.myCardHeader}>
+                    <span style={S.myCardLabel}>You are registered</span>
+                    {myRank && <span style={S.myCardRank}>#{myRank}</span>}
+                  </div>
+                  <div style={S.freezeNote}>
+                    Scoring starts automatically when the tournament begins. Your normal trophies and rewards are unchanged until then.
+                  </div>
+                  <button style={S.leaveBtn} onClick={handleLeave} disabled={busy}>
+                    {busy ? 'Cancelling...' : 'Cancel registration'}
+                  </button>
+                </div>
+              )}
+
+              {joined && live && myStats && (
                 <div style={S.myCard}>
                   <div style={S.myCardHeader}>
                     <span style={S.myCardLabel}>Your standing</span>
@@ -235,6 +261,16 @@ const S = {
   tag: {
     fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 6,
     background: '#fdf8e7', border: '2px solid #d4c8b0', color: '#7c5a3a',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  phaseTagBlue: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#dbeafe', border: '2px solid #60a5fa', color: '#1d4ed8',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  phaseTagGreen: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#dcfce7', border: '2px solid #22c55e', color: '#15803d',
     textTransform: 'uppercase', letterSpacing: 0.4,
   },
   boostTag: {
