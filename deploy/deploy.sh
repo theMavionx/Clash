@@ -375,12 +375,9 @@ fi
 pm2 save
 pm2 startup systemd -u root --hp /root 2>/dev/null || true
 
-# ── 9. Setup auto-deploy watcher ──
-echo "[9/9] Setting up auto-deploy watcher..."
-cp "$APP_DIR/deploy/clash-autopull.service" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable clash-autopull
-systemctl restart clash-autopull
+# Auto-deploy watcher intentionally NOT installed — we deploy manually via
+# `deploy/update.sh` on demand. Keeps prod immune to a bad commit
+# auto-rolling out before it's been smoke-tested locally.
 
 echo ""
 echo "=== Deploy complete! ==="
@@ -388,11 +385,9 @@ echo "  Frontend:    https://$DOMAIN"
 echo "  API:         https://$DOMAIN/api/"
 echo "  Dashboard:   https://$DOMAIN/dashboard"
 echo "  WebSocket:   wss://$DOMAIN/ws"
-echo "  Auto-deploy: watching git every 30s"
 echo ""
 echo "Useful commands:"
-echo "  pm2 logs clash-api                    # Backend logs"
-echo "  pm2 restart clash-api                 # Restart backend"
-echo "  journalctl -u clash-autopull -f       # Auto-deploy logs"
-echo "  systemctl stop clash-autopull          # Stop auto-deploy"
-echo "  nginx -t && systemctl reload nginx    # Reload nginx"
+echo "  pm2 logs clash-api                          # Backend logs"
+echo "  pm2 restart clash-api                       # Restart backend"
+echo "  bash $APP_DIR/deploy/update.sh              # Manual update (pull + rebuild + restart)"
+echo "  nginx -t && systemctl reload nginx          # Reload nginx"
