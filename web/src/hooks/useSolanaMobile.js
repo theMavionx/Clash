@@ -61,12 +61,23 @@ async function detectSolanaMobile() {
         chain: 'solana:mainnet',
         onWalletNotFound: createDefaultWalletNotFoundHandler(),
       });
-      // `readyState` is sync after construction. Installed = native MWA
-      // intent handler present (Saga/Seeker). Loadable = handler advertised
-      // but lazy. NotDetected = generic Android, no MWA.
+      // `readyState` semantics for SolanaMobileWalletAdapter:
+      //   Installed   = native MWA intent handler present (Saga/Seeker
+      //                 with Seed Vault). This is the only state where the
+      //                 deeplink resolves to a real wallet without a
+      //                 "We can't find a wallet" dialog.
+      //   Loadable    = adapter library loaded successfully — MWA spec
+      //                 says any Android device CAN load it, since the
+      //                 adapter would deeplink to a wallet app if one were
+      //                 installed. But on a regular Android phone with no
+      //                 MWA host the deeplink fails open with the wallet-
+      //                 not-found dialog, which is exactly the bug we're
+      //                 fixing.
+      //   NotDetected = adapter couldn't load at all (rare).
+      // Strict `Installed` check is the only one that distinguishes a real
+      // Solana Mobile device from "any Android with the lib loaded".
       const state = adapter.readyState;
-      const isMobile = state === WalletReadyState.Installed
-        || state === WalletReadyState.Loadable;
+      const isMobile = state === WalletReadyState.Installed;
       cachedResult = isMobile;
       return isMobile;
     } catch {

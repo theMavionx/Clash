@@ -8,6 +8,7 @@ import {
   createDefaultWalletNotFoundHandler,
 } from '@solana-mobile/wallet-adapter-mobile';
 import { farcasterDetectPromise } from '../hooks/useFarcaster';
+import { useSolanaMobile } from '../hooks/useSolanaMobile';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -114,17 +115,42 @@ function useFarcasterWalletReady() {
 }
 
 export default function WalletProvider({ children }) {
-  // Always include the MWA adapter. Standard Solana wallets (Phantom,
-  // Solflare, Backpack) auto-register themselves via the Wallet Standard
-  // dispatch event so we don't list them statically. MWA doesn't follow
-  // the wallet-standard discovery path on every device, so we pass it in
-  // explicitly — harmless on non-Solana-Mobile devices because its
-  // readyState stays NotDetected.
-  const wallets = useMemo(() => [SEEKER_MWA_ADAPTER], []);
-  const rpc = useBestRpc();
-  const { ready, inFrame } = useFarcasterWalletReady();
+  // Solana Mobile (Saga/Seeker) detection — reads sync after first detect.
+  // MWA must ONLY be registered on real Solana Mobile devices. On a regular
+  // Android phone the adapter loads (state=Loadable) and deeplinks to a
+  // wallet app that doesn't exist, so the picker shows MWA -> click ->
+  // "We can't find a wallet" dialog. Hiding MWA on non-SM devices makes
+  // the picker fall through to wallet-standard wallets (Phantom, Backpack)
+  // that auto-register themselves.
+  const { isSolanaMobile, ready: smReady } = useSolanaMobile();
 
-  if (!ready) return null;
+  const wallets = useMemo(() => (
+    isSolanaMobile ? [SEEKER_MWA_ADAPTER] : []
+  ), [isSolanaMobile]);
+
+  // Self-heal stale localStorage. If a non-Solana-Mobile user EVER picked
+  // MWA in a buggy build, autoConnect={true} would try to revive that
+  // selection on every page load — same wallet-not-found dialog forever
+  // until the user clears site data. Wipe the selection key so the next
+  // session starts clean.
+  useEffect(() => {
+    if (!smReady || isSolanaMobile) return;
+    try {
+      for (const key of ['walletName', 'fcWalletName']) {
+        const v = localStorage.getItem(key);
+        if (v && /Mobile Wallet Adapter/i.test(v)) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch { /* private mode / quota etc — non-fatal */ }
+  }, [smReady, isSolanaMobile]);
+
+  const rpc = useBestRpc();
+  const { ready: fcReady, inFrame } = useFarcasterWalletReady();
+
+  // Wait for BOTH detections so we don't briefly mount the provider with
+  // the wrong wallet list and trigger a bogus autoConnect.
+  if (!fcReady || !smReady) return null;
 
   return (
     <ConnectionProvider endpoint={rpc}>
