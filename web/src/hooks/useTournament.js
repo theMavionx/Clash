@@ -110,3 +110,43 @@ export function useTournamentLeaderboard(tournamentId, { active = false, pollMs 
 
   return { board, loading, refresh };
 }
+
+// Past tournaments for the current player's DEX (status='ended' or end_at
+// < now). Used by the "History" tab in TournamentPanel so a finished
+// tournament's leaderboard doesn't disappear the moment it ends. Returned
+// rows include the player's own participation summary, so the panel can
+// show "your final rank: $X PnL" without a per-tournament round-trip.
+export function useTournamentHistory({ active = false } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
+  const [items, setItems] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    setLoading(true);
+    const fetchToken = token;
+    try {
+      const res = await fetch('/api/tournaments/history?limit=20', {
+        headers: { 'x-token': fetchToken },
+      });
+      if (!res.ok) throw new Error('failed');
+      const data = await res.json();
+      if (tokenRef.current !== fetchToken) return;
+      setItems(data.tournaments || []);
+    } catch {
+      /* keep last-known list on transient failure */
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!active || !token) return;
+    refresh();
+  }, [active, token, refresh]);
+
+  return { items, loading, refresh };
+}

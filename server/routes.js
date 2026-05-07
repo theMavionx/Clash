@@ -2868,6 +2868,50 @@ router.get('/tournaments/me', auth, (req, res) => {
   });
 });
 
+// History: ended tournaments for the player's DEX, with their participation
+// summary attached so the panel can show "your final standing" without an
+// extra round-trip per tournament. Used by the History tab in
+// TournamentPanel — the leaderboard itself is fetched lazily on click via
+// /tournaments/:id/leaderboard (already public).
+router.get('/tournaments/history', auth, (req, res) => {
+  const dex = req.player.dex;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  // status = 'ended' OR end_at < now (catch tournaments whose admin forgot
+  // to flip the status flag — auto-ended by time still belongs in history).
+  const rows = db.db.prepare(`
+    SELECT t.*,
+           tp.trophies   AS my_trophies,
+           tp.gold       AS my_gold,
+           tp.trades_count AS my_trades_count,
+           tp.volume_usd AS my_volume_usd,
+           tp.pnl_usd    AS my_pnl_usd,
+           tp.left_at    AS my_left_at
+    FROM tournaments t
+    LEFT JOIN tournament_participants tp
+      ON tp.tournament_id = t.id AND tp.player_id = ?
+    WHERE t.dex = ?
+      AND (
+        t.status = 'ended'
+        OR (t.end_at IS NOT NULL AND replace(replace(t.end_at, 'T', ' '), ' UTC', '') <= datetime('now'))
+      )
+    ORDER BY COALESCE(t.end_at, t.created_at) DESC, t.id DESC
+    LIMIT ?
+  `).all(req.player.id, dex, limit);
+  res.json({
+    tournaments: rows.map(r => ({
+      ...tournamentRowToPublic(r),
+      me: (r.my_trophies != null || r.my_gold != null || r.my_trades_count != null) ? {
+        trophies: r.my_trophies || 0,
+        gold: r.my_gold || 0,
+        trades_count: r.my_trades_count || 0,
+        volume_usd: r.my_volume_usd || 0,
+        pnl_usd: r.my_pnl_usd || 0,
+        left_at: r.my_left_at,
+      } : null,
+    })),
+  });
+});
+
 // Join a tournament. Player can only join their own DEX's tournament. If
 // they have a stale soft-leave row from a previous join we re-activate it
 // (preserving counters? — no, reset to zero since the user explicitly

@@ -5,7 +5,7 @@
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
 import { memo, useState, useMemo } from 'react';
-import { useTournament, useTournamentLeaderboard } from '../hooks/useTournament';
+import { useTournament, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -26,17 +26,35 @@ function fmtDate(s) {
 }
 
 function TournamentPanel({ onClose }) {
-  const { me, join, leave } = useTournament({ active: true });
+  // Tab gate: 'active' (default) or 'history'. History shows ended
+  // tournaments + their final leaderboards so a finished cup doesn't just
+  // disappear from the player's view.
+  const [tab, setTab] = useState('active');
+  const [pickedHistoryId, setPickedHistoryId] = useState(null);
+
+  const { me, join, leave } = useTournament({ active: tab === 'active' });
+  const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
-  const t = me?.tournament || null;
+
+  // When the History tab is active and the user clicks a row, swap the
+  // leaderboard pointer to that ended tournament. Otherwise the active
+  // (live) tournament leaderboard.
+  const liveTournament = me?.tournament || null;
+  const historyTournament = useMemo(
+    () => (history || []).find(t => t.id === pickedHistoryId) || null,
+    [history, pickedHistoryId]
+  );
+  const t = tab === 'history' ? historyTournament : liveTournament;
+  const isHistory = tab === 'history' && !!historyTournament;
+
   const joined = !!me?.joined;
-  const myStats = me?.me || null;
+  const myStats = isHistory ? (historyTournament?.me || null) : (me?.me || null);
   const phase = t?.phase || me?.phase || null;
-  const preregistration = phase === 'preregistration';
-  const live = phase === 'live';
-  const canJoin = !!me?.can_join;
-  const { board } = useTournamentLeaderboard(t?.id, { active: !!t });
+  const preregistration = !isHistory && phase === 'preregistration';
+  const live = !isHistory && phase === 'live';
+  const canJoin = !isHistory && !!me?.can_join;
+  const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
   const [busy, setBusy] = useState(false);
 
   const myRank = useMemo(() => {
@@ -78,8 +96,19 @@ function TournamentPanel({ onClose }) {
           </button>
         </div>
 
+        <div style={S.tabRow}>
+          <button
+            style={tab === 'active' ? S.tabActive : S.tab}
+            onClick={() => { setTab('active'); setPickedHistoryId(null); }}
+          >Active</button>
+          <button
+            style={tab === 'history' ? S.tabActive : S.tab}
+            onClick={() => setTab('history')}
+          >History</button>
+        </div>
+
         <div style={S.body}>
-          {!t && (
+          {tab === 'active' && !t && (
             <div style={S.empty}>
               <div style={S.emptyIcon}>🏆</div>
               <div style={S.emptyTitle}>No tournament running</div>
@@ -90,6 +119,56 @@ function TournamentPanel({ onClose }) {
             </div>
           )}
 
+          {tab === 'history' && !pickedHistoryId && (
+            <>
+              {!history && <div style={S.empty}>Loading history...</div>}
+              {history && history.length === 0 && (
+                <div style={S.empty}>
+                  <div style={S.emptyIcon}>📜</div>
+                  <div style={S.emptyTitle}>No past tournaments</div>
+                  <div style={S.emptySub}>Finished cups for {String(dex || '').toUpperCase()} will appear here.</div>
+                </div>
+              )}
+              {history && history.map((h) => {
+                const ended = h.end_at ? fmtDate(h.end_at) : 'past';
+                const placed = !!h.me;
+                const sortKey = h.sort_by;
+                const featured = !placed ? '—'
+                  : sortKey === 'trophies' ? fmt(h.me.trophies)
+                  : sortKey === 'gold' ? fmt(h.me.gold)
+                  : sortKey === 'volume_usd' ? fmtUsd(h.me.volume_usd)
+                  : fmtUsd(h.me.pnl_usd);
+                const featuredColor = !placed ? '#a3906a'
+                  : sortKey === 'pnl_usd' ? ((h.me.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c')
+                  : '#b45309';
+                return (
+                  <button
+                    key={h.id}
+                    style={S.histRow}
+                    onClick={() => setPickedHistoryId(h.id)}
+                  >
+                    <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
+                      <div style={S.histName}>{h.name}</div>
+                      <div style={S.histSub}>
+                        Ended {ended}
+                        {Number(h.gold_boost) !== 1 && <> · ×{h.gold_boost}G</>}
+                        {Number(h.trophy_boost) !== 1 && <> · ×{h.trophy_boost}T</>}
+                        {placed ? <> · sort: {h.sort_by}</> : <> · did not join</>}
+                      </div>
+                    </div>
+                    <span style={{ ...S.histFeatured, color: featuredColor }}>{featured}</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+
+          {tab === 'history' && pickedHistoryId && (
+            <button style={S.backBtn} onClick={() => setPickedHistoryId(null)}>
+              ← Back to history
+            </button>
+          )}
+
           {t && (
             <>
               <div style={S.tCard}>
@@ -97,20 +176,47 @@ function TournamentPanel({ onClose }) {
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
                   <span style={S.tag}>Sort: {t.sort_by}</span>
-                  <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
+                  {isHistory
+                    ? <span style={S.endedTag}>ENDED</span>
+                    : <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
+                  }
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
                   {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
                   {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
                   {preregistration && t.registration_closes_at && <span style={S.tag}>Reg closes {fmtDate(t.registration_closes_at)}</span>}
-                  {t.end_at && <span style={S.tag}>Ends {fmtDate(t.end_at)}</span>}
+                  {t.end_at && <span style={S.tag}>{isHistory ? 'Ended' : 'Ends'} {fmtDate(t.end_at)}</span>}
                 </div>
               </div>
 
-              {!joined && (
+              {!isHistory && !joined && (
                 <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
                   {busy ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                 </button>
+              )}
+
+              {isHistory && myStats && (
+                <div style={S.myCard}>
+                  <div style={S.myCardHeader}>
+                    <span style={S.myCardLabel}>Your final standing</span>
+                    {myRank && <span style={S.myCardRank}>#{myRank}</span>}
+                  </div>
+                  <div style={S.statRow}>
+                    <Stat label="Trophies" value={fmt(myStats.trophies)} />
+                    <Stat label="Gold" value={fmt(myStats.gold)} />
+                    <Stat label="Trades" value={myStats.trades_count} />
+                    <Stat label="Volume" value={fmtUsd(myStats.volume_usd)} />
+                    <Stat
+                      label="PnL"
+                      value={fmtUsd(myStats.pnl_usd)}
+                      color={(myStats.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c'}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {isHistory && !myStats && (
+                <div style={S.didNotJoin}>You didn't join this tournament.</div>
               )}
 
               {joined && preregistration && (
@@ -236,6 +342,46 @@ const S = {
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '14px 16px', background: '#d4c8b0', borderBottom: '4px solid #bba882',
+  },
+  tabRow: {
+    display: 'flex', gap: 0, padding: '8px 12px 0',
+    borderBottom: '2px solid #e8dfc8', background: '#fdf8e7',
+  },
+  tab: {
+    flex: 1, padding: '8px 12px', background: 'transparent',
+    border: 'none', borderBottom: '3px solid transparent',
+    color: '#a3906a', fontSize: 13, fontWeight: 800, cursor: 'pointer',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  tabActive: {
+    flex: 1, padding: '8px 12px', background: 'transparent',
+    border: 'none', borderBottom: '3px solid #b45309',
+    color: '#5C3A21', fontSize: 13, fontWeight: 900, cursor: 'pointer',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  histRow: {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: '8px 12px', borderRadius: 12, marginBottom: 5,
+    background: '#e8dfc8', border: '3px solid #d4c8b0',
+    cursor: 'pointer', textAlign: 'left', width: '100%',
+    fontFamily: 'inherit',
+  },
+  histName: { fontSize: 13, fontWeight: 900, color: '#5C3A21' },
+  histSub: { fontSize: 10, fontWeight: 700, color: '#a3906a', marginTop: 2 },
+  histFeatured: { fontSize: 14, fontWeight: 900, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
+  endedTag: {
+    fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 6,
+    background: '#a3906a', color: '#fff', textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  didNotJoin: {
+    fontSize: 12, color: '#a3906a', textAlign: 'center', padding: '10px',
+    background: '#e8dfc8', border: '2px solid #d4c8b0', borderRadius: 12,
+    fontWeight: 700,
+  },
+  backBtn: {
+    background: 'transparent', border: '2px solid #d4c8b0', borderRadius: 8,
+    padding: '6px 12px', color: '#7c5a3a', fontSize: 12, fontWeight: 700,
+    cursor: 'pointer', alignSelf: 'flex-start', marginBottom: 4,
   },
   headerIcon: {
     width: 22, height: 22, objectFit: 'contain',
