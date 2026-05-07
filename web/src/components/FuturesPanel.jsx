@@ -39,6 +39,41 @@ const TABS = [
 
 const POPULAR_SYMBOLS = ['BTC', 'ETH', 'SOL', 'DOGE', 'XRP', 'SUI', 'TRUMP'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
+const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
+const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
+const PACIFICA_FEE_BUFFER_RATE = 0.0001;
+
+function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRate }) {
+  const m = Number(margin);
+  const p = Number(price);
+  const lev = Number(leverage);
+  if (!Number.isFinite(m) || !Number.isFinite(p) || !Number.isFinite(lev) || m <= 0 || p <= 0 || lev <= 0) {
+    return 0;
+  }
+  // Pacifica validates required collateral against the worst executable
+  // notional, not just mark-price notional. Market orders reserve slippage,
+  // and the account also needs room for taker fees. Sizing from raw
+  // `margin * leverage / mark` makes "100% balance" orders fail with
+  // Insufficient balance; solve for qty from the collateral budget instead.
+  const slippage = orderType === 'market' ? PACIFICA_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PACIFICA_DEFAULT_TAKER_FEE_RATE) + PACIFICA_FEE_BUFFER_RATE;
+  return m / (p * (1 + slippage) * ((1 / lev) + feeRate));
+}
+
+function humanizeTradeError(message) {
+  const text = String(message || '');
+  const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
+  if (insufficient) {
+    const need = Number(insufficient[1]);
+    const available = Number(insufficient[2]);
+    return `Insufficient Pacifica balance: need $${need.toFixed(2)}, available $${available.toFixed(2)}. Reduce margin a little.`;
+  }
+  const cannotMargin = text.match(/CannotUpdateMargin/i);
+  if (cannotMargin) {
+    return 'Close this symbol position and cancel its open orders before changing Cross/Isolated margin.';
+  }
+  return text;
+}
 
 // Format price — no decimals for big numbers, appropriate precision for small
 // Keep the result under ~8 chars so the price column doesn't push the
@@ -569,7 +604,11 @@ const PositionsList = memo(function PositionsList({
         );
       })}
 
-      {error && <div style={S.errorBar} onClick={clearError}>{error}</div>}
+      {error && (
+        <div style={S.errorBar} onClick={clearError}>
+          <span style={S.errorText}>{humanizeTradeError(error)}</span>
+        </div>
+      )}
     </div>
   );
 });
@@ -897,6 +936,11 @@ function FuturesPanel() {
     const t = setTimeout(() => setSuccessMsg(null), 3000);
     return () => clearTimeout(t);
   }, [successMsg]);
+  const clearTradeFeedback = useCallback(() => {
+    setLocalAlert(null);
+    setSuccessMsg(null);
+    if (error && clearError) clearError();
+  }, [clearError, error]);
   // Pending-tx state for LONG/SHORT buttons so the user sees "Signing…" then
   // "Confirming…" instead of bare ellipsis.
   const [tradePhase, setTradePhase] = useState(null); // 'signing' | 'confirming' | null
@@ -1020,16 +1064,42 @@ function FuturesPanel() {
   // Trader-facing balance for the Pro panel slider / max-size calc / deposit
   // CTA. Each DEX exposes the field under a different name; keep the legacy
   // `pacBalance` identifier so the rest of the file doesn't have to change.
-  //   Pacifica → `balance`            (human USDC)
-  //   Decibel  → `usdc_cross_withdrawable_balance` (human USDC, REST)
-  //   Avantis  → `usdcAvailable` / `usdc` (human USDC)
-  const pacBalance = parseFloat(
-    account?.balance
-      ?? account?.usdc_cross_withdrawable_balance
-      ?? account?.usdcAvailable
-      ?? account?.usdc
+  //
+  // Pacifica uses UNIFIED MARGIN, where:
+  //   balance            = raw deposited collateral, can go negative once an
+  //                        open losing position eats more than the deposit
+  //                        (the position itself still has equity backing it,
+  //                        so the account isn't liquidated yet).
+  //   account_equity     = balance + unrealized PnL (true account value).
+  //   available_to_spend = free collateral for opening NEW positions (>= 0).
+  //
+  // Showing raw `balance` was the bug — when a user had an open position in
+  // drawdown they'd see a negative USDC number even though their actual
+  // account value (equity) was still positive. We now route sizing/slider
+  // math off `available_to_spend` (the only meaningful "buying power" in
+  // unified margin) and use `account_equity` for the displayed value.
+  //   Decibel  → `usdc_cross_withdrawable_balance` (free margin, REST)
+  //   Avantis  → `usdcAvailable` / `usdc` (wallet USDC, no unified margin)
+  const pacBalance = Math.max(0, parseFloat(
+    account?.available_to_spend            // Pacifica unified margin (preferred)
+      ?? account?.usdc_cross_withdrawable_balance // Decibel
+      ?? account?.usdcAvailable                   // Avantis variant
+      ?? account?.usdc                            // GMX
+      ?? account?.balance                         // last-resort
       ?? 0
-  );
+  ));
+  // Mark-to-market portfolio value. Used for the displayed "balance" number
+  // and the no-funds deposit CTA gate so a losing trade doesn't make the UI
+  // claim the account has $0 (and pop the deposit prompt) when the position
+  // still has equity.
+  const pacAccountValue = Math.max(0, parseFloat(
+    account?.account_equity                // Pacifica unified
+      ?? account?.perp_equity_balance      // Decibel
+      ?? account?.usdc                     // GMX (acts as equity for cross-margin spec)
+      ?? account?.usdcAvailable            // Avantis fallback
+      ?? account?.balance                  // last-resort
+      ?? 0
+  ));
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
@@ -1041,6 +1111,14 @@ function FuturesPanel() {
   const lotSize = useMemo(() => {
     return markets.find(m => m.symbol === symbol)?.lot_size || '0.00001';
   }, [markets, symbol]);
+  const pacificaSizingPrice = useMemo(() => {
+    if (orderType === 'limit' && Number(limitPrice) > 0) return Number(limitPrice);
+    return Number(currentPrice) || 0;
+  }, [orderType, limitPrice, currentPrice]);
+  const pacificaTakerFeeRate = useMemo(() => {
+    const fee = Number(account?.taker_fee);
+    return Number.isFinite(fee) && fee > 0 ? fee : PACIFICA_DEFAULT_TAKER_FEE_RATE;
+  }, [account?.taker_fee]);
 
   // UX semantics (updated 2026-04):
   //   amount (USDC mode) = MARGIN / collateral the user deposits per trade.
@@ -1055,27 +1133,62 @@ function FuturesPanel() {
     if (!amountInUsdc) return amount;
     // Token qty = leveraged position / price. Previously this treated the
     // amount as notional (no × leverage), so it mis-sized trades.
-    const raw = (parseFloat(amount) * leverage) / parseFloat(currentPrice);
+    const raw = dex === 'pacifica'
+      ? pacificaQtyFromMargin({
+          margin: amount,
+          price: pacificaSizingPrice || currentPrice,
+          leverage,
+          orderType,
+          takerFeeRate: pacificaTakerFeeRate,
+        })
+      : (parseFloat(amount) * leverage) / parseFloat(currentPrice);
     const lot = parseFloat(lotSize);
     return String(Math.floor(raw / lot) * lot);
-  }, [amount, currentPrice, amountInUsdc, lotSize, leverage]);
+  }, [amount, currentPrice, amountInUsdc, lotSize, leverage, dex, pacificaSizingPrice, orderType, pacificaTakerFeeRate]);
 
   // Derived display: position size in USDC (margin × leverage). Kept as a
   // number so callers can format or gate on it without re-parsing.
   const positionUsdc = useMemo(() => {
     if (amountInUsdc) {
+      if (dex === 'pacifica') {
+        const t = parseFloat(tokenAmount);
+        const p = parseFloat(currentPrice);
+        return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
+      }
       const m = parseFloat(amount);
       return Number.isFinite(m) && m > 0 ? m * leverage : 0;
     }
     const t = parseFloat(tokenAmount);
     const p = parseFloat(currentPrice);
     return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
-  }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice]);
+  }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, dex]);
 
   // Buying power = max possible position size = balance × leverage.
   const maxUsdc = pacBalance * leverage;
+  const hasCurrentSymbolPosition = useMemo(
+    () => positions.some(p => String(p.symbol || p.s || '').toUpperCase() === symbol.toUpperCase()),
+    [positions, symbol]
+  );
+  const hasCurrentSymbolOrder = useMemo(
+    () => orders.some(o => String(o.symbol || o.s || '').toUpperCase() === symbol.toUpperCase()),
+    [orders, symbol]
+  );
+  const marginModeLocked = dex === 'pacifica' && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
+  const handleMarginModeToggle = useCallback(() => {
+    clearTradeFeedback();
+    if (marginModeLocked) {
+      setLocalAlert(
+        hasCurrentSymbolPosition
+          ? `Close your ${symbol} position before changing Cross/Isolated margin.`
+          : `Cancel your ${symbol} open orders before changing Cross/Isolated margin.`
+      );
+      return;
+    }
+    setMarginMode?.(symbol, !marginModes[symbol]);
+  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes]);
 
   const handleSizePct = useCallback((pct) => {
+    clearTradeFeedback();
     setSizePct(pct);
     if (pacBalance > 0 && currentPrice) {
       // Slider now sets MARGIN (a fraction of the wallet balance), not
@@ -1086,13 +1199,23 @@ function FuturesPanel() {
         setAmount(marginVal);
       } else {
         // Token-input mode: convert margin → token qty via leverage.
-        setAmount(String(((parseFloat(marginVal) * leverage) / parseFloat(currentPrice)).toFixed(6)));
+        const qty = dex === 'pacifica'
+          ? pacificaQtyFromMargin({
+              margin: marginVal,
+              price: pacificaSizingPrice || currentPrice,
+              leverage,
+              orderType,
+              takerFeeRate: pacificaTakerFeeRate,
+            })
+          : ((parseFloat(marginVal) * leverage) / parseFloat(currentPrice));
+        setAmount(String(qty.toFixed(6)));
       }
     }
-  }, [pacBalance, currentPrice, amountInUsdc, leverage]);
+  }, [clearTradeFeedback, pacBalance, currentPrice, amountInUsdc, leverage, dex, pacificaSizingPrice, orderType, pacificaTakerFeeRate]);
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
+    clearTradeFeedback();
     const v = Math.min(Number(val), maxLev);
     setLeverage(v);
     // Pacifica has an account-level leverage endpoint — debounce + send after
@@ -1105,7 +1228,7 @@ function FuturesPanel() {
     if (dex === 'pacifica' || dex === 'avantis' || dex === 'decibel' || dex === 'gmx') return;
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => setLeverageApi(symbol, v), 2000);
-  }, [maxLev, symbol, setLeverageApi, dex]);
+  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex]);
 
   // Synchronous double-click guard. React's `loading` state is async, so a
   // second click can land between dispatch-1 and React committing the button's
@@ -1149,6 +1272,11 @@ function FuturesPanel() {
         qty = amountInUsdc ? tokenAmount : amount;
         if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
         if (dex === 'pacifica') {
+          const enteredMargin = amountInUsdc ? parseFloat(amount) : null;
+          if (amountInUsdc && Number.isFinite(enteredMargin) && enteredMargin > pacBalance + 1e-6) {
+            setLocalAlert(`Not enough Pacifica balance: $${enteredMargin.toFixed(2)} margin requested, $${pacBalance.toFixed(2)} available.`);
+            return;
+          }
           const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : price;
           const orderNotional = parseFloat(qty) * orderPrice;
           if (!Number.isFinite(orderNotional) || orderNotional < PACIFICA_MIN_NOTIONAL_USD) {
@@ -1210,7 +1338,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, pacBalance]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -1274,7 +1402,20 @@ function FuturesPanel() {
               <span style={{color: '#FF9800', fontWeight: 900}}>Isolated</span>
             </div>
           ) : (
-            <button style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4}} onClick={() => setMarginMode(symbol, !marginModes[symbol])} title={marginModes[symbol] ? 'Isolated margin' : 'Cross margin'}>
+            <button
+              style={{
+                ...S.marginSwapBtn,
+                padding: '6px 10px',
+                fontSize: 12,
+                gap: 4,
+                opacity: marginModeLocked ? 0.65 : 1,
+                cursor: marginModeLocked ? 'not-allowed' : 'pointer',
+              }}
+              onClick={handleMarginModeToggle}
+              title={marginModeLocked
+                ? 'Close this symbol position and cancel its open orders before changing margin mode'
+                : (marginModes[symbol] ? 'Isolated margin' : 'Cross margin')}
+            >
               <span style={{color: marginModes[symbol] ? '#FF9800' : '#4CAF50', fontWeight: 900}}>
                 {marginModes[symbol] ? 'Isolated' : 'Cross'}
               </span>
@@ -1286,7 +1427,10 @@ function FuturesPanel() {
           )}
           <div style={{...S.balBadge, padding: '4px 8px'}}>
             <span style={{fontSize: 8, fontWeight: 700, color: '#a3906a', lineHeight: 1}}>BALANCE</span>
-            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${pacBalance.toFixed(2)}</span>
+            {/* Use account equity (mark-to-market) so the badge reflects the
+                actual portfolio value — including PnL on open positions —
+                not raw collateral that can go negative under unified margin. */}
+            <span style={{fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.1}}>${pacAccountValue.toFixed(2)}</span>
           </div>
         </div>
       </div>
@@ -1312,8 +1456,11 @@ function FuturesPanel() {
       ...(parentScroll ? {width: '100%', padding: 10, boxSizing: 'border-box'} : {}),
     }}>
 
-      {/* Deposit/Withdraw row */}
-      {pacBalance === 0 && (
+      {/* Deposit/Withdraw row — gate on account VALUE, not free margin.
+          A user with an open position has available_to_spend ≈ 0 but
+          account_equity > 0; gating on free margin would pop the deposit
+          prompt for any user with a position. */}
+      {pacAccountValue < 0.01 && (
         <div style={S.noBalanceHint} onClick={() => setActiveTab('Account')}>
           No balance — go to Account tab to deposit USDC
         </div>
@@ -1322,15 +1469,15 @@ function FuturesPanel() {
       {/* Trade controls */}
       <div style={S.tradeBox}>
         <div style={S.row}>
-          <button style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => setOrderType('market')}>Market</button>
-          <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => setOrderType('limit')}>Limit</button>
+          <button style={orderType === 'market' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('market'); }}>Market</button>
+          <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
         </div>
 
         <div style={{...S.row, alignItems: 'stretch'}}>
           <div style={{flex: compactMobile ? '1 1 auto' : 2, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
               <span style={S.label}>{amountInUsdc ? 'Margin' : 'Amount'}</span>
-              <button style={S.unitToggle} onClick={() => setAmountInUsdc(!amountInUsdc)}>
+              <button style={S.unitToggle} onClick={() => { clearTradeFeedback(); setAmountInUsdc(!amountInUsdc); }}>
                 {amountInUsdc ? 'USDC' : symbol}
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" style={{marginLeft: 3}}>
                   <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
@@ -1339,7 +1486,7 @@ function FuturesPanel() {
               </button>
             </div>
             <input type="number" placeholder={amountInUsdc ? '20' : '0.01'} value={amount}
-              onChange={e => { setAmount(e.target.value); setSizePct(0); }} style={S.input} />
+              onChange={e => { clearTradeFeedback(); setAmount(e.target.value); setSizePct(0); }} style={S.input} />
           </div>
           <div style={{flex: compactMobile ? '0 0 92px' : 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <span style={S.label}>Leverage</span>
@@ -1434,13 +1581,13 @@ function FuturesPanel() {
 
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span>{error}</span>
+            <span style={S.errorText}>{humanizeTradeError(error)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span>{localAlert}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
@@ -2016,7 +2163,8 @@ function FuturesPanel() {
                           color: '#B71C1C', fontSize: 12, fontWeight: 700,
                           textAlign: 'center', maxWidth: 380, padding: '8px 12px',
                           background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
-                        }}>{error}</div>
+                          overflowWrap: 'anywhere', wordBreak: 'break-word',
+                        }}>{humanizeTradeError(error)}</div>
                       )}
                     </>
                   );
@@ -2455,13 +2603,13 @@ function FuturesPanel() {
 
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span>{error}</span>
+            <span style={S.errorText}>{humanizeTradeError(error)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span>{localAlert}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
@@ -2604,15 +2752,18 @@ function FuturesPanel() {
           </div>
         </div>
 
-        {/* Pacifica balances */}
+        {/* Pacifica unified-margin balances. "Equity" is the portfolio's
+            mark-to-market value (always >= 0 unless margin call). "Free
+            Margin" is what's left to open NEW trades — distinct from
+            equity once margin gets locked in open positions. */}
         <div style={{display: 'flex', gap: 8}}>
-          <div style={S.balCard}>
-            <span style={S.balCardLabel}>Trading Balance</span>
-            <span style={S.balCardValue}>${pacBalance.toFixed(2)}</span>
-          </div>
           <div style={S.balCard}>
             <span style={S.balCardLabel}>Equity</span>
             <span style={S.balCardValue}>${equity.toFixed(2)}</span>
+          </div>
+          <div style={S.balCard}>
+            <span style={S.balCardLabel}>Free Margin</span>
+            <span style={S.balCardValue}>${pacBalance.toFixed(2)}</span>
           </div>
         </div>
         <div style={{display: 'flex', gap: 8}}>
@@ -2759,13 +2910,13 @@ function FuturesPanel() {
 
         {error && (
           <div style={S.errorBar} onClick={clearError}>
-            <span>{error}</span>
+            <span style={S.errorText}>{humanizeTradeError(error)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
         {localAlert && (
           <div style={S.errorBar} onClick={() => setLocalAlert(null)}>
-            <span>{localAlert}</span>
+            <span style={S.errorText}>{humanizeTradeError(localAlert)}</span>
             <span style={S.errorCloseIcon}>✕</span>
           </div>
         )}
@@ -3289,10 +3440,14 @@ const S = {
   errorBar: {
     background: '#E5393520', border: '2px solid #E53935', borderRadius: 8,
     padding: '7px 10px', color: '#B71C1C', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8,
+    minWidth: 0, maxWidth: '100%', overflow: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  errorText: {
+    flex: '1 1 auto', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   errorCloseIcon: {
-    color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7,
+    color: '#B71C1C', fontSize: 14, fontWeight: 900, opacity: 0.7, flexShrink: 0,
   },
   successBar: {
     background: '#4CAF5020', border: '2px solid #4CAF50', borderRadius: 8,

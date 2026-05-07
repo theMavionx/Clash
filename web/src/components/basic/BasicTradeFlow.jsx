@@ -77,23 +77,25 @@ function BasicTradeFlow({
     return Number(p?.mid || p?.mark || 0);
   }, [pickedToken, prices]);
 
-  // Available USD: prefer the on-DEX trading balance. For Pacifica, wallet
-  // USDC is not spendable until deposited into Pacifica, so do not fall back
-  // to walletUsdc there. Field names differ per DEX:
-  //   Pacifica → `available_to_spend` / `balance`
+  // Available USD: prefer the on-DEX trading balance. For Pacifica's
+  // unified margin we use `available_to_spend` (free margin clamped to 0)
+  // — NOT raw `balance`, which can be negative when an open position is
+  // in drawdown even though account_equity is still positive. Wallet USDC
+  // is not spendable until deposited into Pacifica, so do not fall back
+  // to walletUsdc there.
+  //   Pacifica → `available_to_spend` (free margin under unified margin)
   //   Decibel  → `usdc_cross_withdrawable_balance` / `perp_equity_balance`
-  //              (snake_case, account_overviews REST shape)
   //   Avantis  → `usdcAvailable` / `usdc`
   const balance = useMemo(() => {
-    const accBal = Number(
-      account?.usdc_cross_withdrawable_balance
-        ?? account?.available_to_spend
-        ?? account?.usdcAvailable
-        ?? account?.perp_equity_balance
-        ?? account?.balance
-        ?? account?.usdc
+    const accBal = Math.max(0, Number(
+      account?.available_to_spend                  // Pacifica unified margin
+        ?? account?.usdc_cross_withdrawable_balance // Decibel
+        ?? account?.usdcAvailable                   // Avantis
+        ?? account?.perp_equity_balance             // Decibel fallback
+        ?? account?.balance                         // last-resort
+        ?? account?.usdc                            // GMX
         ?? 0
-    );
+    ));
     if (accBal > 0) return accBal;
     if (dex === 'pacifica') return 0;
     return Number(walletUsdc || 0);

@@ -112,8 +112,13 @@ function ProfileModal({ onClose }) {
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
   // Fall back to player.buildings structure only if buildingDefs isn't ready yet.
   const townHallLevel = buildingDefs?.th_level || player?.buildings?.town_hall?.level || 1;
-  const pacBalance = parseFloat(account?.balance || 0);
-  const pacEquity = parseFloat(account?.account_equity || 0);
+  // Pacifica unified margin: raw `balance` can go negative when an open
+  // position is in drawdown. Use available_to_spend (free margin) for the
+  // "Trading Balance" / Free Margin display so we never show a misleading
+  // -$X.XX while the account_equity is still positive. Clamp at 0 to
+  // hide the negative collateral artifact entirely.
+  const pacBalance = Math.max(0, parseFloat(account?.available_to_spend ?? account?.balance ?? 0));
+  const pacEquity = Math.max(0, parseFloat(account?.account_equity || 0));
 
   // Fetch trading reward stats. Keyed on the reactive player token so that
   // if the user switches accounts while this modal is mounted (open in a
@@ -396,8 +401,13 @@ function ProfileModal({ onClose }) {
             <>
               <div style={S.sectionTitle}>Trading</div>
               {[
-                ['Trading Balance', `$${pacBalance.toFixed(2)}`],
+                // Equity = mark-to-market portfolio value (always >= 0).
+                // Free Margin = collateral available for new trades.
+                // Showing both makes the unified-margin model legible
+                // instead of the old "Trading Balance" which silently meant
+                // raw collateral and went negative on losing positions.
                 ['Equity', `$${pacEquity.toFixed(2)}`],
+                ['Free Margin', `$${pacBalance.toFixed(2)}`],
                 ['Positions', account?.positions_count || 0],
                 ['Orders', account?.orders_count || 0],
               ].map(([label, val]) => (
