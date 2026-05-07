@@ -1643,7 +1643,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // Filter only new trades (after last_trade_id) from the merged set.
     const newTrades = allTrades.filter(t => t.history_id > reward.last_trade_id);
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
-      console.log(`[claim-gold pacifica] player=${req.player.name} -> NO NEW TRADES (api_total=${apiCount}, all <= last_trade_id=${reward.last_trade_id})`);
+      console.log(`[claim-gold pacifica] player=${req.player.name} -> NO NEW TRADES (api_total=${allTrades.length}, all <= last_trade_id=${reward.last_trade_id})`);
       return res.json({ gold: 0, reason: 'No new trades' });
     }
     // Pacifica trade history is fill-level: one user order can appear as
