@@ -82,6 +82,10 @@ function TournamentPanel({ onClose }) {
 
   return (
     <>
+      {/* Inline keyframes for the body cross-fade. Lives here instead of a
+          global stylesheet because it's the only consumer; renders once
+          when the modal mounts and gets cleaned up with it. */}
+      <style>{`@keyframes tournamentFade { from { opacity: 0 } to { opacity: 1 } }`}</style>
       <div style={S.backdrop} onClick={onClose} />
       <div style={S.modal}>
         <div style={S.header}>
@@ -107,7 +111,13 @@ function TournamentPanel({ onClose }) {
           >History</button>
         </div>
 
-        <div style={S.body}>
+        <div
+          // Keying on tab+pickedHistoryId restarts the CSS animation each
+          // time the user switches view, giving a soft 150ms cross-fade
+          // instead of a hard content swap. Combined with the fixed modal
+          // height above, this is what removes the "jump" the user saw.
+          key={`${tab}:${pickedHistoryId || ''}`}
+          style={{ ...S.body, animation: 'tournamentFade 0.15s ease-out' }}>
           {tab === 'active' && !t && (
             <div style={S.empty}>
               <div style={S.emptyIcon}>🏆</div>
@@ -332,7 +342,11 @@ const S = {
   backdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 250, pointerEvents: 'auto' },
   modal: {
     position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-    width: 380, maxWidth: '94vw', maxHeight: '88vh',
+    // Fixed height (clamped to viewport on small screens) keeps the modal
+    // from "popping" up/down when tab content changes size — empty states
+    // and a 50-row leaderboard now share the same outer footprint.
+    width: 380, maxWidth: '94vw',
+    height: 'min(88vh, 620px)',
     background: '#fdf8e7', border: '6px solid #d4c8b0', borderRadius: 24,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     display: 'flex', flexDirection: 'column',
