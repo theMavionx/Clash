@@ -42,11 +42,18 @@ function BasicConfirm({
 
   useEffect(() => {
     const measure = () => {
-      if (trackRef.current) setTrackW(trackRef.current.offsetWidth);
+      if (trackRef.current) {
+        setTrackW(Math.round(trackRef.current.getBoundingClientRect().width));
+      }
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure);
+      return () => window.removeEventListener('resize', measure);
+    }
+    const ro = new ResizeObserver(measure);
+    if (trackRef.current) ro.observe(trackRef.current);
+    return () => ro.disconnect();
   }, []);
 
   // Travel distance for the thumb: total width minus thumb size minus the
@@ -54,7 +61,9 @@ function BasicConfirm({
   const dragMax = Math.max(0, trackW - THUMB_SIZE - THUMB_PAD * 2);
   // Fill width = thumb's left position + the thumb itself, so the green
   // fill always sits visually behind the thumb without leaking past it.
-  const fillWidth = useTransform(x, (v) => v + THUMB_SIZE + THUMB_PAD * 2);
+  const fillWidth = useTransform(x, (v) => (
+    Math.min(trackW, Math.max(0, v + THUMB_SIZE + THUMB_PAD * 2))
+  ));
   // Label fades out as the thumb crosses ~half the track — once you've
   // committed visually, the "Slide to confirm" prompt makes less sense.
   const labelOpacity = useTransform(x, [0, dragMax * 0.6], [1, 0]);
@@ -75,7 +84,7 @@ function BasicConfirm({
     // Grid layout: title (auto), card (1fr — fills + shrinks), pill (auto),
     // back (auto). The slide-to-confirm pill is therefore ALWAYS visible
     // — content above can shrink without clipping the action.
-    <div style={{ ...shared.page, justifyContent: 'center' }}>
+    <div style={S.page}>
       <h2 style={S.tightTitle}>Confirm trade</h2>
 
       {showAgentBanner && bindAgent && (
@@ -183,6 +192,16 @@ function BasicConfirm({
 export default memo(BasicConfirm);
 
 const S = {
+  page: {
+    ...shared.page,
+    justifyContent: 'flex-start',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    width: '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    padding: '4px 14px 14px',
+  },
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 900, color: colors.ink,
@@ -196,6 +215,10 @@ const S = {
     boxShadow: '0 4px 14px rgba(92,58,33,0.15)',
     display: 'flex', flexDirection: 'column', gap: 6,
     boxSizing: 'border-box',
+    width: '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    flexShrink: 0,
   },
   header: { display: 'flex', alignItems: 'center', gap: 10 },
   directionBadge: {
@@ -223,9 +246,14 @@ const S = {
   },
   row: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+    gap: 8,
+    minWidth: 0,
   },
   rowLabel: { fontSize: 12, fontWeight: 700, color: colors.inkFaint, letterSpacing: '0.3px' },
-  rowValue: { fontSize: 14, fontWeight: 800, color: colors.ink, fontVariantNumeric: 'tabular-nums' },
+  rowValue: {
+    fontSize: 14, fontWeight: 800, color: colors.ink, fontVariantNumeric: 'tabular-nums',
+    textAlign: 'right', minWidth: 0, overflowWrap: 'anywhere',
+  },
 
   // Swipe track — pill background. Higher contrast bg + visible border so
   // the pill is always recognisable as a swipe affordance regardless of
@@ -234,6 +262,7 @@ const S = {
   // room (was collapsing to ~0 visual height on cramped panels).
   track: {
     position: 'relative', width: '100%',
+    maxWidth: '100%',
     height: TRACK_H,
     minHeight: TRACK_H,
     borderRadius: TRACK_H / 2,
@@ -241,6 +270,7 @@ const S = {
     borderWidth: 2, borderStyle: 'solid', borderColor: 'rgba(92,58,33,0.18)',
     boxSizing: 'border-box',
     flexShrink: 0,
+    overflow: 'hidden',
   },
   // Filled portion grows from the left edge as the user drags. Border-
   // radius matches the track so the rounded ends stay consistent.
@@ -254,10 +284,12 @@ const S = {
     position: 'absolute', inset: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     paddingLeft: THUMB_SIZE,  // centre label over the un-filled portion
-    fontSize: 15, fontWeight: 900, letterSpacing: '1px',
+    fontSize: 'clamp(11px, 3.5vw, 15px)', fontWeight: 900, letterSpacing: '0.4px',
     color: colors.inkSoft,
     pointerEvents: 'none',
     boxSizing: 'border-box',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
   },
   thumb: {
     position: 'absolute',

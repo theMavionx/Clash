@@ -419,8 +419,14 @@ const S = {
     cursor: 'pointer',
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     gap: 12,
+    boxSizing: 'border-box',
+    flexShrink: 0,
+    minWidth: 0,
+    overflow: 'hidden',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
-  errorClose: { fontWeight: 900, opacity: 0.6 },
+  errorClose: { fontWeight: 900, opacity: 0.6, flexShrink: 0 },
   stepWrap: {
     flex: 1, position: 'relative', minHeight: 0,
     overflow: 'hidden',
@@ -428,5 +434,7 @@ const S = {
   stepInner: {
     position: 'absolute', inset: 0,
     display: 'flex', flexDirection: 'column',
+    minWidth: 0,
+    overflow: 'hidden',
   },
 };

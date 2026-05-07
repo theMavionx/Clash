@@ -32,6 +32,10 @@ export const shared = {
     fontFamily: '"Inter","Segoe UI",sans-serif',
     boxSizing: 'border-box',
     minHeight: 0,
+    minWidth: 0,
+    width: '100%',
+    maxWidth: '100%',
+    overflowX: 'hidden',
   },
   stepHeader: {
     display: 'flex', alignItems: 'center', gap: 10,

@@ -78,6 +78,10 @@ const S = {
     borderWidth: 2, borderStyle: 'solid', borderColor: '#e8b830',
     boxSizing: 'border-box',
     fontFamily: '"Inter","Segoe UI",sans-serif',
+    width: '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    overflow: 'hidden',
   },
   icon: {
     fontSize: 22, lineHeight: 1,
@@ -86,7 +90,7 @@ const S = {
     background: '#fff5cc', borderRadius: '50%',
     border: '2px solid #e8b830',
   },
-  body: { minWidth: 0 },
+  body: { minWidth: 0, overflow: 'hidden' },
   title: {
     fontSize: 13, fontWeight: 900, color: colors.ink,
     letterSpacing: '0.3px',
@@ -94,6 +98,7 @@ const S = {
   text: {
     fontSize: 11, fontWeight: 600, color: colors.inkSoft,
     lineHeight: 1.4, marginTop: 2,
+    overflowWrap: 'anywhere',
   },
   error: {
     fontSize: 11, fontWeight: 700, color: colors.shortDark,
