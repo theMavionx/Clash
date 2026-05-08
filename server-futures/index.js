@@ -115,7 +115,7 @@ app.get('/', (req, res) => {
 </style>
 </head><body>
   <h1>Clash Futures Server</h1>
-  <div class="subtitle">Pacifica Mainnet | Builder: clashofperps</div>
+  <div class="subtitle">Pacifica / Avantis / Decibel / GMX / Perpl | Builder: clashofperps</div>
   <div class="stats">
     <div class="stat"><div class="value">${walletCount}</div><div class="label">Wallets</div></div>
     <div class="stat"><div class="value">${tradeCount}</div><div class="label">Trades</div></div>

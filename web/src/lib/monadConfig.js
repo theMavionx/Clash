@@ -152,10 +152,11 @@ export const ERC20_ABI = [
 ];
 
 // ───── Perpl REST / WS endpoints ─────────────────────────────────────────
-// All under app.perpl.xyz. The WS hosts split traffic: market-data is
-// public + unauthenticated, trading is private + requires the SIWE-issued
-// session cookie.
-export const PERPL_API_BASE = 'https://app.perpl.xyz/api/v1';
+// REST is reverse-proxied via `/perpl-api/*` (Vite in dev, nginx in prod)
+// because Perpl does not currently answer browser CORS preflights for our
+// origin. WS endpoints stay direct; if Perpl starts geofencing WS per user,
+// proxying `PERPL_WS_TRADING` through nginx is the next step.
+export const PERPL_API_BASE = '/perpl-api';
 export const PERPL_WS_TRADING = 'wss://app.perpl.xyz/ws/v1/trading';
 export const PERPL_WS_MARKET_DATA = 'wss://app.perpl.xyz/ws/v1/market-data';
 
@@ -222,12 +223,19 @@ export const PERPL_MT = Object.freeze({
   PING: 1,
   AUTH: 4,
   SUBSCRIBE: 5,
+  GAS_PRICE_UPDATE: 7,
+  MARKET_CONFIG_UPDATE: 8,
+  MARKET_STATE_UPDATE: 9,
+  MARKET_FUNDING_UPDATE: 10,
+  CANDLES_SNAPSHOT: 11,
+  CANDLES_UPDATE: 12,
   ORDER_BOOK_SNAPSHOT: 15,
   ORDER_BOOK_DELTA: 16,
   TRADES_SNAPSHOT: 17,
   TRADES_DELTA: 18,
-  WALLET_SNAPSHOT_OLD: 19,
-  WALLET_SNAPSHOT: 21,
+  WALLET_SNAPSHOT: 19,
+  WALLET_UPDATE: 20,
+  ACCOUNT_UPDATE: 21,
   ORDER: 22,
   ORDERS_SNAPSHOT: 23,
   ORDERS_DELTA: 24,

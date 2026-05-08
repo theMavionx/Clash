@@ -120,6 +120,21 @@ export default defineConfig({
         changeOrigin: true, secure: true,
         rewrite: () => '/arb',
       },
+      // Perpl Foundation (Monad mainnet) — REST + auth endpoints. Same
+      // CORS-strip trick we use for Arbitrum RPC: app.perpl.xyz doesn't
+      // send Access-Control-Allow-Origin, so a direct fetch from
+      // localhost:5173 (or our prod origin) is blocked at preflight.
+      // Routing through `/perpl-api/*` makes Vite (dev) / nginx (prod)
+      // forward server-side where Origin doesn't matter. Cookies are
+      // preserved because changeOrigin rewrites Host but the proxy
+      // sends `credentials: include` requests through unchanged.
+      '/perpl-api': {
+        target: 'https://app.perpl.xyz',
+        changeOrigin: true, secure: true,
+        cookieDomainRewrite: '',
+        cookiePathRewrite: { '/api/v1': '/', '/': '/' },
+        rewrite: (path) => path.replace(/^\/perpl-api/, '/api/v1'),
+      },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
       '/ws': {
         target: process.env.VITE_WS_PROXY || 'ws://localhost:4000',

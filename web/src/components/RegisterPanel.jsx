@@ -162,14 +162,17 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
 }
 
 function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'avantis' }) {
-  // Both Avantis (Base) and GMX (Arbitrum) flow through the same EVM modal +
-  // Privy email path. The Privy embedded wallet is chain-agnostic at the
-  // address level — the same 0xABC… works on every EVM chain; we just
-  // ensureChain(targetId) before each tx. So Privy "sign in with email"
-  // gives the user an Arbitrum-ready wallet for GMX exactly the same way
-  // it gives a Base-ready wallet for Avantis.
-  const venue = dex === 'gmx' ? 'GMX' : 'AVANTIS';
-  const chainName = dex === 'gmx' ? 'Arbitrum' : 'Base';
+  // Avantis (Base), GMX (Arbitrum), and Perpl (Monad) all flow through the
+  // same EVM modal + Privy email path. Privy's embedded wallet is chain-
+  // agnostic at the address level — the same 0xABC… works on every EVM
+  // chain; we just ensureChain(targetId) before each tx. So one panel,
+  // three labels.
+  const venue = dex === 'gmx' ? 'GMX'
+    : dex === 'monad' ? 'PERPL'
+    : 'AVANTIS';
+  const chainName = dex === 'gmx' ? 'Arbitrum'
+    : dex === 'monad' ? 'Monad'
+    : 'Base';
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
@@ -286,6 +289,7 @@ function RegisterPanel() {
                   dex === 'avantis' ? 'Avantis' :
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
+                  dex === 'monad' ? 'Perpl' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
               : 'Signing you in…'}
@@ -303,7 +307,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -347,6 +351,7 @@ function RegisterPanel() {
     if (dex === 'avantis') return 'AVANTIS LOGIN';
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
+    if (dex === 'monad') return 'PERPL LOGIN';
     return 'PACIFICA LOGIN';
   })();
 

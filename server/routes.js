@@ -233,7 +233,7 @@ const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad']);
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -1642,7 +1642,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -1661,7 +1661,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // sources would double-count when the worker later writes a duplicate.
       const sourceWhere = dex === 'decibel'
         ? "AND verified_source = 'server'"
-        : "AND verified_source = 'worker'";
+        : dex === 'monad'
+          ? "AND verified_source = 'perpl_api'"
+          : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
         FROM trade_history
@@ -1685,7 +1687,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // Decibel was at $1 — too low because Decibel min_size per market lets
     // self-traded $1 fills count as legitimate. Bumped to $10 to match
     // a sensible micro-trade floor across all four DEXes.
-    const SANE_MIN_NOTIONAL = dex === 'decibel' ? 10 : 50;
+    const SANE_MIN_NOTIONAL = (dex === 'decibel' || dex === 'monad') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;

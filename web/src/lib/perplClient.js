@@ -30,6 +30,14 @@ import {
   PERPL_MT,
 } from './monadConfig';
 
+export const PERPL_REGION_BLOCKED_MESSAGE = 'Perpl is not available in your country or IP region.';
+
+function throwRegionBlocked() {
+  const e = new Error(PERPL_REGION_BLOCKED_MESSAGE);
+  e.code = 'PERPL_REGION_BLOCKED';
+  throw e;
+}
+
 // ───── Session state ─────────────────────────────────────────────────────
 // Module-singleton because the JWT cookie is browser-global anyway, and
 // we want the hook to share a single auth handshake across re-mounts.
@@ -45,7 +53,7 @@ export function isPerplAuthed() { return !!_authNonce; }
 // X-Auth-Nonce header. We never throw on non-OK by default — the caller
 // gets `{ ok, status, data }` so it can branch on 418 (whitelist gate)
 // vs. 401 (re-login) without try/catch dance.
-async function perplFetch(path, { method = 'GET', body, authed = false } = {}) {
+async function perplFetch(path, { method = 'GET', body, authed = false, credentials = null } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (authed && _authNonce) headers['X-Auth-Nonce'] = _authNonce;
   let res;
@@ -53,7 +61,7 @@ async function perplFetch(path, { method = 'GET', body, authed = false } = {}) {
     res = await fetch(`${PERPL_API_BASE}${path}`, {
       method,
       headers,
-      credentials: authed ? 'include' : 'omit',
+      credentials: credentials || (authed ? 'include' : 'omit'),
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
@@ -73,6 +81,10 @@ export async function fetchPerplContext() {
     console.warn('[perpl] /pub/context failed', r.status, r.error);
     return null;
   }
+  if (!r.data || typeof r.data !== 'object' || !Array.isArray(r.data.markets)) {
+    console.warn('[perpl] /pub/context returned non-context payload', typeof r.data);
+    return null;
+  }
   return r.data;
 }
 
@@ -88,9 +100,14 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
     body: { chain_id: chainId, address },
   });
   if (!payloadRes.ok) {
+    if (payloadRes.status === 451) throwRegionBlocked();
     throw new Error(`Perpl /auth/payload ${payloadRes.status}: ${payloadRes.data?.error || payloadRes.error}`);
   }
-  const { msg, nonce: payloadNonce, mac, t } = payloadRes.data || {};
+  const payload = payloadRes.data || {};
+  const msg = payload.msg || payload.message;
+  const payloadNonce = payload.nonce;
+  const mac = payload.mac;
+  const issuedAt = payload.t ?? payload.issued_at;
   if (!msg) throw new Error('Perpl /auth/payload returned no message');
 
   // 2. Wallet personal_signs the SIWE message.
@@ -99,16 +116,20 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
   // 3. Exchange signature for session nonce + JWT cookie.
   const connectRes = await perplFetch('/auth/connect', {
     method: 'POST',
+    credentials: 'include',
     body: {
       chain_id: chainId,
       address,
+      message: msg,
       signature,
       nonce: payloadNonce,
       mac,
-      t,
+      t: issuedAt,
+      issued_at: issuedAt,
     },
   });
   if (!connectRes.ok) {
+    if (connectRes.status === 451) throwRegionBlocked();
     // 418 = wallet not in Perpl's access list. Surface explicitly so the UI
     // can show "request access at perpl.xyz" instead of a generic error.
     if (connectRes.status === 418) {
@@ -139,17 +160,17 @@ export async function fetchPerplProfile() {
 }
 
 export async function fetchPerplFills({ limit = 50 } = {}) {
-  const r = await perplFetch(`/trading/fills?limit=${encodeURIComponent(limit)}`, { authed: true });
+  const r = await perplFetch(`/trading/fills?count=${encodeURIComponent(limit)}`, { authed: true });
   return r.ok ? r.data : null;
 }
 
 export async function fetchPerplOrderHistory({ limit = 50 } = {}) {
-  const r = await perplFetch(`/trading/order-history?limit=${encodeURIComponent(limit)}`, { authed: true });
+  const r = await perplFetch(`/trading/order-history?count=${encodeURIComponent(limit)}`, { authed: true });
   return r.ok ? r.data : null;
 }
 
 export async function fetchPerplPositionHistory({ limit = 50 } = {}) {
-  const r = await perplFetch(`/trading/position-history?limit=${encodeURIComponent(limit)}`, { authed: true });
+  const r = await perplFetch(`/trading/position-history?count=${encodeURIComponent(limit)}`, { authed: true });
   return r.ok ? r.data : null;
 }
 
@@ -195,13 +216,14 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
       try { frame = JSON.parse(ev.data); } catch { return; }
       // Server heartbeats include a sequence number — gap means we missed
       // frames and should reconnect to resync state. Don't trust local cache.
-      if (frame?.mt === PERPL_MT.HEARTBEAT && typeof frame.seq === 'number') {
-        if (lastSeenSeq != null && frame.seq !== lastSeenSeq + 1) {
-          console.warn('[perpl] WS heartbeat seq gap', lastSeenSeq, '→', frame.seq, '— reconnecting');
+      const seq = Number(frame?.sn ?? frame?.seq);
+      if (frame?.mt === PERPL_MT.HEARTBEAT && Number.isFinite(seq)) {
+        if (lastSeenSeq != null && seq !== lastSeenSeq + 1) {
+          console.warn('[perpl] WS heartbeat seq gap', lastSeenSeq, '→', seq, '— reconnecting');
           try { ws.close(); } catch {}
           return;
         }
-        lastSeenSeq = frame.seq;
+        lastSeenSeq = seq;
       }
       try { handler?.(frame); } catch (e) {
         console.warn('[perpl] WS handler threw', e?.message || e);

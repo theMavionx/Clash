@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
+import { fetchPerplFills } from '../lib/perplClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
@@ -40,6 +41,42 @@ function normalizeDecibelTrade(trade, markets) {
     price: trade.price,
     fee: trade.fee_amount,
     created_at: trade.transaction_unix_ms,
+  };
+}
+
+function perplMarket(markets, id) {
+  const n = Number(id);
+  return (markets || []).find(m => Number(m.market_id) === n)
+    || (markets || []).find(m => String(m.symbol || '').toUpperCase() === String(id || '').toUpperCase())
+    || null;
+}
+
+function normalizePerplTrade(fill, markets) {
+  const m = perplMarket(markets, fill?.mkt ?? fill?.market_id ?? fill?.market);
+  if (!m) return null;
+  const priceDecimals = Number(m.price_decimals ?? 1);
+  const sizeDecimals = Number(m.size_decimals ?? 5);
+  const price = Number(fill?.p ?? fill?.price ?? 0) / 10 ** priceDecimals;
+  const rawSize = Number(fill?.s ?? fill?.size ?? fill?.fs ?? 0);
+  const amount = Math.abs(rawSize) / 10 ** sizeDecimals;
+  const type = Number(fill?.t ?? fill?.type ?? fill?.ot);
+  const isClose = type === 3 || type === 4 || fill?.ro === true || fill?.reduce_only === true;
+  const isLong = type === 1 || type === 4 || rawSize > 0;
+  const side = isClose
+    ? (isLong ? 'close_long' : 'close_short')
+    : (isLong ? 'open_long' : 'open_short');
+  const ts = fill?.at?.t ?? fill?.created_at ?? fill?.timestamp ?? fill?.time ?? fill?.ts;
+  return {
+    ...fill,
+    _dex: 'monad',
+    id: fill?.fid || fill?.id || fill?.oid || `${fill?.mkt}:${fill?.p}:${fill?.s}:${ts}`,
+    symbol: m.symbol,
+    side,
+    action: side,
+    amount,
+    price,
+    fee: Number(fill?.f ?? fill?.fee ?? 0) / 1e6,
+    created_at: ts,
   };
 }
 
@@ -87,6 +124,16 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             fetchOptions: { signal: controller.signal },
           });
           if (!cancelled) setTrades((res?.items || []).map(t => normalizeDecibelTrade(t, markets)));
+          return;
+        }
+        if (dex === 'monad') {
+          const data = await fetchPerplFills({ limit: 100 });
+          const rows = Array.isArray(data) ? data
+            : Array.isArray(data?.data) ? data.data
+            : Array.isArray(data?.fills) ? data.fills
+            : Array.isArray(data?.items) ? data.items
+            : [];
+          if (!cancelled) setTrades(rows.map(t => normalizePerplTrade(t, markets)).filter(Boolean));
           return;
         }
 
@@ -146,7 +193,8 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {dex === 'decibel' ? 'Decibel ' : ''}trade history</div>;
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : '';
+    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';

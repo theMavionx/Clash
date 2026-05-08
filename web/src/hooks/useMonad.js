@@ -15,19 +15,24 @@
 //     per-order (`lv`).
 //
 // Still NOT wired (Phase 3):
-//   - Account-creation flow: USDC→AUSD swap on Monad → approve →
-//     Exchange.createAccount(amount). Until that lands, only wallets that
-//     opened their Perpl account on perpl.xyz can trade through us.
+//   - USDC→AUSD swap on Monad. The account/deposit path expects AUSD
+//     already in the user's wallet.
 //   - TP/SL on existing positions (the envelope is documented; we just
 //     need a UI surface).
 //   - Increase-collateral (mt:22 t=6) for funding stretched positions.
-//   - server-futures Monad worker for trade-history indexing + claim-gold
-//     attribution.
+//   - Background worker indexing. For now the client imports Perpl fills
+//     immediately after WS fill/update events and before claim-gold.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatUnits, parseUnits } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
+import { usePlayer } from './useGodot';
 import {
+  AUSD_ADDRESS,
+  ERC20_ABI,
+  PERPL_EXCHANGE_ABI,
+  PERPL_EXCHANGE_ADDRESS,
   PERPL_MARKETS_MAINNET,
   PERPL_MARKET_BY_SYMBOL,
   PERPL_MT,
@@ -41,6 +46,7 @@ import {
   fetchPerplProfile,
   loginWithEoa,
   isPerplAuthed,
+  getAuthNonce,
   getAuthedAddress,
   clearPerplSession,
   createPerplTradingSocket,
@@ -49,6 +55,8 @@ import {
 const POLL_CONTEXT_MS = 8_000;
 const BLOCK_TTL_BUFFER = 50;        // Order valid for ~50 Monad blocks (~20s @ 400ms).
 const BLOCK_CACHE_MS = 800;         // eth_blockNumber cached for ~2 blocks.
+const AUSD_DECIMALS = 6;
+const MONAD_IMPORT_DEX_HEADER = { 'x-dex': 'monad' };
 
 // ── Block-number cache (shared across the hook lifetime) ──────────────────
 // Perpl orders carry `lb` (last-block-valid). We don't want to round-trip an
@@ -86,44 +94,62 @@ async function getMonadBlockNumber() {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-// Build the unified market shape from /pub/context. Caller keeps `byId` so
-// the order-placement path can resolve scale exponents in O(1) without a
-// list scan.
+// Build the unified market shape from /pub/context.
+//
+// Perpl's response shape (verified live): top-level `markets` is an array
+// of { id, name, config: { price_decimals, size_decimals, initial_margin,
+// maker_fee, taker_fee }, state: { mrk, lst, mid, bid, ask, prv, oi, dv,
+// dva }, funding: { rate, ... } }. Field names are abbreviated — `mrk` is
+// mark price, `lst` last, `prv` previous-period anchor (24h-ish), `oi`
+// open interest, `dv` 24h volume in base size units, `dva` in quote.
+//
+// `initial_margin` is in basis points (10000 = 100%); 1000 = 10% min
+// margin → 10× max leverage. Override via market config in /pub/context
+// rather than hardcoding.
 function normalizeMarkets(ctx) {
   if (!ctx) return { markets: [], prices: [], byId: {} };
-  const cfgList = ctx?.market_configs || ctx?.markets || ctx?.config?.markets || [];
-  const stateList = ctx?.market_states || ctx?.states || ctx?.config?.market_states || [];
-  const stateById = new Map();
-  for (const s of stateList) stateById.set(Number(s?.market_id ?? s?.id), s);
+  const list = Array.isArray(ctx?.markets) ? ctx.markets : [];
 
   const markets = [];
   const prices = [];
   const byId = {};
-  for (const cfg of cfgList) {
-    const id = Number(cfg?.market_id ?? cfg?.id);
+  for (const m of list) {
+    const id = Number(m?.id);
     if (!Number.isFinite(id)) continue;
+    const cfg = m?.config || {};
+    const state = m?.state || {};
+    const fund = m?.funding || {};
     const symbol = PERPL_MARKETS_MAINNET[id]
-      || String(cfg?.symbol || cfg?.name || `MKT${id}`).toUpperCase();
-    // Perpl wire-format scale: integers carry decimals shifted by these
-    // factors. price_decimals defaults to 1 for cheap-asset markets, can
-    // be larger; size_decimals is typically 4-5 for crypto.
-    const priceDecimals = Number(cfg?.price_decimals ?? cfg?.price_scale ?? 1);
-    const sizeDecimals = Number(cfg?.size_decimals ?? cfg?.size_scale ?? 5);
-    // Initial-margin requirement is in micros (1e6 = 100%). Max leverage
-    // is its inverse, capped at 50 by Perpl as a hard global limit.
-    const initialMargin = Number(cfg?.initial_margin || 0);
-    const maxLev = initialMargin > 0
-      ? Math.min(50, Math.floor(1_000_000 / initialMargin))
+      || String(m?.name || m?.symbol || `MKT${id}`).toUpperCase();
+    const priceDecimals = Number(cfg.price_decimals ?? 1);
+    const sizeDecimals = Number(cfg.size_decimals ?? 5);
+    // initial_margin in basis points (10000 = 100%): 1000 → 10% min margin
+    // → 10× max leverage. Cap at 50 globally (Perpl hard limit per docs).
+    const initialMarginBps = Number(cfg.initial_margin || 0);
+    const maxLev = initialMarginBps > 0
+      ? Math.min(50, Math.floor(10_000 / initialMarginBps))
       : 50;
-    const state = stateById.get(id);
-    const decode = (v) => {
+    const decodePx = (v) => {
       if (v == null) return null;
       const n = Number(v) / 10 ** priceDecimals;
+      return Number.isFinite(n) && n > 0 ? n : null;
+    };
+    const decodeSz = (v) => {
+      if (v == null) return null;
+      const n = Number(v) / 10 ** sizeDecimals;
       return Number.isFinite(n) ? n : null;
     };
-    const mark = decode(state?.mark_price ?? state?.mark);
-    const index = decode(state?.index_price ?? state?.index);
-    const last = decode(state?.last_price ?? state?.last);
+    const mark = decodePx(state.mrk);
+    const last = decodePx(state.lst);
+    const bid = decodePx(state.bid);
+    const ask = decodePx(state.ask);
+    const prev = decodePx(state.prv);
+    const oi = decodeSz(state.oi);
+    // Perpl's funding rate is in micros over the funding interval (typically
+    // 1h). Convert to per-hour decimal so FuturesPanel's "+x.xxxx%" display
+    // matches every other DEX. funding_interval_sec is on the market root.
+    const fundingMicros = Number(fund.rate || 0);
+    const fundingRate = fundingMicros / 1_000_000;
     const market = {
       market_id: id,
       symbol, base: symbol, pair: `${symbol}/USD`,
@@ -131,26 +157,36 @@ function normalizeMarkets(ctx) {
       lot_size: String(1 / 10 ** sizeDecimals),
       tick_size: String(1 / 10 ** priceDecimals),
       min_order_size: String(1 / 10 ** sizeDecimals),
+      min_posting_amount: Number(cfg.min_posting_amount || 0) / 10 ** AUSD_DECIMALS,
+      order_ttl_blocks: Number(m?.order_ttl_blocks || 0),
       max_leverage: maxLev,
       isolated_only: false,
-      mark, oracle: index ?? mark,
-      high_24h: null, low_24h: null, open_24h: null, yesterday_price: null,
-      volume_24h: 0, open_interest: 0,
-      funding_rate: 0, next_funding_rate: 0,
+      mark, oracle: mark, // Perpl doesn't surface a separate oracle value here.
+      high_24h: null, low_24h: null,
+      open_24h: prev,
+      yesterday_price: prev,
+      volume_24h: 0,
+      open_interest: oi || 0,
+      funding_rate: fundingRate,
+      next_funding_rate: fundingRate,
       // Scale metadata — used by the write path. Not displayed.
       price_decimals: priceDecimals,
       size_decimals: sizeDecimals,
-      initial_margin_micros: initialMargin,
-      _raw: { cfg, state },
+      initial_margin_bps: initialMarginBps,
+      _raw: m,
     };
     markets.push(market);
     byId[id] = market;
     prices.push({
       symbol,
       mark: mark != null ? String(mark) : '',
-      oracle: (index ?? mark) != null ? String(index ?? mark) : '',
-      yesterday_price: '', volume_24h: 0, open_interest: '0',
+      oracle: mark != null ? String(mark) : '',
+      yesterday_price: prev != null ? String(prev) : '',
+      volume_24h: 0,
+      open_interest: oi != null ? String(oi) : '0',
       last: last != null ? String(last) : '',
+      bid: bid != null ? String(bid) : '',
+      ask: ask != null ? String(ask) : '',
     });
   }
   return { markets, prices, byId };
@@ -232,10 +268,57 @@ function normalizeOrder(o, marketsById) {
   };
 }
 
+function getFrameRows(frame, primaryKey, fallbackKey) {
+  if (Array.isArray(frame?.d)) return frame.d;
+  if (Array.isArray(frame?.[primaryKey])) return frame[primaryKey];
+  if (Array.isArray(frame?.[fallbackKey])) return frame[fallbackKey];
+  return [];
+}
+
+function normalizeAccount(acc) {
+  if (!acc) return null;
+  const id = Number(acc.id ?? acc.acc ?? acc.account_id);
+  const balance = Number(acc.b ?? acc.balance ?? acc.balanceCNS ?? 0) / 1e6;
+  const locked = Number(acc.lb ?? acc.locked_balance ?? 0) / 1e6;
+  const equity = Number.isFinite(balance) ? balance : 0;
+  const marginUsed = Number.isFinite(locked) ? locked : 0;
+  return {
+    ...acc,
+    id,
+    account_id: id,
+    account_equity: equity,
+    available_to_spend: Math.max(0, equity - marginUsed),
+    available_to_withdraw: Math.max(0, equity - marginUsed),
+    total_margin_used: marginUsed,
+  };
+}
+
+function mergeByKey(prev, updates, getKey) {
+  const map = new Map((prev || []).map(item => [getKey(item), item]));
+  for (const item of updates || []) {
+    const key = getKey(item);
+    if (key == null) continue;
+    const remove = item?.r === true || Number(item?.s ?? item?.size ?? item?.fs ?? 1) === 0;
+    if (remove) map.delete(key);
+    else map.set(key, item);
+  }
+  return Array.from(map.values());
+}
+
 export function useMonad() {
-  const { address, walletClient } = useEvmWallet?.() || {};
+  const player = usePlayer();
+  const evm = useEvmWallet?.() || {};
+  const { address, walletClient, ensureChain, getWalletClient, getPublicClient } = evm;
   const { dex } = useDex?.() || {};
   const isActiveDex = dex === 'monad';
+  const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
+  const registeredEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(registeredWallet)
+    ? registeredWallet.toLowerCase()
+    : null;
+  const activeEvmWallet = /^0x[0-9a-fA-F]{40}$/.test(address || '')
+    ? String(address).toLowerCase()
+    : null;
+  const walletMismatch = !!(registeredEvmWallet && activeEvmWallet && registeredEvmWallet !== activeEvmWallet);
 
   const [connected, setConnected] = useState(() => isPerplAuthed());
   const [authedWallet, setAuthedWallet] = useState(() => getAuthedAddress());
@@ -246,9 +329,12 @@ export function useMonad() {
   const [account, setAccount] = useState(null);
   const [accountId, setAccountId] = useState(null);
   const [walletUsdc, setWalletUsdc] = useState(0);
+  const [accountReady, setAccountReady] = useState(false);
+  const [accountChecked, setAccountChecked] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [goldEarned, setGoldEarned] = useState(null);
   const [profile, setProfile] = useState(null);
 
   const wsRef = useRef(null);
@@ -258,9 +344,38 @@ export function useMonad() {
   const marketsByIdRef = useRef({});
   const accountIdRef = useRef(null);
   const positionsRawRef = useRef([]);
+  const ordersRawRef = useRef([]);
   const tradeInFlightRef = useRef(false);
+  const currentBlockRef = useRef(0);
+  const claimGoldRef = useRef(null);
 
   const clearError = useCallback(() => setError(null), []);
+
+  const fetchWalletAusd = useCallback(async () => {
+    if (!isActiveDex || !address || !getPublicClient) {
+      setWalletUsdc(0);
+      return 0;
+    }
+    try {
+      const publicClient = getPublicClient(MONAD_CHAIN_ID);
+      const bal = await publicClient.readContract({
+        address: AUSD_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: 'balanceOf',
+        args: [address],
+      });
+      const n = Number(formatUnits(bal, AUSD_DECIMALS));
+      setWalletUsdc(Number.isFinite(n) ? n : 0);
+      return Number.isFinite(n) ? n : 0;
+    } catch {
+      setWalletUsdc(0);
+      return 0;
+    }
+  }, [isActiveDex, address, getPublicClient]);
+
+  useEffect(() => {
+    fetchWalletAusd();
+  }, [fetchWalletAusd]);
 
   // ── Public context polling (markets + prices) ────────────────────────
   useEffect(() => {
@@ -293,6 +408,7 @@ export function useMonad() {
     setLoading(true);
     setError(null);
     try {
+      if (ensureChain) await ensureChain(MONAD_CHAIN_ID);
       const out = await loginWithEoa({
         chainId: MONAD_CHAIN_ID,
         address,
@@ -305,6 +421,9 @@ export function useMonad() {
       return out;
     } catch (e) {
       setError(e?.message || String(e));
+      if (e?.code === 'PERPL_REGION_BLOCKED') {
+        console.warn('[useMonad] Perpl blocked this country or IP region');
+      }
       if (e?.code === 'PERPL_NOT_WHITELISTED') {
         console.warn('[useMonad] wallet not whitelisted — request access at perpl.xyz');
       }
@@ -312,7 +431,7 @@ export function useMonad() {
     } finally {
       setLoading(false);
     }
-  }, [address, walletClient]);
+  }, [address, walletClient, ensureChain]);
 
   // ── Auto-disconnect on wallet change ─────────────────────────────────
   useEffect(() => {
@@ -322,16 +441,28 @@ export function useMonad() {
       setConnected(false);
       setAccount(null);
       setAccountId(null);
+      setAccountReady(false);
+      setAccountChecked(false);
       accountIdRef.current = null;
       setPositions([]);
+      positionsRawRef.current = [];
       setOrders([]);
+      ordersRawRef.current = [];
     }
   }, [address, authedWallet, connected]);
+
+  const scheduleClaim = useCallback((delayMs = 4000) => {
+    setTimeout(() => {
+      const fn = claimGoldRef.current;
+      if (typeof fn === 'function') fn();
+    }, delayMs);
+  }, []);
 
   // ── Trading WS lifecycle ─────────────────────────────────────────────
   useEffect(() => {
     if (!isActiveDex || !connected) return undefined;
     let stopped = false;
+    setAccountChecked(false);
     try {
       const sock = createPerplTradingSocket({
         chainId: MONAD_CHAIN_ID,
@@ -342,29 +473,39 @@ export function useMonad() {
       sock.onMessage((frame) => {
         if (stopped) return;
         switch (frame?.mt) {
+          case PERPL_MT.HEARTBEAT: {
+            const h = Number(frame?.h || 0);
+            if (h > 0) currentBlockRef.current = h;
+            break;
+          }
           case PERPL_MT.WALLET_SNAPSHOT:
-          case PERPL_MT.WALLET_SNAPSHOT_OLD: {
-            setAccount(frame);
-            const acctId = frame?.acc ?? frame?.account_id ?? frame?.account?.id;
+          case PERPL_MT.WALLET_UPDATE:
+          case PERPL_MT.ACCOUNT_UPDATE: {
+            const acct = Array.isArray(frame?.as) ? frame.as[0]
+              : Array.isArray(frame?.accounts) ? frame.accounts[0]
+              : frame?.account || frame;
+            const norm = normalizeAccount(acct);
+            if (norm) setAccount(norm);
+            const acctId = norm?.id ?? frame?.acc ?? frame?.account_id;
             if (acctId != null) {
               const idNum = Number(acctId);
               setAccountId(idNum);
               accountIdRef.current = idNum;
+              setAccountReady(Number.isFinite(idNum) && idNum > 0);
+            } else if (frame?.mt === PERPL_MT.WALLET_SNAPSHOT) {
+              setAccountReady(false);
             }
-            const bal = Number(frame?.balance ?? frame?.b ?? 0);
-            // Decode AUSD scale (6). If Perpl ever rebases we'll surface a
-            // wrong number here — worth a future runtime check via /pub/context
-            // TokenInfo lookup.
-            if (Number.isFinite(bal)) setWalletUsdc(bal / 1e6);
-            const lfr = frame?.lfr ?? frame?.last_fully_ratcheted ?? 0;
+            setAccountChecked(true);
+            const lfr = norm?.lfr ?? frame?.lfr ?? frame?.last_fully_ratcheted ?? 0;
             try { sock.setRqSeed(lfr); } catch {}
             break;
           }
           case PERPL_MT.POSITIONS_SNAPSHOT:
           case PERPL_MT.POSITIONS_DELTA: {
-            const list = Array.isArray(frame?.positions) ? frame.positions
-              : Array.isArray(frame?.p) ? frame.p
-              : [];
+            const rows = getFrameRows(frame, 'positions', 'p');
+            const list = frame?.mt === PERPL_MT.POSITIONS_DELTA
+              ? mergeByKey(positionsRawRef.current, rows, p => p?.pid ?? p?.id ?? `${p?.mkt ?? p?.market_id}:${Number(p?.s ?? p?.size ?? 0) >= 0 ? 'long' : 'short'}`)
+              : rows;
             positionsRawRef.current = list;
             const norm = list
               .map(p => normalizePosition(p, marketsByIdRef.current))
@@ -374,15 +515,21 @@ export function useMonad() {
           }
           case PERPL_MT.ORDERS_SNAPSHOT:
           case PERPL_MT.ORDERS_DELTA: {
-            const list = Array.isArray(frame?.orders) ? frame.orders
-              : Array.isArray(frame?.o) ? frame.o
-              : [];
+            const rows = getFrameRows(frame, 'orders', 'o');
+            const list = frame?.mt === PERPL_MT.ORDERS_DELTA
+              ? mergeByKey(ordersRawRef.current, rows, o => o?.oid ?? o?.order_id ?? o?.id ?? o?.rq)
+              : rows;
+            ordersRawRef.current = list;
             const norm = list
               .map(o => normalizeOrder(o, marketsByIdRef.current))
               .filter(Boolean);
             setOrders(norm);
             break;
           }
+          case PERPL_MT.FILL_UPDATES:
+            scheduleClaim(4000);
+            scheduleClaim(12000);
+            break;
           default:
             break;
         }
@@ -395,7 +542,7 @@ export function useMonad() {
       try { wsRef.current?.close(); } catch {}
       wsRef.current = null;
     };
-  }, [isActiveDex, connected]);
+  }, [isActiveDex, connected, scheduleClaim]);
 
   // ── Order placement helpers ──────────────────────────────────────────
   // Common preflight: WS open, account known, market resolved. Throws —
@@ -433,27 +580,31 @@ export function useMonad() {
       const isLong = side === 'bid' || side === 'long';
       const mark = Number(market.mark);
       if (!(mark > 0)) throw new Error('Mark price not available — wait for next /pub/context tick');
-      // Aggressive limit price for IOC market: buy a few % above, sell a few
-      // % below. slippage is a percent string in our cross-DEX contract.
-      const slipPct = Math.max(0.001, Math.min(0.5, Number(slippage) / 100 || 0.005));
-      const aggressive = isLong ? mark * (1 + slipPct) : mark * (1 - slipPct);
       const baseSize = (collateral * lev) / mark;
+      const notional = collateral * lev;
+      const minNotional = Number(market.min_posting_amount || 0);
+      if (minNotional > 0 && notional < minNotional) {
+        throw new Error(`Perpl requires at least $${minNotional.toFixed(2)} notional on ${market.symbol}. Increase margin or leverage.`);
+      }
       const sizeWire = Math.max(1, Math.round(baseSize * 10 ** market.size_decimals));
-      const priceWire = Math.max(1, Math.round(aggressive * 10 ** market.price_decimals));
-      const lb = (await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
+      // Perpl market orders are encoded as IOC orders with p=0; using an
+      // aggressive synthetic limit can fail verification on some symbols.
+      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
       const envelope = {
         mt: PERPL_MT.ORDER,
         rq: ws.nextRq(),
         mkt: marketId,
         acc: accId,
         t: isLong ? PERPL_ORDER_TYPE.OPEN_LONG : PERPL_ORDER_TYPE.OPEN_SHORT,
-        p: priceWire,
+        p: 0,
         s: sizeWire,
         fl: PERPL_TIF.IOC,
         lv: lev * 100,
         lb,
       };
       ws.send(envelope);
+      scheduleClaim(7000);
+      scheduleClaim(18000);
       return { success: true, rq: envelope.rq };
     } catch (e) {
       const msg = e?.message || String(e);
@@ -463,7 +614,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight]);
+  }, [preflight, scheduleClaim]);
 
   // placeLimitOrder(symbol, side, limitPrice, collateralUsdc, _tif, leverage)
   const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, _tif, leverage) => {
@@ -480,9 +631,14 @@ export function useMonad() {
       if (!Number.isFinite(limit) || limit <= 0) throw new Error('Invalid limit price');
       const isLong = side === 'bid' || side === 'long';
       const baseSize = (collateral * lev) / limit;
+      const notional = collateral * lev;
+      const minNotional = Number(market.min_posting_amount || 0);
+      if (minNotional > 0 && notional < minNotional) {
+        throw new Error(`Perpl requires at least $${minNotional.toFixed(2)} notional on ${market.symbol}. Increase margin or leverage.`);
+      }
       const sizeWire = Math.max(1, Math.round(baseSize * 10 ** market.size_decimals));
       const priceWire = Math.max(1, Math.round(limit * 10 ** market.price_decimals));
-      const lb = (await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
+      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
       const envelope = {
         mt: PERPL_MT.ORDER,
         rq: ws.nextRq(),
@@ -496,6 +652,8 @@ export function useMonad() {
         lb,
       };
       ws.send(envelope);
+      scheduleClaim(7000);
+      scheduleClaim(18000);
       return { success: true, rq: envelope.rq };
     } catch (e) {
       const msg = e?.message || String(e);
@@ -505,7 +663,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight]);
+  }, [preflight, scheduleClaim]);
 
   // closePosition(symbol, side, baseTokenAmount). FuturesPanel passes the
   // close size as a base-token quantity (matching Pacifica/Decibel
@@ -537,26 +695,24 @@ export function useMonad() {
         ? Math.round(reqBase * 10 ** market.size_decimals)
         : totalSizeAbs;
       const sizeWire = Math.max(1, Math.min(reqWire, totalSizeAbs));
-      // Aggressive close: if we're long, the close direction is sell, so
-      // accept a slightly-below-mark price; vice versa for short.
-      const mark = Number(market.mark);
-      const slipPct = 0.01; // 1% buffer for guaranteed close
-      const closePx = isLongSide ? mark * (1 - slipPct) : mark * (1 + slipPct);
-      const priceWire = Math.max(1, Math.round((closePx > 0 ? closePx : 1) * 10 ** market.price_decimals));
-      const lb = (await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
+      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
+      const posId = Number(pos?.pid ?? pos?.id);
       const envelope = {
         mt: PERPL_MT.ORDER,
         rq: ws.nextRq(),
         mkt: marketId,
         acc: accId,
         t: isLongSide ? PERPL_ORDER_TYPE.CLOSE_LONG : PERPL_ORDER_TYPE.CLOSE_SHORT,
-        p: priceWire,
+        p: 0,
         s: sizeWire,
         fl: PERPL_TIF.IOC,
         lv: 0, // ignored on close (size is bounded by existing position)
         lb,
       };
+      if (Number.isFinite(posId) && posId > 0) envelope.pid = posId;
       ws.send(envelope);
+      scheduleClaim(7000);
+      scheduleClaim(18000);
       return { success: true, rq: envelope.rq };
     } catch (e) {
       const msg = e?.message || String(e);
@@ -566,12 +722,12 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight]);
+  }, [preflight, scheduleClaim]);
 
   // cancelOrder(orderId) — FuturesPanel passes the string we exposed in
   // normalizeOrder.order_id. The mt:22 t=5 envelope needs the original
   // market and account, so we look up the order by id from our cache.
-  const cancelOrder = useCallback(async (orderId) => {
+  const cancelOrder = useCallback(async (...args) => {
     try {
       const ws = wsRef.current;
       if (!ws || ws.getReadyState() !== WebSocket.OPEN) {
@@ -579,12 +735,13 @@ export function useMonad() {
       }
       const accId = accountIdRef.current;
       if (accId == null) throw new Error('Account not loaded');
+      const orderId = args.length > 1 ? args[1] : args[0];
       const target = String(orderId);
       const order = orders.find(o => o.order_id === target);
       if (!order) throw new Error(`Order ${target} not found`);
       const marketId = PERPL_MARKET_BY_SYMBOL[order.symbol];
       if (!marketId) throw new Error(`Unknown market for order ${target}`);
-      const lb = (await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
+      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
       ws.send({
         mt: PERPL_MT.ORDER,
         rq: ws.nextRq(),
@@ -613,13 +770,184 @@ export function useMonad() {
   const setLeverage = useCallback(async () => ({ ok: true, cached: true }), []);
   const setMarginMode = useCallback(async () => ({ ok: true, cached: true }), []);
 
-  // Account creation lands in Phase 3. Until then, surfaced errors steer
-  // the user to the perpl.xyz onboarding flow.
-  const claimGold = useCallback(async () => null, []);
-  const depositToPacifica = useCallback(async () => ({ error: 'Deposit flow lands in Phase 3', code: 'NOT_IMPLEMENTED' }), []);
-  const withdraw = useCallback(async () => ({ error: 'Withdraw flow lands in Phase 3', code: 'NOT_IMPLEMENTED' }), []);
-  const activate = useCallback(async () => ({ error: 'Account creation lands in Phase 3', code: 'NOT_IMPLEMENTED' }), []);
-  const linkOurReferrer = useCallback(async () => true, []);
+  const getMonadClients = useCallback(async () => {
+    if (!address) throw new Error('Connect an EVM wallet first');
+    if (ensureChain) await ensureChain(MONAD_CHAIN_ID);
+    const wc = (getWalletClient && getWalletClient(MONAD_CHAIN_ID)) || walletClient;
+    const pc = getPublicClient && getPublicClient(MONAD_CHAIN_ID);
+    if (!wc || !pc) throw new Error('Monad wallet client not ready');
+    return { walletClient: wc, publicClient: pc };
+  }, [address, ensureChain, getWalletClient, getPublicClient, walletClient]);
+
+  const ensureAusdAllowance = useCallback(async (amountBig) => {
+    const { walletClient: wc, publicClient: pc } = await getMonadClients();
+    const allowance = await pc.readContract({
+      address: AUSD_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: 'allowance',
+      args: [address, PERPL_EXCHANGE_ADDRESS],
+    });
+    if (BigInt(allowance || 0) >= amountBig) return null;
+    const hash = await wc.writeContract({
+      address: AUSD_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: 'approve',
+      args: [PERPL_EXCHANGE_ADDRESS, amountBig],
+      account: address,
+    });
+    await pc.waitForTransactionReceipt({ hash });
+    return hash;
+  }, [address, getMonadClients]);
+
+  const claimGold = useCallback(async () => {
+    const token = player?.token;
+    const wallet = address || authedWallet;
+    const authNonce = getAuthNonce();
+    if (!isActiveDex || !token || !wallet || !authNonce) return null;
+    try {
+      await fetch('/api/futures/monad/import-fills?dex=monad', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-token': token,
+          ...MONAD_IMPORT_DEX_HEADER,
+        },
+        body: JSON.stringify({ wallet, auth_nonce: authNonce }),
+      });
+      const r = await fetch('/api/trading/claim-gold', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({ wallet, dex: 'monad' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      const gold = Number(data?.gold || 0);
+      if (gold > 0) {
+        setGoldEarned(gold);
+        try {
+          window.onGodotMessage?.({
+            action: 'resources_add',
+            data: { gold, wood: 0, ore: 0 },
+          });
+        } catch {}
+      }
+      return data;
+    } catch (e) {
+      console.warn('[useMonad] claimGold failed', e?.message || e);
+      return null;
+    }
+  }, [isActiveDex, player?.token, address, authedWallet]);
+
+  useEffect(() => {
+    claimGoldRef.current = claimGold;
+  }, [claimGold]);
+
+  useEffect(() => {
+    if (!isActiveDex || !connected) return undefined;
+    const id = setInterval(() => claimGoldRef.current?.(), 30_000);
+    return () => clearInterval(id);
+  }, [isActiveDex, connected]);
+
+  const activate = useCallback(async (amount = '10') => {
+    setLoading(true);
+    setError(null);
+    try {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive AUSD amount');
+      const walletBal = await fetchWalletAusd();
+      if (walletBal + 1e-9 < n) {
+        throw new Error(`Not enough AUSD in wallet: need $${n.toFixed(2)}, have $${walletBal.toFixed(2)}`);
+      }
+      const amountBig = parseUnits(String(n), AUSD_DECIMALS);
+      await ensureAusdAllowance(amountBig);
+      const { walletClient: wc, publicClient: pc } = await getMonadClients();
+      const hash = await wc.writeContract({
+        address: PERPL_EXCHANGE_ADDRESS,
+        abi: PERPL_EXCHANGE_ABI,
+        functionName: 'createAccount',
+        args: [amountBig],
+        account: address,
+      });
+      await pc.waitForTransactionReceipt({ hash });
+      await fetchWalletAusd();
+      setTimeout(() => {
+        try { wsRef.current?.close(); } catch {}
+      }, 1000);
+      return { success: true, tx_hash: hash };
+    } catch (e) {
+      const msg = e?.shortMessage || e?.message || String(e);
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [address, ensureAusdAllowance, fetchWalletAusd, getMonadClients]);
+
+  const depositToPacifica = useCallback(async (amount) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive AUSD amount');
+      if (!accountIdRef.current) return await activate(String(n));
+      const walletBal = await fetchWalletAusd();
+      if (walletBal + 1e-9 < n) {
+        throw new Error(`Not enough AUSD in wallet: need $${n.toFixed(2)}, have $${walletBal.toFixed(2)}`);
+      }
+      const amountBig = parseUnits(String(n), AUSD_DECIMALS);
+      await ensureAusdAllowance(amountBig);
+      const { walletClient: wc, publicClient: pc } = await getMonadClients();
+      const hash = await wc.writeContract({
+        address: PERPL_EXCHANGE_ADDRESS,
+        abi: PERPL_EXCHANGE_ABI,
+        functionName: 'deposit',
+        args: [BigInt(accountIdRef.current), amountBig],
+        account: address,
+      });
+      await pc.waitForTransactionReceipt({ hash });
+      await fetchWalletAusd();
+      return { success: true, tx_hash: hash };
+    } catch (e) {
+      const msg = e?.shortMessage || e?.message || String(e);
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [activate, address, ensureAusdAllowance, fetchWalletAusd, getMonadClients]);
+
+  const withdraw = useCallback(async (amount) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive AUSD amount');
+      if (!accountIdRef.current) throw new Error('Perpl account is not loaded yet');
+      const amountBig = parseUnits(String(n), AUSD_DECIMALS);
+      const { walletClient: wc, publicClient: pc } = await getMonadClients();
+      const hash = await wc.writeContract({
+        address: PERPL_EXCHANGE_ADDRESS,
+        abi: PERPL_EXCHANGE_ABI,
+        functionName: 'withdraw',
+        args: [BigInt(accountIdRef.current), amountBig],
+        account: address,
+      });
+      await pc.waitForTransactionReceipt({ hash });
+      await fetchWalletAusd();
+      return { success: true, tx_hash: hash };
+    } catch (e) {
+      const msg = e?.shortMessage || e?.message || String(e);
+      setError(msg);
+      return { error: msg };
+    } finally {
+      setLoading(false);
+    }
+  }, [address, fetchWalletAusd, getMonadClients]);
+
+  const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const linkOurReferrer = useCallback(async () => {
+    if (!connected) return !!(await connectPerpl());
+    return true;
+  }, [connected, connectPerpl]);
 
   const leverageSettings = useMemo(() => {
     // Surface per-symbol leverage from any open position (mirrors the
@@ -646,12 +974,13 @@ export function useMonad() {
     walletEth: 0, // MON gas balance — read in a follow-up.
     leverageSettings,
     marginModes,
+    accountReady,
     dataReady,
     loading,
     error,
     clearError,
-    goldEarned: 0,
-    clearGoldEarned: () => {},
+    goldEarned,
+    clearGoldEarned,
     placeMarketOrder,
     placeLimitOrder,
     closePosition,
@@ -668,15 +997,18 @@ export function useMonad() {
     connectPerpl,
     profile,
     accountId,
-    isReady: connected,
-    setupVerified: connected,
+    walletMismatch,
+    registeredEvmWallet,
+    isReady: connected && accountReady,
+    setupVerified: connected ? (accountChecked ? accountReady : null) : false,
     isSelfCustody: false,
     connectWallet: () => {},
   }), [
     connected, address, account, positions, orders, prices, markets, walletUsdc,
-    leverageSettings, marginModes, dataReady, loading, error, clearError,
+    leverageSettings, marginModes, accountReady, accountChecked, dataReady, loading, error, clearError,
+    goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
     setLeverage, setMarginMode, claimGold, depositToPacifica, withdraw, activate,
-    profile, accountId, connectPerpl, linkOurReferrer,
+    profile, accountId, walletMismatch, registeredEvmWallet, connectPerpl, linkOurReferrer,
   ]);
 }

@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
+import { fetchPerplPositionHistory } from '../lib/perplClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
@@ -45,6 +46,36 @@ function normalizeDecibelFunding(row, markets) {
   };
 }
 
+function perplMarket(markets, id) {
+  const n = Number(id);
+  return (markets || []).find(m => Number(m.market_id) === n)
+    || (markets || []).find(m => String(m.symbol || '').toUpperCase() === String(id || '').toUpperCase())
+    || null;
+}
+
+function normalizePerplFunding(row, markets) {
+  const rawFunding = row?.funding ?? row?.funding_payment ?? row?.fp ?? row?.f;
+  const n = Number(rawFunding);
+  if (!Number.isFinite(n) || n === 0) return null;
+  const m = perplMarket(markets, row?.mkt ?? row?.market_id ?? row?.market);
+  const sizeDecimals = Number(m?.size_decimals ?? 5);
+  const rawSize = Number(row?.s ?? row?.size ?? 0);
+  const amount = Math.abs(rawSize) / 10 ** sizeDecimals;
+  const ts = row?.at?.t ?? row?.created_at ?? row?.timestamp ?? row?.time ?? row?.ts;
+  return {
+    ...row,
+    _dex: 'monad',
+    id: row?.id || row?.pid || `${row?.mkt}:${ts}:${rawFunding}`,
+    symbol: m?.symbol || String(row?.symbol || '').toUpperCase(),
+    side: rawSize >= 0 ? 'bid' : 'ask',
+    payout: n / 1e6,
+    rate: null,
+    amount,
+    fee: 0,
+    created_at: ts,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -83,6 +114,16 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
             fetchOptions: { signal: controller.signal },
           });
           if (!cancelled) setPayments((res?.items || []).map(p => normalizeDecibelFunding(p, markets)));
+          return;
+        }
+        if (dex === 'monad') {
+          const data = await fetchPerplPositionHistory({ limit: 100 });
+          const rows = Array.isArray(data) ? data
+            : Array.isArray(data?.data) ? data.data
+            : Array.isArray(data?.positions) ? data.positions
+            : Array.isArray(data?.items) ? data.items
+            : [];
+          if (!cancelled) setPayments(rows.map(p => normalizePerplFunding(p, markets)).filter(Boolean));
           return;
         }
 
@@ -141,7 +182,8 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {dex === 'decibel' ? 'Decibel ' : ''}funding payments</div>;
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : '';
+    return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
   }
 
   return (

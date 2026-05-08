@@ -64,6 +64,9 @@ function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRat
 
 function humanizeTradeError(message) {
   const text = String(message || '');
+  if (/PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|451/i.test(text)) {
+    return 'Perpl is not available in your country or IP region.';
+  }
   const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
   if (insufficient) {
     const need = Number(insufficient[1]);
@@ -809,11 +812,12 @@ function FuturesPanel() {
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
+    connected: tradingConnected,
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
-    closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
+    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, connectPerpl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -930,7 +934,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -1324,6 +1328,15 @@ function FuturesPanel() {
           );
           return;
         }
+        if (dex === 'monad') {
+          const minPosting = Number(currentMarket?.min_posting_amount || 0);
+          if (minPosting > 0 && positionUsdc < minPosting) {
+            setLocalAlert(
+              `Perpl requires a position ≥ $${minPosting.toFixed(2)}. Yours: $${positionUsdc.toFixed(2)}. Increase margin or leverage.`
+            );
+            return;
+          }
+        }
         // Avantis and Decibel hooks take USDC collateral directly. The token
         // readout is display math, so do not round collateral through it.
         const collateralUsdc = amountInUsdc
@@ -1420,7 +1433,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -1477,6 +1490,8 @@ function FuturesPanel() {
                 ? 'GMX V2 uses isolated margin per position (no cross mode)'
                 : dex === 'decibel'
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
+                : dex === 'monad'
+                ? 'Perpl uses isolated margin per position in this integration'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
               <span style={{color: dex === 'decibel' ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
@@ -1771,7 +1786,9 @@ function FuturesPanel() {
               fontSize: 36, fontWeight: 900,
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
-            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>Wrong Base wallet</div>
+            <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
+              Wrong {dex === 'gmx' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : 'Base'} wallet
+            </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
@@ -1946,6 +1963,46 @@ function FuturesPanel() {
                   <span>GMX · ARBITRUM MAINNET</span>
                 </div>
               </>
+            ) : dex === 'monad' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #6F5CFF 0%, #4530E0 100%)',
+                  border: '4px solid #5547E5',
+                  boxShadow: '0 5px 0 #4530E0, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 44,
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>↯</div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Monad wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Perpl trades on Monad. You need MON for gas and AUSD for collateral.
+                </div>
+                <button
+                  style={{...cartoonBtn('#6F5CFF', '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#4530E0', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>PERPL · MONAD MAINNET</span>
+                </div>
+              </>
             ) : (
               <>
                 <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
@@ -1973,6 +2030,94 @@ function FuturesPanel() {
           onClose={() => setEvmModalOpen(false)}
           onConnected={handleEvmConnected}
         />
+      </>
+    );
+  }
+
+  // ==================== PERPL / MONAD SETUP GATE ====================
+  if (dex === 'monad' && hasWallet && setupVerified !== true) {
+    const perplAuthed = !!tradingConnected;
+    const perplChecking = perplAuthed && setupVerified === null;
+    const walletAusd = Number(walletUsdc || 0);
+    const createAmt = Number(depositAmt || 10);
+    const canCreate = perplAuthed && !perplChecking && Number.isFinite(createAmt) && createAmt > 0 && walletAusd + 1e-9 >= createAmt;
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Setup Perpl Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: 24}}>
+            <img src={DEX_CONFIG.monad.logo} alt="" style={{width: 64, height: 64, objectFit: 'contain'}} />
+            <div style={{color: '#5C3A21', fontSize: 19, fontWeight: 900}}>
+              {perplChecking ? 'Checking your Perpl account' : perplAuthed ? 'Create or fund your Perpl account' : 'Sign in to Perpl'}
+            </div>
+            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
+              {perplChecking
+                ? 'Waiting for Perpl to send your wallet snapshot. This usually takes a moment.'
+                : perplAuthed
+                ? 'Perpl keeps collateral as AUSD inside its Exchange contract. Create the account with AUSD, then the trading panel will unlock.'
+                : 'One wallet signature opens a Perpl API session. After that, orders use the Perpl trading socket without another popup per click.'}
+            </div>
+            {perplAuthed && !perplChecking && (
+              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{...S.fullCard, margin: 0}}>
+                  <div style={S.row}>
+                    <span style={S.label}>Wallet AUSD</span>
+                    <span style={S.detail}>${walletAusd.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="number"
+                    placeholder="Amount (AUSD)"
+                    value={depositAmt}
+                    onChange={e => setDepositAmt(e.target.value)}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                  />
+                </div>
+                {walletAusd <= 0 && (
+                  <div style={{fontSize: 11, color: '#8a7252', fontWeight: 700, lineHeight: 1.4}}>
+                    Your wallet has no AUSD on Monad. Swap or bridge into AUSD first, and keep a small MON balance for gas.
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              style={{
+                ...cartoonBtn(perplAuthed ? '#6F5CFF' : '#4530E0', '#3724B8'),
+                padding: '14px 30px',
+                minWidth: 240,
+                opacity: perplAuthed && !canCreate ? 0.65 : 1,
+              }}
+              disabled={loading || perplChecking || (perplAuthed && !canCreate)}
+              onClick={async () => {
+                if (!perplAuthed) {
+                  const fn = connectPerpl || linkOurReferrer;
+                  if (fn) await fn();
+                  return;
+                }
+                const res = await activate(depositAmt || '10');
+                if (!res?.error) setDepositAmt('');
+              }}
+            >
+              {loading || perplChecking ? 'PLEASE WAIT...' : perplAuthed ? 'CREATE ACCOUNT' : 'SIGN IN'}
+            </button>
+            {error && (
+              <div style={{...S.errorBar, maxWidth: 380}} onClick={clearError}>
+                <span style={S.errorText}>{humanizeTradeError(error)}</span>
+                <span style={S.errorCloseIcon}>×</span>
+              </div>
+            )}
+          </div>
+        </div>
       </>
     );
   }
@@ -2935,8 +3080,8 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>Deposit USDC</span>
-              {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)}</span>}
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : 'Deposit USDC'}</span>
+              {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               {/* Pacifica enforces a $10 deposit floor. Decibel has no fixed
@@ -2944,11 +3089,11 @@ function FuturesPanel() {
                   free-form). Different placeholder + gate per dex so a
                   $1 Decibel deposit isn't silently swallowed. */}
               <input type="number"
-                placeholder={dex === 'decibel' ? 'Amount (USDC)' : 'Min 10 USDC'}
+                placeholder={dex === 'decibel' ? 'Amount (USDC)' : dex === 'monad' ? 'Amount (AUSD)' : 'Min 10 USDC'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-                const minDeposit = dex === 'decibel' ? 0 : 10;
+                const minDeposit = (dex === 'decibel' || dex === 'monad') ? 0 : 10;
                 const v = parseFloat(depositAmt);
                 if (!Number.isFinite(v) || v <= minDeposit) {
                   setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} USDC` : 'Enter a positive amount');
@@ -2963,6 +3108,8 @@ function FuturesPanel() {
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
               {dex === 'decibel'
                 ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
+                : dex === 'monad'
+                ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
                 : 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'}
             </span>
           </div>
@@ -2975,7 +3122,7 @@ function FuturesPanel() {
         {dex !== 'avantis' && dex !== 'gmx' && (dex === 'decibel' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#9945FF'}}>Withdraw USDC</span>
+              <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
               <span style={S.detail}>Max: ${available.toFixed(2)}</span>
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
@@ -3249,6 +3396,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.gmx.colorDark }}>
                 GMX
+              </span>
+            </>
+          ) : dex === 'monad' ? (
+            <>
+              <img
+                src={DEX_CONFIG.monad.logo}
+                alt="Perpl"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.monad.colorDark }}>
+                Perpl
               </span>
             </>
           ) : (

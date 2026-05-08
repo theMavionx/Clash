@@ -85,15 +85,16 @@ export const DEX_CONFIG = {
     label: 'PERPL',
     shortLabel: 'PRP',
     emoji: '⚡',
-    // Phase 1 placeholder — drop the official Perpl mark at /public/perpl.png
-    // before going public. Same convention GMX uses (logoIsWordmark=false +
-    // wordmark rendered inline alongside the icon).
-    logo: '/perpl.png',
+    // Perpl's official mark — 3-bar pixel glyph in their brand purple
+    // (#6F5CFF), pulled directly from app.perpl.xyz. Stored as an SVG so
+    // it scales cleanly at every badge size; same convention as
+    // avantis.svg (icon-only, wordmark rendered as inline text).
+    logo: '/perpl.svg',
     logoIsWordmark: false,
-    color: '#9B6BFF',
-    colorDark: '#5B3DD9',
-    colorLight: 'rgba(155,107,255,0.15)',
-    borderColor: '#7C4DFF',
+    color: '#6F5CFF',
+    colorDark: '#4530E0',
+    colorLight: 'rgba(111,92,255,0.15)',
+    borderColor: '#5547E5',
     chain: 'Monad',
     chainShort: 'MON',
     description: 'Perps on Monad',

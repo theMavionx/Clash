@@ -243,9 +243,10 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
@@ -259,7 +260,9 @@ async function fetchWalletTrades(player, opts = {}) {
       // sources would double-count when the worker later writes a duplicate.
       const sourceWhere = dexFilter === 'decibel'
         ? "AND verified_source = 'server'"
-        : "AND verified_source = 'worker'";
+        : dexFilter === 'monad'
+          ? "AND verified_source = 'perpl_api'"
+          : "AND verified_source = 'worker'";
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, created_at
         FROM trade_history

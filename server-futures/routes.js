@@ -24,6 +24,127 @@ const DECIBEL_ALLOWED_BUILDER_ADDRS = new Set(
     .filter(Boolean)
 );
 
+const PERPL_API_BASE = process.env.PERPL_API_BASE || 'https://app.perpl.xyz/api/v1';
+const PERPL_FILL_LOOKBACK = Math.max(10, Math.min(250, Number(process.env.PERPL_FILL_LOOKBACK || 100)));
+const PERPL_MARKETS_FALLBACK = {
+  1: { symbol: 'BTC', price_decimals: 1, size_decimals: 5 },
+  10: { symbol: 'MON', price_decimals: 6, size_decimals: 0 },
+  20: { symbol: 'ETH', price_decimals: 2, size_decimals: 3 },
+  30: { symbol: 'SOL', price_decimals: 2, size_decimals: 3 },
+};
+let perplContextCache = { at: 0, markets: PERPL_MARKETS_FALLBACK };
+
+function normalizeEvmAddress(addr) {
+  const s = String(addr || '').trim().toLowerCase();
+  return /^0x[0-9a-f]{40}$/.test(s) ? s : null;
+}
+
+function perplRows(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.fills)) return payload.fills;
+  if (Array.isArray(payload?.items)) return payload.items;
+  return [];
+}
+
+async function getPerplMarkets() {
+  if (Date.now() - perplContextCache.at < 60_000 && perplContextCache.markets) {
+    return perplContextCache.markets;
+  }
+  try {
+    const r = await fetch(`${PERPL_API_BASE}/pub/context`, { headers: { accept: 'application/json' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    const out = {};
+    for (const m of perplRows(j?.markets || j)) {
+      const id = Number(m?.id ?? m?.market_id ?? m?.mkt);
+      if (!Number.isFinite(id)) continue;
+      const cfg = m?.config || m;
+      out[id] = {
+        symbol: String(m?.name || m?.symbol || PERPL_MARKETS_FALLBACK[id]?.symbol || `MKT${id}`).toUpperCase(),
+        price_decimals: Number(cfg?.price_decimals ?? PERPL_MARKETS_FALLBACK[id]?.price_decimals ?? 1),
+        size_decimals: Number(cfg?.size_decimals ?? PERPL_MARKETS_FALLBACK[id]?.size_decimals ?? 5),
+      };
+    }
+    if (Object.keys(out).length) {
+      perplContextCache = { at: Date.now(), markets: out };
+      return out;
+    }
+  } catch (e) {
+    console.warn('[perpl] context cache refresh failed:', e.message);
+  }
+  return perplContextCache.markets || PERPL_MARKETS_FALLBACK;
+}
+
+async function perplAuthedGet(path, { cookie, authNonce }) {
+  const r = await fetch(`${PERPL_API_BASE}${path}`, {
+    headers: {
+      accept: 'application/json',
+      cookie,
+      'x-auth-nonce': authNonce,
+    },
+  });
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!r.ok) {
+    const msg = typeof data === 'string' ? data : (data?.error || data?.message || text);
+    throw new Error(`Perpl ${path} ${r.status}: ${msg || 'request failed'}`);
+  }
+  return data;
+}
+
+function perplFillTime(fill) {
+  const raw = fill?.at?.t ?? fill?.created_at ?? fill?.timestamp ?? fill?.time ?? fill?.ts;
+  const n = Number(raw);
+  if (Number.isFinite(n)) return n > 1e12 ? new Date(n).toISOString() : new Date(n * 1000).toISOString();
+  const d = new Date(raw || 0);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : new Date().toISOString();
+}
+
+function perplOrderTypeLabel(t, reduceOnly = false) {
+  const n = Number(t);
+  if (n === 1 || n === 2) return 'market';
+  if (n === 3 || n === 4 || reduceOnly) return 'close';
+  return 'trade';
+}
+
+function normalizePerplFill(fill, markets) {
+  const marketId = Number(fill?.mkt ?? fill?.market_id ?? fill?.market);
+  const market = markets[marketId] || PERPL_MARKETS_FALLBACK[marketId];
+  if (!market) return null;
+  const price = Number(fill?.p ?? fill?.price ?? 0) / 10 ** Number(market.price_decimals || 1);
+  const rawSize = Number(fill?.s ?? fill?.size ?? fill?.fs ?? 0);
+  const amount = Math.abs(rawSize) / 10 ** Number(market.size_decimals || 5);
+  const sideType = Number(fill?.t ?? fill?.type ?? fill?.ot);
+  const isLong = sideType === 1 || sideType === 4 || rawSize > 0;
+  const isClose = sideType === 3 || sideType === 4 || fill?.ro === true || fill?.reduce_only === true;
+  const side = isClose
+    ? (isLong ? 'close_long' : 'close_short')
+    : (isLong ? 'long' : 'short');
+  const notional = price * amount;
+  if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) return null;
+  const id = String(fill?.fid ?? fill?.id ?? fill?.oid ?? fill?.order_id ?? fill?.rq ?? `${marketId}:${rawSize}:${fill?.p}:${fill?.at?.t || ''}`);
+  const fee = Number(fill?.f ?? fill?.fee ?? 0) / 1e6;
+  const pnl = fill?.pnl ?? fill?.realized_pnl;
+  return {
+    symbol: market.symbol,
+    side,
+    orderType: perplOrderTypeLabel(sideType, isClose),
+    amount: String(amount),
+    price: String(price),
+    orderId: null,
+    clientOrderId: `perpl:${id}`,
+    status: 'filled',
+    dex: 'monad',
+    notional_usd: notional,
+    verifiedSource: 'perpl_api',
+    pnl: Number.isFinite(Number(pnl)) ? String(Number(pnl) / 1e6) : null,
+    fee,
+    createdAt: perplFillTime(fill),
+  };
+}
+
 // ---------- Auth Middleware ----------
 // Validates x-token by reading the main game server's SQLite DB directly.
 // Both services run on the same host so cross-SQLite-file reads are cheap
@@ -62,7 +183,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -82,9 +203,9 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad') {
       return res.status(410).json({
-        error: 'Avantis is self-custody now. Connect a Base wallet in the client instead.',
+        error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
     }
     const isAvantis = req.dex === 'avantis';
@@ -112,9 +233,9 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad') {
     return res.status(410).json({
-      error: 'Avantis is self-custody now. Connect a Base wallet in the client instead.',
+      error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
@@ -760,6 +881,49 @@ async function recordVerifiedAvantisOpen(req, body) {
   return true;
 }
 
+router.post('/monad/import-fills', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'monad') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to monad before importing Perpl fills.`,
+      });
+    }
+    const wallet = normalizeEvmAddress(req.body?.wallet || req.playerWallet);
+    const playerWallet = normalizeEvmAddress(req.playerWallet);
+    if (!wallet) return res.status(400).json({ error: 'wallet required (0x...)' });
+    if (playerWallet && wallet !== playerWallet) {
+      return res.status(409).json({ error: 'wallet does not match player account' });
+    }
+    const authNonce = String(req.body?.auth_nonce || req.headers['x-auth-nonce'] || '').trim();
+    if (!authNonce) return res.status(401).json({ error: 'Missing Perpl auth nonce' });
+    const cookie = String(req.headers.cookie || '');
+    if (!cookie) return res.status(401).json({ error: 'Missing Perpl auth cookie' });
+
+    const markets = await getPerplMarkets();
+    const payload = await perplAuthedGet(`/trading/fills?count=${PERPL_FILL_LOOKBACK}`, { cookie, authNonce });
+    const rows = perplRows(payload);
+    let imported = 0;
+    let skipped = 0;
+    for (const fill of rows) {
+      const row = normalizePerplFill(fill, markets);
+      if (!row) { skipped++; continue; }
+      try {
+        const r = db.addTrade(req.playerId, row);
+        if (r?.id) imported++;
+      } catch (e) {
+        skipped++;
+        if (!/UNIQUE|constraint/i.test(e.message || '')) {
+          console.warn('[perpl] fill import skipped:', e.message);
+        }
+      }
+    }
+    res.json({ ok: true, imported, skipped, total: rows.length });
+  } catch (e) {
+    console.warn('[perpl] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Perpl fills', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -841,6 +1005,9 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
+  if (req.dex === 'gmx' || req.dex === 'monad') {
+    return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
+  }
   const wallet = db.getWallet(req.playerId, req.dex);
   if (!wallet) return res.status(404).json({ error: 'No wallet' });
 

@@ -7,6 +7,7 @@ import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
+import { useMonad } from '../hooks/useMonad';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -33,12 +34,15 @@ function ProfileModal({ onClose }) {
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
+  const monadHook = useMonad();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
     ? decibelHook
     : dex === 'gmx'
     ? gmxHook
+    : dex === 'monad'
+    ? monadHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -61,12 +65,12 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const activeWallet = (dex === 'avantis' || dex === 'gmx')
-    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis/useGmx
+  const activeWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
+    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || player?.wallet || null)            // Aptos from useDecibel
     : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy
-  const walletSource = (dex === 'avantis' || dex === 'gmx')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
     ? (walletAddr ? 'evm' : null)
     : dex === 'decibel'
     ? (walletAddr ? 'aptos' : null)

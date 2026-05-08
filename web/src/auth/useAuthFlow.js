@@ -329,7 +329,7 @@ export function useAuthFlow() {
     // for both because the wallet itself is chain-agnostic; only the
     // walletClient transport gets re-bound per-DEX (see EvmWalletContext
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
-    if (dex === 'avantis' || dex === 'gmx') return evmContext || privyEvm || null;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
     return solAdapter || privySol || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
@@ -404,7 +404,21 @@ export function useAuthFlow() {
         });
         if (r.ok) {
           const data = await r.json();
-          const name = data?.name || null;
+          // Sanity-check the dex tag on the returned row. Legacy / older
+          // server versions whose VALID_DEXES set didn't yet include the
+          // active dex would silently fall through to a wallet-only lookup
+          // and hand back a row from a DIFFERENT dex (e.g. user picks
+          // Perpl/Monad → server returns their gmx row because 'monad'
+          // wasn't in VALID_DEXES). That made the probe cache "exists with
+          // name X" when no row for THIS dex actually existed; the auto-
+          // register effect then fired without showing the name form and
+          // the server's name-collision suffix kicked in (ggkhg → ggkhg1).
+          // Treat any cross-dex response as "no account on this dex".
+          const respondedDex = String(data?.dex || '').toLowerCase();
+          const wantedDex = String(dex || '').toLowerCase();
+          const name = (respondedDex && wantedDex && respondedDex !== wantedDex)
+            ? null
+            : (data?.name || null);
           writeAccountProbeCache(candidate.wallet, dex, name);
           setProbedNameByWallet(prev => ({ ...prev, [key]: name }));
         } else {
@@ -541,14 +555,16 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
-    if (dex === 'avantis' || dex === 'gmx') {
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
-      // trusting candidate.chain would mis-tag GMX registrations as Base.
-      // The wallet address itself is identical on every EVM chain so the
-      // server can later look up trade history on the right chain via this
-      // tag.
-      payload.chain = dex === 'gmx' ? 'arbitrum' : 'base';
+      // trusting candidate.chain would mis-tag GMX/Perpl registrations as
+      // Base. The wallet address itself is identical on every EVM chain so
+      // the server can later look up trade history on the right chain via
+      // this tag.
+      payload.chain = dex === 'gmx' ? 'arbitrum'
+        : dex === 'monad' ? 'monad'
+        : 'base';
       payload.walletSource = candidate.source;
     }
     // Pipe the Farcaster FID into register so the server can adopt a prior
@@ -617,14 +633,10 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
-    if (dex === 'avantis' || dex === 'gmx') {
-      // Chain is dex-driven, NOT taken from candidate.chain — the Privy
-      // resolver hard-codes 'base' regardless of which DEX is active, so
-      // trusting candidate.chain would mis-tag GMX registrations as Base.
-      // The wallet address itself is identical on every EVM chain so the
-      // server can later look up trade history on the right chain via this
-      // tag.
-      payload.chain = dex === 'gmx' ? 'arbitrum' : 'base';
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
+      payload.chain = dex === 'gmx' ? 'arbitrum'
+        : dex === 'monad' ? 'monad'
+        : 'base';
       payload.walletSource = candidate.source;
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;

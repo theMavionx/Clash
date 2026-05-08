@@ -395,6 +395,22 @@ server {
         gzip off;
     }
 
+    location /perpl-api/ {
+        proxy_pass https://app.perpl.xyz/api/v1/;
+        proxy_http_version 1.1;
+        proxy_set_header Host app.perpl.xyz;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Accept-Encoding "";
+        proxy_cookie_domain app.perpl.xyz $host;
+        proxy_cookie_domain .perpl.xyz $host;
+        proxy_cookie_path /api/v1/ /;
+        proxy_cookie_path / /;
+        gzip off;
+    }
+
     location /rpc/arb-alchemy {
         proxy_pass https://arb-mainnet.g.alchemy.com/v2/_wtFjwex46SgJDz2fx2c6;
         proxy_http_version 1.1;
