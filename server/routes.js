@@ -5,6 +5,7 @@ const db = require('./db');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
+const earnings = require('./earnings');
 
 const router = express.Router();
 
@@ -3512,6 +3513,19 @@ router.get('/admin/diag/pacifica/summary', adminAuth, (req, res) => {
     ORDER BY n DESC LIMIT 200
   `).all(`-${sinceMin} minutes`);
   res.json({ window_min: sinceMin, rows });
+});
+
+// Admin: net commission earned per DEX. Reads on-chain balances + Pacifica
+// builder-trades sum (Pacifica is off-chain). Cached server-side for 60s
+// to keep tab open / refresh from hammering 4 RPCs. ?force=1 bypasses.
+router.get('/admin/earnings', adminAuth, async (req, res) => {
+  try {
+    const data = await earnings.fetchAllEarnings({ force: req.query.force === '1' });
+    res.json(data);
+  } catch (e) {
+    console.warn('[earnings] aggregate failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

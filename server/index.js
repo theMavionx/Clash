@@ -370,6 +370,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('elfa')">Elfa</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
+    <div class="tab" onclick="switchTab('earnings')">Earnings</div>
   </div>
 
   <div class="panel active" id="tab-players">
@@ -489,6 +490,22 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Sort</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-earnings">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="color:#f59e0b;font-size:20px">Net Commission Earned</h2>
+      <button class="btn" onclick="loadEarnings(true)">Refresh on-chain</button>
+    </div>
+    <div class="stats" id="earningsTotals"></div>
+    <div id="earningsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:8px"></div>
+    <div id="earningsMeta" style="color:#6b7280;font-size:12px;margin-top:14px"></div>
+    <div style="margin-top:18px;padding:12px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;font-size:12px;color:#94a3b8;line-height:1.5">
+      <strong style="color:#cbd5e1">How each number is computed:</strong><br>
+      • <strong>Pacifica</strong> — sum of <code style="color:#fbbf24">builder_fee</code> across every trade tagged with our code (exact rebate Pacifica owes us, paginated REST).<br>
+      • <strong>Decibel</strong> — USDC FA balance of our Aptos builder address (this wallet only receives builder fees, so balance ≈ cumulative net).<br>
+      • <strong>Avantis / GMX</strong> — USDC ERC20 balance of the affiliate / code-owner wallet on Base / Arbitrum (claimed-and-not-yet-withdrawn). Claimable-but-unclaimed rewards held by the protocol distributors are NOT counted here.
+    </div>
   </div>
 
   <div class="panel" id="tab-elfa">
@@ -1392,6 +1409,44 @@ function renderElfaStats() {
   }).join('') || '<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:12px">No errors</td></tr>';
 }
 
+async function loadEarnings(force) {
+  const meta = document.getElementById('earningsMeta');
+  meta.textContent = 'Reading on-chain' + (force ? ' (forced refresh)' : '') + '…';
+  try {
+    const data = await api('/admin/earnings' + (force ? '?force=1' : ''));
+    const dexes = [
+      ['pacifica', 'Pacifica', '#a78bfa', '#7C3AED'],
+      ['decibel',  'Decibel',  '#facc15', '#facc15'],
+      ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
+      ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
+    ];
+    const total = Number(data.total_usd) || 0;
+    document.getElementById('earningsTotals').innerHTML =
+      '<div class="stat" style="min-width:200px"><div class="v">$' + total.toFixed(2) + '</div><div class="l">Total net earned</div></div>';
+    document.getElementById('earningsCards').innerHTML = dexes.map(([k, label, color, border]) => {
+      const d = data[k] || {};
+      const ok = d.ok;
+      const v = ok && Number.isFinite(d.earned_usd) ? '$' + d.earned_usd.toFixed(4) : '—';
+      const sub = ok
+        ? (d.address ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>' : '')
+          + (d.trades != null ? '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades</span>' : '')
+        : '<span style="color:#fca5a5;font-size:11px">' + esc(d.error || 'unavailable') + '</span>';
+      return '<div style="background:#1f2937;border:1px solid ' + border + ';border-radius:12px;padding:18px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">'
+        +   '<div style="font-size:13px;color:' + color + ';font-weight:700;text-transform:uppercase;letter-spacing:0.5px">' + label + '</div>'
+        +   '<div style="font-size:11px;color:#6b7280">' + esc(d.currency || '') + '</div>'
+        + '</div>'
+        + '<div style="font-size:28px;font-weight:800;color:' + color + '">' + v + '</div>'
+        + '<div style="margin-top:8px;display:flex;justify-content:space-between;gap:8px">' + sub + '</div>'
+        + '</div>';
+    }).join('');
+    const ageS = Math.round((Number(data.age_ms) || 0) / 1000);
+    meta.textContent = 'Updated ' + esc(data.last_updated || '') + (data.cached ? ' • cached (' + ageS + 's old)' : ' • fresh');
+  } catch (e) {
+    meta.textContent = 'Failed: ' + (e?.message || e);
+  }
+}
+
 // Load logs/stats when switching to those tabs
 const origSwitch = switchTab;
 switchTab = function(name) {
@@ -1401,6 +1456,7 @@ switchTab = function(name) {
   if (name === 'tasks') loadTasks();
   if (name === 'tournaments') loadTournaments();
   if (name === 'elfa') loadElfa();
+  if (name === 'earnings') loadEarnings();
 };
 
 // Auto-login if key saved
