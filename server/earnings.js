@@ -71,29 +71,54 @@ async function fetchPacificaEarnings() {
 }
 
 // ── Decibel (Aptos) ───────────────────────────────────────────────────────
-// Builder fees accrue on Decibel's PerpEngineGlobal ledger keyed by the
-// builder SUBACCOUNT (the deterministic primary-subaccount of BUILDER_ADDR,
-// resolved via the SDK / Decibel REST). The package does NOT expose a
-// public view function for the cumulative builder fee; primary FA balance
-// of either the master or the subaccount is always zero (fees stay in the
-// engine's internal map until manually withdrawn).
+// Decibel doesn't expose a public on-chain view for cumulative builder
+// fees — they're held in PerpEngineGlobal's internal ledger. But the
+// authenticated REST `/api/v1/account_overviews?account=<subaccount>`
+// returns a `fee_income` field that's exactly our cumulative builder
+// take-rate × notional. We hit it with the same Aptos Labs node API key
+// the SDK uses for all other reads, since the host (api.mainnet.aptoslabs.com)
+// is the same — they share one Bearer credential.
 //
-// Decibel's authenticated REST (api.mainnet.aptoslabs.com/decibel) does
-// surface this via /api/v1/account_overview but requires a Bearer key.
-// Until we wire DECIBEL_API_KEY into this module, surface zero with an
-// explicit "claim-required" marker so the admin sees an honest signal
-// instead of a misleading $0 balance reading.
+// `usdc_cross_withdrawable_balance` is also surfaced so the operator
+// sees what's currently claimable on top of the cumulative figure.
+const DECIBEL_REST = 'https://api.mainnet.aptoslabs.com/decibel';
 const DECIBEL_BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
 const DECIBEL_BUILDER_SUBACCOUNT = '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
+const DECIBEL_API_KEY = process.env.DECIBEL_API_KEY || process.env.APTOS_NODE_API_KEY;
 
 async function fetchDecibelEarnings() {
+  if (!DECIBEL_API_KEY) {
+    return {
+      earned_usd: 0, address: DECIBEL_BUILDER_ADDR,
+      subaccount: DECIBEL_BUILDER_SUBACCOUNT,
+      currency: 'USDC (Aptos)',
+      note: 'DECIBEL_API_KEY missing in env — cannot read account_overviews.',
+    };
+  }
+  const url = `${DECIBEL_REST}/api/v1/account_overviews?account=${DECIBEL_BUILDER_SUBACCOUNT}`;
+  const data = await fetchJson(url, {
+    headers: { Authorization: `Bearer ${DECIBEL_API_KEY}` },
+  });
+  if (data?.status === 'notFound') {
+    return {
+      earned_usd: 0, address: DECIBEL_BUILDER_ADDR,
+      subaccount: DECIBEL_BUILDER_SUBACCOUNT, currency: 'USDC (Aptos)',
+      note: 'Builder subaccount not yet activated on Decibel.',
+    };
+  }
+  // fee_income on a builder subaccount accumulates the builder rebate
+  // collected from every trade tagged with our builder code. Realized PnL
+  // is its own line; we don't fold it into the earnings figure since this
+  // tab is "commission earned" not "subaccount equity change".
+  const earned = Number(data?.fee_income) || 0;
+  const withdrawable = Number(data?.usdc_cross_withdrawable_balance) || 0;
   return {
-    earned_usd: 0,
+    earned_usd: earned,
     address: DECIBEL_BUILDER_ADDR,
     subaccount: DECIBEL_BUILDER_SUBACCOUNT,
     currency: 'USDC (Aptos)',
-    note: 'Off-chain accumulator — claim from Decibel dashboard. Public view fn not exposed.',
-    needs_claim: true,
+    withdrawable_usd: withdrawable,
+    realized_pnl: Number(data?.realized_pnl) || 0,
   };
 }
 
@@ -225,7 +250,7 @@ async function fetchAllEarnings({ force = false } = {}) {
 
   const out = {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
-    decibel:  { ...wrap('decibel',  dec), source: 'decibel_offchain_unread' },
+    decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_offchain_unread' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_subgraph_affiliate_stats' },
     last_updated: new Date(now).toISOString(),

@@ -504,7 +504,7 @@ app.get('/api/admin/panel', (req, res) => {
       <strong style="color:#cbd5e1">Source per DEX:</strong><br>
       • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
       • <strong>GMX</strong> — Goldsky <code>arbitrum-referrals</code> subgraph: <code>totalRebateUsd − discountUsd</code> for our affiliate (same data app.gmx.io/#/referrals reads; the authoritative number).<br>
-      • <strong>Decibel</strong> — Builder fees accrue on PerpEngineGlobal's internal ledger; no public view fn. Shown as $0 — claim via Decibel dashboard.<br>
+      • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
       • <strong>Avantis</strong> — Off-chain rebates with no public earnings API; only the on-chain code owner is read. Claim via the Avantis app.
     </div>
   </div>
@@ -1433,7 +1433,9 @@ async function loadEarnings(force) {
         : '';
       const tradeLine = ok && d.trades != null
         ? '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades' + (d.traded_referrals ? ' / ' + d.traded_referrals + ' refs' : '') + '</span>'
-        : '';
+        : (ok && d.withdrawable_usd != null
+          ? '<span style="color:#9ca3af;font-size:11px">$' + d.withdrawable_usd.toFixed(2) + ' withdrawable</span>'
+          : '');
       const noteLine = ok && d.note
         ? '<div style="margin-top:6px;font-size:11px;color:#fbbf24;line-height:1.4">' + esc(d.note) + '</div>'
         : '';
