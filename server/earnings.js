@@ -225,57 +225,76 @@ async function fetchAvantisEarnings() {
 }
 
 // ── GMX (Arbitrum) ────────────────────────────────────────────────────────
-// Authoritative source: GMX's public Goldsky subgraph for arbitrum-referrals
-// (the same endpoint app.gmx.io/#/referrals reads). `affiliateStats(period:
-// total)` returns lifetime stats for our affiliate wallet, including the
-// 30-decimal totalRebateUsd / discountUsd. Net affiliate earnings =
-// totalRebateUsd − discountUsd, per gmx-interface's own getAffiliateRebateUsd
-// helper (src/domain/referrals/hooks/useReferralsData.ts).
+// Same modelled approach as Avantis: trader notional × fee_per_side ×
+// affiliate share. Affiliate share is read on-chain from GMX's
+// ReferralStorage:
+//   referrerTiers(affiliate)  → tier index (0 = default, 1, 2, …)
+//   tiers(tierIdx)            → (totalRebate, discountShare) in bps/10000
+// Net affiliate cut = totalRebate × (1 − discountShare/10000) / 10000.
+// For our tier 0: 1000 × (1 − 5000/10000) / 10000 = 5%, mirroring Avantis.
 //
-// We deliberately do NOT use wallet balance: an affiliate wallet may hold
-// unrelated USDC (deposits, transfers) that has nothing to do with rebates,
-// which would inflate the "earned" figure. Subgraph gives the truth.
-const GMX_SUBGRAPH = process.env.GMX_REFERRALS_SUBGRAPH ||
-  'https://api.goldsky.com/api/public/project_cmgptuc4qhclc01rh9s4q554a/subgraphs/gmx-arbitrum-referrals/master-240506225935-51167d5/gn';
+// We previously read this from GMX's Goldsky subgraph, but the subgraph
+// only counts trades where the trader bound our code via the on-chain
+// setTraderReferralCodeByUser tx — many of our users' fills slip through
+// without that registration (we auto-bind on first order, but races and
+// rejected binds happen). Using local volume × on-chain rate gives a
+// closer read on what we COULD earn on this volume; the subgraph remained
+// stuck at 0 even with thousands in volume.
+const ARBITRUM_RPC = process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc';
+const GMX_REFERRAL_STORAGE = '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
 const GMX_AFFILIATE = (process.env.GMX_AFFILIATE_ADDR ||
   '0x412A02Ba415e5969596E6f0A35f9439760a3468F').toLowerCase();
+const GMX_AVG_FEE_BPS = Number(process.env.GMX_AVG_FEE_BPS) || 5; // 0.05%/side
 
 async function fetchGmxEarnings() {
-  const query = `query AffiliateRebates($account: String!) {
-    affiliateStats(first: 100, where: { period: total, affiliate: $account }) {
-      referralCode trades tradedReferralsCount registeredReferralsCount
-      volume totalRebateUsd discountUsd
-    }
-  }`;
-  const r = await fetchJson(GMX_SUBGRAPH, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables: { account: GMX_AFFILIATE } }),
-  });
-  if (r?.errors?.length) {
-    throw new Error(r.errors.map(e => e.message).join('; '));
+  // 1. Tier index for our affiliate wallet — referrerTiers(address).
+  const PAD = GMX_AFFILIATE.replace(/^0x/, '').padStart(64, '0');
+  const tierHex = await ethCall(ARBITRUM_RPC, GMX_REFERRAL_STORAGE,
+    '0x1582a018' + PAD); // referrerTiers(address)
+  const tierIdx = Number(BigInt(tierHex || '0x0'));
+
+  // 2. Tier params — tiers(uint256) → (totalRebate, discountShare).
+  const idxArg = tierIdx.toString(16).padStart(64, '0');
+  const paramsHex = await ethCall(ARBITRUM_RPC, GMX_REFERRAL_STORAGE,
+    '0x039af9eb' + idxArg); // tiers(uint256)
+  const totalRebate = Number(BigInt('0x' + paramsHex.slice(2, 66)));
+  const discountShare = Number(BigInt('0x' + paramsHex.slice(66, 130)));
+  // affiliate cut = totalRebate × (1 − discountShare/10000), scaled in bps
+  // so we end up with a "rebate of trader fees" percentage in basis points.
+  const affiliateShareBps = Math.round(totalRebate * (1 - discountShare / 10000));
+
+  // 3. Volume from local futures.db.
+  const Db = loadSqlite();
+  let volume = 0;
+  let trades = 0;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    const fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    try {
+      const r = fdb.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
+        FROM trade_history
+        WHERE dex = 'gmx' AND status = 'filled'
+          AND verified_source IN ('worker', 'client')
+      `).get();
+      volume = Number(r?.vol) || 0;
+      trades = Number(r?.n) || 0;
+    } finally { fdb.close(); }
   }
-  const rows = r?.data?.affiliateStats || [];
-  // 30-decimal fixed-point — divide by 1e30 to get USD. BigInt to dodge
-  // float blow-up on values > 2^53 (lifetime rebate of high-volume codes
-  // could exceed Number's safe range).
-  const sum = (key) => rows.reduce((acc, row) => {
-    try { return acc + BigInt(row[key] || '0'); } catch { return acc; }
-  }, 0n);
-  const SCALE = 10n ** 30n;
-  const toUsd = (big) => Number((big * 1000n) / SCALE) / 1000;
-  const totalRebate = sum('totalRebateUsd');
-  const discount = sum('discountUsd');
-  const earned = toUsd(totalRebate - discount);
-  const trades = rows.reduce((a, r) => a + (parseInt(r.trades, 10) || 0), 0);
-  const tradedRefs = rows.reduce((a, r) => a + (parseInt(r.tradedReferralsCount, 10) || 0), 0);
+
+  // 4. Earnings = volume × fee_per_side × affiliate_share.
+  const earned = volume * (GMX_AVG_FEE_BPS / 10000) * (affiliateShareBps / 10000);
   return {
     earned_usd: earned,
     address: GMX_AFFILIATE,
     currency: 'USDC (Arbitrum)',
+    volume_usd: volume,
     trades,
-    traded_referrals: tradedRefs,
-    source_detail: 'goldsky:arbitrum-referrals',
+    tier: tierIdx,
+    rebate_pct: affiliateShareBps / 100,
+    fee_per_side_pct: GMX_AVG_FEE_BPS / 100,
+    note: `Modelled: volume × ${GMX_AVG_FEE_BPS}bps fee × ${affiliateShareBps}bps rebate (tier ${tierIdx}: totalRebate=${totalRebate}/10000, discountShare=${discountShare}/10000).`,
+    source_detail: 'volume_x_rate',
   };
 }
 
@@ -307,7 +326,7 @@ async function fetchAllEarnings({ force = false } = {}) {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
-    gmx:      { ...wrap('gmx',      gmx), source: 'gmx_subgraph_affiliate_stats' },
+    gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
     last_updated: new Date(now).toISOString(),
   };
   out.total_usd = ['pacifica','decibel','avantis','gmx'].reduce(

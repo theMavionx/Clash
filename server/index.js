@@ -503,7 +503,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div style="margin-top:18px;padding:12px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;font-size:12px;color:#94a3b8;line-height:1.5">
       <strong style="color:#cbd5e1">Source per DEX:</strong><br>
       • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
-      • <strong>GMX</strong> — Goldsky <code>arbitrum-referrals</code> subgraph: <code>totalRebateUsd − discountUsd</code> for our affiliate (same data app.gmx.io/#/referrals reads; the authoritative number).<br>
+      • <strong>GMX</strong> — Modelled as <code>volume × fee_per_side × tier_rebate</code>. Volume from local futures.db, tier rate read on-chain from <code>tiers(referrerTiers(affiliate))</code> on GMX ReferralStorage; fee_per_side default 0.05% (env <code>GMX_AVG_FEE_BPS</code>).<br>
       • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
       • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).
     </div>
