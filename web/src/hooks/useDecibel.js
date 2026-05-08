@@ -617,6 +617,7 @@ export function useDecibel() {
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [walletApt, setWalletApt] = useState(null);
   const [dataReady, setDataReady] = useState(false);
+  const [accountReady, setAccountReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
@@ -780,6 +781,7 @@ export function useDecibel() {
     setWalletUsdc(null);
     setWalletApt(null);
     setDataReady(false);
+    setAccountReady(false);
     setBuilderApproved(null);
     setApiWalletAddr(null);
     setApiWalletDelegated(null);
@@ -885,17 +887,32 @@ export function useDecibel() {
     if (!address) return;
     try {
       const sub = await ensureSubaccount();
-      if (!sub) return;
+      if (!sub) {
+        setAccount(null);
+        setAccountReady(false);
+        return;
+      }
       const read = await getReadClient();
       const acct = await withTimeout(
         read.accountOverview.getByAddr({ subAddr: sub }),
         READ_TIMEOUT_MS,
         'account'
       );
+      const hasBalanceFields = acct && typeof acct === 'object' && (
+        Object.prototype.hasOwnProperty.call(acct, 'perp_equity_balance')
+        || Object.prototype.hasOwnProperty.call(acct, 'usdc_cross_withdrawable_balance')
+        || Object.prototype.hasOwnProperty.call(acct, 'usdc_isolated_withdrawable_balance')
+      );
+      if (!hasBalanceFields) {
+        D.warn('fetchAccount: overview loaded without balance fields; keeping account unreadable for UI gate');
+        setAccountReady(false);
+        return;
+      }
       const equity = Number(acct?.perp_equity_balance ?? 0);
       const cross = Number(acct?.usdc_cross_withdrawable_balance ?? 0);
       D.log(`fetchAccount: equity=$${equity.toFixed(4)} cross=$${cross.toFixed(4)}`);
       setAccount(acct);
+      setAccountReady(true);
     } catch (e) {
       D.warn('fetchAccount failed:', e?.message || e);
     }
@@ -1943,6 +1960,7 @@ export function useDecibel() {
     leverageSettings,
     marginModes,
     dataReady,
+    accountReady,
     loading,
     error,
     clearError,
@@ -1990,7 +2008,7 @@ export function useDecibel() {
     connectWallet: connect,
   }), [
     address, account, positions, orders, prices, markets, walletUsdc, walletApt,
-    dataReady, loading, error, clearError, goldEarned, clearGoldEarned,
+    dataReady, accountReady, loading, error, clearError, goldEarned, clearGoldEarned,
     leverageSettings, marginModes,
     depositToPacifica, withdraw, activate, claimGold, placeMarketOrder,
     placeLimitOrder, closePosition, cancelOrder, setTpsl, setLeverage, setMarginMode,

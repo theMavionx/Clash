@@ -804,7 +804,7 @@ function FuturesPanel() {
     ? gmxHook
     : pacificaHook;
   const {
-    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
+    walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, setTpsl, setMarginMode,
@@ -2269,10 +2269,11 @@ function FuturesPanel() {
   // Skipped if any of:
   //   • `dataReady` is false (still loading) — avoid flashing the gate
   //     before the first poll comes in
+  //   - `accountReady` is false (still loading the Decibel balance read)
   //   • user has open positions (they're in the middle of trading)
   //   • subaccount has any equity OR withdrawable USDC > 0
   if (
-    dex === 'decibel' && hasWallet && isReady && dataReady
+    dex === 'decibel' && hasWallet && isReady && dataReady && accountReady
     && (positions?.length || 0) === 0
     && Number(account?.perp_equity_balance ?? 0) <= 0
     && Number(account?.usdc_cross_withdrawable_balance ?? 0) <= 0
