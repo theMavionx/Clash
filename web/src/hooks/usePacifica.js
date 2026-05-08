@@ -45,6 +45,7 @@ const WS_URL = 'wss://ws.pacifica.fi/ws';
 const BUILDER_CODE = 'clashofperps';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const ACTIVATION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
 const AGENT_SIGNED_TYPES = new Set([
   'create_market_order',
   'create_order',
@@ -1009,6 +1010,9 @@ export function usePacifica() {
           if (/InvalidLeverage/i.test(res.error)) {
             throw new Error(`Leverage ${capped}x not accepted by Pacifica (max for ${symbol} is ${maxLev}x). Close open position first.`);
           }
+          if (res.code === 400 && /Invalid message/i.test(res.error)) {
+            throw new Error(PACIFICA_AGENT_REQUIRED_MESSAGE);
+          }
           throw new Error(res.error);
         }
         fetchLeverageSettings();
@@ -1026,6 +1030,9 @@ export function usePacifica() {
         });
         if (res.error) {
           if (res.code === 422) throw new Error('Close your ' + symbol + ' position first to change margin mode');
+          if (res.code === 400 && /Invalid message/i.test(res.error)) {
+            throw new Error(PACIFICA_AGENT_REQUIRED_MESSAGE);
+          }
           throw new Error(res.error);
         }
         fetchLeverageSettings();

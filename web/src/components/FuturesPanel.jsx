@@ -42,6 +42,7 @@ const PACIFICA_MIN_NOTIONAL_USD = 10;
 const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
 const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
 const PACIFICA_FEE_BUFFER_RATE = 0.0001;
+const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
 
 function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRate }) {
   const m = Number(margin);
@@ -71,6 +72,9 @@ function humanizeTradeError(message) {
   const cannotMargin = text.match(/CannotUpdateMargin/i);
   if (cannotMargin) {
     return 'Close this symbol position and cancel its open orders before changing Cross/Isolated margin.';
+  }
+  if (/Invalid message/i.test(text)) {
+    return PACIFICA_AGENT_REQUIRED_MESSAGE;
   }
   return text;
 }
@@ -1195,7 +1199,7 @@ function FuturesPanel() {
     [orders, symbol]
   );
   const marginModeLocked = dex === 'pacifica' && (hasCurrentSymbolPosition || hasCurrentSymbolOrder);
-  const handleMarginModeToggle = useCallback(() => {
+  const handleMarginModeToggle = useCallback(async () => {
     clearTradeFeedback();
     if (marginModeLocked) {
       setLocalAlert(
@@ -1205,8 +1209,24 @@ function FuturesPanel() {
       );
       return;
     }
+    if (dex === 'pacifica' && !pacAgent && bindAgent) {
+      if (bindingAgent) {
+        setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
+        return;
+      }
+      try {
+        const bound = await bindAgent();
+        if (!bound && !pacAgent) {
+          setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
+          return;
+        }
+      } catch (e) {
+        setLocalAlert(e?.message || PACIFICA_AGENT_REQUIRED_MESSAGE);
+        return;
+      }
+    }
     setMarginMode?.(symbol, !marginModes[symbol]);
-  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes]);
+  }, [clearTradeFeedback, marginModeLocked, hasCurrentSymbolPosition, symbol, setMarginMode, marginModes, dex, pacAgent, bindAgent, bindingAgent]);
 
   const handleSizePct = useCallback((pct) => {
     clearTradeFeedback();
@@ -1242,6 +1262,10 @@ function FuturesPanel() {
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
     if (dex === 'avantis' || dex === 'gmx') return;
+    // Pacifica leverage updates should use the agent key. If the user has
+    // not enabled it yet, keep this UI-only and flush after auto-bind on
+    // trade submit.
+    if (dex === 'pacifica' && !pacAgent) return;
     // Pacifica + Decibel BOTH push leverage to the server — Pacifica via
     // its account-level /leverage endpoint, Decibel via Aptos
     // configureUserSettingsForMarket. Both want the slider drag debounced
@@ -1263,7 +1287,7 @@ function FuturesPanel() {
         setLeverageApi(symbol, v);
       }
     }, 800);
-  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex, positions]);
+  }, [clearTradeFeedback, maxLev, symbol, setLeverageApi, dex, positions, pacAgent]);
 
   // Synchronous double-click guard. React's `loading` state is async, so a
   // second click can land between dispatch-1 and React committing the button's
@@ -1323,6 +1347,25 @@ function FuturesPanel() {
           }
         }
       }
+      // Bind before Pacifica account-settings. Direct wallet signatures from
+      // some adapters can fail Pacifica verification on /account/leverage even
+      // though the wallet returned a 64-byte signature.
+      if (dex === 'pacifica' && !pacAgent && bindAgent) {
+        if (bindingAgent) {
+          setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
+          return;
+        }
+        try {
+          const bound = await bindAgent();
+          if (!bound && !pacAgent) {
+            setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
+            return;
+          }
+        } catch (e) {
+          setLocalAlert(e?.message || PACIFICA_AGENT_REQUIRED_MESSAGE);
+          return;
+        }
+      }
       // Pacifica-only: flush any pending leverage change before placing the
       // order so the server sees the right leverage on fill. Avantis and
       // Decibel both take leverage per-trade (Decibel computes size from
@@ -1342,13 +1385,6 @@ function FuturesPanel() {
             return;
           }
         }
-      }
-      // Pacifica Pro mode has no agent-bind banner. Auto-bind on the first
-      // trade so the user sees ONE wallet popup (bind) instead of one popup
-      // per trade for the rest of the session. Best-effort — if bind is
-      // rejected we still try the trade through master sign.
-      if (dex === 'pacifica' && !pacAgent && bindAgent) {
-        try { await bindAgent(); } catch { /* fall through to master sign */ }
       }
       setTradePhase('signing');
       let result;
@@ -1373,7 +1409,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, pacBalance]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)

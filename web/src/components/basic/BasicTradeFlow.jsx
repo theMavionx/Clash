@@ -21,6 +21,7 @@ import { colors, shared } from './styles';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
+const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for leverage and margin updates.';
 
 // Slide animation between steps. We slide horizontally to reinforce the
 // "checkout flow" mental model (forward = right, back = left).
@@ -172,6 +173,22 @@ function BasicTradeFlow({
         // the calls when the symbol's current value already matches the
         // intent.
         const sym = pickedToken.symbol;
+        if (!pacAgent && bindAgent) {
+          try {
+            const bound = await bindAgent();
+            if (!bound && !pacAgent) {
+              setErrorMsg('1-tap trading is still enabling. Try again in a moment.');
+              submittedRef.current = false;
+              setSubmitting(false);
+              return;
+            }
+          } catch (e) {
+            setErrorMsg(e?.message || PACIFICA_AGENT_REQUIRED_MESSAGE);
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
+        }
         const currentIsolated = !!(marginModes && marginModes[sym]);
         if (!currentIsolated && setMarginMode) {
           const marginRes = await setMarginMode(sym, true);
@@ -263,7 +280,7 @@ function BasicTradeFlow({
       submittedRef.current = false;
       setSubmitting(false);
     }
-  }, [dex, placeMarketOrder, setLeverageApi, setMarginMode, marginModes, leverageSettings, pickedToken, pickedDir, pickedAmount, pickedLev, setActiveTab, livePrice]);
+  }, [dex, placeMarketOrder, setLeverageApi, setMarginMode, marginModes, leverageSettings, pickedToken, pickedDir, pickedAmount, pickedLev, setActiveTab, livePrice, pacAgent, bindAgent]);
 
   const stepIdx = STEPS.indexOf(step);
   const back = useCallback(() => {
