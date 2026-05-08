@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
+import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
@@ -80,6 +81,54 @@ function normalizePerplTrade(fill, markets) {
   };
 }
 
+function normalizePhoenixTrade(fill, markets) {
+  const symbol = phoenixSymbol(fill?.marketSymbol || fill?.symbol || fill?.market);
+  if (!symbol) return null;
+  const m = (markets || []).find(x => String(x.symbol || '').toUpperCase() === symbol);
+  const lotsDecimals = Number(m?._phoenixBaseLotsDecimals ?? 4);
+  const baseDelta = Number(fill?.baseLotsDelta ?? fill?.baseQty ?? fill?.size ?? 0);
+  const beforeLots = Number(fill?.baseLotsBefore ?? 0);
+  const afterLots = Number(fill?.baseLotsAfter ?? 0);
+  const amount = Math.abs(
+    fill?.baseQty != null || fill?.size != null
+      ? Number(fill?.baseQty ?? fill?.size)
+      : baseDelta / 10 ** lotsDecimals
+  );
+  const instruction = String(fill?.instructionType || '').toLowerCase();
+  const reduced = Number.isFinite(beforeLots)
+    && Number.isFinite(afterLots)
+    && Math.abs(afterLots) < Math.abs(beforeLots)
+    && beforeLots !== 0;
+  const isClose = reduced || instruction.includes('close') || fill?.isReduceOnly;
+  const directionLots = isClose ? beforeLots : baseDelta;
+  const isLong = directionLots >= 0;
+  const side = isClose
+    ? (isLong ? 'close_long' : 'close_short')
+    : (isLong ? 'open_long' : 'open_short');
+  const id = [
+    fill?.fillId,
+    fill?.signature,
+    fill?.slot,
+    fill?.slotIndex,
+    fill?.instructionIndex,
+    fill?.eventIndex,
+    symbol,
+  ].filter(v => v !== undefined && v !== null && v !== '').join(':');
+  return {
+    ...fill,
+    _dex: 'phoenix',
+    id,
+    symbol,
+    side,
+    action: side,
+    amount,
+    price: fill?.price,
+    fee: Math.abs(Number(fill?.fees || 0)),
+    created_at: fill?.timestamp,
+    realized_pnl_amount: fill?.realizedPnl,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -134,6 +183,16 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
             : Array.isArray(data?.items) ? data.items
             : [];
           if (!cancelled) setTrades(rows.map(t => normalizePerplTrade(t, markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'phoenix') {
+          const r = await fetch(`${PHOENIX_API_URL}/v1/traders/${encodeURIComponent(addr)}/trades_v2?limit=100`, {
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`Phoenix history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
+          if (!cancelled) setTrades(rows.map(t => normalizePhoenixTrade(t, markets)).filter(Boolean));
           return;
         }
 
@@ -193,11 +252,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
+  const showPnl = dex === 'decibel' || dex === 'phoenix';
 
   return (
     <table style={S.table}>
@@ -208,7 +268,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
         <th style={S.th}>Price</th>
         <th style={S.th}>Amount</th>
         <th style={S.th}>Fee</th>
-        {isDecibel && <th style={S.th}>PnL</th>}
+        {showPnl && <th style={S.th}>PnL</th>}
         {isDecibel && <th style={S.th}>Funding</th>}
       </tr></thead>
       <tbody>
@@ -230,7 +290,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
               <td style={S.td}>${displayNumber(t.price, 6)}</td>
               <td style={S.td}>{displayNumber(t.amount, 6)}</td>
               <td style={S.td}>${Number(t.fee || 0).toFixed(4)}</td>
-              {isDecibel && (
+              {showPnl && (
                 <td style={{ ...S.td, color: pnl >= 0 ? '#4CAF50' : '#E53935', fontWeight: 800 }}>
                   {signedUsd(pnl)}
                 </td>

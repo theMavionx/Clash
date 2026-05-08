@@ -59,6 +59,11 @@ func _save_token() -> void:
 	cfg.set_value("auth", "name", display_name)
 	cfg.save("user://auth.cfg")
 
+func _response_matches_requested_dex(response: Dictionary, requested_dex: String) -> bool:
+	if requested_dex == "":
+		return true
+	return String(response.get("dex", "")).to_lower() == requested_dex.to_lower()
+
 func has_token() -> bool:
 	return token != ""
 
@@ -84,6 +89,12 @@ func register(player_name: String, wallet: String = "", dex: String = "", fid: i
 	http.queue_free()
 	var response = _parse_response(result)
 	if response.has("token"):
+		if not _response_matches_requested_dex(response, dex):
+			return {
+				"error": "DEX mismatch: requested %s but server returned %s" % [dex, String(response.get("dex", ""))],
+				"requested_dex": dex,
+				"actual_dex": String(response.get("dex", "")),
+			}
 		token = response["token"]
 		player_id = response["id"]
 		display_name = response["name"]
@@ -124,6 +135,12 @@ func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
 	http.queue_free()
 	var response = _parse_response(result)
 	if response.has("token"):
+		if not _response_matches_requested_dex(response, dex):
+			return {
+				"error": "DEX mismatch: requested %s but server returned %s" % [dex, String(response.get("dex", ""))],
+				"requested_dex": dex,
+				"actual_dex": String(response.get("dex", "")),
+			}
 		token = response["token"]
 		player_id = response["id"]
 		display_name = response["name"]

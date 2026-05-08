@@ -99,18 +99,30 @@ export const DEX_CONFIG = {
     chainShort: 'MON',
     description: 'Perps on Monad',
   },
+  phoenix: {
+    id: 'phoenix',
+    label: 'PHOENIX',
+    shortLabel: 'PHX',
+    emoji: 'PHX',
+    logo: '/phoenix-mark-orange.svg',
+    logoIsWordmark: false,
+    color: '#F97316',
+    colorDark: '#C2410C',
+    colorLight: 'rgba(249,115,22,0.15)',
+    borderColor: '#EA580C',
+    chain: 'Solana',
+    chainShort: 'SOL',
+    description: 'Phoenix perps on Solana',
+  },
 };
 
 export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
   if (!DEX_CONFIG[dexId]) return false;
-  // Solana Saga / Seeker: lock to Pacifica only. The phone's Seed Vault
-  // (the secure-enclave-backed key store) holds a Solana keypair, and
-  // the Mobile Wallet Adapter protocol is Solana-native — there's no
-  // first-class flow for signing Base/Arbitrum/Aptos transactions through
-  // it. Surfacing Avantis/GMX/Decibel here would either dead-end on a
-  // missing wallet adapter, or silently fall through to Privy email login
-  // which defeats the point of buying a Solana phone. Hide them outright.
-  if (isSolanaMobile && dexId !== 'pacifica') return false;
+  // Solana Saga / Seeker: show only Solana-native venues. The phone's Seed
+  // Vault holds a Solana keypair, and Mobile Wallet Adapter is Solana-native.
+  // Base/Arbitrum/Aptos/Monad signing would either dead-end or fall through
+  // to a non-native wallet flow.
+  if (isSolanaMobile && dexId !== 'pacifica' && dexId !== 'phoenix') return false;
   // Farcaster mini apps expose Solana and, on some clients, EVM providers.
   // Aptos wallet-standard providers such as Petra are not available there, so
   // Decibel would leave users stuck on an impossible connect step.
@@ -186,7 +198,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -222,7 +234,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

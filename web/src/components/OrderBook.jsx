@@ -1,12 +1,37 @@
 import { memo, useState, useEffect, useRef } from 'react';
+import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
-const API = 'https://api.pacifica.fi/api/v1';
-
-function OrderBook({ symbol = 'BTC' }) {
+function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
   const [book, setBook] = useState({ bids: [], asks: [] });
   const wsRef = useRef(null);
 
   useEffect(() => {
+    if (dex === 'phoenix') {
+      let cancelled = false;
+      let timer = null;
+      async function load() {
+        try {
+          const r = await fetch(`${PHOENIX_API_URL}/v1/view/orderbook/${encodeURIComponent(phoenixSymbol(symbol))}`);
+          if (!r.ok) throw new Error(`Phoenix orderbook ${r.status}`);
+          const d = await r.json();
+          if (cancelled) return;
+          setBook({
+            bids: (d?.bids || []).slice(0, 12).map((b, i) => ({ price: Number(b[0]), amount: Number(b[1]), count: b[2] ?? i + 1 })),
+            asks: (d?.asks || []).slice(0, 12).map((a, i) => ({ price: Number(a[0]), amount: Number(a[1]), count: a[2] ?? i + 1 })),
+          });
+        } catch {
+          if (!cancelled) setBook({ bids: [], asks: [] });
+        } finally {
+          if (!cancelled) timer = setTimeout(load, 1500);
+        }
+      }
+      load();
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
+    }
+
     let ws, reconnectTimer, throttleTimer = null, latestBook = null, cancelled = false;
 
     function flushBook() {
@@ -49,7 +74,7 @@ function OrderBook({ symbol = 'BTC' }) {
       clearTimeout(throttleTimer);
       if (ws) { ws.onclose = null; ws.onerror = null; ws.close(); }
     };
-  }, [symbol]);
+  }, [symbol, dex]);
 
   const maxBidAmt = Math.max(...book.bids.map(b => b.amount), 1);
   const maxAskAmt = Math.max(...book.asks.map(a => a.amount), 1);

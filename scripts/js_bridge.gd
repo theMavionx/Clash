@@ -321,7 +321,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 				"trophies": net.trophies,
 				"player_id": net.player_id,
 				"token": net.token,
-				"dex": dex if dex != "" else wallet_result.get("dex", ""),
+				"dex": wallet_result.get("dex", dex),
 			})
 			return
 	if player_name.length() < 2:
@@ -337,7 +337,7 @@ func _do_register(player_name: String, wallet: String = "", dex: String = "", fi
 		"trophies": net.trophies,
 		"player_id": net.player_id,
 		"token": net.token,
-		"dex": dex if dex != "" else result.get("dex", ""),
+		"dex": result.get("dex", dex),
 	})
 
 

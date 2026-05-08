@@ -14,6 +14,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
   const token = player?.token;
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(null);
   const tokenRef = useRef(token);
   tokenRef.current = token;
@@ -34,15 +35,24 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
       // state into Alice's UI.
       if (tokenRef.current !== fetchToken) return;
       setMe(data);
+      setLoaded(true);
     } catch (e) {
       setError(e.message || 'error');
+      setLoaded(true);
     } finally {
       setLoading(false);
     }
   }, [token]);
 
   useEffect(() => {
-    if (!active || !token) return;
+    if (!active) return;
+    if (!token) {
+      setMe(null);
+      setLoading(false);
+      setLoaded(false);
+      return;
+    }
+    setLoaded(false);
     refresh();
     const id = setInterval(refresh, pollMs);
     return () => clearInterval(id);
@@ -70,7 +80,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     return ok;
   }, [token, refresh]);
 
-  return { me, loading, error, refresh, join, leave };
+  return { me, loading, loaded, error, refresh, join, leave };
 }
 
 // Public leaderboard fetcher — separate from the per-player state above

@@ -30,7 +30,7 @@ import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
-import { usePrivy } from '@privy-io/react-auth';
+import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 import {
   useSolanaAdapterResolver,
   usePrivySolanaResolver,
@@ -126,8 +126,13 @@ export function useAuthFlow() {
   // (Mobile Wallet Adapter) we want on Saga/Seeker.
   const solWallet = useSolWallet();
   const { showRegister } = useUI();
-  const privyEnabled = !!import.meta.env.VITE_PRIVY_APP_ID;
-  const { ready: privyReady, authenticated: privyAuthed, login: privyLogin, logout: privyLogout } = usePrivy();
+  const {
+    enabled: privyEnabled,
+    ready: privyReady,
+    authenticated: privyAuthed,
+    login: privyLogin,
+    logout: privyLogout,
+  } = useOptionalPrivy();
   const { setExternalProvider: setEvmProvider, disconnect: evmDisconnect } = useEvmWallet();
 
   const [dexPicked, setDexPickedState] = useState(readDexPicked);
@@ -160,8 +165,8 @@ export function useAuthFlow() {
   // needs an Aptos wallet-standard provider (Petra/etc.), which Farcaster
   // mini apps do not expose, so a cached Decibel choice must fall back to the
   // picker instead of landing on an impossible connect screen. Saga/Seeker
-  // is the same story for every non-Pacifica DEX (no MWA flow for Base /
-  // Arbitrum / Aptos signing).
+  // is the same story for every non-Solana DEX (no MWA flow for Base /
+  // Arbitrum / Aptos / Monad signing).
   useEffect(() => {
     const ctx = { isInFrame, isSolanaMobile };
     if (isDexAvailableInContext(dex, ctx)) return;
@@ -172,23 +177,16 @@ export function useAuthFlow() {
     fcEvmTriedRef.current = false;
   }, [dex, isInFrame, isSolanaMobile, setDex]);
 
-  // Saga/Seeker auto-pick: skip the DEX picker entirely. The user can
-  // only trade Pacifica on this device anyway (the only DEX visible to
-  // them per `isDexAvailableInContext`), so showing the picker would be
-  // a redundant tap. Same effect as the user manually clicking Pacifica.
-  // We don't change `dex` if it already is 'pacifica' (DexProvider's
-  // localStorage default + the guard above already cover that).
+  // Saga/Seeker: keep the cached DEX on a Solana-native venue. Now that
+  // Phoenix is also Solana-native, we keep the DEX picker available instead
+  // of silently locking the device to Pacifica.
   useEffect(() => {
     if (!smReady || !isSolanaMobile) return;
-    if (dex !== 'pacifica') setDex('pacifica');
-    if (!readDexPicked()) {
-      writeDexPicked(true);
-      setDexPickedState(true);
-    }
+    if (dex !== 'pacifica' && dex !== 'phoenix') setDex('pacifica');
   }, [smReady, isSolanaMobile, dex, setDex]);
 
-  // Saga/Seeker auto-connect: once the page settles + Pacifica is picked,
-  // programmatically select + connect the Mobile Wallet Adapter. The OS
+  // Saga/Seeker auto-connect: once the page settles, programmatically select
+  // + connect the Mobile Wallet Adapter. The OS
   // shows the Seed Vault confirmation; one tap and the user's pubkey is
   // available. Without this the user would still have to open the wallet
   // modal and click MWA themselves. Idempotent — only runs while

@@ -371,7 +371,6 @@ export function usePacifica() {
     const rpcs = [
       'https://solana-rpc.publicnode.com',
       'https://api.mainnet-beta.solana.com',
-      'https://rpc.ankr.com/solana',
     ];
     for (const url of rpcs) {
       try {

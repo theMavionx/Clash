@@ -72,7 +72,7 @@ function parseGmxMarketName(raw) {
   const s = String(raw || '');
   // Drop the "[longToken-shortToken]" pool tag and split off the quote.
   const left = s.split('[')[0].trim();           // "ETH/USD"
-  const base = left.split(/[\/-]/)[0].trim();    // "ETH"
+  const base = left.split(/[/-]/)[0].trim();    // "ETH"
   const pool = (s.match(/\[([^\]]+)\]/) || [])[1] || '';
   return {
     base: base.toUpperCase(),
@@ -160,7 +160,7 @@ function normalizePosition(p, marketMap) {
   // — that's what feeds the mark price into the PnL math. Without this,
   // pos.symbol was '' and the panel never found a mark, so pnlVal=0 and
   // the card always showed "+$0.00".
-  const symFromName = String(p?.indexName || '').split(/[\/-]/)[0].trim().toUpperCase();
+  const symFromName = String(p?.indexName || '').split(/[/-]/)[0].trim().toUpperCase();
   const symbol = symFromName
     || String(p?.indexToken?.symbol || p?.market?.indexToken?.symbol || '').toUpperCase();
   const sizeUsd = fmtUsd(p?.sizeInUsd);
@@ -278,7 +278,7 @@ function findGmxMarketSymbol(tickerList, base) {
     .map(t => {
       const sym = String(t?.symbol || '');
       const left = sym.split('[')[0].trim();        // "ETH/USD"
-      const baseSym = left.split(/[\/-]/)[0].trim().toUpperCase();
+      const baseSym = left.split(/[/-]/)[0].trim().toUpperCase();
       const pool = (sym.match(/\[([^\]]+)\]/) || [])[1] || '';
       const shortToken = pool.split('-').pop() || '';
       return { full: sym, baseSym, pool, shortToken, isSwapOnly: /swap[\s-]?only/i.test(sym) };
@@ -767,7 +767,7 @@ export function useGmx() {
   const findV2Position = useCallback(async (apiSdk, target, isLong) => {
     const livePositions = await apiSdk.fetchPositionsInfo({ address: walletAddr, includeRelatedOrders: false });
     return (livePositions || []).find(p => {
-      const base = String(p?.indexName || '').split(/[\/-]/)[0].trim().toUpperCase();
+      const base = String(p?.indexName || '').split(/[/-]/)[0].trim().toUpperCase();
       return base === String(target || '').toUpperCase() && Boolean(p?.isLong) === isLong;
     });
   }, [walletAddr]);
@@ -871,7 +871,7 @@ export function useGmx() {
         try {
           const list = await apiSdk.fetchPositionsInfo({ address: walletAddr });
           if ((list || []).some(p => {
-            const base = String(p?.indexName || '').split(/[\/-]/)[0].trim().toUpperCase();
+            const base = String(p?.indexName || '').split(/[/-]/)[0].trim().toUpperCase();
             return base === String(symbol).toUpperCase() && Boolean(p?.isLong) === isLong;
           })) {
             confirmed = true;
@@ -1092,7 +1092,7 @@ export function useGmx() {
         try {
           const fresh = await apiSdk.fetchPositionsInfo({ address: walletAddr, includeRelatedOrders: false });
           const stillOpen = (fresh || []).find(p => {
-            const base = String(p?.indexName || '').split(/[\/-]/)[0].trim().toUpperCase();
+            const base = String(p?.indexName || '').split(/[/-]/)[0].trim().toUpperCase();
             return base === target && Boolean(p?.isLong) === isLong;
           });
           // Close confirmed when (a) position is gone OR (b) sizeInUsd

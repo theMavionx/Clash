@@ -1,0 +1,66 @@
+import { createPhoenixClient } from '@ellipsis-labs/rise';
+
+export const PHOENIX_API_URL =
+  import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
+
+const DEFAULT_RPC_URL =
+  import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+
+const clients = new Map();
+
+export function getPhoenixClient(rpcUrl) {
+  const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
+  const key = `${PHOENIX_API_URL}|${resolvedRpc}`;
+  if (!clients.has(key)) {
+    clients.set(key, createPhoenixClient({
+      apiUrl: PHOENIX_API_URL,
+      rpcUrl: resolvedRpc,
+      ws: false,
+      pdaCache: { maxEntries: 1024 },
+      exchangeMetadata: { stream: false },
+    }));
+  }
+  return clients.get(key);
+}
+
+export function phoenixSymbol(symbol) {
+  return String(symbol || '')
+    .toUpperCase()
+    .replace(/[-/](PERP|USD|USDC)$/i, '')
+    .replace(/PERP$/i, '')
+    .trim();
+}
+
+export async function phoenixFetch(path, options = {}) {
+  const res = await fetch(`${PHOENIX_API_URL}${path}`, options);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) {
+    const msg = data?.message || data?.error || text || `Phoenix API error ${res.status}`;
+    throw new Error(msg);
+  }
+  return data;
+}
+
+export function asPhoenixArray(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.data)) return value.data;
+  if (Array.isArray(value?.value)) return value.value;
+  if (Array.isArray(value?.items)) return value.items;
+  if (Array.isArray(value?.stats)) return value.stats;
+  return [];
+}
+
+export function phoenixMarketRoute(symbol) {
+  return `/exchange/market/${encodeURIComponent(phoenixSymbol(symbol))}`;
+}
+
+export function phoenixCandlesRoute(symbol, params = {}) {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') qs.set(key, String(value));
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return `/v1/candles/${encodeURIComponent(phoenixSymbol(symbol))}${suffix}`;
+}

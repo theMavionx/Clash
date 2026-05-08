@@ -36,7 +36,6 @@ const RPC_LIST = [
   'https://solana-rpc.publicnode.com',
   'https://api.mainnet-beta.solana.com',
   'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
 ];
 
 function useBestRpc() {

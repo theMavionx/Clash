@@ -4,9 +4,8 @@
 // no side-effects, no registration calls; just map upstream state.
 
 import { useWallet } from '@solana/wallet-adapter-react';
-import { usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
-import { useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
 // ── Solana ────────────────────────────────────────────────────────
 
@@ -35,10 +34,9 @@ export function useSolanaAdapterResolver(isInFrame) {
 // Returns null until Privy is authenticated AND the embedded wallet
 // materialises in `usePrivySolanaWallets()`.
 export function usePrivySolanaResolver() {
-  const { authenticated, user } = usePrivy();
-  const { wallets } = usePrivySolanaWallets();
+  const { authenticated, user, solanaWallets } = useOptionalPrivy();
   if (!authenticated) return null;
-  const pool = wallets || [];
+  const pool = solanaWallets || [];
   const picked = pool.find(w => w && w.walletClientType === 'privy') || pool[0];
   if (!picked?.address) return null;
   return {
@@ -74,10 +72,9 @@ export function useEvmContextResolver() {
 // flow's UI to a "signing you in" state as soon as we know the user is
 // authenticated with Privy on the Avantis path.
 export function usePrivyEvmCandidate() {
-  const { authenticated, user } = usePrivy();
-  const { wallets } = usePrivyEvmWallets();
+  const { authenticated, user, evmWallets } = useOptionalPrivy();
   if (!authenticated) return null;
-  const pool = wallets || [];
+  const pool = evmWallets || [];
   const picked = pool.find(w => w && w.walletClientType === 'privy') || pool[0];
   if (!picked?.address) return null;
   return {

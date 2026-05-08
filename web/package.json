@@ -17,6 +17,7 @@
     "@aptos-labs/ts-sdk": "^5.2.1",
     "@aptos-labs/wallet-adapter-react": "^8.3.3",
     "@decibeltrade/sdk": "^0.6.0",
+    "@ellipsis-labs/rise": "^0.4.9",
     "@farcaster/mini-app-solana": "^2.0.0",
     "@farcaster/miniapp-sdk": "^0.3.0",
     "@gmx-io/sdk": "^1.5.0-alpha-13",

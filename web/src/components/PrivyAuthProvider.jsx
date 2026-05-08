@@ -1,5 +1,6 @@
-import { PrivyProvider } from '@privy-io/react-auth';
-import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
+import { createContext, useContext, useMemo } from 'react';
+import { PrivyProvider, usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
+import { toSolanaWalletConnectors, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
@@ -21,13 +22,55 @@ import { monadChain } from '../lib/monadConfig';
 const SOLANA_RPC_HTTP = 'https://solana-rpc.publicnode.com';
 const SOLANA_RPC_WS = 'wss://solana-rpc.publicnode.com';
 const solanaWalletConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
+const OPTIONAL_PRIVY_DEFAULT = {
+  enabled: false,
+  ready: true,
+  authenticated: false,
+  user: null,
+  login: () => {},
+  logout: () => {},
+  evmWallets: [],
+  solanaWallets: [],
+};
+const OptionalPrivyContext = createContext(OPTIONAL_PRIVY_DEFAULT);
+
+export function useOptionalPrivy() {
+  return useContext(OptionalPrivyContext);
+}
+
+function PrivyStateBridge({ children }) {
+  const { ready, authenticated, user, login, logout } = usePrivy();
+  const { wallets: evmWallets } = usePrivyEvmWallets();
+  const { wallets: solanaWallets } = usePrivySolanaWallets();
+  const value = useMemo(() => ({
+    enabled: true,
+    ready,
+    authenticated,
+    user,
+    login,
+    logout,
+    evmWallets: evmWallets || [],
+    solanaWallets: solanaWallets || [],
+  }), [ready, authenticated, user, login, logout, evmWallets, solanaWallets]);
+  return (
+    <OptionalPrivyContext.Provider value={value}>
+      {children}
+    </OptionalPrivyContext.Provider>
+  );
+}
 
 // Wraps children in PrivyProvider. When VITE_PRIVY_APP_ID is unset (e.g. local dev
 // without a Privy project yet), renders children without Privy so the rest of the
 // app keeps working and the "Login with Privy" button can simply be disabled.
 export default function PrivyAuthProvider({ children }) {
   const appId = import.meta.env.VITE_PRIVY_APP_ID;
-  if (!appId) return children;
+  if (!appId) {
+    return (
+      <OptionalPrivyContext.Provider value={OPTIONAL_PRIVY_DEFAULT}>
+        {children}
+      </OptionalPrivyContext.Provider>
+    );
+  }
 
   return (
     <PrivyProvider
@@ -80,7 +123,9 @@ export default function PrivyAuthProvider({ children }) {
         solanaClusters: [{ name: 'mainnet-beta', rpcUrl: SOLANA_RPC_HTTP }],
       }}
     >
-      {children}
+      <PrivyStateBridge>
+        {children}
+      </PrivyStateBridge>
     </PrivyProvider>
   );
 }

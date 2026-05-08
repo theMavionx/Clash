@@ -12,11 +12,11 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { createPublicClient, createWalletClient, http, custom, fallback } from 'viem';
 import { base, arbitrum } from 'viem/chains';
-import { useWallets as usePrivyEvmWallets, usePrivy } from '@privy-io/react-auth';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
+import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
 // Default public client stays on Base (back-compat for Avantis call sites).
 // Arbitrum-aware callers grab the chain-specific client via getPublicClient(chainId).
@@ -209,8 +209,7 @@ export function EvmWalletProvider({ children }) {
 
   // Privy embedded wallet — auto-picked when user logs in via email.
   // `usePrivyEvmWallets()` returns ONLY Ethereum wallets (no chainType filter needed).
-  const { authenticated } = usePrivy();
-  const { wallets: privyWallets } = usePrivyEvmWallets();
+  const { authenticated, evmWallets: privyWallets } = useOptionalPrivy();
   const privyWallet = authenticated
     ? (privyWallets || []).find(w => w?.walletClientType === 'privy')
       || (privyWallets || [])[0]

@@ -8,6 +8,7 @@ import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
+import { usePhoenix } from '../hooks/usePhoenix';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -35,6 +36,7 @@ function ProfileModal({ onClose }) {
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
+  const phoenixHook = usePhoenix();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
@@ -43,6 +45,8 @@ function ProfileModal({ onClose }) {
     ? gmxHook
     : dex === 'monad'
     ? monadHook
+    : dex === 'phoenix'
+    ? phoenixHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -69,11 +73,15 @@ function ProfileModal({ onClose }) {
     ? (walletAddr || player?.wallet || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || player?.wallet || null)            // Aptos from useDecibel
+    : dex === 'phoenix'
+    ? (walletAddr || player?.wallet || null)            // Solana from usePhoenix
     : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy
   const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
     ? (walletAddr ? 'evm' : null)
     : dex === 'decibel'
     ? (walletAddr ? 'aptos' : null)
+    : dex === 'phoenix'
+    ? (walletAddr ? 'solana' : null)
     : (adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null));
 
   // Switch active DEX. In our model one wallet = one account, so "switching"

@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplPositionHistory } from '../lib/perplClient';
+import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
@@ -76,6 +77,26 @@ function normalizePerplFunding(row, markets) {
   };
 }
 
+function normalizePhoenixFunding(row) {
+  const payout = Number(row?.fundingPayment ?? row?.funding_payment ?? 0);
+  const ratePct = Number(row?.fundingRatePercentage ?? row?.funding_rate_percentage);
+  const positionSize = Number(row?.positionSize ?? row?.position_size ?? 0);
+  const positionSide = String(row?.positionSide ?? row?.position_side ?? '').toLowerCase();
+  const ts = row?.timestamp ?? row?.created_at ?? row?.time;
+  return {
+    ...row,
+    _dex: 'phoenix',
+    id: row?.id || `${row?.symbol || ''}:${ts || ''}:${row?.fundingPayment || row?.funding_payment || ''}`,
+    symbol: phoenixSymbol(row?.symbol),
+    side: positionSide.includes('short') || positionSize < 0 ? 'ask' : 'bid',
+    payout,
+    rate: Number.isFinite(ratePct) ? ratePct / 100 : null,
+    amount: Math.abs(positionSize),
+    fee: 0,
+    created_at: ts,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -124,6 +145,20 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
             : Array.isArray(data?.items) ? data.items
             : [];
           if (!cancelled) setPayments(rows.map(p => normalizePerplFunding(p, markets)).filter(Boolean));
+          return;
+        }
+        if (dex === 'phoenix') {
+          const qs = new URLSearchParams({ traderPdaIndex: '0', limit: '100' });
+          const r = await fetch(`${PHOENIX_API_URL}/trader/${encodeURIComponent(addr)}/funding-history?${qs}`, {
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`Phoenix funding history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.events) ? d.events
+            : Array.isArray(d?.data) ? d.data
+            : Array.isArray(d) ? d
+            : [];
+          if (!cancelled) setPayments(rows.map(normalizePhoenixFunding).filter(p => p.symbol));
           return;
         }
 
@@ -182,7 +217,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
   }
 

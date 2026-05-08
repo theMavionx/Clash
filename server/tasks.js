@@ -243,11 +243,12 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
+    if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
     if (!fdb) return [];
     try {

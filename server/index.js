@@ -296,7 +296,7 @@ app.get('/trading-stats', dashboardAuth, async (req, res) => {
   </table>
 
   <div style="margin-top:40px;font-size:12px;color:#666;text-align:center">
-    Total gold distributed across both DEXs: <strong style="color:#FFD700">${totalGold}</strong>
+    Total gold distributed across indexed DEXs: <strong style="color:#FFD700">${totalGold}</strong>
   </div>
 </body></html>`);
 });
@@ -492,6 +492,8 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="avantis">Avantis</option>
               <option value="decibel">Decibel</option>
               <option value="gmx">GMX</option>
+              <option value="monad">Perpl</option>
+              <option value="phoenix">Phoenix</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
@@ -701,6 +703,7 @@ function renderPlayers() {
   const avtCount   = players.filter(p => p.dex === 'avantis').length;
   const decCount   = players.filter(p => p.dex === 'decibel').length;
   const gmxCount   = players.filter(p => p.dex === 'gmx').length;
+  const phxCount   = players.filter(p => p.dex === 'phoenix').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -716,6 +719,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#0EA5E9"><div class="v" style="color:#38bdf8;font-size:22px">' + avtCount + '</div><div class="l">Avantis</div></div>' +
     '<div class="stat" style="border-color:#facc15"><div class="v" style="color:#facc15;font-size:22px">' + decCount + '</div><div class="l">Decibel</div></div>' +
     '<div class="stat" style="border-color:#4f46e5"><div class="v" style="color:#a5b4fc;font-size:22px">' + gmxCount + '</div><div class="l">GMX</div></div>' +
+    '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + phxCount + '</div><div class="l">Phoenix</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -727,6 +731,7 @@ function renderPlayers() {
     if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
     if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
     if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
+    if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -938,6 +943,7 @@ function clientDexBadge(dex) {
     : d === 'avantis' ? '#38bdf8'
     : d === 'decibel' ? '#facc15'
     : d === 'gmx' ? '#a5b4fc'
+    : d === 'phoenix' ? '#fb923c'
     : '#9ca3af';
   return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
 }
@@ -1115,16 +1121,19 @@ async function loadStats() {
     const avtCount = (byDex.find(x => x.dex === 'avantis')  || {}).n || 0;
     const decCount = (byDex.find(x => x.dex === 'decibel')  || {}).n || 0;
     const gmxCount = (byDex.find(x => x.dex === 'gmx')      || {}).n || 0;
+    const phxCount = (byDex.find(x => x.dex === 'phoenix')  || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
     const decRew = rewardsMap.decibel  || {};
     const gmxRew = rewardsMap.gmx      || {};
+    const phxRew = rewardsMap.phoenix  || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
       dexCard('decibel',  'Decibel · Aptos',   '#facc15', decCount, decRew.total_gold || 0, decRew.total_volume || 0, activityLines('decibel')) +
       dexCard('gmx',      'GMX · Arbitrum',    '#4f46e5', gmxCount, gmxRew.total_gold || 0, gmxRew.total_volume || 0, activityLines('gmx')) +
+      dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
@@ -1178,13 +1187,15 @@ async function loadStats() {
     document.getElementById('topTradersByDex').innerHTML =
       topTraderTable('avantis', 'Avantis · Base',  '#0EA5E9') +
       topTraderTable('decibel', 'Decibel · Aptos', '#facc15') +
-      topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5');
+      topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5') +
+      topTraderTable('phoenix', 'Phoenix · Solana', '#f97316');
 
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
       if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
       if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
+      if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>

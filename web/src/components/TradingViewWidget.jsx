@@ -1,5 +1,7 @@
-import { memo, useEffect, useRef, useState, useCallback } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
+import { getReadClient } from '../lib/decibel';
+import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
@@ -14,6 +16,15 @@ const INTERVALS = [
   { label: '4H', value: '4h', ms: 30 * 24 * 60 * 60 * 1000, pyth: '240' },
   { label: '1D', value: '1d', ms: 180 * 24 * 60 * 60 * 1000, pyth: '1D' },
 ];
+
+const DECIBEL_INTERVALS = {
+  '1m': '1m',
+  '5m': '5m',
+  '15m': '15m',
+  '1h': '1h',
+  '4h': '4h',
+  '1d': '1d',
+};
 
 // Avantis trades a mix of crypto, equities, FX, and commodities — all via
 // Pyth. Pyth identifies symbols as e.g. "Crypto.BTC/USD", "Equity.US.AAPL/USD",
@@ -82,6 +93,44 @@ function benchmarksFallback(pythSymbol) {
   return null;
 }
 
+function decibelMarketName(sym) {
+  const raw = String(sym || '').toUpperCase().trim();
+  const [base, quote = 'USD'] = raw.split(/[-/]/);
+  return `${(base || raw).trim()}/${(quote || 'USD').trim()}`;
+}
+
+function unixSeconds(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
+}
+
+function normalizeDecibelCandles(rows) {
+  return rows.map(c => ({
+    time: unixSeconds(c.t ?? c.time ?? c.timestamp),
+    open: Number(c.o ?? c.open),
+    high: Number(c.h ?? c.high),
+    low: Number(c.l ?? c.low),
+    close: Number(c.c ?? c.close),
+  }))
+    .filter(c => c.time && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))
+    .sort((a, b) => a.time - b.time);
+}
+
+async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
+  const read = await getReadClient();
+  const rows = await read.candlesticks.getByName({
+    marketName: decibelMarketName(symbol),
+    interval: DECIBEL_INTERVALS[interval] || '5m',
+    startTime: startMs,
+    endTime: endMs,
+    hideOutliers: true,
+  });
+  const candles = normalizeDecibelCandles(Array.isArray(rows) ? rows : []);
+  if (!candles.length) throw new Error('No Decibel candles');
+  return candles;
+}
+
 function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], orders = [], currentPrice, chartOverlay, dex = 'pacifica' }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -146,15 +195,64 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       return r.json();
     }
 
+    async function loadPythCandles(tf, now, start) {
+      const primary = pythSymbol || toPythSymbol(symbol);
+      const fallback = benchmarksFallback(primary);
+      const toSec = Math.floor(now / 1000);
+      let fromSec = Math.floor(start / 1000);
+
+      let json = await fetchBenchmarks(primary, tf.pyth, fromSec, toSec);
+      if (json.s === 'error' && fallback && fallback !== primary) {
+        json = await fetchBenchmarks(fallback, tf.pyth, fromSec, toSec);
+      }
+
+      const windowWidens = [3 * 86400, 14 * 86400, 30 * 86400];
+      for (const span of windowWidens) {
+        const bars = Array.isArray(json.t) ? json.t.length : 0;
+        if (bars >= 2) break;
+        fromSec = toSec - span;
+        const sym = (fallback && json.s === 'error') ? fallback : primary;
+        json = await fetchBenchmarks(sym, tf.pyth, fromSec, toSec);
+      }
+
+      if (json.s !== 'ok' || !Array.isArray(json.t)) return [];
+      return json.t.map((t, i) => ({
+        time: t,
+        open: parseFloat(json.o[i]),
+        high: parseFloat(json.h[i]),
+        low: parseFloat(json.l[i]),
+        close: parseFloat(json.c[i]),
+      }));
+    }
+
     async function load() {
       const now = Date.now();
       const tf = INTERVALS.find(i => i.value === interval) || INTERVALS[1];
       const start = now - tf.ms;
       try {
         let candles = [];
-        if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx') {
-          // Avantis and Decibel both price off Pyth on-chain (per their
-          // respective docs), so chart candles come from the same Pyth
+        if (dex === 'phoenix') {
+          const res = await fetch(`${PHOENIX_API_URL}/v1/candles/${encodeURIComponent(phoenixSymbol(symbol))}?timeframe=${encodeURIComponent(interval)}&limit=500`);
+          if (!res.ok) throw new Error(`Phoenix candles ${res.status}`);
+          const json = await res.json();
+          const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.value) ? json.value : [];
+          if (cancelled) return;
+          candles = rows.map(c => ({
+            time: Math.floor(Number(c.time || c.t || 0) / 1000),
+            open: Number(c.open ?? c.o),
+            high: Number(c.high ?? c.h),
+            low: Number(c.low ?? c.l),
+            close: Number(c.close ?? c.c),
+          })).filter(c => c.time && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+        } else if (dex === 'decibel') {
+          try {
+            candles = await fetchDecibelCandles(symbol, interval, start, now);
+          } catch {
+            candles = await loadPythCandles(tf, now, start);
+          }
+          if (cancelled) return;
+        } else if (dex === 'avantis' || dex === 'gmx') {
+          // Avantis and GMX chart candles come from Pyth's
           // benchmarks endpoint. Pacifica fetches its own REST kline.
           // Prefer the Pyth symbol from market data (authoritative); fall
           // back to heuristic mapping if parent didn't pass it.

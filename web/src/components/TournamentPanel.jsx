@@ -32,7 +32,14 @@ function TournamentPanel({ onClose }) {
   const [tab, setTab] = useState('active');
   const [pickedHistoryId, setPickedHistoryId] = useState(null);
 
-  const { me, join, leave } = useTournament({ active: tab === 'active' });
+  const {
+    me,
+    loading: tournamentLoading,
+    loaded: tournamentLoaded,
+    error: tournamentError,
+    join,
+    leave,
+  } = useTournament({ active: tab === 'active' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
   const { dex } = useDex();
@@ -56,6 +63,7 @@ function TournamentPanel({ onClose }) {
   const canJoin = !isHistory && !!me?.can_join;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
   const [busy, setBusy] = useState(false);
+  const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
 
   const myRank = useMemo(() => {
     if (!board || !player?.player_id) return null;
@@ -118,7 +126,21 @@ function TournamentPanel({ onClose }) {
           // height above, this is what removes the "jump" the user saw.
           key={`${tab}:${pickedHistoryId || ''}`}
           style={{ ...S.body, animation: 'tournamentFade 0.15s ease-out' }}>
-          {tab === 'active' && !t && (
+          {activeInitialLoading && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Loading tournament...</div>
+              <div style={S.emptySub}>Checking the latest tournament state from the server.</div>
+            </div>
+          )}
+
+          {tab === 'active' && !activeInitialLoading && tournamentError && !t && (
+            <div style={S.empty}>
+              <div style={S.emptyTitle}>Could not load tournament</div>
+              <div style={S.emptySub}>{tournamentError}</div>
+            </div>
+          )}
+
+          {tab === 'active' && !activeInitialLoading && !tournamentError && !t && (
             <div style={S.empty}>
               <div style={S.emptyIcon}>🏆</div>
               <div style={S.emptyTitle}>No tournament running</div>
@@ -201,7 +223,7 @@ function TournamentPanel({ onClose }) {
 
               {!isHistory && !joined && (
                 <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
-                  {busy ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
+                  {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                 </button>
               )}
 

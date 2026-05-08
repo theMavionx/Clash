@@ -8,6 +8,7 @@ import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
+import { usePhoenix } from '../hooks/usePhoenix';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -113,6 +114,96 @@ const fmtPrice = (p) => {
   const sig = Math.round(p * Math.pow(10, zeros + 3));
   return `0.0${subscriptN(zeros)}${String(sig).padStart(3, '0')}`;
 };
+
+function timeMs(value) {
+  if (value == null || value === '') return 0;
+  const n = Number(value);
+  if (Number.isFinite(n)) {
+    if (n > 1e17) return Math.floor(n / 1e6);
+    if (n > 1e14) return Math.floor(n / 1000);
+    if (n > 1e12) return Math.floor(n);
+    if (n > 1e9) return Math.floor(n * 1000);
+    return 0;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function positionOpenTimeMs(pos) {
+  const raw = pos?._raw || {};
+  const candidates = [
+    pos?.opened_at, pos?.openedAt, pos?.open_time, pos?.openTime,
+    pos?.open_timestamp, pos?.openTimestamp, pos?.entry_time, pos?.entryTime,
+    pos?.created_at, pos?.createdAt, pos?.timestamp, pos?.time,
+    raw.opened_at, raw.openedAt, raw.open_time, raw.openTime,
+    raw.open_timestamp, raw.openTimestamp, raw.entry_time, raw.entryTime,
+    raw.created_at, raw.createdAt, raw.timestamp, raw.time,
+    raw.increasedAtTime, raw.lastIncreasedTime, raw.lastIncreasedAtTime,
+  ];
+  for (const value of candidates) {
+    const ms = timeMs(value);
+    if (ms) return ms;
+  }
+  return 0;
+}
+
+function positionStableKey(pos) {
+  const symbol = String(pos?.symbol || pos?.s || '').toUpperCase();
+  const side = String(pos?.side || pos?.d || '').toLowerCase();
+  const market = String(pos?.market_addr || pos?.marketAddress || pos?.market || pos?._raw?.marketAddress || '');
+  const subaccount = pos?._phoenixSubaccountIndex ?? pos?.subaccount_index ?? pos?.subaccountIndex ?? '';
+  const pair = pos?.pair_index ?? pos?.pairIndex ?? '';
+  const trade = pos?.trade_index ?? pos?.tradeIndex ?? '';
+  const id = pos?.position_id ?? pos?.positionId ?? pos?.id ?? pos?._raw?.key ?? pos?._raw?.positionKey ?? '';
+  const parts = [symbol, side, market, subaccount, pair, trade, id];
+  return parts.some(Boolean) ? parts.join('|') : '';
+}
+
+function orderStableKey(order, index) {
+  const sym = order?.symbol || order?.s || '';
+  const side = order?.side || order?.d || '';
+  const type = order?.order_type || order?.ot || '';
+  const id = order?.order_id ?? order?.i ?? order?.client_order_id ?? order?.clientOrderId ?? '';
+  const pair = order?.pair_index ?? order?.pairIndex ?? '';
+  const trade = order?.trade_index ?? order?.tradeIndex ?? '';
+  const price = order?.price ?? order?.ip ?? order?.stop_price ?? order?.sp ?? '';
+  const parts = [id, sym, side, type, pair, trade, price];
+  return parts.some(part => part !== '' && part != null) ? parts.join('|') : `order:${index}`;
+}
+
+function useOpenedSortedPositions(positions) {
+  const orderRef = useRef({ map: new Map(), nextSeq: 1 });
+  return useMemo(() => {
+    const state = orderRef.current;
+    const now = Date.now();
+    const seen = new Set();
+    const rows = (positions || []).map((pos, index) => {
+      const key = positionStableKey(pos) || `position:${index}`;
+      seen.add(key);
+      let rec = state.map.get(key);
+      if (!rec) {
+        rec = { firstSeenMs: now, seq: state.nextSeq++ };
+        state.map.set(key, rec);
+      }
+      const openedMs = positionOpenTimeMs(pos);
+      if (openedMs) rec.openedMs = openedMs;
+      return {
+        pos,
+        index,
+        seq: rec.seq,
+        openedMs: rec.openedMs || rec.firstSeenMs,
+      };
+    });
+
+    for (const key of state.map.keys()) {
+      if (!seen.has(key)) state.map.delete(key);
+    }
+
+    return rows
+      .sort((a, b) => (b.openedMs - a.openedMs) || (a.seq - b.seq) || (a.index - b.index))
+      .map(row => row.pos);
+  }, [positions]);
+}
 
 const SignalIcon = ({ type, size = 14 }) => {
   if (type === '🔥') return (
@@ -490,7 +581,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
         const isSL = type.includes('STOP LOSS') || type.includes('SL');
         const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
         return (
-          <div key={i} style={S.posCard}>
+          <div key={orderStableKey(o, i)} style={S.posCard}>
             <div style={S.row}>
               <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
               <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
@@ -547,7 +638,7 @@ const PositionsList = memo(function PositionsList({
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
 
         return (
-          <div key={i} style={S.posCard}>
+          <div key={positionStableKey(pos) || i} style={S.posCard}>
             <div style={S.row}>
               <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
               <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
@@ -694,7 +785,7 @@ const BottomPanel = memo(function BottomPanel({
                 const pnlPct = entryPrice && markPrice ? ((markPrice - entryPrice) / entryPrice * 100 * (p.side === 'bid' ? 1 : -1) * (typeof lev === 'number' ? lev : 1)) : 0;
                 const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
                 return (
-                  <tr key={i} style={S.tr}>
+                  <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
                     <td style={{...S.td, color: p.side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{p.side === 'bid' ? 'LONG' : 'SHORT'}</td>
                     <td style={S.td}>{p.amount} <span style={{color: '#a3906a', fontSize: 11}}>(${tblPosValue.toFixed(2)})</span></td>
@@ -736,7 +827,7 @@ const BottomPanel = memo(function BottomPanel({
                 const isSL = type.includes('STOP LOSS') || type.includes('SL');
                 const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
                 return (
-                  <tr key={i} style={S.tr}>
+                  <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
                     <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
                     <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
@@ -803,6 +894,7 @@ function FuturesPanel() {
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
   const monadHook = useMonad();
+  const phoenixHook = usePhoenix();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -815,6 +907,8 @@ function FuturesPanel() {
     ? gmxHook
     : dex === 'monad'
     ? monadHook
+    : dex === 'phoenix'
+    ? phoenixHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
@@ -834,10 +928,11 @@ function FuturesPanel() {
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr,
   } = trading;
+  const openedSortedPositions = useOpenedSortedPositions(positions);
   // For Pacifica: wallet needs adapter or Privy. For Avantis/Decibel:
   // walletAddr is the self-custody address, set when the user connected
   // the chain-specific wallet (viem on Base, Petra on Aptos).
-  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad'
+  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix'
     ? !!walletAddr
     : (!!walletAddr || connected || !!player?.wallet);
 
@@ -1228,6 +1323,10 @@ function FuturesPanel() {
       setLocalAlert('Decibel currently uses cross margin only. Isolated margin is not available yet.');
       return;
     }
+    if (dex === 'phoenix') {
+      setLocalAlert('Phoenix new orders use cross margin here; existing isolated subaccounts are shown on positions.');
+      return;
+    }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
       if (bindingAgent) {
         setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
@@ -1280,7 +1379,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -1317,7 +1416,7 @@ function FuturesPanel() {
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
       // Guard against missing/NaN currentPrice (feed blip).
       const price = parseFloat(currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -1488,7 +1587,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -1499,10 +1598,12 @@ function FuturesPanel() {
                 ? 'Decibel currently uses cross margin; isolated margin is not available yet'
                 : dex === 'monad'
                 ? 'Perpl uses isolated margin per position in this integration'
+                : dex === 'phoenix'
+                ? 'Phoenix new orders use cross margin; existing isolated subaccounts are shown on positions'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: dex === 'decibel' ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {dex === 'decibel' ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {(dex === 'decibel' || dex === 'phoenix') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -1720,7 +1821,7 @@ function FuturesPanel() {
 
   const sortOptionsForTab = useMemo(() => {
     if (bottomTab === 'positions') return [
-      { value: 'symbol', label: 'Symbol' }, { value: 'size', label: 'Size' }, { value: 'pnl', label: 'PnL' },
+      { value: 'opened', label: 'Opened' },
     ];
     if (bottomTab === 'orders') return [
       { value: 'symbol', label: 'Symbol' }, { value: 'price', label: 'Price' },
@@ -1736,21 +1837,14 @@ function FuturesPanel() {
 
   // Apply filters to positions
   const filteredPositions = useMemo(() => {
-    let list = positions;
+    let list = openedSortedPositions;
     if (btmFilters.symbol !== 'All') list = list.filter(p => p.symbol === btmFilters.symbol);
     if (btmFilters.side !== 'All') {
       const wantBid = btmFilters.side === 'Long';
       list = list.filter(p => wantBid ? p.side === 'bid' : p.side === 'ask');
     }
-    const dir = btmFilters.sortDir === 'asc' ? 1 : -1;
-    if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * a.symbol.localeCompare(b.symbol));
-    else if (btmFilters.sortBy === 'size') list = [...list].sort((a, b) => dir * (parseFloat(b.amount) * parseFloat(prices.find(pr => pr.symbol === b.symbol)?.mark || 0) - parseFloat(a.amount) * parseFloat(prices.find(pr => pr.symbol === a.symbol)?.mark || 0)));
-    else if (btmFilters.sortBy === 'pnl') list = [...list].sort((a, b) => {
-      const pnl = (p) => { const m = parseFloat(prices.find(pr => pr.symbol === p.symbol)?.mark || 0); return m ? (m - parseFloat(p.entry_price)) * parseFloat(p.amount) * (p.side === 'bid' ? 1 : -1) : 0; };
-      return dir * (pnl(b) - pnl(a));
-    });
     return list;
-  }, [positions, btmFilters, prices]);
+  }, [openedSortedPositions, btmFilters]);
 
   // Apply filters to orders
   const filteredOrders = useMemo(() => {
@@ -1768,8 +1862,8 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
-  // ==================== WRONG EVM WALLET (Avantis, GMX & Perpl/Monad share EvmWalletContext) ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad') && walletMismatch) {
+  // ==================== WRONG SELF-CUSTODY WALLET ====================
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -1794,14 +1888,14 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : 'Base'} wallet
+              Wrong {dex === 'gmx' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
             </div>
             <button
               style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 28px'}}
-              onClick={() => setEvmModalOpen(true)}
+              onClick={() => dex === 'phoenix' ? openWalletModal(true) : setEvmModalOpen(true)}
             >
               SWITCH WALLET
             </button>
@@ -2008,6 +2102,50 @@ function FuturesPanel() {
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>PERPL · MONAD MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'phoenix' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #F97316 0%, #C2410C 100%)',
+                  border: '4px solid #EA580C',
+                  boxShadow: '0 5px 0 #C2410C, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.phoenix.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Solana wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Phoenix is non-custodial. You need USDC for collateral and a little SOL for gas.
+                </div>
+                <button
+                  style={{...cartoonBtn('#F97316', '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => {
+                    if (inFrame) {
+                      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
+                      if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
+                      else openWalletModal(true);
+                    } else {
+                      openWalletModal(true);
+                    }
+                  }}
+                >
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#C2410C', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>PHOENIX В· SOLANA MAINNET</span>
                 </div>
               </>
             ) : (
@@ -2530,7 +2668,7 @@ function FuturesPanel() {
             <div style={{flex: `0 0 ${chartPct}%`, maxWidth: `${chartPct}%`, minHeight: 0, overflow: 'hidden', position: 'relative'}}>
               <TradingViewWidget symbol={symbol} pythSymbol={currentMarket?.pyth_symbol} positions={positions} orders={orders} currentPrice={currentPrice} chartOverlay={explainBadge} dex={dex} />
             </div>
-            {dex === 'pacifica' && (
+            {(dex === 'pacifica' || dex === 'phoenix') && (
               <>
                 {/* Drag handle: chart ↔ orderbook */}
                 <div style={S.dragHandleV} onMouseDown={dragChart} />
@@ -2539,7 +2677,7 @@ function FuturesPanel() {
                       its own SDK (no public order book), Decibel pushes
                       orderbook via WebSocket and we don't render that yet —
                       gate strictly to Pacifica until those are wired. */}
-                  <OrderBook symbol={symbol} />
+                  <OrderBook symbol={symbol} dex={dex} />
                 </div>
                 {/* Drag handle: orderbook ↔ controls */}
                 <div style={S.dragHandleV} onMouseDown={dragOb} />
@@ -2592,7 +2730,7 @@ function FuturesPanel() {
 
   // ==================== POSITIONS TAB ====================
   const renderPositions = () => {
-    if (!positions.length) {
+    if (!openedSortedPositions.length) {
       return (
         <div style={S.empty}>
           <div style={{opacity: 0.3, color: '#5C3A21'}}>
@@ -2611,7 +2749,7 @@ function FuturesPanel() {
       // a ragged staircase look. Column + stretch (the default
       // `align-items` for column flex) gives a clean uniform list.
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
-        {positions.map((pos, i) => {
+        {openedSortedPositions.map((pos, i) => {
           const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
           const entryP = parseFloat(pos.entry_price);
           const markP = mark ? parseFloat(mark) : 0;
@@ -2658,7 +2796,7 @@ function FuturesPanel() {
               }
             };
             return (
-              <div key={i} style={S.posCard}>
+              <div key={positionStableKey(pos) || i} style={S.posCard}>
                 <div style={S.row}>
                   <div style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: 0}}>
                     <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
@@ -2760,7 +2898,7 @@ function FuturesPanel() {
             }
           };
           return (
-            <div key={i} style={S.posCard}>
+            <div key={positionStableKey(pos) || i} style={S.posCard}>
               <div style={S.row}>
                 <span style={{fontSize: 16, fontWeight: 900}}>{pos.symbol}</span>
                 <div style={{display: 'flex', alignItems: 'center', gap: 6}}>
@@ -2925,7 +3063,7 @@ function FuturesPanel() {
           const isSL = type.includes('STOP LOSS') || type.includes('SL');
           const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
           return (
-            <div key={i} style={S.posCard}>
+            <div key={orderStableKey(o, i)} style={S.posCard}>
               <div style={S.row}>
                 <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
                 <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
@@ -3135,6 +3273,8 @@ function FuturesPanel() {
                 ? 'Sends USDC from your Aptos wallet to your Decibel trading subaccount. Needs a small APT float for gas.'
                 : dex === 'monad'
                 ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
+                : dex === 'phoenix'
+                ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
                 : 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'}
             </span>
           </div>
@@ -3433,6 +3573,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.monad.colorDark }}>
                 Perpl
+              </span>
+            </>
+          ) : dex === 'phoenix' ? (
+            <>
+              <img
+                src={DEX_CONFIG.phoenix.logo}
+                alt="Phoenix"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.phoenix.colorDark }}>
+                Phoenix
               </span>
             </>
           ) : (

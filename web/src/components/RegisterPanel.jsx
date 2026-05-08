@@ -142,10 +142,11 @@ function NameForm({ wallet, suggested, onSubmit }) {
   );
 }
 
-function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed }) {
+function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'pacifica' }) {
+  const venue = dex === 'phoenix' ? 'PHOENIX' : 'PACIFICA';
   return (
     <div style={S.bodyStack}>
-      <h3 style={S.sectionTitle}>CONNECT TO PACIFICA</h3>
+      <h3 style={S.sectionTitle}>CONNECT TO {venue}</h3>
       <p style={S.subtle}>
         Connect your Solana wallet to start playing. Trades are signed by your own wallet — we never hold your keys.
       </p>
@@ -290,6 +291,7 @@ function RegisterPanel() {
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
                   dex === 'monad' ? 'Perpl' :
+                  dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
               : 'Signing you in…'}
@@ -330,6 +332,7 @@ function RegisterPanel() {
         }
         return (
           <ConnectPacifica
+            dex={dex}
             onOpenWalletModal={openSolanaConnect}
             onPrivyLogin={actions.loginWithPrivy}
             privyEnabled={privyEnabled}
@@ -352,6 +355,7 @@ function RegisterPanel() {
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'monad') return 'PERPL LOGIN';
+    if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
 
