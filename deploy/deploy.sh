@@ -404,17 +404,6 @@ server {
         gzip off;
     }
 
-    location = /api/client-log {
-        access_log off;
-        add_header Cache-Control "no-store" always;
-        return 204;
-    }
-    location = /api/client-log/ {
-        access_log off;
-        add_header Cache-Control "no-store" always;
-        return 204;
-    }
-
     location /api/ {
         proxy_pass http://127.0.0.1:4000/api/;
         proxy_http_version 1.1;

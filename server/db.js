@@ -76,6 +76,30 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
 
+// Browser console/error ingestion. Public endpoint writes bounded rows here so
+// production client failures survive PM2 log rotation and can be queried from
+// the admin panel. Payloads are capped in routes.js before insertion.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS client_logs (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT REFERENCES players(id) ON DELETE SET NULL,
+      ip          TEXT,
+      level       TEXT NOT NULL DEFAULT 'info',
+      source      TEXT,
+      url         TEXT,
+      ua          TEXT,
+      message     TEXT NOT NULL,
+      stack       TEXT,
+      payload     TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_client_logs_recent ON client_logs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_client_logs_level_recent ON client_logs(level, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_client_logs_player_recent ON client_logs(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] client_logs migration:', e.message); }
+
 // Tournaments — admin-curated competitions per DEX. While a player is
 // joined ("active in tournament"), their main `players.trophies` is
 // FROZEN (reads still happen, writes from battle/quest paths skip them

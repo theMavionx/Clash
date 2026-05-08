@@ -124,38 +124,95 @@ function auth(req, res, next) {
 // abuse. Previously unprotected: a flood of 10k/s could DoS the server's
 // stdout / log sink.
 const CLIENT_LOG_WINDOW_MS = 60_000;
+const CLIENT_LOG_BATCH_MAX = 50;
+const CLIENT_LOG_RETENTION_DAYS = 7;
 const CLIENT_LOG_MAX_PER_WINDOW = 3000;  // bumped 30 → 3000 (100×) per user request
 const clientLogBuckets = new Map(); // ip → { count, resetAt }
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
-}, 5 * 60_000).unref?.();
-
-// Public client-log ingestion is non-critical and can be abused for DoS.
-// Terminate all methods before the legacy POST handler below.
-router.all('/client-log', (_req, res) => {
-  res.status(204).end();
+const insertClientLog = db.db.prepare(`
+  INSERT INTO client_logs
+    (player_id, ip, level, source, url, ua, message, stack, payload)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+const pruneClientLogs = db.db.prepare(
+  `DELETE FROM client_logs WHERE created_at < datetime('now', ?)`
+);
+const insertClientLogBatch = db.db.transaction((rows) => {
+  for (const row of rows) {
+    insertClientLog.run(
+      row.player_id, row.ip, row.level, row.source, row.url,
+      row.ua, row.message, row.stack, row.payload
+    );
+  }
 });
 
-router.post('/client-log', (req, res) => {
-  const ip = req.headers['x-real-ip'] || req.ip || 'anon';
+function clampText(v, max) {
+  if (v == null) return null;
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return String(s).slice(0, max);
+}
+
+function normalizeClientLevel(v) {
+  const s = String(v || 'info').toLowerCase();
+  if (['log', 'info', 'warn', 'error', 'debug', 'unhandledrejection', 'onerror'].includes(s)) return s;
+  return s.replace(/[^a-z0-9_-]/g, '').slice(0, 24) || 'info';
+}
+
+function clientLogRateOk(ip, n) {
   const now = Date.now();
   const b = clientLogBuckets.get(ip);
   if (b && b.resetAt > now) {
-    if (b.count >= CLIENT_LOG_MAX_PER_WINDOW) {
-      return res.status(429).json({ ok: false });
-    }
-    b.count++;
-  } else {
-    clientLogBuckets.set(ip, { count: 1, resetAt: now + CLIENT_LOG_WINDOW_MS });
+    if (b.count + n > CLIENT_LOG_MAX_PER_WINDOW) return false;
+    b.count += n;
+    return true;
   }
-  const { level, message, ua, url } = req.body || {};
-  const ts = new Date().toISOString();
-  // Cap message size to 1kB — a single payload can't fill the log by itself
-  // even if the rate-limit is somehow bypassed.
-  const msg = String(message || '').slice(0, 1024);
-  console.log(`[CLIENT ${(level || 'info').toUpperCase()}] ${ts} | ${ip} | ${(ua || '').slice(0, 80)} | ${String(url || '').slice(0, 200)} | ${msg}`);
-  res.json({ ok: true });
+  clientLogBuckets.set(ip, { count: n, resetAt: now + CLIENT_LOG_WINDOW_MS });
+  return true;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of clientLogBuckets) if (v.resetAt < now) clientLogBuckets.delete(k);
+  try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
+}, 5 * 60_000).unref?.();
+
+// Public client-log ingestion is non-critical and can be abused for DoS, so
+// persist only bounded batches and leave full details to encrypted diagnostics.
+router.post('/client-log', (req, res) => {
+  const ip = clampText(req.headers['x-real-ip'] || req.ip || 'anon', 64);
+  const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [req.body || {}];
+  const events = rawEvents.slice(0, CLIENT_LOG_BATCH_MAX);
+  if (!clientLogRateOk(ip, events.length)) return res.status(429).json({ ok: false });
+  let playerId = null;
+  const token = req.headers['x-token'];
+  if (typeof token === 'string' && token.length > 10) {
+    try {
+      const player = db.authenticatePlayer(token);
+      if (player) playerId = player.id;
+    } catch {}
+  }
+
+  const rows = events.map((ev) => ({
+    player_id: playerId,
+    ip,
+    level: normalizeClientLevel(ev.level),
+    source: clampText(ev.source, 64),
+    url: clampText(ev.url, 512),
+    ua: clampText(ev.ua, 256),
+    message: clampText(ev.message || ev.msg || '', 2048) || '(empty)',
+    stack: clampText(ev.stack, 4096),
+    payload: ev.payload == null ? null : clampText(ev.payload, 8192),
+  }));
+  try {
+    insertClientLogBatch(rows);
+    res.json({ ok: true, stored: rows.length });
+  } catch (e) {
+    console.warn('[client-log] insert failed:', e.message);
+    res.status(500).json({ ok: false });
+  }
+});
+
+router.all('/client-log', (_req, res) => {
+  res.status(204).end();
 });
 
 // ==================== PLAYERS ====================
@@ -2559,6 +2616,41 @@ router.get('/admin/logs', adminAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 100, LOG_MAX);
   let logs = type ? _serverLogs.filter(l => l.type === type) : _serverLogs;
   res.json(logs.slice(-limit));
+});
+
+router.get('/admin/client-logs', adminAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const sinceMin = parseInt(req.query.since_min, 10);
+  const level = req.query.level ? normalizeClientLevel(req.query.level) : null;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
+  const conds = [];
+  const args = [];
+  if (Number.isFinite(sinceMin) && sinceMin > 0) {
+    conds.push(`created_at >= datetime('now', ?)`);
+    args.push(`-${sinceMin} minutes`);
+  }
+  if (level) {
+    conds.push('level = ?');
+    args.push(level);
+  }
+  if (q) {
+    conds.push('(message LIKE ? OR url LIKE ? OR source LIKE ?)');
+    const like = `%${q}%`;
+    args.push(like, like, like);
+  }
+  args.push(limit);
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const rows = db.db.prepare(`
+    SELECT id, player_id, ip, level, source, url, ua, message, stack, payload, created_at
+    FROM client_logs
+    ${where}
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(...args).map((r) => ({
+    ...r,
+    payload: (() => { try { return r.payload ? JSON.parse(r.payload) : null; } catch { return r.payload; } })(),
+  }));
+  res.json({ rows, total: rows.length });
 });
 
 // Server stats
