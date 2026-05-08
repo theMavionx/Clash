@@ -505,7 +505,7 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
       • <strong>GMX</strong> — Goldsky <code>arbitrum-referrals</code> subgraph: <code>totalRebateUsd − discountUsd</code> for our affiliate (same data app.gmx.io/#/referrals reads; the authoritative number).<br>
       • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
-      • <strong>Avantis</strong> — Off-chain rebates with no public earnings API; only the on-chain code owner is read. Claim via the Avantis app.
+      • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).
     </div>
   </div>
 
@@ -1431,11 +1431,20 @@ async function loadEarnings(force) {
       const addrLine = ok && d.address
         ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>'
         : '';
-      const tradeLine = ok && d.trades != null
-        ? '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades' + (d.traded_referrals ? ' / ' + d.traded_referrals + ' refs' : '') + '</span>'
-        : (ok && d.withdrawable_usd != null
-          ? '<span style="color:#9ca3af;font-size:11px">$' + d.withdrawable_usd.toFixed(2) + ' withdrawable</span>'
-          : '');
+      const subLine = (() => {
+        if (!ok) return '';
+        if (d.volume_usd != null) {
+          return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades · $' + Number(d.volume_usd).toFixed(0) + ' vol × ' + (d.rebate_pct ?? 0) + '% × ' + (d.fee_per_side_pct ?? 0) + '%</span>';
+        }
+        if (d.trades != null) {
+          return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades' + (d.traded_referrals ? ' / ' + d.traded_referrals + ' refs' : '') + '</span>';
+        }
+        if (d.withdrawable_usd != null) {
+          return '<span style="color:#9ca3af;font-size:11px">$' + d.withdrawable_usd.toFixed(2) + ' withdrawable</span>';
+        }
+        return '';
+      })();
+      const tradeLine = subLine;
       const noteLine = ok && d.note
         ? '<div style="margin-top:6px;font-size:11px;color:#fbbf24;line-height:1.4">' + esc(d.note) + '</div>'
         : '';

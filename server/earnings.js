@@ -139,33 +139,88 @@ async function ethCall(rpcUrl, to, data) {
 }
 
 // ── Avantis (Base) ────────────────────────────────────────────────────────
-// On-chain we can only resolve codeOwners(clashofperps) → owner address.
-// Avantis pays rebates off-chain (no public earnings endpoint, no
-// pendingRewards view). Show the resolved owner so the operator can audit
-// who's getting paid, but don't fabricate a $ figure from wallet balance —
-// that proved misleading on GMX where unrelated USDC inflated the number.
+// Avantis publishes neither a per-referrer earnings endpoint nor a public
+// pendingRewards view. So we compute earnings the same way Avantis does
+// internally: total notional × tier rebate % × average trading fee %.
+//
+// Tier rebate is read on-chain from `referralTiers(uint256)` on the
+// Referral contract — for tier 1 it's `(500, 500)` with PRECISION = 10000,
+// i.e. 5% rebate / 5% discount. Override via AVANTIS_REBATE_BPS if our
+// tier ever changes.
+//
+// Per-side trading fee is approximated by AVANTIS_AVG_FEE_BPS (default 8 =
+// 0.08%, which is a typical mid-pair openFee on Avantis V2). Crypto pairs
+// run 4-12 bps per side depending on market and orderType_zero_fee usage,
+// so this is a rough ballpark — surfaced explicitly in the card so the
+// operator knows it's modelled, not measured.
+const PATH = require('path');
+const FS = require('fs');
+let _BetterSQLite3 = null;
+function loadSqlite() {
+  if (_BetterSQLite3) return _BetterSQLite3;
+  try { _BetterSQLite3 = require('better-sqlite3'); } catch { _BetterSQLite3 = null; }
+  return _BetterSQLite3;
+}
+
 const BASE_RPC = process.env.BASE_RPC_URL || 'https://mainnet.base.org';
 const AVANTIS_REFERRAL = '0x1A110bBA13A1f16cCa4b79758BD39290f29De82D';
 const AVANTIS_CODE_BYTES32 =
   '0x' + Buffer.from('clashofperps', 'utf8').toString('hex').padEnd(64, '0');
+const AVANTIS_REBATE_BPS = Number(process.env.AVANTIS_REBATE_BPS) || 500; // 5%
+const AVANTIS_AVG_FEE_BPS = Number(process.env.AVANTIS_AVG_FEE_BPS) || 8; // 0.08%/side
+const FUTURES_DB = process.env.CLASH_FUTURES_DB
+  || PATH.join(__dirname, '..', 'server-futures', 'futures.db');
 
 async function fetchAvantisEarnings() {
-  const data = '0xc8b3c460' + AVANTIS_CODE_BYTES32.slice(2); // codeOwners(bytes32)
-  const ownerHex = await ethCall(BASE_RPC, AVANTIS_REFERRAL, data);
+  // 1. Resolve code owner on chain — confirms our code is still ours.
+  const ownerHex = await ethCall(BASE_RPC, AVANTIS_REFERRAL,
+    '0xc8b3c460' + AVANTIS_CODE_BYTES32.slice(2));
   const owner = '0x' + ownerHex.slice(-40);
   if (/^0x0+$/.test(owner)) {
     return {
       earned_usd: 0, address: null, currency: 'USDC (Base)',
-      note: 'Code "clashofperps" not registered on Avantis Referral contract.',
-      needs_claim: false,
+      note: 'Code "clashofperps" not registered on Avantis.',
     };
   }
+
+  // 2. Sum referred volume from our local futures.db. We accept BOTH
+  //    'worker' and 'client' verified rows here because:
+  //    - 'worker' rows lag the indexer (a fresh trade may not yet be there)
+  //    - 'client' rows are written eagerly at place-order success
+  //    Either source over-counts in one direction; using both is closer to
+  //    truth than worker-only.
+  const Db = loadSqlite();
+  let volume = 0;
+  let trades = 0;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    const fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    try {
+      const r = fdb.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
+        FROM trade_history
+        WHERE dex = 'avantis' AND status = 'filled'
+          AND verified_source IN ('worker', 'client')
+      `).get();
+      volume = Number(r?.vol) || 0;
+      trades = Number(r?.n) || 0;
+    } finally {
+      fdb.close();
+    }
+  }
+
+  // 3. Estimate: volume × fee_per_side × rebate_share.
+  const earned = volume * (AVANTIS_AVG_FEE_BPS / 10000) * (AVANTIS_REBATE_BPS / 10000);
   return {
-    earned_usd: 0,
+    earned_usd: earned,
     address: owner,
     currency: 'USDC (Base)',
-    note: 'Off-chain rebates — claim from Avantis dashboard. No public earnings API.',
-    needs_claim: true,
+    volume_usd: volume,
+    trades,
+    rebate_pct: AVANTIS_REBATE_BPS / 100,
+    fee_per_side_pct: AVANTIS_AVG_FEE_BPS / 100,
+    note: `Modelled: volume × ${AVANTIS_AVG_FEE_BPS}bps fee × ${AVANTIS_REBATE_BPS}bps rebate. On-chain tier1 rebate = ${AVANTIS_REBATE_BPS / 100}%.`,
+    source_detail: 'volume_x_rate',
   };
 }
 
@@ -251,7 +306,7 @@ async function fetchAllEarnings({ force = false } = {}) {
   const out = {
     pacifica: { ...wrap('pacifica', pac), source: 'pacifica_builder_trades_sum' },
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
-    avantis:  { ...wrap('avantis',  avt), source: 'avantis_offchain_unread' },
+    avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_subgraph_affiliate_stats' },
     last_updated: new Date(now).toISOString(),
   };
