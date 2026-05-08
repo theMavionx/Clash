@@ -2,6 +2,13 @@ import { PrivyProvider } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum } from 'viem/chains';
+// Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
+// locally in monadConfig and import the same object both here (Privy's
+// supportedChains list) and in EvmWalletContext (chain switch helper). If
+// Monad isn't in supportedChains, Privy's wagmi-backed connector store
+// returns null for it and the panel crashes the moment the user picks
+// PERPL with `Cannot read properties of null (reading 'connectors')`.
+import { monadChain } from '../lib/monadConfig';
 
 // publicnode has no SSL/cert issues and is open. api.mainnet-beta fails with
 // ERR_CERT_AUTHORITY_INVALID on some networks, breaking Privy's send-TX flow.
@@ -46,7 +53,7 @@ export default function PrivyAuthProvider({ children }) {
         // ensureChain() before the signing popup. Adding arbitrum unblocks
         // them; defaultChain stays Base so Avantis sessions don't change UX.
         defaultChain: base,
-        supportedChains: [base, arbitrum],
+        supportedChains: [base, arbitrum, monadChain],
         externalWallets: {
           // Privy still reads dashboard wallet-login settings even though our
           // UI uses email-only auth. Passing Solana standard connectors keeps

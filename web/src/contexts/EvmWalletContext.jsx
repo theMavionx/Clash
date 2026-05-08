@@ -15,6 +15,7 @@ import { base, arbitrum } from 'viem/chains';
 import { useWallets as usePrivyEvmWallets, usePrivy } from '@privy-io/react-auth';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
+import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 
 // Default public client stays on Base (back-compat for Avantis call sites).
@@ -55,17 +56,31 @@ const arbitrumPublicClient = createPublicClient({
   ),
   batch: { multicall: { wait: 50, batchSize: 30_000 } },
 });
+// Perpl runs on Monad mainnet (chain id 143). Public RPC fallback list
+// mirrors the Arbitrum setup so a transient blip on rpc.monad.xyz doesn't
+// kill reads. Monad doesn't have a Multicall3 deployment we trust yet, so
+// we skip the multicall batch hint — getStorageAt / single eth_call paths
+// the hook uses are the only reads here in Phase 2.
+const monadPublicClient = createPublicClient({
+  chain: monadChain,
+  transport: fallback(
+    MONAD_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
 const CHAIN_BY_ID = {
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
+  [MONAD_CHAIN_ID]: monadChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
   [BASE_CHAIN_ID]: publicClient,
   [ARBITRUM_CHAIN_ID]: arbitrumPublicClient,
+  [MONAD_CHAIN_ID]: monadPublicClient,
 };
 
 const EvmWalletContext = createContext({
@@ -249,8 +264,11 @@ export function EvmWalletProvider({ children }) {
   // Avantis call sites. New callers should pass the chainId they need.
   const ensureChain = useCallback(async (targetChainId = BASE_CHAIN_ID) => {
     if (!provider) throw new Error('No EVM wallet connected');
-    if (Number(targetChainId) === ARBITRUM_CHAIN_ID) {
+    const id = Number(targetChainId);
+    if (id === ARBITRUM_CHAIN_ID) {
       await ensureArbitrumChain(provider);
+    } else if (id === MONAD_CHAIN_ID) {
+      await ensureMonadChain(provider);
     } else {
       await ensureBaseChain(provider);
     }
