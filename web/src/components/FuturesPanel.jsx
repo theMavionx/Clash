@@ -68,7 +68,10 @@ function humanizeTradeError(message) {
     return 'Perpl is not available in your country or IP region.';
   }
   if (/PERPL_NOT_WHITELISTED|not whitelisted|access not granted|I'm a teapot|418/i.test(text)) {
-    return 'This wallet is not whitelisted for Perpl yet. Request access at perpl.xyz or connect a whitelisted wallet.';
+    return 'This wallet needs a Perpl access code. Enter one and sign in again, or connect a whitelisted wallet.';
+  }
+  if (/PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|423/i.test(text)) {
+    return 'That Perpl access code is invalid or already exhausted. Check the code and try again.';
   }
   const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
   if (insufficient) {
@@ -974,6 +977,7 @@ function FuturesPanel() {
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
+  const [perplAccessCode, setPerplAccessCode] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -2069,8 +2073,23 @@ function FuturesPanel() {
                 ? 'Waiting for Perpl to send your wallet snapshot. This usually takes a moment.'
                 : perplAuthed
                 ? 'Perpl keeps collateral as AUSD inside its Exchange contract. Create the account with AUSD, then the trading panel will unlock.'
-                : 'One wallet signature opens a Perpl API session. After that, orders use the Perpl trading socket without another popup per click.'}
+                : 'One wallet signature opens a Perpl API session. If this wallet is not approved yet, enter your Perpl access code first.'}
             </div>
+            {!perplAuthed && (
+              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 6}}>
+                <label style={{...S.label, textAlign: 'left'}}>Access Code</label>
+                <input
+                  type="text"
+                  placeholder="Input access code"
+                  value={perplAccessCode}
+                  onChange={e => setPerplAccessCode(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                />
+              </div>
+            )}
             {perplAuthed && !perplChecking && (
               <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{...S.fullCard, margin: 0}}>
@@ -2104,7 +2123,10 @@ function FuturesPanel() {
               onClick={async () => {
                 if (!perplAuthed) {
                   const fn = connectPerpl || linkOurReferrer;
-                  if (fn) await fn();
+                  if (fn) {
+                    const res = await fn({ accessCode: perplAccessCode });
+                    if (res && !res.error) setPerplAccessCode('');
+                  }
                   return;
                 }
                 const res = await activate(depositAmt || '10');

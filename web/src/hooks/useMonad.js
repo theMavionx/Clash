@@ -402,7 +402,7 @@ export function useMonad() {
   }, [isActiveDex]);
 
   // ── SIWE login (explicit) ────────────────────────────────────────────
-  const connectPerpl = useCallback(async () => {
+  const connectPerpl = useCallback(async (opts = {}) => {
     if (!address) { setError('Connect an EVM wallet first'); return null; }
     if (!walletClient) { setError('EVM walletClient not ready'); return null; }
     setLoading(true);
@@ -412,6 +412,7 @@ export function useMonad() {
       const out = await loginWithEoa({
         chainId: MONAD_CHAIN_ID,
         address,
+        refCode: opts?.accessCode || opts?.refCode,
         signMessageAsync: (msg) =>
           walletClient.signMessage({ account: address, message: msg }),
       });

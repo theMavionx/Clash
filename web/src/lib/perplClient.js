@@ -101,7 +101,7 @@ export async function fetchPerplContext() {
 // signMessageAsync: (msg: string) => Promise<string>  (hex-encoded sig)
 // Wallet adapter must produce a personal_sign-style EIP-191 signature —
 // most viem walletClients' `signMessage({ message })` does this directly.
-export async function loginWithEoa({ chainId, address, signMessageAsync }) {
+export async function loginWithEoa({ chainId, address, signMessageAsync, refCode }) {
   if (!address) throw new Error('Missing wallet address for Perpl login');
   // 1. Fetch the SIWE payload Perpl expects us to sign.
   const payloadRes = await perplFetch('/auth/payload', {
@@ -125,19 +125,23 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
   const signature = await signMessageAsync(msg);
 
   // 3. Exchange signature for session nonce + JWT cookie.
+  const trimmedRefCode = String(refCode || '').trim();
+  const connectBody = {
+    chain_id: chainId,
+    address,
+    message: msg,
+    signature,
+    nonce: payloadNonce,
+    mac,
+    t: issuedAt,
+    issued_at: issuedAt,
+  };
+  if (trimmedRefCode) connectBody.ref_code = trimmedRefCode;
+
   const connectRes = await perplFetch('/auth/connect', {
     method: 'POST',
     credentials: 'include',
-    body: {
-      chain_id: chainId,
-      address,
-      message: msg,
-      signature,
-      nonce: payloadNonce,
-      mac,
-      t: issuedAt,
-      issued_at: issuedAt,
-    },
+    body: connectBody,
   });
   if (!connectRes.ok) {
     if (connectRes.status === 451) throwRegionBlocked();
@@ -146,6 +150,11 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
     if (connectRes.status === 418) {
       const e = new Error('Perpl wallet is not whitelisted yet. Request access at perpl.xyz or use a whitelisted wallet.');
       e.code = 'PERPL_NOT_WHITELISTED';
+      throw e;
+    }
+    if (connectRes.status === 423) {
+      const e = new Error('Perpl access code is invalid or exhausted. Check the code and try again.');
+      e.code = 'PERPL_ACCESS_CODE_INVALID';
       throw e;
     }
     const detail = perplErrorDetail(connectRes);
