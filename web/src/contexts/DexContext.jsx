@@ -80,6 +80,24 @@ export const DEX_CONFIG = {
     chainShort: 'ARB',
     description: 'Perps on Arbitrum',
   },
+  monad: {
+    id: 'monad',
+    label: 'PERPL',
+    shortLabel: 'PRP',
+    emoji: '⚡',
+    // Phase 1 placeholder — drop the official Perpl mark at /public/perpl.png
+    // before going public. Same convention GMX uses (logoIsWordmark=false +
+    // wordmark rendered inline alongside the icon).
+    logo: '/perpl.png',
+    logoIsWordmark: false,
+    color: '#9B6BFF',
+    colorDark: '#5B3DD9',
+    colorLight: 'rgba(155,107,255,0.15)',
+    borderColor: '#7C4DFF',
+    chain: 'Monad',
+    chainShort: 'MON',
+    description: 'Perps on Monad',
+  },
 };
 
 export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
@@ -167,7 +185,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -203,7 +221,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

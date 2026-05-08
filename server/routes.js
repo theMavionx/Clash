@@ -227,7 +227,7 @@ router.all('/client-log', (_req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
@@ -3346,7 +3346,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
-  if (!['pacifica', 'avantis', 'decibel', 'gmx'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
+  if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
   const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
   const sortCol = SORT_COLS.includes(sort_by) ? sort_by : 'pnl_usd';
   const STATUSES = ['active', 'ended', 'draft'];

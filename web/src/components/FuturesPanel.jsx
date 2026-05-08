@@ -7,6 +7,7 @@ import { usePacifica } from '../hooks/usePacifica';
 import { useAvantis } from '../hooks/useAvantis';
 import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
+import { useMonad } from '../hooks/useMonad';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -792,6 +793,7 @@ function FuturesPanel() {
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
   const gmxHook = useGmx();
+  const monadHook = useMonad();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -802,6 +804,8 @@ function FuturesPanel() {
     ? decibelHook
     : dex === 'gmx'
     ? gmxHook
+    : dex === 'monad'
+    ? monadHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
@@ -823,7 +827,7 @@ function FuturesPanel() {
   // For Pacifica: wallet needs adapter or Privy. For Avantis/Decibel:
   // walletAddr is the self-custody address, set when the user connected
   // the chain-specific wallet (viem on Base, Petra on Aptos).
-  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx'
+  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad'
     ? !!walletAddr
     : (!!walletAddr || connected || !!player?.wallet);
 
@@ -1265,7 +1269,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -1302,7 +1306,7 @@ function FuturesPanel() {
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
       // Guard against missing/NaN currentPrice (feed blip).
       const price = parseFloat(currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -1464,7 +1468,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -1742,8 +1746,8 @@ function FuturesPanel() {
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
 
-  // ==================== WRONG EVM WALLET (Avantis & GMX share EvmWalletContext) ====================
-  if ((dex === 'avantis' || dex === 'gmx') && walletMismatch) {
+  // ==================== WRONG EVM WALLET (Avantis, GMX & Perpl/Monad share EvmWalletContext) ====================
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
