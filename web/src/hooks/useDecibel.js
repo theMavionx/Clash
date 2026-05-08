@@ -1657,15 +1657,12 @@ export function useDecibel() {
     }
   }, [requireServerSigner, ensureSubaccount, fetchPositions, tpslOnServer]);
 
-  // Decibel `configureUserSettingsForMarket` is one transaction with
-  // BOTH leverage and margin-mode (cross/isolated). To avoid duplicate
-  // on-chain work and to honour user choice in the UI, we cache the
-  // last-applied (lev, isCross) per symbol and skip the server call
-  // when both already match. Diff-checking + 800 ms debounce live in
-  // FuturesPanel's slider handler — this hook just guards a redundant
-  // call against position-level state if the cache is fresh.
+  // Decibel `configureUserSettingsForMarket` stores leverage together with
+  // the cross-margin flag. Isolated margin is not currently exposed as a
+  // live trader feature, so this hook always configures cross margin and
+  // only caches duplicate leverage updates.
   const lastAppliedSettingsRef = useRef(new Map()); // symbol -> {lev, isCross}
-  const setLeverage = useCallback(async (symbol, lev, opts = {}) => {
+  const setLeverage = useCallback(async (symbol, lev) => {
     try {
       requireServerSigner();
       const market = marketsRef.current.find(m => m.symbol === symbol);
@@ -1673,11 +1670,9 @@ export function useDecibel() {
       const sub = await ensureSubaccount();
       if (!sub) return { ok: true };
       const userLev = Math.max(1, Math.min(50, Number(lev) || 1));
-      // isCross defaults to FALSE (isolated) — matches the historical
-      // hardcoded behaviour for any caller that doesn't pass it. New
-      // callers (FuturesPanel margin toggle, Activate flow) pass the
-      // real value.
-      const isCross = !!opts.isCross;
+      // Decibel currently uses cross margin in production; isolated margin is
+      // still under discussion in the public trader docs.
+      const isCross = true;
       // Skip if we already pushed this exact (lev, isCross) for this
       // symbol within the same session. The server config-tx is
       // idempotent — re-sending wastes builder gas + Aptos sequencer
@@ -1700,22 +1695,12 @@ export function useDecibel() {
     }
   }, [requireServerSigner, ensureSubaccount, leverageOnServer]);
 
-  // Margin-mode toggle: keep the symbol's current leverage but flip
-  // cross↔isolated. Pulls leverage from the open position if any, or
-  // falls back to the symbol's last applied lev, or 1×. Used to be a
-  // silent no-op stub — UI was lying to users about a margin mode
-  // they could "toggle" but never change.
-  const setMarginMode = useCallback(async (symbol, isolated) => {
-    try {
-      const pos = positionsRef.current.find(p => p.symbol === symbol);
-      const cachedLev = lastAppliedSettingsRef.current.get(symbol)?.lev || 0;
-      const lev = Number(pos?.leverage) || cachedLev || 1;
-      return await setLeverage(symbol, lev, { isCross: !isolated });
-    } catch (e) {
-      console.warn('[useDecibel] setMarginMode:', e?.message || e);
-      return { ok: false, error: e?.message };
-    }
-  }, [setLeverage]);
+  // Read-only protocol mode: the UI can render Decibel as Cross, but should
+  // not offer a switch to isolated until Decibel enables it publicly.
+  const setMarginMode = useCallback(async () => ({
+    ok: false,
+    error: 'Decibel currently supports cross margin only. Isolated margin is not available yet.',
+  }), []);
 
   // Deposit / withdraw flow uses Petra directly (login wallet → trading
   // subaccount). We can't use the api wallet here — moving funds is an

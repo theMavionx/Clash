@@ -190,7 +190,7 @@ function BasicTradeFlow({
           }
         }
         const currentIsolated = !!(marginModes && marginModes[sym]);
-        if (!currentIsolated && setMarginMode) {
+        if (dex === 'pacifica' && !currentIsolated && setMarginMode) {
           const marginRes = await setMarginMode(sym, true);
           if (!marginRes || marginRes.error) {
             const reason = marginRes?.error || 'Could not set isolated margin. Close any open position on this symbol first.';
@@ -213,7 +213,7 @@ function BasicTradeFlow({
           // the OLD leverage (e.g. user picked 20× but had 50× set on a
           // prior trade — trade opens at 50× = 2.5× larger than they
           // intended). Surface a clear error and bail.
-          const res = await setLeverageApi(sym, pickedLev);
+          const res = await setLeverageApi(sym, pickedLev, dex === 'decibel' ? { isCross: true } : undefined);
           // Per usePacifica.setLeverage: returns the raw API response on
           // success, undefined on internally-caught error. A successful
           // response has no `error` field.

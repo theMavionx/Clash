@@ -532,7 +532,10 @@ async function configureUserSettingsForMarket(args) {
     const payload = {
       marketAddr: normalizeAptosAddress(args.marketAddr),
       subaccountAddr: normalizeAptosAddress(args.subaccountAddr),
-      isCross: !!args.isCross,
+      // Public Decibel trader docs currently list isolated margin as under
+      // discussion. Force cross so stale clients cannot submit unsupported
+      // isolated settings through our server signer.
+      isCross: true,
       userLeverage: finiteNumber(args.userLeverage, 'userLeverage'),
     };
     if (!payload.marketAddr) throw new Error('marketAddr required');

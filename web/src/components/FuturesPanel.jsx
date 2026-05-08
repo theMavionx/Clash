@@ -1209,6 +1209,10 @@ function FuturesPanel() {
       );
       return;
     }
+    if (dex === 'decibel') {
+      setLocalAlert('Decibel currently uses cross margin only. Isolated margin is not available yet.');
+      return;
+    }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
       if (bindingAgent) {
         setLocalAlert('1-tap trading is still enabling. Try again in a moment.');
@@ -1275,14 +1279,9 @@ function FuturesPanel() {
     // free anyway.
     if (levTimerRef.current) clearTimeout(levTimerRef.current);
     levTimerRef.current = setTimeout(() => {
-      // For Decibel, pass current symbol's isCross from the open position
-      // (preserves the user's prior margin-mode choice rather than always
-      // forcing isolated like the old code did). Falls back to isolated
-      // when no position exists yet (matches Decibel default).
+      // Decibel currently uses cross margin in production.
       if (dex === 'decibel') {
-        const pos = positions.find(p => String(p.symbol || '').toUpperCase() === String(symbol).toUpperCase());
-        const isCross = pos ? !pos.is_isolated : false;
-        setLeverageApi(symbol, v, { isCross });
+        setLeverageApi(symbol, v, { isCross: true });
       } else {
         setLeverageApi(symbol, v);
       }
@@ -1381,13 +1380,11 @@ function FuturesPanel() {
         const serverLevNum = serverLev != null ? Number(serverLev) : NaN;
         const levMatches = Number.isFinite(serverLevNum) && Math.abs(serverLevNum - leverage) < 0.05;
         if (!levMatches) {
-          // Decibel needs isCross alongside leverage in the same tx; preserve
-          // whatever margin-mode the open position already uses, falling back
-          // to isolated to match the Decibel default.
+          // Decibel needs isCross alongside leverage; current production
+          // mode is cross margin.
           const levOpts = (() => {
             if (dex !== 'decibel') return undefined;
-            const pos = positions.find(p => String(p.symbol || '').toUpperCase() === String(symbol).toUpperCase());
-            return { isCross: pos ? !pos.is_isolated : false };
+            return { isCross: true };
           })();
           const levRes = await setLeverageApi(symbol, leverage, levOpts);
           if (!levRes || levRes.error) {
@@ -1467,20 +1464,20 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' ? (
-            // Avantis and GMX V2 are isolated-only at the protocol level —
-            // every position is its own market+collateral unit, there is no
-            // cross-margin pool to share collateral across positions. Render
-            // a read-only badge instead of a toggle that pretends to switch
-            // (the previous clickable toggle did nothing on GMX because
-            // setMarginMode is a no-op there).
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' ? (
+            // Read-only badge for venues where the production margin mode is
+            // not user-toggleable in our integration.
             <div
               style={{...S.marginSwapBtn, padding: '6px 10px', fontSize: 12, gap: 4, cursor: 'default', opacity: 0.85}}
               title={dex === 'gmx'
                 ? 'GMX V2 uses isolated margin per position (no cross mode)'
+                : dex === 'decibel'
+                ? 'Decibel currently uses cross margin; isolated margin is not available yet'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: '#FF9800', fontWeight: 900}}>Isolated</span>
+              <span style={{color: dex === 'decibel' ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {dex === 'decibel' ? 'Cross' : 'Isolated'}
+              </span>
             </div>
           ) : (
             <button
