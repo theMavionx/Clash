@@ -306,6 +306,7 @@ func _switch_to_enemy_island() -> void:
 		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
+		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
 		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
@@ -419,6 +420,7 @@ func _switch_to_enemy_island_after_sail() -> void:
 		bs._rally.reset()
 	_battle_replay.append({
 		"type": "battle_start",
+		"battle_session_id": str(enemy_info.get("battle_session_id", "")),
 		"grid_configs": _battle_grid_configs(),
 		"grid_config": {
 			"grid_width": bs.grid_width,
@@ -786,7 +788,8 @@ func _on_town_hall_destroyed() -> void:
 ## bare). Result is stashed on the instance for the caller to pick up after
 ## the chain-destroy + admire delay.
 func _run_submit_bg(net_node: Node, defender_id: String, casualties: Dictionary) -> void:
-	var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory", casualties)
+	var battle_session_id: String = str(enemy_info.get("battle_session_id", ""))
+	var result: Dictionary = await net_node.submit_battle_result(defender_id, _battle_replay, "victory", casualties, battle_session_id)
 	_submit_result = result
 	_submit_complete = true
 
@@ -1016,7 +1019,8 @@ func check_defeat(delta: float) -> void:
 			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
 		_victory_declared = true  # prevent double-submission
-		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties)
+		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
+		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
 		if not is_instance_valid(bs): return
 		# Apply authoritative post-casualty ship state from server
 		if defeat_result is Dictionary and defeat_result.has("ships"):
@@ -1042,7 +1046,8 @@ func _force_defeat(reason: String) -> void:
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
 	if net_def and net_def.has_token() and def_id != "":
-		net_def.submit_battle_result(def_id, _battle_replay, "defeat", {})
+		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
+		net_def.submit_battle_result(def_id, _battle_replay, "defeat", {}, defeat_session_id)
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason})

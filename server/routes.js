@@ -583,7 +583,7 @@ function _getShipsPayload(playerId) {
 }
 
 router.post('/attack/result', auth, (req, res) => {
-  const { defender_id, actions, result: claimedResult } = req.body;
+  const { defender_id, actions, result: claimedResult, battle_session_id } = req.body;
   if (!defender_id) return res.status(400).json({ error: 'defender_id required' });
   if (!actions || !Array.isArray(actions)) return res.status(400).json({ error: 'actions replay required' });
   if (!claimedResult) return res.status(400).json({ error: 'result required (victory/defeat)' });
@@ -597,7 +597,18 @@ router.post('/attack/result', auth, (req, res) => {
   const battleStartAction = actions.find(a => a.type === 'battle_start');
   const gridConfig = battleStartAction?.grid_config;
   const gridConfigs = battleStartAction?.grid_configs;
+  const battleSessionId = String(battle_session_id || battleStartAction?.battle_session_id || '').trim();
   const gameActions = actions.filter(a => a.type !== 'battle_start');
+  const releaseBattleSession = (status = 'cancelled') => {
+    if (!battleSessionId) return;
+    try { db.finishBattleSession(battleSessionId, req.player.id, defender_id, status); } catch {}
+  };
+
+  const sessionCheck = db.validateBattleSession(battleSessionId, req.player.id, defender_id);
+  if (!sessionCheck.ok) {
+    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', sessionCheck.error, null, null);
+    return res.status(409).json({ error: sessionCheck.error });
+  }
 
   // Basic validation
   const shipActions = gameActions.filter(a => a.type === 'place_ship');
@@ -605,6 +616,7 @@ router.post('/attack/result', auth, (req, res) => {
   if (claimedResult === 'victory' && shipActions.length === 0) {
     replayWarnings.push('No ships deployed');
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      releaseBattleSession('cancelled');
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'No ships', null, null);
       return res.status(403).json({ error: 'No ships deployed' });
     }
@@ -612,6 +624,7 @@ router.post('/attack/result', auth, (req, res) => {
   if (shipActions.length > 5) {
     replayWarnings.push(`Too many ships in replay (${shipActions.length})`);
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      releaseBattleSession('cancelled');
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Too many ships', null, null);
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
@@ -676,6 +689,7 @@ router.post('/attack/result', auth, (req, res) => {
     };
     // Debug info logged server-side only — never expose sim internals to client
     if (STRICT_BATTLE_REPLAY_VERIFICATION) {
+      releaseBattleSession('cancelled');
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', replayReason, null, verification);
       console.log('[SIM REJECT]', JSON.stringify(simDebug));
       return res.status(403).json({ error: 'Replay verification failed', reason: verification.reason });
@@ -685,7 +699,7 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Victory verified — grant loot
   if (claimedResult === 'victory') {
-    const battleResult = db.battleVictory(req.player.id, defender_id);
+    const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
       return res.status(400).json(battleResult);
@@ -700,7 +714,7 @@ router.post('/attack/result', auth, (req, res) => {
   }
 
   // Defeat — attacker loses trophies, defender gains
-  const defeatResult = db.battleDefeat(req.player.id, defender_id);
+  const defeatResult = db.battleDefeat(req.player.id, defender_id, battleSessionId);
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
 
   // Remove server-simulated casualties from attacker's ships.
@@ -758,7 +772,7 @@ router.get('/find-enemy', auth, (req, res) => {
 
   const result = db.findEnemy(req.player.id);
   if (result.error) { logBattle('find_enemy failed', { player: req.player.id, error: result.error }); return res.status(404).json(result); }
-  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name });
+  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name, battle_session_id: result.battle_session_id });
   res.json(result);
 });
 

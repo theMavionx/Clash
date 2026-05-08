@@ -238,13 +238,16 @@ func move_building(building_id: int, grid_x: int, grid_z: int) -> Dictionary:
 func buy_ship(building_id: int) -> Dictionary:
 	return await _http_post("/buildings/%d/buy-ship" % building_id, {})
 
-func submit_battle_result(defender_id: String, actions: Array, result: String, casualties: Dictionary = {}) -> Dictionary:
-	return await _http_post("/attack/result", {
+func submit_battle_result(defender_id: String, actions: Array, result: String, casualties: Dictionary = {}, battle_session_id: String = "") -> Dictionary:
+	var payload: Dictionary = {
 		"defender_id": defender_id,
 		"actions": actions,
 		"result": result,
 		"casualties": casualties,
-	})
+	}
+	if battle_session_id != "":
+		payload["battle_session_id"] = battle_session_id
+	return await _http_post("/attack/result", payload)
 
 
 func remove_building(building_id: int) -> Dictionary:

@@ -151,6 +151,24 @@ try {
   `);
 } catch {}
 
+// Battle matchmaking reservations. /find-enemy creates a short-lived session
+// so two attackers cannot be handed the same unshielded defender, play the
+// whole battle locally, and then have one result rejected once the first
+// submit grants a shield.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS battle_sessions (
+      id            TEXT PRIMARY KEY,
+      attacker_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      defender_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'completed', 'expired', 'cancelled')),
+      reserved_until TEXT NOT NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at  TEXT
+    )
+  `);
+} catch {}
+
 // ---------- Indexes on hot player_id columns (tables defined above) ----------
 // Without these, /battle-log and /buildings endpoints degrade to full-table
 // scans once the DB reaches a few thousand rows. Idempotent on existing DBs.
@@ -165,6 +183,8 @@ try {
     CREATE INDEX IF NOT EXISTS idx_players_wallet ON players(wallet) WHERE wallet IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_players_dex ON players(dex) WHERE dex IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_players_last_seen ON players(last_seen_at) WHERE last_seen_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_battle_sessions_defender_active ON battle_sessions(defender_id, status, reserved_until);
+    CREATE INDEX IF NOT EXISTS idx_battle_sessions_attacker_active ON battle_sessions(attacker_id, status, reserved_until);
   `);
 } catch (e) {
   console.warn('[db] index migration warning:', e.message);
@@ -250,6 +270,12 @@ const stmts = {
     SELECT id, name, trophies, level FROM players
     WHERE id != ?
       AND (shield_until IS NULL OR shield_until < datetime('now'))
+      AND NOT EXISTS (
+        SELECT 1 FROM battle_sessions s
+        WHERE s.defender_id = players.id
+          AND s.status = 'active'
+          AND s.reserved_until > datetime('now')
+      )
       AND EXISTS (
         SELECT 1 FROM buildings
         WHERE buildings.player_id = players.id
@@ -301,6 +327,33 @@ const stmts = {
   repairBuilding: db.prepare(`UPDATE buildings SET hp = max_hp WHERE id = ? AND player_id = ?`),
   setShipOnPort: db.prepare(`UPDATE buildings SET has_ship = 1 WHERE id = ? AND player_id = ?`),
   setShield: db.prepare(`UPDATE players SET shield_until = ?, last_attacked_by = ?, last_attacked_at = datetime('now') WHERE id = ?`),
+
+  // Battle sessions
+  expireBattleSessions: db.prepare(`
+    UPDATE battle_sessions
+    SET status = 'expired'
+    WHERE status = 'active' AND reserved_until <= datetime('now')
+  `),
+  cancelBattleSessionsForAttacker: db.prepare(`
+    UPDATE battle_sessions
+    SET status = 'cancelled', completed_at = datetime('now')
+    WHERE attacker_id = ? AND status = 'active'
+  `),
+  createBattleSession: db.prepare(`
+    INSERT INTO battle_sessions (id, attacker_id, defender_id, reserved_until)
+    VALUES (?, ?, ?, ?)
+  `),
+  getBattleSession: db.prepare(`SELECT * FROM battle_sessions WHERE id = ?`),
+  finishBattleSessionById: db.prepare(`
+    UPDATE battle_sessions
+    SET status = ?, completed_at = datetime('now')
+    WHERE id = ? AND attacker_id = ? AND defender_id = ? AND status = 'active'
+  `),
+  finishBattleSessionsForPair: db.prepare(`
+    UPDATE battle_sessions
+    SET status = ?, completed_at = datetime('now')
+    WHERE attacker_id = ? AND defender_id = ? AND status = 'active'
+  `),
 
   // Tournaments — used by battle paths to detect whether a player is
   // currently joined to an active tournament for their DEX. When yes,
@@ -878,9 +931,24 @@ function getBaseStrength(playerId) {
   return thLevel * 100 + progress;
 }
 
+const BATTLE_RESERVATION_MINUTES = 10;
+
+function sqliteDateFromMs(ms) {
+  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function normalizeBattleSessionId(sessionId) {
+  return String(sessionId || '').trim();
+}
+
 function findEnemy(playerId) {
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return { error: 'Player not found' };
+  return db.transaction(() => {
+  stmts.expireBattleSessions.run();
+  // One attacker should have only one live target reservation. If they tap
+  // Find Enemy again, the newest target replaces the previous lock.
+  stmts.cancelBattleSessionsForAttacker.run(playerId);
   const myStrength = getBaseStrength(playerId);
   const candidates = stmts.findEnemyCandidates.all(playerId);
   // Friendly user-facing message — same wording for "everybody is shielded"
@@ -902,6 +970,9 @@ function findEnemy(playerId) {
   repairAllBuildings(best.id);
   const buildings = stmts.getBuildings.all(best.id);
   const resources = getResources(best.id);
+  const sessionId = uuidv4();
+  const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
+  stmts.createBattleSession.run(sessionId, playerId, best.id, reservedUntil);
   return {
     id: best.id,
     name: best.name,
@@ -909,7 +980,43 @@ function findEnemy(playerId) {
     level: best.level,
     buildings,
     resources,
+    battle_session_id: sessionId,
+    battle_session_expires_at: reservedUntil,
   };
+  })();
+}
+
+function validateBattleSession(sessionId, attackerId, defenderId) {
+  const normalized = normalizeBattleSessionId(sessionId);
+  if (!normalized) return { ok: true, legacy: true };
+
+  stmts.expireBattleSessions.run();
+  const session = stmts.getBattleSession.get(normalized);
+  if (!session) return { ok: false, error: 'Battle session expired. Find an enemy again.' };
+  if (session.attacker_id !== attackerId || session.defender_id !== defenderId) {
+    return { ok: false, error: 'Battle session does not match this attack. Find an enemy again.' };
+  }
+  if (session.status === 'expired') {
+    return { ok: false, error: 'Battle session expired. Find an enemy again.' };
+  }
+  if (session.status !== 'active') {
+    return { ok: false, error: 'Battle session is no longer active. Find an enemy again.' };
+  }
+  const expiresAt = new Date(session.reserved_until + 'Z');
+  if (expiresAt <= new Date()) {
+    stmts.finishBattleSessionById.run('expired', normalized, attackerId, defenderId);
+    return { ok: false, error: 'Battle session expired. Find an enemy again.' };
+  }
+  return { ok: true, session };
+}
+
+function finishBattleSession(sessionId, attackerId, defenderId, status = 'completed') {
+  const finalStatus = ['completed', 'expired', 'cancelled'].includes(status) ? status : 'completed';
+  const normalized = normalizeBattleSessionId(sessionId);
+  if (normalized) {
+    return stmts.finishBattleSessionById.run(finalStatus, normalized, attackerId, defenderId);
+  }
+  return stmts.finishBattleSessionsForPair.run(finalStatus, attackerId, defenderId);
 }
 
 function recalculateTrophies(playerId) {
@@ -981,13 +1088,14 @@ const LOOT_PERCENT = 0.15;
 const SHIELD_HOURS = 6; // 6-hour shield after being raided
 const ATTACK_COOLDOWN_HOURS = 1; // can't attack same player for 1 hour
 
-function battleDefeat(attackerId, defenderId) {
+function battleDefeat(attackerId, defenderId, battleSessionId = '') {
   // Trophy deltas route through applyTrophyDelta so per-player tournament
   // freeze is honoured: a tournament-joined player's main `players.trophies`
   // stays put, and the delta is funneled (with optional positive-only
   // boost) into `tournament_participants.trophies` instead.
   applyTrophyDelta(attackerId, -TROPHY_LOSS);
   applyTrophyDelta(defenderId,  TROPHY_WIN);
+  finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
   // Return current main trophies for backwards-compat with callers that
   // displayed them in the response. For tournament-frozen players these
   // numbers are deliberately stale (matching "main is frozen during
@@ -998,7 +1106,10 @@ function battleDefeat(attackerId, defenderId) {
   };
 }
 
-const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
+const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionId = '') => {
+  const sessionCheck = validateBattleSession(battleSessionId, attackerId, defenderId);
+  if (!sessionCheck.ok) return { error: sessionCheck.error };
+
   // Check defender has no active shield
   const defender = stmts.getPlayerById.get(defenderId);
   if (!defender) return { error: 'Defender not found' };
@@ -1033,6 +1144,7 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
   // delta) to their tournament_participants row instead.
   applyTrophyDelta(attackerId,  TROPHY_WIN);
   applyTrophyDelta(defenderId, -TROPHY_LOSS);
+  finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
 
   return {
     success: true,
@@ -1046,10 +1158,10 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId) => {
   };
 });
 
-function battleVictory(attackerId, defenderId) {
+function battleVictory(attackerId, defenderId, battleSessionId = '') {
   if (!attackerId || !defenderId) return { error: 'Missing player IDs' };
   if (attackerId === defenderId) return { error: 'Cannot attack yourself' };
-  return _battleVictoryTxn(attackerId, defenderId);
+  return _battleVictoryTxn(attackerId, defenderId, battleSessionId);
 }
 
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
@@ -1097,6 +1209,8 @@ module.exports = {
   buyShip,
   battleVictory,
   battleDefeat,
+  validateBattleSession,
+  finishBattleSession,
   // Tournament hooks — exported so server/routes.js claim-gold path and
   // server-futures rewards-workers can credit volume / pnl into
   // tournament_participants alongside the normal flow.
