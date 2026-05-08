@@ -1,83 +1,47 @@
 #!/bin/bash
-# Quick update — pull latest code, rebuild frontend, restart backend
-set -e
+# Pull the source checkout, then run the atomic deploy script.
+#
+# Production source checkout defaults to /home/bloxxdotfun/Clash. The live app
+# is served from /opt/clash/current and should not be edited directly.
 
-APP_DIR="/opt/clash"
-DB_BACKUP="/opt/clash-db-backup"
+set -Eeuo pipefail
 
-echo "=== Quick Update ==="
+BRANCH="${CLASH_BRANCH:-main}"
+SOURCE_DIR="${CLASH_SOURCE_DIR:-/home/bloxxdotfun/Clash}"
+DEPLOY_ROOT="${CLASH_DEPLOY_ROOT:-/opt/clash}"
 
-# Backup databases before pull
-mkdir -p "$DB_BACKUP"
-for db in \
-    "$APP_DIR/server/clash.db" "$APP_DIR/server/clash.db-wal" "$APP_DIR/server/clash.db-shm" \
-    "$APP_DIR/server-futures/futures.db" "$APP_DIR/server-futures/futures.db-wal" "$APP_DIR/server-futures/futures.db-shm"; do
-    [ -f "$db" ] && cp "$db" "$DB_BACKUP/" && echo "Backed up $(basename $db)"
-done
-
-# Pull latest (discard local changes to tracked files)
-cd "$APP_DIR"
-git reset --hard HEAD
-git pull origin main
-
-# Restore databases after pull
-for db in "$DB_BACKUP/clash.db" "$DB_BACKUP/clash.db-wal" "$DB_BACKUP/clash.db-shm"; do
-    [ -f "$db" ] && cp "$db" "$APP_DIR/server/"
-done
-mkdir -p "$APP_DIR/server-futures"
-for db in "$DB_BACKUP/futures.db" "$DB_BACKUP/futures.db-wal" "$DB_BACKUP/futures.db-shm"; do
-    [ -f "$db" ] && cp "$db" "$APP_DIR/server-futures/"
-done
-echo "DB restored"
-
-# Ensure brotli is installed
-command -v brotli &>/dev/null || sudo apt-get install -y -qq brotli
-
-# Install & rebuild frontend
-echo "Building frontend..."
-cd "$APP_DIR/web"
-npm install --legacy-peer-deps
-npm run build
-
-# Stamp build hash into sw.js so browsers pick up new cache on deploy
-BUILD_HASH=$(date +%s)
-sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$APP_DIR/web/dist/sw.js"
-echo "  SW cache version: clash-godot-$BUILD_HASH"
-
-# Pre-compress Godot assets with brotli + gzip for nginx static serving
-echo "Compressing Godot assets..."
-for f in "$APP_DIR/web/dist/godot/Work.pck" "$APP_DIR/web/dist/godot/Work.wasm" "$APP_DIR/web/dist/godot/Work.side.wasm" "$APP_DIR/web/dist/godot/Work.js"; do
-    if [ -f "$f" ]; then
-        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli: $(basename $f) → $(du -h "$f.br" | cut -f1)"
-        gzip -f -k -9 "$f" && echo "  gzip:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+if [ ! -d "$SOURCE_DIR/.git" ]; then
+    SCRIPT_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
+    if [ -d "$SCRIPT_ROOT/.git" ]; then
+        SOURCE_DIR="$SCRIPT_ROOT"
+    else
+        echo "ERROR: source checkout not found at $SOURCE_DIR" >&2
+        echo "Set CLASH_SOURCE_DIR=/path/to/Clash and run again." >&2
+        exit 1
     fi
-done
-if [ -f "$APP_DIR/web/dist/godot/Work.js" ]; then
-    sed -i "s|\[\`\${loadPath}.side.wasm\`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g" "$APP_DIR/web/dist/godot/Work.js"
-    rm -f "$APP_DIR/web/dist/godot/Work.side.wasm"
 fi
 
-# Install & restart backend
-echo "Restarting backend..."
-cd "$APP_DIR/server"
-npm ci --production
+echo "=== Atomic Update ==="
+echo "Source: $SOURCE_DIR"
+echo "Branch: $BRANCH"
 
-# Backfill DIAG_SERVER_SECRET_B58 on existing .env (idempotent). Without this,
-# every restart rotates the diag keypair and old encrypted reports stop being
-# decryptable.
-if [ -f "$APP_DIR/.env" ] && ! grep -q '^DIAG_SERVER_SECRET_B58=' "$APP_DIR/.env"; then
-    DIAG_SECRET=$(node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
-    echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
-    echo "  Generated DIAG_SERVER_SECRET_B58 (persisted)"
+cd "$SOURCE_DIR"
+git fetch origin "$BRANCH"
+git pull --ff-only origin "$BRANCH"
+
+# web/public/godot is intentionally gitignored because the export is large.
+# If the source checkout lacks it, preserve the currently-live export so
+# backend/frontend-only updates can still deploy without producing 404s.
+if [ ! -f "$SOURCE_DIR/web/public/godot/Work.pck" ]; then
+    if [ -f "$DEPLOY_ROOT/current/web/public/godot/Work.pck" ]; then
+        echo "Source Godot export missing; reusing current live export."
+        mkdir -p "$SOURCE_DIR/web/public"
+        rsync -a --delete "$DEPLOY_ROOT/current/web/public/godot" "$SOURCE_DIR/web/public/"
+    else
+        echo "ERROR: source Godot export missing at web/public/godot/Work.pck" >&2
+        echo "Export Godot locally and upload web/public/godot before deploying." >&2
+        exit 1
+    fi
 fi
 
-pm2 restart clash-api
-
-if [ -d "$APP_DIR/server-futures" ]; then
-    echo "Restarting futures backend..."
-    cd "$APP_DIR/server-futures"
-    npm install --production --legacy-peer-deps
-    pm2 restart clash-futures || pm2 start index.js --name clash-futures --env production --node-args="--env-file=$APP_DIR/.env"
-fi
-
-echo "=== Update complete! ==="
+exec bash "$SOURCE_DIR/deploy/deploy.sh"

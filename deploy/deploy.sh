@@ -1,133 +1,336 @@
 #!/bin/bash
-# Deploy script for clashofperps.fun
-# Backend: Node.js on port 4000
-# Frontend: Vite build served by nginx on port 3999 (proxied)
-# Nginx: SSL termination + proxy to both
+# Atomic deploy script for clashofperps.fun.
+#
+# Layout after deploy:
+#   /opt/clash/current -> /opt/clash/releases/<release-id>
+#   /opt/clash/releases/<release-id>/... immutable built release
+#   /opt/clash/shared/.env shared production env
+#   /opt/clash/shared/server/*.db shared main SQLite DB
+#   /opt/clash/shared/server-futures/*.db shared futures SQLite DB
+#
+# Nginx serves /opt/clash/current/web/dist. A new build is prepared in a fresh
+# release directory first; only after validation do we atomically swap current.
 
-set -e
+set -Eeuo pipefail
 
 DOMAIN="clashofperps.fun"
 EMAIL="egor4042007@gmail.com"
-APP_DIR="/opt/clash"
-SERVER_DIR="$APP_DIR/server"
-WEB_DIR="$APP_DIR/web"
+DEPLOY_ROOT="/opt/clash"
+RELEASES_DIR="$DEPLOY_ROOT/releases"
+SHARED_DIR="$DEPLOY_ROOT/shared"
+CURRENT_LINK="$DEPLOY_ROOT/current"
+KEEP_RELEASES="${KEEP_RELEASES:-5}"
+
+SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
+GIT_SHA="$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || echo manual)"
+RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
+RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
+SERVER_DIR="$RELEASE_DIR/server"
+FUTURES_DIR="$RELEASE_DIR/server-futures"
+WEB_DIR="$RELEASE_DIR/web"
 WEB_DIST="$WEB_DIR/dist"
 
-echo "=== Deploying $DOMAIN ==="
+SHARED_SERVER_DIR="$SHARED_DIR/server"
+SHARED_FUTURES_DIR="$SHARED_DIR/server-futures"
+ENV_FILE="$SHARED_DIR/.env"
 
-# ── 1. Install dependencies ──
-echo "[1/7] Installing system dependencies..."
-apt-get update -qq
-apt-get install -y -qq nginx certbot python3-certbot-nginx curl
+BOOTSTRAPPED_LEGACY_DBS=0
+SWITCHED=0
 
-# Install Node.js 20 if not present
-if ! command -v node &> /dev/null; then
-    echo "Installing Node.js 20..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y -qq nodejs
-fi
+log() {
+    echo "[$(date -u +%H:%M:%S)] $*"
+}
 
-# Install PM2 globally
-if ! command -v pm2 &> /dev/null; then
-    npm install -g pm2
-fi
+die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
 
-# ── 2. Copy project files ──
-echo "[2/7] Copying project files..."
-mkdir -p "$APP_DIR"
-rsync -a --delete \
-    --exclude='node_modules' --exclude='.git' --exclude='clash.db*' \
-    --exclude='.env' \
-    --exclude='server-futures/node_modules' --exclude='server-futures/*.db*' \
-    --exclude='server-futures/server.log' \
-    "$(dirname "$(dirname "$(readlink -f "$0")")")/" "$APP_DIR/"
-
-# ── 3. Install backend dependencies ──
-echo "[3/7] Installing backend dependencies..."
-cd "$SERVER_DIR"
-npm ci --production
-
-# Install brotli for pre-compression + nginx brotli module
-if ! command -v brotli &> /dev/null; then
-    echo "Installing brotli..."
-    apt-get install -y -qq brotli
-fi
-# Install nginx brotli module if available
-if ! nginx -V 2>&1 | grep -q brotli; then
-    apt-get install -y -qq libnginx-mod-http-brotli-static libnginx-mod-http-brotli-filter 2>/dev/null || echo "  (brotli module not available — gzip_static will be used as fallback)"
-fi
-
-# ── 4. Build frontend ──
-echo "[4/7] Building frontend..."
-cd "$WEB_DIR"
-# --legacy-peer-deps: @privy-io/react-auth@3.21.2 pins @farcaster/mini-app-solana@^1,
-# but we're on 2.0.0 (works fine at runtime — Privy gracefully degrades).
-# Using `install` over `ci` so a slightly stale lockfile on the server still works.
-npm install --legacy-peer-deps
-npm run build
-
-# Stamp build hash into sw.js so browsers pick up new cache on deploy
-BUILD_HASH=$(date +%s)
-sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
-echo "  SW cache version: clash-godot-$BUILD_HASH"
-
-# Patch Work.js — remove side.wasm from dynamicLibraries (thread support disabled)
-if [ -f "$WEB_DIST/godot/Work.js" ]; then
-    sed -i "s|\[\`\${loadPath}.side.wasm\`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g" "$WEB_DIST/godot/Work.js"
-    rm -f "$WEB_DIST/godot/Work.side.wasm"
-    echo "  Patched Work.js: removed side.wasm reference"
-fi
-
-# Pre-compress Godot assets with brotli + gzip for nginx static serving
-# Use brotli quality 9 for big files (much smaller, slower to compress but done once at deploy)
-echo "Compressing Godot assets..."
-for f in "$WEB_DIST/godot/Work.pck"; do
-    if [ -f "$f" ]; then
-        brotli -f -q 9 -o "$f.br" "$f" && echo "  brotli-9: $(basename $f) → $(du -h "$f.br" | cut -f1)"
-        gzip -f -k -9 "$f" && echo "  gzip-9:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
+require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        die "Run this script with sudo/root."
     fi
-done
-for f in "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.js"; do
-    if [ -f "$f" ]; then
-        brotli -f -q 6 -o "$f.br" "$f" && echo "  brotli-6: $(basename $f) → $(du -h "$f.br" | cut -f1)"
-        gzip -f -k -9 "$f" && echo "  gzip-9:   $(basename $f) → $(du -h "$f.gz" | cut -f1)"
-    fi
-done
-# Also compress the React bundle
-for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
-    if [ -f "$f" ] && [ ! -f "$f.br" ]; then
-        brotli -f -q 6 -o "$f.br" "$f"
-        gzip -f -k -9 "$f"
-    fi
-done
-echo "  Compression complete."
+}
 
-# ── 5. Setup nginx — Step 1: HTTP only (for certbot) ──
-echo "[5/8] Configuring nginx (HTTP)..."
-cat > /etc/nginx/sites-available/$DOMAIN << HTTPCONF
+cleanup_failed_release() {
+    if [ "$SWITCHED" -eq 0 ] && [ -n "${RELEASE_DIR:-}" ] && [ -d "$RELEASE_DIR" ]; then
+        rm -rf "$RELEASE_DIR"
+    fi
+}
+trap cleanup_failed_release ERR
+
+set_env_value() {
+    local key="$1"
+    local value="$2"
+    local escaped="${value//\\/\\\\}"
+    escaped="${escaped//&/\\&}"
+    if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE"
+    else
+        echo "${key}=${value}" >> "$ENV_FILE"
+    fi
+}
+
+ensure_env_default() {
+    local key="$1"
+    local value="$2"
+    if ! grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        echo "${key}=${value}" >> "$ENV_FILE"
+    fi
+}
+
+copy_db_family() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    local base="$3"
+    local copied=0
+    mkdir -p "$dst_dir"
+    for suffix in "" "-wal" "-shm"; do
+        if [ -f "$src_dir/$base$suffix" ]; then
+            cp -a "$src_dir/$base$suffix" "$dst_dir/"
+            copied=1
+        fi
+    done
+    [ "$copied" -eq 1 ]
+}
+
+install_system_dependencies() {
+    log "[1/9] Installing system dependencies..."
+    apt-get update -qq
+    apt-get install -y -qq nginx certbot python3-certbot-nginx curl rsync brotli
+
+    if ! command -v node >/dev/null 2>&1; then
+        log "Installing Node.js 20..."
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y -qq nodejs
+    fi
+
+    if ! command -v pm2 >/dev/null 2>&1; then
+        npm install -g pm2
+    fi
+
+    if ! nginx -V 2>&1 | grep -q brotli; then
+        apt-get install -y -qq libnginx-mod-http-brotli-static libnginx-mod-http-brotli-filter 2>/dev/null \
+            || log "brotli nginx module not available; gzip_static will still be used."
+    fi
+}
+
+prepare_shared_runtime() {
+    log "[2/9] Preparing shared runtime..."
+    mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
+
+    if [ ! -f "$ENV_FILE" ]; then
+        if [ -f "$DEPLOY_ROOT/.env" ]; then
+            cp -a "$DEPLOY_ROOT/.env" "$ENV_FILE"
+            log "Copied legacy .env to $ENV_FILE"
+        else
+            ADMIN_KEY="$(openssl rand -hex 16)"
+            REWARD_SECRET="$(openssl rand -hex 32)"
+            WALLET_ENC_KEY="$(openssl rand -hex 32)"
+            cat > "$ENV_FILE" << EOF
+ADMIN_KEY=$ADMIN_KEY
+REWARD_SECRET=$REWARD_SECRET
+NODE_ENV=production
+ELFA_API_KEY=
+DECIBEL_API_KEY=
+DECIBEL_API_WALLET_PRIVATE_KEY=
+DECIBEL_ALLOWED_BUILDER_ADDRS=
+DECIBEL_BUILDER_FEE_BPS=1
+CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
+EOF
+            chmod 600 "$ENV_FILE"
+            log "Generated new shared .env with ADMIN_KEY=$ADMIN_KEY"
+        fi
+    fi
+
+    ensure_env_default "ADMIN_KEY" "$(openssl rand -hex 16)"
+    ensure_env_default "REWARD_SECRET" "$(openssl rand -hex 32)"
+    ensure_env_default "NODE_ENV" "production"
+    ensure_env_default "ELFA_API_KEY" ""
+    ensure_env_default "DECIBEL_API_KEY" ""
+    ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
+    ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
+    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "1"
+    ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
+
+    set_env_value "NODE_ENV" "production"
+    set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
+    set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
+
+    if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
+        if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then
+            BOOTSTRAPPED_LEGACY_DBS=1
+            log "Bootstrapped main DB from legacy /opt/clash/server"
+        elif [ -L "$CURRENT_LINK" ]; then
+            copy_db_family "$CURRENT_LINK/server" "$SHARED_SERVER_DIR" "clash.db" || true
+        fi
+    fi
+
+    if [ ! -f "$SHARED_FUTURES_DIR/futures.db" ]; then
+        if copy_db_family "$DEPLOY_ROOT/server-futures" "$SHARED_FUTURES_DIR" "futures.db"; then
+            BOOTSTRAPPED_LEGACY_DBS=1
+            log "Bootstrapped futures DB from legacy /opt/clash/server-futures"
+        elif [ -L "$CURRENT_LINK" ]; then
+            copy_db_family "$CURRENT_LINK/server-futures" "$SHARED_FUTURES_DIR" "futures.db" || true
+        fi
+    fi
+}
+
+backup_shared_databases() {
+    local ts
+    ts="$(date -u +%Y%m%d%H%M%S)"
+    local backup_dir="$SHARED_DIR/backups/$ts"
+    mkdir -p "$backup_dir/server" "$backup_dir/server-futures"
+    copy_db_family "$SHARED_SERVER_DIR" "$backup_dir/server" "clash.db" || true
+    copy_db_family "$SHARED_FUTURES_DIR" "$backup_dir/server-futures" "futures.db" || true
+    log "Database backup written to $backup_dir"
+}
+
+copy_source_to_release() {
+    log "[3/9] Copying source to release $RELEASE_ID..."
+    mkdir -p "$RELEASE_DIR"
+    rsync -a --delete \
+        --exclude='.git' \
+        --exclude='.claude' \
+        --exclude='.godot' \
+        --exclude='node_modules' \
+        --exclude='web/node_modules' \
+        --exclude='web/dist' \
+        --exclude='server/node_modules' \
+        --exclude='server/*.db*' \
+        --exclude='server-futures/node_modules' \
+        --exclude='server-futures/*.db*' \
+        --exclude='server-futures/server.log' \
+        --exclude='.env' \
+        --exclude='*.log' \
+        --exclude='*.orig' \
+        --exclude='aptos-test-wallet.txt' \
+        --exclude='android-keystore' \
+        --exclude='twa' \
+        --exclude='backups' \
+        "$SOURCE_DIR/" "$RELEASE_DIR/"
+
+    [ -f "$WEB_DIR/public/godot/Work.pck" ] \
+        || die "Godot export missing at $WEB_DIR/public/godot/Work.pck. Export locally and upload web/public/godot before deploy."
+}
+
+install_release_dependencies() {
+    log "[4/9] Installing release dependencies..."
+    cd "$SERVER_DIR"
+    npm ci --omit=dev
+
+    if [ -d "$FUTURES_DIR" ]; then
+        cd "$FUTURES_DIR"
+        npm install --omit=dev --legacy-peer-deps
+    fi
+
+    if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$ENV_FILE"; then
+        DIAG_SECRET="$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")"
+        echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$ENV_FILE"
+        log "Generated persistent DIAG_SERVER_SECRET_B58"
+    fi
+}
+
+build_frontend() {
+    log "[5/9] Building frontend..."
+    cd "$WEB_DIR"
+    npm install --legacy-peer-deps
+    npm run build
+
+    BUILD_HASH="$(date +%s)"
+    if [ -f "$WEB_DIST/sw.js" ]; then
+        sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
+        log "SW cache version: clash-godot-$BUILD_HASH"
+    fi
+
+    if [ -f "$WEB_DIST/godot/Work.js" ]; then
+        sed -i 's|\[`${loadPath}.side.wasm`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g' "$WEB_DIST/godot/Work.js"
+        rm -f "$WEB_DIST/godot/Work.side.wasm"
+        log "Patched Work.js side.wasm reference"
+    fi
+
+    log "Compressing static assets..."
+    for f in "$WEB_DIST/godot/Work.pck"; do
+        if [ -f "$f" ]; then
+            brotli -f -q 9 -o "$f.br" "$f"
+            gzip -f -k -9 "$f"
+        fi
+    done
+    for f in "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.js"; do
+        if [ -f "$f" ]; then
+            brotli -f -q 6 -o "$f.br" "$f"
+            gzip -f -k -9 "$f"
+        fi
+    done
+    for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
+        if [ -f "$f" ]; then
+            brotli -f -q 6 -o "$f.br" "$f"
+            gzip -f -k -9 "$f"
+        fi
+    done
+}
+
+validate_release() {
+    log "[6/9] Validating release..."
+    [ -f "$WEB_DIST/index.html" ] || die "Missing web/dist/index.html"
+    [ -f "$WEB_DIST/godot/Work.pck" ] || die "Missing web/dist/godot/Work.pck"
+    [ -f "$WEB_DIST/godot/Work.wasm" ] || die "Missing web/dist/godot/Work.wasm"
+    [ -f "$WEB_DIST/godot/Work.js" ] || die "Missing web/dist/godot/Work.js"
+    node --check "$SERVER_DIR/db.js"
+    node --check "$SERVER_DIR/routes.js"
+    if [ -f "$FUTURES_DIR/index.js" ]; then
+        node --check "$FUTURES_DIR/index.js"
+    fi
+}
+
+sync_legacy_databases_before_switch() {
+    if [ "$BOOTSTRAPPED_LEGACY_DBS" -ne 1 ]; then
+        return
+    fi
+
+    log "Stopping old services briefly for one-time DB migration..."
+    pm2 stop clash-api 2>/dev/null || true
+    pm2 stop clash-futures 2>/dev/null || true
+    copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db" || true
+    copy_db_family "$DEPLOY_ROOT/server-futures" "$SHARED_FUTURES_DIR" "futures.db" || true
+}
+
+switch_current_release() {
+    log "[7/9] Switching current symlink atomically..."
+    local tmp_link="$DEPLOY_ROOT/.current.new"
+    ln -sfn "$RELEASE_DIR" "$tmp_link"
+    mv -Tf "$tmp_link" "$CURRENT_LINK"
+    SWITCHED=1
+
+    mkdir -p "$DEPLOY_ROOT/deploy"
+    cat > "$DEPLOY_ROOT/deploy/update.sh" << 'EOF'
+#!/bin/bash
+exec /opt/clash/current/deploy/update.sh "$@"
+EOF
+    chmod +x "$DEPLOY_ROOT/deploy/update.sh"
+}
+
+write_nginx_config() {
+    log "[8/9] Configuring nginx..."
+    if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+        cat > /etc/nginx/sites-available/$DOMAIN << HTTPCONF
 server {
     listen 80;
-    server_name $DOMAIN $DOMAIN;
-    root $WEB_DIST;
+    server_name $DOMAIN;
+    root $CURRENT_LINK/web/dist;
     index index.html;
     location / { try_files \$uri \$uri/ /index.html; }
 }
 HTTPCONF
 
-ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl reload nginx
+        ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+        rm -f /etc/nginx/sites-enabled/default
+        nginx -t
+        systemctl reload nginx
+        certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
+    fi
 
-# ── 6. SSL Certificate ──
-echo "[6/8] Setting up SSL certificate..."
-if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    certbot --nginx -d $DOMAIN -d $DOMAIN --non-interactive --agree-tos -m $EMAIL
-fi
-
-# ── 7. Setup nginx — Step 2: Full config with SSL + proxy ──
-echo "[7/8] Configuring nginx (SSL + proxy)..."
-cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
+    cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
 server {
     listen 80;
     server_name clashofperps.fun;
@@ -143,13 +346,8 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    # COOP allows popups (Coinbase/Base/Privy email). COEP intentionally omitted:
-    # credentialless strips cookies from Privy's auth.privy.io iframe, which breaks
-    # embedded-wallet creation ("Exceeded max attempts"). Godot runs single-threaded.
     add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
 
-    # Futures proxy → server-futures on port 3999 (Avantis + optional Pacifica).
-    # Must come BEFORE /api/ because nginx matches longest prefix first.
     location /api/futures/ {
         proxy_pass http://127.0.0.1:3999/api/;
         proxy_http_version 1.1;
@@ -161,12 +359,6 @@ server {
         gzip off;
     }
 
-    # Arbitrum RPC proxy for GMX SDK reads. Routed server-side so the
-    # Alchemy API key never ships in the browser bundle and MetaMask's
-    # injected.js content script can't intercept the call (it scans
-    # browser fetches for known RPC hosts and re-routes them through its
-    # own provider, stripping ACAO and breaking CORS). Same-origin
-    # localhost-style paths aren't in MM's intercept list.
     location /rpc/arb-alchemy {
         proxy_pass https://arb-mainnet.g.alchemy.com/v2/_wtFjwex46SgJDz2fx2c6;
         proxy_http_version 1.1;
@@ -176,12 +368,6 @@ server {
         proxy_set_header Accept-Encoding "";
         gzip off;
     }
-    # Anonymous Arbitrum RPC fallback chain — used when env override
-    # is not set. Pocket Network primary (most generous), then
-    # OnFinality / publicnode / tenderly. 1rpc.io kept last (250
-    # req/IP/day cap). Path layout matches web/vite.config.js so the
-    # production bundle's same VITE_ARBITRUM_RPC_URL env override works
-    # against either Vite or nginx without rebuilding.
     location /rpc/arb-pokt {
         proxy_pass https://arb-pokt.nodies.app/;
         proxy_http_version 1.1;
@@ -218,15 +404,11 @@ server {
         gzip off;
     }
 
-    # API proxy → backend port 4000 (gzip off — Godot web can't decompress)
-    # Public client-log ingestion is non-critical and can be abused for DoS.
-    # Drop it at nginx so it cannot consume backend or upstream connections.
     location = /api/client-log {
         access_log off;
         add_header Cache-Control "no-store" always;
         return 204;
     }
-
     location = /api/client-log/ {
         access_log off;
         add_header Cache-Control "no-store" always;
@@ -244,7 +426,6 @@ server {
         gzip off;
     }
 
-    # WebSocket proxy
     location /ws {
         proxy_pass http://127.0.0.1:4000/ws;
         proxy_http_version 1.1;
@@ -253,51 +434,42 @@ server {
         proxy_set_header Host $host;
     }
 
-    # Server dashboard
     location /dashboard {
         proxy_pass http://127.0.0.1:4000/;
         proxy_set_header Host $host;
     }
 
-    # Trading stats
     location /trading-stats {
         proxy_pass http://127.0.0.1:4000/trading-stats;
         proxy_set_header Host $host;
     }
 
-    # Frontend static files
-    root /opt/clash/web/dist;
+    root /opt/clash/current/web/dist;
     index index.html;
 
     location / {
         try_files $uri $uri/ /index.html;
     }
 
-    # HTML entry — never cache so new deploys are picked up immediately
     location = /index.html {
         add_header Cache-Control "no-cache, no-store, must-revalidate";
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
     }
 
-    # Service worker — never cache (browser must always check for updates)
     location = /sw.js {
         add_header Cache-Control "no-cache, no-store, must-revalidate";
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
     }
 
-    # Godot assets — long cache with ETag revalidation, SW caches after first load
     location /godot/ {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
         add_header Cache-Control "public, max-age=86400, must-revalidate";
         etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
-
-        # Serve pre-compressed brotli/gzip (30-60% smaller than raw)
         gzip_static on;
     }
 
-    # Hashed JS/CSS assets — immutable cache (filename changes on rebuild)
     location /assets/ {
         add_header Cache-Control "public, max-age=31536000, immutable";
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
@@ -311,93 +483,83 @@ server {
 }
 SSLCONF
 
-# If nginx brotli module is available, enable brotli_static for Godot assets
-if nginx -V 2>&1 | grep -q brotli; then
-    sed -i '/gzip_static on;/a\        brotli_static on;' /etc/nginx/sites-available/$DOMAIN
-    echo "  brotli_static enabled in nginx"
-fi
+    ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
 
-nginx -t
-systemctl reload nginx
-
-# ── 8. Start/restart services with PM2 ──
-echo "[8/9] Starting services..."
-cd "$SERVER_DIR"
-
-# Generate admin key + wallet encryption key if not exists
-if [ ! -f "$APP_DIR/.env" ]; then
-    ADMIN_KEY=$(openssl rand -hex 16)
-    REWARD_SECRET=$(openssl rand -hex 32)
-    WALLET_ENC_KEY=$(openssl rand -hex 32)
-    cat > "$APP_DIR/.env" << EOF
-ADMIN_KEY=$ADMIN_KEY
-REWARD_SECRET=$REWARD_SECRET
-NODE_ENV=production
-ELFA_API_KEY=
-DECIBEL_API_KEY=
-DECIBEL_API_WALLET_PRIVATE_KEY=
-DECIBEL_ALLOWED_BUILDER_ADDRS=
-DECIBEL_BUILDER_FEE_BPS=1
-CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
-CLASH_MAIN_DB=$SERVER_DIR/clash.db
-EOF
-    DIAG_SECRET=$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
-    echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
-    echo "Generated .env with ADMIN_KEY=$ADMIN_KEY"
-else
-    # Backfill missing keys on existing .env (idempotent)
-    grep -q '^CLASH_WALLET_ENCRYPTION_KEY=' "$APP_DIR/.env" || \
-        echo "CLASH_WALLET_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> "$APP_DIR/.env"
-    grep -q '^CLASH_MAIN_DB=' "$APP_DIR/.env" || \
-        echo "CLASH_MAIN_DB=$SERVER_DIR/clash.db" >> "$APP_DIR/.env"
-    grep -q '^DECIBEL_API_KEY=' "$APP_DIR/.env" || \
-        echo "DECIBEL_API_KEY=" >> "$APP_DIR/.env"
-    grep -q '^DECIBEL_API_WALLET_PRIVATE_KEY=' "$APP_DIR/.env" || \
-        echo "DECIBEL_API_WALLET_PRIVATE_KEY=" >> "$APP_DIR/.env"
-    grep -q '^DECIBEL_ALLOWED_BUILDER_ADDRS=' "$APP_DIR/.env" || \
-        echo "DECIBEL_ALLOWED_BUILDER_ADDRS=" >> "$APP_DIR/.env"
-    grep -q '^DECIBEL_BUILDER_FEE_BPS=' "$APP_DIR/.env" || \
-        echo "DECIBEL_BUILDER_FEE_BPS=1" >> "$APP_DIR/.env"
-    # Diagnostic-report long-term keypair (NaCl box, base58-encoded 32-byte
-    # secret). Without this, every restart rotates the key and old encrypted
-    # reports become undecryptable. Generated via the server's own tweetnacl
-    # so we don't depend on extra tooling.
-    if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$APP_DIR/.env"; then
-        DIAG_SECRET=$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
-        echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
+    if nginx -V 2>&1 | grep -q brotli; then
+        sed -i '/gzip_static on;/a\        brotli_static on;' /etc/nginx/sites-available/$DOMAIN
+        log "brotli_static enabled in nginx"
     fi
-fi
 
-pm2 delete clash-api 2>/dev/null || true
-pm2 start index.js --name clash-api --env production --node-args="--env-file=$APP_DIR/.env"
+    nginx -t
+    systemctl reload nginx
+}
 
-# ── Futures service (port 3999) — Avantis custodial trading ──
-FUTURES_DIR="$APP_DIR/server-futures"
-if [ -d "$FUTURES_DIR" ]; then
-    echo "Installing server-futures dependencies..."
-    cd "$FUTURES_DIR"
-    npm install --production --legacy-peer-deps
-    pm2 delete clash-futures 2>/dev/null || true
-    pm2 start index.js --name clash-futures --env production --node-args="--env-file=$APP_DIR/.env"
-    cd "$SERVER_DIR"
-fi
+restart_services() {
+    log "[9/9] Restarting PM2 services..."
 
-pm2 save
-pm2 startup systemd -u root --hp /root 2>/dev/null || true
+    pm2 delete clash-api 2>/dev/null || true
+    pm2 start "$CURRENT_LINK/server/index.js" \
+        --name clash-api \
+        --cwd "$CURRENT_LINK/server" \
+        --env production \
+        --node-args="--env-file=$ENV_FILE"
 
-# Auto-deploy watcher intentionally NOT installed — we deploy manually via
-# `deploy/update.sh` on demand. Keeps prod immune to a bad commit
-# auto-rolling out before it's been smoke-tested locally.
+    if [ -d "$CURRENT_LINK/server-futures" ]; then
+        pm2 delete clash-futures 2>/dev/null || true
+        pm2 start "$CURRENT_LINK/server-futures/index.js" \
+            --name clash-futures \
+            --cwd "$CURRENT_LINK/server-futures" \
+            --env production \
+            --node-args="--env-file=$ENV_FILE"
+    fi
 
-echo ""
-echo "=== Deploy complete! ==="
-echo "  Frontend:    https://$DOMAIN"
-echo "  API:         https://$DOMAIN/api/"
-echo "  Dashboard:   https://$DOMAIN/dashboard"
-echo "  WebSocket:   wss://$DOMAIN/ws"
-echo ""
-echo "Useful commands:"
-echo "  pm2 logs clash-api                          # Backend logs"
-echo "  pm2 restart clash-api                       # Restart backend"
-echo "  bash $APP_DIR/deploy/update.sh              # Manual update (pull + rebuild + restart)"
-echo "  nginx -t && systemctl reload nginx          # Reload nginx"
+    pm2 save
+    pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
+}
+
+cleanup_old_releases() {
+    log "Keeping last $KEEP_RELEASES release(s)."
+    local count=0
+    local release
+    while IFS= read -r release; do
+        count=$((count + 1))
+        if [ "$count" -gt "$KEEP_RELEASES" ] && [ "$release" != "$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)" ]; then
+            rm -rf "$release"
+            log "Removed old release $(basename "$release")"
+        fi
+    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | awk '{print $2}')
+}
+
+main() {
+    require_root
+    log "=== Atomic deploy $DOMAIN ($RELEASE_ID) ==="
+    log "Source: $SOURCE_DIR"
+
+    install_system_dependencies
+    prepare_shared_runtime
+    backup_shared_databases
+    copy_source_to_release
+    install_release_dependencies
+    build_frontend
+    validate_release
+    sync_legacy_databases_before_switch
+    switch_current_release
+    write_nginx_config
+    restart_services
+    cleanup_old_releases
+
+    log "=== Deploy complete ==="
+    echo "Frontend:  https://$DOMAIN"
+    echo "API:       https://$DOMAIN/api/"
+    echo "Release:   $RELEASE_DIR"
+    echo "Current:   $(readlink -f "$CURRENT_LINK")"
+    echo ""
+    echo "Useful commands:"
+    echo "  pm2 logs clash-api"
+    echo "  pm2 logs clash-futures"
+    echo "  bash $DEPLOY_ROOT/deploy/update.sh"
+    echo "  ln -sfn <release-dir> $DEPLOY_ROOT/.current.rollback && mv -Tf $DEPLOY_ROOT/.current.rollback $CURRENT_LINK"
+}
+
+main "$@"

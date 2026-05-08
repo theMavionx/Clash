@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const DB_PATH = path.join(__dirname, 'clash.db');
+const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
 
 const db = new Database(DB_PATH);
 
