@@ -872,7 +872,7 @@ function FuturesPanel() {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
-  const { enabled: privyEnabled, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
+  const { enabled: privyEnabled, ready: privyReady, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
   // entry — we use that to gate the trading UI behind the selection screen.
   const { mode: futuresMode, needsSelection: needsModeSelection } = useFuturesMode();
@@ -934,6 +934,17 @@ function FuturesPanel() {
   // or a stored player wallet as "connected" unless the hook resolved the
   // address it will actually use for signing.
   const hasWallet = !!walletAddr;
+  const isSolanaDex = dex === 'pacifica' || dex === 'phoenix';
+  const [solanaWalletGrace, setSolanaWalletGrace] = useState(true);
+  useEffect(() => {
+    if (!isSolanaDex || hasWallet) {
+      setSolanaWalletGrace(false);
+      return undefined;
+    }
+    setSolanaWalletGrace(true);
+    const timer = setTimeout(() => setSolanaWalletGrace(false), 900);
+    return () => clearTimeout(timer);
+  }, [isSolanaDex, hasWallet]);
   const openSolanaConnect = useCallback(() => {
     if (inFrame) {
       const fc = wallets.find(w => w.adapter.name === 'Farcaster');
@@ -950,7 +961,11 @@ function FuturesPanel() {
     try { privyLogin({ loginMethods: ['email'] }); }
     catch { privyLogin(); }
   }, [privyEnabled, privyLogin]);
-  const restoringPrivySolana = (dex === 'pacifica' || dex === 'phoenix') && privyEnabled && privyAuthed && !walletAddr;
+  const restoringPrivySolana = isSolanaDex && privyEnabled && privyAuthed && !walletAddr;
+  const checkingSolanaWallet = isSolanaDex && !hasWallet && !inFrame && (
+    (privyEnabled && !privyReady) ||
+    (privyEnabled && privyAuthed && solanaWalletGrace)
+  );
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -1877,6 +1892,59 @@ function FuturesPanel() {
   }, [orders, btmFilters]);
 
   const hasActiveFilters = btmFilters.symbol !== 'All' || btmFilters.side !== 'All';
+
+  // ==================== SOLANA WALLET RESTORE ====================
+  if (checkingSolanaWallet) {
+    const venueLabel = dex === 'phoenix' ? 'Phoenix' : 'Pacifica';
+    const venueColor = dex === 'phoenix' ? '#F97316' : '#9945FF';
+    const venueShadow = dex === 'phoenix' ? '#C2410C' : '#7B36CC';
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Futures Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 18, textAlign: 'center'}}>
+            <div style={{
+              width: 76,
+              height: 76,
+              borderRadius: '50%',
+              border: '6px solid #E7D9BF',
+              borderTopColor: venueColor,
+              boxShadow: `0 5px 0 ${venueShadow}, 0 8px 16px rgba(0,0,0,0.22)`,
+              animation: 'wallet-spin 0.85s linear infinite',
+            }} />
+            <div style={{
+              color: '#5C3A21',
+              fontSize: 18,
+              fontWeight: 900,
+              letterSpacing: '0.5px',
+            }}>
+              Loading {venueLabel}
+            </div>
+            <div style={{
+              color: '#8a7252',
+              fontSize: 12,
+              fontWeight: 700,
+              maxWidth: 280,
+              lineHeight: 1.45,
+            }}>
+              Checking your trading wallet...
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
   if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') && walletMismatch) {
@@ -3715,6 +3783,9 @@ const animCSS = `
   @keyframes pulse-glow {
     0%, 100% { box-shadow: 0 0 0 rgba(232, 184, 48, 0.6); }
     50% { box-shadow: 0 0 12px rgba(232, 184, 48, 0.9); }
+  }
+  @keyframes wallet-spin {
+    to { transform: rotate(360deg); }
   }
   /* Gradient Scrollbar */
   .grad-scrollbar::-webkit-scrollbar { width: 8px; }
