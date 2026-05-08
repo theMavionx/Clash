@@ -183,7 +183,9 @@ export function usePacifica() {
     privyWalletObj = (pWallets || []).find(w => w && w.walletClientType === 'privy') || (pWallets || [])[0] || null;
   }
   const privyAddr = privyWalletObj?.address || null;
-  const privyActive = !publicKey && !!privyAddr;
+  const adapterAddr = publicKey?.toBase58() || null;
+  const inFarcasterFrame = isFarcasterFrame();
+  const privyActive = !!privyAddr && (!inFarcasterFrame || !adapterAddr);
 
   // Gate WS + polling on DEX. FuturesPanel instantiates BOTH hooks but only
   // one is shown — without this gate Pacifica WS would stay subscribed and
@@ -220,7 +222,7 @@ export function usePacifica() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
-  const walletAddr = publicKey?.toBase58() || privyAddr;
+  const walletAddr = privyActive ? privyAddr : (adapterAddr || privyAddr);
 
   useEffect(() => {
     activatedRef.current = readActivationCache(walletAddr);
@@ -250,7 +252,7 @@ export function usePacifica() {
   // as `signedRequest` below (FC → Privy → adapter) so any wallet type
   // can authorise the agent.
   const masterSign = useCallback(async (msgBytes) => {
-    if (isFarcasterFrame()) {
+    if (!privyActive && isFarcasterFrame()) {
       const sig = await fcSignMessage(msgBytes);
       if (sig) return sig;
     }
@@ -357,7 +359,7 @@ export function usePacifica() {
   // Fetch wallet USDC balance — try connection first, fallback to direct RPC
   const fetchWalletUsdc = useCallback(async () => {
     if (!walletAddr) return;
-    const ownerPk = publicKey || new PublicKey(walletAddr);
+    const ownerPk = new PublicKey(walletAddr);
     const ata = getATA(ownerPk, USDC_MINT);
 
     // Try main connection
@@ -390,7 +392,7 @@ export function usePacifica() {
       } catch {}
     }
     setWalletUsdc(0);
-  }, [walletAddr, publicKey, connection]);
+  }, [walletAddr, connection]);
 
   // Sign & send to Pacifica API.
   //
@@ -417,8 +419,8 @@ export function usePacifica() {
       type, endpoint,
       walletKind,
       adapterName: adapterName || null,
-      pubkey: publicKey?.toBase58() || privyAddr || null,
-      hasAdapter: !!(publicKey && signMessage),
+      pubkey: walletAddr || null,
+      hasAdapter: !!(!privyActive && publicKey && signMessage),
       hasPrivy: !!(privyActive && privySignMessage && privyWalletObj),
       inFarcaster: inFC,
       hasAgentSecret,
@@ -463,7 +465,7 @@ export function usePacifica() {
             path: 'agent',
             type, endpoint, attempt: label,
             adapter: adapterName || 'agent',
-            account: publicKey?.toBase58() || privyAddr || null,
+            account: walletAddr || null,
             agent_pubkey: String(headerBag.agent_wallet || '') || null,
             status: res.status,
             error_kind: String(parsed?.error || text || `HTTP ${res.status}`).slice(0, 120),
@@ -524,7 +526,7 @@ export function usePacifica() {
       console.log(`[Pacifica] agent-path SKIP: signWithAgentKey not exposed (hook not ready or no wallet)`);
     }
 
-    const hasAdapter = !!(publicKey && signMessage);
+    const hasAdapter = !!(!privyActive && publicKey && signMessage);
     const hasPrivy = !!(privyActive && privySignMessage && privyWalletObj);
     if (!hasAdapter && !hasPrivy) {
       console.error(`[Pacifica] master-path ABORT: no signing method available`, { hasAdapter, hasPrivy, adapterName, privyActive, inFC });
@@ -535,7 +537,7 @@ export function usePacifica() {
       throw new Error(`${adapterName} on Solana is not supported by Pacifica. Please connect Phantom or Solflare.`);
     }
 
-    const account = publicKey ? publicKey.toBase58() : privyAddr;
+    const account = walletAddr;
     const message = buildMessage(type, payload);
     const msgBytes = new TextEncoder().encode(message);
     let sigBytes;
@@ -686,7 +688,7 @@ export function usePacifica() {
       // activation/retry layer above can react to it instead of bailing.
       return { error: text || `API error ${res.status}`, code: res.status, _nonJson: true };
     }
-  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName]);
+  }, [publicKey, signMessage, privyActive, privySignMessage, privyWalletObj, privyAddr, walletAddr, signWithAgentKey, bindAgent, forgetAgentLocally, adapterName]);
 
   // Onboarding activation — must be defined before signedRequestWithActivation
   const activate = useCallback(async () => {
@@ -838,9 +840,9 @@ export function usePacifica() {
 
   // ---------- Deposit (on-chain) ----------
   const depositToPacifica = useCallback(async (amountUsdc) => {
-    const ownerPk = publicKey || (privyAddr ? new PublicKey(privyAddr) : null);
+    const ownerPk = walletAddr ? new PublicKey(walletAddr) : null;
     if (!ownerPk) { setError('Wallet not connected'); return; }
-    const canSendAdapter = !!sendTransaction;
+    const canSendAdapter = !privyActive && !!publicKey && !!sendTransaction;
     const canSendPrivy = privyActive && !!privySendTx && !!privyWalletObj;
     if (!canSendAdapter && !canSendPrivy) { setError('Wallet cannot send transactions'); return; }
 
@@ -926,7 +928,7 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [publicKey, sendTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privyWalletObj, privyAddr, claimGold]);
+  }, [walletAddr, publicKey, sendTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privyWalletObj, claimGold]);
 
   // ---------- Trading ----------
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {

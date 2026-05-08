@@ -1,6 +1,6 @@
-import { createContext, useContext, useMemo } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
 import { PrivyProvider, usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
-import { toSolanaWalletConnectors, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
+import { toSolanaWalletConnectors, useCreateWallet as useCreateSolanaWallet, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
@@ -41,7 +41,24 @@ export function useOptionalPrivy() {
 function PrivyStateBridge({ children }) {
   const { ready, authenticated, user, login, logout } = usePrivy();
   const { wallets: evmWallets } = usePrivyEvmWallets();
-  const { wallets: solanaWallets } = usePrivySolanaWallets();
+  const { ready: solanaReady, wallets: solanaWallets } = usePrivySolanaWallets();
+  const { createWallet: createSolanaWallet } = useCreateSolanaWallet();
+  const solanaCreateTriedRef = useRef(false);
+
+  useEffect(() => {
+    if (!authenticated) {
+      solanaCreateTriedRef.current = false;
+      return;
+    }
+    if (!ready || !solanaReady) return;
+    const hasSolanaWallet = (solanaWallets || []).some(w => w?.address);
+    if (hasSolanaWallet || solanaCreateTriedRef.current) return;
+    solanaCreateTriedRef.current = true;
+    Promise.resolve(createSolanaWallet()).catch(err => {
+      console.warn('[privy] Solana embedded wallet create failed:', err?.message || err);
+    });
+  }, [ready, authenticated, solanaReady, solanaWallets, createSolanaWallet]);
+
   const value = useMemo(() => ({
     enabled: true,
     ready,
@@ -87,11 +104,13 @@ export default function PrivyAuthProvider({ children }) {
           accentColor: '#e8b830',
           logo: '/icons/icon.jpg',
         },
-        // Auto-create BOTH embedded wallets on email sign-up. Pacifica reads
-        // the Solana one, Avantis reads the Ethereum (Base) one.
+        // Auto-create embedded wallets for email users even if an injected
+        // wallet exists in the browser. Otherwise Privy email sessions can
+        // authenticate successfully but still land in "connect wallet" on
+        // Solana trading screens.
         embeddedWallets: {
-          solana:   { createOnLogin: 'users-without-wallets' },
-          ethereum: { createOnLogin: 'users-without-wallets' },
+          solana:   { createOnLogin: 'all-users' },
+          ethereum: { createOnLogin: 'all-users' },
         },
         // Default EVM chain for trading = Base mainnet (Avantis runs there).
         // GMX V2 sits on Arbitrum, so the embedded wallet has to be allowed

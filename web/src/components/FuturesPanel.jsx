@@ -1,5 +1,5 @@
 import { useState, memo, useCallback, useMemo, useRef, useEffect } from 'react';
-import { useSend, useUI, usePlayer } from '../hooks/useGodot';
+import { useSend } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
@@ -19,6 +19,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import TradingViewWidget from './TradingViewWidget';
 import EvmWalletModal from './EvmWalletModal';
+import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import OrderBook from './OrderBook';
 import TradeHistory from './TradeHistory';
@@ -867,11 +868,11 @@ const BottomPanel = memo(function BottomPanel({
 
 function FuturesPanel() {
   const { setFuturesOpen } = useSend();
-  const { connected, select, wallets, connect } = useWallet();
+  const { select, wallets, connect } = useWallet();
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
-  const player = usePlayer();
   const { dex } = useDex();
+  const { enabled: privyEnabled, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
   // entry — we use that to gate the trading UI behind the selection screen.
   const { mode: futuresMode, needsSelection: needsModeSelection } = useFuturesMode();
@@ -929,12 +930,27 @@ function FuturesPanel() {
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
-  // For Pacifica: wallet needs adapter or Privy. For Avantis/Decibel:
-  // walletAddr is the self-custody address, set when the user connected
-  // the chain-specific wallet (viem on Base, Petra on Aptos).
-  const hasWallet = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix'
-    ? !!walletAddr
-    : (!!walletAddr || connected || !!player?.wallet);
+  // The trading hook owns the active signer. Do not treat a detected adapter
+  // or a stored player wallet as "connected" unless the hook resolved the
+  // address it will actually use for signing.
+  const hasWallet = !!walletAddr;
+  const openSolanaConnect = useCallback(() => {
+    if (inFrame) {
+      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
+      if (fc) {
+        select(fc.adapter.name);
+        setTimeout(() => connect().catch(() => {}), 100);
+        return;
+      }
+    }
+    openWalletModal(true);
+  }, [inFrame, wallets, select, connect, openWalletModal]);
+  const loginWithPrivyEmail = useCallback(() => {
+    if (!privyEnabled) return;
+    try { privyLogin({ loginMethods: ['email'] }); }
+    catch { privyLogin(); }
+  }, [privyEnabled, privyLogin]);
+  const restoringPrivySolana = (dex === 'pacifica' || dex === 'phoenix') && privyEnabled && privyAuthed && !walletAddr;
 
   const { isMobile } = useLayout();
   // Drag state — ref-based: zero React re-renders during drag, no listener leaks
@@ -2119,26 +2135,28 @@ function FuturesPanel() {
                 <div style={{
                   color: '#5C3A21', fontSize: 18, fontWeight: 900,
                   textAlign: 'center', letterSpacing: '0.5px',
-                }}>Connect your Solana wallet</div>
+                }}>{restoringPrivySolana ? 'Restoring email wallet' : 'Connect your Solana wallet'}</div>
                 <div style={{
                   color: '#8a7252', fontSize: 12, fontWeight: 600,
                   textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
                 }}>
-                  Phoenix is non-custodial. You need USDC for collateral and a little SOL for gas.
+                  {restoringPrivySolana
+                    ? 'Your Privy Solana wallet is being prepared. If it does not continue, tap the email button once.'
+                    : 'Phoenix is non-custodial. You need USDC for collateral and a little SOL for gas.'}
                 </div>
+                {privyEnabled && (
+                  <button
+                    style={{...cartoonBtn('#F97316', '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                    onClick={loginWithPrivyEmail}
+                  >
+                    <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+                  </button>
+                )}
                 <button
-                  style={{...cartoonBtn('#F97316', '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
-                  onClick={() => {
-                    if (inFrame) {
-                      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
-                      if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
-                      else openWalletModal(true);
-                    } else {
-                      openWalletModal(true);
-                    }
-                  }}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#F97316', privyEnabled ? '#6B573E' : '#C2410C'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={openSolanaConnect}
                 >
-                  <span>CONNECT WALLET</span>
+                  <span>CONNECT SOLANA WALLET</span>
                 </button>
                 <div style={{
                   display: 'flex', alignItems: 'center', gap: 4,
@@ -2151,20 +2169,30 @@ function FuturesPanel() {
             ) : (
               <>
                 <div style={{fontSize: 48, filter: 'grayscale(60%)'}}>🔗</div>
-                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>Connect Wallet to Trade</div>
+                <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900, textAlign: 'center'}}>
+                  {restoringPrivySolana ? 'Restoring email wallet' : 'Connect Wallet to Trade'}
+                </div>
+                {restoringPrivySolana && (
+                  <div style={{
+                    color: '#8a7252', fontSize: 12, fontWeight: 600,
+                    textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                  }}>
+                    Your Privy Solana wallet is being prepared. If it does not continue, tap the email button once.
+                  </div>
+                )}
+                {privyEnabled && (
+                  <button
+                    style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                    onClick={loginWithPrivyEmail}
+                  >
+                    <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+                  </button>
+                )}
                 <button
-                  style={{...cartoonBtn('#9945FF', '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
-                  onClick={() => {
-                    if (inFrame) {
-                      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
-                      if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); }
-                      else openWalletModal(true);
-                    } else {
-                      openWalletModal(true);
-                    }
-                  }}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#9945FF', privyEnabled ? '#6B573E' : '#7B36CC'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={openSolanaConnect}
                 >
-                  <span>CONNECT WALLET</span>
+                  <span>CONNECT SOLANA WALLET</span>
                 </button>
               </>
             )}

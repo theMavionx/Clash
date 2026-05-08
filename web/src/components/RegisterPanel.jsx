@@ -150,14 +150,14 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
       <p style={S.subtle}>
         Connect your Solana wallet to start playing. Trades are signed by your own wallet — we never hold your keys.
       </p>
-      <button style={S.primaryBtn} onClick={onOpenWalletModal}>
-        <WalletIcon /> CONNECT WALLET
-      </button>
       {privyEnabled && (
-        <button style={S.secondaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'LOGOUT' : 'SIGN IN WITH EMAIL'}
+        <button style={S.primaryBtn} onClick={onPrivyLogin}>
+          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
         </button>
       )}
+      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenWalletModal}>
+        <WalletIcon /> CONNECT SOLANA WALLET
+      </button>
     </div>
   );
 }

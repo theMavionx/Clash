@@ -329,7 +329,11 @@ export function useAuthFlow() {
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
     if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
-    return solAdapter || privySol || null;
+    if (dex === 'pacifica' || dex === 'phoenix') {
+      const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
+      return farcasterSol || privySol || solAdapter || null;
+    }
+    return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
 
   // Suggested display name. FC username always wins when present (matches
