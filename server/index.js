@@ -501,10 +501,11 @@ app.get('/api/admin/panel', (req, res) => {
     <div id="earningsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:8px"></div>
     <div id="earningsMeta" style="color:#6b7280;font-size:12px;margin-top:14px"></div>
     <div style="margin-top:18px;padding:12px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;font-size:12px;color:#94a3b8;line-height:1.5">
-      <strong style="color:#cbd5e1">How each number is computed:</strong><br>
-      • <strong>Pacifica</strong> — sum of <code style="color:#fbbf24">builder_fee</code> across every trade tagged with our code (exact rebate Pacifica owes us, paginated REST).<br>
-      • <strong>Decibel</strong> — USDC FA balance of our Aptos builder address (this wallet only receives builder fees, so balance ≈ cumulative net).<br>
-      • <strong>Avantis / GMX</strong> — USDC ERC20 balance of the affiliate / code-owner wallet on Base / Arbitrum (claimed-and-not-yet-withdrawn). Claimable-but-unclaimed rewards held by the protocol distributors are NOT counted here.
+      <strong style="color:#cbd5e1">Source per DEX:</strong><br>
+      • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
+      • <strong>GMX</strong> — Goldsky <code>arbitrum-referrals</code> subgraph: <code>totalRebateUsd − discountUsd</code> for our affiliate (same data app.gmx.io/#/referrals reads; the authoritative number).<br>
+      • <strong>Decibel</strong> — Builder fees accrue on PerpEngineGlobal's internal ledger; no public view fn. Shown as $0 — claim via Decibel dashboard.<br>
+      • <strong>Avantis</strong> — Off-chain rebates with no public earnings API; only the on-chain code owner is read. Claim via the Avantis app.
     </div>
   </div>
 
@@ -1427,17 +1428,26 @@ async function loadEarnings(force) {
       const d = data[k] || {};
       const ok = d.ok;
       const v = ok && Number.isFinite(d.earned_usd) ? '$' + d.earned_usd.toFixed(4) : '—';
-      const sub = ok
-        ? (d.address ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>' : '')
-          + (d.trades != null ? '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades</span>' : '')
-        : '<span style="color:#fca5a5;font-size:11px">' + esc(d.error || 'unavailable') + '</span>';
+      const addrLine = ok && d.address
+        ? '<code class="mono" style="color:#94a3b8;font-size:10px">' + esc(d.address.slice(0, 10) + '…' + d.address.slice(-4)) + '</code>'
+        : '';
+      const tradeLine = ok && d.trades != null
+        ? '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades' + (d.traded_referrals ? ' / ' + d.traded_referrals + ' refs' : '') + '</span>'
+        : '';
+      const noteLine = ok && d.note
+        ? '<div style="margin-top:6px;font-size:11px;color:#fbbf24;line-height:1.4">' + esc(d.note) + '</div>'
+        : '';
+      const errLine = !ok
+        ? '<div style="margin-top:6px;font-size:11px;color:#fca5a5">' + esc(d.error || 'unavailable') + '</div>'
+        : '';
       return '<div style="background:#1f2937;border:1px solid ' + border + ';border-radius:12px;padding:18px">'
         + '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">'
         +   '<div style="font-size:13px;color:' + color + ';font-weight:700;text-transform:uppercase;letter-spacing:0.5px">' + label + '</div>'
         +   '<div style="font-size:11px;color:#6b7280">' + esc(d.currency || '') + '</div>'
         + '</div>'
         + '<div style="font-size:28px;font-weight:800;color:' + color + '">' + v + '</div>'
-        + '<div style="margin-top:8px;display:flex;justify-content:space-between;gap:8px">' + sub + '</div>'
+        + '<div style="margin-top:8px;display:flex;justify-content:space-between;gap:8px;align-items:baseline">' + addrLine + tradeLine + '</div>'
+        + noteLine + errLine
         + '</div>';
     }).join('');
     const ageS = Math.round((Number(data.age_ms) || 0) / 1000);
