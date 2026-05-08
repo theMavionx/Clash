@@ -305,7 +305,7 @@ switch_current_release() {
     mkdir -p "$DEPLOY_ROOT/deploy"
     cat > "$DEPLOY_ROOT/deploy/update.sh" << 'EOF'
 #!/bin/bash
-exec /opt/clash/current/deploy/update.sh "$@"
+exec bash /opt/clash/current/deploy/update.sh "$@"
 EOF
     chmod +x "$DEPLOY_ROOT/deploy/update.sh"
 }
