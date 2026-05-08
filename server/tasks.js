@@ -77,7 +77,12 @@ function parseParams(p) {
 
 function matchesSymbol(tradeSymbol, wantSymbol) {
   if (!wantSymbol || wantSymbol === 'ANY' || wantSymbol === 'any' || wantSymbol === '*') return true;
-  return (tradeSymbol || '').toUpperCase() === wantSymbol.toUpperCase();
+  const normalize = (s) => {
+    const base = String(s || '').toUpperCase().split(/[-/]/)[0];
+    if (base === 'WTIOIL' || base === 'USOIL') return 'WTI';
+    return base;
+  };
+  return normalize(tradeSymbol) === normalize(wantSymbol);
 }
 
 // Pacifica trade side: "bid"/"ask", "open_long"/"open_short",
@@ -247,17 +252,19 @@ async function fetchWalletTrades(player, opts = {}) {
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
-      // Worker-only source for ALL self-custody DEXes. Earlier comment
-      // claimed Decibel needed `'server'` because of indexer delay — that
-      // was wrong. The 'server' rows are written eagerly by the place-order
-      // proxy on API success (no on-chain confirmation), and accepting
-      // them in the verifier let users earn quest progress for orders
-      // that never actually filled. Worker confirms on-chain, full stop.
+      // Avantis/GMX stay worker-only. Decibel uses server rows as the
+      // instant source of truth: they are inserted only after our server-side
+      // signer waits for Aptos transaction success. The Decibel worker polls
+      // positions and can miss fast open+close cycles, and including both
+      // sources would double-count when the worker later writes a duplicate.
+      const sourceWhere = dexFilter === 'decibel'
+        ? "AND verified_source = 'server'"
+        : "AND verified_source = 'worker'";
       const rows = fdb.prepare(`
-        SELECT id, symbol, side, amount, price, notional_usd, order_type, created_at
+        SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
-          AND verified_source = 'worker'
+          ${sourceWhere}
         ORDER BY id ASC
       `).all(player.id, dexFilter);
       return rows.map(r => {
@@ -272,6 +279,8 @@ async function fetchWalletTrades(player, opts = {}) {
           amount: String(amount),
           _notional: notional,
           _order_type: r.order_type,
+          order_id: r.order_id,
+          client_order_id: r.client_order_id,
         };
       });
     } catch (e) {
