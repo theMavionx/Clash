@@ -1910,7 +1910,25 @@ export function useDecibel() {
   }, [address, isActiveDex, ensureSubaccount, fetchBuilderApproval, fetchServerSigner, activationStep, apiWalletAddr, player?.token]);
 
   const marginModes = useMemo(() => ({}), []);
-  const leverageSettings = useMemo(() => ({}), []);
+  // Surface the on-chain leverage per symbol so the order panel's slider
+  // initializes from chain truth, not from a 20× UI default. Without this,
+  // a user with sticky chain leverage (e.g. 40× from a previous session)
+  // would see "20×" in the dropdown but the position would record at 40×
+  // because configureUserSettingsForMarket was never called by the slider.
+  // Open positions take priority — they ARE the on-chain truth — and we
+  // fall back to lastAppliedSettingsRef so the symbol's last user-applied
+  // value persists across symbol switches in the same session.
+  const leverageSettings = useMemo(() => {
+    const out = {};
+    for (const [sym, cached] of lastAppliedSettingsRef.current.entries()) {
+      if (cached?.lev) out[sym] = cached.lev;
+    }
+    for (const p of positions) {
+      const lev = Number(p.leverage);
+      if (p.symbol && Number.isFinite(lev) && lev > 0) out[p.symbol] = lev;
+    }
+    return out;
+  }, [positions]);
 
   return useMemo(() => ({
     connected: !!address,

@@ -1366,11 +1366,13 @@ function FuturesPanel() {
           return;
         }
       }
-      // Pacifica-only: flush any pending leverage change before placing the
-      // order so the server sees the right leverage on fill. Avantis and
-      // Decibel both take leverage per-trade (Decibel computes size from
-      // collateral × leverage / mark inside the hook), so no pre-flush.
-      if (dex === 'pacifica') {
+      // Flush any pending leverage change before placing the order so the
+      // chain sees the right leverage on fill. Pacifica and Decibel both
+      // store per-symbol leverage on-chain; without a pre-flush the order
+      // executes against whatever leverage was last persisted (e.g. 40× from
+      // a previous session even though the slider shows 20×). Avantis/GMX
+      // take leverage per-trade in the place-order call, so no pre-flush.
+      if (dex === 'pacifica' || dex === 'decibel') {
         if (levTimerRef.current) {
           clearTimeout(levTimerRef.current);
           levTimerRef.current = null;
@@ -1379,7 +1381,15 @@ function FuturesPanel() {
         const serverLevNum = serverLev != null ? Number(serverLev) : NaN;
         const levMatches = Number.isFinite(serverLevNum) && Math.abs(serverLevNum - leverage) < 0.05;
         if (!levMatches) {
-          const levRes = await setLeverageApi(symbol, leverage);
+          // Decibel needs isCross alongside leverage in the same tx; preserve
+          // whatever margin-mode the open position already uses, falling back
+          // to isolated to match the Decibel default.
+          const levOpts = (() => {
+            if (dex !== 'decibel') return undefined;
+            const pos = positions.find(p => String(p.symbol || '').toUpperCase() === String(symbol).toUpperCase());
+            return { isCross: pos ? !pos.is_isolated : false };
+          })();
+          const levRes = await setLeverageApi(symbol, leverage, levOpts);
           if (!levRes || levRes.error) {
             setLocalAlert(levRes?.error || 'Could not set leverage. Close any open position on this symbol first.');
             return;
@@ -1409,7 +1419,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
