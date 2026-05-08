@@ -430,14 +430,14 @@ app.get('/api/admin/panel', (req, res) => {
         <option value="360">6h</option>
         <option value="1440">24h</option>
         <option value="10080">7d</option>
-        <option value="">All retained</option>
+        <option value="">All retained (7d max)</option>
       </select>
       <input id="clientLogSearch" placeholder="Search message / URL / source" onkeydown="if(event.key==='Enter')loadClientLogs()">
       <button class="btn" onclick="loadClientLogs()">Refresh</button>
       <span id="clientLogCount" style="color:#6b7280;font-size:12px;margin-left:8px"></span>
     </div>
     <table><thead><tr>
-      <th>Time</th><th>Level</th><th>Source</th><th>Message</th><th>URL / User</th><th>Details</th>
+      <th>User group</th><th>Time</th><th>Level</th><th>Source</th><th>Message</th><th>URL / Details</th>
     </tr></thead><tbody id="clientLogsBody"></tbody></table>
   </div>
 
@@ -926,6 +926,48 @@ function detailsBlock(label, value) {
   return '<details class="log-details"><summary>' + label + '</summary><pre class="log-pre mono">' + esc(text) + '</pre></details>';
 }
 
+function shortWallet(wallet) {
+  const s = String(wallet || '');
+  if (!s) return 'no wallet';
+  return s.length > 18 ? s.slice(0, 6) + '…' + s.slice(-4) : s;
+}
+
+function clientDexBadge(dex) {
+  const d = String(dex || 'unknown').toLowerCase();
+  const color = d === 'pacifica' ? '#8b5cf6'
+    : d === 'avantis' ? '#38bdf8'
+    : d === 'decibel' ? '#facc15'
+    : d === 'gmx' ? '#a5b4fc'
+    : '#9ca3af';
+  return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
+}
+
+function groupClientLogs(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.player_id ? 'player:' + r.player_id : 'anon:' + (r.ip || '') + ':' + (r.ua || '').slice(0, 80);
+    let g = map.get(key);
+    if (!g) {
+      g = {
+        key,
+        rows: [],
+        player_id: r.player_id,
+        name: r.player_name || null,
+        dex: r.player_dex || null,
+        wallet: r.player_wallet || null,
+        ip: r.ip || null,
+        ua: r.ua || null,
+        counts: {},
+      };
+      map.set(key, g);
+    }
+    g.rows.push(r);
+    const level = String(r.level || 'info').toLowerCase();
+    g.counts[level] = (g.counts[level] || 0) + 1;
+  }
+  return Array.from(map.values());
+}
+
 async function loadClientLogs() {
   try {
     const params = new URLSearchParams();
@@ -950,24 +992,46 @@ async function loadClientLogs() {
       '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (counts.warn || 0) + '</div><div class="l">Warnings</div></div>' +
       '<div class="stat"><div class="v" style="color:#7dd3fc">' + ((counts.info || 0) + (counts.log || 0)) + '</div><div class="l">Info / Log</div></div>' +
       '<div class="stat"><div class="v" style="color:#a78bfa">' + (counts.debug || 0) + '</div><div class="l">Debug</div></div>';
-    document.getElementById('clientLogCount').textContent = rows.length + ' entries';
-    document.getElementById('clientLogsBody').innerHTML = rows.map((r) => {
-      const color = levelColor(r.level);
-      const cls = 'log-row-' + String(r.level || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
-      const userLine = r.player_id
-        ? '<div class="log-meta">player ' + esc(String(r.player_id).slice(0, 8)) + '</div>'
-        : '<div class="log-meta">anonymous</div>';
-      const ipLine = r.ip ? '<div class="log-meta">' + esc(r.ip) + '</div>' : '';
-      const urlText = compactUrl(r.url);
-      const details = detailsBlock('Stack', r.stack) + detailsBlock('Payload', r.payload);
-      return '<tr class="' + cls + '">' +
-        '<td class="mono" style="white-space:nowrap">' + formatClientLogTime(r.created_at) + '</td>' +
-        '<td><span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(r.level || 'info') + '</span></td>' +
-        '<td class="mono" style="font-size:11px;color:#cbd5e1">' + esc(r.source || 'client') + '</td>' +
-        '<td class="log-msg">' + esc(r.message || '') + '</td>' +
-        '<td><div class="log-url" title="' + esc(r.url || '') + '">' + esc(urlText) + '</div>' + userLine + ipLine + '</td>' +
-        '<td>' + (details || '<span class="log-meta">—</span>') + '</td>' +
+    const groups = groupClientLogs(rows);
+    document.getElementById('clientLogCount').textContent =
+      rows.length + ' entries · ' + groups.length + ' group' + (groups.length === 1 ? '' : 's') +
+      ' · kept ' + (data.retention_days || 7) + 'd max';
+    document.getElementById('clientLogsBody').innerHTML = groups.map((g) => {
+      const errorCount = (g.counts.error || 0) + (g.counts.onerror || 0) + (g.counts.unhandledrejection || 0);
+      const warnCount = g.counts.warn || 0;
+      const groupName = g.name || 'Anonymous browser';
+      const title = g.name
+        ? '<strong>' + esc(groupName) + '</strong> ' + clientDexBadge(g.dex) + '<div class="log-meta mono">' + esc(shortWallet(g.wallet)) + '</div>'
+        : '<strong>' + esc(groupName) + '</strong><div class="log-meta">' + esc(g.ip || 'unknown ip') + '</div>';
+      const uaLine = g.ua ? '<div class="log-meta" style="max-width:680px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(g.ua) + '</div>' : '';
+      const header =
+        '<tr style="background:#111827;border-top:2px solid #374151">' +
+          '<td colspan="6" style="padding:12px 14px">' +
+            '<div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start">' +
+              '<div>' + title + uaLine + '</div>' +
+              '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">' +
+                '<span class="badge" style="background:#374151;color:#d1d5db">' + g.rows.length + ' logs</span>' +
+                (errorCount ? '<span class="badge" style="background:#ef444422;color:#fca5a5">' + errorCount + ' errors</span>' : '') +
+                (warnCount ? '<span class="badge" style="background:#f59e0b22;color:#fbbf24">' + warnCount + ' warns</span>' : '') +
+              '</div>' +
+            '</div>' +
+          '</td>' +
         '</tr>';
+      const rowsHtml = g.rows.map((r) => {
+        const color = levelColor(r.level);
+        const cls = 'log-row-' + String(r.level || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        const urlText = compactUrl(r.url);
+        const details = detailsBlock('Stack', r.stack) + detailsBlock('Payload', r.payload);
+        return '<tr class="' + cls + '">' +
+          '<td class="log-meta">' + (r.player_id ? 'player ' + esc(String(r.player_id).slice(0, 8)) : esc(r.ip || 'anonymous')) + '</td>' +
+          '<td class="mono" style="white-space:nowrap">' + formatClientLogTime(r.created_at) + '</td>' +
+          '<td><span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(r.level || 'info') + '</span></td>' +
+          '<td class="mono" style="font-size:11px;color:#cbd5e1">' + esc(r.source || 'client') + '</td>' +
+          '<td class="log-msg">' + esc(r.message || '') + '</td>' +
+          '<td><div class="log-url" title="' + esc(r.url || '') + '">' + esc(urlText) + '</div>' + (details || '<span class="log-meta">—</span>') + '</td>' +
+        '</tr>';
+      }).join('');
+      return header + rowsHtml;
     }).join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No client logs for this filter</td></tr>';
   } catch(e) { console.error(e); }
 }

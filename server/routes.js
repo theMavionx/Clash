@@ -178,6 +178,7 @@ setInterval(() => {
 // Public client-log ingestion is non-critical and can be abused for DoS, so
 // persist only bounded batches and leave full details to encrypted diagnostics.
 router.post('/client-log', (req, res) => {
+  try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
   const ip = clampText(req.headers['x-real-ip'] || req.ip || 'anon', 64);
   const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [req.body || {}];
   const events = rawEvents.slice(0, CLIENT_LOG_BATCH_MAX);
@@ -2619,38 +2620,47 @@ router.get('/admin/logs', adminAuth, (req, res) => {
 });
 
 router.get('/admin/client-logs', adminAuth, (req, res) => {
+  try { pruneClientLogs.run(`-${CLIENT_LOG_RETENTION_DAYS} days`); } catch {}
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
-  const sinceMin = parseInt(req.query.since_min, 10);
+  const rawSinceMin = parseInt(req.query.since_min, 10);
+  const maxSinceMin = CLIENT_LOG_RETENTION_DAYS * 24 * 60;
+  const sinceMin = Number.isFinite(rawSinceMin) && rawSinceMin > 0
+    ? Math.min(rawSinceMin, maxSinceMin)
+    : maxSinceMin;
   const level = req.query.level ? normalizeClientLevel(req.query.level) : null;
   const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 80) : '';
   const conds = [];
   const args = [];
-  if (Number.isFinite(sinceMin) && sinceMin > 0) {
-    conds.push(`created_at >= datetime('now', ?)`);
-    args.push(`-${sinceMin} minutes`);
-  }
+  conds.push(`cl.created_at >= datetime('now', ?)`);
+  args.push(`-${sinceMin} minutes`);
   if (level) {
-    conds.push('level = ?');
+    conds.push('cl.level = ?');
     args.push(level);
   }
   if (q) {
-    conds.push('(message LIKE ? OR url LIKE ? OR source LIKE ?)');
+    conds.push('(cl.message LIKE ? OR cl.url LIKE ? OR cl.source LIKE ? OR p.name LIKE ? OR p.wallet LIKE ? OR p.dex LIKE ?)');
     const like = `%${q}%`;
-    args.push(like, like, like);
+    args.push(like, like, like, like, like, like);
   }
   args.push(limit);
   const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
   const rows = db.db.prepare(`
-    SELECT id, player_id, ip, level, source, url, ua, message, stack, payload, created_at
-    FROM client_logs
+    SELECT
+      cl.id, cl.player_id, cl.ip, cl.level, cl.source, cl.url, cl.ua,
+      cl.message, cl.stack, cl.payload, cl.created_at,
+      p.name AS player_name,
+      p.dex AS player_dex,
+      p.wallet AS player_wallet
+    FROM client_logs cl
+    LEFT JOIN players p ON p.id = cl.player_id
     ${where}
-    ORDER BY id DESC
+    ORDER BY cl.id DESC
     LIMIT ?
   `).all(...args).map((r) => ({
     ...r,
     payload: (() => { try { return r.payload ? JSON.parse(r.payload) : null; } catch { return r.payload; } })(),
   }));
-  res.json({ rows, total: rows.length });
+  res.json({ rows, total: rows.length, retention_days: CLIENT_LOG_RETENTION_DAYS });
 });
 
 // Server stats
