@@ -346,6 +346,16 @@ app.get('/api/admin/panel', (req, res) => {
   .mono { font-family: 'Cascadia Code', monospace; font-size: 12px; }
   .filter { margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
   .filter select, .filter input { padding: 6px 10px; background: #1f2937; border: 1px solid #4b5563; border-radius: 6px; color: #e5e7eb; font-size: 13px; }
+  .filter input { min-width: 220px; }
+  .log-row-error { border-left: 3px solid #ef4444; }
+  .log-row-warn { border-left: 3px solid #f59e0b; }
+  .log-row-info, .log-row-log { border-left: 3px solid #38bdf8; }
+  .log-msg { max-width: 420px; white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
+  .log-url { max-width: 240px; word-break: break-all; color: #93c5fd; font-size: 11px; }
+  .log-meta { color: #6b7280; font-size: 11px; line-height: 1.35; }
+  details.log-details { margin-top: 6px; }
+  details.log-details summary { cursor: pointer; color: #fbbf24; font-size: 11px; }
+  .log-pre { margin-top: 6px; max-height: 220px; overflow: auto; background: #111827; border: 1px solid #374151; border-radius: 8px; padding: 8px; color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
 </style>
 </head><body>
 
@@ -369,6 +379,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('tournaments')">Tournaments</div>
     <div class="tab" onclick="switchTab('elfa')">Elfa</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
+    <div class="tab" onclick="switchTab('client')">Client Logs</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
   </div>
@@ -396,6 +407,38 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>Time</th><th>Type</th><th>Message</th><th>Data</th>
     </tr></thead><tbody id="logsBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-client">
+    <div class="stats" id="clientLogStats"></div>
+    <div class="filter" style="flex-wrap:wrap">
+      <span style="color:#9ca3af;font-size:13px">Level:</span>
+      <select id="clientLogLevel" onchange="loadClientLogs()">
+        <option value="">All</option>
+        <option value="error">Error</option>
+        <option value="warn">Warn</option>
+        <option value="unhandledrejection">Unhandled rejection</option>
+        <option value="onerror">Window error</option>
+        <option value="info">Info</option>
+        <option value="log">Log</option>
+        <option value="debug">Debug</option>
+      </select>
+      <span style="color:#9ca3af;font-size:13px">Window:</span>
+      <select id="clientLogSince" onchange="loadClientLogs()">
+        <option value="15">15m</option>
+        <option value="60" selected>1h</option>
+        <option value="360">6h</option>
+        <option value="1440">24h</option>
+        <option value="10080">7d</option>
+        <option value="">All retained</option>
+      </select>
+      <input id="clientLogSearch" placeholder="Search message / URL / source" onkeydown="if(event.key==='Enter')loadClientLogs()">
+      <button class="btn" onclick="loadClientLogs()">Refresh</button>
+      <span id="clientLogCount" style="color:#6b7280;font-size:12px;margin-left:8px"></span>
+    </div>
+    <table><thead><tr>
+      <th>Time</th><th>Level</th><th>Source</th><th>Message</th><th>URL / User</th><th>Details</th>
+    </tr></thead><tbody id="clientLogsBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-stats">
@@ -634,7 +677,10 @@ function logout() {
 }
 
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', t.textContent.toLowerCase().includes(name)));
+  document.querySelectorAll('.tab').forEach((t) => {
+    const onclick = t.getAttribute('onclick') || '';
+    t.classList.toggle('active', onclick.includes("switchTab('" + name + "')"));
+  });
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
 }
 
@@ -843,8 +889,86 @@ async function loadLogs() {
         '<td><span class="badge" style="background:' + typeColor + '22;color:' + typeColor + '">' + l.type + '</span></td>' +
         '<td>' + esc(l.message) + '</td>' +
         '<td class="mono" style="max-width:300px;word-break:break-all;font-size:11px;color:#6b7280">' + (l.data ? esc(JSON.stringify(l.data)) : '') + '</td>' +
-        '</tr>';
+      '</tr>';
     }).join('');
+  } catch(e) { console.error(e); }
+}
+
+function levelColor(level) {
+  const l = String(level || '').toLowerCase();
+  if (l === 'error' || l === 'onerror' || l === 'unhandledrejection') return '#fca5a5';
+  if (l === 'warn') return '#fbbf24';
+  if (l === 'debug') return '#a78bfa';
+  if (l === 'info' || l === 'log') return '#7dd3fc';
+  return '#9ca3af';
+}
+
+function formatClientLogTime(value) {
+  if (!value) return '';
+  const d = new Date(String(value).replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return esc(value);
+  return d.toLocaleString();
+}
+
+function compactUrl(url) {
+  if (!url) return '—';
+  try {
+    const u = new URL(url);
+    return u.pathname + (u.search || '') + (u.hash || '');
+  } catch {
+    return String(url);
+  }
+}
+
+function detailsBlock(label, value) {
+  if (!value) return '';
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return '<details class="log-details"><summary>' + label + '</summary><pre class="log-pre mono">' + esc(text) + '</pre></details>';
+}
+
+async function loadClientLogs() {
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', '200');
+    const level = document.getElementById('clientLogLevel').value;
+    const since = document.getElementById('clientLogSince').value;
+    const q = document.getElementById('clientLogSearch').value.trim();
+    if (level) params.set('level', level);
+    if (since) params.set('since_min', since);
+    if (q) params.set('q', q);
+    const data = await api('/admin/client-logs?' + params.toString());
+    const rows = data.rows || [];
+    const counts = rows.reduce((acc, r) => {
+      const l = String(r.level || 'info').toLowerCase();
+      acc[l] = (acc[l] || 0) + 1;
+      return acc;
+    }, {});
+    const serious = (counts.error || 0) + (counts.onerror || 0) + (counts.unhandledrejection || 0);
+    document.getElementById('clientLogStats').innerHTML =
+      '<div class="stat"><div class="v">' + rows.length + '</div><div class="l">Rows shown</div></div>' +
+      '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + serious + '</div><div class="l">Errors</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (counts.warn || 0) + '</div><div class="l">Warnings</div></div>' +
+      '<div class="stat"><div class="v" style="color:#7dd3fc">' + ((counts.info || 0) + (counts.log || 0)) + '</div><div class="l">Info / Log</div></div>' +
+      '<div class="stat"><div class="v" style="color:#a78bfa">' + (counts.debug || 0) + '</div><div class="l">Debug</div></div>';
+    document.getElementById('clientLogCount').textContent = rows.length + ' entries';
+    document.getElementById('clientLogsBody').innerHTML = rows.map((r) => {
+      const color = levelColor(r.level);
+      const cls = 'log-row-' + String(r.level || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      const userLine = r.player_id
+        ? '<div class="log-meta">player ' + esc(String(r.player_id).slice(0, 8)) + '</div>'
+        : '<div class="log-meta">anonymous</div>';
+      const ipLine = r.ip ? '<div class="log-meta">' + esc(r.ip) + '</div>' : '';
+      const urlText = compactUrl(r.url);
+      const details = detailsBlock('Stack', r.stack) + detailsBlock('Payload', r.payload);
+      return '<tr class="' + cls + '">' +
+        '<td class="mono" style="white-space:nowrap">' + formatClientLogTime(r.created_at) + '</td>' +
+        '<td><span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(r.level || 'info') + '</span></td>' +
+        '<td class="mono" style="font-size:11px;color:#cbd5e1">' + esc(r.source || 'client') + '</td>' +
+        '<td class="log-msg">' + esc(r.message || '') + '</td>' +
+        '<td><div class="log-url" title="' + esc(r.url || '') + '">' + esc(urlText) + '</div>' + userLine + ipLine + '</td>' +
+        '<td>' + (details || '<span class="log-meta">—</span>') + '</td>' +
+        '</tr>';
+    }).join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No client logs for this filter</td></tr>';
   } catch(e) { console.error(e); }
 }
 
@@ -1473,6 +1597,7 @@ const origSwitch = switchTab;
 switchTab = function(name) {
   origSwitch(name);
   if (name === 'logs') loadLogs();
+  if (name === 'client') loadClientLogs();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
   if (name === 'tournaments') loadTournaments();
