@@ -38,6 +38,15 @@ function throwRegionBlocked() {
   throw e;
 }
 
+function perplErrorDetail(res) {
+  const data = res?.data;
+  if (data && typeof data === 'object') {
+    return data.error || data.message || data.detail || data.reason || JSON.stringify(data);
+  }
+  if (typeof data === 'string' && data.trim()) return data.trim();
+  return res?.error || 'Request failed';
+}
+
 // ───── Session state ─────────────────────────────────────────────────────
 // Module-singleton because the JWT cookie is browser-global anyway, and
 // we want the hook to share a single auth handshake across re-mounts.
@@ -101,7 +110,9 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
   });
   if (!payloadRes.ok) {
     if (payloadRes.status === 451) throwRegionBlocked();
-    throw new Error(`Perpl /auth/payload ${payloadRes.status}: ${payloadRes.data?.error || payloadRes.error}`);
+    const detail = perplErrorDetail(payloadRes);
+    console.warn('[perpl] /auth/payload failed', { status: payloadRes.status, detail, chainId, address });
+    throw new Error(`Perpl /auth/payload ${payloadRes.status}: ${detail}`);
   }
   const payload = payloadRes.data || {};
   const msg = payload.msg || payload.message;
@@ -137,7 +148,9 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
       e.code = 'PERPL_NOT_WHITELISTED';
       throw e;
     }
-    throw new Error(`Perpl /auth/connect ${connectRes.status}: ${connectRes.data?.error || ''}`);
+    const detail = perplErrorDetail(connectRes);
+    console.warn('[perpl] /auth/connect failed', { status: connectRes.status, detail, chainId, address });
+    throw new Error(`Perpl /auth/connect ${connectRes.status}: ${detail}`);
   }
   _authNonce = connectRes.data?.nonce || null;
   _authedAddress = address;

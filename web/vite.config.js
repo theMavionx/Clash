@@ -133,6 +133,12 @@ export default defineConfig({
         changeOrigin: true, secure: true,
         cookieDomainRewrite: '',
         cookiePathRewrite: { '/api/v1': '/', '/': '/' },
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
         rewrite: (path) => path.replace(/^\/perpl-api/, '/api/v1'),
       },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
