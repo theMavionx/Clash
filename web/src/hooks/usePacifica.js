@@ -8,6 +8,7 @@ import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
 import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
+import { reportDiag } from '../lib/diagReporter';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -454,6 +455,23 @@ export function usePacifica() {
             sentBodyJSON: JSON.stringify(body),
             sentBodyObj: body,
           });
+          // Encrypted upload of the failing trace so we can debug
+          // without asking the user to copy/paste console logs.
+          // Captures ONLY public data (signed message, sig, pubkey,
+          // Pacifica error body) — never the agent secret or wallet
+          // private key. See lib/diagReporter.js for the threat model.
+          reportDiag({
+            path: 'agent',
+            type, endpoint, attempt: label,
+            adapter: adapterName || 'agent',
+            account: publicKey?.toBase58() || privyAddr || null,
+            agent_pubkey: String(headerBag.agent_wallet || '') || null,
+            status: res.status,
+            error_kind: String(parsed?.error || text || `HTTP ${res.status}`).slice(0, 120),
+            response_body: parsed ?? text,
+            response_headers: Object.fromEntries(res.headers.entries()),
+            sent_body: body,
+          });
         } else {
           console.log(`[Pacifica] ${type} agent-path OK status=${res.status}`);
         }
@@ -613,6 +631,21 @@ export function usePacifica() {
           sentBodyObj: body,
           signedMessage: message,
         });
+        reportDiag({
+          path: 'master',
+          type, endpoint,
+          adapter: signSubpath || `adapter:${adapterName}`,
+          account,
+          status: res.status,
+          error_kind: String(json?.error || `HTTP ${res.status}`).slice(0, 120),
+          signed_message: message,
+          signed_message_length: msgBytes.length,
+          signature_b58: signature,
+          signature_length: sigBytes.length,
+          response_body: json,
+          response_headers: responseHeaders,
+          sent_body: body,
+        });
       }
       return json;
     } catch {
@@ -622,6 +655,26 @@ export function usePacifica() {
         sentBodyJSON: JSON.stringify(body),
         sentBodyObj: body,
         signedMessage: message,
+      });
+      // Same as above but text response (Pacifica sometimes returns
+      // plain "Invalid message" with no JSON wrapper). This is the
+      // failure path the user was hitting on Solflare — capturing the
+      // exact signed bytes + signature here is what lets us figure out
+      // why server-side verification rejects.
+      reportDiag({
+        path: 'master',
+        type, endpoint,
+        adapter: signSubpath || `adapter:${adapterName}`,
+        account,
+        status: res.status,
+        error_kind: String(text || `HTTP ${res.status}`).slice(0, 120),
+        signed_message: message,
+        signed_message_length: msgBytes.length,
+        signature_b58: signature,
+        signature_length: sigBytes.length,
+        response_text: text,
+        response_headers: responseHeaders,
+        sent_body: body,
       });
       // Farcaster wallet signMessage is not compatible with Pacifica verification
       if (text.includes('erification failed')) {

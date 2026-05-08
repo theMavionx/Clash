@@ -34,6 +34,7 @@ import { ed25519 } from '@noble/curves/ed25519';
 // timestamps stay aligned with master-signed ones. Lives in lib/ rather than
 // usePacifica to avoid a circular import.
 import { pacificaNow } from '../lib/pacificaTime';
+import { reportDiag } from '../lib/diagReporter';
 
 const API = 'https://api.pacifica.fi/api/v1';
 // How long we keep an agent wallet stored client-side. Pacifica itself
@@ -158,6 +159,26 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
       try { data = JSON.parse(text); } catch { /* non-JSON */ }
       if (!res.ok || data?.error) {
         const reason = data?.error || data?.message || text || 'Bind failed';
+        // Bind failures are the upstream cause of every "Invalid
+        // message" leverage/margin issue — if bind itself rejects on
+        // Solflare master sign, that confirms the wallet is fully
+        // incompatible (not just a per-endpoint validator quirk).
+        // Capture the exact signed message + sig so we can diff
+        // canonical-form across wallets.
+        reportDiag({
+          path: 'master',
+          type: 'bind_agent_wallet',
+          endpoint: '/agent/bind',
+          account: walletAddr,
+          agent_pubkey: agentPubkeyB58,
+          status: res.status,
+          error_kind: String(reason).slice(0, 120),
+          signed_message: message,
+          signed_message_length: msgBytes.length,
+          signature_b58: signature,
+          response_text: text,
+          response_body: data,
+        });
         throw new Error(reason);
       }
 

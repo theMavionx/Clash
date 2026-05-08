@@ -341,6 +341,8 @@ DECIBEL_BUILDER_FEE_BPS=1
 CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
 CLASH_MAIN_DB=$SERVER_DIR/clash.db
 EOF
+    DIAG_SECRET=$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
+    echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
     echo "Generated .env with ADMIN_KEY=$ADMIN_KEY"
 else
     # Backfill missing keys on existing .env (idempotent)
@@ -356,6 +358,14 @@ else
         echo "DECIBEL_ALLOWED_BUILDER_ADDRS=" >> "$APP_DIR/.env"
     grep -q '^DECIBEL_BUILDER_FEE_BPS=' "$APP_DIR/.env" || \
         echo "DECIBEL_BUILDER_FEE_BPS=1" >> "$APP_DIR/.env"
+    # Diagnostic-report long-term keypair (NaCl box, base58-encoded 32-byte
+    # secret). Without this, every restart rotates the key and old encrypted
+    # reports become undecryptable. Generated via the server's own tweetnacl
+    # so we don't depend on extra tooling.
+    if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$APP_DIR/.env"; then
+        DIAG_SECRET=$(cd "$SERVER_DIR" && node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
+        echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
+    fi
 fi
 
 pm2 delete clash-api 2>/dev/null || true

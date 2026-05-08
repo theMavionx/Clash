@@ -4,6 +4,7 @@ const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
+const diag = require('./diag');
 
 const router = express.Router();
 
@@ -1247,6 +1248,26 @@ try {
 } catch (e) {
   console.warn(`[boot] pacifica legacy migration skipped:`, e.message);
 }
+// Encrypted client diagnostic uploads. Stored as TEXT JSON because the
+// schema of useful fields is endpoint-specific (Pacifica signed-message
+// trace today, GMX RPC errors tomorrow) and we want to avoid migrating
+// the table every time a new failure mode is logged.
+try {
+  db.db.exec(`
+    CREATE TABLE IF NOT EXISTS diag_reports (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT,
+      category    TEXT NOT NULL DEFAULT 'pacifica',
+      adapter     TEXT,
+      error_kind  TEXT,
+      payload     TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_diag_recent ON diag_reports(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_diag_category_recent ON diag_reports(category, created_at DESC);
+  `);
+} catch (e) { console.warn('[boot] diag_reports table:', e.message); }
+
 // `pacifica_builder_approved` — server-side mirror of the client's 30-day
 // localStorage activation cache. If localStorage gets cleared (incognito,
 // browser cleanup, Privy iframe context) we used to ask the user to
@@ -1560,19 +1581,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
     let newTrades = [];
     try {
-      // Worker-only source. The earlier `verified_source IN ('worker','server')`
-      // for Decibel was a hole — `'server'` rows are written by the
-      // /decibel/orders/place proxy IMMEDIATELY when the SDK call returns
-      // success=true, which only means "Aptos sequencer accepted the
-      // signed payload". The order can still revert/cancel/under-fill on
-      // chain. With $1 min-notional + 10× gold rate (both also fixed in
-      // this commit), that became a gold farm. Worker-only means we wait
-      // until the rewards-worker confirms the trade landed.
+      // Avantis/GMX stay worker-only. Decibel uses server rows as the
+      // instant source of truth: they are inserted only after our server-side
+      // signer waits for Aptos transaction success. The Decibel worker polls
+      // positions and can miss fast open+close cycles, and including both
+      // sources would double-count when the worker later writes a duplicate.
+      const sourceWhere = dex === 'decibel'
+        ? "AND verified_source = 'server'"
+        : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
-          AND verified_source = 'worker' AND id > ?
+          ${sourceWhere} AND id > ?
         ORDER BY id ASC
       `).all(req.player.id, dex, reward.last_trade_id || 0);
     } catch (e) {
@@ -1980,6 +2001,36 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx']);
+
+async function maybeRefreshTaskProgress(player, task, playerTask) {
+  if (!playerTask || playerTask.claimed_at) return playerTask;
+  const dex = String(player?.dex || '').toLowerCase();
+  if (!LIVE_TASK_PROGRESS_DEXES.has(dex)) return playerTask;
+  try {
+    const snap = tasks.parseParams(playerTask.snapshot);
+    const result = await tasks.verifyTask(player, task, snap);
+    const progress = result.target_value > 0
+      ? Math.min(1, result.progress_value / result.target_value)
+      : 0;
+    tasks.upsertPlayerTask(player.id, task.id, {
+      snapshot: snap,
+      progress,
+      progress_value: result.progress_value,
+      target_value: result.target_value,
+    });
+    return {
+      ...playerTask,
+      progress,
+      progress_value: result.progress_value,
+      target_value: result.target_value,
+    };
+  } catch (e) {
+    console.warn(`[tasks] live progress refresh failed player=${player?.name || player?.id} task=${task?.id}:`, e.message);
+    return playerTask;
+  }
+}
+
 // Rate-limit tasks endpoints per player (2s)
 const taskRateLimit = new Map();
 setInterval(() => {
@@ -2008,7 +2059,8 @@ router.get('/tasks', auth, async (req, res) => {
   const list = tasks.getActiveTasks();
   const out = [];
   for (const t of list) {
-    const pt = tasks.getPlayerTask(req.player.id, t.id);
+    let pt = tasks.getPlayerTask(req.player.id, t.id);
+    pt = await maybeRefreshTaskProgress(req.player, t, pt);
     out.push({
       id: t.id,
       type: t.type,
@@ -3322,6 +3374,130 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
   db.db.prepare('DELETE FROM tournaments WHERE id = ?').run(tid);
   res.json({ ok: true });
+});
+
+// ==================== ENCRYPTED CLIENT DIAGNOSTICS ====================
+//
+// Upload pipeline for capturing wallet sign-traces / Pacifica error
+// bodies / agent-bind failures from production browsers. End-to-end
+// encrypted with NaCl box (X25519+XSalsa20-Poly1305): client fetches
+// the server's public key, generates an ephemeral keypair per upload,
+// seals the report, sends `{ephemeral_pubkey, nonce, ciphertext}`. We
+// decrypt server-side with the long-term private key (stored in
+// .env as DIAG_SERVER_SECRET_B58, see server/diag.js for setup).
+//
+// The plaintext is bounded JSON; we cap at MAX_PLAINTEXT_BYTES (64KB)
+// so a malicious client can't DOS the table.
+
+// Public key endpoint — anonymous, used by every client to encrypt
+// uploads. Doesn't change between deploys (the secret is persisted in
+// .env), so clients can cache it for the session.
+router.get('/diag/pacifica/pubkey', (req, res) => {
+  res.json({ pubkey: diag.getPublicKeyB58(), category: 'pacifica' });
+});
+
+// In-memory rate limit per IP — diagnostics are reactive (we don't want
+// every single sign-error spamming the table). 30 / minute / IP is well
+// above legitimate burst (a stuck user might fire ~5 per minute as they
+// retry trades) and well under DDoS volume.
+const _diagRate = new Map();
+function diagRateOk(ip) {
+  const now = Date.now();
+  const window = now - 60_000;
+  const arr = (_diagRate.get(ip) || []).filter(t => t > window);
+  if (arr.length >= 30) { _diagRate.set(ip, arr); return false; }
+  arr.push(now);
+  _diagRate.set(ip, arr);
+  return true;
+}
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60_000;
+  for (const [k, v] of _diagRate) {
+    const filtered = v.filter(t => t > cutoff);
+    if (filtered.length === 0) _diagRate.delete(k);
+    else _diagRate.set(k, filtered);
+  }
+}, 5 * 60_000);
+
+// Upload endpoint — anonymous accepted (Pacifica errors can hit BEFORE
+// the player has a token), but if x-token is supplied we associate the
+// row with the player_id for easy filtering in admin.
+router.post('/diag/pacifica/upload', (req, res) => {
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  if (!diagRateOk(ip)) return res.status(429).json({ error: 'too many reports' });
+  const { ephemeral_pubkey, nonce, ciphertext } = req.body || {};
+  if (typeof ephemeral_pubkey !== 'string' || typeof nonce !== 'string' || typeof ciphertext !== 'string') {
+    return res.status(400).json({ error: 'missing ephemeral_pubkey / nonce / ciphertext' });
+  }
+  const plaintext = diag.decryptReport({ ephemeral_pubkey, nonce, ciphertext });
+  if (!plaintext) {
+    return res.status(400).json({ error: 'decrypt failed (wrong key, malformed payload, or oversized)' });
+  }
+  // Best-effort player_id resolution (no auth middleware here so a stale
+  // token doesn't block the upload — the report is still valuable even
+  // for logged-out users).
+  let playerId = null;
+  const token = req.headers['x-token'];
+  if (typeof token === 'string' && token.length > 10) {
+    try {
+      const row = db.db.prepare('SELECT id FROM players WHERE token = ? LIMIT 1').get(token);
+      if (row) playerId = row.id;
+    } catch {}
+  }
+  // Pull a few hot fields out of the JSON for index-friendly filtering.
+  const adapter = typeof plaintext.adapter === 'string' ? plaintext.adapter.slice(0, 64) : null;
+  const errorKind = typeof plaintext.error_kind === 'string' ? plaintext.error_kind.slice(0, 64)
+    : (typeof plaintext.error === 'string' ? plaintext.error.slice(0, 64) : null);
+  const category = typeof plaintext.category === 'string' ? plaintext.category.slice(0, 32) : 'pacifica';
+  try {
+    db.db.prepare(
+      `INSERT INTO diag_reports (player_id, category, adapter, error_kind, payload) VALUES (?, ?, ?, ?, ?)`
+    ).run(playerId, category, adapter, errorKind, JSON.stringify(plaintext));
+  } catch (e) {
+    console.warn('[diag] insert failed:', e.message);
+    return res.status(500).json({ error: 'persist failed' });
+  }
+  res.json({ ok: true });
+});
+
+// Admin: paged list with optional filters (adapter, category, since).
+router.get('/admin/diag/pacifica', adminAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+  const adapter = req.query.adapter;
+  const category = req.query.category || 'pacifica';
+  const sinceMin = parseInt(req.query.since_min, 10);
+  const conds = ['category = ?'];
+  const args = [category];
+  if (adapter) { conds.push('adapter = ?'); args.push(adapter); }
+  if (Number.isFinite(sinceMin) && sinceMin > 0) {
+    conds.push(`created_at >= datetime('now', ?)`);
+    args.push(`-${sinceMin} minutes`);
+  }
+  args.push(limit);
+  const sql = `SELECT id, player_id, category, adapter, error_kind, payload, created_at
+               FROM diag_reports WHERE ${conds.join(' AND ')}
+               ORDER BY id DESC LIMIT ?`;
+  const rows = db.db.prepare(sql).all(...args).map(r => ({
+    ...r,
+    payload: (() => { try { return JSON.parse(r.payload); } catch { return r.payload; } })(),
+  }));
+  res.json({ rows, total: rows.length });
+});
+
+// Admin: counts per (adapter, error_kind) over a recent window — quick
+// triage view to find the dominant failure mode without scrolling.
+router.get('/admin/diag/pacifica/summary', adminAuth, (req, res) => {
+  const sinceMin = Math.max(1, parseInt(req.query.since_min, 10) || 60);
+  const rows = db.db.prepare(`
+    SELECT adapter, error_kind, COUNT(*) AS n,
+           MIN(created_at) AS first_seen,
+           MAX(created_at) AS last_seen
+    FROM diag_reports
+    WHERE created_at >= datetime('now', ?)
+    GROUP BY adapter, error_kind
+    ORDER BY n DESC LIMIT 200
+  `).all(`-${sinceMin} minutes`);
+  res.json({ window_min: sinceMin, rows });
 });
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

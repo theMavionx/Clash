@@ -61,6 +61,16 @@ fi
 echo "Restarting backend..."
 cd "$APP_DIR/server"
 npm ci --production
+
+# Backfill DIAG_SERVER_SECRET_B58 on existing .env (idempotent). Without this,
+# every restart rotates the diag keypair and old encrypted reports stop being
+# decryptable.
+if [ -f "$APP_DIR/.env" ] && ! grep -q '^DIAG_SERVER_SECRET_B58=' "$APP_DIR/.env"; then
+    DIAG_SECRET=$(node -e "const n=require('tweetnacl');const b=require('bs58').default||require('bs58');console.log(b.encode(n.box.keyPair().secretKey))")
+    echo "DIAG_SERVER_SECRET_B58=$DIAG_SECRET" >> "$APP_DIR/.env"
+    echo "  Generated DIAG_SERVER_SECRET_B58 (persisted)"
+fi
+
 pm2 restart clash-api
 
 if [ -d "$APP_DIR/server-futures" ]; then
