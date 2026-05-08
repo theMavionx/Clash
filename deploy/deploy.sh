@@ -79,6 +79,41 @@ ensure_env_default() {
     fi
 }
 
+load_vite_env_for_build() {
+    # Vite only embeds variables that are present in the build process env and
+    # start with VITE_. Release copies intentionally exclude .env files, so
+    # production-only public config (Privy app id, Aptos/Arbitrum API keys)
+    # must be lifted from /opt/clash/shared/.env before npm run build.
+    [ -f "$ENV_FILE" ] || return 0
+
+    local count=0
+    local loaded_keys=()
+    local line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in
+            ''|\#*) continue ;;
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            VITE_*)
+                if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                    export "$key=$value"
+                    loaded_keys+=("$key")
+                    count=$((count + 1))
+                fi
+                ;;
+        esac
+    done < "$ENV_FILE"
+
+    if [ "$count" -gt 0 ]; then
+        log "Loaded $count Vite build env key(s): ${loaded_keys[*]}"
+    else
+        log "No VITE_* build env keys found in $ENV_FILE"
+    fi
+}
+
 copy_db_family() {
     local src_dir="$1"
     local dst_dir="$2"
@@ -235,6 +270,7 @@ build_frontend() {
     log "[5/9] Building frontend..."
     cd "$WEB_DIR"
     npm install --legacy-peer-deps
+    load_vite_env_for_build
     npm run build
 
     BUILD_HASH="$(date +%s)"
