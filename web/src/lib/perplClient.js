@@ -144,7 +144,7 @@ export async function loginWithEoa({ chainId, address, signMessageAsync }) {
     // 418 = wallet not in Perpl's access list. Surface explicitly so the UI
     // can show "request access at perpl.xyz" instead of a generic error.
     if (connectRes.status === 418) {
-      const e = new Error('Perpl access not granted for this wallet');
+      const e = new Error('Perpl wallet is not whitelisted yet. Request access at perpl.xyz or use a whitelisted wallet.');
       e.code = 'PERPL_NOT_WHITELISTED';
       throw e;
     }

@@ -67,6 +67,9 @@ function humanizeTradeError(message) {
   if (/PERPL_REGION_BLOCKED|Unavailable For Legal Reasons|not available in your country|country or IP region|451/i.test(text)) {
     return 'Perpl is not available in your country or IP region.';
   }
+  if (/PERPL_NOT_WHITELISTED|not whitelisted|access not granted|I'm a teapot|418/i.test(text)) {
+    return 'This wallet is not whitelisted for Perpl yet. Request access at perpl.xyz or connect a whitelisted wallet.';
+  }
   const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
   if (insufficient) {
     const need = Number(insufficient[1]);
