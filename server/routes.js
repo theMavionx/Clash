@@ -1585,8 +1585,15 @@ function futuresDbReadonly() {
 router.post('/trading/claim-gold', auth, async (req, res) => {
   // Rate limit
   const lastClaim = claimCooldowns.get(req.player.id);
-  if (lastClaim && Date.now() - lastClaim < CLAIM_COOLDOWN_MS) {
-    return res.status(429).json({ gold: 0, reason: 'Please wait before claiming again' });
+  const sinceLastClaim = lastClaim ? Date.now() - lastClaim : Infinity;
+  if (lastClaim && sinceLastClaim < CLAIM_COOLDOWN_MS) {
+    const retryAfterMs = Math.max(1, CLAIM_COOLDOWN_MS - sinceLastClaim);
+    res.set('Retry-After', '1');
+    return res.status(429).json({
+      gold: 0,
+      reason: 'Please wait before claiming again',
+      retry_after_ms: retryAfterMs,
+    });
   }
   claimCooldowns.set(req.player.id, Date.now());
   // Wallet is ALWAYS the player's master from auth — body.wallet is no

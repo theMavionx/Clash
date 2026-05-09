@@ -60,6 +60,8 @@ const MONAD_IMPORT_DEX_HEADER = { 'x-dex': 'monad' };
 const ORDER_CONFIRM_TIMEOUT_MS = 30_000;
 const ORDER_RESEND_MS = 800;
 const ORDER_RESEND_MAX = 2;
+const CLAIM_GOLD_MIN_GAP_MS = 2_000;
+const CLAIM_GOLD_RETRY_MS = 8_000;
 const ORDER_STATUS = Object.freeze({
   PENDING: 1,
   OPEN: 2,
@@ -587,6 +589,9 @@ export function useMonad() {
   const tradeInFlightRef = useRef(false);
   const currentBlockRef = useRef(0);
   const claimGoldRef = useRef(null);
+  const claimGoldInFlightRef = useRef(false);
+  const claimGoldTimerRef = useRef(null);
+  const lastClaimGoldAttemptRef = useRef(0);
   const tradingAuthedRef = useRef(false);
   const orderForwardingAllowedRef = useRef(false);
   const orderForwardingEnableRef = useRef(null);
@@ -689,6 +694,10 @@ export function useMonad() {
       setOrderForwardingAllowed(false);
       accountIdRef.current = null;
       orderForwardingAllowedRef.current = false;
+      claimGoldInFlightRef.current = false;
+      lastClaimGoldAttemptRef.current = 0;
+      if (claimGoldTimerRef.current?.id) clearTimeout(claimGoldTimerRef.current.id);
+      claimGoldTimerRef.current = null;
       setPositions([]);
       positionsRawRef.current = [];
       setOrders([]);
@@ -697,10 +706,20 @@ export function useMonad() {
   }, [address, authedWallet, connected]);
 
   const scheduleClaim = useCallback((delayMs = 4000) => {
-    setTimeout(() => {
+    const at = Date.now() + Math.max(0, Number(delayMs) || 0);
+    const current = claimGoldTimerRef.current;
+    if (current?.at && current.at <= at) return;
+    if (current?.id) clearTimeout(current.id);
+    const id = setTimeout(() => {
+      claimGoldTimerRef.current = null;
       const fn = claimGoldRef.current;
-      if (typeof fn === 'function') fn();
-    }, delayMs);
+      if (typeof fn === 'function') fn({ scheduled: true });
+    }, Math.max(0, at - Date.now()));
+    claimGoldTimerRef.current = { id, at };
+  }, []);
+
+  useEffect(() => () => {
+    if (claimGoldTimerRef.current?.id) clearTimeout(claimGoldTimerRef.current.id);
   }, []);
 
   const getOrderLastBlock = useCallback(async (market) => {
@@ -1538,13 +1557,24 @@ export function useMonad() {
     return hash;
   }, [address, getMonadClients]);
 
-  const claimGold = useCallback(async () => {
+  const claimGold = useCallback(async (opts = {}) => {
     const token = player?.token;
     const wallet = address || authedWallet;
     const authNonce = getAuthNonce();
     if (!isActiveDex || !token || !wallet || !authNonce || !accountReady) return null;
+    if (claimGoldInFlightRef.current) {
+      scheduleClaim(CLAIM_GOLD_MIN_GAP_MS);
+      return null;
+    }
+    const sinceLast = Date.now() - lastClaimGoldAttemptRef.current;
+    if (!opts.force && sinceLast < CLAIM_GOLD_MIN_GAP_MS) {
+      scheduleClaim(CLAIM_GOLD_MIN_GAP_MS - sinceLast + 100);
+      return null;
+    }
+    claimGoldInFlightRef.current = true;
+    lastClaimGoldAttemptRef.current = Date.now();
     try {
-      await fetch('/api/futures/monad/import-fills?dex=monad', {
+      const importRes = await fetch('/api/futures/monad/import-fills?dex=monad', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1553,12 +1583,41 @@ export function useMonad() {
         },
         body: JSON.stringify({ wallet, auth_nonce: authNonce }),
       });
+      if (!importRes.ok) {
+        logPerplOrder('perpl.claim_gold_import_failed', {
+          status: importRes.status,
+          retry_ms: CLAIM_GOLD_RETRY_MS,
+        }, importRes.status >= 500 ? 'error' : 'warn');
+        scheduleClaim(CLAIM_GOLD_RETRY_MS);
+      }
       const r = await fetch('/api/trading/claim-gold', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ wallet, dex: 'monad' }),
       });
       const data = await r.json().catch(() => ({}));
+      if (r.status === 429) {
+        const retryMs = Math.max(
+          CLAIM_GOLD_MIN_GAP_MS,
+          Number(data?.retry_after_ms || data?.retry_after_s * 1000 || CLAIM_GOLD_RETRY_MS),
+        );
+        logPerplOrder('perpl.claim_gold_rate_limited', {
+          status: r.status,
+          reason: data?.reason || data?.error || null,
+          retry_ms: retryMs,
+        }, 'warn');
+        scheduleClaim(retryMs + 250);
+        return data;
+      }
+      if (!r.ok) {
+        logPerplOrder('perpl.claim_gold_failed', {
+          status: r.status,
+          reason: data?.reason || data?.error || null,
+          retry_ms: CLAIM_GOLD_RETRY_MS,
+        }, r.status >= 500 ? 'error' : 'warn');
+        scheduleClaim(CLAIM_GOLD_RETRY_MS);
+        return data;
+      }
       const gold = Number(data?.gold || 0);
       if (gold > 0) {
         setGoldEarned(gold);
@@ -1572,9 +1631,16 @@ export function useMonad() {
       return data;
     } catch (e) {
       console.warn('[useMonad] claimGold failed', e?.message || e);
+      logPerplOrder('perpl.claim_gold_network_failed', {
+        message: e?.message || String(e),
+        retry_ms: CLAIM_GOLD_RETRY_MS,
+      }, 'warn');
+      scheduleClaim(CLAIM_GOLD_RETRY_MS);
       return null;
+    } finally {
+      claimGoldInFlightRef.current = false;
     }
-  }, [isActiveDex, player?.token, address, authedWallet, accountReady]);
+  }, [isActiveDex, player?.token, address, authedWallet, accountReady, scheduleClaim]);
 
   useEffect(() => {
     claimGoldRef.current = claimGold;
@@ -1582,9 +1648,9 @@ export function useMonad() {
 
   useEffect(() => {
     if (!isActiveDex || !connected || !accountReady) return undefined;
-    const id = setInterval(() => claimGoldRef.current?.(), 30_000);
+    const id = setInterval(() => scheduleClaim(0), 30_000);
     return () => clearInterval(id);
-  }, [isActiveDex, connected, accountReady]);
+  }, [isActiveDex, connected, accountReady, scheduleClaim]);
 
   const activate = useCallback(async (amount = '10') => {
     setLoading(true);
