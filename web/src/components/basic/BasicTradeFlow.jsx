@@ -138,7 +138,7 @@ function BasicTradeFlow({
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'phoenix';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix';
       const sideForOpen = pickedDir === 'long'
         ? (isCollateralDex ? 'long' : 'bid')
         : (isCollateralDex ? 'short' : 'ask');
@@ -155,6 +155,18 @@ function BasicTradeFlow({
           submittedRef.current = false;
           setSubmitting(false);
           return;
+        }
+        if (dex === 'monad') {
+          const minPosting = Number(pickedToken?.min_posting_amount || 0);
+          if (minPosting > 0 && notional < minPosting) {
+            setErrorMsg(
+              `Perpl requires a position >= $${minPosting.toFixed(2)}. Yours: ` +
+              `$${Number.isFinite(notional) ? notional.toFixed(2) : '0.00'}. Increase amount or leverage.`
+            );
+            submittedRef.current = false;
+            setSubmitting(false);
+            return;
+          }
         }
         result = await placeMarketOrder(pickedToken.symbol, sideForOpen, pickedAmount, '0.5', pickedLev);
       } else {
