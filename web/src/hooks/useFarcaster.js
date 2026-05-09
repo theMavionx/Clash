@@ -7,6 +7,9 @@ let _inMiniApp = false;
 let _cachedContext = null;
 let _resolveDetect;
 const detectPromise = new Promise((r) => { _resolveDetect = r; });
+const IMPORT_TIMEOUT_MS = 4000;
+const READY_TIMEOUT_MS = 1800;
+const CONTEXT_TIMEOUT_MS = 1200;
 
 function _log(level, message) {
   fetch('/api/client-log', {
@@ -16,30 +19,50 @@ function _log(level, message) {
   }).catch(() => {});
 }
 
-// Always init SDK and call ready()
-initPromise = import('@farcaster/miniapp-sdk').then(async (mod) => {
+function withTimeout(promise, ms, fallback) {
+  let timer;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function finishDetect(inMiniApp) {
+  if (_resolved) return;
+  _resolved = true;
+  _inMiniApp = !!inMiniApp;
+  _resolveDetect(_inMiniApp);
+}
+
+// Always try the SDK, but fail open outside Farcaster hosts. Some in-app
+// browsers (notably Phantom mobile) never resolve sdk.actions.ready().
+initPromise = withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, null).then(async (mod) => {
+  if (!mod?.sdk) {
+    _log('info', 'SDK import timed out; treating as regular browser');
+    finishDetect(false);
+    return null;
+  }
   sdkInstance = mod.sdk;
   _log('info', 'SDK imported, calling ready()');
-  await mod.sdk.actions.ready({ disableNativeGestures: true });
+  await withTimeout(mod.sdk.actions.ready({ disableNativeGestures: true }), READY_TIMEOUT_MS, null);
   _log('info', 'ready() done');
 
   // Check if we're actually inside a mini app — cache context for useFarcaster hook
   try {
-    const ctx = await mod.sdk.context;
+    const ctx = await withTimeout(mod.sdk.context, CONTEXT_TIMEOUT_MS, null);
     _cachedContext = ctx;
     if (ctx?.user) {
-      _inMiniApp = true;
       _log('info', `Detected mini app: fid=${ctx.user.fid}, platform=${ctx?.client?.platformType || '?'}`);
     }
   } catch { /* ctx unavailable — treat as non-miniapp */ }
 
-  _resolved = true;
-  _resolveDetect(_inMiniApp);
+  finishDetect(!!_cachedContext?.user);
   return mod.sdk;
 }).catch((err) => {
   _log('error', `SDK init failed: ${err}`);
-  _resolved = true;
-  _resolveDetect(false);
+  finishDetect(false);
   return null;
 });
 

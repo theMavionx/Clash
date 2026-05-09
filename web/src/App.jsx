@@ -40,6 +40,11 @@ function FarcasterGate({ children }) {
     }
   }, [loading]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => setReady(true), 3500);
+    return () => clearTimeout(timer);
+  }, []);
+
   if (!ready) {
     return (
       <SplashScreen label={isInFrame ? 'Connecting to Farcaster...' : 'Loading...'} />
