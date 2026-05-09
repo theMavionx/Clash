@@ -176,11 +176,6 @@ export function clearPerplSession() {
 // Each helper assumes loginWithEoa has run. They return parsed bodies on
 // success, null on failure, and never throw — the hook treats null as
 // "data not yet available" and re-polls.
-export async function fetchPerplProfile() {
-  const r = await perplFetch('/profile/ref-code', { authed: true });
-  return r.ok ? r.data : null;
-}
-
 export async function fetchPerplFills({ limit = 50 } = {}) {
   const r = await perplFetch(`/trading/fills?count=${encodeURIComponent(limit)}`, { authed: true });
   return r.ok ? r.data : null;

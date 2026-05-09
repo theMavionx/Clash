@@ -43,7 +43,6 @@ import {
 } from '../lib/monadConfig';
 import {
   fetchPerplContext,
-  fetchPerplProfile,
   loginWithEoa,
   isPerplAuthed,
   getAuthNonce,
@@ -335,7 +334,6 @@ export function useMonad() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
-  const [profile, setProfile] = useState(null);
 
   const wsRef = useRef(null);
   // Ref-mirrors of state so order-placement (called from inside async
@@ -418,7 +416,6 @@ export function useMonad() {
       });
       setConnected(true);
       setAuthedWallet(out.address);
-      try { setProfile(await fetchPerplProfile()); } catch {}
       return out;
     } catch (e) {
       setError(e?.message || String(e));
@@ -993,10 +990,10 @@ export function useMonad() {
     depositToPacifica,
     withdraw,
     activate,
-    hasReferrer: !!profile?.code,
+    hasReferrer: true,
     linkOurReferrer,
     connectPerpl,
-    profile,
+    profile: null,
     accountId,
     walletMismatch,
     registeredEvmWallet,
@@ -1010,6 +1007,6 @@ export function useMonad() {
     goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
     setLeverage, setMarginMode, claimGold, depositToPacifica, withdraw, activate,
-    profile, accountId, walletMismatch, registeredEvmWallet, connectPerpl, linkOurReferrer,
+    accountId, walletMismatch, registeredEvmWallet, connectPerpl, linkOurReferrer,
   ]);
 }
