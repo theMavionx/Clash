@@ -25,6 +25,30 @@ function fmtDate(s) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function sortLabel(tOrSort) {
+  const sortBy = typeof tOrSort === 'string' ? tOrSort : tOrSort?.sort_by;
+  if (typeof tOrSort === 'object' && tOrSort?.sort_label) return tOrSort.sort_label;
+  if (sortBy === 'trophies') return 'Trophies';
+  if (sortBy === 'volume_usd') return 'Volume';
+  if (sortBy === 'gold') return 'Gold';
+  if (sortBy === 'volume_trophies_50_50') return '50% Vol / 50% Trophies';
+  return 'PnL';
+}
+
+function featuredMetric(sortKey, row) {
+  if (!row) return { value: '-', color: '#a3906a' };
+  if (sortKey === 'trophies') return { value: fmt(row.trophies), color: '#b45309' };
+  if (sortKey === 'gold') return { value: fmt(row.gold), color: '#b45309' };
+  if (sortKey === 'volume_usd') return { value: fmtUsd(row.volume_usd), color: '#b45309' };
+  if (sortKey === 'volume_trophies_50_50') {
+    return { value: `${Number(row.score || 0).toFixed(1)} pts`, color: '#b45309' };
+  }
+  return {
+    value: fmtUsd(row.pnl_usd),
+    color: (row.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c',
+  };
+}
+
 function TournamentPanel({ onClose }) {
   // Tab gate: 'active' (default) or 'history'. History shows ended
   // tournaments + their final leaderboards so a finished cup doesn't just
@@ -173,6 +197,9 @@ function TournamentPanel({ onClose }) {
                 const featuredColor = !placed ? '#a3906a'
                   : sortKey === 'pnl_usd' ? ((h.me.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c')
                   : '#b45309';
+                const featuredDisplay = placed
+                  ? featuredMetric(sortKey, h.me)
+                  : { value: featured, color: featuredColor };
                 return (
                   <button
                     key={h.id}
@@ -185,10 +212,10 @@ function TournamentPanel({ onClose }) {
                         Ended {ended}
                         {Number(h.gold_boost) !== 1 && <> · ×{h.gold_boost}G</>}
                         {Number(h.trophy_boost) !== 1 && <> · ×{h.trophy_boost}T</>}
-                        {placed ? <> · sort: {h.sort_by}</> : <> · did not join</>}
+                        {placed ? <> · sort: {sortLabel(h)}</> : <> · did not join</>}
                       </div>
                     </div>
-                    <span style={{ ...S.histFeatured, color: featuredColor }}>{featured}</span>
+                    <span style={{ ...S.histFeatured, color: featuredDisplay.color }}>{featuredDisplay.value}</span>
                   </button>
                 );
               })}
@@ -207,7 +234,7 @@ function TournamentPanel({ onClose }) {
                 <div style={S.tName}>{t.name}</div>
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
-                  <span style={S.tag}>Sort: {t.sort_by}</span>
+                  <span style={S.tag}>Sort: {sortLabel(t)}</span>
                   {isHistory
                     ? <span style={S.endedTag}>ENDED</span>
                     : <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
@@ -234,6 +261,9 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {t.sort_by === 'volume_trophies_50_50' && (
+                      <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
+                    )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
                     <Stat label="Gold" value={fmt(myStats.gold)} />
                     <Stat label="Trades" value={myStats.trades_count} />
@@ -273,6 +303,9 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
+                    {t.sort_by === 'volume_trophies_50_50' && (
+                      <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
+                    )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
                     <Stat label="Gold" value={fmt(myStats.gold)} />
                     <Stat label="Trades" value={myStats.trades_count} />
@@ -303,13 +336,7 @@ function TournamentPanel({ onClose }) {
                   const isMe = r.player_id === player?.player_id;
                   const medalColor = r.rank === 1 ? '#FFD700' : r.rank === 2 ? '#C0C0C0' : r.rank === 3 ? '#CD7F32' : null;
                   const sortKey = board.sort_by;
-                  const featured = sortKey === 'trophies' ? fmt(r.trophies)
-                    : sortKey === 'gold' ? fmt(r.gold)
-                    : sortKey === 'volume_usd' ? fmtUsd(r.volume_usd)
-                    : fmtUsd(r.pnl_usd);
-                  const featuredColor = sortKey === 'pnl_usd'
-                    ? ((r.pnl_usd || 0) >= 0 ? '#15803d' : '#b91c1c')
-                    : '#b45309';
+                  const featuredDisplay = featuredMetric(sortKey, r);
                   return (
                     <div
                       key={r.player_id}
@@ -336,7 +363,7 @@ function TournamentPanel({ onClose }) {
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
                         </span>
                       </div>
-                      <span style={{ ...S.featured, color: featuredColor }}>{featured}</span>
+                      <span style={{ ...S.featured, color: featuredDisplay.color }}>{featuredDisplay.value}</span>
                     </div>
                   );
                 })}

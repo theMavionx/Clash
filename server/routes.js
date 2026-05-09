@@ -3049,6 +3049,44 @@ function parseBool(v) {
   return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
 }
 
+const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
+const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_COMBINED_SORT];
+const TOURNAMENT_SQL_SORT_COLS = {
+  pnl_usd: 'tp.pnl_usd',
+  trophies: 'tp.trophies',
+  volume_usd: 'tp.volume_usd',
+  gold: 'tp.gold',
+};
+
+function normalizeTournamentSort(sortBy, fallback = 'pnl_usd') {
+  return TOURNAMENT_SORT_KEYS.includes(sortBy) ? sortBy : fallback;
+}
+
+function tournamentSortLabel(sortBy) {
+  switch (sortBy) {
+    case 'trophies': return 'Trophies';
+    case 'volume_usd': return 'Volume (USD)';
+    case 'gold': return 'Gold';
+    case TOURNAMENT_COMBINED_SORT: return '50% Volume / 50% Trophies';
+    case 'pnl_usd':
+    default:
+      return 'PnL (USD)';
+  }
+}
+
+function applyVolumeTrophyScore(rows) {
+  const maxVolume = rows.reduce((m, r) => Math.max(m, Number(r.volume_usd) || 0), 0);
+  const maxTrophies = rows.reduce((m, r) => Math.max(m, Number(r.trophies) || 0), 0);
+  for (const r of rows) {
+    const volumeScore = maxVolume > 0 ? ((Number(r.volume_usd) || 0) / maxVolume) * 50 : 0;
+    const trophyScore = maxTrophies > 0 ? ((Number(r.trophies) || 0) / maxTrophies) * 50 : 0;
+    r.volume_score = Number(volumeScore.toFixed(4));
+    r.trophy_score = Number(trophyScore.toFixed(4));
+    r.score = Number((volumeScore + trophyScore).toFixed(4));
+  }
+  return rows;
+}
+
 function validateTournamentWindow({ start_at, end_at, registration_opens_at, registration_closes_at }) {
   if (end_at && end_at <= start_at) return 'end_at must be after start_at';
   const registrationClose = registration_closes_at || start_at;
@@ -3104,6 +3142,7 @@ function tournamentRowToPublic(t) {
     gold_boost: Number(t.gold_boost),
     trophy_boost: Number(t.trophy_boost),
     sort_by: t.sort_by,
+    sort_label: tournamentSortLabel(t.sort_by),
     status: t.status,
     phase,
     preregistration_enabled: !!Number(t.preregistration_enabled || 0),
@@ -3160,6 +3199,15 @@ router.get('/tournaments/me', auth, (req, res) => {
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
+  let comboMeScore = null;
+  if (me && t.sort_by === TOURNAMENT_COMBINED_SORT) {
+    const scored = applyVolumeTrophyScore(db.db.prepare(`
+      SELECT player_id, trophies, volume_usd
+      FROM tournament_participants
+      WHERE tournament_id = ? AND left_at IS NULL
+    `).all(t.id));
+    comboMeScore = scored.find(s => s.player_id === req.player.id) || null;
+  }
   res.json({
     tournament: pub,
     joined: !!(me && me.left_at === null),
@@ -3171,6 +3219,9 @@ router.get('/tournaments/me', auth, (req, res) => {
       trades_count: me.trades_count,
       volume_usd: me.volume_usd,
       pnl_usd: me.pnl_usd,
+      score: comboMeScore?.score ?? null,
+      volume_score: comboMeScore?.volume_score ?? null,
+      trophy_score: comboMeScore?.trophy_score ?? null,
       joined_at: me.joined_at,
       left_at: me.left_at,
     } : null,
@@ -3206,6 +3257,17 @@ router.get('/tournaments/history', auth, (req, res) => {
     ORDER BY COALESCE(t.end_at, t.created_at) DESC, t.id DESC
     LIMIT ?
   `).all(req.player.id, dex, limit);
+  const comboScores = new Map();
+  for (const r of rows) {
+    if (r.sort_by !== TOURNAMENT_COMBINED_SORT) continue;
+    const scored = applyVolumeTrophyScore(db.db.prepare(`
+      SELECT player_id, trophies, volume_usd
+      FROM tournament_participants
+      WHERE tournament_id = ? AND left_at IS NULL
+    `).all(r.id));
+    const mine = scored.find(s => s.player_id === req.player.id);
+    if (mine) comboScores.set(r.id, mine);
+  }
   res.json({
     tournaments: rows.map(r => ({
       ...tournamentRowToPublic(r),
@@ -3215,6 +3277,9 @@ router.get('/tournaments/history', auth, (req, res) => {
         trades_count: r.my_trades_count || 0,
         volume_usd: r.my_volume_usd || 0,
         pnl_usd: r.my_pnl_usd || 0,
+        score: comboScores.get(r.id)?.score ?? null,
+        volume_score: comboScores.get(r.id)?.volume_score ?? null,
+        trophy_score: comboScores.get(r.id)?.trophy_score ?? null,
         left_at: r.my_left_at,
       } : null,
     })),
@@ -3282,26 +3347,38 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
   // Whitelist sort columns to defend against future schema drift.
-  const SORT_COLS = {
-    pnl_usd: 'tp.pnl_usd',
-    trophies: 'tp.trophies',
-    volume_usd: 'tp.volume_usd',
-    gold: 'tp.gold',
-  };
-  const col = SORT_COLS[t.sort_by] || 'tp.pnl_usd';
+  const sortBy = normalizeTournamentSort(t.sort_by);
+  const col = TOURNAMENT_SQL_SORT_COLS[sortBy] || 'tp.pnl_usd';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
-  const rows = db.db.prepare(`
+  const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd,
            p.name, p.wallet
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+  `;
+  let rows;
+  if (sortBy === TOURNAMENT_COMBINED_SORT) {
+    rows = applyVolumeTrophyScore(db.db.prepare(baseSql).all(tid))
+      .sort((a, b) =>
+        (Number(b.score) || 0) - (Number(a.score) || 0)
+        || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+        || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+        || (Number(b.trades_count) || 0) - (Number(a.trades_count) || 0)
+        || String(a.player_id).localeCompare(String(b.player_id))
+      )
+      .slice(0, limit);
+  } else {
+    rows = db.db.prepare(`
+      ${baseSql}
     ORDER BY ${col} DESC, tp.trades_count DESC, tp.player_id ASC
     LIMIT ?
-  `).all(tid, limit);
+    `).all(tid, limit);
+  }
   res.json({
     tournament: tournamentRowToPublic(t),
-    sort_by: t.sort_by,
+    sort_by: sortBy,
+    sort_label: tournamentSortLabel(sortBy),
     leaderboard: rows.map((r, i) => ({
       rank: i + 1,
       player_id: r.player_id,
@@ -3312,6 +3389,9 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       trades_count: r.trades_count,
       volume_usd: r.volume_usd,
       pnl_usd: r.pnl_usd,
+      score: r.score ?? null,
+      volume_score: r.volume_score ?? null,
+      trophy_score: r.trophy_score ?? null,
     })),
   });
 });
@@ -3349,8 +3429,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
-  const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
-  const sortCol = SORT_COLS.includes(sort_by) ? sort_by : 'pnl_usd';
+  const sortCol = normalizeTournamentSort(sort_by);
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
@@ -3410,10 +3489,11 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
-    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
-  const SORT_COLS = ['pnl_usd', 'trophies', 'volume_usd', 'gold'];
+  const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'];
+  if (dex !== undefined && !validDexes.includes(dex)) return res.status(400).json({ error: 'invalid dex' });
   const STATUSES = ['active', 'ended', 'draft'];
   let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt;
   try {
@@ -3442,11 +3522,12 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
+    dex: dex !== undefined ? dex : t.dex,
     start_at: nextStartAt,
     end_at: nextEndAt,
     gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
     trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
-    sort_by: SORT_COLS.includes(sort_by) ? sort_by : t.sort_by,
+    sort_by: normalizeTournamentSort(sort_by, t.sort_by),
     status: STATUSES.includes(status) ? status : t.status,
     preregistration_enabled: preregistration_enabled !== undefined
       ? (parseBool(preregistration_enabled) ? 1 : 0)
@@ -3455,13 +3536,14 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   };
   db.db.prepare(`
-    UPDATE tournaments SET name = ?, description = ?, start_at = ?, end_at = ?,
+    UPDATE tournaments SET name = ?, description = ?, dex = ?, start_at = ?, end_at = ?,
                             gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?,
                             preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
     next.name,
     next.description,
+    next.dex,
     next.start_at,
     next.end_at,
     next.gold_boost,

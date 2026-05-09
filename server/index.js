@@ -483,7 +483,7 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel" id="tab-tournaments">
     <div style="display:flex;gap:20px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap">
       <div style="flex:1;min-width:340px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
-        <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Create Tournament</h3>
+        <h3 id="tn_form_title" style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Create Tournament</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <label style="font-size:11px;color:#9ca3af">Name<input id="tn_name" placeholder="e.g. Spring Cup" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">DEX
@@ -511,6 +511,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="pnl_usd">PnL (USD)</option>
               <option value="trophies">Trophies</option>
               <option value="volume_usd">Volume (USD)</option>
+              <option value="volume_trophies_50_50">50% Volume / 50% Trophies</option>
               <option value="gold">Gold</option>
             </select>
           </label>
@@ -522,13 +523,16 @@ app.get('/api/admin/panel', (req, res) => {
             </select>
           </label>
         </div>
-        <button class="btn" style="margin-top:10px" onclick="createTournament()">Create</button>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button id="tn_submit" class="btn" onclick="saveTournament()">Create</button>
+          <button id="tn_cancel" class="btn" style="display:none;background:#4b5563" onclick="resetTournamentForm()">Cancel edit</button>
+        </div>
       </div>
       <div style="flex:2;min-width:380px;background:#1f2937;border:1px solid #374151;border-radius:12px;padding:14px">
         <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Live Leaderboard</h3>
         <div id="tn_lb_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament below to view its leaderboard.</div>
         <table style="font-size:12px"><thead><tr>
-          <th>#</th><th>Player</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
+          <th>#</th><th>Player</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
         </tr></thead><tbody id="tn_lb_body"></tbody></table>
       </div>
     </div>
@@ -1429,6 +1433,15 @@ async function deleteTask(id) {
 // ---------- Tournaments admin ----------
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
+let TOURNAMENT_EDIT_ID = null;
+
+function tournamentSortLabel(sortBy) {
+  if (sortBy === 'trophies') return 'Trophies';
+  if (sortBy === 'volume_usd') return 'Volume (USD)';
+  if (sortBy === 'gold') return 'Gold';
+  if (sortBy === 'volume_trophies_50_50') return '50% Volume / 50% Trophies';
+  return 'PnL (USD)';
+}
 
 async function loadTournaments() {
   try {
@@ -1468,10 +1481,11 @@ function renderTournaments() {
       + '<td style="font-size:11px">' + reg + '</td>'
       + '<td>' + t.gold_boost + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
-      + '<td>' + esc(t.sort_by) + '</td>'
+      + '<td>' + esc(t.sort_label || tournamentSortLabel(t.sort_by)) + '</td>'
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
       +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
+      +   '<button class="btn" onclick="editTournament(' + t.id + ')">Edit</button> '
       +   (t.status === 'active' ? '<button class="btn" onclick="endTournament(' + t.id + ')">End</button> ' : '')
       +   '<button class="btn" onclick="deleteTournament(' + t.id + ')" style="background:#7f1d1d">Delete</button>'
       + '</td>'
@@ -1479,8 +1493,8 @@ function renderTournaments() {
   }).join('');
 }
 
-async function createTournament() {
-  const body = {
+function getTournamentFormBody() {
+  return {
     name: document.getElementById('tn_name').value.trim(),
     description: document.getElementById('tn_desc').value.trim(),
     dex: document.getElementById('tn_dex').value,
@@ -1494,22 +1508,66 @@ async function createTournament() {
     sort_by: document.getElementById('tn_sort').value,
     status: document.getElementById('tn_status').value,
   };
-  if (!body.name) { alert('Name required'); return; }
-  const r = await fetch('/api/admin/tournaments', {
-    method: 'POST',
-    headers: { 'x-admin-key': KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const j = await r.json();
-  if (!r.ok) { alert(j.error || 'Failed'); return; }
+}
+
+function resetTournamentForm() {
+  TOURNAMENT_EDIT_ID = null;
+  document.getElementById('tn_form_title').textContent = 'Create Tournament';
+  document.getElementById('tn_submit').textContent = 'Create';
+  document.getElementById('tn_cancel').style.display = 'none';
   document.getElementById('tn_name').value = '';
   document.getElementById('tn_desc').value = '';
+  document.getElementById('tn_dex').value = 'pacifica';
   document.getElementById('tn_start').value = '';
   document.getElementById('tn_end').value = '';
   document.getElementById('tn_prereg').checked = false;
   document.getElementById('tn_reg_open').value = '';
   document.getElementById('tn_reg_close').value = '';
+  document.getElementById('tn_gold').value = '1';
+  document.getElementById('tn_trophy').value = '1';
+  document.getElementById('tn_sort').value = 'pnl_usd';
+  document.getElementById('tn_status').value = 'active';
+}
+
+function editTournament(id) {
+  const t = TOURNAMENTS_CACHE.find(x => Number(x.id) === Number(id));
+  if (!t) return;
+  TOURNAMENT_EDIT_ID = t.id;
+  document.getElementById('tn_form_title').textContent = 'Edit Tournament #' + t.id;
+  document.getElementById('tn_submit').textContent = 'Save changes';
+  document.getElementById('tn_cancel').style.display = 'inline-block';
+  document.getElementById('tn_name').value = t.name || '';
+  document.getElementById('tn_desc').value = t.description || '';
+  document.getElementById('tn_dex').value = t.dex || 'pacifica';
+  document.getElementById('tn_start').value = t.start_at || '';
+  document.getElementById('tn_end').value = t.end_at || '';
+  document.getElementById('tn_prereg').checked = !!t.preregistration_enabled;
+  document.getElementById('tn_reg_open').value = t.registration_opens_at || '';
+  document.getElementById('tn_reg_close').value = t.registration_closes_at || '';
+  document.getElementById('tn_gold').value = t.gold_boost || 1;
+  document.getElementById('tn_trophy').value = t.trophy_boost || 1;
+  document.getElementById('tn_sort').value = t.sort_by || 'pnl_usd';
+  document.getElementById('tn_status').value = t.status || 'active';
+  document.getElementById('tn_form_title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveTournament() {
+  const body = getTournamentFormBody();
+  if (!body.name) { alert('Name required'); return; }
+  const editingId = TOURNAMENT_EDIT_ID;
+  const r = await fetch(editingId ? '/api/admin/tournaments/' + editingId : '/api/admin/tournaments', {
+    method: editingId ? 'PATCH' : 'POST',
+    headers: { 'x-admin-key': KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json();
+  if (!r.ok) { alert(j.error || 'Failed'); return; }
+  resetTournamentForm();
   loadTournaments();
+}
+
+async function createTournament() {
+  return saveTournament();
 }
 
 async function endTournament(id) {
@@ -1538,11 +1596,13 @@ async function loadTournamentLeaderboard(id) {
     if (!r.ok) { alert(j.error || 'Failed'); return; }
     const t = j.tournament;
     document.getElementById('tn_lb_meta').textContent =
-      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + j.sort_by + ' · ' + (j.leaderboard.length) + ' players';
+      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + ' · ' + (j.leaderboard.length) + ' players';
     document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
+      const score = r.score == null ? '—' : Number(r.score || 0).toFixed(1);
       return '<tr>'
         + '<td>' + r.rank + '</td>'
         + '<td>' + esc(r.name || (r.wallet || '').slice(0, 8)) + '</td>'
+        + '<td>' + score + '</td>'
         + '<td>' + r.trophies + '</td>'
         + '<td>' + r.gold + '</td>'
         + '<td>' + r.trades_count + '</td>'

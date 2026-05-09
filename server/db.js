@@ -105,7 +105,7 @@ try {
 // FROZEN (reads still happen, writes from battle/quest paths skip them
 // for the joined player). Tournament-only counters live in
 // `tournament_participants` and rank players by an admin-chosen sort
-// key (pnl_usd / trophies / volume / gold). Boosts are multipliers
+// key (pnl_usd / trophies / volume / gold / volume_trophies_50_50). Boosts are multipliers
 // applied to the in-tournament counters; main account stats see the
 // unboosted (zero) delta. Leaderboard is real-time read from the
 // participant rows; tournament ends → status flips to 'ended', writes
@@ -116,12 +116,12 @@ try {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix')),
       start_at     TEXT NOT NULL,                        -- ISO datetime
       end_at       TEXT,                                  -- nullable (open-ended)
       gold_boost   REAL NOT NULL DEFAULT 1.0,
       trophy_boost REAL NOT NULL DEFAULT 1.0,
-      sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold')),
+      sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -130,6 +130,56 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN preregistration_enabled INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
+  try {
+    const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
+    const needsRebuild = schema
+      && (!schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'"));
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE tournaments_new (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            name         TEXT NOT NULL,
+            description  TEXT,
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix')),
+            start_at     TEXT NOT NULL,
+            end_at       TEXT,
+            gold_boost   REAL NOT NULL DEFAULT 1.0,
+            trophy_boost REAL NOT NULL DEFAULT 1.0,
+            sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
+            status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            preregistration_enabled INTEGER NOT NULL DEFAULT 0,
+            registration_opens_at TEXT,
+            registration_closes_at TEXT
+          );
+          INSERT INTO tournaments_new (
+            id, name, description, dex, start_at, end_at, gold_boost, trophy_boost,
+            sort_by, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+          )
+          SELECT
+            id, name, description,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix') THEN dex ELSE 'pacifica' END,
+            start_at, end_at, gold_boost, trophy_boost,
+            CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
+            CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
+            created_at,
+            COALESCE(preregistration_enabled, 0),
+            registration_opens_at,
+            registration_closes_at
+          FROM tournaments;
+          DROP TABLE tournaments;
+          ALTER TABLE tournaments_new RENAME TO tournaments;
+          CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
+          INSERT OR REPLACE INTO sqlite_sequence(name, seq)
+            SELECT 'tournaments', COALESCE(MAX(id), 0) FROM tournaments;
+        `);
+      })();
+    }
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
 } catch (e) { console.warn('[db] tournaments migration:', e.message); }
 
 try {
