@@ -134,6 +134,10 @@ function sanitize(value, depth = 0, seen = new WeakSet()) {
   return out;
 }
 
+function sanitizeDeep(value) {
+  return sanitize(value, -2);
+}
+
 function argToText(arg) {
   if (typeof arg === 'string') return redactText(arg);
   if (arg instanceof Error) return `${arg.name}: ${arg.message}`;
@@ -205,12 +209,13 @@ export function reportClientEvent(type, data = {}, opts = {}) {
     const level = opts.level || 'info';
     const source = opts.source || 'client.event';
     const message = opts.message || type || 'client.event';
+    const eventData = sanitizeDeep(data);
     addBreadcrumbInternal(type, data, level);
     enqueue(makeEvent(level, [message], source, opts.stack || '', {
-      payload: {
+      rawPayload: {
         event: {
           type,
-          data: sanitize(data),
+          data: eventData,
         },
       },
       context: opts.context || {},
@@ -251,7 +256,7 @@ function makeEvent(level, args, source, stack, extra = {}) {
     args: safeArgs,
     context: currentContext(extra.context || {}),
     breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
-    ...sanitize(extra.payload || {}),
+    ...(extra.rawPayload || sanitize(extra.payload || {})),
   };
   return {
     level,

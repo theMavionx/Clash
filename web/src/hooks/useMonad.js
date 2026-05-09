@@ -76,6 +76,7 @@ const ORDER_REASON = Object.freeze({
   22: 'MakerOrderFilled',
   28: 'OrderCancelled',
   32: 'OrderDescIdTooLow',
+  34: 'OrderForwardingNotAllowed',
   35: 'OrderPlaced',
   36: 'OrderPostFailed',
   43: 'TakerOrderFilled',
@@ -355,9 +356,14 @@ function describePerplOrder(order, fallback = 'Perpl order was not confirmed') {
 
 function makePerplOrderError(order, fallback) {
   const err = new Error(describePerplOrder(order, fallback));
-  err.code = getOrderStatusReason(order) === 32 ? 'PERPL_ORDER_DESC_ID_TOO_LOW' : 'PERPL_ORDER_NOT_CONFIRMED';
+  const sr = getOrderStatusReason(order);
+  err.code = sr === 32
+    ? 'PERPL_ORDER_DESC_ID_TOO_LOW'
+    : sr === 34
+      ? 'PERPL_ORDER_FORWARDING_DISABLED'
+      : 'PERPL_ORDER_NOT_CONFIRMED';
   err.status = getOrderStatus(order);
-  err.statusReason = getOrderStatusReason(order);
+  err.statusReason = sr;
   return err;
 }
 
@@ -403,6 +409,7 @@ function sanitizeOrderEnvelope(envelope) {
     rq: envelope?.rq,
     mkt: envelope?.mkt,
     acc: envelope?.acc,
+    oid: envelope?.oid,
     t: envelope?.t,
     p: envelope?.p,
     s: envelope?.s,
@@ -477,6 +484,7 @@ function summarizePendingEntry(entry) {
     before_size_wire: entry.beforeSizeWire,
     position_id: entry.positionId || null,
     resend_count: entry.resendCount,
+    account_forwarding: entry.accountForwarding,
   };
 }
 
@@ -520,6 +528,7 @@ function normalizeAccount(acc) {
     available_to_spend: Math.max(0, equity - marginUsed),
     available_to_withdraw: Math.max(0, equity - marginUsed),
     total_margin_used: marginUsed,
+    order_forwarding_allowed: acc?.fw === true,
   };
 }
 
@@ -561,6 +570,7 @@ export function useMonad() {
   const [walletUsdc, setWalletUsdc] = useState(0);
   const [accountReady, setAccountReady] = useState(false);
   const [accountChecked, setAccountChecked] = useState(false);
+  const [orderForwardingAllowed, setOrderForwardingAllowed] = useState(false);
   const [dataReady, setDataReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -578,6 +588,8 @@ export function useMonad() {
   const currentBlockRef = useRef(0);
   const claimGoldRef = useRef(null);
   const tradingAuthedRef = useRef(false);
+  const orderForwardingAllowedRef = useRef(false);
+  const orderForwardingEnableRef = useRef(null);
   const pendingOrdersRef = useRef(new Map());
 
   const clearError = useCallback(() => setError(null), []);
@@ -674,7 +686,9 @@ export function useMonad() {
       setAccountId(null);
       setAccountReady(false);
       setAccountChecked(false);
+      setOrderForwardingAllowed(false);
       accountIdRef.current = null;
+      orderForwardingAllowedRef.current = false;
       setPositions([]);
       positionsRawRef.current = [];
       setOrders([]);
@@ -1008,6 +1022,12 @@ export function useMonad() {
               : frame?.account || frame;
             const norm = normalizeAccount(acct);
             if (norm) setAccount(norm);
+            const fwRaw = acct?.fw ?? frame?.fw;
+            if (fwRaw != null) {
+              const allowed = fwRaw === true;
+              orderForwardingAllowedRef.current = allowed;
+              setOrderForwardingAllowed(allowed);
+            }
             const acctId = norm?.id ?? frame?.acc ?? frame?.account_id;
             if (acctId != null) {
               const idNum = Number(acctId);
@@ -1016,6 +1036,8 @@ export function useMonad() {
               setAccountReady(Number.isFinite(idNum) && idNum > 0);
             } else if (frame?.mt === PERPL_MT.WALLET_SNAPSHOT) {
               setAccountReady(false);
+              orderForwardingAllowedRef.current = false;
+              setOrderForwardingAllowed(false);
             }
             setAccountChecked(true);
             const lfr = norm?.lfr ?? frame?.lfr ?? frame?.last_fully_ratcheted ?? 0;
@@ -1026,6 +1048,7 @@ export function useMonad() {
                 account_id: accountIdRef.current,
                 lfr,
                 account_ready: Number(accountIdRef.current) > 0,
+                account_forwarding: orderForwardingAllowedRef.current,
               });
             }
             break;
@@ -1097,6 +1120,60 @@ export function useMonad() {
     return wsRef.current;
   }, []);
 
+  const getMonadWriteClients = useCallback(async () => {
+    if (!address) throw new Error('Connect a Monad wallet first');
+    if (ensureChain) await ensureChain(MONAD_CHAIN_ID);
+    const wc = (getWalletClient && getWalletClient(MONAD_CHAIN_ID)) || walletClient;
+    const pc = getPublicClient && getPublicClient(MONAD_CHAIN_ID);
+    if (!wc || !pc) throw new Error('Monad wallet client not ready');
+    return { walletClient: wc, publicClient: pc };
+  }, [address, ensureChain, getWalletClient, getPublicClient, walletClient]);
+
+  const ensureOrderForwardingAllowed = useCallback(async (opts = {}) => {
+    if (!opts.force && orderForwardingAllowedRef.current) {
+      return { success: true, skipped: true };
+    }
+    if (orderForwardingEnableRef.current) {
+      return await orderForwardingEnableRef.current;
+    }
+    const task = (async () => {
+      logPerplOrder('perpl.forwarding_enable_start', {
+        reason: opts.reason || 'preflight',
+        account_id: accountIdRef.current,
+        was_allowed: orderForwardingAllowedRef.current,
+      }, 'warn');
+      const { walletClient: wc, publicClient: pc } = await getMonadWriteClients();
+      const hash = await wc.writeContract({
+        address: PERPL_EXCHANGE_ADDRESS,
+        abi: PERPL_EXCHANGE_ABI,
+        functionName: 'allowOrderForwarding',
+        args: [true],
+        account: address,
+      });
+      await pc.waitForTransactionReceipt({ hash });
+      orderForwardingAllowedRef.current = true;
+      setOrderForwardingAllowed(true);
+      logPerplOrder('perpl.forwarding_enable_success', {
+        reason: opts.reason || 'preflight',
+        account_id: accountIdRef.current,
+        tx_hash: hash,
+      });
+      return { success: true, tx_hash: hash };
+    })().catch((e) => {
+      const msg = e?.shortMessage || e?.message || String(e);
+      logPerplOrder('perpl.forwarding_enable_failed', {
+        reason: opts.reason || 'preflight',
+        account_id: accountIdRef.current,
+        message: msg,
+      }, 'error');
+      throw new Error(`Enable Perpl one-click trading first: ${msg}`);
+    }).finally(() => {
+      orderForwardingEnableRef.current = null;
+    });
+    orderForwardingEnableRef.current = task;
+    return await task;
+  }, [address, getMonadWriteClients]);
+
   const preflight = useCallback(async (symbol) => {
     const ws = await waitForTradingSocket();
     if (!ws || ws.getReadyState() !== WebSocket.OPEN || !tradingAuthedRef.current) {
@@ -1108,13 +1185,19 @@ export function useMonad() {
     if (accountIdRef.current == null) {
       throw new Error('Perpl account not loaded yet — wait a moment and retry');
     }
+    if (!orderForwardingAllowedRef.current) {
+      await ensureOrderForwardingAllowed({ reason: 'preflight_trade' });
+    }
     const target = String(symbol || '').toUpperCase();
     const marketId = PERPL_MARKET_BY_SYMBOL[target];
     if (!marketId) throw new Error(`Unknown Perpl market: ${target}`);
     const market = marketsByIdRef.current[marketId];
     if (!market) throw new Error(`Market metadata not loaded for ${target}`);
-    return { ws, market, marketId, accountId: accountIdRef.current };
-  }, [connected, waitForTradingSocket]);
+    const activeWs = wsRef.current?.getReadyState?.() === WebSocket.OPEN && tradingAuthedRef.current
+      ? wsRef.current
+      : ws;
+    return { ws: activeWs, market, marketId, accountId: accountIdRef.current };
+  }, [connected, ensureOrderForwardingAllowed, waitForTradingSocket]);
 
   // placeMarketOrder(symbol, side, collateralUsdc, slippage, leverage) →
   //   matches Avantis/GMX shape; FuturesPanel passes USDC margin + leverage.
@@ -1159,6 +1242,7 @@ export function useMonad() {
         min_notional: minNotional,
         before_size_wire: before.sizeWire,
         before_position_id: before.positionId || null,
+        account_forwarding: orderForwardingAllowedRef.current,
         current_block: currentBlockRef.current,
       });
       logPerplOrder('perpl.market_order_start', tradeLog);
@@ -1169,6 +1253,7 @@ export function useMonad() {
           action: 'open',
           marketId,
           accountId: accId,
+          accountForwarding: orderForwardingAllowedRef.current,
           isLong,
           orderType,
           beforeSizeWire: before.sizeWire,
@@ -1259,6 +1344,7 @@ export function useMonad() {
           action: 'limit',
           marketId,
           accountId: accId,
+          accountForwarding: orderForwardingAllowedRef.current,
           isLong,
           orderType,
           beforeSizeWire: getPositionSnapshot(marketId, isLong).sizeWire,
@@ -1328,6 +1414,7 @@ export function useMonad() {
           action: 'close',
           marketId,
           accountId: accId,
+          accountForwarding: orderForwardingAllowedRef.current,
           isLong: isLongSide,
           orderType,
           beforeSizeWire: totalSizeAbs,
@@ -1389,6 +1476,7 @@ export function useMonad() {
           action: 'cancel',
           marketId,
           accountId: accId,
+          accountForwarding: orderForwardingAllowedRef.current,
           isLong: order.side === 'bid',
           orderType: PERPL_ORDER_TYPE.CANCEL,
           beforeSizeWire: 0,
@@ -1519,6 +1607,7 @@ export function useMonad() {
         account: address,
       });
       await pc.waitForTransactionReceipt({ hash });
+      await ensureOrderForwardingAllowed({ force: true, reason: 'activate' });
       await fetchWalletAusd();
       setTimeout(() => {
         try { wsRef.current?.close(); } catch {}
@@ -1531,7 +1620,7 @@ export function useMonad() {
     } finally {
       setLoading(false);
     }
-  }, [address, ensureAusdAllowance, fetchWalletAusd, getMonadClients]);
+  }, [address, ensureAusdAllowance, ensureOrderForwardingAllowed, fetchWalletAusd, getMonadClients]);
 
   const depositToPacifica = useCallback(async (amount) => {
     setLoading(true);
@@ -1550,8 +1639,8 @@ export function useMonad() {
       const hash = await wc.writeContract({
         address: PERPL_EXCHANGE_ADDRESS,
         abi: PERPL_EXCHANGE_ABI,
-        functionName: 'deposit',
-        args: [BigInt(accountIdRef.current), amountBig],
+        functionName: 'depositCollateral',
+        args: [amountBig],
         account: address,
       });
       await pc.waitForTransactionReceipt({ hash });
@@ -1578,8 +1667,8 @@ export function useMonad() {
       const hash = await wc.writeContract({
         address: PERPL_EXCHANGE_ADDRESS,
         abi: PERPL_EXCHANGE_ABI,
-        functionName: 'withdraw',
-        args: [BigInt(accountIdRef.current), amountBig],
+        functionName: 'withdrawCollateral',
+        args: [amountBig],
         account: address,
       });
       await pc.waitForTransactionReceipt({ hash });
@@ -1626,6 +1715,7 @@ export function useMonad() {
     leverageSettings,
     marginModes,
     accountReady,
+    orderForwardingAllowed,
     dataReady,
     loading,
     error,
@@ -1656,7 +1746,7 @@ export function useMonad() {
     connectWallet: () => {},
   }), [
     connected, address, account, positions, orders, prices, markets, walletUsdc,
-    leverageSettings, marginModes, accountReady, accountChecked, dataReady, loading, error, clearError,
+    leverageSettings, marginModes, accountReady, orderForwardingAllowed, accountChecked, dataReady, loading, error, clearError,
     goldEarned, clearGoldEarned,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder, setTpsl,
     setLeverage, setMarginMode, claimGold, depositToPacifica, withdraw, activate,

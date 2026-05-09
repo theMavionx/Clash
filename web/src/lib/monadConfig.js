@@ -120,18 +120,15 @@ export const PERPL_EXCHANGE_ADDRESS = '0x34B6552d57a35a1D042CcAe1951BD1C370112a6
 export const PERPL_EXCHANGE_ABI = [
   { name: 'createAccount', type: 'function', stateMutability: 'nonpayable',
     inputs: [{ name: 'amount', type: 'uint256' }],
+    outputs: [{ name: 'accountId', type: 'uint256' }] },
+  { name: 'allowOrderForwarding', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'allow', type: 'bool' }],
     outputs: [] },
-  { name: 'deposit', type: 'function', stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'accountId', type: 'uint256' },
-      { name: 'amount', type: 'uint256' },
-    ],
+  { name: 'depositCollateral', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'amount', type: 'uint256' }],
     outputs: [] },
-  { name: 'withdraw', type: 'function', stateMutability: 'nonpayable',
-    inputs: [
-      { name: 'accountId', type: 'uint256' },
-      { name: 'amount', type: 'uint256' },
-    ],
+  { name: 'withdrawCollateral', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'amount', type: 'uint256' }],
     outputs: [] },
 ];
 
