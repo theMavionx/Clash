@@ -546,10 +546,23 @@ export function useMonad() {
   // Common preflight: WS open, account known, market resolved. Throws —
   // callers wrap in try/catch and translate to the { error } return shape
   // FuturesPanel reads.
-  const preflight = useCallback((symbol) => {
-    const ws = wsRef.current;
+  const waitForTradingSocket = useCallback(async (timeoutMs = 6000) => {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const ws = wsRef.current;
+      if (ws?.getReadyState?.() === WebSocket.OPEN) return ws;
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    return wsRef.current;
+  }, []);
+
+  const preflight = useCallback(async (symbol) => {
+    const ws = await waitForTradingSocket();
     if (!ws || ws.getReadyState() !== WebSocket.OPEN) {
-      throw new Error('Perpl trading socket not connected — sign in first');
+      if (connected) {
+        throw new Error('Perpl trading socket is reconnecting - wait a moment and retry');
+      }
+      throw new Error('Sign in to Perpl first');
     }
     if (accountIdRef.current == null) {
       throw new Error('Perpl account not loaded yet — wait a moment and retry');
@@ -560,7 +573,7 @@ export function useMonad() {
     const market = marketsByIdRef.current[marketId];
     if (!market) throw new Error(`Market metadata not loaded for ${target}`);
     return { ws, market, marketId, accountId: accountIdRef.current };
-  }, []);
+  }, [connected, waitForTradingSocket]);
 
   // placeMarketOrder(symbol, side, collateralUsdc, slippage, leverage) →
   //   matches Avantis/GMX shape; FuturesPanel passes USDC margin + leverage.
@@ -571,7 +584,7 @@ export function useMonad() {
     setLoading(true);
     setError(null);
     try {
-      const { ws, market, marketId, accountId: accId } = preflight(symbol);
+      const { ws, market, marketId, accountId: accId } = await preflight(symbol);
       const collateral = parseFloat(collateralUsdc);
       const lev = Math.max(1, Math.min(market.max_leverage || 50, Math.floor(Number(leverage) || 1)));
       if (!Number.isFinite(collateral) || collateral <= 0) throw new Error('Invalid collateral');
@@ -621,7 +634,7 @@ export function useMonad() {
     setLoading(true);
     setError(null);
     try {
-      const { ws, market, marketId, accountId: accId } = preflight(symbol);
+      const { ws, market, marketId, accountId: accId } = await preflight(symbol);
       const collateral = parseFloat(collateralUsdc);
       const limit = parseFloat(limitPrice);
       const lev = Math.max(1, Math.min(market.max_leverage || 50, Math.floor(Number(leverage) || 1)));
@@ -673,7 +686,7 @@ export function useMonad() {
     setLoading(true);
     setError(null);
     try {
-      const { ws, market, marketId, accountId: accId } = preflight(symbol);
+      const { ws, market, marketId, accountId: accId } = await preflight(symbol);
       const target = String(symbol).toUpperCase();
       const isLongSide = side === 'bid' || side === 'long';
       const pos = (positionsRawRef.current || []).find(p => {
