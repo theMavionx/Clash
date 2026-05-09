@@ -801,7 +801,7 @@ export function useMonad() {
     const token = player?.token;
     const wallet = address || authedWallet;
     const authNonce = getAuthNonce();
-    if (!isActiveDex || !token || !wallet || !authNonce) return null;
+    if (!isActiveDex || !token || !wallet || !authNonce || !accountReady) return null;
     try {
       await fetch('/api/futures/monad/import-fills?dex=monad', {
         method: 'POST',
@@ -833,17 +833,17 @@ export function useMonad() {
       console.warn('[useMonad] claimGold failed', e?.message || e);
       return null;
     }
-  }, [isActiveDex, player?.token, address, authedWallet]);
+  }, [isActiveDex, player?.token, address, authedWallet, accountReady]);
 
   useEffect(() => {
     claimGoldRef.current = claimGold;
   }, [claimGold]);
 
   useEffect(() => {
-    if (!isActiveDex || !connected) return undefined;
+    if (!isActiveDex || !connected || !accountReady) return undefined;
     const id = setInterval(() => claimGoldRef.current?.(), 30_000);
     return () => clearInterval(id);
-  }, [isActiveDex, connected]);
+  }, [isActiveDex, connected, accountReady]);
 
   const activate = useCallback(async (amount = '10') => {
     setLoading(true);

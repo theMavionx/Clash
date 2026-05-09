@@ -31,6 +31,9 @@ import {
 } from './monadConfig';
 
 export const PERPL_REGION_BLOCKED_MESSAGE = 'Perpl is not available in your country or IP region.';
+// Perpl `sn` can jump between heartbeats on a healthy stream, so reconnect
+// only on heartbeat timeout unless we later confirm per-client sequencing.
+const STRICT_SEQUENCE_RECONNECT = false;
 
 function throwRegionBlocked() {
   const e = new Error(PERPL_REGION_BLOCKED_MESSAGE);
@@ -194,8 +197,8 @@ export async function fetchPerplPositionHistory({ limit = 50 } = {}) {
 // ───── Trading WebSocket ─────────────────────────────────────────────────
 // Opens a connection, auths with the cached session nonce, then forwards
 // every server frame to the registered handler. Reconnects on close (the
-// caller can hard-shutdown via close()). Heartbeat (mt:1) every 30s; if we
-// miss two server heartbeats in a row we drop the socket and reconnect.
+// caller can hard-shutdown via close()). Heartbeat (mt:1) every 30s; if the
+// server stops sending heartbeats for a while we drop the socket and reconnect.
 //
 // Returns:
 //   { send(envelope), close(), onMessage(handler), getReadyState(), getRq() }
@@ -208,9 +211,11 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
   let ws = null;
   let handler = null;
   let pingTimer = null;
+  let heartbeatWatchTimer = null;
   let reconnectTimer = null;
   let closed = false;
   let rqCounter = 0;
+  let lastHeartbeatAt = 0;
   let lastSeenSeq = null;
 
   const session = sessionId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -226,16 +231,22 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
       pingTimer = setInterval(() => {
         try { ws.send(JSON.stringify({ mt: PERPL_MT.PING })); } catch {}
       }, 30_000);
+      lastHeartbeatAt = Date.now();
+      heartbeatWatchTimer = setInterval(() => {
+        if (!lastHeartbeatAt || Date.now() - lastHeartbeatAt <= 75_000) return;
+        try { ws.close(4000, 'heartbeat timeout'); } catch {}
+      }, 15_000);
       try { onOpen?.(); } catch {}
     };
     ws.onmessage = (ev) => {
       let frame;
       try { frame = JSON.parse(ev.data); } catch { return; }
-      // Server heartbeats include a sequence number — gap means we missed
-      // frames and should reconnect to resync state. Don't trust local cache.
+      if (frame?.mt === PERPL_MT.HEARTBEAT) lastHeartbeatAt = Date.now();
+      // Keep the latest sequence only for diagnostics; it is not strict
+      // enough per client stream to drive reconnects.
       const seq = Number(frame?.sn ?? frame?.seq);
       if (frame?.mt === PERPL_MT.HEARTBEAT && Number.isFinite(seq)) {
-        if (lastSeenSeq != null && seq !== lastSeenSeq + 1) {
+        if (STRICT_SEQUENCE_RECONNECT && lastSeenSeq != null && seq !== lastSeenSeq + 1) {
           console.warn('[perpl] WS heartbeat seq gap', lastSeenSeq, '→', seq, '— reconnecting');
           try { ws.close(); } catch {}
           return;
@@ -248,7 +259,10 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
     };
     ws.onclose = (ev) => {
       clearInterval(pingTimer);
+      clearInterval(heartbeatWatchTimer);
       pingTimer = null;
+      heartbeatWatchTimer = null;
+      lastHeartbeatAt = 0;
       try { onClose?.(ev); } catch {}
       // 3401 = "session invalid, please re-auth". Clear the nonce so a
       // fresh login is forced upstream rather than spinning on a dead session.
@@ -282,6 +296,7 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
     close() {
       closed = true;
       clearInterval(pingTimer);
+      clearInterval(heartbeatWatchTimer);
       clearTimeout(reconnectTimer);
       try { ws?.close(); } catch {}
       ws = null;

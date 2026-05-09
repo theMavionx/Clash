@@ -82,6 +82,8 @@ async function perplAuthedGet(path, { cookie, authNonce }) {
       accept: 'application/json',
       cookie,
       'x-auth-nonce': authNonce,
+      origin: 'https://app.perpl.xyz',
+      referer: 'https://app.perpl.xyz/',
     },
   });
   const text = await r.text();
