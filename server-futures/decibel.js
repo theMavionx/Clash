@@ -384,6 +384,19 @@ function cleanObject(obj) {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== ''));
 }
 
+function assertTpslLeg(payload, prefix, label) {
+  const triggerKey = `${prefix}TriggerPrice`;
+  const limitKey = `${prefix}LimitPrice`;
+  const sizeKey = `${prefix}Size`;
+  const hasAny = payload[triggerKey] != null || payload[limitKey] != null || payload[sizeKey] != null;
+  if (!hasAny) return false;
+  if (payload[triggerKey] == null || payload[limitKey] == null || payload[sizeKey] == null) {
+    throw new Error(`${label} requires trigger price, limit price, and size`);
+  }
+  if (payload[sizeKey] <= 0n) throw new Error(`${label} size must be greater than zero`);
+  return true;
+}
+
 function jsonSafe(value) {
   if (typeof value === 'bigint') return value.toString();
   if (Array.isArray(value)) return value.map(jsonSafe);
@@ -507,6 +520,9 @@ async function placeTpSlOrderForPosition(args) {
       subaccountAddr: args.subaccountAddr ? normalizeAptosAddress(args.subaccountAddr) : undefined,
     });
     if (!payload.marketAddr) throw new Error('marketAddr required');
+    const hasTp = assertTpslLeg(payload, 'tp', 'Take-profit');
+    const hasSl = assertTpslLeg(payload, 'sl', 'Stop-loss');
+    if (!hasTp && !hasSl) throw new Error('TP/SL requires at least one take-profit or stop-loss leg');
     const tx = await sendDecibelTx({
       function: `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::place_tp_sl_order_for_position`,
       typeArguments: [],
@@ -524,6 +540,66 @@ async function placeTpSlOrderForPosition(args) {
       ],
     });
     return txResult(tx, 'TP/SL update');
+  });
+}
+
+async function updateTpOrderForPosition(args) {
+  return captureWrite('TP update', async () => {
+    const payload = cleanObject({
+      marketAddr: normalizeAptosAddress(args.marketAddr),
+      prevOrderId: args.prevOrderId || args.tpOrderId || args.tp_order_id,
+      tpTriggerPrice: args.tpTriggerPrice == null ? undefined : finiteNumber(args.tpTriggerPrice, 'tpTriggerPrice'),
+      tpLimitPrice: args.tpLimitPrice == null ? undefined : finiteNumber(args.tpLimitPrice, 'tpLimitPrice'),
+      tpSize: args.tpSize == null ? undefined : parseChainInt(args.tpSize, 'tpSize'),
+      tickSize: args.tickSize == null ? undefined : finiteNumber(args.tickSize, 'tickSize'),
+      subaccountAddr: args.subaccountAddr ? normalizeAptosAddress(args.subaccountAddr) : undefined,
+    });
+    if (!payload.marketAddr) throw new Error('marketAddr required');
+    if (!payload.prevOrderId) throw new Error('prevOrderId required');
+    if (!assertTpslLeg(payload, 'tp', 'Take-profit')) throw new Error('Take-profit update requires trigger price, limit price, and size');
+    const tx = await sendDecibelTx({
+      function: `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::update_tp_order_for_position`,
+      typeArguments: [],
+      functionArguments: [
+        payload.subaccountAddr,
+        parseChainInt(payload.prevOrderId, 'prevOrderId'),
+        payload.marketAddr,
+        roundToTickSize(payload.tpTriggerPrice, payload.tickSize),
+        roundToTickSize(payload.tpLimitPrice, payload.tickSize),
+        payload.tpSize,
+      ],
+    });
+    return txResult(tx, 'TP update');
+  });
+}
+
+async function updateSlOrderForPosition(args) {
+  return captureWrite('SL update', async () => {
+    const payload = cleanObject({
+      marketAddr: normalizeAptosAddress(args.marketAddr),
+      prevOrderId: args.prevOrderId || args.slOrderId || args.sl_order_id,
+      slTriggerPrice: args.slTriggerPrice == null ? undefined : finiteNumber(args.slTriggerPrice, 'slTriggerPrice'),
+      slLimitPrice: args.slLimitPrice == null ? undefined : finiteNumber(args.slLimitPrice, 'slLimitPrice'),
+      slSize: args.slSize == null ? undefined : parseChainInt(args.slSize, 'slSize'),
+      tickSize: args.tickSize == null ? undefined : finiteNumber(args.tickSize, 'tickSize'),
+      subaccountAddr: args.subaccountAddr ? normalizeAptosAddress(args.subaccountAddr) : undefined,
+    });
+    if (!payload.marketAddr) throw new Error('marketAddr required');
+    if (!payload.prevOrderId) throw new Error('prevOrderId required');
+    if (!assertTpslLeg(payload, 'sl', 'Stop-loss')) throw new Error('Stop-loss update requires trigger price, limit price, and size');
+    const tx = await sendDecibelTx({
+      function: `${DECIBEL_PACKAGE_MAINNET}::dex_accounts_entry::update_sl_order_for_position`,
+      typeArguments: [],
+      functionArguments: [
+        payload.subaccountAddr,
+        parseChainInt(payload.prevOrderId, 'prevOrderId'),
+        payload.marketAddr,
+        roundToTickSize(payload.slTriggerPrice, payload.tickSize),
+        roundToTickSize(payload.slLimitPrice, payload.tickSize),
+        payload.slSize,
+      ],
+    });
+    return txResult(tx, 'SL update');
   });
 }
 
@@ -699,6 +775,8 @@ module.exports = {
   placeOrder,
   cancelOrder,
   placeTpSlOrderForPosition,
+  updateTpOrderForPosition,
+  updateSlOrderForPosition,
   configureUserSettingsForMarket,
   rewardInfoFromPlaceOrder,
   fetchMarkets,

@@ -196,6 +196,21 @@ function tickSizeChainUnits(market) {
   if (t == null) return 0;
   return Number(t);
 }
+function roundPriceUnitsToTick(priceUnits, market) {
+  const p = Number(priceUnits);
+  const t = Number(tickSizeChainUnits(market));
+  if (!Number.isFinite(p)) throw new Error('Invalid Decibel trigger price');
+  if (!Number.isFinite(t) || t <= 0) return Math.max(1, Math.round(p));
+  return Math.max(1, Math.floor(p / t) * t);
+}
+function tpslLimitPriceUnits(triggerUnits, market, isLong, kind) {
+  const tick = Math.max(1, Number(tickSizeChainUnits(market)) || 1);
+  const trigger = roundPriceUnitsToTick(triggerUnits, market);
+  const dir = kind === 'tp'
+    ? (isLong ? 1 : -1)
+    : (isLong ? -1 : 1);
+  return Math.max(tick, trigger + dir * tick);
+}
 function sizeToChainUnits(human, market) {
   const d = Number(market?.sz_decimals ?? market?.szDecimals ?? 6);
   const raw = BigInt(Math.round(Number(human) * Math.pow(10, d)));
@@ -321,6 +336,13 @@ function normalizePosition(p, markets) {
     pnl: String(pnl),
     market_addr: marketAddr || (m && m.market_addr) || null,
     is_isolated: !!p.is_isolated,
+    tp_order_id: p.tp_order_id ?? p.tpOrderId ?? null,
+    tp_trigger_price: p.tp_trigger_price == null ? null : String(p.tp_trigger_price),
+    tp_limit_price: p.tp_limit_price == null ? null : String(p.tp_limit_price),
+    sl_order_id: p.sl_order_id ?? p.slOrderId ?? null,
+    sl_trigger_price: p.sl_trigger_price == null ? null : String(p.sl_trigger_price),
+    sl_limit_price: p.sl_limit_price == null ? null : String(p.sl_limit_price),
+    has_fixed_sized_tpsls: !!p.has_fixed_sized_tpsls,
   };
 }
 
@@ -1626,36 +1648,78 @@ export function useDecibel() {
     }
   }, [requireServerSigner, ensureSubaccount, fetchOrders, cancelOrderOnServer]);
 
-  const setTpsl = useCallback(async (symbol, _side, takeProfit, stopLoss) => {
+  const setTpsl = useCallback(async (symbol, _side, takeProfit, stopLoss, _pairIndex, _tradeIndex, positionAmount, marketAddrHint) => {
+    setLoading(true);
+    setError(null);
     try {
       requireServerSigner();
-      const market = marketsRef.current.find(m => m.symbol === symbol);
+      const target = String(symbol || '').toUpperCase();
+      const market = marketsRef.current.find(m =>
+        m.symbol === target ||
+        (marketAddrHint && sameAptosAddress(m.market_addr, marketAddrHint))
+      );
       if (!market || !market.market_addr) throw new Error('Market address unavailable for TP/SL');
       const sub = await ensureSubaccount();
+      if (!sub) throw new Error('Trading account not yet provisioned');
+
+      const position = (positionsRef.current || []).find(p =>
+        p.symbol === target &&
+        (!market.market_addr || !p.market_addr || sameAptosAddress(p.market_addr, market.market_addr))
+      ) || (positionsRef.current || []).find(p => p.symbol === target) || null;
+      if (!position && !(Number(positionAmount) > 0)) {
+        throw new Error(`No open ${target} position to attach TP/SL to`);
+      }
+
       const tp = Number(takeProfit);
       const sl = Number(stopLoss);
+      if (!(tp > 0) && !(sl > 0)) return { success: true, skipped: true };
+
+      const isLong = position ? position.side === 'bid' : !String(_side || '').toLowerCase().includes('bid');
+      const sizeHuman = Number(position?.amount ?? positionAmount);
+      const size = assertTradableSize(sizeToChainUnits(sizeHuman, market), market);
+      const sizeStr = size.toString();
+      const mark = Number(prices.find(p => p.symbol === target)?.mark || 0);
+      const refPrice = mark > 0 ? mark : Number(position?.entry_price || 0);
+      if (refPrice > 0) {
+        if (tp > 0 && ((isLong && tp <= refPrice) || (!isLong && tp >= refPrice))) {
+          throw new Error(isLong ? 'Take profit must be above current price' : 'Take profit must be below current price');
+        }
+        if (sl > 0 && ((isLong && sl >= refPrice) || (!isLong && sl <= refPrice))) {
+          throw new Error(isLong ? 'Stop loss must be below current price' : 'Stop loss must be above current price');
+        }
+      }
+
+      const tpTrigger = tp > 0 ? priceToChainUnits(tp, market) : null;
+      const slTrigger = sl > 0 ? priceToChainUnits(sl, market) : null;
       const res = await tpslOnServer({
         marketAddr: market.market_addr,
+        tpOrderId: position?.tp_order_id || undefined,
+        slOrderId: position?.sl_order_id || undefined,
         ...(tp > 0 ? {
-          tpTriggerPrice: priceToChainUnits(tp, market),
-          tpLimitPrice: priceToChainUnits(tp, market),
+          tpTriggerPrice: tpTrigger,
+          tpLimitPrice: tpslLimitPriceUnits(tpTrigger, market, isLong, 'tp'),
+          tpSize: sizeStr,
         } : {}),
         ...(sl > 0 ? {
-          slTriggerPrice: priceToChainUnits(sl, market),
-          slLimitPrice: priceToChainUnits(sl, market),
+          slTriggerPrice: slTrigger,
+          slLimitPrice: tpslLimitPriceUnits(slTrigger, market, isLong, 'sl'),
+          slSize: sizeStr,
         } : {}),
         tickSize: tickSizeChainUnits(market),
         ...(sub ? { subaccountAddr: sub } : {}),
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');
       fetchPositions();
+      fetchOrders();
       return { tx_hash: txHash, status: 'updated' };
     } catch (e) {
       const msg = decodeTradeError(e, 'TP/SL update failed');
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
+    } finally {
+      setLoading(false);
     }
-  }, [requireServerSigner, ensureSubaccount, fetchPositions, tpslOnServer]);
+  }, [requireServerSigner, ensureSubaccount, prices, fetchPositions, fetchOrders, tpslOnServer]);
 
   // Decibel `configureUserSettingsForMarket` stores leverage together with
   // the cross-margin flag. Isolated margin is not currently exposed as a
@@ -2030,6 +2094,9 @@ function decodeTradeError(e, fallback) {
         return 'Decibel server signer ran out of APT for gas. Fund the server API wallet or enable gas sponsorship.';
       }
       if (/insufficient/i.test(reason)) return 'Insufficient USDC in trading account';
+      if (/EINVALID_TP_SL_SIZE|EINVALID_TP_SL_PARAMETERS|TP\/SL/i.test(reason)) {
+        return 'Invalid Decibel TP/SL - check price direction and position size';
+      }
       if (/reject|cancel|denied/i.test(reason)) return 'Signature cancelled';
       if (/slippage|price/i.test(reason)) return 'Price moved past slippage — widen slippage or retry';
       if (/builder/i.test(reason)) return 'Builder fee not yet approved — tap "Activate" to authorise';

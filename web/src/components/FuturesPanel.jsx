@@ -702,7 +702,7 @@ const PositionsList = memo(function PositionsList({
                 <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
-                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index);
+                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                   setTpPrice(''); setSlPrice(''); setExpandedPos(null);
                 }} disabled={!tpPrice && !slPrice}>Set</button>
               </div>
@@ -1270,7 +1270,7 @@ function FuturesPanel() {
   const lotSize = useMemo(() => {
     return markets.find(m => m.symbol === symbol)?.lot_size || '0.00001';
   }, [markets, symbol]);
-  const pacificaSizingPrice = useMemo(() => {
+  const orderSizingPrice = useMemo(() => {
     if (orderType === 'limit' && Number(limitPrice) > 0) return Number(limitPrice);
     return Number(currentPrice) || 0;
   }, [orderType, limitPrice, currentPrice]);
@@ -1288,22 +1288,23 @@ function FuturesPanel() {
   //   amount (token mode) = direct token quantity (no leverage applied here;
   //                         the pair's qty itself is the exposure).
   const tokenAmount = useMemo(() => {
-    if (!amount || !currentPrice) return '';
+    const sizingPx = Number(orderSizingPrice || currentPrice);
+    if (!amount || !(sizingPx > 0)) return '';
     if (!amountInUsdc) return amount;
     // Token qty = leveraged position / price. Previously this treated the
     // amount as notional (no × leverage), so it mis-sized trades.
     const raw = dex === 'pacifica'
       ? pacificaQtyFromMargin({
           margin: amount,
-          price: pacificaSizingPrice || currentPrice,
+          price: sizingPx,
           leverage,
           orderType,
           takerFeeRate: pacificaTakerFeeRate,
         })
-      : (parseFloat(amount) * leverage) / parseFloat(currentPrice);
+      : (parseFloat(amount) * leverage) / sizingPx;
     const lot = parseFloat(lotSize);
     return String(Math.floor(raw / lot) * lot);
-  }, [amount, currentPrice, amountInUsdc, lotSize, leverage, dex, pacificaSizingPrice, orderType, pacificaTakerFeeRate]);
+  }, [amount, currentPrice, amountInUsdc, lotSize, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
 
   // Derived display: position size in USDC (margin × leverage). Kept as a
   // number so callers can format or gate on it without re-parsing.
@@ -1311,16 +1312,16 @@ function FuturesPanel() {
     if (amountInUsdc) {
       if (dex === 'pacifica') {
         const t = parseFloat(tokenAmount);
-        const p = parseFloat(currentPrice);
+        const p = parseFloat(orderSizingPrice || currentPrice);
         return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
       }
       const m = parseFloat(amount);
       return Number.isFinite(m) && m > 0 ? m * leverage : 0;
     }
     const t = parseFloat(tokenAmount);
-    const p = parseFloat(currentPrice);
+    const p = parseFloat(orderSizingPrice || currentPrice);
     return Number.isFinite(t) && Number.isFinite(p) && t > 0 && p > 0 ? t * p : 0;
-  }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, dex]);
+  }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, orderSizingPrice, dex]);
 
   // Buying power = max possible position size = balance × leverage.
   const maxUsdc = pacBalance * leverage;
@@ -1385,16 +1386,16 @@ function FuturesPanel() {
         const qty = dex === 'pacifica'
           ? pacificaQtyFromMargin({
               margin: marginVal,
-              price: pacificaSizingPrice || currentPrice,
+              price: orderSizingPrice || currentPrice,
               leverage,
               orderType,
               takerFeeRate: pacificaTakerFeeRate,
             })
-          : ((parseFloat(marginVal) * leverage) / parseFloat(currentPrice));
+          : ((parseFloat(marginVal) * leverage) / parseFloat(orderSizingPrice || currentPrice));
         setAmount(String(qty.toFixed(6)));
       }
     }
-  }, [clearTradeFeedback, pacBalance, currentPrice, amountInUsdc, leverage, dex, pacificaSizingPrice, orderType, pacificaTakerFeeRate]);
+  }, [clearTradeFeedback, pacBalance, currentPrice, amountInUsdc, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
@@ -1439,7 +1440,8 @@ function FuturesPanel() {
       // Avantis & Decibel APIs: 3rd arg is COLLATERAL / margin in USDC.
       // The UI's `amount` (in USDC mode) is the MARGIN the user deposits.
       // Guard against missing/NaN currentPrice (feed blip).
-      const price = parseFloat(currentPrice);
+      const markPrice = parseFloat(currentPrice);
+      const tradePrice = parseFloat(orderSizingPrice || currentPrice);
       const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix';
       let qty;
       if (isCollateralDex) {
@@ -1471,7 +1473,7 @@ function FuturesPanel() {
         // readout is display math, so do not round collateral through it.
         const collateralUsdc = amountInUsdc
           ? parseFloat(amount)
-          : (price > 0 ? (parseFloat(tokenAmount) * price) / leverage : 0);
+          : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
         qty = String(collateralUsdc.toFixed(6));
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
@@ -1482,7 +1484,7 @@ function FuturesPanel() {
             setLocalAlert(`Not enough Pacifica balance: $${enteredMargin.toFixed(2)} margin requested, $${pacBalance.toFixed(2)} available.`);
             return;
           }
-          const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : price;
+          const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : markPrice;
           const orderNotional = parseFloat(qty) * orderPrice;
           if (!Number.isFinite(orderNotional) || orderNotional < PACIFICA_MIN_NOTIONAL_USD) {
             setLocalAlert(
@@ -1563,7 +1565,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -1702,6 +1704,19 @@ function FuturesPanel() {
           <button style={orderType === 'limit' ? S.typeActive : S.typeBtn} onClick={() => { clearTradeFeedback(); setOrderType('limit'); }}>Limit</button>
         </div>
 
+        {orderType === 'limit' && (
+          <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
+            <span style={S.label}>Limit Price</span>
+            <input
+              type="number"
+              placeholder={currentPrice || '0'}
+              value={limitPrice}
+              onChange={e => { clearTradeFeedback(); setLimitPrice(e.target.value); }}
+              style={S.input}
+            />
+          </div>
+        )}
+
         <div style={{...S.row, alignItems: 'stretch'}}>
           <div style={{flex: compactMobile ? '1 1 auto' : 2, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3}}>
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
@@ -1761,13 +1776,6 @@ function FuturesPanel() {
             <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
           </div>
         </div>
-
-        {orderType === 'limit' && (
-          <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
-            <span style={S.label}>Limit Price</span>
-            <input type="number" placeholder={currentPrice || '0'} value={limitPrice} onChange={e => setLimitPrice(e.target.value)} style={S.input} />
-          </div>
-        )}
 
         {/* Leverage modal */}
         {showLeverage && (
@@ -3094,7 +3102,7 @@ function FuturesPanel() {
                   <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
-                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index);
+                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
                     setTpPrice(''); setSlPrice(''); setExpandedPos(null);
                   }} disabled={!tpPrice && !slPrice}>Set</button>
                 </div>

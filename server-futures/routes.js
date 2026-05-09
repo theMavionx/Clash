@@ -450,12 +450,70 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
-    const result = await decibel.placeTpSlOrderForPosition({
-      ...req.body,
+    const body = req.body || {};
+    const hasTp = body.tpTriggerPrice != null || body.tpLimitPrice != null || body.tpSize != null;
+    const hasSl = body.slTriggerPrice != null || body.slLimitPrice != null || body.slSize != null;
+    const tpOrderId = body.tpOrderId || body.tp_order_id;
+    const slOrderId = body.slOrderId || body.sl_order_id;
+    const base = {
+      ...body,
       subaccountAddr: verified.subaccount,
+    };
+    const results = [];
+    if (hasTp && tpOrderId) {
+      results.push({
+        leg: 'tp',
+        ...(await decibel.updateTpOrderForPosition({
+          ...base,
+          prevOrderId: tpOrderId,
+        })),
+      });
+    }
+    if (hasSl && slOrderId) {
+      results.push({
+        leg: 'sl',
+        ...(await decibel.updateSlOrderForPosition({
+          ...base,
+          prevOrderId: slOrderId,
+        })),
+      });
+    }
+    const placePayload = {
+      ...base,
+      ...(hasTp && !tpOrderId ? {
+        tpTriggerPrice: body.tpTriggerPrice,
+        tpLimitPrice: body.tpLimitPrice,
+        tpSize: body.tpSize,
+      } : {
+        tpTriggerPrice: undefined,
+        tpLimitPrice: undefined,
+        tpSize: undefined,
+      }),
+      ...(hasSl && !slOrderId ? {
+        slTriggerPrice: body.slTriggerPrice,
+        slLimitPrice: body.slLimitPrice,
+        slSize: body.slSize,
+      } : {
+        slTriggerPrice: undefined,
+        slLimitPrice: undefined,
+        slSize: undefined,
+      }),
+    };
+    if ((hasTp && !tpOrderId) || (hasSl && !slOrderId)) {
+      results.push({
+        leg: hasTp && !tpOrderId && hasSl && !slOrderId ? 'tp_sl' : (hasTp && !tpOrderId ? 'tp' : 'sl'),
+        ...(await decibel.placeTpSlOrderForPosition(placePayload)),
+      });
+    }
+    const failed = results.find(r => r?.success === false);
+    if (failed) return res.status(400).json({ success: false, results, error: failed.error || 'Decibel TP/SL failed' });
+    const hashes = results.map(r => r.transactionHash || r.hash).filter(Boolean);
+    res.json({
+      success: true,
+      results,
+      transactionHash: hashes[hashes.length - 1] || null,
+      hash: hashes[hashes.length - 1] || null,
     });
-    if (result?.success === false) return res.status(400).json(result);
-    res.json(result);
   } catch (e) {
     console.error('[decibel] TP/SL error:', e);
     res.status(500).json({ error: e.message || 'Failed to update Decibel TP/SL' });

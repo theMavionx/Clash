@@ -431,10 +431,12 @@ const S = {
     position: 'fixed', inset: 0,
     background: 'rgba(0,0,0,0.6)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: '10px',
     zIndex: 30, pointerEvents: 'all',
   },
   panel: {
     width: 420, maxWidth: '94vw',
+    maxHeight: 'calc(100vh - 20px)',
     background: '#ebdaba',
     border: '4px solid #377d9f',
     boxShadow: '0 20px 60px rgba(0,0,0,0.8), inset 0 0 0 4px #ebdaba',
@@ -455,9 +457,14 @@ const S = {
   content: {
     padding: '18px 22px 22px',
     display: 'flex', flexDirection: 'column', gap: 14,
+    flex: 1, minHeight: 0,
+    overflowY: 'auto',
+    WebkitOverflowScrolling: 'touch',
+    overscrollBehavior: 'contain',
   },
   bodyStack: {
     display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'stretch',
+    minHeight: 0,
   },
   sectionTitle: {
     margin: 0,
@@ -472,7 +479,7 @@ const S = {
   // DEX picker cards (keep the original colored buttons — they're the DEX's
   // brand identity, not the parchment theme).
   dexList: {
-    display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4,
+    display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, paddingBottom: 6,
   },
   dexCard: {
     width: '100%', display: 'flex', alignItems: 'center', gap: 14,
