@@ -266,6 +266,31 @@ install_release_dependencies() {
     fi
 }
 
+patch_godot_work_js() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+
+    sed -i 's|\[`${loadPath}.side.wasm`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g' "$file"
+
+    node - "$file" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+let source = fs.readFileSync(file, 'utf8');
+
+const safariGuard = 'var currentSafariVersion=userAgent.includes("Safari/")&&userAgent.match(/Version\\/(\\d+\\.?\\d*\\.?\\d*)/)?humanReadableVersionToPacked(userAgent.match(/Version\\/(\\d+\\.?\\d*\\.?\\d*)/)[1]):TARGET_NOT_SUPPORTED;';
+const patchedSafariGuard = 'var currentSafariVersion=!(userAgent.includes("Android")&&(/; wv\\)|Version\\/4\\.0|Phantom\\/android/i.test(userAgent)))&&userAgent.includes("Safari/")&&userAgent.match(/Version\\/(\\d+\\.?\\d*\\.?\\d*)/)?humanReadableVersionToPacked(userAgent.match(/Version\\/(\\d+\\.?\\d*\\.?\\d*)/)[1]):TARGET_NOT_SUPPORTED;';
+
+if (source.includes(safariGuard)) {
+    source = source.replace(safariGuard, patchedSafariGuard);
+} else if (!source.includes(patchedSafariGuard) && source.includes('requires Safari')) {
+    console.error('ERROR: Work.js Safari guard pattern not found; refusing to deploy unpatched Godot runtime.');
+    process.exit(1);
+}
+
+fs.writeFileSync(file, source);
+NODE
+}
+
 build_frontend() {
     log "[5/9] Building frontend..."
     cd "$WEB_DIR"
@@ -280,9 +305,9 @@ build_frontend() {
     fi
 
     if [ -f "$WEB_DIST/godot/Work.js" ]; then
-        sed -i 's|\[`${loadPath}.side.wasm`\].concat(this.gdextensionLibs)|[].concat(this.gdextensionLibs)|g' "$WEB_DIST/godot/Work.js"
+        patch_godot_work_js "$WEB_DIST/godot/Work.js"
         rm -f "$WEB_DIST/godot/Work.side.wasm"
-        log "Patched Work.js side.wasm reference"
+        log "Patched Work.js runtime guards"
     fi
 
     log "Compressing static assets..."
