@@ -50,12 +50,37 @@ import {
   clearPerplSession,
   createPerplTradingSocket,
 } from '../lib/perplClient';
+import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 
 const POLL_CONTEXT_MS = 8_000;
-const BLOCK_TTL_BUFFER = 50;        // Order valid for ~50 Monad blocks (~20s @ 400ms).
+const BLOCK_TTL_BUFFER = 50;        // Fallback only; prefer market.order_ttl_blocks.
 const BLOCK_CACHE_MS = 800;         // eth_blockNumber cached for ~2 blocks.
 const AUSD_DECIMALS = 6;
 const MONAD_IMPORT_DEX_HEADER = { 'x-dex': 'monad' };
+const ORDER_CONFIRM_TIMEOUT_MS = 30_000;
+const ORDER_RESEND_MS = 800;
+const ORDER_RESEND_MAX = 2;
+const ORDER_STATUS = Object.freeze({
+  PENDING: 1,
+  OPEN: 2,
+  PARTIAL: 3,
+  FILLED: 4,
+  CANCELED: 5,
+  EXPIRED: 6,
+  FAILED: 7,
+  UNTRIGGERED: 8,
+  TRIGGERED: 9,
+});
+const ORDER_REASON = Object.freeze({
+  16: 'ImmediateOrCancelExecuted',
+  22: 'MakerOrderFilled',
+  28: 'OrderCancelled',
+  32: 'OrderDescIdTooLow',
+  35: 'OrderPlaced',
+  36: 'OrderPostFailed',
+  43: 'TakerOrderFilled',
+  46: 'UnmatchedLotRemainsInFillOrKill',
+});
 
 // ── Block-number cache (shared across the hook lifetime) ──────────────────
 // Perpl orders carry `lb` (last-block-valid). We don't want to round-trip an
@@ -257,7 +282,7 @@ function normalizeOrder(o, marketsById) {
     price: String(Number(o?.p ?? o?.price ?? 0) / 10 ** m.price_decimals),
     leverage: String((Number(o?.lv ?? o?.leverage ?? 100)) / 100),
     order_type: t === PERPL_ORDER_TYPE.OPEN_LONG || t === PERPL_ORDER_TYPE.OPEN_SHORT
-      ? (Number(o?.fl ?? 0) === PERPL_TIF.IOC ? 'MARKET' : 'LIMIT')
+      ? ((Number(o?.fl ?? 0) & PERPL_TIF.IOC) ? 'MARKET' : 'LIMIT')
       : 'CLOSE',
     tif: 'GTC',
     order_id: String(o?.oid ?? o?.order_id ?? o?.id ?? ''),
@@ -272,6 +297,212 @@ function getFrameRows(frame, primaryKey, fallbackKey) {
   if (Array.isArray(frame?.[primaryKey])) return frame[primaryKey];
   if (Array.isArray(frame?.[fallbackKey])) return frame[fallbackKey];
   return [];
+}
+
+function finiteNumber(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function getOrderFilledWire(order) {
+  return Math.abs(finiteNumber(order?.fs ?? order?.filled_size ?? order?.filledSize, 0));
+}
+
+function getOrderStatus(order) {
+  return finiteNumber(order?.st ?? order?.status, 0);
+}
+
+function getOrderStatusReason(order) {
+  return finiteNumber(order?.sr ?? order?.status_reason ?? order?.statusReason, 0);
+}
+
+function getOrderRequestId(row) {
+  const rq = finiteNumber(row?.rq ?? row?.request_id ?? row?.requestId, NaN);
+  return Number.isFinite(rq) ? rq : null;
+}
+
+function getOrderType(row) {
+  return finiteNumber(row?.t ?? row?.type, 0);
+}
+
+function getRowMarketId(row) {
+  return finiteNumber(row?.mkt ?? row?.market_id ?? row?.market, NaN);
+}
+
+function getRowAccountId(row) {
+  return finiteNumber(row?.acc ?? row?.account_id ?? row?.account, NaN);
+}
+
+function getPositionWireSize(row) {
+  return Math.abs(finiteNumber(row?.s ?? row?.size, 0));
+}
+
+function getPositionIsLong(row) {
+  if (typeof row?.is_long === 'boolean') return row.is_long;
+  if (Number.isFinite(Number(row?.sd))) return Number(row.sd) === 1;
+  return finiteNumber(row?.s ?? row?.size, 0) >= 0;
+}
+
+function describePerplOrder(order, fallback = 'Perpl order was not confirmed') {
+  const st = getOrderStatus(order);
+  const sr = getOrderStatusReason(order);
+  const reason = ORDER_REASON[sr] || (sr ? `sr:${sr}` : 'unknown reason');
+  if (st === ORDER_STATUS.FAILED) return `Perpl order failed: ${reason}`;
+  if (st === ORDER_STATUS.EXPIRED) return `Perpl order expired: ${reason}`;
+  if (st === ORDER_STATUS.CANCELED) return `Perpl order canceled without fill: ${reason}`;
+  return fallback;
+}
+
+function makePerplOrderError(order, fallback) {
+  const err = new Error(describePerplOrder(order, fallback));
+  err.code = getOrderStatusReason(order) === 32 ? 'PERPL_ORDER_DESC_ID_TOO_LOW' : 'PERPL_ORDER_NOT_CONFIRMED';
+  err.status = getOrderStatus(order);
+  err.statusReason = getOrderStatusReason(order);
+  return err;
+}
+
+function orderMatchesPending(entry, row) {
+  const rq = getOrderRequestId(row);
+  if (rq != null) return rq === entry.rq;
+  const mkt = getRowMarketId(row);
+  const acc = getRowAccountId(row);
+  if (Number.isFinite(mkt) && mkt !== entry.marketId) return false;
+  if (Number.isFinite(acc) && acc !== entry.accountId) return false;
+  const t = getOrderType(row);
+  return !t || t === entry.orderType;
+}
+
+function fillMatchesPending(entry, row) {
+  const rq = getOrderRequestId(row);
+  if (rq != null) return rq === entry.rq;
+  const mkt = getRowMarketId(row);
+  const acc = getRowAccountId(row);
+  if (Number.isFinite(mkt) && mkt !== entry.marketId) return false;
+  if (Number.isFinite(acc) && acc !== entry.accountId) return false;
+  const t = getOrderType(row);
+  return !t || t === entry.orderType;
+}
+
+function positionMatchesPending(entry, row) {
+  const mkt = getRowMarketId(row);
+  if (!Number.isFinite(mkt) || mkt !== entry.marketId) return false;
+  const acc = getRowAccountId(row);
+  if (Number.isFinite(acc) && acc !== entry.accountId) return false;
+  const posId = finiteNumber(row?.pid ?? row?.id ?? row?.position_id, NaN);
+  if (entry.positionId && Number.isFinite(posId) && posId !== entry.positionId) return false;
+  const isLong = getPositionIsLong(row);
+  if (isLong !== entry.isLong) return false;
+  const sizeWire = getPositionWireSize(row);
+  if (entry.action === 'close') return sizeWire < entry.beforeSizeWire || row?.r === true;
+  return sizeWire > entry.beforeSizeWire;
+}
+
+function sanitizeOrderEnvelope(envelope) {
+  return {
+    mt: envelope?.mt,
+    rq: envelope?.rq,
+    mkt: envelope?.mkt,
+    acc: envelope?.acc,
+    t: envelope?.t,
+    p: envelope?.p,
+    s: envelope?.s,
+    fl: envelope?.fl,
+    lv: envelope?.lv,
+    lb: envelope?.lb,
+  };
+}
+
+function wireNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function summarizeOrderRow(row) {
+  if (!row) return null;
+  return {
+    rq: getOrderRequestId(row),
+    oid: row?.oid ?? row?.order_id ?? row?.id ?? null,
+    mkt: wireNumber(row?.mkt ?? row?.market_id ?? row?.market),
+    acc: wireNumber(row?.acc ?? row?.account_id ?? row?.account),
+    t: getOrderType(row),
+    st: getOrderStatus(row),
+    sr: getOrderStatusReason(row),
+    fs: wireNumber(row?.fs ?? row?.filled_size ?? row?.filledSize),
+    s: wireNumber(row?.s ?? row?.size),
+    p: wireNumber(row?.p ?? row?.price),
+    lv: wireNumber(row?.lv ?? row?.leverage),
+    r: row?.r === true ? true : undefined,
+  };
+}
+
+function summarizeFillRow(row) {
+  if (!row) return null;
+  return {
+    rq: getOrderRequestId(row),
+    oid: row?.oid ?? row?.order_id ?? row?.id ?? null,
+    mkt: wireNumber(row?.mkt ?? row?.market_id ?? row?.market),
+    acc: wireNumber(row?.acc ?? row?.account_id ?? row?.account),
+    t: getOrderType(row),
+    s: wireNumber(row?.s ?? row?.size),
+    p: wireNumber(row?.p ?? row?.price),
+    fee: wireNumber(row?.fee ?? row?.f),
+  };
+}
+
+function summarizePositionRow(row) {
+  if (!row) return null;
+  return {
+    pid: wireNumber(row?.pid ?? row?.id ?? row?.position_id),
+    mkt: wireNumber(row?.mkt ?? row?.market_id ?? row?.market),
+    acc: wireNumber(row?.acc ?? row?.account_id ?? row?.account),
+    is_long: getPositionIsLong(row),
+    s: wireNumber(row?.s ?? row?.size),
+    c: wireNumber(row?.c ?? row?.collateral ?? row?.margin),
+    ep: wireNumber(row?.ep ?? row?.entry_price),
+    lp: wireNumber(row?.lp ?? row?.liquidation_price),
+    r: row?.r === true ? true : undefined,
+  };
+}
+
+function summarizePendingEntry(entry) {
+  if (!entry) return null;
+  return {
+    rq: entry.rq,
+    action: entry.action,
+    attempt: entry.attempt,
+    mkt: entry.marketId,
+    acc: entry.accountId,
+    is_long: entry.isLong,
+    order_type: entry.orderType,
+    before_size_wire: entry.beforeSizeWire,
+    position_id: entry.positionId || null,
+    resend_count: entry.resendCount,
+  };
+}
+
+function summarizePendingFrame(frame) {
+  if (!frame) return null;
+  let rows = [];
+  if (frame.mt === PERPL_MT.ORDERS_DELTA || frame.mt === PERPL_MT.ORDERS_SNAPSHOT) {
+    rows = getFrameRows(frame, 'orders', 'o').slice(0, 16).map(summarizeOrderRow);
+  } else if (frame.mt === PERPL_MT.FILL_UPDATES) {
+    rows = getFrameRows(frame, 'fills', 'f').slice(0, 16).map(summarizeFillRow);
+  } else if (frame.mt === PERPL_MT.POSITIONS_DELTA || frame.mt === PERPL_MT.POSITIONS_SNAPSHOT) {
+    rows = getFrameRows(frame, 'positions', 'p').slice(0, 16).map(summarizePositionRow);
+  }
+  return {
+    mt: frame.mt,
+    sn: frame.sn ?? null,
+    rows,
+  };
+}
+
+function logPerplOrder(type, data = {}, level = 'info') {
+  reportClientEvent(type, data, {
+    level,
+    source: 'perpl.order',
+    message: `[perpl] ${type}`,
+  });
 }
 
 function normalizeAccount(acc) {
@@ -346,6 +577,8 @@ export function useMonad() {
   const tradeInFlightRef = useRef(false);
   const currentBlockRef = useRef(0);
   const claimGoldRef = useRef(null);
+  const tradingAuthedRef = useRef(false);
+  const pendingOrdersRef = useRef(new Map());
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -456,6 +689,287 @@ export function useMonad() {
     }, delayMs);
   }, []);
 
+  const getOrderLastBlock = useCallback(async (market) => {
+    let head = currentBlockRef.current;
+    for (let i = 0; !head && i < 12; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      head = currentBlockRef.current;
+    }
+    const fromTradingHeartbeat = !!head;
+    if (!head) head = await getMonadBlockNumber();
+    if (!(head > 0)) {
+      throw new Error('Perpl head block is not loaded yet - wait a moment and retry');
+    }
+    const ttl = Math.max(1, Math.floor(Number(market?.order_ttl_blocks) || BLOCK_TTL_BUFFER));
+    return head + (fromTradingHeartbeat ? ttl : Math.max(1, ttl - 5));
+  }, []);
+
+  const getPositionSnapshot = useCallback((marketId, isLong) => {
+    const pos = (positionsRawRef.current || []).find(p => {
+      const id = getRowMarketId(p);
+      if (!Number.isFinite(id) || id !== marketId) return false;
+      return getPositionIsLong(p) === isLong;
+    });
+    return {
+      position: pos || null,
+      sizeWire: pos ? getPositionWireSize(pos) : 0,
+      positionId: pos ? finiteNumber(pos?.pid ?? pos?.id ?? pos?.position_id, 0) : 0,
+    };
+  }, []);
+
+  const finishPendingOrder = useCallback((entry, result, error = null) => {
+    if (!entry || entry.done) return;
+    entry.done = true;
+    clearTimeout(entry.timeoutId);
+    clearInterval(entry.retryTimer);
+    pendingOrdersRef.current.delete(entry.rq);
+    if (error) entry.reject(error);
+    else entry.resolve(result);
+  }, []);
+
+  const processPendingOrderFrame = useCallback((frame) => {
+    if (!pendingOrdersRef.current.size || !frame) return;
+    const entries = Array.from(pendingOrdersRef.current.values());
+    if (
+      frame.mt === PERPL_MT.ORDERS_DELTA
+      || frame.mt === PERPL_MT.ORDERS_SNAPSHOT
+      || frame.mt === PERPL_MT.FILL_UPDATES
+      || frame.mt === PERPL_MT.POSITIONS_DELTA
+      || frame.mt === PERPL_MT.POSITIONS_SNAPSHOT
+    ) {
+      logPerplOrder('perpl.order_ws_frame', {
+        current_block: currentBlockRef.current,
+        pending: entries.slice(0, 8).map(summarizePendingEntry),
+        frame: summarizePendingFrame(frame),
+      });
+    }
+    const confirm = (entry, reason, row = null) => {
+      addClientBreadcrumb('perpl.order_confirmed', {
+        rq: entry.rq,
+        action: entry.action,
+        reason,
+        mkt: entry.marketId,
+        status: row ? getOrderStatus(row) : undefined,
+        status_reason: row ? getOrderStatusReason(row) : undefined,
+      });
+      logPerplOrder('perpl.order_confirmed', {
+        ...summarizePendingEntry(entry),
+        reason,
+        current_block: currentBlockRef.current,
+        order: row ? summarizeOrderRow(row) : null,
+        fill: frame?.mt === PERPL_MT.FILL_UPDATES ? summarizeFillRow(row) : null,
+        position: (frame?.mt === PERPL_MT.POSITIONS_DELTA || frame?.mt === PERPL_MT.POSITIONS_SNAPSHOT)
+          ? summarizePositionRow(row)
+          : null,
+      });
+      finishPendingOrder(entry, { success: true, rq: entry.rq, reason, order: row || undefined });
+    };
+    const fail = (entry, row, fallback) => {
+      const error = makePerplOrderError(row, fallback);
+      addClientBreadcrumb('perpl.order_failed', {
+        rq: entry.rq,
+        action: entry.action,
+        mkt: entry.marketId,
+        status: error.status,
+        status_reason: error.statusReason,
+        message: error.message,
+      }, 'error');
+      logPerplOrder('perpl.order_failed', {
+        ...summarizePendingEntry(entry),
+        current_block: currentBlockRef.current,
+        error: error.message,
+        code: error.code,
+        order: summarizeOrderRow(row),
+      }, 'error');
+      finishPendingOrder(entry, null, error);
+    };
+
+    if (frame.mt === PERPL_MT.ORDERS_DELTA || frame.mt === PERPL_MT.ORDERS_SNAPSHOT) {
+      const rows = getFrameRows(frame, 'orders', 'o');
+      for (const row of rows) {
+        for (const entry of entries) {
+          if (entry.done || !orderMatchesPending(entry, row)) continue;
+          const st = getOrderStatus(row);
+          const sr = getOrderStatusReason(row);
+          const filledWire = getOrderFilledWire(row);
+          if (entry.action === 'cancel' && (row?.r === true || st === ORDER_STATUS.CANCELED)) {
+            confirm(entry, 'order_canceled', row);
+          } else if (filledWire > 0 || sr === 16 || sr === 22 || sr === 43) {
+            confirm(entry, 'order_filled', row);
+          } else if (entry.action === 'limit' && (
+            st === ORDER_STATUS.OPEN
+            || st === ORDER_STATUS.PARTIAL
+            || st === ORDER_STATUS.FILLED
+            || st === ORDER_STATUS.UNTRIGGERED
+            || st === ORDER_STATUS.TRIGGERED
+          )) {
+            confirm(entry, 'order_accepted', row);
+          } else if (entry.action !== 'limit' && (st === ORDER_STATUS.PARTIAL || st === ORDER_STATUS.FILLED)) {
+            confirm(entry, 'order_filled', row);
+          } else if (st === ORDER_STATUS.FAILED || st === ORDER_STATUS.EXPIRED || st === ORDER_STATUS.CANCELED) {
+            fail(entry, row, 'Perpl order did not open a position');
+          }
+        }
+      }
+      return;
+    }
+
+    if (frame.mt === PERPL_MT.FILL_UPDATES) {
+      const rows = getFrameRows(frame, 'fills', 'f');
+      for (const row of rows) {
+        for (const entry of entries) {
+          if (entry.done || !fillMatchesPending(entry, row)) continue;
+          const size = Math.abs(finiteNumber(row?.s ?? row?.size, 0));
+          if (size > 0) confirm(entry, 'fill_update', row);
+        }
+      }
+      return;
+    }
+
+    if (frame.mt === PERPL_MT.POSITIONS_DELTA || frame.mt === PERPL_MT.POSITIONS_SNAPSHOT) {
+      const rows = getFrameRows(frame, 'positions', 'p');
+      for (const row of rows) {
+        for (const entry of entries) {
+          if (entry.done || !positionMatchesPending(entry, row)) continue;
+          confirm(entry, 'position_update', row);
+        }
+      }
+    }
+  }, [finishPendingOrder]);
+
+  const waitForOrderConfirmation = useCallback((ws, envelope, meta) => new Promise((resolve, reject) => {
+    const rq = Number(envelope.rq);
+    const entry = {
+      ...meta,
+      rq,
+      envelope,
+      done: false,
+      resendCount: 0,
+      resolve,
+      reject,
+      timeoutId: null,
+      retryTimer: null,
+    };
+    entry.timeoutId = setTimeout(() => {
+      const err = new Error('Perpl did not confirm the order before it expired. No success was shown.');
+      err.code = 'PERPL_ORDER_TIMEOUT';
+      err.lb = envelope.lb;
+      addClientBreadcrumb('perpl.order_timeout', {
+        rq,
+        mkt: envelope.mkt,
+        lb: envelope.lb,
+        current_block: currentBlockRef.current,
+      }, 'error');
+      logPerplOrder('perpl.order_timeout', {
+        ...summarizePendingEntry(entry),
+        envelope: sanitizeOrderEnvelope(envelope),
+        current_block: currentBlockRef.current,
+        timeout_ms: ORDER_CONFIRM_TIMEOUT_MS,
+      }, 'error');
+      finishPendingOrder(entry, null, err);
+    }, ORDER_CONFIRM_TIMEOUT_MS);
+    entry.retryTimer = setInterval(() => {
+      if (entry.done) return;
+      if (currentBlockRef.current && envelope.lb && currentBlockRef.current >= envelope.lb) {
+        const err = new Error('Perpl order reached lb without a status update.');
+        err.code = 'PERPL_ORDER_TIMEOUT';
+        err.lb = envelope.lb;
+        addClientBreadcrumb('perpl.order_expired_without_status', {
+          rq,
+          lb: envelope.lb,
+          current_block: currentBlockRef.current,
+        }, 'warn');
+        logPerplOrder('perpl.order_expired_without_status', {
+          ...summarizePendingEntry(entry),
+          envelope: sanitizeOrderEnvelope(envelope),
+          current_block: currentBlockRef.current,
+        }, 'warn');
+        finishPendingOrder(entry, null, err);
+        return;
+      }
+      if (entry.resendCount >= ORDER_RESEND_MAX) return;
+      const activeWs = wsRef.current || ws;
+      if (activeWs?.getReadyState?.() !== WebSocket.OPEN || !tradingAuthedRef.current) return;
+      try {
+        activeWs.send(envelope);
+        entry.resendCount += 1;
+        addClientBreadcrumb('perpl.order_resend_same_rq', {
+          rq,
+          attempt: entry.resendCount,
+          lb: envelope.lb,
+          current_block: currentBlockRef.current,
+        }, 'warn');
+        logPerplOrder('perpl.order_resend_same_rq', {
+          ...summarizePendingEntry(entry),
+          envelope: sanitizeOrderEnvelope(envelope),
+          current_block: currentBlockRef.current,
+        }, 'warn');
+      } catch (e) {
+        addClientBreadcrumb('perpl.order_resend_failed', {
+          rq,
+          message: e?.message || String(e),
+        }, 'warn');
+        logPerplOrder('perpl.order_resend_failed', {
+          ...summarizePendingEntry(entry),
+          envelope: sanitizeOrderEnvelope(envelope),
+          message: e?.message || String(e),
+        }, 'warn');
+      }
+    }, ORDER_RESEND_MS);
+
+    pendingOrdersRef.current.set(rq, entry);
+    addClientBreadcrumb('perpl.order_send', sanitizeOrderEnvelope(envelope));
+    logPerplOrder('perpl.order_send', {
+      ...summarizePendingEntry(entry),
+      envelope: sanitizeOrderEnvelope(envelope),
+      current_block: currentBlockRef.current,
+    });
+    try {
+      ws.send(envelope);
+    } catch (e) {
+      logPerplOrder('perpl.order_send_failed', {
+        ...summarizePendingEntry(entry),
+        envelope: sanitizeOrderEnvelope(envelope),
+        message: e?.message || String(e),
+      }, 'error');
+      finishPendingOrder(entry, null, e);
+    }
+  }), [finishPendingOrder]);
+
+  const sendOrderWithConfirmation = useCallback(async ({ ws, market, buildEnvelope, meta }) => {
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const rq = ws.nextRq();
+      const lb = await getOrderLastBlock(market);
+      const envelope = buildEnvelope(rq, lb);
+      try {
+        return await waitForOrderConfirmation(ws, envelope, { ...meta, attempt });
+      } catch (e) {
+        lastError = e;
+        const canRetryNewRq = attempt === 0 && (
+          e?.code === 'PERPL_ORDER_DESC_ID_TOO_LOW'
+          || (e?.code === 'PERPL_ORDER_TIMEOUT' && currentBlockRef.current && envelope.lb && currentBlockRef.current >= envelope.lb)
+        );
+        if (!canRetryNewRq) throw e;
+        try { ws.setRqSeed(Date.now()); } catch {}
+        addClientBreadcrumb('perpl.order_retry_new_rq', {
+          old_rq: envelope.rq,
+          code: e?.code,
+          current_block: currentBlockRef.current,
+          lb: envelope.lb,
+        }, 'warn');
+        logPerplOrder('perpl.order_retry_new_rq', {
+          old_rq: envelope.rq,
+          code: e?.code,
+          message: e?.message || String(e),
+          current_block: currentBlockRef.current,
+          lb: envelope.lb,
+        }, 'warn');
+      }
+    }
+    throw lastError || new Error('Perpl order was not confirmed');
+  }, [getOrderLastBlock, waitForOrderConfirmation]);
+
   // ── Trading WS lifecycle ─────────────────────────────────────────────
   useEffect(() => {
     if (!isActiveDex || !connected) return undefined;
@@ -464,12 +978,21 @@ export function useMonad() {
     try {
       const sock = createPerplTradingSocket({
         chainId: MONAD_CHAIN_ID,
-        onOpen: () => {},
-        onClose: () => {},
+        onOpen: () => {
+          tradingAuthedRef.current = false;
+          logPerplOrder('perpl.ws_open', { chain_id: MONAD_CHAIN_ID });
+        },
+        onClose: () => {
+          tradingAuthedRef.current = false;
+          logPerplOrder('perpl.ws_close', {
+            pending: Array.from(pendingOrdersRef.current.values()).slice(0, 8).map(summarizePendingEntry),
+          }, pendingOrdersRef.current.size ? 'warn' : 'info');
+        },
       });
       wsRef.current = sock;
       sock.onMessage((frame) => {
         if (stopped) return;
+        processPendingOrderFrame(frame);
         switch (frame?.mt) {
           case PERPL_MT.HEARTBEAT: {
             const h = Number(frame?.h || 0);
@@ -479,6 +1002,7 @@ export function useMonad() {
           case PERPL_MT.WALLET_SNAPSHOT:
           case PERPL_MT.WALLET_UPDATE:
           case PERPL_MT.ACCOUNT_UPDATE: {
+            if (frame?.mt === PERPL_MT.WALLET_SNAPSHOT) tradingAuthedRef.current = true;
             const acct = Array.isArray(frame?.as) ? frame.as[0]
               : Array.isArray(frame?.accounts) ? frame.accounts[0]
               : frame?.account || frame;
@@ -496,6 +1020,14 @@ export function useMonad() {
             setAccountChecked(true);
             const lfr = norm?.lfr ?? frame?.lfr ?? frame?.last_fully_ratcheted ?? 0;
             try { sock.setRqSeed(lfr); } catch {}
+            if (frame?.mt === PERPL_MT.WALLET_SNAPSHOT) {
+              logPerplOrder('perpl.ws_authed', {
+                sn: frame?.sn ?? null,
+                account_id: accountIdRef.current,
+                lfr,
+                account_ready: Number(accountIdRef.current) > 0,
+              });
+            }
             break;
           }
           case PERPL_MT.POSITIONS_SNAPSHOT:
@@ -533,14 +1065,23 @@ export function useMonad() {
         }
       });
     } catch (e) {
+      logPerplOrder('perpl.ws_init_failed', {
+        message: e?.message || String(e),
+      }, 'error');
       console.warn('[useMonad] WS init failed', e?.message || e);
     }
     return () => {
       stopped = true;
+      tradingAuthedRef.current = false;
+      for (const entry of pendingOrdersRef.current.values()) {
+        const err = new Error('Perpl trading socket stopped before order confirmation');
+        err.code = 'PERPL_SOCKET_STOPPED';
+        finishPendingOrder(entry, null, err);
+      }
       try { wsRef.current?.close(); } catch {}
       wsRef.current = null;
     };
-  }, [isActiveDex, connected, scheduleClaim]);
+  }, [isActiveDex, connected, scheduleClaim, processPendingOrderFrame, finishPendingOrder]);
 
   // ── Order placement helpers ──────────────────────────────────────────
   // Common preflight: WS open, account known, market resolved. Throws —
@@ -550,7 +1091,7 @@ export function useMonad() {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       const ws = wsRef.current;
-      if (ws?.getReadyState?.() === WebSocket.OPEN) return ws;
+      if (ws?.getReadyState?.() === WebSocket.OPEN && tradingAuthedRef.current) return ws;
       await new Promise(resolve => setTimeout(resolve, 150));
     }
     return wsRef.current;
@@ -558,9 +1099,9 @@ export function useMonad() {
 
   const preflight = useCallback(async (symbol) => {
     const ws = await waitForTradingSocket();
-    if (!ws || ws.getReadyState() !== WebSocket.OPEN) {
+    if (!ws || ws.getReadyState() !== WebSocket.OPEN || !tradingAuthedRef.current) {
       if (connected) {
-        throw new Error('Perpl trading socket is reconnecting - wait a moment and retry');
+        throw new Error('Perpl trading socket is reconnecting/authenticating - wait a moment and retry');
       }
       throw new Error('Sign in to Perpl first');
     }
@@ -583,6 +1124,13 @@ export function useMonad() {
     tradeInFlightRef.current = true;
     setLoading(true);
     setError(null);
+    const tradeLog = {
+      symbol: String(symbol || '').toUpperCase(),
+      side,
+      collateral: Number(collateralUsdc),
+      leverage: Number(leverage),
+      slippage: Number(slippage),
+    };
     try {
       const { ws, market, marketId, accountId: accId } = await preflight(symbol);
       const collateral = parseFloat(collateralUsdc);
@@ -598,34 +1146,88 @@ export function useMonad() {
         throw new Error(`Perpl requires at least $${minNotional.toFixed(2)} notional on ${market.symbol}. Increase margin or leverage.`);
       }
       const sizeWire = Math.max(1, Math.round(baseSize * 10 ** market.size_decimals));
-      // Perpl market orders are encoded as IOC orders with p=0; using an
-      // aggressive synthetic limit can fail verification on some symbols.
-      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
-      const envelope = {
-        mt: PERPL_MT.ORDER,
-        rq: ws.nextRq(),
+      const orderType = isLong ? PERPL_ORDER_TYPE.OPEN_LONG : PERPL_ORDER_TYPE.OPEN_SHORT;
+      const before = getPositionSnapshot(marketId, isLong);
+      Object.assign(tradeLog, {
         mkt: marketId,
         acc: accId,
-        t: isLong ? PERPL_ORDER_TYPE.OPEN_LONG : PERPL_ORDER_TYPE.OPEN_SHORT,
-        p: 0,
-        s: sizeWire,
-        fl: PERPL_TIF.IOC,
-        lv: lev * 100,
-        lb,
-      };
-      ws.send(envelope);
+        mark,
+        notional,
+        base_size: baseSize,
+        size_wire: sizeWire,
+        order_type: orderType,
+        min_notional: minNotional,
+        before_size_wire: before.sizeWire,
+        before_position_id: before.positionId || null,
+        current_block: currentBlockRef.current,
+      });
+      logPerplOrder('perpl.market_order_start', tradeLog);
+      const result = await sendOrderWithConfirmation({
+        ws,
+        market,
+        meta: {
+          action: 'open',
+          marketId,
+          accountId: accId,
+          isLong,
+          orderType,
+          beforeSizeWire: before.sizeWire,
+          positionId: before.positionId,
+        },
+        buildEnvelope: (rq, lb) => ({
+          mt: PERPL_MT.ORDER,
+          rq,
+          mkt: marketId,
+          acc: accId,
+          t: orderType,
+          p: 0,
+          s: sizeWire,
+          fl: PERPL_TIF.IOC,
+          lv: lev * 100,
+          lb,
+        }),
+      });
+      logPerplOrder('perpl.market_order_result', {
+        ...tradeLog,
+        rq: result?.rq ?? null,
+        reason: result?.reason || null,
+      });
+      for (const delayMs of [2500, 8000]) {
+        setTimeout(() => {
+          const after = getPositionSnapshot(marketId, isLong);
+          const opened = after.sizeWire > before.sizeWire;
+          logPerplOrder('perpl.position_postcheck', {
+            ...tradeLog,
+            rq: result?.rq ?? null,
+            reason: result?.reason || null,
+            delay_ms: delayMs,
+            opened,
+            before_size_wire: before.sizeWire,
+            after_size_wire: after.sizeWire,
+            after_position_id: after.positionId || null,
+          }, opened ? 'info' : 'warn');
+        }, delayMs);
+      }
       scheduleClaim(7000);
       scheduleClaim(18000);
-      return { success: true, rq: envelope.rq };
+      return result;
     } catch (e) {
       const msg = e?.message || String(e);
+      logPerplOrder('perpl.market_order_error', {
+        ...tradeLog,
+        code: e?.code || null,
+        message: msg,
+        status: e?.status ?? null,
+        status_reason: e?.statusReason ?? null,
+        current_block: currentBlockRef.current,
+      }, 'error');
       setError(msg);
       return { error: msg };
     } finally {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim]);
+  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation]);
 
   // placeLimitOrder(symbol, side, limitPrice, collateralUsdc, _tif, leverage)
   const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, _tif, leverage) => {
@@ -649,23 +1251,34 @@ export function useMonad() {
       }
       const sizeWire = Math.max(1, Math.round(baseSize * 10 ** market.size_decimals));
       const priceWire = Math.max(1, Math.round(limit * 10 ** market.price_decimals));
-      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
-      const envelope = {
-        mt: PERPL_MT.ORDER,
-        rq: ws.nextRq(),
-        mkt: marketId,
-        acc: accId,
-        t: isLong ? PERPL_ORDER_TYPE.OPEN_LONG : PERPL_ORDER_TYPE.OPEN_SHORT,
-        p: priceWire,
-        s: sizeWire,
-        fl: PERPL_TIF.GTC,
-        lv: lev * 100,
-        lb,
-      };
-      ws.send(envelope);
+      const orderType = isLong ? PERPL_ORDER_TYPE.OPEN_LONG : PERPL_ORDER_TYPE.OPEN_SHORT;
+      const result = await sendOrderWithConfirmation({
+        ws,
+        market,
+        meta: {
+          action: 'limit',
+          marketId,
+          accountId: accId,
+          isLong,
+          orderType,
+          beforeSizeWire: getPositionSnapshot(marketId, isLong).sizeWire,
+        },
+        buildEnvelope: (rq, lb) => ({
+          mt: PERPL_MT.ORDER,
+          rq,
+          mkt: marketId,
+          acc: accId,
+          t: orderType,
+          p: priceWire,
+          s: sizeWire,
+          fl: PERPL_TIF.GTC,
+          lv: lev * 100,
+          lb,
+        }),
+      });
       scheduleClaim(7000);
       scheduleClaim(18000);
-      return { success: true, rq: envelope.rq };
+      return result;
     } catch (e) {
       const msg = e?.message || String(e);
       setError(msg);
@@ -674,7 +1287,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim]);
+  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation]);
 
   // closePosition(symbol, side, baseTokenAmount). FuturesPanel passes the
   // close size as a base-token quantity (matching Pacifica/Decibel
@@ -706,25 +1319,40 @@ export function useMonad() {
         ? Math.round(reqBase * 10 ** market.size_decimals)
         : totalSizeAbs;
       const sizeWire = Math.max(1, Math.min(reqWire, totalSizeAbs));
-      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
       const posId = Number(pos?.pid ?? pos?.id);
-      const envelope = {
-        mt: PERPL_MT.ORDER,
-        rq: ws.nextRq(),
-        mkt: marketId,
-        acc: accId,
-        t: isLongSide ? PERPL_ORDER_TYPE.CLOSE_LONG : PERPL_ORDER_TYPE.CLOSE_SHORT,
-        p: 0,
-        s: sizeWire,
-        fl: PERPL_TIF.IOC,
-        lv: 0, // ignored on close (size is bounded by existing position)
-        lb,
-      };
-      if (Number.isFinite(posId) && posId > 0) envelope.pid = posId;
-      ws.send(envelope);
+      const orderType = isLongSide ? PERPL_ORDER_TYPE.CLOSE_LONG : PERPL_ORDER_TYPE.CLOSE_SHORT;
+      const result = await sendOrderWithConfirmation({
+        ws,
+        market,
+        meta: {
+          action: 'close',
+          marketId,
+          accountId: accId,
+          isLong: isLongSide,
+          orderType,
+          beforeSizeWire: totalSizeAbs,
+          positionId: Number.isFinite(posId) ? posId : 0,
+        },
+        buildEnvelope: (rq, lb) => {
+          const envelope = {
+            mt: PERPL_MT.ORDER,
+            rq,
+            mkt: marketId,
+            acc: accId,
+            t: orderType,
+            p: 0,
+            s: sizeWire,
+            fl: PERPL_TIF.IOC,
+            lv: 0, // ignored on close (size is bounded by existing position)
+            lb,
+          };
+          if (Number.isFinite(posId) && posId > 0) envelope.lp = posId;
+          return envelope;
+        },
+      });
       scheduleClaim(7000);
       scheduleClaim(18000);
-      return { success: true, rq: envelope.rq };
+      return result;
     } catch (e) {
       const msg = e?.message || String(e);
       setError(msg);
@@ -733,7 +1361,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim]);
+  }, [preflight, scheduleClaim, sendOrderWithConfirmation]);
 
   // cancelOrder(orderId) — FuturesPanel passes the string we exposed in
   // normalizeOrder.order_id. The mt:22 t=5 envelope needs the original
@@ -741,7 +1369,7 @@ export function useMonad() {
   const cancelOrder = useCallback(async (...args) => {
     try {
       const ws = wsRef.current;
-      if (!ws || ws.getReadyState() !== WebSocket.OPEN) {
+      if (!ws || ws.getReadyState() !== WebSocket.OPEN || !tradingAuthedRef.current) {
         throw new Error('Perpl trading socket not connected');
       }
       const accId = accountIdRef.current;
@@ -752,24 +1380,36 @@ export function useMonad() {
       if (!order) throw new Error(`Order ${target} not found`);
       const marketId = PERPL_MARKET_BY_SYMBOL[order.symbol];
       if (!marketId) throw new Error(`Unknown market for order ${target}`);
-      const lb = (currentBlockRef.current || await getMonadBlockNumber()) + BLOCK_TTL_BUFFER;
-      ws.send({
-        mt: PERPL_MT.ORDER,
-        rq: ws.nextRq(),
-        mkt: marketId,
-        acc: accId,
-        oid: Number(target),
-        t: PERPL_ORDER_TYPE.CANCEL,
-        p: 0, s: 0, fl: 0, lv: 0,
-        lb,
+      const market = marketsByIdRef.current[marketId];
+      if (!market) throw new Error(`Market metadata not loaded for ${order.symbol}`);
+      return await sendOrderWithConfirmation({
+        ws,
+        market,
+        meta: {
+          action: 'cancel',
+          marketId,
+          accountId: accId,
+          isLong: order.side === 'bid',
+          orderType: PERPL_ORDER_TYPE.CANCEL,
+          beforeSizeWire: 0,
+        },
+        buildEnvelope: (rq, lb) => ({
+          mt: PERPL_MT.ORDER,
+          rq,
+          mkt: marketId,
+          acc: accId,
+          oid: Number(target),
+          t: PERPL_ORDER_TYPE.CANCEL,
+          p: 0, s: 0, fl: 0, lv: 0,
+          lb,
+        }),
       });
-      return { success: true };
     } catch (e) {
       const msg = e?.message || String(e);
       setError(msg);
       return { error: msg };
     }
-  }, [orders]);
+  }, [orders, sendOrderWithConfirmation]);
 
   // setTpsl is on the same envelope (tp + tpc + lp), but the UI flow needs
   // a dedicated modal that the FuturesPanel doesn't yet wire up for Perpl.

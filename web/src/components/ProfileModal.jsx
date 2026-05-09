@@ -394,6 +394,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#4F46E5', '#3730A3'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT ARBITRUM WALLET</button>
+          ) : dex === 'monad' ? (
+            <button
+              style={{...cartoonBtn('#6F5CFF', '#4530E0'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT MONAD WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}

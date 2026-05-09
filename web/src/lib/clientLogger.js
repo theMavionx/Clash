@@ -200,6 +200,24 @@ export function setClientLogContext(next = {}) {
   } catch { /* noop */ }
 }
 
+export function reportClientEvent(type, data = {}, opts = {}) {
+  try {
+    const level = opts.level || 'info';
+    const source = opts.source || 'client.event';
+    const message = opts.message || type || 'client.event';
+    addBreadcrumbInternal(type, data, level);
+    enqueue(makeEvent(level, [message], source, opts.stack || '', {
+      payload: {
+        event: {
+          type,
+          data: sanitize(data),
+        },
+      },
+      context: opts.context || {},
+    }));
+  } catch { /* noop */ }
+}
+
 function payloadString(payload) {
   try { return truncate(JSON.stringify(payload), 7600); } catch { return null; }
 }

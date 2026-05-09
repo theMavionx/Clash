@@ -31,9 +31,10 @@ import {
 } from './monadConfig';
 
 export const PERPL_REGION_BLOCKED_MESSAGE = 'Perpl is not available in your country or IP region.';
-// Perpl `sn` can jump between heartbeats on a healthy stream, so reconnect
-// only on heartbeat timeout unless we later confirm per-client sequencing.
-const STRICT_SEQUENCE_RECONNECT = false;
+// Perpl trading stream sequence starts from WalletSnapshot.sn, then every
+// heartbeat must advance by one. A gap means we may have missed order/fill
+// updates, so reconnect and let the server send fresh snapshots.
+const STRICT_SEQUENCE_RECONNECT = true;
 
 function throwRegionBlocked() {
   const e = new Error(PERPL_REGION_BLOCKED_MESSAGE);
@@ -214,7 +215,7 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
   let heartbeatWatchTimer = null;
   let reconnectTimer = null;
   let closed = false;
-  let rqCounter = 0;
+  let rqCounter = Date.now();
   let lastHeartbeatAt = 0;
   let lastSeenSeq = null;
 
@@ -242,8 +243,10 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
       let frame;
       try { frame = JSON.parse(ev.data); } catch { return; }
       if (frame?.mt === PERPL_MT.HEARTBEAT) lastHeartbeatAt = Date.now();
-      // Keep the latest sequence only for diagnostics; it is not strict
-      // enough per client stream to drive reconnects.
+      if (frame?.mt === PERPL_MT.WALLET_SNAPSHOT) {
+        const snapshotSeq = Number(frame?.sn);
+        if (Number.isFinite(snapshotSeq)) lastSeenSeq = snapshotSeq;
+      }
       const seq = Number(frame?.sn ?? frame?.seq);
       if (frame?.mt === PERPL_MT.HEARTBEAT && Number.isFinite(seq)) {
         if (STRICT_SEQUENCE_RECONNECT && lastSeenSeq != null && seq !== lastSeenSeq + 1) {
@@ -291,8 +294,11 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
       ws.send(JSON.stringify(envelope));
     },
     onMessage(fn) { handler = fn; },
-    setRqSeed(lfr) { rqCounter = Math.max(rqCounter, Number(lfr) || 0); },
-    nextRq() { return ++rqCounter; },
+    setRqSeed(lfr) { rqCounter = Math.max(rqCounter, Number(lfr) || 0, Date.now()); },
+    nextRq() {
+      rqCounter = Math.max(rqCounter + 1, Date.now());
+      return rqCounter;
+    },
     close() {
       closed = true;
       clearInterval(pingTimer);

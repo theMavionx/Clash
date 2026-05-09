@@ -65,6 +65,7 @@ function DexPicker({ onPick, isInFrame }) {
                 {cfg.chain} · {
                   cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
                 }
