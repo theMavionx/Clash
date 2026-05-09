@@ -120,14 +120,20 @@ export default defineConfig({
         changeOrigin: true, secure: true,
         rewrite: () => '/arb',
       },
-      // Perpl Foundation (Monad mainnet) — REST + auth endpoints. Keep the
-      // browser Origin/Referer intact: Perpl uses them to build the SIWE
-      // message domain/URI, and blanking them produces invalid `://` payloads.
+      // Perpl Foundation (Monad mainnet) — REST + auth endpoints. Perpl uses
+      // Origin/Referer to build and validate its SIWE message, and accepts its
+      // own app origin here; blanking them produces invalid `://` payloads.
       '/perpl-api': {
         target: 'https://app.perpl.xyz',
         changeOrigin: true, secure: true,
         cookieDomainRewrite: '',
         cookiePathRewrite: { '/api/v1': '/', '/': '/' },
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('origin', 'https://app.perpl.xyz');
+            proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
+          });
+        },
         rewrite: (path) => path.replace(/^\/perpl-api/, '/api/v1'),
       },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
