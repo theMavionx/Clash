@@ -9,6 +9,11 @@ import {
 } from '@solana-mobile/wallet-adapter-mobile';
 import { farcasterDetectPromise } from '../hooks/useFarcaster';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
+import {
+  forgetSelectedWallet,
+  isPhantomInAppBrowser,
+  isUserDismissedWalletError,
+} from '../lib/solanaWalletUi';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -37,22 +42,6 @@ const RPC_LIST = [
   'https://api.mainnet-beta.solana.com',
   'https://solana.drpc.org',
 ];
-
-const USER_DISMISSED_WALLET_RE = /not authorized|authorized by the user|user rejected|user denied|declined|cancel/i;
-
-function adapterName(adapter) {
-  return adapter?.name || adapter?.adapter?.name || adapter?._wallet?.name || 'Solana wallet';
-}
-
-function forgetSelectedWallet(localStorageKey, adapter) {
-  try {
-    const selected = localStorage.getItem(localStorageKey);
-    const name = adapterName(adapter);
-    if (!selected || selected === name || selected.includes(name) || name.includes(selected)) {
-      localStorage.removeItem(localStorageKey);
-    }
-  } catch { /* private mode / quota etc — non-fatal */ }
-}
 
 function useBestRpc() {
   const [rpc, setRpc] = useState(RPC_LIST[0]);
@@ -163,12 +152,10 @@ export default function WalletProvider({ children }) {
   const rpc = useBestRpc();
   const { ready: fcReady, inFrame } = useFarcasterWalletReady();
   const localStorageKey = inFrame ? 'fcWalletName' : 'walletName';
+  const solanaAutoConnect = !isPhantomInAppBrowser();
 
   const handleWalletError = useCallback((error, adapter) => {
-    const name = error?.name || '';
-    const message = error?.message || String(error || '');
-    const userDismissedConnect = name === 'WalletConnectionError' && USER_DISMISSED_WALLET_RE.test(message);
-    if (userDismissedConnect) {
+    if (isUserDismissedWalletError(error)) {
       forgetSelectedWallet(localStorageKey, adapter);
       return;
     }
@@ -183,7 +170,7 @@ export default function WalletProvider({ children }) {
     <ConnectionProvider endpoint={rpc}>
       <SolWalletProvider
         wallets={wallets}
-        autoConnect={true}
+        autoConnect={solanaAutoConnect}
         localStorageKey={localStorageKey}
         onError={handleWalletError}
       >

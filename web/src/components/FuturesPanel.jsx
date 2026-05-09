@@ -29,6 +29,7 @@ import TradeIdeaModal from './TradeIdeaModal';
 import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
 import TokenIcon from './TokenIcon';
+import { openSolanaWallet } from '../lib/solanaWalletUi';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
 
@@ -946,15 +947,7 @@ function FuturesPanel() {
     return () => clearTimeout(timer);
   }, [isSolanaDex, hasWallet]);
   const openSolanaConnect = useCallback(() => {
-    if (inFrame) {
-      const fc = wallets.find(w => w.adapter.name === 'Farcaster');
-      if (fc) {
-        select(fc.adapter.name);
-        setTimeout(() => connect().catch(() => {}), 100);
-        return;
-      }
-    }
-    openWalletModal(true);
+    openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame });
   }, [inFrame, wallets, select, connect, openWalletModal]);
   const loginWithPrivyEmail = useCallback(() => {
     if (!privyEnabled) return;

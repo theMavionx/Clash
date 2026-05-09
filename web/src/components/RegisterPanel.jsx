@@ -6,6 +6,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { DEX_CONFIG, getAvailableDexConfigs } from '../contexts/DexContext';
 import { useAuthFlow } from '../auth/useAuthFlow';
+import { openSolanaWallet } from '../lib/solanaWalletUi';
 
 // Styled to match the project's dominant Clash-of-Clans modal look (parchment
 // body + blue header + yellow action button — see BuildingInfoPanel LT styles
@@ -269,11 +270,7 @@ function RegisterPanel() {
   }, [setEvmProvider]);
 
   const openSolanaConnect = useCallback(() => {
-    if (isInFrame) {
-      const fc = (wallets || []).find(w => w.adapter.name === 'Farcaster');
-      if (fc) { select(fc.adapter.name); setTimeout(() => connect().catch(() => {}), 100); return; }
-    }
-    openWalletModal(true);
+    openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame: isInFrame });
   }, [isInFrame, wallets, select, connect, openWalletModal]);
 
   const body = (() => {

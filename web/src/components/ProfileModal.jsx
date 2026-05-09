@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useMemo } from 'react';
+import { memo, useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePrivy } from '@privy-io/react-auth';
@@ -16,6 +16,7 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { cartoonBtn } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
+import { openSolanaWallet } from '../lib/solanaWalletUi';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -119,6 +120,10 @@ function ProfileModal({ onClose }) {
     setEvmModalOpen(false);
     if (provider && address) setEvmProvider(provider, address, rdns, 'external');
   };
+
+  const openSolanaConnect = useCallback(() => {
+    openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame });
+  }, [wallets, select, connect, openWalletModal, inFrame]);
 
   const { buildingDefs } = useBuildingDefs();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
@@ -364,7 +369,7 @@ function ProfileModal({ onClose }) {
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
-              onClick={() => openWalletModal(true)}
+              onClick={openSolanaConnect}
             >CONNECT WALLET</button>
           )}
 
