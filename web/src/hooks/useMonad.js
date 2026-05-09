@@ -1078,6 +1078,12 @@ export function useMonad() {
             pending: Array.from(pendingOrdersRef.current.values()).slice(0, 8).map(summarizePendingEntry),
           }, pendingOrdersRef.current.size ? 'warn' : 'info');
         },
+        onAuthInvalid: () => {
+          setConnected(false);
+          setAccountReady(false);
+          setAccountChecked(true);
+          setError('Perpl session expired - sign in again');
+        },
       });
       wsRef.current = sock;
       sock.onMessage((frame) => {

@@ -35,6 +35,8 @@ export const PERPL_REGION_BLOCKED_MESSAGE = 'Perpl is not available in your coun
 // heartbeat must advance by one. A gap means we may have missed order/fill
 // updates, so reconnect and let the server send fresh snapshots.
 const STRICT_SEQUENCE_RECONNECT = true;
+const PERPL_SESSION_STORAGE_KEY = 'clash.perpl.session.v1';
+const PERPL_SESSION_FALLBACK_TTL_MS = 6 * 24 * 60 * 60 * 1000;
 
 function throwRegionBlocked() {
   const e = new Error(PERPL_REGION_BLOCKED_MESSAGE);
@@ -56,10 +58,65 @@ function perplErrorDetail(res) {
 // we want the hook to share a single auth handshake across re-mounts.
 let _authNonce = null;
 let _authedAddress = null;
+let _authExpiresAt = 0;
 
-export function getAuthNonce() { return _authNonce; }
+function storageAvailable() {
+  return typeof window !== 'undefined' && window.localStorage;
+}
+
+function clearPersistedSession() {
+  try {
+    if (storageAvailable()) window.localStorage.removeItem(PERPL_SESSION_STORAGE_KEY);
+  } catch {}
+}
+
+function persistSession({ nonce, address, expiresAt }) {
+  try {
+    if (!storageAvailable() || !nonce) return;
+    window.localStorage.setItem(PERPL_SESSION_STORAGE_KEY, JSON.stringify({
+      nonce,
+      address,
+      expires_at: expiresAt || (Date.now() + PERPL_SESSION_FALLBACK_TTL_MS),
+      saved_at: Date.now(),
+    }));
+  } catch {}
+}
+
+function hydratePersistedSession() {
+  try {
+    if (!storageAvailable()) return false;
+    const raw = window.localStorage.getItem(PERPL_SESSION_STORAGE_KEY);
+    if (!raw) return false;
+    const s = JSON.parse(raw);
+    const nonce = typeof s?.nonce === 'string' ? s.nonce.trim() : '';
+    const address = typeof s?.address === 'string' ? s.address.trim() : '';
+    const expiresAt = Number(s?.expires_at ?? s?.expiresAt ?? 0);
+    if (!nonce || !/^0x[0-9a-fA-F]{40}$/.test(address) || (expiresAt && Date.now() >= expiresAt - 30_000)) {
+      clearPersistedSession();
+      return false;
+    }
+    _authNonce = nonce;
+    _authedAddress = address;
+    _authExpiresAt = expiresAt || (Date.now() + PERPL_SESSION_FALLBACK_TTL_MS);
+    return true;
+  } catch {
+    clearPersistedSession();
+    return false;
+  }
+}
+
+hydratePersistedSession();
+
+export function isPerplAuthed() {
+  if (!_authNonce) hydratePersistedSession();
+  if (_authNonce && _authExpiresAt && Date.now() >= _authExpiresAt - 30_000) {
+    clearPerplSession();
+  }
+  return !!_authNonce;
+}
+
+export function getAuthNonce() { return isPerplAuthed() ? _authNonce : null; }
 export function getAuthedAddress() { return _authedAddress; }
-export function isPerplAuthed() { return !!_authNonce; }
 
 // ───── REST helpers ──────────────────────────────────────────────────────
 // All authed requests need the cookie (credentials:'include') and the
@@ -68,7 +125,9 @@ export function isPerplAuthed() { return !!_authNonce; }
 // vs. 401 (re-login) without try/catch dance.
 async function perplFetch(path, { method = 'GET', body, authed = false, credentials = null } = {}) {
   const headers = { 'Content-Type': 'application/json' };
-  if (authed && _authNonce) headers['X-Auth-Nonce'] = _authNonce;
+  const authNonce = authed ? getAuthNonce() : null;
+  if (authed && !authNonce) return { ok: false, status: 401, error: 'Perpl session expired' };
+  if (authed && authNonce) headers['X-Auth-Nonce'] = authNonce;
   let res;
   try {
     res = await fetch(`${PERPL_API_BASE}${path}`, {
@@ -83,6 +142,7 @@ async function perplFetch(path, { method = 'GET', body, authed = false, credenti
   let data = null;
   const text = await res.text();
   try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (authed && res.status === 401) clearPerplSession();
   return { ok: res.ok, status: res.status, data };
 }
 
@@ -168,12 +228,17 @@ export async function loginWithEoa({ chainId, address, signMessageAsync, refCode
   _authNonce = connectRes.data?.nonce || null;
   _authedAddress = address;
   if (!_authNonce) throw new Error('Perpl /auth/connect returned no nonce');
-  return { nonce: _authNonce, address };
+  _authExpiresAt = Number(connectRes.data?.expires_at ?? connectRes.data?.expiresAt ?? 0)
+    || (Date.now() + PERPL_SESSION_FALLBACK_TTL_MS);
+  persistSession({ nonce: _authNonce, address, expiresAt: _authExpiresAt });
+  return { nonce: _authNonce, address, expires_at: _authExpiresAt };
 }
 
 export function clearPerplSession() {
   _authNonce = null;
   _authedAddress = null;
+  _authExpiresAt = 0;
+  clearPersistedSession();
 }
 
 // ───── Authed REST reads ─────────────────────────────────────────────────
@@ -206,7 +271,9 @@ export async function fetchPerplPositionHistory({ limit = 50 } = {}) {
 //
 // `getRq()` returns the next monotonic order-id for mt:22 envelopes. Seed
 // it explicitly via setRqSeed(lfr) once WalletSnapshot mt:21 lands.
-export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }) {
+export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose, onAuthInvalid }) {
+  const authNonce = getAuthNonce();
+  _authNonce = authNonce;
   if (!_authNonce) throw new Error('Perpl trading WS: no session nonce — log in first');
 
   let ws = null;
@@ -226,7 +293,7 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
     ws = new WebSocket(PERPL_WS_TRADING);
     ws.onopen = () => {
       // mt:4 AuthSignIn — chain_id + nonce + ses (client session id we make up).
-      ws.send(JSON.stringify({ mt: PERPL_MT.AUTH, chain_id: chainId, nonce: _authNonce, ses: session }));
+      ws.send(JSON.stringify({ mt: PERPL_MT.AUTH, chain_id: chainId, nonce: authNonce, ses: session }));
       // 30s app-level ping. The server-side heartbeat is mt:100 (incoming);
       // we send mt:1 to keep the connection alive on the way out.
       pingTimer = setInterval(() => {
@@ -271,6 +338,7 @@ export function createPerplTradingSocket({ chainId, sessionId, onOpen, onClose }
       // fresh login is forced upstream rather than spinning on a dead session.
       if (ev.code === 3401) {
         clearPerplSession();
+        try { onAuthInvalid?.(ev); } catch {}
         return;
       }
       if (closed) return;
