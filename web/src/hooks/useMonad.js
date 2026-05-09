@@ -13,12 +13,11 @@
 //     wired with per-market price/size scaling, block-bounded TTL (`lb`),
 //     monotonic `rq` seeded from WalletSnapshot.lfr, leverage encoded
 //     per-order (`lv`).
+//   - TP/SL trigger orders for existing positions via `tp` + `tpc` + `lp`.
 //
 // Still NOT wired (Phase 3):
 //   - USDC→AUSD swap on Monad. The account/deposit path expects AUSD
 //     already in the user's wallet.
-//   - TP/SL on existing positions (the envelope is documented; we just
-//     need a UI surface).
 //   - Increase-collateral (mt:22 t=6) for funding stretched positions.
 //   - Background worker indexing. For now the client imports Perpl fills
 //     immediately after WS fill/update events and before claim-gold.
@@ -83,6 +82,10 @@ const ORDER_REASON = Object.freeze({
   36: 'OrderPostFailed',
   43: 'TakerOrderFilled',
   46: 'UnmatchedLotRemainsInFillOrKill',
+});
+const TRIGGER_CONDITION = Object.freeze({
+  GTE: 1,
+  LTE: 2,
 });
 
 // ── Block-number cache (shared across the hook lifetime) ──────────────────
@@ -231,10 +234,10 @@ function normalizePosition(p, marketsById) {
   const id = Number(p?.mkt ?? p?.market_id ?? p?.market);
   const m = marketsById?.[id];
   if (!m) return null;
-  // sign: Perpl encodes long as +, short as − in `s` / `size` (signed).
-  // Some frames carry a separate `is_long` boolean; we honor whichever is set.
+  // Perpl's Position.s is unsigned; direction comes from sd (1=long, 2=short)
+  // or equivalent side flags on older frames.
   const rawSize = Number(p?.s ?? p?.size ?? 0);
-  const isLong = (typeof p?.is_long === 'boolean') ? p.is_long : rawSize >= 0;
+  const isLong = getPositionIsLong(p);
   const sizeAbs = Math.abs(rawSize);
   const sizeBase = sizeAbs / 10 ** m.size_decimals;
   const entryPrice = Number(p?.ep ?? p?.entry_price ?? 0) / 10 ** m.price_decimals;
@@ -250,6 +253,7 @@ function normalizePosition(p, marketsById) {
   const pnlUsd = pnlField != null
     ? Number(pnlField) / 1e6
     : (markPx - entryPrice) * sizeBase * (isLong ? 1 : -1);
+  const positionId = p?.pid ?? p?.id ?? p?.position_id ?? null;
   return {
     symbol: m.symbol,
     side: isLong ? 'bid' : 'ask',
@@ -263,9 +267,9 @@ function normalizePosition(p, marketsById) {
     pnl_usd: pnlUsd,
     market_addr: null,
     is_isolated: true,         // Perpl tracks margin per-position.
-    position_id: p?.pid ?? p?.id ?? null,
+    position_id: positionId,
     pair_index: id,             // For closePosition lookup.
-    trade_index: null,
+    trade_index: positionId,
     _raw: p,
   };
 }
@@ -277,18 +281,27 @@ function normalizeOrder(o, marketsById) {
   if (!m) return null;
   const t = Number(o?.t ?? o?.type);
   const isLong = t === PERPL_ORDER_TYPE.OPEN_LONG || t === PERPL_ORDER_TYPE.CLOSE_SHORT;
+  const triggerPriceWire = Number(o?.tp ?? o?.trigger_price ?? o?.stop_price ?? 0);
+  const triggerCondition = Number(o?.tpc ?? o?.trigger_condition ?? 0);
+  const isTrigger = triggerPriceWire > 0 && triggerCondition > 0;
+  const isTp = isTrigger && isTriggerTakeProfit(t, triggerCondition);
   const sizeAbs = Math.abs(Number(o?.s ?? o?.size ?? 0));
   return {
     symbol: m.symbol,
     side: isLong ? 'bid' : 'ask',
     amount: String(sizeAbs / 10 ** m.size_decimals),
-    price: String(Number(o?.p ?? o?.price ?? 0) / 10 ** m.price_decimals),
+    price: String((triggerPriceWire || Number(o?.p ?? o?.price ?? 0)) / 10 ** m.price_decimals),
+    stop_price: isTrigger ? String(triggerPriceWire / 10 ** m.price_decimals) : undefined,
     leverage: String((Number(o?.lv ?? o?.leverage ?? 100)) / 100),
-    order_type: t === PERPL_ORDER_TYPE.OPEN_LONG || t === PERPL_ORDER_TYPE.OPEN_SHORT
-      ? ((Number(o?.fl ?? 0) & PERPL_TIF.IOC) ? 'MARKET' : 'LIMIT')
-      : 'CLOSE',
+    order_type: isTrigger
+      ? (isTp ? 'TAKE_PROFIT' : 'STOP_LOSS')
+      : t === PERPL_ORDER_TYPE.OPEN_LONG || t === PERPL_ORDER_TYPE.OPEN_SHORT
+        ? ((Number(o?.fl ?? 0) & PERPL_TIF.IOC) ? 'MARKET' : 'LIMIT')
+        : 'CLOSE',
     tif: 'GTC',
     order_id: String(o?.oid ?? o?.order_id ?? o?.id ?? ''),
+    pair_index: id,
+    trade_index: o?.lp ?? o?.linked_position_id ?? null,
     market_addr: null,
     market_name: m.market_name,
     _raw: o,
@@ -342,8 +355,43 @@ function getPositionWireSize(row) {
 
 function getPositionIsLong(row) {
   if (typeof row?.is_long === 'boolean') return row.is_long;
-  if (Number.isFinite(Number(row?.sd))) return Number(row.sd) === 1;
+  if (typeof row?.is_short === 'boolean') return !row.is_short;
+  const sideText = String(row?.side ?? row?.direction ?? row?.position_side ?? row?.position_type ?? '').toLowerCase();
+  if (sideText) {
+    if (sideText.includes('short') || sideText === 'sell' || sideText === 'ask') return false;
+    if (sideText.includes('long') || sideText === 'buy' || sideText === 'bid') return true;
+  }
+  const positionType = row?.sd ?? row?.pt ?? row?.position_type_id;
+  if (Number.isFinite(Number(positionType))) return Number(positionType) === 1;
+  const entryWire = Number(row?.ep ?? row?.entry_price ?? 0);
+  const liqWire = Number(row?.lp ?? row?.liquidation_price ?? 0);
+  if (entryWire > 0 && liqWire > 0 && liqWire !== entryWire) {
+    return liqWire < entryWire;
+  }
   return finiteNumber(row?.s ?? row?.size, 0) >= 0;
+}
+
+function getPositionId(row) {
+  const id = finiteNumber(row?.pid ?? row?.id ?? row?.position_id, NaN);
+  return Number.isFinite(id) ? id : null;
+}
+
+function getTriggerCondition(isLong, kind) {
+  if (kind === 'take_profit') {
+    return isLong ? TRIGGER_CONDITION.GTE : TRIGGER_CONDITION.LTE;
+  }
+  return isLong ? TRIGGER_CONDITION.LTE : TRIGGER_CONDITION.GTE;
+}
+
+function getCloseOrderType(isLong) {
+  return isLong ? PERPL_ORDER_TYPE.CLOSE_LONG : PERPL_ORDER_TYPE.CLOSE_SHORT;
+}
+
+function isTriggerTakeProfit(orderType, condition) {
+  return (
+    (orderType === PERPL_ORDER_TYPE.CLOSE_LONG && condition === TRIGGER_CONDITION.GTE)
+    || (orderType === PERPL_ORDER_TYPE.CLOSE_SHORT && condition === TRIGGER_CONDITION.LTE)
+  );
 }
 
 function describePerplOrder(order, fallback = 'Perpl order was not confirmed') {
@@ -417,6 +465,10 @@ function sanitizeOrderEnvelope(envelope) {
     s: envelope?.s,
     fl: envelope?.fl,
     lv: envelope?.lv,
+    tp: envelope?.tp,
+    tpc: envelope?.tpc,
+    tr: envelope?.tr,
+    lp: envelope?.lp,
     lb: envelope?.lb,
   };
 }
@@ -440,6 +492,10 @@ function summarizeOrderRow(row) {
     s: wireNumber(row?.s ?? row?.size),
     p: wireNumber(row?.p ?? row?.price),
     lv: wireNumber(row?.lv ?? row?.leverage),
+    tp: wireNumber(row?.tp ?? row?.trigger_price ?? row?.stop_price),
+    tpc: wireNumber(row?.tpc ?? row?.trigger_condition),
+    tr: wireNumber(row?.tr ?? row?.linked_request_id),
+    lp: wireNumber(row?.lp ?? row?.linked_position_id),
     r: row?.r === true ? true : undefined,
   };
 }
@@ -485,6 +541,7 @@ function summarizePendingEntry(entry) {
     order_type: entry.orderType,
     before_size_wire: entry.beforeSizeWire,
     position_id: entry.positionId || null,
+    trigger_kind: entry.triggerKind || null,
     resend_count: entry.resendCount,
     account_forwarding: entry.accountForwarding,
   };
@@ -829,14 +886,14 @@ export function useMonad() {
             confirm(entry, 'order_canceled', row);
           } else if (filledWire > 0 || sr === 16 || sr === 22 || sr === 43) {
             confirm(entry, 'order_filled', row);
-          } else if (entry.action === 'limit' && (
+          } else if ((entry.action === 'limit' || entry.action === 'trigger') && (
             st === ORDER_STATUS.OPEN
             || st === ORDER_STATUS.PARTIAL
             || st === ORDER_STATUS.FILLED
             || st === ORDER_STATUS.UNTRIGGERED
             || st === ORDER_STATUS.TRIGGERED
           )) {
-            confirm(entry, 'order_accepted', row);
+            confirm(entry, entry.action === 'trigger' ? 'trigger_order_accepted' : 'order_accepted', row);
           } else if (entry.action !== 'limit' && (st === ORDER_STATUS.PARTIAL || st === ORDER_STATUS.FILLED)) {
             confirm(entry, 'order_filled', row);
           } else if (st === ORDER_STATUS.FAILED || st === ORDER_STATUS.EXPIRED || st === ORDER_STATUS.CANCELED) {
@@ -969,11 +1026,11 @@ export function useMonad() {
     }
   }), [finishPendingOrder]);
 
-  const sendOrderWithConfirmation = useCallback(async ({ ws, market, buildEnvelope, meta }) => {
+  const sendOrderWithConfirmation = useCallback(async ({ ws, market, buildEnvelope, meta, skipLastBlock = false }) => {
     let lastError = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const rq = ws.nextRq();
-      const lb = await getOrderLastBlock(market);
+      const lb = skipLastBlock ? 0 : await getOrderLastBlock(market);
       const envelope = buildEnvelope(rq, lb);
       try {
         return await waitForOrderConfirmation(ws, envelope, { ...meta, attempt });
@@ -1218,6 +1275,55 @@ export function useMonad() {
     return { ws: activeWs, market, marketId, accountId: accountIdRef.current };
   }, [connected, ensureOrderForwardingAllowed, waitForTradingSocket]);
 
+  const reportFilledOrder = useCallback(async ({ order, market, symbol, mark }) => {
+    const token = player?.token;
+    const wallet = address || authedWallet;
+    if (!isActiveDex || !token || !wallet || !order || !market) return null;
+    const orderSummary = summarizeOrderRow(order);
+    if (!orderSummary?.rq || !(Number(orderSummary?.fs) > 0 || Number(orderSummary?.s) > 0)) return null;
+    try {
+      const r = await fetch('/api/futures/monad/report-fill?dex=monad', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-token': token,
+          ...MONAD_IMPORT_DEX_HEADER,
+        },
+        body: JSON.stringify({
+          wallet,
+          order: orderSummary,
+          symbol: String(symbol || market.symbol || '').toUpperCase(),
+          mark: Number(mark || market.mark || 0),
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      logPerplOrder(r.ok ? 'perpl.fill_report_success' : 'perpl.fill_report_failed', {
+        status: r.status,
+        rq: orderSummary.rq,
+        oid: orderSummary.oid || null,
+        mkt: orderSummary.mkt,
+        fs: orderSummary.fs,
+        imported: data?.imported ?? null,
+        duplicate: data?.duplicate ?? null,
+        notional_usd: data?.notional_usd ?? null,
+        reason: data?.error || data?.detail || null,
+      }, r.ok ? 'info' : 'warn');
+      if (r.ok) {
+        scheduleClaim(250);
+        setTimeout(() => {
+          try { claimGoldRef.current?.({ force: true }); } catch {}
+        }, 650);
+      }
+      return data;
+    } catch (e) {
+      logPerplOrder('perpl.fill_report_network_failed', {
+        rq: orderSummary.rq,
+        message: e?.message || String(e),
+      }, 'warn');
+      return null;
+    }
+  }, [isActiveDex, player?.token, address, authedWallet, scheduleClaim]);
+
   // placeMarketOrder(symbol, side, collateralUsdc, slippage, leverage) →
   //   matches Avantis/GMX shape; FuturesPanel passes USDC margin + leverage.
   // We compute size in base tokens locally (collateral × leverage / mark).
@@ -1296,6 +1402,14 @@ export function useMonad() {
         rq: result?.rq ?? null,
         reason: result?.reason || null,
       });
+      if (result?.reason === 'order_filled') {
+        await reportFilledOrder({
+          order: result?.order,
+          market,
+          symbol: market.symbol,
+          mark,
+        });
+      }
       for (const delayMs of [2500, 8000]) {
         setTimeout(() => {
           const after = getPositionSnapshot(marketId, isLong);
@@ -1331,7 +1445,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation]);
+  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation, reportFilledOrder]);
 
   // placeLimitOrder(symbol, side, limitPrice, collateralUsdc, _tif, leverage)
   const placeLimitOrder = useCallback(async (symbol, side, limitPrice, collateralUsdc, _tif, leverage) => {
@@ -1381,6 +1495,14 @@ export function useMonad() {
           lb,
         }),
       });
+      if (result?.reason === 'order_filled') {
+        await reportFilledOrder({
+          order: result?.order,
+          market,
+          symbol: market.symbol,
+          mark: limit,
+        });
+      }
       scheduleClaim(7000);
       scheduleClaim(18000);
       return result;
@@ -1392,7 +1514,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation]);
+  }, [preflight, scheduleClaim, getPositionSnapshot, sendOrderWithConfirmation, reportFilledOrder]);
 
   // closePosition(symbol, side, baseTokenAmount). FuturesPanel passes the
   // close size as a base-token quantity (matching Pacifica/Decibel
@@ -1456,6 +1578,14 @@ export function useMonad() {
           return envelope;
         },
       });
+      if (result?.reason === 'order_filled') {
+        await reportFilledOrder({
+          order: result?.order,
+          market,
+          symbol: target,
+          mark: market.mark,
+        });
+      }
       scheduleClaim(7000);
       scheduleClaim(18000);
       return result;
@@ -1467,7 +1597,7 @@ export function useMonad() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [preflight, scheduleClaim, sendOrderWithConfirmation]);
+  }, [preflight, scheduleClaim, sendOrderWithConfirmation, reportFilledOrder]);
 
   // cancelOrder(orderId) — FuturesPanel passes the string we exposed in
   // normalizeOrder.order_id. The mt:22 t=5 envelope needs the original
@@ -1518,10 +1648,124 @@ export function useMonad() {
     }
   }, [orders, sendOrderWithConfirmation]);
 
-  // setTpsl is on the same envelope (tp + tpc + lp), but the UI flow needs
-  // a dedicated modal that the FuturesPanel doesn't yet wire up for Perpl.
-  // Returning a clear "coming next" makes the gate explicit in the panel.
-  const setTpsl = useCallback(async () => ({ error: 'TP/SL on Perpl positions arrives in Phase 3', code: 'NOT_IMPLEMENTED' }), []);
+  const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss, pairIndex, tradeIndex) => {
+    if (tradeInFlightRef.current) return { error: 'Trade already in progress' };
+    tradeInFlightRef.current = true;
+    setLoading(true);
+    setError(null);
+    const target = String(symbol || '').toUpperCase();
+    try {
+      const { ws, market, marketId, accountId: accId } = await preflight(target);
+      const tp = Number(takeProfit);
+      const sl = Number(stopLoss);
+      if (!(tp > 0) && !(sl > 0)) return { success: true, skipped: true };
+
+      const hintedMarketId = Number(pairIndex);
+      const hintedPositionId = Number(tradeIndex);
+      const isLongFromCloseSide = side === 'ask' || side === 'sell' || side === 'short';
+      const candidates = (positionsRawRef.current || []).filter(p => {
+        const id = getRowMarketId(p);
+        if (!Number.isFinite(id) || id !== marketId) return false;
+        if (Number.isFinite(hintedMarketId) && hintedMarketId > 0 && id !== hintedMarketId) return false;
+        const pid = getPositionId(p);
+        if (Number.isFinite(hintedPositionId) && hintedPositionId > 0 && pid != null) {
+          return pid === hintedPositionId;
+        }
+        return getPositionIsLong(p) === isLongFromCloseSide;
+      });
+      const pos = candidates[0] || null;
+      if (!pos) throw new Error(`No open ${target} position to attach TP/SL to`);
+
+      const posId = getPositionId(pos);
+      if (!posId) throw new Error('Perpl position id is not loaded yet - wait a moment and retry');
+      const isLong = getPositionIsLong(pos);
+      const sizeWire = getPositionWireSize(pos);
+      if (!(sizeWire > 0)) throw new Error('Empty Perpl position');
+      const mark = Number(market.mark);
+      if (mark > 0) {
+        if (tp > 0 && ((isLong && tp <= mark) || (!isLong && tp >= mark))) {
+          throw new Error(isLong ? 'Take profit must be above current price' : 'Take profit must be below current price');
+        }
+        if (sl > 0 && ((isLong && sl >= mark) || (!isLong && sl <= mark))) {
+          throw new Error(isLong ? 'Stop loss must be below current price' : 'Stop loss must be above current price');
+        }
+      }
+
+      const orderType = getCloseOrderType(isLong);
+      const submitTrigger = async (kind, price) => {
+        const priceWire = Math.max(1, Math.round(Number(price) * 10 ** market.price_decimals));
+        logPerplOrder('perpl.tpsl_order_start', {
+          symbol: target,
+          kind,
+          price: Number(price),
+          price_wire: priceWire,
+          mkt: marketId,
+          acc: accId,
+          position_id: posId,
+          is_long: isLong,
+          size_wire: sizeWire,
+          order_type: orderType,
+          trigger_condition: getTriggerCondition(isLong, kind),
+        });
+        return await sendOrderWithConfirmation({
+          ws,
+          market,
+          skipLastBlock: true,
+          meta: {
+            action: 'trigger',
+            triggerKind: kind,
+            marketId,
+            accountId: accId,
+            accountForwarding: orderForwardingAllowedRef.current,
+            isLong,
+            orderType,
+            beforeSizeWire: sizeWire,
+            positionId: posId,
+          },
+          buildEnvelope: (rq) => ({
+            mt: PERPL_MT.ORDER,
+            rq,
+            mkt: marketId,
+            acc: accId,
+            t: orderType,
+            p: 0,
+            s: sizeWire,
+            fl: PERPL_TIF.GTC,
+            lv: 0,
+            tp: priceWire,
+            tpc: getTriggerCondition(isLong, kind),
+            lp: posId,
+            lb: 0,
+          }),
+        });
+      };
+
+      const out = { success: true };
+      if (tp > 0) out.take_profit = await submitTrigger('take_profit', tp);
+      if (sl > 0) out.stop_loss = await submitTrigger('stop_loss', sl);
+      logPerplOrder('perpl.tpsl_result', {
+        symbol: target,
+        position_id: posId,
+        take_profit: tp > 0 ? tp : null,
+        stop_loss: sl > 0 ? sl : null,
+      });
+      return out;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      logPerplOrder('perpl.tpsl_error', {
+        symbol: target,
+        code: e?.code || null,
+        message: msg,
+        status: e?.status ?? null,
+        status_reason: e?.statusReason ?? null,
+      }, 'error');
+      setError(msg);
+      return { error: msg, code: e?.code };
+    } finally {
+      tradeInFlightRef.current = false;
+      setLoading(false);
+    }
+  }, [preflight, sendOrderWithConfirmation]);
 
   // No-op leverage setter — Perpl carries leverage per-order, so the
   // panel's slider doesn't need to flush state to the chain.

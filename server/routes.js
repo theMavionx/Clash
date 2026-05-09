@@ -1669,7 +1669,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       const sourceWhere = dex === 'decibel'
         ? "AND verified_source = 'server'"
         : dex === 'monad'
-          ? "AND verified_source = 'perpl_api'"
+          ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
@@ -2500,7 +2500,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'phoenix')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?

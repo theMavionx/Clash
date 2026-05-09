@@ -60,10 +60,14 @@ async function getPerplMarkets() {
       const id = Number(m?.id ?? m?.market_id ?? m?.mkt);
       if (!Number.isFinite(id)) continue;
       const cfg = m?.config || m;
+      const state = m?.state || {};
+      const priceDecimals = Number(cfg?.price_decimals ?? PERPL_MARKETS_FALLBACK[id]?.price_decimals ?? 1);
+      const markWire = Number(state?.mrk ?? state?.lst ?? state?.mid ?? state?.ask ?? state?.bid ?? 0);
       out[id] = {
         symbol: String(m?.name || m?.symbol || PERPL_MARKETS_FALLBACK[id]?.symbol || `MKT${id}`).toUpperCase(),
-        price_decimals: Number(cfg?.price_decimals ?? PERPL_MARKETS_FALLBACK[id]?.price_decimals ?? 1),
+        price_decimals: priceDecimals,
         size_decimals: Number(cfg?.size_decimals ?? PERPL_MARKETS_FALLBACK[id]?.size_decimals ?? 5),
+        mark: Number.isFinite(markWire) && markWire > 0 ? markWire / 10 ** priceDecimals : null,
       };
     }
     if (Object.keys(out).length) {
@@ -111,6 +115,19 @@ function perplOrderTypeLabel(t, reduceOnly = false) {
   return 'trade';
 }
 
+function perplSideFromOrderType(t, rawSize = 0, reduceOnly = false) {
+  const n = Number(t);
+  const isClose = n === 3 || n === 4 || reduceOnly;
+  const isLong = n === 1 || n === 3 || (n !== 2 && n !== 4 && Number(rawSize) > 0);
+  if (isClose) return isLong ? 'close_long' : 'close_short';
+  return isLong ? 'long' : 'short';
+}
+
+function perplNumericId(value) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 function normalizePerplFill(fill, markets) {
   const marketId = Number(fill?.mkt ?? fill?.market_id ?? fill?.market);
   const market = markets[marketId] || PERPL_MARKETS_FALLBACK[marketId];
@@ -119,14 +136,12 @@ function normalizePerplFill(fill, markets) {
   const rawSize = Number(fill?.s ?? fill?.size ?? fill?.fs ?? 0);
   const amount = Math.abs(rawSize) / 10 ** Number(market.size_decimals || 5);
   const sideType = Number(fill?.t ?? fill?.type ?? fill?.ot);
-  const isLong = sideType === 1 || sideType === 4 || rawSize > 0;
   const isClose = sideType === 3 || sideType === 4 || fill?.ro === true || fill?.reduce_only === true;
-  const side = isClose
-    ? (isLong ? 'close_long' : 'close_short')
-    : (isLong ? 'long' : 'short');
+  const side = perplSideFromOrderType(sideType, rawSize, isClose);
   const notional = price * amount;
   if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) return null;
-  const id = String(fill?.fid ?? fill?.id ?? fill?.oid ?? fill?.order_id ?? fill?.rq ?? `${marketId}:${rawSize}:${fill?.p}:${fill?.at?.t || ''}`);
+  const orderId = perplNumericId(fill?.oid ?? fill?.order_id);
+  const id = String(orderId ?? fill?.fid ?? fill?.id ?? fill?.rq ?? `${marketId}:${rawSize}:${fill?.p}:${fill?.at?.t || ''}`);
   const fee = Number(fill?.f ?? fill?.fee ?? 0) / 1e6;
   const pnl = fill?.pnl ?? fill?.realized_pnl;
   return {
@@ -135,7 +150,7 @@ function normalizePerplFill(fill, markets) {
     orderType: perplOrderTypeLabel(sideType, isClose),
     amount: String(amount),
     price: String(price),
-    orderId: null,
+    orderId,
     clientOrderId: `perpl:${id}`,
     status: 'filled',
     dex: 'monad',
@@ -806,6 +821,92 @@ router.get('/history', auth, (req, res) => {
   res.json(trades);
 });
 
+router.post('/monad/report-fill', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'monad') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to monad before reporting Perpl fills.`,
+      });
+    }
+    const wallet = normalizeEvmAddress(req.body?.wallet || req.playerWallet);
+    const playerWallet = normalizeEvmAddress(req.playerWallet);
+    if (!wallet) return res.status(400).json({ error: 'wallet required (0x...)' });
+    if (playerWallet && wallet !== playerWallet) {
+      return res.status(409).json({ error: 'wallet does not match player account' });
+    }
+
+    const order = req.body?.order || {};
+    const marketId = Number(order?.mkt ?? order?.market_id ?? order?.market);
+    const orderType = Number(order?.t ?? order?.type);
+    const rq = Number(order?.rq ?? order?.request_id);
+    const orderId = perplNumericId(order?.oid ?? order?.order_id ?? order?.id);
+    const status = Number(order?.st ?? order?.status);
+    const statusReason = Number(order?.sr ?? order?.status_reason ?? order?.statusReason);
+    const filledWire = Math.abs(Number(order?.fs ?? order?.filled_size ?? order?.filledSize ?? order?.s ?? order?.size ?? 0));
+    if (!Number.isFinite(marketId) || !Number.isFinite(orderType) || !orderId || filledWire <= 0) {
+      return res.status(400).json({ error: 'invalid Perpl fill report' });
+    }
+    if (status !== 4 && ![16, 22, 43].includes(statusReason)) {
+      return res.status(400).json({ error: 'Perpl order is not filled', status, status_reason: statusReason });
+    }
+    // Perpl request ids are seeded from Date.now(). Keep the fallback instant,
+    // but reject stale/fabricated reports from old tabs.
+    if (!Number.isFinite(rq) || Math.abs(Date.now() - rq) > 2 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'stale Perpl request id' });
+    }
+
+    const markets = await getPerplMarkets();
+    const market = markets[marketId] || PERPL_MARKETS_FALLBACK[marketId];
+    if (!market) return res.status(400).json({ error: 'unknown Perpl market' });
+
+    const priceDecimals = Number(market.price_decimals || 1);
+    const sizeDecimals = Number(market.size_decimals || 5);
+    const fallbackMark = Number(req.body?.mark ?? req.body?.price ?? 0);
+    const price = Number(market.mark) > 0
+      ? Number(market.mark)
+      : (Number.isFinite(fallbackMark) && fallbackMark > 0 ? fallbackMark : 0);
+    const amount = filledWire / 10 ** sizeDecimals;
+    const notional = amount * price;
+    if (!Number.isFinite(notional) || notional < 10 || notional > 10_000_000) {
+      return res.status(400).json({ error: 'Perpl fill notional outside reward bounds', notional });
+    }
+
+    const clientOrderId = `perpl:${orderId || rq}`;
+    const existing = db.db.prepare(`
+      SELECT id FROM trade_history
+      WHERE dex = 'monad' AND (
+        client_order_id = ?
+        OR (? IS NOT NULL AND order_id = ?)
+      )
+      LIMIT 1
+    `).get(clientOrderId, orderId, orderId);
+    if (existing) {
+      return res.json({ ok: true, imported: false, duplicate: true, trade_id: existing.id, notional_usd: notional });
+    }
+
+    const row = {
+      symbol: market.symbol,
+      side: perplSideFromOrderType(orderType, order?.s ?? order?.size ?? 0),
+      orderType: perplOrderTypeLabel(orderType),
+      amount: String(amount),
+      price: String(price),
+      orderId,
+      clientOrderId,
+      status: 'filled',
+      dex: 'monad',
+      notional_usd: notional,
+      verifiedSource: 'perpl_ws',
+      pnl: null,
+    };
+    const inserted = db.addTrade(req.playerId, row);
+    console.log(`[perpl] ws fill report imported player=${req.playerName} rq=${rq} oid=${orderId || '-'} ${row.symbol} ${row.side} $${notional.toFixed(2)}`);
+    res.json({ ok: true, imported: true, trade_id: inserted.id, notional_usd: notional, symbol: row.symbol, side: row.side });
+  } catch (e) {
+    console.warn('[perpl] ws fill report failed:', e.message);
+    res.status(502).json({ error: 'Failed to record Perpl fill', detail: e.message });
+  }
+});
+
 // ==================== TRADE REPORT (non-custodial: Avantis, Decibel) ====================
 // Client reports are accepted for backwards-compatible UI flow. Browser-only
 // payloads are not rewardable; market opens on Avantis are immediately
@@ -910,6 +1011,10 @@ router.post('/monad/import-fills', auth, async (req, res) => {
       const row = normalizePerplFill(fill, markets);
       if (!row) { skipped++; continue; }
       try {
+        if (row.orderId) {
+          const existing = db.db.prepare("SELECT id FROM trade_history WHERE dex = 'monad' AND order_id = ? LIMIT 1").get(row.orderId);
+          if (existing) { skipped++; continue; }
+        }
         const r = db.addTrade(req.playerId, row);
         if (r?.id) imported++;
       } catch (e) {
