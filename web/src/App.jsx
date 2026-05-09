@@ -1,15 +1,19 @@
-import { useEffect, useState, lazy, Suspense } from 'react';
-import { GodotProvider } from './hooks/useGodot';
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
+import { GodotProvider, usePlayer } from './hooks/useGodot';
 import WalletProvider from './components/WalletProvider';
 import PrivyAuthProvider from './components/PrivyAuthProvider';
-import { DexProvider, DexServerSync } from './contexts/DexContext';
-import { FuturesModeProvider } from './contexts/FuturesModeContext';
-import { EvmWalletProvider } from './contexts/EvmWalletContext';
+import { DexProvider, DexServerSync, useDex } from './contexts/DexContext';
+import { FuturesModeProvider, useFuturesMode } from './contexts/FuturesModeContext';
+import { EvmWalletProvider, useEvmWallet } from './contexts/EvmWalletContext';
 import { AptosWalletAdapterProvider } from '@aptos-labs/wallet-adapter-react';
 import { Network } from '@aptos-labs/ts-sdk';
-import { AptosWalletProvider } from './contexts/AptosWalletContext';
+import { AptosWalletProvider, useAptosWallet } from './contexts/AptosWalletContext';
 import { useFarcaster } from './hooks/useFarcaster';
 import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
+import { useOptionalPrivy } from './components/PrivyAuthProvider';
+import ChunkErrorBoundary from './components/ChunkErrorBoundary';
+import { addClientBreadcrumb, lazyWithClientReload, setClientLogContext } from './lib/clientLogger';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
 // separately so the logo can be hidden on narrow (phone-portrait) screens
@@ -20,8 +24,8 @@ const splashLogo = '/splash-logo.png?v=splash-art';
 import './index.css';
 
 // Lazy load heavy components — only after Farcaster SDK is ready
-const GodotCanvas = lazy(() => import('./components/GodotCanvas'));
-const GameUI = lazy(() => import('./components/GameUI'));
+const GodotCanvas = lazy(lazyWithClientReload(() => import('./components/GodotCanvas'), 'GodotCanvas'));
+const GameUI = lazy(lazyWithClientReload(() => import('./components/GameUI'), 'GameUI'));
 
 function FarcasterGate({ children }) {
   const { isInFrame, user, loading } = useFarcaster();
@@ -80,14 +84,69 @@ function AppInner() {
   usePreloadPanelAssets();
   return (
     <FarcasterGate>
-      <Suspense fallback={<SplashScreen label="Loading game..." />}>
-        <div style={styles.container}>
-          <GodotCanvas />
-          <GameUI />
-        </div>
-      </Suspense>
+      <ChunkErrorBoundary name="AppInner">
+        <Suspense fallback={<SplashScreen label="Loading game..." />}>
+          <div style={styles.container}>
+            <GodotCanvas />
+            <GameUI />
+          </div>
+        </Suspense>
+      </ChunkErrorBoundary>
     </FarcasterGate>
   );
+}
+
+function ClientLogContextBridge() {
+  const { dex } = useDex();
+  const { mode } = useFuturesMode();
+  const player = usePlayer();
+  const solWallet = useSolWallet();
+  const evmWallet = useEvmWallet();
+  const aptosWallet = useAptosWallet();
+  const privy = useOptionalPrivy();
+  const prevRef = useRef({});
+
+  const solAddress = solWallet?.publicKey?.toBase58?.() || null;
+  const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
+  const isEvmDex = dex === 'avantis' || dex === 'gmx' || dex === 'monad';
+  const walletAddress = dex === 'decibel'
+    ? aptosWallet?.address
+    : isEvmDex
+      ? evmWallet?.address
+      : (solAddress || privySolAddress);
+  const walletAdapter = dex === 'decibel'
+    ? aptosWallet?.walletName
+    : isEvmDex
+      ? evmWallet?.source
+      : (solWallet?.wallet?.adapter?.name || (privySolAddress ? 'privy_solana' : null));
+  const playerId = player?.player_id || player?.id || null;
+  const hasPrivySolanaWallet = (privy.solanaWallets || []).some(w => w?.address);
+
+  useEffect(() => {
+    setClientLogContext({
+      selected_dex: dex,
+      futures_mode: mode || null,
+      player_id: playerId,
+      wallet_adapter: walletAdapter || null,
+      wallet_address: walletAddress || null,
+      privy_logged_in: !!privy.authenticated,
+      has_privy_solana_wallet: hasPrivySolanaWallet,
+    });
+
+    const prev = prevRef.current;
+    if (prev.dex && prev.dex !== dex) addClientBreadcrumb('dex.changed', { from: prev.dex, to: dex });
+    if (prev.mode !== undefined && prev.mode !== mode) addClientBreadcrumb('futures_mode.changed', { from: prev.mode, to: mode || null });
+    if (prev.walletAddress !== undefined && prev.walletAddress !== walletAddress) {
+      addClientBreadcrumb('wallet.active_changed', {
+        dex,
+        adapter: walletAdapter || null,
+        connected: !!walletAddress,
+      });
+    }
+    prevRef.current = { dex, mode, walletAddress };
+  }, [dex, mode, playerId, walletAdapter, walletAddress, privy.authenticated, hasPrivySolanaWallet]);
+
+  return null;
 }
 
 export default function App() {
@@ -118,6 +177,7 @@ export default function App() {
                   {/* FuturesModeProvider sits inside GodotProvider so it can read
                       the player's `futures_mode` from the player state context. */}
                   <FuturesModeProvider>
+                    <ClientLogContextBridge />
                     <AppInner />
                   </FuturesModeProvider>
                 </GodotProvider>

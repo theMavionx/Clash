@@ -38,6 +38,7 @@ import {
   useEvmContextResolver,
   usePrivyEvmCandidate,
 } from './resolvers';
+import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const DEX_PICKED_KEY = 'clash_dex_picked';
 // v2 cache: keyed by `${wallet}|${dex}` instead of just `wallet`. Per-DEX
@@ -199,17 +200,25 @@ export function useAuthFlow() {
     if (!solWallet || solWallet.connected || solWallet.connecting) return;
     if (!solWallet.select || !solWallet.connect) return;
     seekerAutoConnectTriedRef.current = true;
+    addClientBreadcrumb('wallet.connect_start', { source: 'seeker_mwa', dex });
     // The adapter name is "Mobile Wallet Adapter". Stable across SDK
     // versions and matches what `SolanaMobileWalletAdapter` registers as.
     try { solWallet.select('Mobile Wallet Adapter'); } catch { /* noop */ }
-    Promise.resolve(solWallet.connect()).catch(e => {
+    Promise.resolve(solWallet.connect()).then(() => {
+      addClientBreadcrumb('wallet.connect_success', { source: 'seeker_mwa', dex });
+    }).catch(e => {
       // User dismissed the Seed Vault prompt, or no MWA host actually
       // present (we trusted the readyState check but the device rejected).
       // Don't retry on the same device — they can manually connect via
       // the wallet modal as a fallback.
+      addClientBreadcrumb('wallet.connect_fail', {
+        source: 'seeker_mwa',
+        dex,
+        message: e?.message || String(e || ''),
+      }, 'warn');
       console.warn('[useAuthFlow] Seeker auto-connect failed:', e?.message || e);
     });
-  }, [smReady, isSolanaMobile, solWallet]);
+  }, [smReady, isSolanaMobile, solWallet, dex]);
 
   // Session-invalidated reset. Godot sends `show_register` in two cases:
   //   (a) brand-new user — nothing to clean, all flags are already clear
@@ -295,13 +304,20 @@ export function useAuthFlow() {
       const prov = await getFarcasterEthProvider();
       if (!prov) return; // fcNoEvm — manual UI will kick in after grace window
       try {
+        addClientBreadcrumb('wallet.connect_start', { source: 'farcaster_evm', dex });
         const accounts = await prov.request({ method: 'eth_requestAccounts' });
         const addr = accounts && accounts[0];
         if (addr) {
           // Don't persist FC provider's rdns — valid only inside the frame.
           setEvmProvider(prov, addr, null, 'farcaster');
+          addClientBreadcrumb('wallet.connect_success', { source: 'farcaster_evm', dex });
         }
       } catch (err) {
+        addClientBreadcrumb('wallet.connect_fail', {
+          source: 'farcaster_evm',
+          dex,
+          message: err?.message || String(err || ''),
+        }, 'warn');
         console.warn('[auth] FC eth_requestAccounts failed:', err?.message || err);
       }
     })();
@@ -588,6 +604,11 @@ export function useAuthFlow() {
     // tutorial_flags, gold and building progress intact across FC→Avantis
     // sign-in paths.
     if (fcUser?.fid) payload.fid = fcUser.fid;
+    addClientBreadcrumb('auth.register_start', {
+      dex,
+      source: candidate.source || null,
+      mode: 'auto',
+    });
     sendToGodot('register', payload);
     // Safety: if Godot never acks (network partition), clear the spinner
     // after 10s so the user can retry or pick a different path.
@@ -602,6 +623,7 @@ export function useAuthFlow() {
     if (!isDexAvailableInContext(newDex, { isInFrame })) return;
     const isLoggedIn = typeof window !== 'undefined' && !!window._playerToken;
     const switching = isLoggedIn && dexPicked && newDex !== dex;
+    addClientBreadcrumb('dex.pick', { from: dex, to: newDex, switching });
     setDex(newDex);
     writeDexPicked(true);
     setDexPickedState(true);
@@ -657,6 +679,11 @@ export function useAuthFlow() {
     }
     if (fcUser?.fid) payload.fid = fcUser.fid;
     writeAccountProbeCache(candidate.wallet, dex, name.trim());
+    addClientBreadcrumb('auth.register_start', {
+      dex,
+      source: candidate.source || null,
+      mode: 'manual_name',
+    });
     sendToGodot('register', payload);
     const t = setTimeout(() => setRegistering(false), 10000);
     return () => clearTimeout(t);
@@ -665,9 +692,10 @@ export function useAuthFlow() {
   // Trigger manual Privy login (email) — Privy renders its own modal.
   const loginWithPrivy = useCallback(() => {
     if (!privyEnabled) return;
+    addClientBreadcrumb('wallet.connect_start', { source: 'privy_email', dex });
     try { privyLogin({ loginMethods: ['email'] }); }
     catch { privyLogin(); }
-  }, [privyEnabled, privyLogin]);
+  }, [privyEnabled, privyLogin, dex]);
 
   const logout = useCallback(() => {
     lastRegisteredRef.current = null;

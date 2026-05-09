@@ -114,11 +114,13 @@ export async function resolveSkrName(wallet) {
       const parser = await getParser(rpcUrl);
       const main = await withTimeout(parser.getMainDomain(pubkey), RPC_TIMEOUT_MS);
       if (!main || !main.domain) {
-        // No primary domain set — cache the negative so we don't re-probe
-        // for 24h. User can clear localStorage if they register one later.
         writeCache(wallet, null);
         return null;
       }
+      // On-chain shape (verified against tldparser@1.2.1
+      // dist/cjs/svm/utils.js:396 — `mainDomain: data.domain + data.tld`):
+      //   `tld`    is stored WITH the leading dot, e.g. `".skr"`
+      //   `domain` is the bare name, e.g. `"alice"`
       const tld = String(main.tld || '').toLowerCase().replace(/^\./, '');
       const name = String(main.domain || '').toLowerCase();
       if (tld === 'skr' && name) {
@@ -130,11 +132,20 @@ export async function resolveSkrName(wallet) {
       writeCache(wallet, null);
       return null;
     } catch (err) {
-      // RPC stall / 429 / parse error — try next endpoint. We DO NOT cache
-      // negatives on transport errors; the user might have a domain we
-      // just couldn't read. Cache only on a clean "no domain" answer.
+      // `getMainDomain` THROWS "Unable to find MainDomain account at <addr>"
+      // when the wallet has no primary domain set — the common case for
+      // most wallets. Treat that as a definitive negative (cache it for
+      // 24h so we don't re-probe across all three RPCs every render) and
+      // bail without trying the next endpoint. ANY other error (timeout,
+      // 429, parse fail) is a transport problem — we DO try the next RPC
+      // and DO NOT cache a negative.
+      const msg = String(err?.message || err || '');
+      if (/Unable to find MainDomain account/i.test(msg)) {
+        writeCache(wallet, null);
+        return null;
+      }
       if (rpcUrl === RPC_FALLBACKS[RPC_FALLBACKS.length - 1]) {
-        console.warn('[skrName] all RPCs failed:', err?.message || err);
+        console.warn('[skrName] all RPCs failed:', msg);
       }
       // Reset parserPromise so the next attempt re-binds to a healthy RPC.
       parserPromise = null;

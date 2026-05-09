@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { addClientBreadcrumb } from '../lib/clientLogger';
 
 // Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
@@ -100,10 +101,18 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
     setError(null);
     setConnecting(detail.info?.rdns || detail.info?.name);
     try {
+      addClientBreadcrumb('wallet.connect_start', {
+        source: 'evm_injected',
+        adapter: detail.info?.name || detail.info?.rdns || null,
+      });
       const accounts = await detail.provider.request({ method: 'eth_requestAccounts' });
       const addr = accounts && accounts[0];
       if (!addr) throw new Error('No account returned');
       await ensureBaseChain(detail.provider);
+      addClientBreadcrumb('wallet.connect_success', {
+        source: 'evm_injected',
+        adapter: detail.info?.name || detail.info?.rdns || null,
+      });
       onConnected({
         address: addr,
         provider: detail.provider,
@@ -111,6 +120,11 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
         rdns: detail.info?.rdns || detail.info?.name,
       });
     } catch (err) {
+      addClientBreadcrumb('wallet.connect_fail', {
+        source: 'evm_injected',
+        adapter: detail.info?.name || detail.info?.rdns || null,
+        message: err?.message || String(err || ''),
+      }, 'error');
       console.error('[evm-modal] connect failed:', err);
       const msg = err?.message || String(err);
       if (/user rejected|denied/i.test(msg)) setError('Connection cancelled');

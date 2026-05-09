@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
+import { addClientBreadcrumb } from '../lib/clientLogger';
 // Loading splash — served from `web/public/splash-bg.png` + splash-logo.png.
 // Layered so the logo can be hidden on narrow / portrait screens while the
 // background art still fills the viewport. Public-path reference means art
@@ -183,10 +184,15 @@ function GodotCanvas({ onEngineReady }) {
     let easeRafId = null;
     let loadedTimeoutId = null;
     let stage2DelayId = null;
+    let lastProgressBucket = -1;
 
     // Catch unhandled errors for mobile debug
     const errHandler = (e) => {
       if (disposed) return;
+      addClientBreadcrumb('godot.global_error', {
+        message: describeGlobalError(e),
+        progress: lastProgressRef.current.value,
+      }, 'error');
       setErrorMsg(prev => prev || formatGlobalError(e));
     };
     const rejectionHandler = (e) => errHandler(e);
@@ -197,9 +203,15 @@ function GodotCanvas({ onEngineReady }) {
       if (disposed) return;
       const GODOT = window.Engine || window.Godot;
       if (!GODOT) {
+        addClientBreadcrumb('godot.engine_missing', {}, 'error');
         console.error('Godot engine not found');
         return;
       }
+      addClientBreadcrumb('godot.start', {
+        pixel_ratio: getGodotPixelRatio(),
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
 
       // Server may not send Content-Length for Godot files. Keep this near
       // Work.pck + Work.wasm so the bar does not crawl after PCK trimming.
@@ -231,6 +243,7 @@ function GodotCanvas({ onEngineReady }) {
       };
       const startStage2 = () => {
         if (disposed || stage2StartTime != null) return;
+        addClientBreadcrumb('godot.stage2_start');
         console.log('[load] stage2 ramp starting');
         stage2StartTime = Date.now();
         setStage(2);
@@ -251,6 +264,11 @@ function GodotCanvas({ onEngineReady }) {
           pct = Math.min(99, Math.round((current / maxDownload) * 100));
         }
         console.log('[load] stage1 download', { current, total, maxDownload, pct });
+        const bucket = Math.floor(pct / 25);
+        if (bucket !== lastProgressBucket) {
+          lastProgressBucket = bucket;
+          addClientBreadcrumb('godot.stage1_progress', { pct, total: total || null });
+        }
         setStage(1);
         setStageProgress(pct);
         lastProgressRef.current = { value: pct, time: Date.now() };
@@ -267,6 +285,7 @@ function GodotCanvas({ onEngineReady }) {
       const godotBuildingsLoaded = () => {
         if (disposed) return;
         if (stage2BuildingsDone) return;
+        addClientBreadcrumb('godot.stage2_complete');
         console.log('[load] stage2 complete (godotBuildingsLoaded)');
         stage2BuildingsDone = Date.now();
       };
@@ -300,6 +319,7 @@ function GodotCanvas({ onEngineReady }) {
         // Download finished → ease stage 1 from current% up to 100 over 500ms,
         // pause 450ms at 100%, then start stage 2.
         console.log('[load] engine.startGame resolved → easing stage 1 → 100');
+        addClientBreadcrumb('godot.engine_ready');
         resizeCanvas();
         if (onEngineReadyRef.current) onEngineReadyRef.current(engine);
         const from = lastProgressRef.current.value;
@@ -315,6 +335,9 @@ function GodotCanvas({ onEngineReady }) {
         easeRafId = requestAnimationFrame(easeTick);
       }).catch(err => {
         if (disposed) return;
+        addClientBreadcrumb('godot.start_error', {
+          message: err?.message || String(err || ''),
+        }, 'error');
         console.error('Godot start error:', err);
         setErrorMsg(String(err?.message || err));
       });
@@ -322,7 +345,12 @@ function GodotCanvas({ onEngineReady }) {
     loadGodotEngineScript()
       .then(startGodot)
       .catch(err => {
-        if (!disposed) setErrorMsg(String(err?.message || err));
+        if (!disposed) {
+          addClientBreadcrumb('godot.script_load_error', {
+            message: err?.message || String(err || ''),
+          }, 'error');
+          setErrorMsg(String(err?.message || err));
+        }
       });
     return () => {
       disposed = true;

@@ -12,16 +12,18 @@ import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay from './TutorialOverlay';
 import { useSend, useUI, useSelectedBuilding, useTutorial } from '../hooks/useGodot';
+import ChunkErrorBoundary from './ChunkErrorBoundary';
+import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 
 // Heavy components are lazy-loaded — their JS only ships to the user
 // when they actually open the relevant UI. Saves ~600KB from the
 // initial bundle (FuturesPanel pulls in TradingViewWidget +
 // lightweight-charts + all wallet-adapter pickers; the three modals
 // each have their own animation/data-fetch chunks).
-const FuturesPanel = lazy(() => import('./FuturesPanel'));
-const ProfileModal = lazy(() => import('./ProfileModal'));
-const BattleLogPanel = lazy(() => import('./BattleLogPanel'));
-const LeaderboardPanel = lazy(() => import('./LeaderboardPanel'));
+const FuturesPanel = lazy(lazyWithClientReload(() => import('./FuturesPanel'), 'FuturesPanel'));
+const ProfileModal = lazy(lazyWithClientReload(() => import('./ProfileModal'), 'ProfileModal'));
+const BattleLogPanel = lazy(lazyWithClientReload(() => import('./BattleLogPanel'), 'BattleLogPanel'));
+const LeaderboardPanel = lazy(lazyWithClientReload(() => import('./LeaderboardPanel'), 'LeaderboardPanel'));
 
 export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
@@ -51,6 +53,19 @@ export default function GameUI() {
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
   }, [anyPanelOpen, sendToGodot]);
+
+  useEffect(() => {
+    if (futuresOpen) addClientBreadcrumb('ui.panel_open', { panel: 'futures' });
+  }, [futuresOpen]);
+  useEffect(() => {
+    if (showProfile) addClientBreadcrumb('ui.panel_open', { panel: 'profile' });
+  }, [showProfile]);
+  useEffect(() => {
+    if (showBattleLog) addClientBreadcrumb('ui.panel_open', { panel: 'battle_log' });
+  }, [showBattleLog]);
+  useEffect(() => {
+    if (showLeaderboard) addClientBreadcrumb('ui.panel_open', { panel: 'leaderboard' });
+  }, [showLeaderboard]);
 
   const handleCloseShop = useCallback(() => {
     setShopOpen(false);
@@ -118,23 +133,25 @@ export default function GameUI() {
       {/* Lazy-loaded panels — Suspense boundary renders nothing while
           the chunk fetches (typically <100ms on a warm cache). The user
           opened the panel deliberately so a tiny pause is acceptable. */}
-      <Suspense fallback={null}>
-        {futuresOpen && (
-          <FuturesPanel />
-        )}
+      <ChunkErrorBoundary name="GameUI.lazy_panels" fallback={null}>
+        <Suspense fallback={null}>
+          {futuresOpen && (
+            <FuturesPanel />
+          )}
 
-        {showProfile && (
-          <ProfileModal onClose={() => setShowProfile(false)} />
-        )}
+          {showProfile && (
+            <ProfileModal onClose={() => setShowProfile(false)} />
+          )}
 
-        {showBattleLog && (
-          <BattleLogPanel onClose={() => setShowBattleLog(false)} />
-        )}
+          {showBattleLog && (
+            <BattleLogPanel onClose={() => setShowBattleLog(false)} />
+          )}
 
-        {showLeaderboard && (
-          <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
-        )}
-      </Suspense>
+          {showLeaderboard && (
+            <LeaderboardPanel onClose={() => setShowLeaderboard(false)} />
+          )}
+        </Suspense>
+      </ChunkErrorBoundary>
 
       {tutorialPhase && (
         <TutorialOverlay

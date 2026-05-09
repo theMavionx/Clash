@@ -14,6 +14,7 @@ import {
   isPhantomInAppBrowser,
   isUserDismissedWalletError,
 } from '../lib/solanaWalletUi';
+import { addClientBreadcrumb } from '../lib/clientLogger';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
@@ -156,9 +157,18 @@ export default function WalletProvider({ children }) {
 
   const handleWalletError = useCallback((error, adapter) => {
     if (isUserDismissedWalletError(error)) {
+      addClientBreadcrumb('wallet.connect_dismissed', {
+        source: 'solana_adapter',
+        adapter: adapter?.name || adapter?.adapter?.name || null,
+      }, 'warn');
       forgetSelectedWallet(localStorageKey, adapter);
       return;
     }
+    addClientBreadcrumb('wallet.connect_fail', {
+      source: 'solana_adapter',
+      adapter: adapter?.name || adapter?.adapter?.name || null,
+      message: error?.message || String(error || ''),
+    }, 'error');
     console.error('[solana-wallet] adapter error:', error, adapter);
   }, [localStorageKey]);
 
