@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import { ConnectionProvider, WalletProvider as SolWalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import {
@@ -37,6 +37,22 @@ const RPC_LIST = [
   'https://api.mainnet-beta.solana.com',
   'https://solana.drpc.org',
 ];
+
+const USER_DISMISSED_WALLET_RE = /not authorized|authorized by the user|user rejected|user denied|declined|cancel/i;
+
+function adapterName(adapter) {
+  return adapter?.name || adapter?.adapter?.name || adapter?._wallet?.name || 'Solana wallet';
+}
+
+function forgetSelectedWallet(localStorageKey, adapter) {
+  try {
+    const selected = localStorage.getItem(localStorageKey);
+    const name = adapterName(adapter);
+    if (!selected || selected === name || selected.includes(name) || name.includes(selected)) {
+      localStorage.removeItem(localStorageKey);
+    }
+  } catch { /* private mode / quota etc — non-fatal */ }
+}
 
 function useBestRpc() {
   const [rpc, setRpc] = useState(RPC_LIST[0]);
@@ -146,6 +162,18 @@ export default function WalletProvider({ children }) {
 
   const rpc = useBestRpc();
   const { ready: fcReady, inFrame } = useFarcasterWalletReady();
+  const localStorageKey = inFrame ? 'fcWalletName' : 'walletName';
+
+  const handleWalletError = useCallback((error, adapter) => {
+    const name = error?.name || '';
+    const message = error?.message || String(error || '');
+    const userDismissedConnect = name === 'WalletConnectionError' && USER_DISMISSED_WALLET_RE.test(message);
+    if (userDismissedConnect) {
+      forgetSelectedWallet(localStorageKey, adapter);
+      return;
+    }
+    console.error('[solana-wallet] adapter error:', error, adapter);
+  }, [localStorageKey]);
 
   // Wait for BOTH detections so we don't briefly mount the provider with
   // the wrong wallet list and trigger a bogus autoConnect.
@@ -156,7 +184,8 @@ export default function WalletProvider({ children }) {
       <SolWalletProvider
         wallets={wallets}
         autoConnect={true}
-        localStorageKey={inFrame ? 'fcWalletName' : 'walletName'}
+        localStorageKey={localStorageKey}
+        onError={handleWalletError}
       >
         <WalletModalProvider>
           {children}
