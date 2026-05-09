@@ -1,5 +1,23 @@
 // Solana Mobile (Saga / Seeker) detection.
 //
+// Reference: https://docs.solanamobile.com/recipes/general/detecting-seeker-users
+//
+// The official recipe assumes a React Native runtime and recommends
+//   `Platform.constants.Model === 'Seeker'`
+// (with `Brand: solanamobile`, `Manufacturer: Solana Mobile Inc.`). We're a
+// PWA / TWA — `Platform.constants` doesn't exist in the browser, and the
+// docs explicitly call out that "the Platform Constants API can be spoofed
+// and should not be used for use cases where you need a guaranteed Seeker
+// user." The doc's *guaranteed* path is verifying an SGT (Seeker Genesis
+// Token) NFT on-chain after a SIWS handshake. That's overkill for this
+// surface — we only use the signal to (a) decide whether to mount the
+// Mobile Wallet Adapter (avoids "wallet not found" on plain Android) and
+// (b) surface the user's `.skr` handle as a nickname suggestion. A spoofer
+// gains nothing from a false positive on either path, and a false NEGATIVE
+// on a real Seeker just means the user taps MWA themselves and types their
+// nickname manually instead of one-tap-applying their `.skr`. Both paths
+// are recoverable.
+//
 // Why we can't use SolanaMobileWalletAdapter.readyState alone:
 // the adapter reports `Loadable` on EVERY Android device (the package's
 // own getIsSupported() is just a UA + secureContext check), and only
@@ -9,17 +27,10 @@
 // that signal is what produced the "We can't find a wallet" dialog on
 // plain Android phones for everyone hitting the Pacifica auto-flow.
 //
-// Instead we do a UA-based pre-filter for Saga/Seeker markers. False
-// positives here (a regular Android with a fake Saga UA) are unlikely
-// in practice and recoverable — the user just sees the wallet picker
-// and can choose Phantom. False NEGATIVES on real Seekers fall through
-// to the same picker — also recoverable, but means the user has to tap
-// MWA themselves instead of getting the auto-connect.
-//
-// UA markers based on Solana Mobile's own detection guidance and
-// observed device strings:
-//   - Saga (OG): "OnePlus" + "Saga" / Saga model code
-//   - Saga 2 / Seeker: "Solana" / "Seeker"
+// Web-equivalent UA markers — Brand/Manufacturer/Model surface in the
+// Android WebView UA string Solana Mobile devices ship:
+//   - Saga (OG): "OnePlus" + "Saga" model code
+//   - Saga 2 / Seeker: "Seeker" model token, "Solana Mobile" brand token
 // Vendor rebrands of the next Solana Mobile chassis (Telegram, etc.)
 // would need to be added here; keep the regex narrow on purpose.
 
@@ -47,12 +58,17 @@ function detectSolanaMobileSync() {
   }
   // Saga / Seeker UA markers. "Saga" alone is too generic (matches a few
   // unrelated apps in WebView UAs), so we gate it on either OEM presence
-  // ("OnePlus" — original Saga) or "Solana" / "Seeker" tokens which only
-  // appear on Solana Mobile devices. Tested against shipping device UAs
-  // logged by the Solana Mobile dApp Store.
+  // ("OnePlus" — original Saga) or one of the Solana Mobile brand tokens.
+  // The flagship tokens we look for:
+  //   - `Seeker` (the Model field on Seeker firmware MR4+)
+  //   - `Solana Mobile` (the Manufacturer field — "Solana Mobile Inc.")
+  //   - `solanamobile` (the Brand field — emitted as the lowercase build
+  //     fingerprint on Seeker; the spaceless variant won't be caught by
+  //     `\bSolana\b.*\bMobile\b` so we add it explicitly)
   const isSagaSeeker =
     /\bSeeker\b/i.test(ua) ||
     /\bSolana\b.*\bMobile\b/i.test(ua) ||
+    /solanamobile/i.test(ua) ||
     (/\bSaga\b/i.test(ua) && /OnePlus/i.test(ua));
   cachedResult = isSagaSeeker;
   return isSagaSeeker;

@@ -14,6 +14,7 @@ import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
+import { useSkrHandle } from '../hooks/useSkrHandle';
 import { cartoonBtn } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
@@ -84,6 +85,15 @@ function ProfileModal({ onClose }) {
     : dex === 'phoenix'
     ? (walletAddr ? 'solana' : null)
     : (adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null));
+
+  // Seeker `.skr` handle for the active wallet (Solana DEXes only — the
+  // hook bails out for EVM / Aptos addresses on its own). Surfaced as a
+  // chip next to the truncated wallet address so a Seeker user can see
+  // their Solana Mobile identity at a glance.
+  const skrLookupWallet = (walletSource === 'adapter' || walletSource === 'privy' || walletSource === 'solana')
+    ? activeWallet
+    : null;
+  const { handle: seekerHandle } = useSkrHandle(skrLookupWallet);
 
   // Switch active DEX. In our model one wallet = one account, so "switching"
   // DEX really means "log out of this account and sign in with the other
@@ -312,11 +322,29 @@ function ProfileModal({ onClose }) {
           {/* Wallet */}
           {activeWallet ? (
             <div style={S.connectedBox}>
-              <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+              <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
                 <div style={S.dot} />
                 <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>
                   {copied ? 'Copied' : `${activeWallet.slice(0, 6)}...${activeWallet.slice(-4)}`}
                 </span>
+                {seekerHandle?.full && (
+                  <span
+                    title={`Seeker .skr handle for ${activeWallet}`}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      padding: '2px 8px', borderRadius: 999,
+                      background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
+                      color: '#fff',
+                      fontSize: 10, fontWeight: 900, letterSpacing: '0.4px',
+                      textTransform: 'lowercase',
+                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 1px 0 rgba(0,0,0,0.25)',
+                      textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+                    }}
+                  >
+                    <span style={{ fontSize: 9, opacity: 0.85 }}>SEEKER</span>
+                    <strong>{seekerHandle.full}</strong>
+                  </span>
+                )}
                 <button
                   title="Copy full address"
                   onClick={async () => {

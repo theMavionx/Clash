@@ -30,6 +30,7 @@ import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
+import { useSkrHandle } from '../hooks/useSkrHandle';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 import {
   useSolanaAdapterResolver,
@@ -336,6 +337,13 @@ export function useAuthFlow() {
     return privySol || solAdapter || null;
   }, [dex, dexPicked, evmContext, privyEvm, aptosCandidate, solAdapter, privySol]);
 
+  // Seeker `.skr` handle — only resolves on Saga/Seeker hardware (the hook
+  // gates internally), so on every other host this is a free no-op. We feed
+  // the result into `suggestedName` AND expose it to RegisterPanel so the
+  // form can render a one-tap "Use my .skr handle" button when the user
+  // would prefer to override the default with the bare wallet handle.
+  const { handle: seekerHandle } = useSkrHandle(candidate?.wallet);
+
   // Suggested display name. FC username always wins when present (matches
   // user expectation: "when I'm on Farcaster, use my FC name"). Email
   // prefix is a fallback for Privy flows outside frames.
@@ -348,17 +356,23 @@ export function useAuthFlow() {
   // this default (editable later in the profile). Without this fallback every
   // returning MetaMask / Phantom user sees the name form even though they
   // already have an account server-side.
+  //
+  // Seeker priority: a Seeker user's `.skr` handle (without the TLD, capped
+  // at 20 chars by the server) takes precedence over `player_<hex>` because
+  // it's the identity Solana Mobile already issued them. FC still wins inside
+  // a frame (FC username is the strongest signal there).
   const suggestedName = useMemo(() => {
     if (fcUser) return String(fcUser.username || fcUser.displayName || 'fc_' + fcUser.fid);
     const email = candidate?.email || privyEvm?.email || privySol?.email;
     if (email) return email.split('@')[0].slice(0, 20);
+    if (seekerHandle?.name) return seekerHandle.name.slice(0, 20);
     if (candidate?.wallet) {
       // Strip 0x prefix for EVM; Solana base58 addresses have no prefix.
       const raw = String(candidate.wallet).replace(/^0x/i, '');
       return 'player_' + raw.slice(0, 6).toLowerCase();
     }
     return null;
-  }, [fcUser, candidate, privyEvm, privySol]);
+  }, [fcUser, candidate, privyEvm, privySol, seekerHandle]);
 
   // (lastRegisteredRef is declared up-front alongside fcEvmTriedRef.)
   // It tracks the last wallet we fired register for; clears on session
@@ -677,6 +691,7 @@ export function useAuthFlow() {
     fcUser,
     candidate,
     suggestedName,
+    seekerHandle,
     privyEnabled,
     privyAuthed,
     actions: {

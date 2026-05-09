@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from 'react';
+import { memo, useState, useCallback, useEffect, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import EvmWalletModal from './EvmWalletModal';
@@ -109,14 +109,42 @@ function DexBadge({ dex, onChange }) {
   );
 }
 
-function NameForm({ wallet, suggested, onSubmit }) {
+function NameForm({ wallet, suggested, seekerHandle, onSubmit }) {
   const [name, setName] = useState(suggested || '');
+  // Track whether the user has manually typed in the field. We want the
+  // input to track late-arriving `suggested` updates (the Seeker `.skr`
+  // lookup is async — the form may mount with a `player_<hex>` placeholder
+  // and then need to refresh once the handle resolves a beat later) WITHOUT
+  // clobbering whatever the user is actively typing.
+  const editedRef = useRef(false);
+  const onChangeName = useCallback(e => {
+    editedRef.current = true;
+    setName(e.target.value);
+  }, []);
+  useEffect(() => {
+    if (editedRef.current) return;
+    if (!suggested) return;
+    setName(suggested);
+  }, [suggested]);
+
   const submit = e => {
     e.preventDefault();
     if (name.trim().length < 2) return;
     onSubmit(name);
   };
   const valid = name.trim().length >= 2;
+
+  // One-tap "use my .skr name". Only renders on Seeker (the hook never
+  // returns a handle off-device) AND when the input doesn't already match
+  // the .skr name — if it does, the chip would be a no-op.
+  const skrName = seekerHandle?.name?.slice(0, 20) || '';
+  const skrFull = seekerHandle?.full || '';
+  const showSkrChip = skrName && name.trim().toLowerCase() !== skrName.toLowerCase();
+  const applySkr = useCallback(() => {
+    editedRef.current = false; // treat as auto-fill, not manual edit
+    setName(skrName);
+  }, [skrName]);
+
   return (
     <form onSubmit={submit} style={S.bodyStack}>
       <h3 style={S.sectionTitle}>PICK A NAME</h3>
@@ -127,11 +155,24 @@ function NameForm({ wallet, suggested, onSubmit }) {
       <input
         style={S.input}
         value={name}
-        onChange={e => setName(e.target.value)}
+        onChange={onChangeName}
         placeholder="Your display name"
         maxLength={20}
         autoFocus
       />
+      {showSkrChip && (
+        <button
+          type="button"
+          onClick={applySkr}
+          style={S.skrChip}
+          title={`Use your Seeker handle (${skrFull})`}
+        >
+          <span style={S.skrChipIcon}>S</span>
+          <span style={S.skrChipText}>
+            Use my Seeker handle: <strong>{skrFull}</strong>
+          </span>
+        </button>
+      )}
       <button
         type="submit"
         style={{ ...S.primaryBtn, opacity: valid ? 1 : 0.5 }}
@@ -254,7 +295,7 @@ function EmailIcon() {
 
 function RegisterPanel() {
   const {
-    state, dex, isInFrame, fcUser, candidate, suggestedName,
+    state, dex, isInFrame, fcUser, candidate, suggestedName, seekerHandle,
     privyEnabled, privyAuthed, actions,
   } = useAuthFlow();
 
@@ -301,6 +342,7 @@ function RegisterPanel() {
           <NameForm
             wallet={candidate.wallet}
             suggested={suggestedName || ''}
+            seekerHandle={seekerHandle}
             onSubmit={actions.submitName}
           />
         );
@@ -503,6 +545,29 @@ const S = {
     boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.1)',
     fontFamily: 'inherit',
   },
+  skrChip: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    width: '100%', boxSizing: 'border-box',
+    padding: '10px 14px', borderRadius: 12,
+    background: 'linear-gradient(180deg, rgba(168,116,255,0.18) 0%, rgba(120,80,220,0.22) 100%)',
+    border: '2px solid #8B5CF6',
+    boxShadow: '0 2px 0 #6D28D9, inset 0 1px 0 rgba(255,255,255,0.25)',
+    color: '#3F1B8C',
+    fontSize: 12, fontWeight: 800, letterSpacing: '0.4px',
+    cursor: 'pointer', textAlign: 'left',
+    fontFamily: 'inherit',
+  },
+  skrChipIcon: {
+    flexShrink: 0,
+    width: 22, height: 22, borderRadius: 6,
+    background: 'linear-gradient(180deg, #A78BFA 0%, #6D28D9 100%)',
+    color: '#fff',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 12, fontWeight: 900,
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.4), 0 1px 0 rgba(0,0,0,0.25)',
+    textShadow: '0 1px 0 rgba(0,0,0,0.3)',
+  },
+  skrChipText: { lineHeight: 1.3 },
 
   // Matches BuildingInfoPanel.styles.actionBtn (yellow gradient).
   primaryBtn: {
