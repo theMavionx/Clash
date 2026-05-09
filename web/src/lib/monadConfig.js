@@ -152,13 +152,19 @@ export const ERC20_ABI = [
 ];
 
 // ───── Perpl REST / WS endpoints ─────────────────────────────────────────
-// REST is reverse-proxied via `/perpl-api/*` (Vite in dev, nginx in prod)
-// because Perpl does not currently answer browser CORS preflights for our
-// origin. WS endpoints stay direct; if Perpl starts geofencing WS per user,
-// proxying `PERPL_WS_TRADING` through nginx is the next step.
+function perplWsUrl(path) {
+  if (typeof window === 'undefined' || !window.location?.host) {
+    return `wss://app.perpl.xyz/ws/v1${path}`;
+  }
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${window.location.host}/perpl-ws${path}`;
+}
+
+// REST and WS are reverse-proxied via Vite/nginx because Perpl validates
+// browser Origin/Referer against its own app domain during auth handshakes.
 export const PERPL_API_BASE = '/perpl-api';
-export const PERPL_WS_TRADING = 'wss://app.perpl.xyz/ws/v1/trading';
-export const PERPL_WS_MARKET_DATA = 'wss://app.perpl.xyz/ws/v1/market-data';
+export const PERPL_WS_TRADING = perplWsUrl('/trading');
+export const PERPL_WS_MARKET_DATA = perplWsUrl('/market-data');
 
 // ───── Market-id mapping ─────────────────────────────────────────────────
 // Mainnet only. Perpl's REST/WS uses numeric market_id; UI/quest code

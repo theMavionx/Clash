@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+function setPerplProxyOrigin(proxyReq) {
+  proxyReq.setHeader('origin', 'https://app.perpl.xyz');
+  proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
+}
+
 export default defineConfig({
   // Vite 8 swapped the dep optimizer from esbuild to Rolldown and
   // tightened the CJS->ESM interop. The new behaviour drops named-export
@@ -129,12 +134,19 @@ export default defineConfig({
         cookieDomainRewrite: '',
         cookiePathRewrite: { '/api/v1': '/', '/': '/' },
         configure: (proxy) => {
-          proxy.on('proxyReq', (proxyReq) => {
-            proxyReq.setHeader('origin', 'https://app.perpl.xyz');
-            proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
-          });
+          proxy.on('proxyReq', setPerplProxyOrigin);
         },
         rewrite: (path) => path.replace(/^\/perpl-api/, '/api/v1'),
+      },
+      '/perpl-ws': {
+        target: 'wss://app.perpl.xyz',
+        ws: true,
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReqWs', setPerplProxyOrigin);
+        },
+        rewrite: (path) => path.replace(/^\/perpl-ws/, '/ws/v1'),
       },
       '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
       '/ws': {

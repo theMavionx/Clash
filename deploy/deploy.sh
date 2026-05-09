@@ -438,6 +438,22 @@ server {
         gzip off;
     }
 
+    location /perpl-ws/ {
+        proxy_pass https://app.perpl.xyz/ws/v1/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host app.perpl.xyz;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Origin "https://app.perpl.xyz";
+        proxy_set_header Referer "https://app.perpl.xyz/";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
     location /rpc/arb-alchemy {
         proxy_pass https://arb-mainnet.g.alchemy.com/v2/_wtFjwex46SgJDz2fx2c6;
         proxy_http_version 1.1;
