@@ -2083,7 +2083,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'phoenix']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;

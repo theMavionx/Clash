@@ -262,7 +262,7 @@ async function fetchWalletTrades(player, opts = {}) {
       const sourceWhere = dexFilter === 'decibel'
         ? "AND verified_source = 'server'"
         : dexFilter === 'monad'
-          ? "AND verified_source = 'perpl_api'"
+          ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : "AND verified_source = 'worker'";
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, created_at
