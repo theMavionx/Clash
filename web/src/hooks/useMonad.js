@@ -276,6 +276,7 @@ function normalizePosition(p, marketsById) {
 
 function normalizeOrder(o, marketsById) {
   if (!o) return null;
+  if (o?.r === true || !isLiveOrderStatus(getOrderStatus(o))) return null;
   const id = Number(o?.mkt ?? o?.market_id ?? o?.market);
   const m = marketsById?.[id];
   if (!m) return null;
@@ -285,12 +286,16 @@ function normalizeOrder(o, marketsById) {
   const triggerCondition = Number(o?.tpc ?? o?.trigger_condition ?? 0);
   const isTrigger = triggerPriceWire > 0 && triggerCondition > 0;
   const isTp = isTrigger && isTriggerTakeProfit(t, triggerCondition);
-  const sizeAbs = Math.abs(Number(o?.s ?? o?.size ?? 0));
+  const sizeAbs = Math.abs(finiteNumber(
+    o?.s ?? o?.size ?? o?.sz ?? o?.qty ?? o?.quantity ?? o?.order_size,
+    0
+  ));
+  const priceWire = finiteNumber(o?.p ?? o?.price ?? o?.limit_price, 0);
   return {
     symbol: m.symbol,
     side: isLong ? 'bid' : 'ask',
     amount: String(sizeAbs / 10 ** m.size_decimals),
-    price: String((triggerPriceWire || Number(o?.p ?? o?.price ?? 0)) / 10 ** m.price_decimals),
+    price: String((triggerPriceWire || priceWire) / 10 ** m.price_decimals),
     stop_price: isTrigger ? String(triggerPriceWire / 10 ** m.price_decimals) : undefined,
     leverage: String((Number(o?.lv ?? o?.leverage ?? 100)) / 100),
     order_type: isTrigger
@@ -330,6 +335,14 @@ function getOrderStatus(order) {
 
 function getOrderStatusReason(order) {
   return finiteNumber(order?.sr ?? order?.status_reason ?? order?.statusReason, 0);
+}
+
+function isLiveOrderStatus(status) {
+  if (!status) return true;
+  return status === ORDER_STATUS.OPEN
+    || status === ORDER_STATUS.PARTIAL
+    || status === ORDER_STATUS.UNTRIGGERED
+    || status === ORDER_STATUS.TRIGGERED;
 }
 
 function getOrderRequestId(row) {
@@ -451,6 +464,18 @@ function positionMatchesPending(entry, row) {
   const sizeWire = getPositionWireSize(row);
   if (entry.action === 'close') return sizeWire < entry.beforeSizeWire || row?.r === true;
   return sizeWire > entry.beforeSizeWire;
+}
+
+function hydrateOrderRowFromPending(row, entry) {
+  if (!row || !entry?.envelope) return row;
+  const env = entry.envelope;
+  const patch = {};
+  for (const key of ['mkt', 'acc', 't', 'p', 's', 'fl', 'lv', 'tp', 'tpc', 'tr', 'lp']) {
+    if (row[key] == null && env[key] != null) patch[key] = env[key];
+  }
+  if (row.rq == null && entry.rq != null) patch.rq = entry.rq;
+  if (Object.keys(patch).length) Object.assign(row, patch);
+  return row;
 }
 
 function sanitizeOrderEnvelope(envelope) {
@@ -591,14 +616,41 @@ function normalizeAccount(acc) {
   };
 }
 
-function mergeByKey(prev, updates, getKey) {
+function mergeDefinedFields(prev, update) {
+  if (!prev) return update;
+  const merged = { ...prev };
+  for (const [key, value] of Object.entries(update || {})) {
+    if (value !== undefined && value !== null) merged[key] = value;
+  }
+  return merged;
+}
+
+function defaultShouldRemoveRow(row) {
+  if (row?.r === true) return true;
+  if (row?.s != null || row?.size != null) {
+    return Number(row?.s ?? row?.size) === 0;
+  }
+  return false;
+}
+
+function shouldRemoveOrderRow(row, merged) {
+  if (row?.r === true) return true;
+  const st = getOrderStatus(row) || getOrderStatus(merged);
+  if (st === ORDER_STATUS.CANCELED || st === ORDER_STATUS.EXPIRED || st === ORDER_STATUS.FAILED) return true;
+  if (st === ORDER_STATUS.FILLED) return true;
+  return false;
+}
+
+function mergeByKey(prev, updates, getKey, options = {}) {
+  const merge = options.merge || ((_prev, update) => update);
+  const shouldRemove = options.shouldRemove || defaultShouldRemoveRow;
   const map = new Map((prev || []).map(item => [getKey(item), item]));
   for (const item of updates || []) {
     const key = getKey(item);
     if (key == null) continue;
-    const remove = item?.r === true || Number(item?.s ?? item?.size ?? item?.fs ?? 1) === 0;
-    if (remove) map.delete(key);
-    else map.set(key, item);
+    const merged = merge(map.get(key), item);
+    if (shouldRemove(item, merged)) map.delete(key);
+    else map.set(key, merged);
   }
   return Array.from(map.values());
 }
@@ -879,6 +931,7 @@ export function useMonad() {
       for (const row of rows) {
         for (const entry of entries) {
           if (entry.done || !orderMatchesPending(entry, row)) continue;
+          hydrateOrderRowFromPending(row, entry);
           const st = getOrderStatus(row);
           const sr = getOrderStatusReason(row);
           const filledWire = getOrderFilledWire(row);
@@ -1152,7 +1205,10 @@ export function useMonad() {
           case PERPL_MT.ORDERS_DELTA: {
             const rows = getFrameRows(frame, 'orders', 'o');
             const list = frame?.mt === PERPL_MT.ORDERS_DELTA
-              ? mergeByKey(ordersRawRef.current, rows, o => o?.oid ?? o?.order_id ?? o?.id ?? o?.rq)
+              ? mergeByKey(ordersRawRef.current, rows, o => o?.oid ?? o?.order_id ?? o?.id ?? o?.rq, {
+                merge: mergeDefinedFields,
+                shouldRemove: shouldRemoveOrderRow,
+              })
               : rows;
             ordersRawRef.current = list;
             const norm = list
