@@ -1536,13 +1536,11 @@ export function useMonad() {
       const target = String(symbol).toUpperCase();
       const isLongSide = side === 'bid' || side === 'long';
       const pos = (positionsRawRef.current || []).find(p => {
-        const id = Number(p?.mkt ?? p?.market_id ?? p?.market);
-        const sgn = Number(p?.s ?? p?.size ?? 0);
-        const long = (typeof p?.is_long === 'boolean') ? p.is_long : sgn >= 0;
-        return id === marketId && long === isLongSide;
+        const id = getRowMarketId(p);
+        return id === marketId && getPositionIsLong(p) === isLongSide;
       });
       if (!pos) throw new Error(`No open ${target} position`);
-      const totalSizeAbs = Math.abs(Number(pos?.s ?? pos?.size ?? 0));
+      const totalSizeAbs = getPositionWireSize(pos);
       if (totalSizeAbs <= 0) throw new Error('Empty position');
       // Convert request from base tokens → wire-scale, capped by current
       // position size. If caller didn't pass a number (e.g. close-button
@@ -1552,7 +1550,7 @@ export function useMonad() {
         ? Math.round(reqBase * 10 ** market.size_decimals)
         : totalSizeAbs;
       const sizeWire = Math.max(1, Math.min(reqWire, totalSizeAbs));
-      const posId = Number(pos?.pid ?? pos?.id);
+      const posId = getPositionId(pos);
       const orderType = isLongSide ? PERPL_ORDER_TYPE.CLOSE_LONG : PERPL_ORDER_TYPE.CLOSE_SHORT;
       const result = await sendOrderWithConfirmation({
         ws,
