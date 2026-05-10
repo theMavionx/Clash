@@ -239,7 +239,7 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"register":
 			_do_register(data.get("name", ""), data.get("wallet", ""), data.get("dex", ""), int(data.get("fid", 0)))
 		"wallet_connected":
-			_try_wallet_login(data.get("wallet", ""))
+			_try_wallet_login(data.get("wallet", ""), data.get("dex", ""))
 		"logout":
 			_do_logout()
 		"deselect_building":
@@ -368,7 +368,7 @@ func _do_logout() -> void:
 	send_to_react("show_register", {})
 
 
-func _try_wallet_login(wallet: String) -> void:
+func _try_wallet_login(wallet: String, dex: String = "") -> void:
 	if wallet == "":
 		return
 	var net = get_node_or_null("/root/Net")
@@ -378,7 +378,7 @@ func _try_wallet_login(wallet: String) -> void:
 	if net.has_token():
 		net.link_wallet(wallet)
 		return
-	var result = await net.login_by_wallet(wallet)
+	var result = await net.login_by_wallet(wallet, dex)
 	if result.has("token"):
 		send_to_react("registered", {"success": true})
 		send_to_react("state", {

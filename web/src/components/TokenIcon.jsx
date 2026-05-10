@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { canonTokenSymbol, tokenFallbackColor, tokenLogoSources } from '../lib/tokenLogos';
 
-// v3 = invalidate cached "failed" entries from before we added local PNGs
-// for MSATS / MET / SYRUP / BRENTOIL aliases. Stale logoFailed entries from
-// v2 prevented the icon from re-trying after the assets shipped. Bump
+// v4 = invalidate cached "failed" entries from before we added local SKR.
+// v3 invalidated MSATS / MET / SYRUP / BRENTOIL aliases. Bump
 // whenever new local /tokens/* are added so users force a fresh probe.
-const LOGO_CACHE_KEY = 'clash_token_logos_v3';
+const LOGO_CACHE_KEY = 'clash_token_logos_v4';
 const LOGO_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const logoCache = new Map();

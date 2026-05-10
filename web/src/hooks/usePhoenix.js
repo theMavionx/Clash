@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-import { useSignAndSendTransaction as usePrivySignAndSend, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
+import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
 import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
@@ -9,7 +9,6 @@ import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
   getPhoenixClient,
-  phoenixFetch,
   phoenixSymbol,
 } from '../lib/phoenixClient';
 import { sendPhoenixInstructions } from '../lib/phoenixTx';
@@ -17,6 +16,8 @@ import { sendPhoenixInstructions } from '../lib/phoenixTx';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const POLL_MS = 10_000;
+const PHOENIX_PRICE_CACHE_MS = 15_000;
+const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
 const USDC_DECIMALS = 6;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
@@ -64,9 +65,22 @@ function roundDownToLot(value, lotSize) {
   return Number((Math.floor(n / lot) * lot).toFixed(decimals));
 }
 
-function fundingPercentToDecimal(value) {
+function fundingBasisPointsToDecimal(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n / 10_000 : 0;
+}
+
+function fundingPercentageToDecimal(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n / 100 : 0;
+}
+
+function phoenixFundingToDecimal(row) {
+  if (!row) return 0;
+  if (row.fundingRatePercentage != null || row.currentFundingRatePercentage != null) {
+    return fundingPercentageToDecimal(row.fundingRatePercentage ?? row.currentFundingRatePercentage);
+  }
+  return fundingBasisPointsToDecimal(row.fundingRate);
 }
 
 function phoenixTickSizeUsd(m) {
@@ -97,8 +111,8 @@ function normalizeMarket(m) {
     isolated_only: !!m?.isolatedOnly,
     maker_fee: Number(m?.makerFee ?? 0.00005),
     taker_fee: Number(m?.takerFee ?? 0.00035),
-    funding_rate: fundingPercentToDecimal(m?.fundingRate ?? m?.fundingRatePercentage ?? m?.currentFundingRatePercentage),
-    next_funding_rate: fundingPercentToDecimal(m?.fundingRate ?? m?.fundingRatePercentage ?? m?.currentFundingRatePercentage),
+    funding_rate: phoenixFundingToDecimal(m),
+    next_funding_rate: phoenixFundingToDecimal(m),
     volume_24h: 0,
     open_interest: 0,
     _phoenix: m,
@@ -113,8 +127,8 @@ function enrichMarketsWithFunding(markets, fundingOverview) {
     const symbol = phoenixSymbol(series?.symbol);
     const points = Array.isArray(series?.points) ? series.points : [];
     const latest = points.length ? points[points.length - 1] : null;
-    if (symbol && latest?.fundingRate != null) {
-      bySymbol[symbol] = fundingPercentToDecimal(latest.fundingRate);
+    if (symbol && (latest?.fundingRate != null || latest?.fundingRatePercentage != null || latest?.currentFundingRatePercentage != null)) {
+      bySymbol[symbol] = phoenixFundingToDecimal(latest);
     }
   }
   return markets.map(m => {
@@ -123,20 +137,37 @@ function enrichMarketsWithFunding(markets, fundingOverview) {
   });
 }
 
-function normalizePrice(symbol, stats, fallbackMarket = null) {
-  const latest = Array.isArray(stats) && stats.length ? stats[stats.length - 1] : null;
-  const prev = Array.isArray(stats) && stats.length > 1 ? stats[0] : latest;
-  const mark = Number(latest?.mark_price ?? latest?.markPrice ?? latest?.price ?? 0);
-  const spot = Number(latest?.spot_price ?? latest?.spotPrice ?? mark);
-  const previous = Number(prev?.mark_price ?? prev?.markPrice ?? mark);
-  return {
-    symbol,
-    mark: mark > 0 ? String(mark) : '',
-    oracle: spot > 0 ? String(spot) : (mark > 0 ? String(mark) : ''),
-    yesterday_price: previous > 0 ? String(previous) : '',
-    volume_24h: String(latest?.volume_quote ?? latest?.volumeQuote ?? fallbackMarket?.volume_24h ?? 0),
-    open_interest: String(latest?.open_interest ?? latest?.openInterest ?? fallbackMarket?.open_interest ?? 0),
-  };
+function pricesFromFundingOverview(markets, fundingOverview) {
+  const bySymbol = {};
+  for (const series of fundingOverview?.series || []) {
+    const symbol = phoenixSymbol(series?.symbol);
+    const points = Array.isArray(series?.points) ? series.points : [];
+    const latest = points.length ? points[points.length - 1] : null;
+    const prev = points.length > 1 ? points[0] : latest;
+    const mark = Number(latest?.markPrice ?? latest?.mark_price ?? latest?.price ?? 0);
+    const previous = Number(prev?.markPrice ?? prev?.mark_price ?? mark);
+    if (symbol && mark > 0) {
+      bySymbol[symbol] = {
+        symbol,
+        mark: String(mark),
+        oracle: String(mark),
+        yesterday_price: previous > 0 ? String(previous) : String(mark),
+        volume_24h: '0',
+        open_interest: '0',
+      };
+    }
+  }
+  return markets
+    .map(m => {
+      const p = bySymbol[m.symbol];
+      if (!p) return null;
+      return {
+        ...p,
+        volume_24h: String(m?.volume_24h ?? 0),
+        open_interest: String(m?.open_interest ?? 0),
+      };
+    })
+    .filter(Boolean);
 }
 
 function ticksToUsd(value, market) {
@@ -240,19 +271,23 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
 export function usePhoenix() {
   const { dex } = useDex();
   const isActiveDex = dex === 'phoenix';
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
   const { connection } = useConnection();
   const player = usePlayer();
 
   let privyWalletObj = null;
   let privySendTx = null;
+  let privySignTx = null;
   if (PRIVY_ENABLED) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const { wallets } = usePrivyWallets();
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const { signAndSendTransaction } = usePrivySignAndSend();
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signTransaction: signPrivyTransaction } = usePrivySignTransaction();
     privyWalletObj = (wallets || []).find(w => w && w.walletClientType === 'privy') || (wallets || [])[0] || null;
     privySendTx = signAndSendTransaction;
+    privySignTx = signPrivyTransaction;
   }
 
   const privyAddr = privyWalletObj?.address || null;
@@ -273,6 +308,8 @@ export function usePhoenix() {
   const [walletUsdc, setWalletUsdc] = useState(null);
   const [dataReady, setDataReady] = useState(false);
   const [accountReady, setAccountReady] = useState(false);
+  const [traderRegistered, setTraderRegistered] = useState(false);
+  const [inviteStatus, setInviteStatus] = useState({ checking: false, whitelisted: null, codeUsed: null });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
@@ -280,10 +317,14 @@ export function usePhoenix() {
   const marketsRef = useRef([]);
   const marketsBySymbolRef = useRef({});
   const pricesRef = useRef([]);
+  const pricesFetchedAtRef = useRef(0);
+  const priceBackoffUntilRef = useRef(0);
   const subaccountsRef = useRef([]);
   const traderRegisteredRef = useRef(false);
   const tokenRef = useRef(null);
   const claimGoldRef = useRef(null);
+  const claimInFlightRef = useRef(null);
+  const lastClaimAtRef = useRef(0);
   const inFlightRef = useRef(new Map());
 
   useEffect(() => {
@@ -311,32 +352,76 @@ export function usePhoenix() {
       ownerPk,
       connection,
       sendTransaction,
+      signTransaction,
       privyActive,
       privySendTx,
+      privySignTx,
       privyWalletObj,
+      label: 'phoenix',
     });
-  }, [ownerPk, connection, sendTransaction, privyActive, privySendTx, privyWalletObj]);
+  }, [ownerPk, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
-  const claimGold = useCallback(async () => {
+  const claimGold = useCallback(async (opts = {}) => {
     if (!walletAddr) return null;
     const token = tokenRef.current || window._playerToken;
     if (!token) return null;
-    try {
+    if (claimInFlightRef.current) return claimInFlightRef.current;
+    const now = Date.now();
+    const minGap = opts.force ? 750 : 5000;
+    if (now - lastClaimAtRef.current < minGap) return null;
+    lastClaimAtRef.current = now;
+
+    const promise = (async () => {
+      if (opts.importFills !== false) {
+        try {
+          const importRes = await fetch(`${GAME_API}/futures/phoenix/import-fills?dex=phoenix`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-token': token },
+            body: JSON.stringify({ wallet: walletAddr }),
+          });
+          const importData = await importRes.json().catch(() => ({}));
+          if (importRes.ok) {
+            console.log('[Phoenix rewards] import-fills', importData);
+          } else {
+            console.warn('[Phoenix rewards] import-fills failed', importRes.status, importData);
+          }
+        } catch (e) {
+          console.warn('[Phoenix rewards] import-fills request failed', e?.message || e);
+        }
+      }
+
       const res = await fetch(`${GAME_API}/trading/claim-gold`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
         body: JSON.stringify({ wallet: walletAddr, dex: 'phoenix' }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 429) {
+        console.warn('[Phoenix rewards] claim-gold rate limited', data);
+        return data;
+      }
       if (res.ok && data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Phoenix trading rewards' });
         if (window.onGodotMessage) {
           window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
       }
+      if (res.ok) {
+        console.log('[Phoenix rewards] claim-gold', data);
+      } else {
+        console.warn('[Phoenix rewards] claim-gold failed', res.status, data);
+      }
       return data;
-    } catch {
+    })();
+
+    claimInFlightRef.current = promise;
+    try {
+      return await promise;
+    } catch (e) {
+      console.warn('[Phoenix rewards] claim-gold request failed', e?.message || e);
       return null;
+    } finally {
+      if (claimInFlightRef.current === promise) claimInFlightRef.current = null;
     }
   }, [walletAddr]);
 
@@ -348,10 +433,10 @@ export function usePhoenix() {
     if (!isActiveDex || !walletAddr) return undefined;
     const fire = () => {
       const fn = claimGoldRef.current;
-      if (typeof fn === 'function') fn();
+      if (typeof fn === 'function') fn({ importFills: true });
     };
-    const first = setTimeout(fire, 6_000);
-    const iv = setInterval(fire, 30_000);
+    const first = setTimeout(fire, 10_000);
+    const iv = setInterval(fire, 45_000);
     return () => {
       clearTimeout(first);
       clearInterval(iv);
@@ -374,28 +459,46 @@ export function usePhoenix() {
     }
   }, [walletAddr, ownerPk, connection]);
 
-  const fetchPrices = useCallback(async (marketList = marketsRef.current) => {
-    if (!isActiveDex || !marketList.length) return [];
-    const rows = await Promise.allSettled(marketList.map(async (m) => {
-      const data = await phoenixFetch(`/v1/market/${encodeURIComponent(m.symbol)}/stats?limit=2`);
-      const row = normalizePrice(m.symbol, asPhoenixArray(data?.stats ? data.stats : data), m);
-      return row;
-    }));
-    const next = rows
-      .filter(r => r.status === 'fulfilled')
-      .map(r => r.value)
-      .filter(Boolean);
-    if (next.length) {
-      const bySymbol = { ...marketsBySymbolRef.current };
-      for (const p of next) {
-        if (bySymbol[p.symbol]) bySymbol[p.symbol] = { ...bySymbol[p.symbol], _mark: Number(p.mark || 0) };
-      }
-      marketsBySymbolRef.current = bySymbol;
-      pricesRef.current = next;
-      setPrices(next);
+  const applyPriceRows = useCallback((rows) => {
+    const next = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!next.length) return pricesRef.current;
+    const bySymbol = { ...marketsBySymbolRef.current };
+    for (const p of next) {
+      if (bySymbol[p.symbol]) bySymbol[p.symbol] = { ...bySymbol[p.symbol], _mark: Number(p.mark || 0) };
     }
+    marketsBySymbolRef.current = bySymbol;
+    pricesRef.current = next;
+    pricesFetchedAtRef.current = Date.now();
+    priceBackoffUntilRef.current = 0;
+    setPrices(next);
     return next;
-  }, [isActiveDex]);
+  }, []);
+
+  const fetchPrices = useCallback(async (marketList = marketsRef.current, options = {}) => {
+    if (!isActiveDex || !marketList.length) return [];
+    if (options.overview) {
+      return applyPriceRows(pricesFromFundingOverview(marketList, options.overview));
+    }
+    const now = Date.now();
+    if (!options.force && pricesRef.current.length && now - pricesFetchedAtRef.current < PHOENIX_PRICE_CACHE_MS) {
+      return pricesRef.current;
+    }
+    if (!options.force && now < priceBackoffUntilRef.current) {
+      return pricesRef.current;
+    }
+    try {
+      // One overview request returns markPrice for all markets. Avoid the old
+      // N-markets -> N `/v1/market/{symbol}/stats` burst that quickly hit 429.
+      const overview = await client.api.funding().getFundingOverview({ perMarketLimit: 2 });
+      return applyPriceRows(pricesFromFundingOverview(marketList, overview));
+    } catch (e) {
+      const text = String(e?.message || e || '');
+      if (/429|Too Many Requests/i.test(text) || Number(e?.status) === 429) {
+        priceBackoffUntilRef.current = Date.now() + PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS;
+      }
+      return pricesRef.current;
+    }
+  }, [applyPriceRows, client, isActiveDex]);
 
   const fetchMarkets = useCallback(async () => {
     if (!isActiveDex) return [];
@@ -403,8 +506,9 @@ export function usePhoenix() {
       const raw = await client.api.markets().getMarkets();
       const baseList = asPhoenixArray(raw).map(normalizeMarket).filter(Boolean);
       let list = baseList;
+      let overview = null;
       try {
-        const overview = await client.api.funding().getFundingOverview({ perMarketLimit: 1 });
+        overview = await client.api.funding().getFundingOverview({ perMarketLimit: 2 });
         list = enrichMarketsWithFunding(baseList, overview);
       } catch {
         list = baseList;
@@ -417,7 +521,7 @@ export function usePhoenix() {
         maker_fee: list[0]?.maker_fee ?? prev.maker_fee,
         taker_fee: list[0]?.taker_fee ?? prev.taker_fee,
       } : prev);
-      fetchPrices(list);
+      fetchPrices(list, overview ? { overview } : {});
       return list;
     } catch (e) {
       setError(e?.message || 'Could not load Phoenix markets');
@@ -433,6 +537,7 @@ export function usePhoenix() {
     try {
       const state = await client.api.traders().getTraderStateSnapshot(walletAddr, { traderPdaIndex: 0 });
       traderRegisteredRef.current = true;
+      setTraderRegistered(true);
       const subaccounts = Array.isArray(state?.snapshot?.subaccounts) ? state.snapshot.subaccounts : [];
       subaccountsRef.current = subaccounts;
       const cross = subaccounts.find(s => Number(s.subaccountIndex) === 0) || subaccounts[0] || null;
@@ -480,6 +585,7 @@ export function usePhoenix() {
       return state;
     } catch {
       traderRegisteredRef.current = false;
+      setTraderRegistered(false);
       subaccountsRef.current = [];
       setPositions([]);
       setOrders([]);
@@ -502,26 +608,68 @@ export function usePhoenix() {
     }
   }, [client, isActiveDex, walletAddr]);
 
-  const activate = useCallback(async () => {
+  const checkInviteStatus = useCallback(async () => {
+    if (!isActiveDex || !walletAddr) {
+      setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
+      return null;
+    }
+    setInviteStatus(prev => ({ ...prev, checking: true }));
+    try {
+      const check = await client.api.invite().checkWallet(walletAddr);
+      const next = {
+        checking: false,
+        whitelisted: !!check?.whitelisted,
+        codeUsed: check?.invite_code_used || null,
+      };
+      setInviteStatus(next);
+      return check;
+    } catch (e) {
+      setInviteStatus(prev => ({ ...prev, checking: false }));
+      return null;
+    }
+  }, [client, isActiveDex, walletAddr]);
+
+  const activate = useCallback(async (inviteOptions = {}) => {
     if (!walletAddr) {
       setError('Wallet not connected');
       return false;
     }
-    return runOnce(`activate:${walletAddr}`, async () => {
+    const inviteCode = String(
+      inviteOptions?.code
+      || inviteOptions?.inviteCode
+      || inviteOptions?.accessCode
+      || inviteOptions?.referralCode
+      || ''
+    ).trim();
+    const inviteKind = String(
+      inviteOptions?.inviteKind
+      || inviteOptions?.codeType
+      || (inviteOptions?.referralCode ? 'referral' : 'access')
+    ).toLowerCase();
+    return runOnce(`activate:${walletAddr}:${inviteKind}:${inviteCode}`, async () => {
       setLoading(true);
       setError(null);
       try {
         if (!traderRegisteredRef.current) {
-          try {
-            const check = await client.api.invite().checkWallet(walletAddr);
-            if (!check?.whitelisted && PHOENIX_ACCESS_CODE) {
+          const check = await checkInviteStatus();
+          if (!check?.whitelisted) {
+            if (inviteCode) {
+              if (inviteKind === 'referral') {
+                await client.api.invite().activateInviteWithReferral({ authority: walletAddr, referral_code: inviteCode });
+              } else {
+                await client.api.invite().activateInvite({ authority: walletAddr, code: inviteCode });
+              }
+              setInviteStatus({ checking: false, whitelisted: true, codeUsed: inviteCode });
+            } else if (PHOENIX_ACCESS_CODE) {
               await client.api.invite().activateInvite({ authority: walletAddr, code: PHOENIX_ACCESS_CODE });
-            } else if (!check?.whitelisted && PHOENIX_REFERRAL_CODE) {
+              setInviteStatus({ checking: false, whitelisted: true, codeUsed: PHOENIX_ACCESS_CODE });
+            } else if (PHOENIX_REFERRAL_CODE) {
               await client.api.invite().activateInviteWithReferral({ authority: walletAddr, referral_code: PHOENIX_REFERRAL_CODE });
+              setInviteStatus({ checking: false, whitelisted: true, codeUsed: PHOENIX_REFERRAL_CODE });
+            } else if (check) {
+              setInviteStatus(prev => ({ ...prev, whitelisted: false }));
+              throw new Error('Phoenix access code required');
             }
-          } catch {
-            // Some Phoenix environments allow direct registration; let the
-            // on-chain registration path be the source of truth.
           }
           const ix = await client.ixs.buildRegisterTrader({
             authority: walletAddr,
@@ -529,6 +677,7 @@ export function usePhoenix() {
           });
           await sendIxs(ix);
           traderRegisteredRef.current = true;
+          setTraderRegistered(true);
         }
         await refreshTraderState();
         return true;
@@ -536,6 +685,7 @@ export function usePhoenix() {
         const text = e?.message || 'Phoenix activation failed';
         if (/already|exists|initialized/i.test(text)) {
           traderRegisteredRef.current = true;
+          setTraderRegistered(true);
           await refreshTraderState();
           return true;
         }
@@ -545,7 +695,16 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [checkInviteStatus, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || traderRegistered) return undefined;
+    let cancelled = false;
+    (async () => {
+      if (!cancelled) await checkInviteStatus();
+    })();
+    return () => { cancelled = true; };
+  }, [checkInviteStatus, isActiveDex, traderRegistered, walletAddr]);
 
   const depositToPacifica = useCallback(async (amountUsdc) => {
     if (!walletAddr) {
@@ -636,7 +795,8 @@ export function usePhoenix() {
         });
         const signature = await sendIxs(ix);
         await refreshTraderState();
-        setTimeout(() => claimGold(), 3000);
+        setTimeout(() => claimGold({ force: true }), 3000);
+        setTimeout(() => claimGold({ force: true }), 12000);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix market order failed';
@@ -713,7 +873,8 @@ export function usePhoenix() {
         });
         const signature = await sendIxs(ix);
         await refreshTraderState();
-        setTimeout(() => claimGold(), 3000);
+        setTimeout(() => claimGold({ force: true }), 3000);
+        setTimeout(() => claimGold({ force: true }), 12000);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix close failed';
@@ -871,6 +1032,9 @@ export function usePhoenix() {
     marginModes: {},
     dataReady,
     accountReady,
+    isReady: !!walletAddr && traderRegistered,
+    setupVerified: walletAddr ? (accountReady ? traderRegistered : null) : false,
+    inviteStatus,
     loading,
     error,
     clearError,
@@ -891,8 +1055,6 @@ export function usePhoenix() {
     fetchPositions: refreshTraderState,
     fetchOrders: refreshTraderState,
     isSelfCustody: true,
-    isReady: true,
-    setupVerified: true,
     walletMismatch,
     registeredEvmWallet: registeredSolanaWallet,
   };

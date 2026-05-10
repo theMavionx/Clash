@@ -68,8 +68,9 @@ function tradeKey(wallet, fill) {
 
 function fillTimestampMs(fill) {
   const raw = Number(fill?.timestamp ?? fill?.created_at ?? fill?.time ?? 0);
-  if (!Number.isFinite(raw) || raw <= 0) return 0;
-  return raw > 1e12 ? raw : raw * 1000;
+  if (Number.isFinite(raw) && raw > 0) return raw > 1e12 ? raw : raw * 1000;
+  const parsed = Date.parse(fill?.timestamp ?? fill?.created_at ?? fill?.time ?? '');
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function classifySide(fill, amount) {
@@ -82,18 +83,27 @@ function classifySide(fill, amount) {
   return amount >= 0 ? 'long' : 'short';
 }
 
+function fillAmount(fill) {
+  const direct = Number(fill.baseQty || fill.size || fill.quantity || 0);
+  if (Number.isFinite(direct) && direct !== 0) return direct;
+  const delta = Number(fill.baseLotsDelta || 0);
+  if (Number.isFinite(delta) && delta !== 0) return delta;
+  const before = Number(fill.baseLotsBefore || 0);
+  const after = Number(fill.baseLotsAfter || 0);
+  if (Number.isFinite(before) && Number.isFinite(after) && before !== after) {
+    return after - before;
+  }
+  return 0;
+}
+
 function normalizeFill(wallet, fill, marketMap) {
   const symbol = String(fill.marketSymbol || fill.symbol || fill.market || '').toUpperCase();
   if (!symbol) return null;
-  const market = marketMap[symbol] || {};
-  const lotsDecimals = Number(market.baseLotsDecimals ?? 4);
   const price = Number(fill.price || 0);
-  let amount = Number(fill.baseQty || fill.size || 0);
-  if (!Number.isFinite(amount) || amount === 0) {
-    amount = Number(fill.baseLotsDelta || 0) / 10 ** lotsDecimals;
-  }
+  const amount = fillAmount(fill);
   const absAmount = Math.abs(amount);
-  const notional = absAmount * price;
+  const quoteDelta = Math.abs(Number(fill.virtualQuoteLotsDelta ?? fill.quoteLotsDelta ?? 0));
+  const notional = quoteDelta > 0 ? quoteDelta : absAmount * price;
   if (!Number.isFinite(notional) || notional <= 0) return null;
   const side = classifySide(fill, amount);
   return {
@@ -112,50 +122,80 @@ function normalizeFill(wallet, fill, marketMap) {
   };
 }
 
+async function importFillsForPlayer(playerId, wallet, opts = {}) {
+  const cleanWallet = String(wallet || '').trim();
+  if (!isSolanaWallet(cleanWallet)) {
+    return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_solana_wallet' };
+  }
+  const marketMap = await getMarketMap();
+  let inserted = 0;
+  let skipped = 0;
+
+  let payload;
+  try {
+    const limit = Math.max(1, Math.min(200, Number(opts.limit || 100)));
+    payload = await fetchJson(`/trader/${encodeURIComponent(cleanWallet)}/trades-history?limit=${limit}`);
+  } catch (e) {
+    if (String(e.message || '').includes('404')) {
+      return { ok: true, imported: 0, skipped: 0, total: 0, reason: 'no_trader_history' };
+    }
+    throw e;
+  }
+
+  const fills = Array.isArray(payload) ? payload
+    : Array.isArray(payload?.data) ? payload.data
+    : Array.isArray(payload?.value) ? payload.value
+    : [];
+
+  const lookbackMs = opts.lookbackMs == null ? LOOKBACK_MS : Number(opts.lookbackMs);
+  const minTsMs = lookbackMs > 0 ? Date.now() - lookbackMs : 0;
+  for (const fill of fills) {
+    const tsMs = fillTimestampMs(fill);
+    if (minTsMs > 0 && (!tsMs || tsMs < minTsMs)) {
+      skipped++;
+      continue;
+    }
+    const trade = normalizeFill(cleanWallet, fill, marketMap);
+    if (!trade) {
+      skipped++;
+      continue;
+    }
+    try {
+      const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
+      if (before) {
+        skipped++;
+        continue;
+      }
+      db.addTrade(playerId, trade);
+      inserted++;
+    } catch (e) {
+      skipped++;
+      if (!String(e.message).includes('UNIQUE')) {
+        console.error('[phoenix-rewards-worker] addTrade failed:', e.message);
+      }
+    }
+  }
+
+  return { ok: true, imported: inserted, skipped, total: fills.length };
+}
+
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
     `SELECT id, wallet FROM players WHERE dex='phoenix' AND wallet IS NOT NULL AND wallet != ''`
   ).all();
   if (!rows.length) return 0;
 
-  const marketMap = await getMarketMap();
   let inserted = 0;
 
   for (const row of rows) {
     const wallet = String(row.wallet || '').trim();
     if (!isSolanaWallet(wallet)) continue;
 
-    let payload;
     try {
-      payload = await fetchJson(`/v1/traders/${encodeURIComponent(wallet)}/trades_v2?limit=100`);
+      const result = await importFillsForPlayer(row.id, wallet);
+      inserted += result.imported || 0;
     } catch (e) {
-      if (!String(e.message || '').includes('404')) {
-        console.warn(`[phoenix-rewards-worker] history fetch failed for ${wallet.slice(0, 8)}:`, e.message);
-      }
-      continue;
-    }
-
-    const fills = Array.isArray(payload) ? payload
-      : Array.isArray(payload?.data) ? payload.data
-      : Array.isArray(payload?.value) ? payload.value
-      : [];
-
-    const minTsMs = LOOKBACK_MS > 0 ? Date.now() - LOOKBACK_MS : 0;
-    for (const fill of fills) {
-      const tsMs = fillTimestampMs(fill);
-      if (minTsMs > 0 && (!tsMs || tsMs < minTsMs)) continue;
-      const trade = normalizeFill(wallet, fill, marketMap);
-      if (!trade) continue;
-      try {
-        const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
-        if (before) continue;
-        db.addTrade(row.id, trade);
-        inserted++;
-      } catch (e) {
-        if (!String(e.message).includes('UNIQUE')) {
-          console.error('[phoenix-rewards-worker] addTrade failed:', e.message);
-        }
-      }
+      console.warn(`[phoenix-rewards-worker] history fetch failed for ${wallet.slice(0, 8)}:`, e.message);
     }
   }
 
@@ -187,4 +227,4 @@ function start() {
   console.log(`[phoenix-rewards-worker] started (polling every ${POLL_MS / 1000}s)`);
 }
 
-module.exports = { start, pollOnce };
+module.exports = { start, pollOnce, importFillsForPlayer, isSolanaWallet };

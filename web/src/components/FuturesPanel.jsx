@@ -76,6 +76,9 @@ function humanizeTradeError(message) {
   if (/PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|423/i.test(text)) {
     return 'That Perpl access code is invalid or already exhausted. Check the code and try again.';
   }
+  if (/Trader not found|Phoenix access code required|not whitelisted|invite/i.test(text)) {
+    return 'Enter your Phoenix access code, then create the trader account.';
+  }
   const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
   if (insufficient) {
     const need = Number(insufficient[1]);
@@ -928,7 +931,7 @@ function FuturesPanel() {
     // subaccountAddr lets the gate distinguish "fresh user" (no
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
-    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr,
+    activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
   // The trading hook owns the active signer. Do not treat a detected adapter
@@ -1097,6 +1100,8 @@ function FuturesPanel() {
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
   const [perplAccessCode, setPerplAccessCode] = useState('');
+  const [phoenixInviteCode, setPhoenixInviteCode] = useState('');
+  const [phoenixInviteKind, setPhoenixInviteKind] = useState('access');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -2382,6 +2387,121 @@ function FuturesPanel() {
     );
   }
 
+  // ==================== PHOENIX SETUP GATE ====================
+  if (dex === 'phoenix' && hasWallet && setupVerified !== true) {
+    const whitelisted = inviteStatus?.whitelisted === true;
+    const checkingInvite = setupVerified === null || inviteStatus?.checking;
+    const needsCode = inviteStatus?.whitelisted === false;
+    return (
+      <>
+        <style>{animCSS}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>Setup Phoenix Trading</span>
+            <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+          <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: 24}}>
+            <img src={DEX_CONFIG.phoenix.logo} alt="" style={{width: 64, height: 64, objectFit: 'contain'}} />
+            <div style={{color: '#5C3A21', fontSize: 19, fontWeight: 900}}>
+              {checkingInvite ? 'Checking Phoenix access' : whitelisted ? 'Create your Phoenix account' : 'Enter your Phoenix code'}
+            </div>
+            <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
+              {whitelisted
+                ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to trade.'
+                : 'Phoenix requires an access code before the trader account can be created.'}
+            </div>
+            {checkingInvite ? (
+              <div style={{width: '100%', maxWidth: 360, minHeight: 108, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10}}>
+                <div style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: '50%',
+                  border: '5px solid rgba(249,115,22,0.22)',
+                  borderTopColor: DEX_CONFIG.phoenix.color,
+                  animation: 'wallet-spin 0.85s linear infinite',
+                }} />
+                <div style={{fontSize: 12, color: '#8a7252', fontWeight: 800}}>
+                  Checking wallet allowlist...
+                </div>
+              </div>
+            ) : !whitelisted && (
+              <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8}}>
+                  {[
+                    ['access', 'Access code'],
+                    ['referral', 'Referral code'],
+                  ].map(([kind, label]) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      onClick={() => setPhoenixInviteKind(kind)}
+                      style={{
+                        ...S.btnSmall,
+                        background: phoenixInviteKind === kind ? DEX_CONFIG.phoenix.color : '#F7EBD2',
+                        border: `2px solid ${phoenixInviteKind === kind ? DEX_CONFIG.phoenix.borderColor : '#D4C8B0'}`,
+                        color: phoenixInviteKind === kind ? '#fff' : '#5C3A21',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  placeholder={phoenixInviteKind === 'referral' ? 'Referral code' : 'Access code'}
+                  value={phoenixInviteCode}
+                  onChange={e => setPhoenixInviteCode(e.target.value)}
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                />
+                {needsCode && !phoenixInviteCode.trim() && (
+                  <div style={{fontSize: 11, color: '#C2410C', fontWeight: 800, lineHeight: 1.35}}>
+                    This wallet is not allowlisted yet.
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              style={{
+                ...cartoonBtn('#F97316', '#C2410C'),
+                padding: '14px 30px',
+                minWidth: 240,
+                opacity: loading || checkingInvite ? 0.7 : 1,
+              }}
+              disabled={loading || checkingInvite}
+              onClick={async () => {
+                const ok = await activate({
+                  inviteCode: phoenixInviteCode,
+                  inviteKind: phoenixInviteKind,
+                });
+                if (ok) setPhoenixInviteCode('');
+              }}
+            >
+              {loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX'}
+            </button>
+            {error && (
+              <div style={{
+                color: '#B71C1C', fontSize: 12, fontWeight: 700,
+                textAlign: 'center', maxWidth: 380, padding: '8px 12px',
+                background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
+                overflowWrap: 'anywhere', wordBreak: 'break-word',
+              }}>{humanizeTradeError(error)}</div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== DECIBEL ACTIVATE GATE ====================
   // Petra is connected but the on-chain trading setup isn't done. The gate
   // takes over the WHOLE futures panel — no trading UI is reachable behind
@@ -3344,18 +3464,17 @@ function FuturesPanel() {
               {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
-              {/* Pacifica enforces a $10 deposit floor. Decibel has no fixed
-                  floor (per-market minSize matters for trading; deposits are
-                  free-form). Different placeholder + gate per dex so a
-                  $1 Decibel deposit isn't silently swallowed. */}
+              {/* Pacifica enforces a $10 deposit floor. Decibel/Phoenix/Perpl
+                  do not have this fixed UI floor here (per-market minSize
+                  matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'decibel' ? 'Amount (USDC)' : dex === 'monad' ? 'Amount (AUSD)' : 'Min 10 USDC'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-                const minDeposit = (dex === 'decibel' || dex === 'monad') ? 0 : 10;
+                const minDeposit = dex === 'pacifica' ? 10 : 0;
                 const v = parseFloat(depositAmt);
-                if (!Number.isFinite(v) || v <= minDeposit) {
+                if (!Number.isFinite(v) || v <= 0 || (minDeposit > 0 && v < minDeposit)) {
                   setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} USDC` : 'Enter a positive amount');
                   return;
                 }

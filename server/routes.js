@@ -345,13 +345,14 @@ router.post('/players/register', (req, res) => {
   if (!result) {
     return res.status(409).json({ error: 'Name collision — try a different name' });
   }
+  // New rows start as dex='pacifica'. If this wallet already has a Pacifica
+  // account and the user creates Phoenix, wallet-first updates would collide
+  // with UNIQUE(wallet, dex), so set the requested dex in the wallet update.
   if (wallet) {
-    db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, result.id);
+    db.db.prepare('UPDATE players SET dex = ?, wallet = ? WHERE id = ?').run(requestedDex, wallet, result.id);
+  } else {
+    db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(requestedDex, result.id);
   }
-  // Always set dex on new rows — not just when VALID. The default
-  // 'pacifica' from the table DDL is a sensible fallback but we already
-  // normalised requestedDex above so it's guaranteed valid.
-  db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(requestedDex, result.id);
   const state = db.getFullPlayerState(result.id);
   logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
@@ -400,6 +401,7 @@ router.post('/players/link-wallet', auth, (req, res) => {
   }
 
   db.db.prepare('UPDATE players SET wallet = ? WHERE id = ?').run(wallet, current.id);
+  db.db.prepare('UPDATE trading_rewards SET wallet = ? WHERE player_id = ? AND dex = ?').run(wallet, current.id, current.dex);
   res.json({ success: true, switched_account: false });
 });
 

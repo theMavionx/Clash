@@ -6,6 +6,7 @@ const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
 const gmx = require('./gmx');
+const phoenixRewards = require('./phoenix-rewards-worker');
 
 const router = express.Router();
 
@@ -1087,6 +1088,33 @@ router.post('/monad/import-fills', auth, async (req, res) => {
   } catch (e) {
     console.warn('[perpl] import-fills failed:', e.message);
     res.status(502).json({ error: 'Failed to import Perpl fills', detail: e.message });
+  }
+});
+
+router.post('/phoenix/import-fills', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'phoenix') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to phoenix before importing Phoenix fills.`,
+      });
+    }
+    const wallet = String(req.body?.wallet || req.playerWallet || '').trim();
+    const playerWallet = String(req.playerWallet || '').trim();
+    if (!phoenixRewards.isSolanaWallet(wallet)) {
+      return res.status(400).json({ error: 'wallet required (Solana pubkey)' });
+    }
+    if (phoenixRewards.isSolanaWallet(playerWallet) && wallet !== playerWallet) {
+      return res.status(409).json({ error: 'wallet does not match player account' });
+    }
+
+    const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, { limit: 100 });
+    if (result.imported > 0) {
+      console.log(`[phoenix] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${wallet.slice(0, 8)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[phoenix] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Phoenix fills', detail: e.message });
   }
 });
 

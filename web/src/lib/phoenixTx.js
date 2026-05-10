@@ -1,6 +1,6 @@
-import { PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
+import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import bs58 from 'bs58';
+import { sendSolanaTransactionWithRetry } from './solanaTx';
 
 const ACCOUNT_ROLE = {
   READONLY: 0,
@@ -51,33 +51,25 @@ export async function sendPhoenixInstructions({
   ownerPk,
   connection,
   sendTransaction,
+  signTransaction = null,
   privyActive = false,
   privySendTx = null,
+  privySignTx = null,
   privyWalletObj = null,
+  label = 'phoenix',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
-  const tx = new Transaction();
-  for (const ix of list) tx.add(kitInstructionToWeb3(ix));
-
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-  tx.recentBlockhash = blockhash;
-  tx.feePayer = ownerPk;
-
-  let sig;
-  if (sendTransaction && !privyActive) {
-    sig = await sendTransaction(tx, connection);
-  } else if (privyActive && privySendTx && privyWalletObj) {
-    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-    const result = await privySendTx({
-      transaction: new Uint8Array(serialized),
-      wallet: privyWalletObj,
-    });
-    const sigBytes = result?.signature || result;
-    sig = typeof sigBytes === 'string' ? sigBytes : bs58.encode(sigBytes);
-  } else {
-    throw new Error('Wallet cannot send Phoenix transactions');
-  }
-
-  await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
-  return sig;
+  const web3Instructions = list.map(kitInstructionToWeb3);
+  return sendSolanaTransactionWithRetry({
+    instructions: web3Instructions,
+    ownerPk,
+    connection,
+    sendTransaction,
+    signTransaction,
+    privyActive,
+    privySendTx,
+    privySignTx,
+    privyWalletObj,
+    label,
+  });
 }

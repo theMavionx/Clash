@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
+import { PublicKey, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { isFarcasterFrame } from './useFarcaster';
@@ -9,10 +9,11 @@ import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
 import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
 import { reportDiag } from '../lib/diagReporter';
+import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
-import { useSignMessage as usePrivySignMessage, useSignAndSendTransaction as usePrivySignAndSend } from '@privy-io/react-auth/solana';
+import { useSignMessage as usePrivySignMessage, useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction } from '@privy-io/react-auth/solana';
 import { useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
 
 // ---------- Farcaster direct signing ----------
@@ -153,7 +154,7 @@ const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const PACIFICA_INCOMPATIBLE_WALLETS = new Set(['MetaMask']);
 
 export function usePacifica() {
-  const { publicKey, signMessage, sendTransaction, connected, wallet } = useWallet();
+  const { publicKey, signMessage, sendTransaction, signTransaction, connected, wallet } = useWallet();
   const { connection } = useConnection();
   const adapterName = wallet?.adapter?.name || '';
   const isIncompatibleWallet = PACIFICA_INCOMPATIBLE_WALLETS.has(adapterName);
@@ -171,6 +172,7 @@ export function usePacifica() {
   let privySignMessage = null;
   let privyWalletObj = null;
   let privySendTx = null;
+  let privySignTx = null;
   if (PRIVY_ENABLED) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const { signMessage: pSign } = usePrivySignMessage();
@@ -178,8 +180,11 @@ export function usePacifica() {
     const { wallets: pWallets } = usePrivyWallets();
     // eslint-disable-next-line react-hooks/rules-of-hooks
     const { signAndSendTransaction: pSend } = usePrivySignAndSend();
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signTransaction: pSignTx } = usePrivySignTransaction();
     privySignMessage = pSign;
     privySendTx = pSend;
+    privySignTx = pSignTx;
     privyWalletObj = (pWallets || []).find(w => w && w.walletClientType === 'privy') || (pWallets || [])[0] || null;
   }
   const privyAddr = privyWalletObj?.address || null;
@@ -890,16 +895,20 @@ export function usePacifica() {
         data: Buffer.from(data),
       });
 
-      const tx = new Transaction().add(ix);
-      // Privy's signAndSendTransaction needs feePayer + blockhash pre-set.
-      const { blockhash } = await connection.getLatestBlockhash();
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = ownerPk;
+      const sig = await sendSolanaTransactionWithRetry({
+        instructions: [ix],
+        ownerPk,
+        connection,
+        sendTransaction,
+        signTransaction,
+        privyActive,
+        privySendTx,
+        privySignTx,
+        privyWalletObj,
+        label: 'pacifica.deposit',
+      });
+      /*
 
-      let sig;
-      if (canSendAdapter && publicKey) {
-        sig = await sendTransaction(tx, connection);
-      } else {
         // Privy's useSignAndSendTransaction expects a serialized Uint8Array, not
         // a Transaction object. Partial-sign=false so Privy signs fully.
         const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
@@ -912,6 +921,7 @@ export function usePacifica() {
         sig = typeof sigBytes === 'string' ? sigBytes : bs58.encode(sigBytes);
       }
       await connection.confirmTransaction(sig, 'confirmed');
+      */
 
       // Auto-activate after first deposit
       await activate();
@@ -928,7 +938,7 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, publicKey, sendTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privyWalletObj, claimGold]);
+  }, [walletAddr, publicKey, sendTransaction, signTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privySignTx, privyWalletObj, claimGold]);
 
   // ---------- Trading ----------
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {

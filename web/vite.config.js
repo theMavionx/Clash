@@ -1,10 +1,21 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
 function setPerplProxyOrigin(proxyReq) {
   proxyReq.setHeader('origin', 'https://app.perpl.xyz');
   proxyReq.setHeader('referer', 'https://app.perpl.xyz/');
 }
+
+const viteEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
+const API_PROXY_TARGET = process.env.VITE_API_PROXY || viteEnv.VITE_API_PROXY || '';
+const WS_PROXY_TARGET = process.env.VITE_WS_PROXY || viteEnv.VITE_WS_PROXY || '';
+const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
+  || viteEnv.VITE_FUTURES_PROXY
+  || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
+    ? API_PROXY_TARGET
+    : 'http://localhost:3999');
+const FUTURES_PROXY_IS_DIRECT = /^https?:\/\/(?:localhost|127\.0\.0\.1):3999\b/i.test(FUTURES_PROXY_TARGET)
+  || /^https?:\/\/[^/]+:3999\b/i.test(FUTURES_PROXY_TARGET);
 
 export default defineConfig({
   // Vite 8 swapped the dep optimizer from esbuild to Rolldown and
@@ -61,9 +72,9 @@ export default defineConfig({
       // end up at `/api/markets` on the futures server. In production nginx
       // does this rewrite; in dev the proxy does it here.
       '/api/futures': {
-        target: process.env.VITE_FUTURES_PROXY || process.env.VITE_API_PROXY || 'http://localhost:3999',
+        target: FUTURES_PROXY_TARGET,
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/futures/, '/api'),
+        rewrite: (path) => FUTURES_PROXY_IS_DIRECT ? path.replace(/^\/api\/futures/, '/api') : path,
       },
       // Arbitrum RPC proxy — workaround for MetaMask's `injected.js` content
       // script. MM scans browser fetch() calls for known RPC URLs (Infura,
@@ -148,9 +159,9 @@ export default defineConfig({
         },
         rewrite: (path) => path.replace(/^\/perpl-ws/, '/ws/v1'),
       },
-      '/api': process.env.VITE_API_PROXY || 'http://localhost:4000',
+      '/api': API_PROXY_TARGET || 'http://localhost:4000',
       '/ws': {
-        target: process.env.VITE_WS_PROXY || 'ws://localhost:4000',
+        target: WS_PROXY_TARGET || 'ws://localhost:4000',
         ws: true,
         changeOrigin: true,
       },
