@@ -1682,9 +1682,49 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
+
+    let decibelPnlRows = [];
+    if (dex === 'decibel') {
+      try {
+        decibelPnlRows = fdb.prepare(`
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          FROM trade_history
+          WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
+            AND verified_source = 'worker'
+            AND side IN ('close_long', 'close_short')
+            AND pnl IS NOT NULL AND pnl != ''
+            AND notional_usd >= 10
+          ORDER BY id ASC
+          LIMIT 1000
+        `).all(req.player.id);
+      } catch (e) {
+        console.warn('[claim-gold decibel] delayed PnL sync query failed:', e.message);
+      }
+    }
+    const syncDecibelTournamentPnl = () => {
+      if (dex !== 'decibel' || !decibelPnlRows.length) {
+        return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+      }
+      return db.recordTournamentTradeRows(req.player.id, decibelPnlRows, {
+        source: 'trade_history_decibel_pnl',
+        count: false,
+        volume: false,
+        pnl: true,
+      });
+    };
     console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
+      const pnlSync = syncDecibelTournamentPnl();
+      if (pnlSync.credited_rows > 0) {
+        console.log(`[claim-gold ${dex}] player=${req.player.name} -> SYNCED tournament pnl=$${pnlSync.pnl_usd.toFixed(2)} rows=${pnlSync.credited_rows}`);
+        return res.json({
+          gold: 0,
+          reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
+          dex,
+          tournament_pnl_usd: pnlSync.pnl_usd,
+        });
+      }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> NO NEW TRADES (returning 0)`);
       return res.json({ gold: 0, reason: 'No new trades' });
     }
@@ -1703,6 +1743,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let newVolume = 0;
     let newPnl = 0;
     let creditedTrades = 0;
+    const creditedTradeRows = [];
     // Track opens separately — "first_trade" bonus should only fire on an
     // actual OPEN (long/short), not on a close-only sequence. Previously a
     // user who closed a pre-reward position without ever opening a new one
@@ -1726,6 +1767,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       }
       totalGold += volumeGoldForDex(dex, raw);
       creditedTrades++;
+      creditedTradeRows.push(t);
       const sideLower = String(t.side || '').toLowerCase();
       if (sideLower === 'long' || sideLower === 'short' || sideLower === 'bid' || sideLower === 'ask') {
         creditedOpens++;
@@ -1805,8 +1847,14 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // gold credit. No-op outside tournaments. Bumping inside the txn
       // keeps the leaderboard atomic with the gold ledger.
       if (creditedTrades > 0) {
-        db.recordTournamentTrade(req.player.id, newVolume, newPnl, creditedTrades);
+        db.recordTournamentTradeRows(req.player.id, creditedTradeRows, {
+          source: 'trade_history',
+          count: true,
+          volume: true,
+          pnl: true,
+        });
       }
+      syncDecibelTournamentPnl();
       return { raced: false, paid: paidGold };
     });
 
@@ -2722,30 +2770,36 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'phoenix'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   try {
     const fdb = futuresDbReadonly();
     if (fdb) {
-      const totals = fdb.prepare(`
-        SELECT COUNT(*) AS trades,
-               COUNT(DISTINCT player_id) AS traders,
-               COALESCE(SUM(notional_usd), 0) AS volume
-        FROM trade_history WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
-      `);
-      const recent = fdb.prepare(`
-        SELECT COUNT(*) AS trades FROM trade_history
-        WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
-          AND created_at > datetime('now', '-24 hours')
-      `);
-      const top = fdb.prepare(`
-        SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
-        FROM trade_history WHERE dex = ? AND status = 'filled' AND verified_source = 'worker'
-        GROUP BY player_id ORDER BY vol DESC LIMIT 10
-      `);
+      const sourceWhereForDex = (dex) => dex === 'monad'
+        ? "verified_source IN ('perpl_api', 'perpl_ws')"
+        : dex === 'decibel'
+          ? "verified_source IN ('worker', 'server')"
+          : "verified_source = 'worker'";
       const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
       for (const dex of ACTIVITY_DEXES) {
+        const sourceWhere = sourceWhereForDex(dex);
+        const totals = fdb.prepare(`
+          SELECT COUNT(*) AS trades,
+                 COUNT(DISTINCT player_id) AS traders,
+                 COALESCE(SUM(notional_usd), 0) AS volume
+          FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
+        `);
+        const recent = fdb.prepare(`
+          SELECT COUNT(*) AS trades FROM trade_history
+          WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
+            AND created_at > datetime('now', '-24 hours')
+        `);
+        const top = fdb.prepare(`
+          SELECT player_id, COALESCE(SUM(notional_usd), 0) AS vol, COUNT(*) AS trades
+          FROM trade_history WHERE dex = ? AND status = 'filled' AND ${sourceWhere}
+          GROUP BY player_id ORDER BY vol DESC LIMIT 10
+        `);
         const tot = totals.get(dex) || {};
         const rec = recent.get(dex) || {};
         dexActivity[dex] = {

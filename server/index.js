@@ -707,6 +707,7 @@ function renderPlayers() {
   const avtCount   = players.filter(p => p.dex === 'avantis').length;
   const decCount   = players.filter(p => p.dex === 'decibel').length;
   const gmxCount   = players.filter(p => p.dex === 'gmx').length;
+  const monCount   = players.filter(p => p.dex === 'monad').length;
   const phxCount   = players.filter(p => p.dex === 'phoenix').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
@@ -723,6 +724,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#0EA5E9"><div class="v" style="color:#38bdf8;font-size:22px">' + avtCount + '</div><div class="l">Avantis</div></div>' +
     '<div class="stat" style="border-color:#facc15"><div class="v" style="color:#facc15;font-size:22px">' + decCount + '</div><div class="l">Decibel</div></div>' +
     '<div class="stat" style="border-color:#4f46e5"><div class="v" style="color:#a5b4fc;font-size:22px">' + gmxCount + '</div><div class="l">GMX</div></div>' +
+    '<div class="stat" style="border-color:#8b5cf6"><div class="v" style="color:#c4b5fd;font-size:22px">' + monCount + '</div><div class="l">Perpl</div></div>' +
     '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + phxCount + '</div><div class="l">Phoenix</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
@@ -735,6 +737,7 @@ function renderPlayers() {
     if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
     if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
     if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
+    if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
     if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
     return '<span class="badge badge-off">—</span>';
   }
@@ -1125,12 +1128,14 @@ async function loadStats() {
     const avtCount = (byDex.find(x => x.dex === 'avantis')  || {}).n || 0;
     const decCount = (byDex.find(x => x.dex === 'decibel')  || {}).n || 0;
     const gmxCount = (byDex.find(x => x.dex === 'gmx')      || {}).n || 0;
+    const monCount = (byDex.find(x => x.dex === 'monad')    || {}).n || 0;
     const phxCount = (byDex.find(x => x.dex === 'phoenix')  || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
     const decRew = rewardsMap.decibel  || {};
     const gmxRew = rewardsMap.gmx      || {};
+    const monRew = rewardsMap.monad    || {};
     const phxRew = rewardsMap.phoenix  || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
@@ -1138,6 +1143,7 @@ async function loadStats() {
       dexCard('decibel',  'Decibel · Aptos',   '#facc15', decCount, decRew.total_gold || 0, decRew.total_volume || 0, activityLines('decibel')) +
       dexCard('gmx',      'GMX · Arbitrum',    '#4f46e5', gmxCount, gmxRew.total_gold || 0, gmxRew.total_volume || 0, activityLines('gmx')) +
       dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
+      dexCard('monad',    'Perpl / Monad',     '#8b5cf6', monCount, monRew.total_gold || 0, monRew.total_volume || 0, activityLines('monad')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
@@ -1192,6 +1198,7 @@ async function loadStats() {
       topTraderTable('avantis', 'Avantis · Base',  '#0EA5E9') +
       topTraderTable('decibel', 'Decibel · Aptos', '#facc15') +
       topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5') +
+      topTraderTable('monad',   'Perpl / Monad',   '#8b5cf6') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316');
 
     function dexBadge(d) {
@@ -1199,6 +1206,7 @@ async function loadStats() {
       if (d === 'avantis')  return '<span class="badge" style="background:#0c4a6e;color:#bae6fd">AVT</span>';
       if (d === 'decibel')  return '<span class="badge" style="background:#713f12;color:#fde68a">DCB</span>';
       if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
+      if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
       if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
       return '<span class="badge badge-off">—</span>';
     }
@@ -1679,6 +1687,7 @@ async function loadEarnings(force) {
       ['decibel',  'Decibel',  '#facc15', '#facc15'],
       ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
+      ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =

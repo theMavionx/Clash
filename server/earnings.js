@@ -303,6 +303,43 @@ async function fetchGmxEarnings() {
 // HTTPS call each, except Pacifica which paginates) but cumulatively
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
+const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 2;
+
+async function fetchPerplEarnings() {
+  const Db = loadSqlite();
+  let volume = 0;
+  let trades = 0;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    const fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    try {
+      const r = fdb.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
+        FROM trade_history
+        WHERE dex = 'monad' AND status = 'filled'
+          AND verified_source IN ('perpl_api', 'perpl_ws')
+      `).get();
+      volume = Number(r?.vol) || 0;
+      trades = Number(r?.n) || 0;
+    } finally {
+      fdb.close();
+    }
+  }
+
+  const earned = volume * (PERPL_BUILDER_FEE_BPS / 10000);
+  return {
+    earned_usd: earned,
+    address: null,
+    currency: 'AUSD (Monad)',
+    volume_usd: volume,
+    trades,
+    rebate_pct: PERPL_BUILDER_FEE_BPS / 100,
+    fee_per_side_pct: PERPL_BUILDER_FEE_BPS / 100,
+    note: `Modelled: volume x ${PERPL_BUILDER_FEE_BPS}bps builder fee from verified Perpl fills.`,
+    source_detail: 'volume_x_builder_fee',
+  };
+}
+
 const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
@@ -312,11 +349,12 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, mon] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
     fetchGmxEarnings(),
+    fetchPerplEarnings(),
   ]);
   const wrap = (label, r) => r.status === 'fulfilled'
     ? { ok: true, ...r.value }
@@ -327,9 +365,10 @@ async function fetchAllEarnings({ force = false } = {}) {
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
+    monad:    { ...wrap('monad',    mon), source: 'perpl_volume_x_builder_fee' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','monad'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

@@ -202,6 +202,24 @@ try {
   `);
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tournament_trade_credits (
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+      source        TEXT NOT NULL DEFAULT 'trade_history',
+      trade_id      TEXT NOT NULL,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      dex           TEXT NOT NULL,
+      trades_count  INTEGER NOT NULL DEFAULT 0,
+      volume_usd    REAL NOT NULL DEFAULT 0,
+      pnl_usd       REAL NOT NULL DEFAULT 0,
+      credited_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (tournament_id, source, trade_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ttc_player ON tournament_trade_credits(player_id, tournament_id);
+  `);
+} catch (e) { console.warn('[db] tournament_trade_credits migration:', e.message); }
+
 // Battle replays — stores full replay data for verification and future replay viewer
 try {
   db.exec(`
@@ -437,7 +455,8 @@ const stmts = {
   // means the participant is still active (didn't soft-leave).
   // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost, t.sort_by
+    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost, t.sort_by,
+           t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
     JOIN tournaments t ON t.id = p.tournament_id AND t.dex = (SELECT dex FROM players WHERE id = p.player_id)
     WHERE p.player_id = ?
@@ -465,6 +484,11 @@ const stmts = {
         pnl_usd = pnl_usd + ?,
         last_activity_at = datetime('now')
     WHERE tournament_id = ? AND player_id = ?
+  `),
+  insertTournamentTradeCredit: db.prepare(`
+    INSERT OR IGNORE INTO tournament_trade_credits (
+      tournament_id, source, trade_id, player_id, dex, trades_count, volume_usd, pnl_usd
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `),
 };
 
@@ -544,6 +568,81 @@ function recordTournamentTrade(playerId, volumeUsd, pnlUsd, count = 1) {
     t.tournament_id,
     playerId
   );
+}
+
+function sqlDateMs(v) {
+  if (!v) return null;
+  const s = String(v)
+    .replace(/[zZ]$/, '')
+    .replace(/\s*UTC$/i, '')
+    .replace(' ', 'T')
+    .trim();
+  const ms = Date.parse(`${s}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function tradeInTournamentWindow(t, row) {
+  const tradeMs = sqlDateMs(row?.created_at) ?? Date.now();
+  const startMs = Math.max(sqlDateMs(t.start_at) ?? 0, sqlDateMs(t.joined_at) ?? 0);
+  const endMs = sqlDateMs(t.end_at) ?? Infinity;
+  return tradeMs >= startMs && tradeMs <= endMs;
+}
+
+function safeUsd(v, maxAbs = 10_000_000) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || Math.abs(n) > maxAbs) return 0;
+  return n;
+}
+
+// Idempotently credits concrete futures trade_history rows into the active
+// tournament. This is separate from trading_rewards.last_trade_id because some
+// venues, especially Decibel, emit realised PnL later than the instant server
+// order row. The ledger lets us sync that delayed PnL without minting volume or
+// gold twice.
+function recordTournamentTradeRows(playerId, rows, opts = {}) {
+  if (!playerId || !Array.isArray(rows) || rows.length === 0) {
+    return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+  }
+  const t = getPlayerActiveTournament(playerId);
+  if (!t) return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+
+  const source = String(opts.source || 'trade_history');
+  const creditCount = opts.count !== false;
+  const creditVolume = opts.volume !== false;
+  const creditPnl = opts.pnl !== false;
+  let creditedRows = 0;
+  let tradesCount = 0;
+  let volumeUsd = 0;
+  let pnlUsd = 0;
+
+  for (const row of rows) {
+    if (!tradeInTournamentWindow(t, row)) continue;
+    const tradeId = row?.id ?? row?.history_id ?? row?.trade_id;
+    if (tradeId === undefined || tradeId === null || tradeId === '') continue;
+    const count = creditCount ? 1 : 0;
+    const volume = creditVolume ? Math.max(0, safeUsd(row.notional_usd ?? row.volume_usd ?? row.volume)) : 0;
+    const pnl = creditPnl ? safeUsd(row.pnl ?? row.pnl_usd ?? row.realized_pnl ?? row.realised_pnl) : 0;
+    const r = stmts.insertTournamentTradeCredit.run(
+      t.tournament_id,
+      source,
+      String(tradeId),
+      playerId,
+      t.dex,
+      count,
+      volume,
+      pnl
+    );
+    if (!r.changes) continue;
+    creditedRows++;
+    tradesCount += count;
+    volumeUsd += volume;
+    pnlUsd += pnl;
+  }
+
+  if (creditedRows > 0 && (tradesCount !== 0 || volumeUsd !== 0 || pnlUsd !== 0)) {
+    stmts.bumpTournamentTrade.run(tradesCount, volumeUsd, pnlUsd, t.tournament_id, playerId);
+  }
+  return { credited_rows: creditedRows, trades_count: tradesCount, volume_usd: volumeUsd, pnl_usd: pnlUsd };
 }
 
 // ---------- Building Definitions (mirroring Godot) ----------
@@ -1292,6 +1391,7 @@ module.exports = {
   applyTrophyDelta,
   applyGoldReward,
   recordTournamentTrade,
+  recordTournamentTradeRows,
   getResourceCaps,
   storeReplay,
   TROPHY_TABLE,
