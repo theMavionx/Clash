@@ -31,10 +31,11 @@ import {
 } from './monadConfig';
 
 export const PERPL_REGION_BLOCKED_MESSAGE = 'Perpl is not available in your country or IP region.';
-// Perpl trading stream sequence starts from WalletSnapshot.sn, then every
-// heartbeat must advance by one. A gap means we may have missed order/fill
-// updates, so reconnect and let the server send fresh snapshots.
-const STRICT_SEQUENCE_RECONNECT = true;
+// Perpl's heartbeat sequence is not guaranteed to be contiguous per client.
+// Treating every gap as a missed-delta signal caused a reconnect loop every
+// few seconds on healthy sessions. We still reconnect on real heartbeat
+// timeout below; order confirmation listens to explicit order/fill frames.
+const STRICT_SEQUENCE_RECONNECT = false;
 const PERPL_SESSION_STORAGE_KEY = 'clash.perpl.session.v1';
 const PERPL_SESSION_FALLBACK_TTL_MS = 6 * 24 * 60 * 60 * 1000;
 

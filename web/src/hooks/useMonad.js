@@ -1870,7 +1870,7 @@ export function useMonad() {
       }
       const gold = Number(data?.gold || 0);
       if (gold > 0) {
-        setGoldEarned(gold);
+        setGoldEarned({ amount: gold, reason: data.reason || 'Perpl trading rewards' });
         try {
           window.onGodotMessage?.({
             action: 'resources_add',
