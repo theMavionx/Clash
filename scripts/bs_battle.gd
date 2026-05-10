@@ -82,6 +82,21 @@ var _replay_buildings_snapshot: Array = []
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
 var _victory_declared: bool = false
+var _find_in_progress: bool = false
+
+const ATTACK_COST_BY_TH: Dictionary = {
+	1: 100,
+	2: 250,
+	3: 500,
+}
+
+func _get_attack_cost_gold() -> int:
+	var th_level: int = 1
+	if bs and bs.has_method("_get_th_level"):
+		th_level = max(1, int(bs._get_th_level()))
+	if ATTACK_COST_BY_TH.has(th_level):
+		return int(ATTACK_COST_BY_TH[th_level])
+	return int(round((50.0 * float(th_level) * float(th_level) + 50.0) / 50.0) * 50.0)
 
 # ---------------------------------------------------------------------------
 # Cleanup helpers
@@ -109,6 +124,7 @@ func reset() -> void:
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = false
+	_find_in_progress = false
 	_submit_result = {}
 	_submit_complete = false
 
@@ -160,12 +176,19 @@ func _free_home_troops_and_ships() -> void:
 ## the cloud transition, fetches an enemy from the server, then switches to
 ## the enemy island. Called when the Find Enemy button is pressed.
 func _on_find_pressed() -> void:
-	if is_viewing_enemy:
+	if is_viewing_enemy or _find_in_progress:
 		return
 	var net: Node = bs._net
 	if not net or not net.has_token():
 		print("Not logged in")
 		return
+	var attack_cost: int = _get_attack_cost_gold()
+	if int(bs.resources.get("gold", 0)) < attack_cost:
+		var bridge0 = bs._bridge
+		if bridge0:
+			bridge0.send_to_react("error", {"message": "Need %d gold to attack" % attack_cost})
+		return
+	_find_in_progress = true
 	# Snapshot the fleet BEFORE anything is freed or destroyed
 	_saved_fleet = await bs._build_fleet()
 	if bs.find_button:
@@ -213,6 +236,7 @@ func _on_find_pressed() -> void:
 		bs.find_button.text = "Find Enemy"
 	if result.has("error"):
 		print("Find enemy error: ", result.error)
+		_find_in_progress = false
 		cloud.reveal()
 		await cloud.reveal_finished
 		if bridge2:
@@ -220,6 +244,8 @@ func _on_find_pressed() -> void:
 			bridge2.send_to_react("error", {"message": result.error})
 		_restore_ships_and_troops()
 		return
+	if result.has("attacker_resources") and result.attacker_resources is Dictionary:
+		bs._apply_resources_from_server(result.attacker_resources)
 	enemy_info = result
 	_switch_to_enemy_island_after_sail()
 
@@ -338,6 +364,7 @@ func _switch_to_enemy_island() -> void:
 		# at the local coordinates of the previously selected home building.
 		bsys._deselect_building()
 		bsys._battle.is_viewing_enemy = true
+		bsys._battle._find_in_progress = false
 	var bridge = bs._bridge
 	if bridge:
 		var enemy_res: Dictionary = enemy_info.get("resources", {})
@@ -348,6 +375,7 @@ func _switch_to_enemy_island() -> void:
 			"gold": enemy_res.get("gold", 0),
 			"wood": enemy_res.get("wood", 0),
 			"ore": enemy_res.get("ore", 0),
+			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	var bridge2 = bs._bridge
 	if bridge2:
@@ -445,12 +473,18 @@ func _switch_to_enemy_island_after_sail() -> void:
 		# at the local coordinates of the previously selected home building.
 		bsys._deselect_building()
 		bsys._battle.is_viewing_enemy = true
+		bsys._battle._find_in_progress = false
 	var bridge = bs._bridge
 	if bridge:
+		var enemy_res: Dictionary = enemy_info.get("resources", {})
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": enemy_info.get("name", "???"),
 			"trophies": enemy_info.get("trophies", 0),
+			"gold": enemy_res.get("gold", 0),
+			"wood": enemy_res.get("wood", 0),
+			"ore": enemy_res.get("ore", 0),
+			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):

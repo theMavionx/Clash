@@ -241,6 +241,7 @@ function TournamentPanel({ onClose }) {
                   }
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
+                  <span style={S.tag}>{t.freeze_trophies === false ? 'Main trophies live' : 'Main trophies frozen'}</span>
                   {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
                   {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
                   {preregistration && t.registration_closes_at && <span style={S.tag}>Reg closes {fmtDate(t.registration_closes_at)}</span>}
@@ -317,8 +318,11 @@ function TournamentPanel({ onClose }) {
                     />
                   </div>
                   <div style={S.freezeNote}>
-                    Main trophies are <strong>frozen</strong> while joined. Battle wins/losses count
-                    only toward this tournament. Quests &amp; gold credit normally.
+                    {t.freeze_trophies === false ? (
+                      <>Main trophies keep updating while joined. Battle wins/losses also count toward this tournament.</>
+                    ) : (
+                      <>Main trophies are <strong>frozen</strong> while joined. Battle wins/losses count only toward this tournament.</>
+                    )} Quests &amp; gold credit normally.
                   </div>
                   <button style={S.leaveBtn} onClick={handleLeave} disabled={busy}>
                     {busy ? 'Leaving…' : 'Leave tournament'}

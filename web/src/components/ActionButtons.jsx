@@ -4,6 +4,7 @@ import { useLayout } from '../hooks/useIsMobile';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
 import attackIcon from '../assets/resources/file_000000006858720a8f860ee8da33335a.png';
 import chartIcon from '../assets/resources/chart.png';
+import goldIcon from '../assets/resources/gold_bar.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
 import TournamentPanel from './TournamentPanel';
@@ -24,6 +25,14 @@ const ATTACK_TROOPS = [
   { key: 'archer',    label: 'Ranger',    img: arbaletImg },
   { key: 'ranger',    label: 'Rogue',     img: archerImg  },
 ];
+
+const attackCostForTownHall = (level) => {
+  const th = Math.max(1, Math.floor(Number(level) || 1));
+  if (th === 1) return 100;
+  if (th === 2) return 250;
+  if (th === 3) return 500;
+  return Math.round((50 * th * th + 50) / 50) * 50;
+};
 
 // ── Shared styled button (normal mode) ────────────────────────────────────
 const CustomBtn = ({ children, onClick, width = 140, height = 140, style = {}, mobileScale = 0.7, ...rest }) => (
@@ -363,6 +372,9 @@ function ActionButtons({ onOpenBattleLog }) {
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape } = useLayout();
+  const townHallLevel = buildingDefs?.th_level || 1;
+  const attackCost = useMemo(() => attackCostForTownHall(townHallLevel), [townHallLevel]);
+  const canAffordAttack = (resources.gold || 0) >= attackCost;
 
   // Count how many buildings the player can actually build right now
   const affordableCount = useMemo(() => {
@@ -393,7 +405,16 @@ function ActionButtons({ onOpenBattleLog }) {
 
   const [showSurrender, setShowSurrender] = useState(false);
   const handleReturnHome  = useCallback(() => sendToGodot('return_home'),     [sendToGodot]);
-  const handleFindEnemy   = useCallback(() => sendToGodot('find_enemy'),       [sendToGodot]);
+  const handleFindEnemy   = useCallback(() => {
+    if (!canAffordAttack) {
+      window.onGodotMessage?.({
+        action: 'error',
+        data: { message: `Need ${attackCost} gold to attack` },
+      });
+      return;
+    }
+    sendToGodot('find_enemy');
+  }, [sendToGodot, canAffordAttack, attackCost]);
   const handleOpenShop    = useCallback(() => sendToGodot('open_shop'),        [sendToGodot]);
   const handleOpenTrade   = useCallback(() => setFuturesOpen(true),            [setFuturesOpen]);
   const handleShipCannon  = useCallback(() => sendToGodot('ship_cannon_mode'), [sendToGodot]);
@@ -467,6 +488,10 @@ function ActionButtons({ onOpenBattleLog }) {
           </CustomBtn>
           <CustomBtn onClick={handleFindEnemy} width={btnSize} height={btnSize} data-tutorial="attack-btn">
             <img src={attackIcon} alt="attack" style={{ ...styles.attackIconImg, ...(mobile ? { width: 95, height: 95 } : {}) }} />
+            <div style={{ ...styles.attackCostBadge, ...(canAffordAttack ? {} : styles.attackCostBadgeLocked), ...(mobile ? styles.attackCostBadgeMobile : {}) }}>
+              <img src={goldIcon} alt="" style={styles.attackCostIcon} />
+              <span>{attackCost}</span>
+            </div>
             <span style={styles.btnLabel}>ATTACK</span>
           </CustomBtn>
         </div>
@@ -873,6 +898,45 @@ const styles = {
   attackIconImg: {
     width: 120, height: 120, objectFit: 'contain',
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))', marginBottom: 2,
+  },
+  attackCostBadge: {
+    position: 'absolute',
+    top: 20,
+    right: 12,
+    minWidth: 50,
+    height: 26,
+    padding: '0 8px 0 5px',
+    borderRadius: 13,
+    background: 'linear-gradient(180deg, #fff2a8 0%, #d79d15 100%)',
+    border: '2px solid #5C3A21',
+    boxShadow: '0 3px 6px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.65)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    color: '#5C3A21',
+    fontSize: 14,
+    fontWeight: 950,
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    zIndex: 12,
+  },
+  attackCostBadgeMobile: {
+    top: 18,
+    right: 8,
+    minWidth: 46,
+    height: 24,
+    fontSize: 13,
+  },
+  attackCostBadgeLocked: {
+    background: 'linear-gradient(180deg, #ffd1d1 0%, #d94a3b 100%)',
+    color: '#fff',
+    textShadow: '0 1px 2px rgba(0,0,0,0.55)',
+  },
+  attackCostIcon: {
+    width: 15,
+    height: 15,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.35))',
   },
   chartIconImg: {
     width: 110, height: 110, objectFit: 'contain',

@@ -830,8 +830,11 @@ router.get('/find-enemy', auth, (req, res) => {
   }
 
   const result = db.findEnemy(req.player.id);
-  if (result.error) { logBattle('find_enemy failed', { player: req.player.id, error: result.error }); return res.status(404).json(result); }
-  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name, battle_session_id: result.battle_session_id });
+  if (result.error) {
+    logBattle('find_enemy failed', { player: req.player.id, error: result.error, attack_cost_gold: result.attack_cost_gold });
+    return res.status(result.status || 404).json(result);
+  }
+  logBattle('find_enemy', { attacker: req.player.id, defender: result.id, name: result.name, battle_session_id: result.battle_session_id, attack_cost_gold: result.attack_cost_gold });
   res.json(result);
 });
 
@@ -3068,8 +3071,8 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
 // Tournaments are admin-curated per-DEX competitions. Players can join one
 // active tournament for their DEX at a time. While joined:
 //   - Trophies earned from battles are routed into tournament_participants
-//     (with optional trophy_boost) and players.trophies stays FROZEN. This
-//     is the "freeze" mechanic the user asked for.
+//     (with optional trophy_boost). Per tournament, admins choose whether
+//     players.trophies stays frozen or also receives the raw battle delta.
 //   - Gold earned from /claim-gold is multiplied by gold_boost and the
 //     boosted amount lands in both players.gold and tournament_participants.gold.
 //   - Volume + pnl + trades_count are tracked in tournament_participants
@@ -3202,6 +3205,7 @@ function tournamentRowToPublic(t) {
     end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
     trophy_boost: Number(t.trophy_boost),
+    freeze_trophies: Number(t.freeze_trophies ?? 1) !== 0,
     sort_by: t.sort_by,
     sort_label: tournamentSortLabel(t.sort_by),
     status: t.status,
@@ -3486,7 +3490,7 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
     name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
-    preregistration_enabled, registration_opens_at, registration_closes_at,
+    freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
@@ -3496,6 +3500,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
   const gb = Math.max(0.1, Math.min(10, Number(gold_boost) || 1));
   const tb = Math.max(0.1, Math.min(10, Number(trophy_boost) || 1));
+  const freeze = freeze_trophies === undefined ? 1 : (parseBool(freeze_trophies) ? 1 : 0);
   let startIso, endIso, registrationOpenIso, registrationCloseIso;
   try {
     startIso = start_at && typeof start_at === 'string'
@@ -3522,9 +3527,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const r = db.db.prepare(`
     INSERT INTO tournaments (
       name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
-      preregistration_enabled, registration_opens_at, registration_closes_at
+      freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -3535,6 +3540,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     tb,
     sortCol,
     stat,
+    freeze,
     prereg,
     registrationOpenIso,
     registrationCloseIso
@@ -3551,7 +3557,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
     name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
-    preregistration_enabled, registration_opens_at, registration_closes_at,
+    freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
   const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'];
   if (dex !== undefined && !validDexes.includes(dex)) return res.status(400).json({ error: 'invalid dex' });
@@ -3588,6 +3594,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     end_at: nextEndAt,
     gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
     trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
+    freeze_trophies: freeze_trophies !== undefined
+      ? (parseBool(freeze_trophies) ? 1 : 0)
+      : Number(t.freeze_trophies ?? 1),
     sort_by: normalizeTournamentSort(sort_by, t.sort_by),
     status: STATUSES.includes(status) ? status : t.status,
     preregistration_enabled: preregistration_enabled !== undefined
@@ -3599,7 +3608,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   db.db.prepare(`
     UPDATE tournaments SET name = ?, description = ?, dex = ?, start_at = ?, end_at = ?,
                             gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?,
-                            preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
+                            freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
     next.name,
@@ -3611,6 +3620,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.trophy_boost,
     next.sort_by,
     next.status,
+    next.freeze_trophies,
     next.preregistration_enabled,
     next.registration_opens_at,
     next.registration_closes_at,

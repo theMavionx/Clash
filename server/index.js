@@ -506,6 +506,9 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af">Registration closes<input id="tn_reg_close" placeholder="defaults to start" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Gold boost (×)<input id="tn_gold" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Trophy boost (×)<input id="tn_trophy" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
+            <input id="tn_freeze_trophies" type="checkbox" checked style="width:auto;margin:0"> Freeze main trophies
+          </label>
           <label style="font-size:11px;color:#9ca3af">Sort by
             <select id="tn_sort" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="pnl_usd">PnL (USD)</option>
@@ -537,7 +540,7 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Sort</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Freeze</th><th>Sort</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -1464,7 +1467,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="13" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet — create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -1489,6 +1492,7 @@ function renderTournaments() {
       + '<td style="font-size:11px">' + reg + '</td>'
       + '<td>' + t.gold_boost + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
+      + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
       + '<td>' + esc(t.sort_label || tournamentSortLabel(t.sort_by)) + '</td>'
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
@@ -1513,6 +1517,7 @@ function getTournamentFormBody() {
     registration_closes_at: document.getElementById('tn_reg_close').value.trim() || undefined,
     gold_boost: parseFloat(document.getElementById('tn_gold').value) || 1,
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
+    freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
     sort_by: document.getElementById('tn_sort').value,
     status: document.getElementById('tn_status').value,
   };
@@ -1533,6 +1538,7 @@ function resetTournamentForm() {
   document.getElementById('tn_reg_close').value = '';
   document.getElementById('tn_gold').value = '1';
   document.getElementById('tn_trophy').value = '1';
+  document.getElementById('tn_freeze_trophies').checked = true;
   document.getElementById('tn_sort').value = 'pnl_usd';
   document.getElementById('tn_status').value = 'active';
 }
@@ -1554,6 +1560,7 @@ function editTournament(id) {
   document.getElementById('tn_reg_close').value = t.registration_closes_at || '';
   document.getElementById('tn_gold').value = t.gold_boost || 1;
   document.getElementById('tn_trophy').value = t.trophy_boost || 1;
+  document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;
   document.getElementById('tn_sort').value = t.sort_by || 'pnl_usd';
   document.getElementById('tn_status').value = t.status || 'active';
   document.getElementById('tn_form_title').scrollIntoView({ behavior: 'smooth', block: 'center' });

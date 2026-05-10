@@ -7,6 +7,7 @@ import stoneIcon from '../assets/resources/stone_bar.png';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
+const LOOT_PERCENT = 0.15;
 
 function EnemyHeader() {
   const { enemyMode } = useUI();
@@ -59,7 +60,7 @@ function EnemyHeader() {
 }
 
 function ResourceRow({ icon, value }) {
-  const loot = Math.floor(value * 0.3);
+  const loot = Math.floor(value * LOOT_PERCENT);
   return (
     <div style={styles.resourceRow}>
       <img src={icon} alt="" style={styles.resourceIcon} />
@@ -229,4 +230,3 @@ const styles = {
 };
 
 export default memo(EnemyHeader);
-

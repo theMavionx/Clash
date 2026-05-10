@@ -121,6 +121,7 @@ try {
       end_at       TEXT,                                  -- nullable (open-ended)
       gold_boost   REAL NOT NULL DEFAULT 1.0,
       trophy_boost REAL NOT NULL DEFAULT 1.0,
+      freeze_trophies INTEGER NOT NULL DEFAULT 1,
       sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
@@ -130,6 +131,7 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN preregistration_enabled INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN freeze_trophies INTEGER NOT NULL DEFAULT 1`); } catch {}
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
@@ -147,6 +149,7 @@ try {
             end_at       TEXT,
             gold_boost   REAL NOT NULL DEFAULT 1.0,
             trophy_boost REAL NOT NULL DEFAULT 1.0,
+            freeze_trophies INTEGER NOT NULL DEFAULT 1,
             sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
@@ -156,12 +159,13 @@ try {
           );
           INSERT INTO tournaments_new (
             id, name, description, dex, start_at, end_at, gold_boost, trophy_boost,
-            sort_by, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            freeze_trophies, sort_by, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
             CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix') THEN dex ELSE 'pacifica' END,
             start_at, end_at, gold_boost, trophy_boost,
+            COALESCE(freeze_trophies, 1),
             CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
             created_at,
@@ -455,7 +459,8 @@ const stmts = {
   // means the participant is still active (didn't soft-leave).
   // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost, t.sort_by,
+    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost,
+           COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
            t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
     JOIN tournaments t ON t.id = p.tournament_id AND t.dex = (SELECT dex FROM players WHERE id = p.player_id)
@@ -515,6 +520,14 @@ function getPlayerActiveTournament(playerId) {
 // "trophies clamps to zero" behaviour by capping main updates and
 // relying on `MAX(0, ...)` in `bumpTournamentTrophies` for the
 // participant counter.
+function applyMainTrophyDelta(playerId, delta) {
+  const cur = stmts.getPlayerById.get(playerId)?.trophies || 0;
+  const next = Math.max(0, cur + delta);
+  stmts.updateTrophies.run(next, playerId);
+  console.log(`[trophy] player=${playerId.slice(0,8)} MAIN ${cur} ${delta>=0?'+':''}${delta} -> ${next}`);
+  return next;
+}
+
 function applyTrophyDelta(playerId, delta) {
   if (!playerId || !delta) return;
   const t = getPlayerActiveTournament(playerId);
@@ -522,15 +535,16 @@ function applyTrophyDelta(playerId, delta) {
     const boosted = delta > 0
       ? Math.round(delta * Number(t.trophy_boost || 1))
       : delta;
+    const freezeTrophies = Number(t.freeze_trophies ?? 1) !== 0;
     stmts.bumpTournamentTrophies.run(boosted, t.tournament_id, playerId);
-    console.log(`[trophy] player=${playerId.slice(0,8)} TOURNAMENT t=${t.tournament_id} delta=${delta} boosted=${boosted} (main FROZEN)`);
+    if (!freezeTrophies) {
+      applyMainTrophyDelta(playerId, delta);
+    }
+    console.log(`[trophy] player=${playerId.slice(0,8)} TOURNAMENT t=${t.tournament_id} delta=${delta} boosted=${boosted} main=${freezeTrophies ? 'FROZEN' : 'LIVE'}`);
     return;
   }
   // No tournament — apply to main, clamping at zero like the legacy code.
-  const cur = stmts.getPlayerById.get(playerId)?.trophies || 0;
-  const next = Math.max(0, cur + delta);
-  stmts.updateTrophies.run(next, playerId);
-  console.log(`[trophy] player=${playerId.slice(0,8)} MAIN ${cur} ${delta>=0?'+':''}${delta} -> ${next}`);
+  applyMainTrophyDelta(playerId, delta);
 }
 
 // Apply tournament gold_boost to a base gold reward and record the boosted
@@ -1145,6 +1159,24 @@ function findEnemy(playerId) {
   const resources = getResources(best.id);
   const sessionId = uuidv4();
   const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
+  const attackCostGold = getAttackCost(playerId);
+  if (!canAfford(playerId, attackCostGold, 0, 0)) {
+    return {
+      error: `Not enough gold to attack. Need ${attackCostGold} gold.`,
+      status: 400,
+      attack_cost_gold: attackCostGold,
+      resources: getResources(playerId),
+    };
+  }
+  const attackerResources = subtractResources(playerId, attackCostGold, 0, 0);
+  if (attackerResources?.error) {
+    return {
+      error: 'Not enough gold to attack',
+      status: 400,
+      attack_cost_gold: attackCostGold,
+      resources: getResources(playerId),
+    };
+  }
   stmts.createBattleSession.run(sessionId, playerId, best.id, reservedUntil);
   return {
     id: best.id,
@@ -1153,6 +1185,8 @@ function findEnemy(playerId) {
     level: best.level,
     buildings,
     resources,
+    attacker_resources: attackerResources,
+    attack_cost_gold: attackCostGold,
     battle_session_id: sessionId,
     battle_session_expires_at: reservedUntil,
   };
@@ -1256,6 +1290,22 @@ function buyShip(playerId, buildingId) {
 }
 
 const LOOT_PERCENT = 0.15;
+
+const ATTACK_COST_BY_TH = {
+  1: 100,
+  2: 250,
+  3: 500,
+};
+
+function attackCostForTownHallLevel(thLevel) {
+  const lvl = Math.max(1, Math.floor(Number(thLevel) || 1));
+  if (ATTACK_COST_BY_TH[lvl] != null) return ATTACK_COST_BY_TH[lvl];
+  return Math.round((50 * lvl * lvl + 50) / 50) * 50;
+}
+
+function getAttackCost(playerId) {
+  return attackCostForTownHallLevel(getTownHallLevel(playerId));
+}
 
 
 const SHIELD_HOURS = 6; // 6-hour shield after being raided
