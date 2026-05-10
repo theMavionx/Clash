@@ -120,6 +120,41 @@ const fmtPrice = (p) => {
   return `0.0${subscriptN(zeros)}${String(sig).padStart(3, '0')}`;
 };
 
+function numOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cleanSignedZero(value) {
+  const n = Number(value || 0);
+  return Math.abs(n) < 0.005 ? 0 : n;
+}
+
+function getPositionMetrics(pos, prices, leverageSettings = {}) {
+  const priceRowMark = numOrNull(prices.find(p => p.symbol === pos.symbol)?.mark);
+  const entryP = numOrNull(pos.entry_price) || 0;
+  const markP = numOrNull(pos.mark_price) || priceRowMark || 0;
+  const amt = numOrNull(pos.amount) || 0;
+  const margin = numOrNull(pos.margin) || 0;
+  const providedValue = numOrNull(pos.size_usd);
+  const posValueUsd = providedValue && providedValue > 0
+    ? providedValue
+    : (markP ? amt * markP : amt * entryP);
+  const providedPnl = numOrNull(pos.pnl_usd);
+  const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
+  const pnlVal = cleanSignedZero(providedPnl ?? derivedPnl);
+  const rawLev = numOrNull(pos.leverage);
+  const setLev = rawLev && rawLev > 0
+    ? Math.round(rawLev * 10) / 10
+    : ((margin > 0 && posValueUsd > 0) ? Math.round((posValueUsd / margin) * 10) / 10 : (leverageSettings[pos.symbol] || 1));
+  const providedPct = numOrNull(pos.pnl_pct);
+  const pnlPct = providedPct ?? (margin > 0
+    ? (pnlVal / margin) * 100
+    : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0));
+  const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+  return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor };
+}
+
 function timeMs(value) {
   if (value == null || value === '') return 0;
   const n = Number(value);
@@ -629,16 +664,7 @@ const PositionsList = memo(function PositionsList({
   return (
     <div style={{display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start'}}>
       {positions.map((pos, i) => {
-        const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
-        const entryP = parseFloat(pos.entry_price);
-        const markP = mark ? parseFloat(mark) : 0;
-        const amt = parseFloat(pos.amount);
-        const margin = parseFloat(pos.margin || 0);
-        const pnlVal = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-        const setLev = (margin > 0 && entryP > 0 && amt > 0) ? Math.round((amt * entryP) / margin) : (leverageSettings[pos.symbol] || 1);
-        const posValueUsd = markP ? amt * markP : amt * entryP;
-        const pnlPct = entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0;
-        const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+        const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
 
@@ -779,16 +805,15 @@ const BottomPanel = memo(function BottomPanel({
                 <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
               </tr></thead>
               <tbody>{filteredPositions.map((p, i) => {
-                const mark = prices.find(pr => pr.symbol === p.symbol)?.mark;
-                const entryPrice = parseFloat(p.entry_price);
-                const markPrice = mark ? parseFloat(mark) : 0;
-                const tblAmt = parseFloat(p.amount);
-                const tblMargin = parseFloat(p.margin || 0);
-                const pnlVal = markPrice ? (markPrice - entryPrice) * tblAmt * (p.side === 'bid' ? 1 : -1) : 0;
-                const lev = (tblMargin > 0 && entryPrice > 0 && tblAmt > 0) ? Math.round((tblAmt * entryPrice) / tblMargin) : (leverageSettings[p.symbol] || 1);
-                const tblPosValue = markPrice ? tblAmt * markPrice : tblAmt * entryPrice;
-                const pnlPct = entryPrice && markPrice ? ((markPrice - entryPrice) / entryPrice * 100 * (p.side === 'bid' ? 1 : -1) * (typeof lev === 'number' ? lev : 1)) : 0;
-                const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+                const {
+                  entryP: entryPrice,
+                  markP: markPrice,
+                  pnlVal,
+                  setLev: lev,
+                  posValueUsd: tblPosValue,
+                  pnlPct,
+                  pnlColor,
+                } = getPositionMetrics(p, prices, leverageSettings);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -2967,16 +2992,7 @@ function FuturesPanel() {
       // `align-items` for column flex) gives a clean uniform list.
       <div style={{display: 'flex', flexDirection: 'column', gap: 8}}>
         {openedSortedPositions.map((pos, i) => {
-          const mark = prices.find(p => p.symbol === pos.symbol)?.mark;
-          const entryP = parseFloat(pos.entry_price);
-          const markP = mark ? parseFloat(mark) : 0;
-          const amt = parseFloat(pos.amount);
-          const margin = parseFloat(pos.margin || 0);
-          const pnlVal = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
-          const setLev = (margin > 0 && entryP > 0 && amt > 0) ? Math.round((amt * entryP) / margin) : (leverageSettings[pos.symbol] || 1);
-          const posValueUsd = markP ? amt * markP : amt * entryP;
-          const pnlPct = entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0;
-          const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
+          const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
 

@@ -40,6 +40,34 @@ function parseMaybeUsdc(value) {
   return n;
 }
 
+function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function firstFinite(...values) {
+  for (const value of values) {
+    const n = finiteNumber(value);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+function tokenAmountValue(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' || typeof value === 'string' || typeof value === 'bigint') {
+    return finiteNumber(value);
+  }
+  const ui = finiteNumber(value.ui);
+  if (ui != null) return ui;
+  const raw = finiteNumber(value.value ?? value.amount ?? value.raw);
+  const decimals = Number(value.decimals);
+  if (raw != null && Number.isInteger(decimals) && decimals >= 0 && decimals <= 18) {
+    return raw / 10 ** decimals;
+  }
+  return raw;
+}
+
 function toRawUsdc(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive USDC amount');
@@ -63,6 +91,16 @@ function roundDownToLot(value, lotSize) {
   if (!Number.isFinite(lot) || lot <= 0) return n;
   const decimals = Math.max(0, String(lotSize).split('.')[1]?.length || 0);
   return Number((Math.floor(n / lot) * lot).toFixed(decimals));
+}
+
+function formatBaseUnits(value, lotSize) {
+  const n = Number(value);
+  const lot = Number(lotSize);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  const decimals = Number.isFinite(lot) && lot > 0
+    ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
+    : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
+  return Number(n.toFixed(decimals)).toString();
 }
 
 function fundingBasisPointsToDecimal(value) {
@@ -199,6 +237,14 @@ function activeTriggerPrice(triggers, market) {
   return ticksToUsd(row?.trigger?.triggerPriceTicks, market);
 }
 
+function collateralForTraderView(traderView) {
+  return firstFinite(
+    tokenAmountValue(traderView?.collateralBalance),
+    tokenAmountValue(traderView?.effectiveCollateral),
+    tokenAmountValue(traderView?.portfolioValue)
+  ) || 0;
+}
+
 function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 0) {
   const symbol = phoenixSymbol(p?.symbol);
   if (!symbol) return null;
@@ -209,7 +255,7 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
     : Number(p?.basePositionLots || 0) / 10 ** lotDecimals;
   if (!Number.isFinite(rawBase) || rawBase === 0) return null;
   const amount = Math.abs(rawBase);
-  const entry = Number(p?.entryPriceUsd || p?.entryPrice || 0);
+  const entry = firstFinite(p?.entryPriceUsd, p?.entryPrice, ticksToUsd(p?.entryPriceTicks, m)) || 0;
   const price = Number(m?._mark || entry || 0);
   const notional = amount * (entry || price || 0);
   const margin = collateral > 0 ? Math.min(collateral, notional) : 0;
@@ -238,6 +284,73 @@ function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 
     _phoenixDirectTakeProfitPrice: directTakeProfitPrice,
     _phoenixDirectStopLossPrice: directStopLossPrice,
     _raw: p,
+  };
+}
+
+function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
+  const symbol = phoenixSymbol(vp?.symbol);
+  if (!symbol) return null;
+  const m = marketsBySymbol.current[symbol];
+  const lotDecimals = Number(m?._phoenixBaseLotsDecimals ?? 4);
+  const snapshotBase = snapshotRow?.basePositionUnits != null
+    ? Number(snapshotRow.basePositionUnits)
+    : Number(snapshotRow?.basePositionLots || 0) / 10 ** lotDecimals;
+  const sizeValue = tokenAmountValue(vp?.positionSize);
+  const rawBase = Number.isFinite(sizeValue) && sizeValue !== 0 ? sizeValue : snapshotBase;
+  if (!Number.isFinite(rawBase) || rawBase === 0) return null;
+
+  const sideSign = rawBase >= 0 ? 1 : -1;
+  const amount = Math.abs(rawBase);
+  const entry = firstFinite(
+    tokenAmountValue(vp?.entryPrice),
+    snapshotRow?.entryPriceUsd,
+    ticksToUsd(snapshotRow?.entryPriceTicks, m)
+  ) || 0;
+  const pnl = firstFinite(tokenAmountValue(vp?.unrealizedPnl), 0) || 0;
+  const derivedMark = entry > 0 && amount > 0 ? entry + (pnl / amount) * sideSign : 0;
+  const mark = firstFinite(derivedMark > 0 ? derivedMark : null, m?._mark, entry) || 0;
+  const signedPositionValue = firstFinite(tokenAmountValue(vp?.positionValue), amount * (mark || entry || 0)) || 0;
+  const positionValue = Math.abs(signedPositionValue);
+  const accountCollateral = collateralForTraderView(traderView);
+  const margin = firstFinite(
+    tokenAmountValue(vp?.positionInitialMargin),
+    tokenAmountValue(vp?.initialMargin),
+    tokenAmountValue(traderView?.initialMargin),
+    accountCollateral
+  ) || 0;
+  const leverageBase = accountCollateral > 0 ? accountCollateral : margin;
+  const directTakeProfitPrice = firstFinite(tokenAmountValue(vp?.takeProfitPrice), activeTriggerPrice(snapshotRow?.takeProfitTriggers, m));
+  const directStopLossPrice = firstFinite(tokenAmountValue(vp?.stopLossPrice), activeTriggerPrice(snapshotRow?.stopLossTriggers, m));
+  const conditionalTakeProfitPrice = activeTriggerPrice(snapshotRow?.conditionalTakeProfitTriggers, m);
+  const conditionalStopLossPrice = activeTriggerPrice(snapshotRow?.conditionalStopLossTriggers, m);
+  const subaccountIndex = Number(traderView?.traderSubaccountIndex) || 0;
+  const pnlPct = margin > 0 ? (pnl / margin) * 100 : (
+    entry > 0 && mark > 0 ? ((mark - entry) / entry * 100 * sideSign) : 0
+  );
+
+  return {
+    symbol,
+    side: sideSign >= 0 ? 'bid' : 'ask',
+    amount,
+    size_usd: positionValue,
+    entry_price: entry || mark,
+    mark_price: mark || entry,
+    liquidation_price: tokenAmountValue(vp?.liquidationPrice),
+    margin,
+    leverage: leverageBase > 0 && positionValue > 0 ? Math.round((positionValue / leverageBase) * 10) / 10 : null,
+    pnl_usd: pnl,
+    pnl_pct: pnlPct,
+    is_isolated: Number(subaccountIndex) > 0,
+    take_profit_price: directTakeProfitPrice ?? conditionalTakeProfitPrice,
+    stop_loss_price: directStopLossPrice ?? conditionalStopLossPrice,
+    market_addr: m?.market_addr || null,
+    pair_index: null,
+    trade_index: null,
+    _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
+    _phoenixDirectTakeProfitPrice: directTakeProfitPrice,
+    _phoenixDirectStopLossPrice: directStopLossPrice,
+    _raw: snapshotRow || vp,
+    _view: vp,
   };
 }
 
@@ -360,6 +473,24 @@ export function usePhoenix() {
       label: 'phoenix',
     });
   }, [ownerPk, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
+
+  const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0) => {
+    if (!walletAddr) throw new Error('Wallet not connected');
+    const traderAccount = await client.pda.getTraderAddress({
+      authority: walletAddr,
+      traderPdaIndex: 0,
+      subaccountIndex: Number(subaccountIndex) || 0,
+    });
+    const conditionalOrders = await client.pda.getConditionalOrdersAddress({ traderAccount });
+    const info = await connection.getAccountInfo(new PublicKey(conditionalOrders));
+    if (info) return null;
+    return client.ixs.buildCreateConditionalOrdersAccount({
+      authority: walletAddr,
+      traderPdaIndex: 0,
+      traderSubaccountIndex: Number(subaccountIndex) || 0,
+      capacity: 32,
+    });
+  }, [client, connection, walletAddr]);
 
   const claimGold = useCallback(async (opts = {}) => {
     if (!walletAddr) return null;
@@ -535,15 +666,40 @@ export function usePhoenix() {
       return null;
     }
     try {
-      const state = await client.api.traders().getTraderStateSnapshot(walletAddr, { traderPdaIndex: 0 });
+      const [state, viewState] = await Promise.all([
+        client.api.traders().getTraderStateSnapshot(walletAddr, { traderPdaIndex: 0 }),
+        client.api.traders().getTraderState(walletAddr, { pdaIndex: 0 }).catch(e => {
+          console.warn('[Phoenix] trader view unavailable; falling back to snapshot math', e?.message || e);
+          return null;
+        }),
+      ]);
       traderRegisteredRef.current = true;
       setTraderRegistered(true);
       const subaccounts = Array.isArray(state?.snapshot?.subaccounts) ? state.snapshot.subaccounts : [];
       subaccountsRef.current = subaccounts;
       const cross = subaccounts.find(s => Number(s.subaccountIndex) === 0) || subaccounts[0] || null;
-      const crossCollateral = parseMaybeUsdc(cross?.collateral);
-      const totalCollateral = subaccounts.reduce((sum, s) => sum + parseMaybeUsdc(s?.collateral), 0);
-      const pos = subaccounts
+      const snapshotRowsByKey = new Map();
+      for (const sub of subaccounts) {
+        const subIndex = Number(sub?.subaccountIndex) || 0;
+        for (const row of sub?.positions || []) {
+          const symbol = phoenixSymbol(row?.symbol);
+          if (symbol) snapshotRowsByKey.set(`${subIndex}:${symbol}`, row);
+        }
+      }
+      const viewTraders = Array.isArray(viewState?.traders) ? viewState.traders : [];
+      const viewPositions = viewTraders
+        .flatMap(trader => {
+          const subIndex = Number(trader?.traderSubaccountIndex) || 0;
+          return (trader?.positions || [])
+            .map(row => positionFromTraderView(
+              row,
+              trader,
+              snapshotRowsByKey.get(`${subIndex}:${phoenixSymbol(row?.symbol)}`),
+              marketsBySymbolRef
+            ))
+            .filter(Boolean);
+        });
+      const fallbackPositions = subaccounts
         .flatMap(sub => {
           const subIndex = Number(sub?.subaccountIndex) || 0;
           const collateral = parseMaybeUsdc(sub?.collateral);
@@ -551,6 +707,7 @@ export function usePhoenix() {
             .map(p => positionFromSnapshot(p, marketsBySymbolRef, collateral, subIndex))
             .filter(Boolean);
         });
+      const pos = viewPositions.length ? viewPositions : fallbackPositions;
       const ord = subaccounts.flatMap(sub => {
         const subIndex = Number(sub?.subaccountIndex) || 0;
         return (sub?.orders || []).flatMap(group => ordersFromSnapshot(group, marketsBySymbolRef, subIndex));
@@ -558,11 +715,17 @@ export function usePhoenix() {
       const notional = pos.reduce((sum, p) => sum + Number(p.size_usd || 0), 0);
       const marginUsed = pos.reduce((sum, p) => sum + Number(p.margin || 0), 0);
       const pnl = pos.reduce((sum, p) => sum + Number(p.pnl_usd || 0), 0);
-      const equity = Math.max(0, totalCollateral + pnl);
+      const crossView = viewTraders.find(t => Number(t?.traderSubaccountIndex) === 0) || viewTraders[0] || null;
+      const crossCollateral = firstFinite(tokenAmountValue(crossView?.collateralBalance), parseMaybeUsdc(cross?.collateral)) || 0;
+      const totalCollateral = viewTraders.length
+        ? viewTraders.reduce((sum, t) => sum + collateralForTraderView(t), 0)
+        : subaccounts.reduce((sum, s) => sum + parseMaybeUsdc(s?.collateral), 0);
+      const equityFromView = viewTraders.reduce((sum, t) => sum + (tokenAmountValue(t?.portfolioValue) || 0), 0);
+      const equity = Math.max(0, equityFromView > 0 ? equityFromView : totalCollateral + pnl);
       const crossMarginUsed = pos
         .filter(p => !p.is_isolated)
         .reduce((sum, p) => sum + Number(p.margin || 0), 0);
-      const available = Math.max(0, crossCollateral - crossMarginUsed);
+      const available = Math.max(0, firstFinite(tokenAmountValue(crossView?.effectiveCollateralForWithdrawals), crossCollateral - crossMarginUsed) || 0);
       const firstMarket = marketsRef.current[0] || {};
       setPositions(pos);
       setOrders(ord);
@@ -844,10 +1007,10 @@ export function usePhoenix() {
     });
   }, [activate, buildBaseUnitsFromMargin, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
 
-  const closePosition = useCallback(async (symbol, side, amount) => {
+  const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
     const phx = phoenixSymbol(symbol);
-    return runOnce(`close:${walletAddr}:${phx}:${side}`, async () => {
+    return runOnce(`close:${walletAddr}:${phx}:${side}:${amount}:${fullClose ? 'full' : 'partial'}`, async () => {
       setLoading(true);
       setError(null);
       try {
@@ -857,12 +1020,39 @@ export function usePhoenix() {
           || null;
         const subaccountIndex = Number(existing?._phoenixSubaccountIndex || 0);
         const m = marketsBySymbolRef.current[phx];
-        const baseUnits = String(roundDownToLot(amount, m?.lot_size || '0.0001'));
+        const requested = Number(amount);
+        const openAmount = Number(existing?.amount || 0);
+        const amountToClose = fullClose && openAmount > 0
+          ? openAmount
+          : (openAmount > 0 && Number.isFinite(requested) ? Math.min(requested, openAmount) : requested);
+        const roundedAmount = roundDownToLot(amountToClose, m?.lot_size || '0.0001');
+        const baseUnits = formatBaseUnits(roundedAmount, m?.lot_size || '0.0001');
+        if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
+        const priceRow = pricesRef.current.find(p => p.symbol === phx);
+        const mark = firstFinite(existing?.mark_price, priceRow?.mark, m?._mark, existing?.entry_price);
+        const priceLimitUsd = mark > 0 ? mark * (closeSide === Side.Bid ? 1.03 : 0.97) : null;
+        console.log('[Phoenix] closePosition', {
+          symbol: phx,
+          uiSide: side,
+          closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
+          requested,
+          openAmount,
+          baseUnits,
+          minBaseUnitsToFill: m?.lot_size || baseUnits,
+          fullClose: !!fullClose,
+          subaccountIndex,
+          mark,
+          priceLimitUsd,
+        });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: closeSide,
           baseUnits,
+          priceLimitUsd,
+          minBaseUnitsToFill: m?.lot_size || baseUnits,
+          minQuoteLotsToFill: null,
           orderFlags: OrderFlags.ReduceOnly || 128,
+          cancelExisting: true,
         });
         const ix = await client.ixs.buildPlaceMarketOrder({
           authority: walletAddr,
@@ -948,44 +1138,68 @@ export function usePhoenix() {
 
         const isLong = position.side === 'bid';
         const subaccountIndex = Number(position._phoenixSubaccountIndex || 0);
-        const buildTrigger = async (price, executionDirection) => client.ixs.buildPlaceStopLoss({
+        const mark = Number(position.mark_price || pricesRef.current.find(p => p.symbol === phx)?.mark || 0);
+        const tp = takeProfit ? Number(takeProfit) : null;
+        const sl = stopLoss ? Number(stopLoss) : null;
+        if (tp != null && (!Number.isFinite(tp) || tp <= 0)) throw new Error('Enter a positive Phoenix TP price');
+        if (sl != null && (!Number.isFinite(sl) || sl <= 0)) throw new Error('Enter a positive Phoenix SL price');
+        if (mark > 0 && tp != null) {
+          if (isLong && tp <= mark) throw new Error(`Phoenix long TP must be above mark ($${mark.toFixed(2)})`);
+          if (!isLong && tp >= mark) throw new Error(`Phoenix short TP must be below mark ($${mark.toFixed(2)})`);
+        }
+        if (mark > 0 && sl != null) {
+          if (isLong && sl >= mark) throw new Error(`Phoenix long SL must be below mark ($${mark.toFixed(2)})`);
+          if (!isLong && sl <= mark) throw new Error(`Phoenix short SL must be above mark ($${mark.toFixed(2)})`);
+        }
+
+        const buildTriggerOrder = (price, triggerDirection) => {
+          const n = Number(price);
+          const executionPrice = closeSide === Side.Bid ? n * 1.02 : n * 0.98;
+          return {
+            triggerDirection,
+            tradeSide: closeSide,
+            orderKind: StopLossOrderKind.IOC,
+            triggerPrice: priceToTicks(n, market),
+            executionPrice: priceToTicks(executionPrice, market),
+          };
+        };
+
+        let greaterTriggerOrder = null;
+        let lessTriggerOrder = null;
+        if (tp != null) {
+          const direction = isLong ? Direction.GreaterThan : Direction.LessThan;
+          const trigger = buildTriggerOrder(tp, direction);
+          if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+          else lessTriggerOrder = trigger;
+        }
+        if (sl != null) {
+          const direction = isLong ? Direction.LessThan : Direction.GreaterThan;
+          const trigger = buildTriggerOrder(sl, direction);
+          if (direction === Direction.GreaterThan) greaterTriggerOrder = trigger;
+          else lessTriggerOrder = trigger;
+        }
+
+        const createConditionalIx = await ensureConditionalOrdersAccountIx(subaccountIndex);
+        const placeConditionalIx = await client.ixs.buildPlacePositionConditionalOrder({
           authority: walletAddr,
           symbol: phx,
-          triggerPrice: priceToTicks(price, market),
-          tradeSide: closeSide,
-          executionDirection,
-          orderKind: StopLossOrderKind.IOC,
+          greaterTriggerOrder,
+          lessTriggerOrder,
+          sizePercent: 100,
           traderPdaIndex: 0,
           traderSubaccountIndex: subaccountIndex,
         });
-
-        const instructions = [];
-        if (takeProfit) {
-          const direction = isLong ? Direction.GreaterThan : Direction.LessThan;
-          if (position._phoenixDirectTakeProfitPrice != null) {
-            instructions.push(await client.ixs.buildCancelStopLoss({
-              authority: walletAddr,
-              symbol: phx,
-              executionDirection: direction,
-              traderPdaIndex: 0,
-              traderSubaccountIndex: subaccountIndex,
-            }));
-          }
-          instructions.push(await buildTrigger(takeProfit, direction));
-        }
-        if (stopLoss) {
-          const direction = isLong ? Direction.LessThan : Direction.GreaterThan;
-          if (position._phoenixDirectStopLossPrice != null) {
-            instructions.push(await client.ixs.buildCancelStopLoss({
-              authority: walletAddr,
-              symbol: phx,
-              executionDirection: direction,
-              traderPdaIndex: 0,
-              traderSubaccountIndex: subaccountIndex,
-            }));
-          }
-          instructions.push(await buildTrigger(stopLoss, direction));
-        }
+        const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
+        console.log('[Phoenix] setTpsl', {
+          symbol: phx,
+          positionSide: position.side,
+          closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
+          subaccountIndex,
+          mark,
+          takeProfit: tp,
+          stopLoss: sl,
+          createdConditionalAccount: !!createConditionalIx,
+        });
 
         const signature = await sendIxs(instructions);
         await refreshTraderState();
@@ -998,7 +1212,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, positions, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [client, ensureConditionalOrdersAccountIx, positions, refreshTraderState, runOnce, sendIxs, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
