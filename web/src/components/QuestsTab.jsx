@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
@@ -6,6 +6,111 @@ import { usePlayer } from '../hooks/useGodot';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
+
+const QUOTE_TICKERS = new Set([
+  'USD', 'USDC', 'USDT', 'USDE', 'DAI', 'AUSD',
+  'EUR', 'GBP', 'JPY', 'CHF', 'AUD', 'CAD', 'NZD',
+]);
+
+const SYMBOL_ALIASES = {
+  XBT: 'BTC',
+  WBTC: 'BTC',
+  TBTC: 'BTC',
+  WETH: 'ETH',
+  WSOL: 'SOL',
+  WBNB: 'BNB',
+  WAVAX: 'AVAX',
+  WMATIC: 'MATIC',
+  POL: 'MATIC',
+  WTIOIL: 'WTI',
+  USOIL: 'WTI',
+  BRENTOIL: 'BRENT',
+  UKOIL: 'BRENT',
+};
+
+function cleanSymbolText(value) {
+  return String(value || '')
+    .toUpperCase()
+    .replace(/^\$/, '')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/[^A-Z0-9./:_-]+/g, ' ')
+    .trim();
+}
+
+function canonicalTicker(value) {
+  const raw = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!raw) return '';
+  return SYMBOL_ALIASES[raw] || raw;
+}
+
+function tickerVariants(value) {
+  const raw = String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!raw) return [];
+  const out = new Set([canonicalTicker(raw)]);
+  const scaled = raw.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
+  if (scaled) out.add(canonicalTicker(scaled[1]));
+  return [...out].filter(Boolean);
+}
+
+function extractTickerCandidates(value) {
+  const text = cleanSymbolText(value);
+  if (!text) return [];
+  const out = new Set();
+  const push = (part) => {
+    const clean = String(part || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!clean) return;
+    for (const quote of QUOTE_TICKERS) {
+      if (clean.length > quote.length + 1 && clean.endsWith(quote)) {
+        tickerVariants(clean.slice(0, -quote.length)).forEach(v => out.add(v));
+      }
+    }
+    tickerVariants(clean).forEach(v => out.add(v));
+  };
+
+  for (const chunk of text.split(/\s+/)) {
+    if (!chunk) continue;
+    push(chunk);
+    const dotted = chunk.split('.');
+    if (dotted.length > 1) push(dotted[dotted.length - 1]);
+    const parts = chunk.split(/[/:_-]/).filter(Boolean);
+    if (parts.length) {
+      push(parts[0]);
+      if (parts.length > 1 && QUOTE_TICKERS.has(parts[0])) push(parts.join(''));
+    }
+  }
+  return [...out];
+}
+
+function marketTickerSet(markets) {
+  const set = new Set();
+  for (const m of markets || []) {
+    if (!m) continue;
+    const raw = m._raw || m._phoenix || {};
+    const values = [
+      m.symbol, m.base, m.pair, m.market_name, m.marketName, m.name,
+      m.pyth_symbol, m.icon_symbol,
+      raw.symbol, raw.base, raw.from, raw.pair, raw.name,
+      raw.market_name, raw.marketName,
+      raw.feed?.attributes?.symbol,
+    ];
+    values.flatMap(extractTickerCandidates).forEach(v => set.add(v));
+  }
+  return set;
+}
+
+function taskSymbol(task) {
+  const s = task?.params?.symbol;
+  if (!s || s === '*' || String(s).toLowerCase() === 'any') return '';
+  return String(s).toUpperCase();
+}
+
+function taskTradableOnMarkets(task, markets) {
+  const sym = taskSymbol(task);
+  if (!sym) return true;
+  if (!Array.isArray(markets) || markets.length === 0) return true;
+  const available = marketTickerSet(markets);
+  return extractTickerCandidates(sym).some(v => available.has(v));
+}
 
 function fmtVal(v, type) {
   if (v == null) return '0';
@@ -97,7 +202,7 @@ function QuestCard({ task, onStart, onClaim, loading }) {
   );
 }
 
-function QuestsTab() {
+function QuestsTab({ markets = [] }) {
   const [tasks, setTasks] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -171,6 +276,11 @@ function QuestsTab() {
     } finally { setLoading(false); }
   }, [fetchTasks, token]);
 
+  const visibleTasks = useMemo(
+    () => tasks.filter(t => taskTradableOnMarkets(t, markets)),
+    [tasks, markets],
+  );
+
   if (!loaded) {
     return (
       <div style={{...S.empty, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12}}>
@@ -186,12 +296,12 @@ function QuestsTab() {
     );
   }
 
-  if (!tasks.length) {
+  if (!visibleTasks.length) {
     return (
       <div style={S.empty}>
         <div style={S.emptyIcon}>⚔️</div>
-        <div style={S.emptyTitle}>No quests available</div>
-        <div style={S.emptyDesc}>Check back later for new quests from the admin.</div>
+        <div style={S.emptyTitle}>{tasks.length ? 'No quests for this DEX' : 'No quests available'}</div>
+        <div style={S.emptyDesc}>{tasks.length ? 'Switch DEX or check back later.' : 'Check back later for new quests from the admin.'}</div>
       </div>
     );
   }
@@ -200,7 +310,7 @@ function QuestsTab() {
     <div style={S.wrap}>
       {flash && <div style={S.flash}>{flash}</div>}
       {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}
-      {tasks.map(t => (
+      {visibleTasks.map(t => (
         <QuestCard key={t.id} task={t} onStart={handleStart} onClaim={handleClaim} loading={loading} />
       ))}
     </div>

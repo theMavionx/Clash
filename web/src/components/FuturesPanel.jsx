@@ -3489,7 +3489,7 @@ function FuturesPanel() {
     if (activeTab === 'Positions') return renderPositions();
     if (activeTab === 'Orders') return renderOrders();
     if (activeTab === 'Account') return renderAccount();
-    if (activeTab === 'Quests') return <QuestsTab />;
+    if (activeTab === 'Quests') return <QuestsTab markets={markets} />;
   };
 
   // First-time mode selection: hide the trading UI behind a parchment card

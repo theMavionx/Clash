@@ -75,14 +75,49 @@ function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
 }
 
+const TASK_SYMBOL_ALIASES = {
+  XBT: 'BTC',
+  WBTC: 'BTC',
+  TBTC: 'BTC',
+  WETH: 'ETH',
+  WSOL: 'SOL',
+  WBNB: 'BNB',
+  WAVAX: 'AVAX',
+  WMATIC: 'MATIC',
+  POL: 'MATIC',
+  WTIOIL: 'WTI',
+  USOIL: 'WTI',
+  BRENTOIL: 'BRENT',
+  UKOIL: 'BRENT',
+};
+
+function canonicalTaskSymbol(value) {
+  const base = String(value || '')
+    .toUpperCase()
+    .replace(/^\$/, '')
+    .split(/[-/]/)[0]
+    .replace(/[^A-Z0-9]/g, '');
+  if (!base) return '';
+  return TASK_SYMBOL_ALIASES[base] || base;
+}
+
+function taskSymbolVariants(value) {
+  const base = String(value || '')
+    .toUpperCase()
+    .replace(/^\$/, '')
+    .split(/[-/]/)[0]
+    .replace(/[^A-Z0-9]/g, '');
+  if (!base) return [];
+  const out = new Set([canonicalTaskSymbol(base)]);
+  const scaled = base.match(/^(?:1000|10000|1000000|1K|1M)([A-Z][A-Z0-9]{1,})$/);
+  if (scaled) out.add(canonicalTaskSymbol(scaled[1]));
+  return [...out].filter(Boolean);
+}
+
 function matchesSymbol(tradeSymbol, wantSymbol) {
   if (!wantSymbol || wantSymbol === 'ANY' || wantSymbol === 'any' || wantSymbol === '*') return true;
-  const normalize = (s) => {
-    const base = String(s || '').toUpperCase().split(/[-/]/)[0];
-    if (base === 'WTIOIL' || base === 'USOIL') return 'WTI';
-    return base;
-  };
-  return normalize(tradeSymbol) === normalize(wantSymbol);
+  const wanted = new Set(taskSymbolVariants(wantSymbol));
+  return taskSymbolVariants(tradeSymbol).some(v => wanted.has(v));
 }
 
 // Pacifica trade side: "bid"/"ask", "open_long"/"open_short",
