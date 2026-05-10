@@ -119,6 +119,8 @@ async function fetchDecibelEarnings() {
     currency: 'USDC (Aptos)',
     withdrawable_usd: withdrawable,
     realized_pnl: Number(data?.realized_pnl) || 0,
+    source_detail: 'decibel_fee_income_exact',
+    note: 'Exact Decibel REST fee_income from the builder subaccount. Old trades stay at the fee charged when they were placed; this is not recalculated with the current bps. Withdrawable is current claimable balance, not commission-only earnings.',
   };
 }
 
