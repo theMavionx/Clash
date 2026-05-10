@@ -902,7 +902,7 @@ const styles = {
   attackCostBadge: {
     position: 'absolute',
     top: 20,
-    right: 12,
+    right: 22,
     minWidth: 50,
     height: 26,
     padding: '0 8px 0 5px',
@@ -922,7 +922,7 @@ const styles = {
   },
   attackCostBadgeMobile: {
     top: 18,
-    right: 8,
+    right: 16,
     minWidth: 46,
     height: 24,
     fontSize: 13,
