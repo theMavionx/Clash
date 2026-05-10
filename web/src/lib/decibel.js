@@ -25,8 +25,8 @@
 // on-chain and reverts with "invalid address" if you pass a short code.
 export const BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
 
-// 1 basis point = 0.01%. Per builder agreement / user request.
-export const BUILDER_FEE_BPS = 1;
+// 2 basis points = 0.02%. Per builder agreement / user request.
+export const BUILDER_FEE_BPS = 2;
 
 // Referral code (consumer-side, the 6-char alphanumeric thing on
 // app.decibel.trade). Decibel's perp_engine aborts with

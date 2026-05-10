@@ -10,7 +10,7 @@
 //   • Decibel server-state (positions, orders, balances) — REST via the SDK
 //     read client; same 5 s polling cadence as the Avantis hook.
 //   • Builder fee — `approveMaxBuilderFee` once per subaccount. Every order
-//     carries `builderAddr` + `builderFee: 1` (= 0.01%).
+//     carries `builderAddr` + the configured builder fee from decibel.js.
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
