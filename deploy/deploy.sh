@@ -170,7 +170,7 @@ ELFA_API_KEY=
 DECIBEL_API_KEY=
 DECIBEL_API_WALLET_PRIVATE_KEY=
 DECIBEL_ALLOWED_BUILDER_ADDRS=
-DECIBEL_BUILDER_FEE_BPS=1
+DECIBEL_BUILDER_FEE_BPS=2
 CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
 EOF
             chmod 600 "$ENV_FILE"
@@ -185,10 +185,11 @@ EOF
     ensure_env_default "DECIBEL_API_KEY" ""
     ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
-    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "1"
+    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "2"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
 
     set_env_value "NODE_ENV" "production"
+    set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
 
