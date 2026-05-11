@@ -667,7 +667,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   if (!hasShips) {
     return { valid: false, reason: 'No ships deployed in defeat' };
   }
-  return { valid: true, reason: 'Defeat accepted', townHallDestroyed: false, buildingsDestroyed, townHallHpPct };
+  return { valid: true, reason: 'Defeat accepted', townHallDestroyed: false, buildingsDestroyed, townHallHpPct, ..._debug };
 }
 
 module.exports = { verifyReplay };

@@ -1387,9 +1387,22 @@ function battleVictory(attackerId, defenderId, battleSessionId = '') {
   return _battleVictoryTxn(attackerId, defenderId, battleSessionId);
 }
 
+function replayDurationSec(replayData, simResult) {
+  const simDuration = Number(simResult?._simTimeSec ?? simResult?.simTimeSec);
+  if (Number.isFinite(simDuration) && simDuration > 0) return simDuration;
+
+  const actions = Array.isArray(replayData?.actions)
+    ? replayData.actions
+    : (Array.isArray(replayData) ? replayData : []);
+  const times = actions
+    .map(a => Number(a?.t))
+    .filter(t => Number.isFinite(t) && t >= 0);
+  if (!times.length) return 0;
+  return Math.max(0, Math.max(...times) - Math.min(...times));
+}
+
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
-  const actions = replayData.actions || replayData;
-  const duration = Array.isArray(actions) && actions.length > 1 ? actions[actions.length - 1].t - (actions[0].t || 0) : 0;
+  const duration = replayDurationSec(replayData, simResult);
   stmts.insertReplay.run(
     attackerId, defenderId, claimedResult, verifiedResult, reason || '',
     JSON.stringify(replayData), JSON.stringify(buildingsSnapshot),
