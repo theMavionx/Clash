@@ -52,12 +52,9 @@ function phoenixErrorLogs(error) {
 
 function isPhoenixMetadataDriftError(error) {
   const code = phoenixSimulationCode(error);
-  if (code !== '0x1900' && code !== '0x1902') return false;
-  const logs = phoenixErrorLogs(error).join('\n');
-  const text = `${error?.transactionMessage || ''}\n${error?.message || ''}\n${logs}`;
-  return /Result \(Failed\):/i.test(text)
-    || /Some\(\d+\)\s*==\s*Some\(\d+\)/i.test(text)
-    || /\[[\d,\s]+\]\s*==\s*\[[\d,\s]+\]/.test(text);
+  // Phoenix exchange/orderbook snapshot mismatches surface as 0x1900/0x1902.
+  // Some RPCs omit simulation logs, so the code itself is enough to rebuild.
+  return code === '0x1900' || code === '0x1902';
 }
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
@@ -122,13 +119,23 @@ function sideToUi(side) {
   return 'ask';
 }
 
+function decimalPlaces(value) {
+  const text = String(value || '');
+  const exponent = text.match(/e-(\d+)$/i);
+  if (exponent) return Number(exponent[1]) || 0;
+  return Math.max(0, text.split('.')[1]?.replace(/e.*$/i, '').length || 0);
+}
+
 function roundDownToLot(value, lotSize) {
   const n = Number(value);
   const lot = Number(lotSize);
   if (!Number.isFinite(n) || n <= 0) return 0;
   if (!Number.isFinite(lot) || lot <= 0) return n;
-  const decimals = Math.max(0, String(lotSize).split('.')[1]?.length || 0);
-  return Number((Math.floor(n / lot) * lot).toFixed(decimals));
+  const decimals = Math.min(12, Math.max(decimalPlaces(value), decimalPlaces(lotSize)));
+  const scale = 10 ** decimals;
+  const lotUnits = Math.max(1, Math.round(lot * scale));
+  const valueUnits = Math.floor(n * scale + 1e-9);
+  return Number(((Math.floor(valueUnits / lotUnits) * lotUnits) / scale).toFixed(decimals));
 }
 
 function formatBaseUnits(value, lotSize) {
@@ -136,7 +143,7 @@ function formatBaseUnits(value, lotSize) {
   const lot = Number(lotSize);
   if (!Number.isFinite(n) || n <= 0) return '0';
   const decimals = Number.isFinite(lot) && lot > 0
-    ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
+    ? decimalPlaces(lotSize)
     : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
   return Number(n.toFixed(decimals)).toString();
 }
