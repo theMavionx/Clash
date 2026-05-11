@@ -5,25 +5,37 @@ export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 
 const DEFAULT_RPC_URL = DEFAULT_SOLANA_RPC_URL;
+const EXCHANGE_METADATA_RPC_TTL_MS = 1_000;
 
 const clients = new Map();
+
+function createClient(rpcUrl) {
+  const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
+  return createPhoenixClient({
+    apiUrl: PHOENIX_API_URL,
+    rpcUrl: resolvedRpc,
+    ws: false,
+    pdaCache: { maxEntries: 1024 },
+    exchangeMetadata: {
+      // The public API snapshot can lag on-chain state by many slots. Order
+      // instructions must be built from the same current RPC view used to send.
+      priority: 'rpc',
+      rpc: {
+        enabled: true,
+        ttlMs: EXCHANGE_METADATA_RPC_TTL_MS,
+      },
+      api: {
+        enabled: true,
+      },
+    },
+  });
+}
 
 export function getPhoenixClient(rpcUrl) {
   const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
   const key = `${PHOENIX_API_URL}|${resolvedRpc}`;
   if (!clients.has(key)) {
-    clients.set(key, createPhoenixClient({
-      apiUrl: PHOENIX_API_URL,
-      rpcUrl: resolvedRpc,
-      ws: {
-        connectMode: 'lazy',
-        idleCloseMs: 30_000,
-      },
-      pdaCache: { maxEntries: 1024 },
-      exchangeMetadata: {
-        stream: true,
-      },
-    }));
+    clients.set(key, createClient(resolvedRpc));
   }
   return clients.get(key);
 }
@@ -39,6 +51,10 @@ export function resetPhoenixClient(rpcUrl) {
 export function getFreshPhoenixClient(rpcUrl) {
   resetPhoenixClient(rpcUrl);
   return getPhoenixClient(rpcUrl);
+}
+
+export function createPhoenixTransactionClient(rpcUrl) {
+  return createClient(rpcUrl);
 }
 
 export function phoenixSymbol(symbol) {

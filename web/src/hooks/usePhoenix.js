@@ -8,7 +8,7 @@ import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
-  getFreshPhoenixClient,
+  createPhoenixTransactionClient,
   getPhoenixClient,
   phoenixSymbol,
 } from '../lib/phoenixClient';
@@ -55,6 +55,32 @@ function isPhoenixMetadataDriftError(error) {
   // Phoenix exchange/orderbook snapshot mismatches surface as 0x1900/0x1902.
   // Some RPCs omit simulation logs, so the code itself is enough to rebuild.
   return code === '0x1900' || code === '0x1902';
+}
+
+function shortPhoenixAddress(value) {
+  const text = String(value || '');
+  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
+}
+
+function phoenixMetadataSummary(orderClient, symbol) {
+  try {
+    const source = orderClient?.exchange?.source?.();
+    const snapshot = orderClient?.exchange?.snapshot?.();
+    const context = orderClient?.exchange?.instructionContext?.(symbol);
+    return {
+      metadata_source: source?.active || null,
+      metadata_priority: source?.priority || null,
+      metadata_slot: snapshot?.slot != null ? String(snapshot.slot) : null,
+      metadata_slot_index: snapshot?.slotIndex ?? null,
+      market_pubkey: shortPhoenixAddress(context?.market?.marketPubkey),
+      spline_pubkey: shortPhoenixAddress(context?.market?.splinePubkey),
+      active_trader_buffer: Array.isArray(context?.exchange?.activeTraderBuffer)
+        ? context.exchange.activeTraderBuffer.map(shortPhoenixAddress).filter(Boolean)
+        : [],
+    };
+  } catch {
+    return {};
+  }
 }
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
@@ -365,7 +391,9 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     ? Number(snapshotRow.basePositionUnits)
     : Number(snapshotRow?.basePositionLots || 0) / 10 ** lotDecimals;
   const sizeValue = tokenAmountValue(vp?.positionSize);
-  const rawBase = Number.isFinite(sizeValue) && sizeValue !== 0 ? sizeValue : snapshotBase;
+  const rawBase = Number.isFinite(snapshotBase) && snapshotBase !== 0
+    ? (Number.isFinite(sizeValue) && sizeValue !== 0 ? Math.abs(sizeValue) * Math.sign(snapshotBase) : snapshotBase)
+    : sizeValue;
   if (!Number.isFinite(rawBase) || rawBase === 0) return null;
 
   const sideSign = rawBase >= 0 ? 1 : -1;
@@ -518,20 +546,35 @@ export function usePhoenix() {
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
   const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
+    const phx = phoenixSymbol(symbol);
+    const runWithTransactionClient = async (phase) => {
+      const orderClient = createPhoenixTransactionClient(connection?.rpcEndpoint);
+      try {
+        await orderClient.exchange?.ready?.();
+        console.info('[Phoenix] transaction metadata ready', {
+          label,
+          symbol: phx,
+          phase,
+          ...phoenixMetadataSummary(orderClient, phx),
+        });
+        return await buildAndSend(orderClient);
+      } finally {
+        try { orderClient.dispose?.(); } catch {}
+      }
+    };
     try {
-      return await buildAndSend(client);
+      return await runWithTransactionClient('initial');
     } catch (e) {
       if (!isPhoenixMetadataDriftError(e)) throw e;
-      const freshClient = getFreshPhoenixClient(connection?.rpcEndpoint);
       console.warn('[Phoenix] exchange metadata drift; rebuilding instruction once', {
         label,
-        symbol: phoenixSymbol(symbol),
+        symbol: phx,
         code: phoenixSimulationCode(e),
         logs: phoenixErrorLogs(e).slice(-6),
       });
-      return buildAndSend(freshClient);
+      return runWithTransactionClient('retry');
     }
-  }, [client, connection?.rpcEndpoint]);
+  }, [connection?.rpcEndpoint]);
 
   const runOnce = useCallback((key, fn) => {
     const map = inFlightRef.current;
