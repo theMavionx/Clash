@@ -5,6 +5,7 @@ import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
+import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
   createPhoenixTransactionClient,
@@ -526,8 +527,9 @@ export function usePhoenix() {
 
   const privyAddr = privyWalletObj?.address || null;
   const adapterAddr = publicKey?.toBase58() || null;
-  const privyActive = !!privyAddr && !adapterAddr;
-  const walletAddr = adapterAddr || privyAddr || null;
+  const inFarcasterFrame = isFarcasterFrame();
+  const privyActive = !!privyAddr && (!inFarcasterFrame || !adapterAddr);
+  const walletAddr = privyActive ? privyAddr : (adapterAddr || privyAddr || null);
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
   const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
   const registeredSolanaWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(registeredWallet) ? registeredWallet : null;
