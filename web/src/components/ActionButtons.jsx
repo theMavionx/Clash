@@ -304,6 +304,7 @@ const formatReplayTime = (seconds) => {
 
 function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
   const { sendToGodot } = useSend();
+  const { isMobile: mobile } = useLayout();
   const [speedIdx, setSpeedIdx] = useState(0);
   const [fallbackRemaining, setFallbackRemaining] = useState(null);
   const fallbackRef = useRef({ remaining: null, lastTick: 0, speed: 1 });
@@ -354,28 +355,40 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
     sendToGodot('replay_speed', { speed: REPLAY_SPEEDS[next] });
   }, [speedIdx, sendToGodot]);
 
+  const topRightStyle = mobile
+    ? { ...hud.wrapTopRight, top: 'calc(env(safe-area-inset-top, 0px) + 10px)', right: 10 }
+    : hud.wrapTopRight;
+  const controlRowStyle = mobile
+    ? { display: 'flex', alignItems: 'center', gap: 8 }
+    : { display: 'flex', alignItems: 'center', gap: 10 };
+  const speedBtnStyle = mobile ? { ...hud.speedBtn, ...hud.replayControlMobile } : hud.speedBtn;
+  const homeBtnStyle = mobile ? { ...hud.homeBtn, ...hud.replayControlMobile } : hud.homeBtn;
+  const replayCountdownStyle = mobile ? { ...hud.replayCountdownWrap, ...hud.replayCountdownMobile } : hud.replayCountdownWrap;
+  const replayCountdownLabelStyle = mobile ? { ...hud.replayCountdownLabel, fontSize: 8, marginBottom: 2 } : hud.replayCountdownLabel;
+  const replayCountdownTimeStyle = mobile ? { ...hud.replayCountdownTime, fontSize: 24 } : hud.replayCountdownTime;
+
   return (
     <>
       {remaining != null && (
-        <div style={hud.replayCountdownWrap} aria-live="polite">
-          <div style={hud.replayCountdownLabel}>REPLAY ENDS IN</div>
-          <div style={hud.replayCountdownTime}>{formatReplayTime(remaining)}</div>
+        <div style={replayCountdownStyle} aria-live="polite">
+          <div style={replayCountdownLabelStyle}>REPLAY ENDS IN</div>
+          <div style={replayCountdownTimeStyle}>{formatReplayTime(remaining)}</div>
         </div>
       )}
-      <div style={hud.wrapTopRight}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button style={hud.speedBtn} onClick={handleSpeed} title="Change speed"
+      <div style={topRightStyle}>
+      <div style={controlRowStyle}>
+        <button style={speedBtnStyle} onClick={handleSpeed} title="Change speed"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
           onMouseOut={e => e.currentTarget.style.filter = 'none'}
         >
           <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
         </button>
-        <div style={hud.replayBadge}>REPLAY</div>
-        <button style={hud.homeBtn} onClick={onReturnHome} title="Return Home"
+        {!mobile && <div style={hud.replayBadge}>REPLAY</div>}
+        <button style={homeBtnStyle} onClick={onReturnHome} title="Return Home"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
           onMouseOut={e => e.currentTarget.style.filter = 'none'}
         >
-          <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
+          <span style={{ fontSize: mobile ? 22 : 26, lineHeight: 1 }}>🏳️</span>
         </button>
       </div>
       </div>
@@ -798,6 +811,13 @@ const hud = {
     textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
+  replayCountdownMobile: {
+    top: 'calc(env(safe-area-inset-top, 0px) + 70px)',
+    minWidth: 104,
+    padding: '5px 12px 7px',
+    borderRadius: 10,
+    zIndex: 9,
+  },
   replayCountdownLabel: {
     color: 'rgba(190,235,255,0.84)',
     fontSize: 10,
@@ -822,6 +842,11 @@ const hud = {
     cursor: 'pointer', flexShrink: 0,
     transition: 'filter 0.15s',
     outline: 'none',
+  },
+  replayControlMobile: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
   },
   speedText: {
     color: '#7df4ff', fontSize: 18, fontWeight: 900,

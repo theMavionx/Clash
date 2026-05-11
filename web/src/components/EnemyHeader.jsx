@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { useUI } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -11,31 +12,35 @@ const LOOT_PERCENT = 0.15;
 
 function EnemyHeader() {
   const { enemyMode } = useUI();
+  const { isMobile: mobile } = useLayout();
 
   if (!enemyMode?.active) return null;
 
+  const isReplay = !!enemyMode.is_replay;
+  const compact = mobile && isReplay;
+
   return (
-    <div style={styles.container}>
+    <div style={compact ? { ...styles.container, ...styles.containerReplayMobile } : styles.container}>
       {/* Player Header - Styled like PlayerInfo */}
-      <div style={styles.headerWrap}>
+      <div style={compact ? { ...styles.headerWrap, gap: 8 } : styles.headerWrap}>
         <div style={styles.levelCircleContainer}>
-          <div style={styles.levelCircle}>
-            <div style={styles.innerSquare}>
-              <span style={styles.levelText}>{enemyMode.level || 1}</span>
+          <div style={compact ? { ...styles.levelCircle, ...styles.levelCircleMobile } : styles.levelCircle}>
+            <div style={compact ? { ...styles.innerSquare, borderRadius: 6 } : styles.innerSquare}>
+              <span style={compact ? { ...styles.levelText, ...styles.levelTextMobile } : styles.levelText}>{enemyMode.level || 1}</span>
             </div>
           </div>
         </div>
 
         <div style={styles.infoStack}>
-          <span style={styles.playerName}>{enemyMode.name}</span>
+          <span style={compact ? { ...styles.playerName, ...styles.playerNameReplayMobile } : styles.playerName}>{enemyMode.name}</span>
 
           {enemyMode.trophies !== undefined && (
-            <div style={styles.trophyContainer}>
-              <div style={styles.trophyBox}>
+            <div style={compact ? { ...styles.trophyContainer, height: 26, marginLeft: 2 } : styles.trophyContainer}>
+              <div style={compact ? { ...styles.trophyBox, width: 24, height: 24, borderRadius: 5 } : styles.trophyBox}>
                 <img src={trophyIcon} alt="trophy" style={styles.trophyImg} />
               </div>
-              <div style={styles.trophyBar}>
-                <span style={styles.trophiesText}>
+              <div style={compact ? { ...styles.trophyBar, height: 18, minWidth: 54, padding: '0 8px' } : styles.trophyBar}>
+                <span style={compact ? { ...styles.trophiesText, fontSize: 12 } : styles.trophiesText}>
                   {fmt(enemyMode.trophies)}
                 </span>
               </div>
@@ -84,6 +89,11 @@ const styles = {
     fontFamily: '"Inter", "Segoe UI", sans-serif',
     gap: 8,
   },
+  containerReplayMobile: {
+    top: 'calc(env(safe-area-inset-top, 0px) + 10px)',
+    left: 10,
+    gap: 4,
+  },
   headerWrap: {
     display: 'flex',
     alignItems: 'center',
@@ -105,6 +115,12 @@ const styles = {
     justifyContent: 'center',
     position: 'relative',
     padding: 6,
+  },
+  levelCircleMobile: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    padding: 5,
   },
   innerSquare: {
     width: '100%',
@@ -128,6 +144,9 @@ const styles = {
     transform: 'translateY(-1px)',
     letterSpacing: '-1px',
   },
+  levelTextMobile: {
+    fontSize: 24,
+  },
   infoStack: {
     display: 'flex',
     flexDirection: 'column',
@@ -141,6 +160,15 @@ const styles = {
     textShadow: '-1px -1px 0 #1a1a1a, 1px -1px 0 #1a1a1a, -1px 1px 0 #1a1a1a, 1px 1px 0 #1a1a1a, 0 2px 2px rgba(0,0,0,0.8)',
     marginLeft: 4,
     letterSpacing: '0.5px',
+  },
+  playerNameReplayMobile: {
+    maxWidth: 'calc(100vw - 178px)',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: 18,
+    marginLeft: 2,
+    letterSpacing: 0,
   },
   trophyContainer: {
     position: 'relative',
