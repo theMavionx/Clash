@@ -218,6 +218,21 @@ func enter_attack_mode(fleet: Array = []) -> void:
 	print("Attack mode ON - place up to %d ships from fleet!" % ship_count)
 
 
+## Replay setup: same fleet data as attack mode, but no interactive placement
+## plane. Replay actions drive placement directly from recorded coordinates.
+func enter_replay_mode(fleet: Array = []) -> void:
+	exit_attack_mode()
+	_fleet = fleet.duplicate(true)
+	_ships_placed = 0
+	_total_ships_launched = 0
+	_ship_stop_positions.clear()
+	_ship_markers.clear()
+	is_attack_mode = false
+	if ship_plane:
+		ship_plane.visible = false
+		ship_plane.material_override = null
+
+
 ## Temporarily hides the placement plane without resetting any state.
 ## Used when cannon mode activates mid-placement to prevent RMB conflicts.
 func _pause_attack_mode() -> void:
@@ -388,11 +403,16 @@ func _try_place_ship(hit: Vector3) -> bool:
 		# server troops appear offshore and the TH survives in the sim.
 		var stop_pos_for_log: Vector3 = _ship_stop_positions[-1]
 		var spawn_pos_for_log: Vector3 = _base_troop_spawn_pos(stop_pos_for_log)
+		var troop_levels_for_log: Dictionary = {}
+		if "troop_levels" in bs:
+			for troop_name in ship_data.get("troops", []):
+				troop_levels_for_log[troop_name] = bs.troop_levels.get(troop_name, 1)
 		bs._battle_replay.append({
 			"t": t, "type": "place_ship",
 			"x": spawn_pos_for_log.x, "z": spawn_pos_for_log.z,
 			"shipLevel": ship_data.get("level", 1),
 			"troops": ship_data.get("troops", []),
+			"troopLevels": troop_levels_for_log,
 		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
@@ -435,9 +455,38 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 	return null
 
 
+func _get_sail_dir() -> Vector3:
+	if ship_plane == null:
+		return Vector3(0, 0, 1)
+	var sail_dir: Vector3 = ship_plane.global_transform.basis.z.normalized()
+	sail_dir.y = 0
+	sail_dir = sail_dir.normalized()
+	var to_plane: Vector3 = (plane_center - ship_plane.get_parent().global_position).normalized()
+	if sail_dir.dot(to_plane) < 0:
+		sail_dir = -sail_dir
+	return sail_dir
+
+
+func _stop_pos_from_troop_spawn_pos(spawn_pos: Vector3) -> Vector3:
+	if ship_plane == null:
+		return spawn_pos
+	var pb: Basis = ship_plane.global_transform.basis
+	var lat_dir: Vector3 = pb.x.normalized()
+	var sail_dir: Vector3 = _get_sail_dir()
+	var stop_pos: Vector3 = spawn_pos + sail_dir * (plane_extent_z * 0.5) + lat_dir * 0.2
+	stop_pos.y = water_y
+	if _is_within_ship_plane(stop_pos):
+		return stop_pos
+	var offset: Vector3 = stop_pos - plane_center
+	var lateral: float = clampf(offset.dot(lat_dir), -_click_extent_x, _click_extent_x)
+	stop_pos = plane_center + lat_dir * lateral - sail_dir * (_click_extent_z - 0.05)
+	stop_pos.y = water_y
+	return stop_pos
+
+
 ## Spawns a fleet ship at the edge of the placement zone and sails it to [target].
 ## [ship_idx] specifies which fleet entry to use.
-func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
+func _spawn_single_ship(target: Vector3, ship_idx: int = -1, target_is_stop_pos: bool = false) -> bool:
 	if ship_idx < 0:
 		ship_idx = _ships_placed
 	if ship_idx >= _fleet.size():
@@ -455,26 +504,31 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
 	ship.scale = Vector3(ship_scale, ship_scale, ship_scale)
 
 	# Sailing direction — perpendicular to shipPlane, pointing outward
-	var sail_dir: Vector3 = ship_plane.global_transform.basis.z.normalized()
-	sail_dir.y = 0
-	sail_dir = sail_dir.normalized()
-	var to_plane: Vector3 = (plane_center - ship_plane.get_parent().global_position).normalized()
-	if sail_dir.dot(to_plane) < 0:
-		sail_dir = -sail_dir
+	var sail_dir: Vector3 = _get_sail_dir()
 
 	# Ship stops at inner edge of ShipPlane (closest to buildings)
 	var pb: Basis = ship_plane.global_transform.basis
 	var lateral_dir: Vector3 = pb.x.normalized()
-	var offset: Vector3 = target - plane_center
-	var lateral: float = offset.dot(lateral_dir)
-	lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
-	var stop_pos: Vector3 = plane_center + lateral_dir * lateral - sail_dir * (_click_extent_z - 0.05)
+	var stop_pos: Vector3
+	if target_is_stop_pos:
+		stop_pos = target
+		stop_pos.y = water_y
+		if not _is_within_ship_plane(stop_pos):
+			var explicit_offset: Vector3 = stop_pos - plane_center
+			var explicit_lateral: float = clampf(explicit_offset.dot(lateral_dir), -_click_extent_x, _click_extent_x)
+			stop_pos = plane_center + lateral_dir * explicit_lateral - sail_dir * (_click_extent_z - 0.05)
+	else:
+		var offset: Vector3 = target - plane_center
+		var lateral: float = offset.dot(lateral_dir)
+		lateral = clampf(lateral, -_click_extent_x, _click_extent_x)
+		stop_pos = plane_center + lateral_dir * lateral - sail_dir * (_click_extent_z - 0.05)
 	stop_pos.y = water_y
 
-	# Offset laterally so this ship doesn't land on top of an existing one
-	stop_pos = _get_adjusted_stop_pos(stop_pos, lateral_dir)
-	if stop_pos == Vector3.INF:
-		return false
+	if not target_is_stop_pos:
+		# Offset laterally so this ship doesn't land on top of an existing one
+		stop_pos = _get_adjusted_stop_pos(stop_pos, lateral_dir)
+		if stop_pos == Vector3.INF:
+			return false
 	_ship_stop_positions.append(stop_pos)
 
 	var spawn_pos: Vector3 = stop_pos + sail_dir * spawn_distance
@@ -522,6 +576,26 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1) -> bool:
 	return true
 
 
+func replay_place_ship_from_spawn(action: Dictionary) -> bool:
+	if _fleet.is_empty():
+		return false
+	if _ships_placed >= _fleet.size():
+		return false
+	var ship_idx: int = _ships_placed
+	for i in _fleet.size():
+		if not _fleet[i].get("_placed", false):
+			ship_idx = i
+			break
+	var spawn_pos: Vector3 = Vector3(float(action.get("x", 0.0)), water_y, float(action.get("z", 0.0)))
+	var stop_pos: Vector3 = _stop_pos_from_troop_spawn_pos(spawn_pos)
+	if not _spawn_single_ship(stop_pos, ship_idx, true):
+		return false
+	_fleet[ship_idx]["_placed"] = true
+	_ships_placed += 1
+	_total_ships_launched += 1
+	return true
+
+
 ## Returns the deterministic troop spawn position derived from a ship's
 ## landing (stop) position. The troop deploy offset must match between
 ## client and server so the replay verifier spawns troops at the same
@@ -533,12 +607,7 @@ func _base_troop_spawn_pos(stop_pos: Vector3) -> Vector3:
 		return stop_pos
 	var pb: Basis = ship_plane.global_transform.basis
 	var lat_dir: Vector3 = pb.x.normalized()
-	var sail_dir: Vector3 = pb.z.normalized()
-	sail_dir.y = 0
-	sail_dir = sail_dir.normalized()
-	var to_plane: Vector3 = (plane_center - ship_plane.get_parent().global_position).normalized()
-	if sail_dir.dot(to_plane) < 0:
-		sail_dir = -sail_dir
+	var sail_dir: Vector3 = _get_sail_dir()
 	var p: Vector3 = stop_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	p.y = stop_pos.y
 	return p
@@ -553,6 +622,10 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 	var troop_names: Array = ship_data.get("troops", [])
 	if troop_names.is_empty():
 		return
+	var recorded_levels: Dictionary = {}
+	var raw_recorded_levels = ship_data.get("troop_levels", ship_data.get("troopLevels", {}))
+	if raw_recorded_levels is Dictionary:
+		recorded_levels = raw_recorded_levels
 
 	var pb2: Basis = ship_plane.global_transform.basis
 	var lat_dir: Vector3 = pb2.x.normalized()
@@ -585,6 +658,10 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		var troop_level: int = 1
 		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_name):
 			troop_level = bs_ref.troop_levels[troop_name]
+		if recorded_levels.has(troop_name):
+			troop_level = int(recorded_levels[troop_name])
+		elif recorded_levels.has(troop_name.to_lower()):
+			troop_level = int(recorded_levels[troop_name.to_lower()])
 		var timer: SceneTreeTimer = get_tree().create_timer(troop_spawn_delay * i)
 		var lvl: int = troop_level
 		var m_res: Resource = model_res

@@ -200,6 +200,18 @@ func _drop_rally(world_pos: Vector3) -> bool:
 	return true
 
 
+## Replay-only rally drop. It shows the same red grenade/marker and applies
+## the same troop focus on impact, but does not consume cannon energy or append
+## another replay action.
+func replay_drop_rally(world_pos: Vector3, flight_time_override: float = -1.0) -> void:
+	var ship: Node3D = _get_attack_ship()
+	if not ship:
+		return
+	var ground_y: float = bs.grid_y + 0.005
+	var pos: Vector3 = Vector3(world_pos.x, ground_y, world_pos.z)
+	_launch_rally_grenade(ship, pos, flight_time_override)
+
+
 func _get_attack_ship() -> Node3D:
 	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
 		bs._ship_attack_node = bs.get_tree().root.find_child("MainShipAttack", true, false)
@@ -208,7 +220,7 @@ func _get_attack_ship() -> Node3D:
 	return bs._ship_attack_node
 
 
-func _launch_rally_grenade(ship: Node3D, target_pos: Vector3) -> float:
+func _launch_rally_grenade(ship: Node3D, target_pos: Vector3, flight_time_override: float = -1.0) -> float:
 	var grenade := MeshInstance3D.new()
 	var mesh := SphereMesh.new()
 	mesh.radius = RALLY_GRENADE_RADIUS
@@ -226,6 +238,8 @@ func _launch_rally_grenade(ship: Node3D, target_pos: Vector3) -> float:
 	grenade.global_position = start_pos
 	var dist: float = start_pos.distance_to(target_pos)
 	var flight_time: float = maxf(dist / RALLY_GRENADE_SPEED, RALLY_GRENADE_MIN_FLIGHT)
+	if flight_time_override > 0.0:
+		flight_time = flight_time_override
 	_rally_grenades.append({
 		"node": grenade,
 		"target_pos": target_pos,

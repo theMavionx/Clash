@@ -831,6 +831,43 @@ func _run_submit_bg(net_node: Node, defender_id: String, casualties: Dictionary)
 ## Starts a replay of a recorded attack. Loads the buildings snapshot, enters
 ## enemy-view mode, then hands off to _replay_playback() for timed action
 ## playback.
+func _replay_troops_for_action(action: Dictionary) -> Array:
+	var result: Array = []
+	var raw_troops = action.get("troops", [])
+	if raw_troops is Array:
+		for troop in raw_troops:
+			var name: String = str(troop).strip_edges()
+			if name != "":
+				result.append(name)
+	elif action.has("troopType"):
+		var legacy_name: String = str(action.get("troopType", "")).strip_edges()
+		if legacy_name != "":
+			result.append(legacy_name.capitalize())
+	return result
+
+
+func _replay_fleet_from_actions(actions: Array) -> Array:
+	var fleet: Array = []
+	for action in actions:
+		if action.get("type", "") != "place_ship":
+			continue
+		var troops: Array = _replay_troops_for_action(action)
+		if troops.is_empty():
+			continue
+		var recorded_levels: Dictionary = {}
+		var raw_levels = action.get("troopLevels", action.get("troop_levels", {}))
+		if raw_levels is Dictionary:
+			recorded_levels = raw_levels
+		fleet.append({
+			"level": int(action.get("shipLevel", 1)),
+			"troops": troops,
+			"troop_levels": recorded_levels,
+		})
+		if fleet.size() >= 5:
+			break
+	return fleet
+
+
 func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String) -> void:
 	bs.get_tree().paused = false
 	_replay_active = true
@@ -888,6 +925,9 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	bs._cannon.reset()
 	if bs._rally:
 		bs._rally.reset()
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	if attack_system and attack_system.has_method("enter_replay_mode"):
+		attack_system.enter_replay_mode(_replay_fleet_from_actions(_replay_actions))
 	Engine.time_scale = 1.0
 	_replay_playback()
 
@@ -898,8 +938,9 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 func _replay_playback() -> void:
 	var actions: Array = []
 	for a in _replay_actions:
-		if a.get("type", "") in ["place_ship", "cannon_fire"]:
+		if a.get("type", "") in ["place_ship", "cannon_fire", "rally_drop"]:
 			actions.append(a)
+	actions.sort_custom(func(a, b): return float(a.get("t", 0.0)) < float(b.get("t", 0.0)))
 	if actions.is_empty():
 		_replay_active = false
 		return
@@ -921,6 +962,8 @@ func _replay_playback() -> void:
 				_replay_place_ship(action, attack_system)
 			"cannon_fire":
 				_replay_cannon_fire(action)
+			"rally_drop":
+				_replay_rally_drop(action)
 	while _replay_active and is_instance_valid(bs):
 		await bs.get_tree().create_timer(0.5).timeout
 		if not _replay_active:
@@ -950,7 +993,10 @@ func _replay_playback() -> void:
 func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 	if not attack_system:
 		return
-	var troop_type: String = action.get("troopType", "knight")
+	if action.has("troops") and attack_system.has_method("replay_place_ship_from_spawn"):
+		if attack_system.replay_place_ship_from_spawn(action):
+			return
+	var troop_type: String = str(action.get("troopType", "knight")).to_lower()
 	var troop_level: int = action.get("troopLevel", 1)
 	var troop_idx: int = 0
 	for i in attack_system.SHIP_TROOPS.size():
@@ -965,6 +1011,13 @@ func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 	var hit: Vector3 = Vector3(action.get("x", 0.0), bs.grid_y, action.get("z", 0.0))
 	attack_system._try_place_ship(hit)
 	bs.troop_levels[level_key] = original_level
+
+
+func _replay_rally_drop(action: Dictionary) -> void:
+	if not bs._rally or not bs._rally.has_method("replay_drop_rally"):
+		return
+	var pos: Vector3 = Vector3(float(action.get("x", 0.0)), bs.grid_y, float(action.get("z", 0.0)))
+	bs._rally.replay_drop_rally(pos, float(action.get("flight_time", -1.0)))
 
 
 ## Replays a single cannon_fire action by looking up the target building by

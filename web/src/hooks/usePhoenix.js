@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
+import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
@@ -101,6 +101,21 @@ function formatBaseUnits(value, lotSize) {
     ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
     : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
   return Number(n.toFixed(decimals)).toString();
+}
+
+function rawPhoenixPositionAmount(position, market) {
+  const raw = position?._raw;
+  if (!raw) return null;
+  const lotDecimals = Number(market?._phoenixBaseLotsDecimals ?? 4);
+  if (raw.basePositionUnits != null) {
+    const units = Number(raw.basePositionUnits);
+    return Number.isFinite(units) && units !== 0 ? Math.abs(units) : null;
+  }
+  if (raw.basePositionLots != null) {
+    const lots = Number(raw.basePositionLots);
+    return Number.isFinite(lots) && lots !== 0 ? Math.abs(lots) / 10 ** lotDecimals : null;
+  }
+  return null;
 }
 
 function fundingBasisPointsToDecimal(value) {
@@ -1022,37 +1037,39 @@ export function usePhoenix() {
         const m = marketsBySymbolRef.current[phx];
         const requested = Number(amount);
         const openAmount = Number(existing?.amount || 0);
-        const amountToClose = fullClose && openAmount > 0
-          ? openAmount
+        const rawFullCloseAmount = fullClose ? rawPhoenixPositionAmount(existing, m) : null;
+        const amountToClose = fullClose && (rawFullCloseAmount || openAmount) > 0
+          ? (rawFullCloseAmount || openAmount)
           : (openAmount > 0 && Number.isFinite(requested) ? Math.min(requested, openAmount) : requested);
         const roundedAmount = roundDownToLot(amountToClose, m?.lot_size || '0.0001');
         const baseUnits = formatBaseUnits(roundedAmount, m?.lot_size || '0.0001');
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
         const priceRow = pricesRef.current.find(p => p.symbol === phx);
         const mark = firstFinite(existing?.mark_price, priceRow?.mark, m?._mark, existing?.entry_price);
-        const priceLimitUsd = mark > 0 ? mark * (closeSide === Side.Bid ? 1.03 : 0.97) : null;
         console.log('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
           closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
           requested,
           openAmount,
+          rawFullCloseAmount,
           baseUnits,
-          minBaseUnitsToFill: m?.lot_size || baseUnits,
+          minBaseUnitsToFill: '0',
+          minQuoteLotsToFill: '0',
           fullClose: !!fullClose,
           subaccountIndex,
           mark,
-          priceLimitUsd,
+          priceLimitUsd: null,
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: closeSide,
           baseUnits,
-          priceLimitUsd,
-          minBaseUnitsToFill: m?.lot_size || baseUnits,
-          minQuoteLotsToFill: null,
+          priceLimitUsd: null,
+          minBaseUnitsToFill: '0',
+          minQuoteLotsToFill: quoteLots(0n),
           orderFlags: OrderFlags.ReduceOnly || 128,
-          cancelExisting: true,
+          cancelExisting: false,
         });
         const ix = await client.ixs.buildPlaceMarketOrder({
           authority: walletAddr,

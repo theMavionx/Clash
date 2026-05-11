@@ -4,6 +4,40 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
+const TROOP_LABELS = {
+  knight: 'Knight',
+  mage: 'Mage',
+  barbarian: 'Barbarian',
+  archer: 'Archer',
+  ranger: 'Ranger',
+};
+
+function normalizeTroopName(name) {
+  const raw = String(name || '').trim();
+  if (!raw || raw === 'undefined' || raw === 'null') return null;
+  return TROOP_LABELS[raw.toLowerCase()] || raw;
+}
+
+function troopsForReplayShip(ship) {
+  if (!ship) return [];
+  if (Array.isArray(ship.troops)) {
+    return ship.troops.map(normalizeTroopName).filter(Boolean);
+  }
+  const legacy = normalizeTroopName(ship.troopType);
+  return legacy ? [legacy] : [];
+}
+
+function countReplayTroops(replayData) {
+  const ships = (Array.isArray(replayData) ? replayData : []).filter(a => a.type === 'place_ship');
+  const troops = {};
+  ships.forEach((ship) => {
+    troopsForReplayShip(ship).forEach((troop) => {
+      troops[troop] = (troops[troop] || 0) + 1;
+    });
+  });
+  return { ships, troops };
+}
+
 function timeAgo(dateStr) {
   if (!dateStr) return '';
   const now = new Date();
@@ -162,10 +196,9 @@ function BattleLogPanel({ onClose }) {
                       </div>
                     )}
                     {b.replay_data && (() => {
-                      const ships = (Array.isArray(b.replay_data) ? b.replay_data : []).filter(a => a.type === 'place_ship');
+                      const { ships, troops } = countReplayTroops(b.replay_data);
                       if (ships.length === 0) return null;
-                      const troops = {};
-                      ships.forEach(s => { troops[s.troopType] = (troops[s.troopType] || 0) + 1; });
+                      const troopText = Object.entries(troops).map(([t, c]) => `${t} x${c}`).join(', ');
                       return (
                         <>
                           <div style={S.detailRow}>
@@ -174,7 +207,7 @@ function BattleLogPanel({ onClose }) {
                           </div>
                           <div style={S.detailRow}>
                             <span style={S.detailLabel}>Troops</span>
-                            <span style={S.detailVal}>{Object.entries(troops).map(([t, c]) => `${t} x${c}`).join(', ')}</span>
+                            <span style={S.detailVal}>{troopText || '-'}</span>
                           </div>
                         </>
                       );
