@@ -1388,17 +1388,26 @@ function battleVictory(attackerId, defenderId, battleSessionId = '') {
 }
 
 function replayDurationSec(replayData, simResult) {
-  const simDuration = Number(simResult?._simTimeSec ?? simResult?.simTimeSec);
-  if (Number.isFinite(simDuration) && simDuration > 0) return simDuration;
-
   const actions = Array.isArray(replayData?.actions)
     ? replayData.actions
     : (Array.isArray(replayData) ? replayData : []);
+  const battleEnd = actions
+    .map(a => (a?.type === 'battle_end' ? Number(a?.t) : NaN))
+    .filter(t => Number.isFinite(t) && t > 0);
+  if (battleEnd.length) return Math.max(...battleEnd);
+
   const times = actions
+    .filter(a => a?.type !== 'battle_start' && a?.type !== 'battle_end')
     .map(a => Number(a?.t))
     .filter(t => Number.isFinite(t) && t >= 0);
-  if (!times.length) return 0;
-  return Math.max(0, Math.max(...times) - Math.min(...times));
+  if (times.length) {
+    const actionDuration = Math.max(0, Math.max(...times) - Math.min(...times));
+    if (actionDuration >= 1) return actionDuration;
+  }
+
+  const simDuration = Number(simResult?._simTimeSec ?? simResult?.simTimeSec);
+  if (Number.isFinite(simDuration) && simDuration > 0) return simDuration;
+  return 0;
 }
 
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {

@@ -843,6 +843,28 @@ router.get('/find-enemy', auth, (req, res) => {
 
 // ==================== BATTLE LOG ====================
 
+function _battleLogDisplayDuration(replayData, storedDuration) {
+  const actions = Array.isArray(replayData?.actions)
+    ? replayData.actions
+    : (Array.isArray(replayData) ? replayData : []);
+  const battleEndTimes = actions
+    .map(a => (a?.type === 'battle_end' ? Number(a?.t) : NaN))
+    .filter(t => Number.isFinite(t) && t > 0);
+  if (battleEndTimes.length) return Math.max(...battleEndTimes);
+
+  const actionTimes = actions
+    .filter(a => a?.type !== 'battle_start' && a?.type !== 'battle_end')
+    .map(a => Number(a?.t))
+    .filter(t => Number.isFinite(t) && t >= 0);
+  if (actionTimes.length) {
+    const actionDuration = Math.max(0, Math.max(...actionTimes) - Math.min(...actionTimes));
+    if (actionDuration >= 1) return actionDuration;
+  }
+
+  const fallback = Number(storedDuration);
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+}
+
 // Get battle log — both attacks on player's base AND player's own attacks
 router.get('/battle-log', auth, (req, res) => {
   const rows = db.db.prepare(`
@@ -862,6 +884,10 @@ router.get('/battle-log', auth, (req, res) => {
 
   res.json(rows.map(r => {
     const isAttacker = r.attacker_id === req.player.id;
+    let replayData = null;
+    let buildingsSnapshot = null;
+    try { replayData = r.replay_data ? JSON.parse(r.replay_data) : null; } catch {}
+    try { buildingsSnapshot = r.buildings_snapshot ? JSON.parse(r.buildings_snapshot) : null; } catch {}
     return {
       id: r.id,
       side: isAttacker ? 'attack' : 'defense',
@@ -871,10 +897,10 @@ router.get('/battle-log', auth, (req, res) => {
       loot: { gold: r.loot_gold, wood: r.loot_wood, ore: r.loot_ore },
       th_hp_pct: r.sim_th_hp_pct,
       buildings_destroyed: r.sim_buildings_destroyed,
-      duration: r.duration_sec,
+      duration: _battleLogDisplayDuration(replayData, r.duration_sec),
       created_at: r.created_at,
-      replay_data: r.replay_data ? JSON.parse(r.replay_data) : null,
-      buildings_snapshot: r.buildings_snapshot ? JSON.parse(r.buildings_snapshot) : null,
+      replay_data: replayData,
+      buildings_snapshot: buildingsSnapshot,
     };
   }));
 });

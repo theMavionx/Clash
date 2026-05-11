@@ -1,4 +1,4 @@
-import { memo, useCallback, useState, useMemo } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { useSend, useUI, useResources, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import buildIcon from '../assets/resources/Gemini_Generated_Image_dl9plxdl9plxdl9p-removebg-preview.png';
@@ -302,10 +302,51 @@ const formatReplayTime = (seconds) => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-function ReplayHUD({ onReturnHome, battleTimer }) {
+function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
   const { sendToGodot } = useSend();
   const [speedIdx, setSpeedIdx] = useState(0);
-  const remaining = Number.isFinite(Number(battleTimer)) ? Math.max(0, Math.ceil(Number(battleTimer))) : null;
+  const [fallbackRemaining, setFallbackRemaining] = useState(null);
+  const fallbackRef = useRef({ remaining: null, lastTick: 0, speed: 1 });
+  const replayDurationSec = Number.isFinite(Number(replayDuration)) ? Math.max(0, Number(replayDuration)) : 0;
+
+  useEffect(() => {
+    const remaining = replayDurationSec > 0 ? Math.ceil(replayDurationSec) : null;
+    fallbackRef.current = {
+      remaining,
+      lastTick: performance.now(),
+      speed: 1,
+    };
+    setFallbackRemaining(remaining);
+  }, [replayDurationSec]);
+
+  useEffect(() => {
+    fallbackRef.current.speed = REPLAY_SPEEDS[speedIdx] || 1;
+    fallbackRef.current.lastTick = performance.now();
+  }, [speedIdx]);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const state = fallbackRef.current;
+      if (state.remaining == null) return;
+      const now = performance.now();
+      const elapsed = Math.max(0, (now - state.lastTick) / 1000) * state.speed;
+      state.lastTick = now;
+      state.remaining = Math.max(0, state.remaining - elapsed);
+      setFallbackRemaining(Math.ceil(state.remaining));
+    }, 250);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const next = Number(battleTimer);
+    if (!Number.isFinite(next) || next <= 0) return;
+    fallbackRef.current.remaining = next;
+    fallbackRef.current.lastTick = performance.now();
+    setFallbackRemaining(Math.ceil(next));
+  }, [battleTimer]);
+
+  const godotRemaining = Number.isFinite(Number(battleTimer)) ? Math.max(0, Math.ceil(Number(battleTimer))) : null;
+  const remaining = godotRemaining && godotRemaining > 0 ? godotRemaining : fallbackRemaining;
 
   const handleSpeed = useCallback(() => {
     const next = (speedIdx + 1) % REPLAY_SPEEDS.length;
@@ -445,7 +486,7 @@ function ActionButtons({ onOpenBattleLog }) {
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
     if (enemyMode.is_replay) {
-      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} />;
+      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} replayDuration={enemyMode.duration} />;
     }
     return (
       <>
@@ -742,7 +783,7 @@ const hud = {
   },
   replayCountdownWrap: {
     position: 'fixed',
-    top: 74,
+    top: 20,
     left: '50%',
     transform: 'translateX(-50%)',
     zIndex: 11,

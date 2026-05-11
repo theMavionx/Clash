@@ -134,6 +134,23 @@ func reset() -> void:
 	_submit_result = {}
 	_submit_complete = false
 
+
+func _battle_elapsed_sec() -> float:
+	if _battle_start_time <= 0.0:
+		return maxf(0.0, _battle_timer)
+	return maxf(0.0, (Time.get_ticks_msec() / 1000.0) - _battle_start_time)
+
+
+func _record_battle_end(result: String) -> void:
+	for action in _battle_replay:
+		if action is Dictionary and str(action.get("type", "")) == "battle_end":
+			return
+	_battle_replay.append({
+		"type": "battle_end",
+		"t": _battle_elapsed_sec(),
+		"result": result,
+	})
+
 ## Frees all home troops and port ships immediately — called when switching
 ## to enemy island so they don't linger in the background.
 ## MainShipBase and MainShipAttack are never touched.
@@ -670,6 +687,8 @@ const VICTORY_ADMIRE_DELAY: float = 2.5  ## seconds to hold on the ruined island
 func _on_town_hall_destroyed() -> void:
 	_battle_timer_active = false
 	_victory_declared = true
+	if not _replay_active:
+		_record_battle_end("victory")
 
 	# 1. Set all troops to VICTORY immediately (they stop fighting)
 	var deployed_troops: Dictionary = {}
@@ -947,6 +966,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 			"name": "Replay: " + attacker_name,
 			"trophies": 0,
 			"is_replay": true,
+			"duration": _replay_duration,
 		})
 		_send_replay_timer(true)
 		bridge.send_to_react("cloud_transition", {"visible": true})
@@ -988,6 +1008,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	if attack_system and attack_system.has_method("enter_replay_mode"):
 		attack_system.enter_replay_mode(_replay_fleet_from_actions(_replay_actions))
 	Engine.time_scale = 1.0
+	_send_replay_timer(true)
 	_replay_playback()
 
 
@@ -1171,6 +1192,7 @@ func check_defeat(delta: float) -> void:
 			defeat_casualties[t_name] = defeat_casualties.get(t_name, 0) + 1
 	if net_def and net_def.has_token() and def_id != "" and not _victory_declared:
 		_victory_declared = true  # prevent double-submission
+		_record_battle_end("defeat")
 		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
 		var defeat_result: Dictionary = await net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
 		if not is_instance_valid(bs): return
@@ -1193,6 +1215,7 @@ func _force_defeat(reason: String) -> void:
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = true  # prevent check_defeat from firing again
+	_record_battle_end("defeat")
 	# Casualties already reported to server via /troop-died in real-time
 	# Just send the defeat result with empty casualties (server already has the data)
 	var net_def: Node = bs._net
