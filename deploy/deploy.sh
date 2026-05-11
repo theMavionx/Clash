@@ -187,6 +187,14 @@ EOF
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
     ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "2"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
+    ensure_env_default "VITE_PRIVY_APP_ID" ""
+    ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
+    ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
+    ensure_env_default "VITE_SOLANA_RPC_URL" ""
+    ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
+    ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
+    ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
+    ensure_env_default "VITE_DECIBEL_GAS_STATION_API_KEY" ""
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"
@@ -219,7 +227,11 @@ backup_shared_databases() {
     mkdir -p "$backup_dir/server" "$backup_dir/server-futures"
     copy_db_family "$SHARED_SERVER_DIR" "$backup_dir/server" "clash.db" || true
     copy_db_family "$SHARED_FUTURES_DIR" "$backup_dir/server-futures" "futures.db" || true
-    log "Database backup written to $backup_dir"
+    if [ -f "$ENV_FILE" ]; then
+        cp -a "$ENV_FILE" "$backup_dir/.env"
+        chmod 600 "$backup_dir/.env" || true
+    fi
+    log "Shared backup written to $backup_dir"
 }
 
 copy_source_to_release() {
