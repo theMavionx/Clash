@@ -170,6 +170,13 @@ static var _island_extent_z: float = 10.0
 static var _island_rot: float = 0.0
 static var _island_bounds_ready: bool = false
 
+static func reset_island_bounds_cache() -> void:
+	_island_bounds_ready = false
+	_island_center = Vector3.ZERO
+	_island_extent_x = 10.0
+	_island_extent_z = 10.0
+	_island_rot = 0.0
+
 static func _ensure_island_bounds() -> void:
 	if _island_bounds_ready:
 		return

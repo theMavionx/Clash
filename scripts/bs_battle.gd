@@ -990,6 +990,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 		bsys._destroy_all_buildings()
 	for bsys in bs._building_systems:
 		bsys._load_buildings_from_server(buildings_snapshot)
+	BaseTroop.reset_island_bounds_cache()
 	if bs.build_button:
 		bs.build_button.visible = false
 	if bs.find_button:
@@ -1064,6 +1065,10 @@ func _replay_playback() -> void:
 		var troops_alive: int = BaseTroop._get_troops_cached().size()
 		if troops_alive == 0:
 			break
+	if _replay_active and _replay_elapsed < _replay_duration:
+		var finish_wait_ok: bool = await _replay_wait(_replay_duration - _replay_elapsed)
+		if not finish_wait_ok:
+			return
 	if _replay_active:
 		await _replay_wait(2.0)
 	Engine.time_scale = 1.0
@@ -1081,6 +1086,9 @@ func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 		return
 	if action.has("troops") and attack_system.has_method("replay_place_ship_from_spawn"):
 		if attack_system.replay_place_ship_from_spawn(action):
+			return
+	if action.has("troops") and attack_system.has_method("replay_deploy_troops_at_spawn"):
+		if attack_system.replay_deploy_troops_at_spawn(action):
 			return
 	var troop_type: String = str(action.get("troopType", "knight")).to_lower()
 	var troop_level: int = action.get("troopLevel", 1)

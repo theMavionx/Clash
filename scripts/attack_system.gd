@@ -142,6 +142,15 @@ func _ready() -> void:
 		push_warning("AttackSystem: shipPlane not found")
 		return
 	ship_plane.visible = false
+	_refresh_placement_bounds()
+	print("AttackSystem ready. center: ", plane_center, " extent_x: ", plane_extent_x, " extent_z: ", plane_extent_z)
+
+
+func _refresh_placement_bounds() -> void:
+	if ship_plane == null:
+		ship_plane = get_node_or_null(grid_plane_path)
+	if ship_plane == null:
+		return
 	plane_center = ship_plane.global_position
 	plane_y = plane_center.y
 	# Full basis length for ship positioning math
@@ -153,7 +162,6 @@ func _ready() -> void:
 	var water: Node3D = get_node_or_null(water_node_path)
 	if water:
 		water_y = water.global_position.y
-	print("AttackSystem ready. center: ", plane_center, " extent_x: ", plane_extent_x, " extent_z: ", plane_extent_z)
 
 
 func _process(delta: float) -> void:
@@ -187,6 +195,7 @@ func _separate_ships(delta: float) -> void:
 ## [fleet] is an Array of {level: int, troops: Array[String]} — one entry per ship.
 ## If fleet is empty, falls back to legacy mode (no ships to place).
 func enter_attack_mode(fleet: Array = []) -> void:
+	_refresh_placement_bounds()
 	is_attack_mode = true
 	_ships_placed = 0
 	_total_ships_launched = 0
@@ -221,6 +230,7 @@ func enter_attack_mode(fleet: Array = []) -> void:
 ## Replay setup: same fleet data as attack mode, but no interactive placement
 ## plane. Replay actions drive placement directly from recorded coordinates.
 func enter_replay_mode(fleet: Array = []) -> void:
+	_refresh_placement_bounds()
 	exit_attack_mode()
 	_fleet = fleet.duplicate(true)
 	_ships_placed = 0
@@ -360,6 +370,9 @@ func _get_adjusted_stop_pos(desired: Vector3, lateral_dir: Vector3) -> Vector3:
 
 ## Checks if a world position is within the shipPlane bounds.
 func _is_within_ship_plane(pos: Vector3) -> bool:
+	_refresh_placement_bounds()
+	if ship_plane == null:
+		return false
 	var offset = pos - plane_center
 	var pb = ship_plane.global_transform.basis
 	var local_x = offset.dot(pb.x.normalized())
@@ -456,6 +469,7 @@ func _find_child_anim_player(node: Node) -> AnimationPlayer:
 
 
 func _get_sail_dir() -> Vector3:
+	_refresh_placement_bounds()
 	if ship_plane == null:
 		return Vector3(0, 0, 1)
 	var sail_dir: Vector3 = ship_plane.global_transform.basis.z.normalized()
@@ -468,6 +482,7 @@ func _get_sail_dir() -> Vector3:
 
 
 func _stop_pos_from_troop_spawn_pos(spawn_pos: Vector3) -> Vector3:
+	_refresh_placement_bounds()
 	if ship_plane == null:
 		return spawn_pos
 	var pb: Basis = ship_plane.global_transform.basis
@@ -487,6 +502,9 @@ func _stop_pos_from_troop_spawn_pos(spawn_pos: Vector3) -> Vector3:
 ## Spawns a fleet ship at the edge of the placement zone and sails it to [target].
 ## [ship_idx] specifies which fleet entry to use.
 func _spawn_single_ship(target: Vector3, ship_idx: int = -1, target_is_stop_pos: bool = false) -> bool:
+	_refresh_placement_bounds()
+	if ship_plane == null:
+		return false
 	if ship_idx < 0:
 		ship_idx = _ships_placed
 	if ship_idx >= _fleet.size():
@@ -578,7 +596,7 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1, target_is_stop_pos:
 
 func replay_place_ship_from_spawn(action: Dictionary) -> bool:
 	if _fleet.is_empty():
-		return false
+		return replay_deploy_troops_at_spawn(action)
 	if _ships_placed >= _fleet.size():
 		return false
 	var ship_idx: int = _ships_placed
@@ -586,13 +604,48 @@ func replay_place_ship_from_spawn(action: Dictionary) -> bool:
 		if not _fleet[i].get("_placed", false):
 			ship_idx = i
 			break
+	_refresh_placement_bounds()
 	var spawn_pos: Vector3 = Vector3(float(action.get("x", 0.0)), water_y, float(action.get("z", 0.0)))
 	var stop_pos: Vector3 = _stop_pos_from_troop_spawn_pos(spawn_pos)
 	if not _spawn_single_ship(stop_pos, ship_idx, true):
-		return false
+		return replay_deploy_troops_at_spawn(action)
 	_fleet[ship_idx]["_placed"] = true
 	_ships_placed += 1
 	_total_ships_launched += 1
+	return true
+
+
+func replay_deploy_troops_at_spawn(action: Dictionary) -> bool:
+	var troop_names: Array = []
+	var raw_troops = action.get("troops", [])
+	if raw_troops is Array:
+		for troop in raw_troops:
+			var name: String = str(troop).strip_edges()
+			if name != "":
+				troop_names.append(name)
+	elif action.has("troopType"):
+		var legacy_name: String = str(action.get("troopType", "")).strip_edges()
+		if legacy_name != "":
+			troop_names.append(legacy_name.capitalize())
+	if troop_names.is_empty():
+		return false
+	var recorded_levels: Dictionary = {}
+	var raw_levels = action.get("troopLevels", action.get("troop_levels", {}))
+	if raw_levels is Dictionary:
+		recorded_levels = raw_levels
+	_refresh_placement_bounds()
+	var spawn_pos: Vector3 = Vector3(float(action.get("x", 0.0)), water_y, float(action.get("z", 0.0)))
+	_spawn_troops_at_pos(troop_names, recorded_levels, spawn_pos)
+	if not _fleet.is_empty():
+		var ship_idx: int = clampi(_ships_placed, 0, _fleet.size() - 1)
+		for i in _fleet.size():
+			if not _fleet[i].get("_placed", false):
+				ship_idx = i
+				break
+		_fleet[ship_idx]["_placed"] = true
+	_total_ships_launched += 1
+	if _ships_placed < max_ships:
+		_ships_placed += 1
 	return true
 
 
@@ -603,6 +656,7 @@ func replay_place_ship_from_spawn(action: Dictionary) -> bool:
 ## (`hit.x, hit.z`) which left server troops stranded offshore while
 ## client troops actually appeared on the beach.
 func _base_troop_spawn_pos(stop_pos: Vector3) -> Vector3:
+	_refresh_placement_bounds()
 	if ship_plane == null:
 		return stop_pos
 	var pb: Basis = ship_plane.global_transform.basis
@@ -627,8 +681,11 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 	if raw_recorded_levels is Dictionary:
 		recorded_levels = raw_recorded_levels
 
-	var pb2: Basis = ship_plane.global_transform.basis
-	var lat_dir: Vector3 = pb2.x.normalized()
+	_refresh_placement_bounds()
+	var lat_dir: Vector3 = Vector3(1, 0, 0)
+	if ship_plane != null:
+		var pb2: Basis = ship_plane.global_transform.basis
+		lat_dir = pb2.x.normalized()
 	# `sail_dir` param kept for call-site compatibility; the spawn position
 	# is now computed by `_base_troop_spawn_pos` so the same formula feeds
 	# both the actual troop spawn AND the replay-logged coordinate.
@@ -680,6 +737,66 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 			if lvl > 1 and troop.has_method("upgrade_to"):
 				troop.upgrade_to(lvl)
 			# If victory already declared (TH destroyed), new troops celebrate immediately
+			var battle_ref = bs_ref._battle if bs_ref and "_battle" in bs_ref else null
+			if battle_ref and "_victory_declared" in battle_ref and battle_ref._victory_declared:
+				if troop.has_method("_play_victory"):
+					troop._play_victory()
+			elif troop.has_method("activate"):
+				troop.activate()
+		)
+
+
+func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn_pos: Vector3) -> void:
+	if troop_names.is_empty():
+		return
+	_refresh_placement_bounds()
+	var lat_dir: Vector3 = Vector3(1, 0, 0)
+	if ship_plane != null:
+		var pb2: Basis = ship_plane.global_transform.basis
+		lat_dir = pb2.x.normalized()
+
+	var building_y: float = spawn_pos.y
+	var bs_ref: Node = null
+	for building_sys in BaseTroop._get_building_systems_cached():
+		if "grid_y" in building_sys:
+			building_y = building_sys.grid_y
+			bs_ref = building_sys
+			break
+
+	for i in troop_names.size():
+		var troop_name: String = troop_names[i]
+		var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
+		if tdef.is_empty():
+			continue
+		var cached: Dictionary = _troop_res_cache.get(troop_name, {})
+		var model_res: Resource = cached.get("model", null)
+		var script_res: Resource = cached.get("script", null)
+		if model_res == null or script_res == null:
+			continue
+		var troop_level: int = 1
+		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_name):
+			troop_level = bs_ref.troop_levels[troop_name]
+		if recorded_levels.has(troop_name):
+			troop_level = int(recorded_levels[troop_name])
+		elif recorded_levels.has(troop_name.to_lower()):
+			troop_level = int(recorded_levels[troop_name.to_lower()])
+		var timer: SceneTreeTimer = get_tree().create_timer(troop_spawn_delay * i)
+		var lvl: int = troop_level
+		var m_res: Resource = model_res
+		var s_res: Resource = script_res
+		timer.timeout.connect(func():
+			var troop = m_res.instantiate()
+			troop.set_script(s_res)
+			troop.name = "Troop_%d" % (randi() % 99999)
+			get_tree().current_scene.add_child(troop)
+			troop._spawn_scale = troop_scale
+			troop.scale = Vector3(troop_scale, troop_scale, troop_scale)
+			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
+			troop.global_position = BaseTroop._clamp_to_island(spawn_pos + offset)
+			troop.global_position.y = building_y
+			troop.visible = true
+			if lvl > 1 and troop.has_method("upgrade_to"):
+				troop.upgrade_to(lvl)
 			var battle_ref = bs_ref._battle if bs_ref and "_battle" in bs_ref else null
 			if battle_ref and "_victory_declared" in battle_ref and battle_ref._victory_declared:
 				if troop.has_method("_play_victory"):

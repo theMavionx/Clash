@@ -347,7 +347,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
   }, [battleTimer]);
 
   const godotRemaining = Number.isFinite(Number(battleTimer)) ? Math.max(0, Math.ceil(Number(battleTimer))) : null;
-  const remaining = godotRemaining && godotRemaining > 0 ? godotRemaining : fallbackRemaining;
+  const remaining = godotRemaining != null ? godotRemaining : fallbackRemaining;
 
   const handleSpeed = useCallback(() => {
     const next = (speedIdx + 1) % REPLAY_SPEEDS.length;
@@ -812,11 +812,14 @@ const hud = {
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   replayCountdownMobile: {
-    top: 'calc(env(safe-area-inset-top, 0px) + 70px)',
-    minWidth: 104,
-    padding: '5px 12px 7px',
+    top: 'calc(env(safe-area-inset-top, 0px) + 66px)',
+    right: 10,
+    left: 'auto',
+    transform: 'none',
+    minWidth: 92,
+    padding: '5px 10px 7px',
     borderRadius: 10,
-    zIndex: 9,
+    zIndex: 101,
   },
   replayCountdownLabel: {
     color: 'rgba(190,235,255,0.84)',
