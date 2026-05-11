@@ -256,6 +256,9 @@ copy_source_to_release() {
         --exclude='android-keystore' \
         --exclude='twa' \
         --exclude='backups' \
+        --exclude='current' \
+        --exclude='releases' \
+        --exclude='shared' \
         "$SOURCE_DIR/" "$RELEASE_DIR/"
 
     [ -f "$WEB_DIR/public/godot/Work.pck" ] \

@@ -443,7 +443,6 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     tokenAmountValue(traderView?.initialMargin),
     accountCollateral
   ) || 0;
-  const leverageBase = accountCollateral > 0 ? accountCollateral : margin;
   const directTakeProfitPrice = firstFinite(tokenAmountValue(vp?.takeProfitPrice), activeTriggerPrice(snapshotRow?.takeProfitTriggers, m));
   const directStopLossPrice = firstFinite(tokenAmountValue(vp?.stopLossPrice), activeTriggerPrice(snapshotRow?.stopLossTriggers, m));
   const conditionalTakeProfitPrice = activeTriggerPrice(snapshotRow?.conditionalTakeProfitTriggers, m);
@@ -462,7 +461,7 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     mark_price: mark || entry,
     liquidation_price: tokenAmountValue(vp?.liquidationPrice),
     margin,
-    leverage: leverageBase > 0 && positionValue > 0 ? Math.round((positionValue / leverageBase) * 10) / 10 : null,
+    leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : null,
     pnl_usd: pnl,
     pnl_pct: pnlPct,
     is_isolated: Number(subaccountIndex) > 0,
@@ -472,6 +471,7 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     pair_index: null,
     trade_index: null,
     _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
+    _phoenixAccountCollateral: accountCollateral,
     _phoenixDirectTakeProfitPrice: directTakeProfitPrice,
     _phoenixDirectStopLossPrice: directStopLossPrice,
     _raw: snapshotRow || vp,
