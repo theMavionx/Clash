@@ -3155,11 +3155,11 @@ function applyVolumeTrophyScore(rows) {
 
 function validateTournamentWindow({ start_at, end_at, registration_opens_at, registration_closes_at }) {
   if (end_at && end_at <= start_at) return 'end_at must be after start_at';
-  const registrationClose = registration_closes_at || start_at;
-  if (registration_closes_at && registration_closes_at > start_at) {
-    return 'registration_closes_at must be before or equal to start_at';
+  if (registration_closes_at && end_at && registration_closes_at > end_at) {
+    return 'registration_closes_at must be before or equal to end_at';
   }
-  if (registration_opens_at && registration_opens_at >= registrationClose) {
+  const registrationClose = registration_closes_at || end_at;
+  if (registration_opens_at && registrationClose && registration_opens_at >= registrationClose) {
     return 'registration_opens_at must be before registration close';
   }
   return null;
@@ -3182,7 +3182,16 @@ function isTournamentPreregOpen(t, now = nowSql()) {
   if (!t || !Number(t.preregistration_enabled || 0)) return false;
   if (tournamentPhase(t, now) !== 'preregistration') return false;
   const opens = cleanSqlDate(t.registration_opens_at);
-  const closes = cleanSqlDate(t.registration_closes_at) || cleanSqlDate(t.start_at);
+  const closes = cleanSqlDate(t.registration_closes_at) || cleanSqlDate(t.end_at);
+  if (opens && opens > now) return false;
+  if (closes && closes <= now) return false;
+  return true;
+}
+
+function isTournamentLiveRegistrationOpen(t, now = nowSql()) {
+  if (!t || tournamentPhase(t, now) !== 'live') return false;
+  const opens = cleanSqlDate(t.registration_opens_at);
+  const closes = cleanSqlDate(t.registration_closes_at) || cleanSqlDate(t.end_at);
   if (opens && opens > now) return false;
   if (closes && closes <= now) return false;
   return true;
@@ -3191,7 +3200,7 @@ function isTournamentPreregOpen(t, now = nowSql()) {
 function canJoinTournament(t, now = nowSql()) {
   const phase = tournamentPhase(t, now);
   if (phase === 'preregistration') return isTournamentPreregOpen(t, now);
-  if (phase === 'live') return !Number(t.preregistration_enabled || 0);
+  if (phase === 'live') return isTournamentLiveRegistrationOpen(t, now);
   return false;
 }
 
@@ -3356,7 +3365,7 @@ router.get('/tournaments/history', auth, (req, res) => {
 // Join a tournament. Player can only join their own DEX's tournament. If
 // they have a stale soft-leave row from a previous join we re-activate it
 // (preserving counters? — no, reset to zero since the user explicitly
-// left). The tournament must currently be live.
+// left). The tournament can be in pre-registration or already live.
 router.post('/tournaments/:id/join', auth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
@@ -3368,13 +3377,10 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   if (cleanSqlDate(t.end_at) && cleanSqlDate(t.end_at) <= now) return res.status(400).json({ error: 'tournament has ended' });
   const phase = tournamentPhase(t, now);
   if (phase === 'scheduled') return res.status(400).json({ error: 'pre-registration is not open' });
-  if (phase === 'live' && Number(t.preregistration_enabled || 0)) {
-    return res.status(400).json({ error: 'registration is closed' });
-  }
   if (phase === 'preregistration' && !isTournamentPreregOpen(t, now)) {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
-  if (!canJoinTournament(t, now)) return res.status(400).json({ error: 'tournament is not joinable' });
+  if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
   db.db.prepare(`

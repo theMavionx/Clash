@@ -285,7 +285,7 @@ function normalizeOrder(o, marketsById) {
   const triggerPriceWire = Number(o?.tp ?? o?.trigger_price ?? o?.stop_price ?? 0);
   const triggerCondition = Number(o?.tpc ?? o?.trigger_condition ?? 0);
   const isTrigger = triggerPriceWire > 0 && triggerCondition > 0;
-ф  const isTp = isTrigger && isTriggerTakeProfit(t, triggerCondition);
+  const isTp = isTrigger && isTriggerTakeProfit(t, triggerCondition);
   const sizeAbs = Math.abs(finiteNumber(
     o?.s ?? o?.size ?? o?.sz ?? o?.qty ?? o?.quantity ?? o?.order_size,
     0
