@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
+import { Direction, MarginType, Side, StopLossOrderKind, baseLots, buildPlaceMarketOrderFlow, priceUsdToTicks } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
@@ -101,6 +101,16 @@ function formatBaseUnits(value, lotSize) {
     ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
     : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
   return Number(n.toFixed(decimals)).toString();
+}
+
+function baseUnitsToBaseLots(value, market) {
+  const rawDecimals = Number(market?._phoenixBaseLotsDecimals ?? market?._phoenix?.baseLotsDecimals ?? 4);
+  const decimals = Number.isFinite(rawDecimals) ? Math.max(0, Math.trunc(rawDecimals)) : 4;
+  const [wholeRaw, fractionRaw = ''] = String(value || '0').trim().split('.');
+  const whole = wholeRaw.replace(/[^\d]/g, '') || '0';
+  const fraction = `${fractionRaw.replace(/[^\d]/g, '')}${'0'.repeat(decimals)}`.slice(0, decimals);
+  const raw = BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fraction || '0');
+  return baseLots(raw);
 }
 
 function rawPhoenixPositionAmount(position, market) {
@@ -473,7 +483,7 @@ export function usePhoenix() {
     return p;
   }, []);
 
-  const sendIxs = useCallback((instructions) => {
+  const sendIxs = useCallback((instructions, label = 'phoenix') => {
     if (!ownerPk) throw new Error('Wallet not connected');
     return sendPhoenixInstructions({
       instructions,
@@ -485,7 +495,7 @@ export function usePhoenix() {
       privySendTx,
       privySignTx,
       privyWalletObj,
-      label: 'phoenix',
+      label,
     });
   }, [ownerPk, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
@@ -853,7 +863,7 @@ export function usePhoenix() {
             authority: walletAddr,
             marginType: MarginType.Cross || 'cross',
           });
-          await sendIxs(ix);
+          await sendIxs(ix, 'phoenix.register');
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
         }
@@ -897,7 +907,7 @@ export function usePhoenix() {
         if (!ok) throw new Error('Phoenix account is not ready');
         const amount = toRawUsdc(amountUsdc);
         const built = await client.ixs.buildDepositIxs({ authority: walletAddr, amount });
-        const signature = await sendIxs(built.instructions);
+        const signature = await sendIxs(built.instructions, 'phoenix.deposit');
         await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
         claimGold();
         return { success: true, signature };
@@ -919,7 +929,7 @@ export function usePhoenix() {
       try {
         const amount = toRawUsdc(amountUsdc);
         const built = await client.ixs.buildWithdrawIxs({ authority: walletAddr, amount });
-        const signature = await sendIxs(built.instructions);
+        const signature = await sendIxs(built.instructions, 'phoenix.withdraw');
         await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
         return { success: true, signature };
       } catch (e) {
@@ -971,7 +981,7 @@ export function usePhoenix() {
           traderPdaIndex: 0,
           traderSubaccountIndex: 0,
         });
-        const signature = await sendIxs(ix);
+        const signature = await sendIxs(ix, 'phoenix.market');
         await refreshTraderState();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
@@ -1009,7 +1019,7 @@ export function usePhoenix() {
           traderPdaIndex: 0,
           traderSubaccountIndex: 0,
         });
-        const signature = await sendIxs(ix);
+        const signature = await sendIxs(ix, 'phoenix.limit');
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {
@@ -1029,10 +1039,11 @@ export function usePhoenix() {
       setLoading(true);
       setError(null);
       try {
-        const closeSide = side === 'bid' ? Side.Ask : Side.Bid;
         const existing = positions.find(p => p.symbol === phx && p.side === side)
           || positions.find(p => p.symbol === phx)
           || null;
+        const positionSide = existing?.side || side;
+        const closeSide = positionSide === 'bid' ? Side.Ask : Side.Bid;
         const subaccountIndex = Number(existing?._phoenixSubaccountIndex || 0);
         const m = marketsBySymbolRef.current[phx];
         const requested = Number(amount);
@@ -1044,45 +1055,35 @@ export function usePhoenix() {
         const roundedAmount = roundDownToLot(amountToClose, m?.lot_size || '0.0001');
         const baseUnits = formatBaseUnits(roundedAmount, m?.lot_size || '0.0001');
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
-        const priceRow = pricesRef.current.find(p => p.symbol === phx);
-        const mark = firstFinite(existing?.mark_price, priceRow?.mark, m?._mark, existing?.entry_price);
-        const priceLimitUsd = mark > 0
-          ? mark * (closeSide === Side.Bid ? 1.02 : 0.98)
-          : null;
+        const lotsToClose = baseUnitsToBaseLots(baseUnits, m);
         console.log('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
+          positionSide,
           closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
           requested,
           openAmount,
           rawFullCloseAmount,
           baseUnits,
-          minBaseUnitsToFill: baseUnits,
-          minQuoteLotsToFill: '1 quote lot',
+          baseLots: lotsToClose.toString(),
           fullClose: !!fullClose,
           subaccountIndex,
-          mark,
-          priceLimitUsd,
+          flow: 'buildPlaceMarketOrderFlow',
+          priceLimitSource: 'sdk_mid_default_slippage',
           positionRaw: existing?._raw || null,
         });
-        const packet = await client.orderPackets.buildMarketOrderPacket({
-          symbol: phx,
-          side: closeSide,
-          baseUnits,
-          priceLimitUsd,
-          minBaseUnitsToFill: baseUnits,
-          minQuoteLotsToFill: quoteLots(1n),
-          orderFlags: OrderFlags.ReduceOnly || 128,
-          cancelExisting: false,
-        });
-        const ix = await client.ixs.buildPlaceMarketOrder({
+        const built = await buildPlaceMarketOrderFlow({
           authority: walletAddr,
           symbol: phx,
-          orderPacket: packet,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: subaccountIndex,
-        });
-        const signature = await sendIxs(ix);
+          side: closeSide,
+          numBaseLots: lotsToClose,
+          marginType: MarginType.Cross,
+          subaccountIndex,
+          pdaIndex: 0,
+          isReduceOnly: true,
+          skipTransferToParent: true,
+        }, client);
+        const signature = await sendIxs(built.instructions, 'phoenix.close');
         await refreshTraderState();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
@@ -1120,7 +1121,7 @@ export function usePhoenix() {
               traderPdaIndex: 0,
               traderSubaccountIndex: subaccountIndex,
             });
-        const signature = await sendIxs(ix);
+        const signature = await sendIxs(ix, 'phoenix.cancel');
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {
@@ -1148,12 +1149,12 @@ export function usePhoenix() {
       setError(null);
       try {
         if (!takeProfit && !stopLoss) return { success: true };
-        const closeSide = sideToPhoenix(side);
-        const expectedPositionSide = closeSide === Side.Ask ? 'bid' : 'ask';
-        const position = positions.find(p => p.symbol === phx && p.side === expectedPositionSide)
+        const requestedPositionSide = sideToUi(sideToPhoenix(side));
+        const position = positions.find(p => p.symbol === phx && p.side === requestedPositionSide)
           || positions.find(p => p.symbol === phx)
           || null;
         if (!position) throw new Error(`No open ${phx} position to attach TP/SL to`);
+        const closeSide = position.side === 'bid' ? Side.Ask : Side.Bid;
         const market = marketsBySymbolRef.current[phx];
         if (!market) throw new Error(`No Phoenix market metadata for ${phx}`);
 
@@ -1213,6 +1214,7 @@ export function usePhoenix() {
         const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
         console.log('[Phoenix] setTpsl', {
           symbol: phx,
+          requestedSide: side,
           positionSide: position.side,
           closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
           subaccountIndex,
@@ -1222,7 +1224,7 @@ export function usePhoenix() {
           createdConditionalAccount: !!createConditionalIx,
         });
 
-        const signature = await sendIxs(instructions);
+        const signature = await sendIxs(instructions, 'phoenix.tpsl');
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {

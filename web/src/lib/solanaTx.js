@@ -42,7 +42,15 @@ async function describeSolanaError(error, connection) {
   if (error?.source) details.source = error.source;
   if (error?.slot) details.slot = error.slot;
   if (error?.confirmationStatus) details.confirmation_status = error.confirmationStatus;
-  if (Array.isArray(error?.logs)) details.logs = error.logs.slice(-20);
+  const keys = Object.getOwnPropertyNames(error || {}).filter(Boolean);
+  if (keys.length) details.error_keys = keys.slice(0, 30);
+  const directLogs = error?.logs || error?.transactionLogs || error?.simulationLogs || error?.cause?.logs;
+  if (Array.isArray(directLogs)) details.logs = directLogs.slice(-30);
+  if (error?.cause?.transactionMessage && !details.transaction_message) {
+    details.transaction_message = error.cause.transactionMessage;
+  }
+  const causeLogs = error?.cause?.logs || error?.cause?.transactionLogs || error?.cause?.simulationLogs;
+  if (!details.logs && Array.isArray(causeLogs)) details.logs = causeLogs.slice(-30);
   if (typeof error?.getLogs === 'function') {
     try {
       const logs = await error.getLogs(connection);
