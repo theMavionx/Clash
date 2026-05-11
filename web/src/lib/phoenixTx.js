@@ -71,6 +71,7 @@ export async function sendPhoenixInstructions({
     privySignTx,
     privyWalletObj,
     skipPreflight: false,
+    preferPrivySignAndSend: true,
     label,
   });
 }

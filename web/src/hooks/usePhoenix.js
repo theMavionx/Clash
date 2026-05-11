@@ -24,6 +24,8 @@ const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
+const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
+const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -34,7 +36,9 @@ function phoenixSimulationCode(error) {
   const text = `${error?.transactionMessage || ''}\n${error?.message || ''}\n${logs.join('\n')}`;
   const hex = text.match(/custom program error:\s*(0x[0-9a-f]+)/i)?.[1]?.toLowerCase();
   if (hex) return hex;
-  const instructionError = error?.transactionError?.InstructionError;
+  const instructionError = error?.transactionError?.InstructionError
+    || error?.simulationErr?.InstructionError
+    || error?.simulationResult?.err?.InstructionError;
   const custom = instructionError?.[1]?.Custom ?? instructionError?.[1]?.custom;
   if (Number.isFinite(Number(custom))) return `0x${Number(custom).toString(16)}`;
   return null;
@@ -44,17 +48,38 @@ function phoenixErrorLogs(error) {
   const logs = error?.logs
     || error?.transactionLogs
     || error?.simulationLogs
+    || error?.simulationResult?.logs
     || error?.transactionError?.logs
     || error?.cause?.logs
     || error?.cause?.transactionLogs;
   return Array.isArray(logs) ? logs : [];
 }
 
+function isLighthouseAssertionError(error) {
+  return phoenixErrorLogs(error).some(line => (
+    String(line || '').includes(LIGHTHOUSE_PROGRAM_ID)
+    || /Program log:\s*Result \(Failed\)/i.test(String(line || ''))
+  ));
+}
+
+function phoenixFailedProgramId(error) {
+  const logs = phoenixErrorLogs(error);
+  for (let i = logs.length - 1; i >= 0; i -= 1) {
+    const match = String(logs[i] || '').match(/^Program ([1-9A-HJ-NP-Za-km-z]{32,44}) failed:/);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
 function isPhoenixMetadataDriftError(error) {
+  if (isLighthouseAssertionError(error)) return false;
   const code = phoenixSimulationCode(error);
+  if (code !== '0x1900' && code !== '0x1902') return false;
+  const failedProgram = phoenixFailedProgramId(error);
+  if (failedProgram && failedProgram !== PHOENIX_PROGRAM_ID) return false;
   // Phoenix exchange/orderbook snapshot mismatches surface as 0x1900/0x1902.
   // Some RPCs omit simulation logs, so the code itself is enough to rebuild.
-  return code === '0x1900' || code === '0x1902';
+  return true;
 }
 
 function shortPhoenixAddress(value) {
@@ -570,6 +595,7 @@ export function usePhoenix() {
         label,
         symbol: phx,
         code: phoenixSimulationCode(e),
+        failed_program_id: phoenixFailedProgramId(e),
         logs: phoenixErrorLogs(e).slice(-6),
       });
       return runWithTransactionClient('retry');
