@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { Direction, MarginType, Side, StopLossOrderKind, baseLots, buildPlaceMarketOrderFlow, priceUsdToTicks } from '@ellipsis-labs/rise';
+import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
@@ -101,16 +101,6 @@ function formatBaseUnits(value, lotSize) {
     ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
     : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
   return Number(n.toFixed(decimals)).toString();
-}
-
-function baseUnitsToBaseLots(value, market) {
-  const rawDecimals = Number(market?._phoenixBaseLotsDecimals ?? market?._phoenix?.baseLotsDecimals ?? 4);
-  const decimals = Number.isFinite(rawDecimals) ? Math.max(0, Math.trunc(rawDecimals)) : 4;
-  const [wholeRaw, fractionRaw = ''] = String(value || '0').trim().split('.');
-  const whole = wholeRaw.replace(/[^\d]/g, '') || '0';
-  const fraction = `${fractionRaw.replace(/[^\d]/g, '')}${'0'.repeat(decimals)}`.slice(0, decimals);
-  const raw = BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fraction || '0');
-  return baseLots(raw);
 }
 
 function rawPhoenixPositionAmount(position, market) {
@@ -953,7 +943,8 @@ export function usePhoenix() {
     return String(rounded);
   }, []);
 
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage = '0.5', leverage = 1) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1) => {
+    void _slippage;
     if (!walletAddr) return { error: 'Wallet not connected' };
     const phx = phoenixSymbol(symbol);
     return runOnce(`market:${walletAddr}:${phx}:${side}:${amount}:${leverage}`, async () => {
@@ -965,16 +956,24 @@ export function usePhoenix() {
         const priceRow = pricesRef.current.find(p => p.symbol === phx);
         const mark = Number(priceRow?.mark || 0);
         const sideEnum = sideToPhoenix(side);
-        const priceLimitUsd = mark > 0
-          ? mark * (sideEnum === Side.Bid ? (1 + Number(slippage || 0.5) / 100) : (1 - Number(slippage || 0.5) / 100))
-          : null;
+        const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
+        console.log('[Phoenix] placeMarketOrder', {
+          symbol: phx,
+          requestedSide: side,
+          side: sideEnum === Side.Bid ? 'bid' : 'ask',
+          amount,
+          leverage,
+          mark,
+          baseUnits,
+          flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
+          priceLimitUsd: null,
+        });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: sideEnum,
-          baseUnits: buildBaseUnitsFromMargin(phx, amount, leverage),
-          priceLimitUsd,
+          baseUnits,
         });
-        const ix = await client.ixs.buildPlaceMarketOrder({
+        const ix = await client.ixs.placeMarketOrder({
           authority: walletAddr,
           symbol: phx,
           orderPacket: packet,
@@ -1033,6 +1032,8 @@ export function usePhoenix() {
   }, [activate, buildBaseUnitsFromMargin, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
+    void _pairIndex;
+    void _tradeIndex;
     if (!walletAddr) return { error: 'Wallet not connected' };
     const phx = phoenixSymbol(symbol);
     return runOnce(`close:${walletAddr}:${phx}:${side}:${amount}:${fullClose ? 'full' : 'partial'}`, async () => {
@@ -1055,7 +1056,6 @@ export function usePhoenix() {
         const roundedAmount = roundDownToLot(amountToClose, m?.lot_size || '0.0001');
         const baseUnits = formatBaseUnits(roundedAmount, m?.lot_size || '0.0001');
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
-        const lotsToClose = baseUnitsToBaseLots(baseUnits, m);
         console.log('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
@@ -1065,25 +1065,27 @@ export function usePhoenix() {
           openAmount,
           rawFullCloseAmount,
           baseUnits,
-          baseLots: lotsToClose.toString(),
           fullClose: !!fullClose,
           subaccountIndex,
-          flow: 'buildPlaceMarketOrderFlow',
-          priceLimitSource: 'sdk_mid_default_slippage',
+          flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
+          reduceOnly: true,
+          priceLimitUsd: null,
           positionRaw: existing?._raw || null,
         });
-        const built = await buildPlaceMarketOrderFlow({
-          authority: walletAddr,
+        const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: closeSide,
-          numBaseLots: lotsToClose,
-          marginType: MarginType.Cross,
-          subaccountIndex,
-          pdaIndex: 0,
-          isReduceOnly: true,
-          skipTransferToParent: true,
-        }, client);
-        const signature = await sendIxs(built.instructions, 'phoenix.close');
+          baseUnits,
+          orderFlags: OrderFlags.ReduceOnly,
+        });
+        const ix = await client.ixs.placeMarketOrder({
+          authority: walletAddr,
+          symbol: phx,
+          orderPacket: packet,
+          traderPdaIndex: 0,
+          traderSubaccountIndex: subaccountIndex,
+        });
+        const signature = await sendIxs(ix, 'phoenix.close');
         await refreshTraderState();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
