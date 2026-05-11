@@ -98,6 +98,19 @@ export default defineConfig({
       // at; the actual `https://arb-mainnet.g.alchemy.com/v2/<key>` URL
       // lives only in this file and never reaches the client.
       // 100M compute units / month free = far beyond what testing burns.
+      '/rpc/solana-ws': {
+        target: 'wss://api.mainnet-beta.solana.com',
+        ws: true,
+        changeOrigin: true,
+        secure: true,
+        rewrite: () => '/',
+      },
+      '/rpc/solana': {
+        target: 'https://api.mainnet-beta.solana.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: () => '/',
+      },
       '/rpc/arb-alchemy': {
         target: 'https://arb-mainnet.g.alchemy.com',
         changeOrigin: true, secure: true,

@@ -1,10 +1,10 @@
 import { createPhoenixClient } from '@ellipsis-labs/rise';
+import { DEFAULT_SOLANA_RPC_URL } from './solanaRpc';
 
 export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 
-const DEFAULT_RPC_URL =
-  import.meta.env.VITE_SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const DEFAULT_RPC_URL = DEFAULT_SOLANA_RPC_URL;
 
 const clients = new Map();
 

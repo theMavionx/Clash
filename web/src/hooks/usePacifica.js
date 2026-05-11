@@ -10,6 +10,7 @@ import { usePacificaAgent } from './usePacificaAgent';
 import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
 import { reportDiag } from '../lib/diagReporter';
 import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
+import { SOLANA_RPC_URLS } from '../lib/solanaRpc';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
 // rules-of-hooks even though ESLint can't statically prove it).
@@ -375,11 +376,7 @@ export function usePacifica() {
     } catch {}
 
     // Fallback RPCs
-    const rpcs = [
-      'https://solana-rpc.publicnode.com',
-      'https://api.mainnet-beta.solana.com',
-    ];
-    for (const url of rpcs) {
+    for (const url of SOLANA_RPC_URLS) {
       try {
         const res = await fetch(url, {
           method: 'POST',

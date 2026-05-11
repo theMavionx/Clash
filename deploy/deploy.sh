@@ -199,7 +199,7 @@ EOF
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"
     if grep -qi "^VITE_SOLANA_RPC_URL=.*solana-rpc\.publicnode\.com" "$ENV_FILE" 2>/dev/null; then
-        log "Removing broken publicnode Solana RPC from VITE_SOLANA_RPC_URL; frontend will use the official Solana RPC fallback."
+        log "Removing broken publicnode Solana RPC from VITE_SOLANA_RPC_URL; frontend will use the same-origin Solana RPC proxy."
         set_env_value "VITE_SOLANA_RPC_URL" ""
     fi
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
@@ -469,6 +469,30 @@ server {
         proxy_set_header Referer "https://app.perpl.xyz/";
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+    }
+
+    location /rpc/solana-ws {
+        proxy_pass https://api.mainnet-beta.solana.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /rpc/solana {
+        proxy_pass https://api.mainnet-beta.solana.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
     }
 
     location /rpc/arb-alchemy {

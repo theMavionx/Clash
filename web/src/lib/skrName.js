@@ -25,6 +25,7 @@
 //     we never want a domain lookup error to break login.
 
 import { Connection, PublicKey } from '@solana/web3.js';
+import { SOLANA_RPC_URLS } from './solanaRpc';
 
 const CACHE_KEY = 'clash_skr_name_cache_v1';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -32,13 +33,9 @@ const RPC_TIMEOUT_MS = 6000;
 
 // Reuse the same RPC list as WalletProvider — the lookup is independent of
 // the user's wallet adapter connection (it only needs read-only access),
-// so we hit a public RPC directly rather than threading the adapter's
-// `useConnection()` hook through useAuthFlow.
-const RPC_FALLBACKS = [
-  'https://solana-rpc.publicnode.com',
-  'https://api.mainnet-beta.solana.com',
-  'https://solana.drpc.org',
-];
+// but browser clients still go through our proxy to avoid direct public RPC
+// certificate and CORS failures.
+const RPC_FALLBACKS = SOLANA_RPC_URLS;
 
 let parserPromise = null;
 async function getParser(rpcUrl) {
