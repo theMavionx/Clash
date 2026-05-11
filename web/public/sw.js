@@ -1,6 +1,6 @@
 const CACHE_NAME = 'clash-godot-resource-icons-__BUILD_HASH__';
 
-// Large Godot assets to cache (cache-first strategy)
+// Large Godot assets to cache per release.
 const GODOT_ASSETS = [
   '/godot/Work.pck',
   '/godot/Work.wasm',
@@ -31,14 +31,15 @@ self.addEventListener('fetch', (event) => {
   const isGodotAsset = GODOT_ASSETS.some((path) => url.pathname === path);
   if (!isGodotAsset) return;
 
-  // Cache-first with streaming: serve from cache immediately, update in background
+  // Release cache first, then bypass the browser HTTP cache on first fill.
   event.respondWith(
     caches.open(CACHE_NAME).then((cache) =>
       cache.match(event.request).then((cached) => {
         if (cached) return cached;
 
         // Not in cache — fetch and cache for next time
-        return fetch(event.request).then((response) => {
+        const freshRequest = new Request(event.request, { cache: 'reload' });
+        return fetch(freshRequest).then((response) => {
           if (response.ok) {
             cache.put(event.request, response.clone());
           }

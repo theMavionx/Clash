@@ -549,7 +549,7 @@ server {
     location /godot/ {
         try_files $uri =404;
         add_header Cross-Origin-Opener-Policy "same-origin-allow-popups" always;
-        add_header Cache-Control "public, max-age=86400, must-revalidate";
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
         etag on;
         types { application/wasm wasm; application/javascript js; application/octet-stream pck; }
         gzip_static on;
