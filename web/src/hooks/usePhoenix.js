@@ -8,6 +8,7 @@ import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
+  getFreshPhoenixClient,
   getPhoenixClient,
   phoenixSymbol,
 } from '../lib/phoenixClient';
@@ -23,6 +24,41 @@ const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function phoenixSimulationCode(error) {
+  const logs = phoenixErrorLogs(error);
+  const text = `${error?.transactionMessage || ''}\n${error?.message || ''}\n${logs.join('\n')}`;
+  const hex = text.match(/custom program error:\s*(0x[0-9a-f]+)/i)?.[1]?.toLowerCase();
+  if (hex) return hex;
+  const instructionError = error?.transactionError?.InstructionError;
+  const custom = instructionError?.[1]?.Custom ?? instructionError?.[1]?.custom;
+  if (Number.isFinite(Number(custom))) return `0x${Number(custom).toString(16)}`;
+  return null;
+}
+
+function phoenixErrorLogs(error) {
+  const logs = error?.logs
+    || error?.transactionLogs
+    || error?.simulationLogs
+    || error?.transactionError?.logs
+    || error?.cause?.logs
+    || error?.cause?.transactionLogs;
+  return Array.isArray(logs) ? logs : [];
+}
+
+function isPhoenixMetadataDriftError(error) {
+  const code = phoenixSimulationCode(error);
+  if (code !== '0x1900' && code !== '0x1902') return false;
+  const logs = phoenixErrorLogs(error).join('\n');
+  const text = `${error?.transactionMessage || ''}\n${error?.message || ''}\n${logs}`;
+  return /Result \(Failed\):/i.test(text)
+    || /Some\(\d+\)\s*==\s*Some\(\d+\)/i.test(text)
+    || /\[[\d,\s]+\]\s*==\s*\[[\d,\s]+\]/.test(text);
+}
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
@@ -474,6 +510,22 @@ export function usePhoenix() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
+  const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
+    try {
+      return await buildAndSend(client);
+    } catch (e) {
+      if (!isPhoenixMetadataDriftError(e)) throw e;
+      const freshClient = getFreshPhoenixClient(connection?.rpcEndpoint);
+      console.warn('[Phoenix] exchange metadata drift; rebuilding instruction once', {
+        label,
+        symbol: phoenixSymbol(symbol),
+        code: phoenixSimulationCode(e),
+        logs: phoenixErrorLogs(e).slice(-6),
+      });
+      return buildAndSend(freshClient);
+    }
+  }, [client, connection?.rpcEndpoint]);
+
   const runOnce = useCallback((key, fn) => {
     const map = inFlightRef.current;
     if (map.has(key)) return map.get(key);
@@ -500,17 +552,17 @@ export function usePhoenix() {
     });
   }, [ownerPk, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
-  const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0) => {
+  const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');
-    const traderAccount = await client.pda.getTraderAddress({
+    const traderAccount = await orderClient.pda.getTraderAddress({
       authority: walletAddr,
       traderPdaIndex: 0,
       subaccountIndex: Number(subaccountIndex) || 0,
     });
-    const conditionalOrders = await client.pda.getConditionalOrdersAddress({ traderAccount });
+    const conditionalOrders = await orderClient.pda.getConditionalOrdersAddress({ traderAccount });
     const info = await connection.getAccountInfo(new PublicKey(conditionalOrders));
     if (info) return null;
-    return client.ixs.buildCreateConditionalOrdersAccount({
+    return orderClient.ixs.buildCreateConditionalOrdersAccount({
       authority: walletAddr,
       traderPdaIndex: 0,
       traderSubaccountIndex: Number(subaccountIndex) || 0,
@@ -797,6 +849,15 @@ export function usePhoenix() {
     }
   }, [client, isActiveDex, walletAddr]);
 
+  const waitForTraderState = useCallback(async (attempts = 8) => {
+    for (let i = 0; i < attempts; i += 1) {
+      const state = await refreshTraderState();
+      if (state) return state;
+      await sleep(Math.min(2_500, 700 + i * 300));
+    }
+    return null;
+  }, [refreshTraderState]);
+
   const checkInviteStatus = useCallback(async () => {
     if (!isActiveDex || !walletAddr) {
       setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
@@ -812,7 +873,7 @@ export function usePhoenix() {
       };
       setInviteStatus(next);
       return check;
-    } catch (e) {
+    } catch {
       setInviteStatus(prev => ({ ...prev, checking: false }));
       return null;
     }
@@ -868,14 +929,19 @@ export function usePhoenix() {
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
         }
-        await refreshTraderState();
+        const state = await waitForTraderState();
+        if (!state) throw new Error('Phoenix account is not visible on RPC yet; retry in a few seconds');
         return true;
       } catch (e) {
         const text = e?.message || 'Phoenix activation failed';
         if (/already|exists|initialized/i.test(text)) {
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
-          await refreshTraderState();
+          const state = await waitForTraderState(6);
+          if (!state) {
+            setError('Phoenix account is not visible on RPC yet; retry in a few seconds');
+            return false;
+          }
           return true;
         }
         setError(text);
@@ -884,7 +950,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [checkInviteStatus, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [checkInviteStatus, client, runOnce, sendIxs, waitForTraderState, walletAddr]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || traderRegistered) return undefined;
@@ -982,22 +1048,24 @@ export function usePhoenix() {
           minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
           minQuoteLotsToFill: '0',
         });
-        const packet = await client.orderPackets.buildMarketOrderPacket({
-          symbol: phx,
-          side: sideEnum,
-          baseUnits,
-          priceLimitUsd,
-          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
-          minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
+        const signature = await withFreshPhoenixMetadataRetry('phoenix.market', phx, async (orderClient) => {
+          const packet = await orderClient.orderPackets.buildMarketOrderPacket({
+            symbol: phx,
+            side: sideEnum,
+            baseUnits,
+            priceLimitUsd,
+            minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+            minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
+          });
+          const ix = await orderClient.ixs.placeMarketOrder({
+            authority: walletAddr,
+            symbol: phx,
+            orderPacket: packet,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: 0,
+          });
+          return sendIxs(ix, 'phoenix.market');
         });
-        const ix = await client.ixs.placeMarketOrder({
-          authority: walletAddr,
-          symbol: phx,
-          orderPacket: packet,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: 0,
-        });
-        const signature = await sendIxs(ix, 'phoenix.market');
         await refreshTraderState();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
@@ -1010,7 +1078,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, claimGold, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -1022,20 +1090,22 @@ export function usePhoenix() {
       try {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
-        const packet = await client.orderPackets.buildLimitOrderPacket({
-          symbol: phx,
-          side: sideToPhoenix(side),
-          priceUsd: String(price),
-          baseUnits: buildBaseUnitsFromMargin(phx, amount, leverage, Number(price)),
+        const signature = await withFreshPhoenixMetadataRetry('phoenix.limit', phx, async (orderClient) => {
+          const packet = await orderClient.orderPackets.buildLimitOrderPacket({
+            symbol: phx,
+            side: sideToPhoenix(side),
+            priceUsd: String(price),
+            baseUnits: buildBaseUnitsFromMargin(phx, amount, leverage, Number(price)),
+          });
+          const ix = await orderClient.ixs.buildPlaceLimitOrder({
+            authority: walletAddr,
+            symbol: phx,
+            orderPacket: packet,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: 0,
+          });
+          return sendIxs(ix, 'phoenix.limit');
         });
-        const ix = await client.ixs.buildPlaceLimitOrder({
-          authority: walletAddr,
-          symbol: phx,
-          orderPacket: packet,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: 0,
-        });
-        const signature = await sendIxs(ix, 'phoenix.limit');
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {
@@ -1046,7 +1116,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, client, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [activate, buildBaseUnitsFromMargin, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;
@@ -1096,25 +1166,27 @@ export function usePhoenix() {
           minQuoteLotsToFill: '0',
           positionRaw: existing?._raw || null,
         });
-        const packet = await client.orderPackets.buildMarketOrderPacket({
-          symbol: phx,
-          side: closeSide,
-          baseUnits,
-          priceLimitUsd,
-          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
-          minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
-          selfTradeBehavior: SelfTradeBehavior.Abort,
-          orderFlags: OrderFlags.ReduceOnly,
-          cancelExisting: false,
+        const signature = await withFreshPhoenixMetadataRetry('phoenix.close', phx, async (orderClient) => {
+          const packet = await orderClient.orderPackets.buildMarketOrderPacket({
+            symbol: phx,
+            side: closeSide,
+            baseUnits,
+            priceLimitUsd,
+            minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+            minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
+            selfTradeBehavior: SelfTradeBehavior.Abort,
+            orderFlags: OrderFlags.ReduceOnly,
+            cancelExisting: false,
+          });
+          const ix = await orderClient.ixs.placeMarketOrder({
+            authority: walletAddr,
+            symbol: phx,
+            orderPacket: packet,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: subaccountIndex,
+          });
+          return sendIxs(ix, 'phoenix.close');
         });
-        const ix = await client.ixs.placeMarketOrder({
-          authority: walletAddr,
-          symbol: phx,
-          orderPacket: packet,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: subaccountIndex,
-        });
-        const signature = await sendIxs(ix, 'phoenix.close');
         await refreshTraderState();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
@@ -1127,7 +1199,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, client, positions, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [claimGold, positions, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -1138,21 +1210,23 @@ export function usePhoenix() {
       try {
         const existing = orders.find(o => String(o.order_id) === String(orderId) || String(o.orderSequenceNumber) === String(orderId));
         const subaccountIndex = Number(existing?._phoenixSubaccountIndex || 0);
-        const ix = existing?.price
-          ? await client.ixs.buildCancelOrdersById({
-              authority: walletAddr,
-              symbol: phx,
-              orders: [{ price: Number(existing.price), orderSequenceNumber: existing.orderSequenceNumber || orderId }],
-              traderPdaIndex: 0,
-              traderSubaccountIndex: subaccountIndex,
-            })
-          : await client.ixs.buildCancelAll({
-              authority: walletAddr,
-              symbol: phx,
-              traderPdaIndex: 0,
-              traderSubaccountIndex: subaccountIndex,
-            });
-        const signature = await sendIxs(ix, 'phoenix.cancel');
+        const signature = await withFreshPhoenixMetadataRetry('phoenix.cancel', phx, async (orderClient) => {
+          const ix = existing?.price
+            ? await orderClient.ixs.buildCancelOrdersById({
+                authority: walletAddr,
+                symbol: phx,
+                orders: [{ price: Number(existing.price), orderSequenceNumber: existing.orderSequenceNumber || orderId }],
+                traderPdaIndex: 0,
+                traderSubaccountIndex: subaccountIndex,
+              })
+            : await orderClient.ixs.buildCancelAll({
+                authority: walletAddr,
+                symbol: phx,
+                traderPdaIndex: 0,
+                traderSubaccountIndex: subaccountIndex,
+              });
+          return sendIxs(ix, 'phoenix.cancel');
+        });
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {
@@ -1163,7 +1237,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, orders, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [orders, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
   const setMarginMode = useCallback(async (_symbol, isolated) => (
@@ -1232,17 +1306,6 @@ export function usePhoenix() {
           else lessTriggerOrder = trigger;
         }
 
-        const createConditionalIx = await ensureConditionalOrdersAccountIx(subaccountIndex);
-        const placeConditionalIx = await client.ixs.buildPlacePositionConditionalOrder({
-          authority: walletAddr,
-          symbol: phx,
-          greaterTriggerOrder,
-          lessTriggerOrder,
-          sizePercent: 100,
-          traderPdaIndex: 0,
-          traderSubaccountIndex: subaccountIndex,
-        });
-        const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
         console.log('[Phoenix] setTpsl', {
           symbol: phx,
           requestedSide: side,
@@ -1252,10 +1315,27 @@ export function usePhoenix() {
           mark,
           takeProfit: tp,
           stopLoss: sl,
-          createdConditionalAccount: !!createConditionalIx,
         });
 
-        const signature = await sendIxs(instructions, 'phoenix.tpsl');
+        const signature = await withFreshPhoenixMetadataRetry('phoenix.tpsl', phx, async (orderClient) => {
+          const createConditionalIx = await ensureConditionalOrdersAccountIx(subaccountIndex, orderClient);
+          const placeConditionalIx = await orderClient.ixs.buildPlacePositionConditionalOrder({
+            authority: walletAddr,
+            symbol: phx,
+            greaterTriggerOrder,
+            lessTriggerOrder,
+            sizePercent: 100,
+            traderPdaIndex: 0,
+            traderSubaccountIndex: subaccountIndex,
+          });
+          const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
+          console.log('[Phoenix] setTpsl instructions', {
+            symbol: phx,
+            createdConditionalAccount: !!createConditionalIx,
+            instructionCount: instructions.length,
+          });
+          return sendIxs(instructions, 'phoenix.tpsl');
+        });
         await refreshTraderState();
         return { success: true, signature };
       } catch (e) {
@@ -1266,7 +1346,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, ensureConditionalOrdersAccountIx, positions, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;

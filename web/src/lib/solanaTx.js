@@ -30,6 +30,23 @@ function rpcHost(connection) {
   return solanaRpcHost(connection?.rpcEndpoint || '');
 }
 
+function customProgramErrorCode(error) {
+  const text = [
+    error?.transactionMessage,
+    error?.message,
+    ...(Array.isArray(error?.logs) ? error.logs : []),
+    ...(Array.isArray(error?.transactionLogs) ? error.transactionLogs : []),
+    ...(Array.isArray(error?.simulationLogs) ? error.simulationLogs : []),
+    ...(Array.isArray(error?.transactionError?.logs) ? error.transactionError.logs : []),
+  ].filter(Boolean).join('\n');
+  const hexMatch = text.match(/custom program error:\s*(0x[0-9a-f]+)/i);
+  if (hexMatch) return hexMatch[1].toLowerCase();
+  const instructionError = error?.transactionError?.InstructionError;
+  const custom = instructionError?.[1]?.Custom ?? instructionError?.[1]?.custom;
+  if (Number.isFinite(Number(custom))) return `0x${Number(custom).toString(16)}`;
+  return null;
+}
+
 function logTx(label, type, data = {}, level = 'info') {
   const payload = { label, ...data };
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
@@ -195,9 +212,9 @@ async function selectFreshTransactionConnection(candidates, { label, attempt }) 
   const usable = scored
     .filter(p => p.usable)
     .sort((a, b) => (
-      (Number(b.currentBlockHeight) || 0) - (Number(a.currentBlockHeight) || 0)
+      a.index - b.index
+      || (Number(b.currentBlockHeight) || 0) - (Number(a.currentBlockHeight) || 0)
       || (Number(b.remainingClusterBlocks) || 0) - (Number(a.remainingClusterBlocks) || 0)
-      || a.index - b.index
     ));
 
   const selected = usable[0] || null;
@@ -233,6 +250,8 @@ async function describeSolanaError(error, connection) {
   }
   if (error?.transactionMessage) details.transaction_message = error.transactionMessage;
   if (error?.transactionError) details.transaction_error = error.transactionError;
+  const code = customProgramErrorCode(error);
+  if (code) details.simulation_error_code = code;
   if (error?.source) details.source = error.source;
   if (error?.slot) details.slot = error.slot;
   if (error?.currentBlockHeight != null) details.current_block_height = error.currentBlockHeight;
@@ -242,7 +261,11 @@ async function describeSolanaError(error, connection) {
   if (Array.isArray(error?.rpcProbes)) details.rpc_probes = error.rpcProbes.slice(0, 8);
   const keys = Object.getOwnPropertyNames(error || {}).filter(Boolean);
   if (keys.length) details.error_keys = keys.slice(0, 30);
-  const directLogs = error?.logs || error?.transactionLogs || error?.simulationLogs || error?.cause?.logs;
+  const directLogs = error?.logs
+    || error?.transactionLogs
+    || error?.simulationLogs
+    || error?.transactionError?.logs
+    || error?.cause?.logs;
   if (Array.isArray(directLogs)) details.logs = directLogs.slice(-30);
   if (error?.cause?.transactionMessage && !details.transaction_message) {
     details.transaction_message = error.cause.transactionMessage;
@@ -364,13 +387,28 @@ async function waitForLateLanding({ connection, signature, label, attempt, grace
 
 export function isBlockhashExpiredError(error) {
   const name = String(error?.name || '');
-  const message = String(error?.message || error || '');
+  const logs = [
+    ...(Array.isArray(error?.logs) ? error.logs : []),
+    ...(Array.isArray(error?.transactionLogs) ? error.transactionLogs : []),
+    ...(Array.isArray(error?.simulationLogs) ? error.simulationLogs : []),
+    ...(Array.isArray(error?.transactionError?.logs) ? error.transactionError.logs : []),
+    ...(Array.isArray(error?.cause?.logs) ? error.cause.logs : []),
+  ];
+  const message = [
+    error?.message,
+    error?.transactionMessage,
+    error?.cause?.message,
+    ...logs,
+  ].filter(Boolean).join('\n') || String(error || '');
   return (
     name === 'TransactionExpiredBlockheightExceededError'
     || name === 'SolanaRpcStaleBlockhashError'
     || /block height exceeded/i.test(message)
     || /signature .* has expired/i.test(message)
     || /blockhash.*expired/i.test(message)
+    || /blockhash not found/i.test(message)
+    || /could not find (?:a )?recent blockhash/i.test(message)
+    || /recent blockhash .*not found/i.test(message)
     || /stale.*blockhash/i.test(message)
   );
 }

@@ -309,11 +309,16 @@ build_frontend() {
     cd "$WEB_DIR"
     npm install --legacy-peer-deps
     load_vite_env_for_build
+    export VITE_BUILD_ID="$RELEASE_ID"
+    export VITE_COMMIT_SHA="$GIT_SHA"
     npm run build
 
     BUILD_HASH="$(date +%s)"
     if [ -f "$WEB_DIST/sw.js" ]; then
         sed -i "s/__BUILD_HASH__/$BUILD_HASH/g" "$WEB_DIST/sw.js"
+        if grep -q "__BUILD_HASH__" "$WEB_DIST/sw.js"; then
+            die "Service worker cache placeholder was not replaced."
+        fi
         log "SW cache version: clash-godot-$BUILD_HASH"
     fi
 

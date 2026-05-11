@@ -1,16 +1,17 @@
 const rawEnvSolanaRpc = (import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
+const allowDirectBrowserRpc = import.meta.env.DEV
+  || /^(1|true|yes)$/i.test(String(import.meta.env.VITE_ALLOW_DIRECT_SOLANA_RPC || ''));
+const defaultDirectBrowserRpc = ['https://solana-rpc', 'publicnode.com'].join('.');
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
 export const SOLANA_RPC_PROBE_TIMEOUT_MS = 3_000;
 
-// Browser-side public RPCs. These must support CORS because wallet-adapter,
-// Privy embedded Solana wallets, and Phoenix all call them from the user's
-// browser. Keeping these client-side spreads free-tier rate limits across
-// user IPs instead of funnelling every trade through our VPS.
-const BROWSER_SOLANA_RPC_URLS = [
-  'https://solana-rpc.publicnode.com',
-];
+// Direct public RPCs are fine in local dev, but production trading should go
+// through same-origin proxies unless an operator explicitly opts in.
+const BROWSER_SOLANA_RPC_URLS = allowDirectBrowserRpc
+  ? [import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || defaultDirectBrowserRpc]
+  : [];
 
 function siteOrigin() {
   if (typeof window !== 'undefined' && window.location?.origin) {
@@ -86,9 +87,9 @@ function scoreSolanaRpcProbes(probes) {
   const usable = scored
     .filter(p => p.usable)
     .sort((a, b) => (
-      (Number(b.currentBlockHeight) || 0) - (Number(a.currentBlockHeight) || 0)
+      a.index - b.index
+      || (Number(b.currentBlockHeight) || 0) - (Number(a.currentBlockHeight) || 0)
       || (Number(b.remainingClusterBlocks) || 0) - (Number(a.remainingClusterBlocks) || 0)
-      || a.index - b.index
     ));
   return { selected: usable[0] || null, probes: scored, clusterBlockHeight };
 }

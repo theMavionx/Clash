@@ -15,12 +15,30 @@ export function getPhoenixClient(rpcUrl) {
     clients.set(key, createPhoenixClient({
       apiUrl: PHOENIX_API_URL,
       rpcUrl: resolvedRpc,
-      ws: false,
+      ws: {
+        connectMode: 'lazy',
+        idleCloseMs: 30_000,
+      },
       pdaCache: { maxEntries: 1024 },
-      exchangeMetadata: { stream: false },
+      exchangeMetadata: {
+        stream: true,
+      },
     }));
   }
   return clients.get(key);
+}
+
+export function resetPhoenixClient(rpcUrl) {
+  const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
+  const key = `${PHOENIX_API_URL}|${resolvedRpc}`;
+  const client = clients.get(key);
+  try { client?.dispose?.(); } catch {}
+  clients.delete(key);
+}
+
+export function getFreshPhoenixClient(rpcUrl) {
+  resetPhoenixClient(rpcUrl);
+  return getPhoenixClient(rpcUrl);
 }
 
 export function phoenixSymbol(symbol) {
