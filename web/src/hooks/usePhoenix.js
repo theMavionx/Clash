@@ -9,6 +9,7 @@ import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
   createPhoenixTransactionClient,
+  disposePhoenixClient,
   getPhoenixClient,
   phoenixSymbol,
 } from '../lib/phoenixClient';
@@ -22,6 +23,8 @@ const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
 const USDC_DECIMALS = 6;
 const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
+const PHOENIX_TX_METADATA_TTL_MS = 12_000;
+const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
@@ -561,6 +564,13 @@ export function usePhoenix() {
   const claimInFlightRef = useRef(null);
   const lastClaimAtRef = useRef(0);
   const inFlightRef = useRef(new Map());
+  const refreshTraderStateInFlightRef = useRef(null);
+  const refreshTraderStateCachedAtRef = useRef(0);
+  const refreshTraderStateLastResultRef = useRef(undefined);
+  const txClientRef = useRef(null);
+  const txClientEndpointRef = useRef(null);
+  const txClientReadyAtRef = useRef(0);
+  const txClientInFlightRef = useRef(null);
 
   useEffect(() => {
     tokenRef.current = player?.token || null;
@@ -570,22 +580,66 @@ export function usePhoenix() {
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
 
+  const disposeTransactionClient = useCallback(() => {
+    disposePhoenixClient(txClientRef.current);
+    txClientRef.current = null;
+    txClientEndpointRef.current = null;
+    txClientReadyAtRef.current = 0;
+    txClientInFlightRef.current = null;
+  }, []);
+
+  useEffect(() => () => {
+    disposeTransactionClient();
+  }, [disposeTransactionClient]);
+
+  const getTransactionClient = useCallback(async (forceFresh = false) => {
+    const endpoint = connection?.rpcEndpoint || null;
+    const now = Date.now();
+    const cached = txClientRef.current;
+    const cacheFresh = cached
+      && txClientEndpointRef.current === endpoint
+      && now - txClientReadyAtRef.current < PHOENIX_TX_METADATA_TTL_MS;
+
+    if (!forceFresh && cacheFresh) return cached;
+    if (!forceFresh && txClientInFlightRef.current) return txClientInFlightRef.current;
+
+    if (cached) disposeTransactionClient();
+    const promise = (async () => {
+      const next = createPhoenixTransactionClient(endpoint);
+      try {
+        await next.exchange?.ready?.();
+        txClientRef.current = next;
+        txClientEndpointRef.current = endpoint;
+        txClientReadyAtRef.current = Date.now();
+        return next;
+      } catch (e) {
+        disposePhoenixClient(next);
+        throw e;
+      }
+    })();
+    txClientInFlightRef.current = promise;
+    try {
+      return await promise;
+    } finally {
+      if (txClientInFlightRef.current === promise) {
+        txClientInFlightRef.current = null;
+      }
+    }
+  }, [connection?.rpcEndpoint, disposeTransactionClient]);
+
   const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
     const phx = phoenixSymbol(symbol);
-    const runWithTransactionClient = async (phase) => {
-      const orderClient = createPhoenixTransactionClient(connection?.rpcEndpoint);
-      try {
-        await orderClient.exchange?.ready?.();
-        console.info('[Phoenix] transaction metadata ready', {
-          label,
-          symbol: phx,
-          phase,
-          ...phoenixMetadataSummary(orderClient, phx),
-        });
-        return await buildAndSend(orderClient);
-      } finally {
-        try { orderClient.dispose?.(); } catch {}
-      }
+    const runWithTransactionClient = async (phase, forceFresh = false) => {
+      const orderClient = await getTransactionClient(forceFresh);
+      console.info('[Phoenix] transaction metadata ready', {
+        label,
+        symbol: phx,
+        phase,
+        cached: !forceFresh,
+        cache_age_ms: Math.max(0, Date.now() - txClientReadyAtRef.current),
+        ...phoenixMetadataSummary(orderClient, phx),
+      });
+      return buildAndSend(orderClient);
     };
     try {
       return await runWithTransactionClient('initial');
@@ -598,9 +652,9 @@ export function usePhoenix() {
         failed_program_id: phoenixFailedProgramId(e),
         logs: phoenixErrorLogs(e).slice(-6),
       });
-      return runWithTransactionClient('retry');
+      return runWithTransactionClient('retry', true);
     }
-  }, [connection?.rpcEndpoint]);
+  }, [getTransactionClient]);
 
   const runOnce = useCallback((key, fn) => {
     const map = inFlightRef.current;
@@ -814,12 +868,24 @@ export function usePhoenix() {
     }
   }, [client, fetchPrices, isActiveDex]);
 
-  const refreshTraderState = useCallback(async () => {
+  const refreshTraderState = useCallback(async (options = {}) => {
     if (!isActiveDex || !walletAddr) {
       setAccountReady(false);
       return null;
     }
-    try {
+    const force = !!options.force;
+    const now = Date.now();
+    if (!force && refreshTraderStateInFlightRef.current) return refreshTraderStateInFlightRef.current;
+    if (
+      !force
+      && refreshTraderStateLastResultRef.current !== undefined
+      && now - refreshTraderStateCachedAtRef.current < PHOENIX_TRADER_STATE_DEDUP_MS
+    ) {
+      return refreshTraderStateLastResultRef.current;
+    }
+
+    const promise = (async () => {
+      try {
       const [state, viewState] = await Promise.all([
         client.api.traders().getTraderStateSnapshot(walletAddr, { traderPdaIndex: 0 }),
         client.api.traders().getTraderState(walletAddr, { pdaIndex: 0 }).catch(e => {
@@ -899,6 +965,8 @@ export function usePhoenix() {
       });
       setAccountReady(true);
       setDataReady(true);
+      refreshTraderStateLastResultRef.current = state;
+      refreshTraderStateCachedAtRef.current = Date.now();
       return state;
     } catch {
       traderRegisteredRef.current = false;
@@ -921,17 +989,39 @@ export function usePhoenix() {
       });
       setAccountReady(true);
       setDataReady(true);
+      refreshTraderStateLastResultRef.current = null;
+      refreshTraderStateCachedAtRef.current = Date.now();
       return null;
+      }
+    })();
+
+    refreshTraderStateInFlightRef.current = promise;
+    try {
+      return await promise;
+    } finally {
+      if (refreshTraderStateInFlightRef.current === promise) {
+        refreshTraderStateInFlightRef.current = null;
+      }
     }
   }, [client, isActiveDex, walletAddr]);
 
   const waitForTraderState = useCallback(async (attempts = 8) => {
     for (let i = 0; i < attempts; i += 1) {
-      const state = await refreshTraderState();
+      const state = await refreshTraderState({ force: i > 0 });
       if (state) return state;
       await sleep(Math.min(2_500, 700 + i * 300));
     }
     return null;
+  }, [refreshTraderState]);
+
+  const refreshTraderStateSoon = useCallback((delays = [800, 3_500]) => {
+    for (const delay of delays) {
+      setTimeout(() => {
+        refreshTraderState({ force: true }).catch(e => {
+          console.warn('[Phoenix] background trader refresh failed', e?.message || e);
+        });
+      }, delay);
+    }
   }, [refreshTraderState]);
 
   const checkInviteStatus = useCallback(async () => {
@@ -1037,6 +1127,21 @@ export function usePhoenix() {
     return () => { cancelled = true; };
   }, [checkInviteStatus, isActiveDex, traderRegistered, walletAddr]);
 
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      getTransactionClient().catch(e => {
+        console.warn('[Phoenix] transaction metadata prewarm failed', e?.message || e);
+      });
+    }, 1_500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [getTransactionClient, isActiveDex, walletAddr]);
+
   const depositToPacifica = useCallback(async (amountUsdc) => {
     if (!walletAddr) {
       setError('Wallet not connected');
@@ -1051,7 +1156,7 @@ export function usePhoenix() {
         const amount = toRawUsdc(amountUsdc);
         const built = await client.ixs.buildDepositIxs({ authority: walletAddr, amount });
         const signature = await sendIxs(built.instructions, 'phoenix.deposit');
-        await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
+        await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         claimGold();
         return { success: true, signature };
       } catch (e) {
@@ -1073,7 +1178,7 @@ export function usePhoenix() {
         const amount = toRawUsdc(amountUsdc);
         const built = await client.ixs.buildWithdrawIxs({ authority: walletAddr, amount });
         const signature = await sendIxs(built.instructions, 'phoenix.withdraw');
-        await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
+        await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix withdraw failed';
@@ -1142,7 +1247,7 @@ export function usePhoenix() {
           });
           return sendIxs(ix, 'phoenix.market');
         });
-        await refreshTraderState();
+        refreshTraderStateSoon();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
         return { success: true, signature };
@@ -1154,7 +1259,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -1182,7 +1287,7 @@ export function usePhoenix() {
           });
           return sendIxs(ix, 'phoenix.limit');
         });
-        await refreshTraderState();
+        refreshTraderStateSoon();
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix limit order failed';
@@ -1192,7 +1297,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [activate, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;
@@ -1263,7 +1368,7 @@ export function usePhoenix() {
           });
           return sendIxs(ix, 'phoenix.close');
         });
-        await refreshTraderState();
+        refreshTraderStateSoon();
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
         return { success: true, signature };
@@ -1275,7 +1380,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, positions, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -1303,7 +1408,7 @@ export function usePhoenix() {
               });
           return sendIxs(ix, 'phoenix.cancel');
         });
-        await refreshTraderState();
+        refreshTraderStateSoon();
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix cancel failed';
@@ -1313,7 +1418,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [orders, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [orders, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
   const setMarginMode = useCallback(async (_symbol, isolated) => (
@@ -1412,7 +1517,7 @@ export function usePhoenix() {
           });
           return sendIxs(instructions, 'phoenix.tpsl');
         });
-        await refreshTraderState();
+        refreshTraderStateSoon();
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix TP/SL failed';
@@ -1422,7 +1527,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderState, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;

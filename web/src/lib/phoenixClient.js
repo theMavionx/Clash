@@ -5,7 +5,8 @@ export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 
 const DEFAULT_RPC_URL = DEFAULT_SOLANA_RPC_URL;
-const EXCHANGE_METADATA_RPC_TTL_MS = 1_000;
+const EXCHANGE_METADATA_RPC_TTL_MS = 15_000;
+const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 
 const clients = new Map();
 
@@ -23,6 +24,7 @@ function createClient(rpcUrl) {
       rpc: {
         enabled: true,
         ttlMs: EXCHANGE_METADATA_RPC_TTL_MS,
+        pollIntervalMs: EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS,
       },
       api: {
         enabled: true,
@@ -40,11 +42,16 @@ export function getPhoenixClient(rpcUrl) {
   return clients.get(key);
 }
 
+export function disposePhoenixClient(client) {
+  try { client?.exchange?.close?.(); } catch {}
+  try { client?.dispose?.(); } catch {}
+}
+
 export function resetPhoenixClient(rpcUrl) {
   const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
   const key = `${PHOENIX_API_URL}|${resolvedRpc}`;
   const client = clients.get(key);
-  try { client?.dispose?.(); } catch {}
+  disposePhoenixClient(client);
   clients.delete(key);
 }
 
