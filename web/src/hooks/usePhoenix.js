@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { Direction, MarginType, OrderFlags, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
+import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
@@ -101,6 +101,15 @@ function formatBaseUnits(value, lotSize) {
     ? Math.max(0, String(lotSize).split('.')[1]?.length || 0)
     : Math.min(8, Math.max(0, String(value).split('.')[1]?.length || 0));
   return Number(n.toFixed(decimals)).toString();
+}
+
+function marketOrderPriceLimitUsd(side, mark) {
+  const n = Number(mark);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const multiplier = side === Side.Bid
+    ? 1 + DEFAULT_MARKET_ORDER_SLIPPAGE
+    : 1 - DEFAULT_MARKET_ORDER_SLIPPAGE;
+  return String(Math.max(0, n * multiplier));
 }
 
 function rawPhoenixPositionAmount(position, market) {
@@ -957,6 +966,7 @@ export function usePhoenix() {
         const mark = Number(priceRow?.mark || 0);
         const sideEnum = sideToPhoenix(side);
         const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
+        const priceLimitUsd = marketOrderPriceLimitUsd(sideEnum, mark);
         console.log('[Phoenix] placeMarketOrder', {
           symbol: phx,
           requestedSide: side,
@@ -966,12 +976,13 @@ export function usePhoenix() {
           mark,
           baseUnits,
           flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
-          priceLimitUsd: null,
+          priceLimitUsd,
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: sideEnum,
           baseUnits,
+          priceLimitUsd,
         });
         const ix = await client.ixs.placeMarketOrder({
           authority: walletAddr,
@@ -1056,6 +1067,8 @@ export function usePhoenix() {
         const roundedAmount = roundDownToLot(amountToClose, m?.lot_size || '0.0001');
         const baseUnits = formatBaseUnits(roundedAmount, m?.lot_size || '0.0001');
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
+        const mark = Number(existing?.mark_price || pricesRef.current.find(p => p.symbol === phx)?.mark || 0);
+        const priceLimitUsd = marketOrderPriceLimitUsd(closeSide, mark);
         console.log('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
@@ -1069,14 +1082,20 @@ export function usePhoenix() {
           subaccountIndex,
           flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
           reduceOnly: true,
-          priceLimitUsd: null,
+          selfTradeBehavior: 'CancelProvide',
+          cancelExisting: true,
+          mark,
+          priceLimitUsd,
           positionRaw: existing?._raw || null,
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: closeSide,
           baseUnits,
+          priceLimitUsd,
+          selfTradeBehavior: SelfTradeBehavior.CancelProvide,
           orderFlags: OrderFlags.ReduceOnly,
+          cancelExisting: true,
         });
         const ix = await client.ixs.placeMarketOrder({
           authority: walletAddr,
