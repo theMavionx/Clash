@@ -243,7 +243,7 @@ function addTrade(playerId, { symbol, side, orderType, amount, price, orderId, c
     status, dex, notional_usd, verifiedSource,
     pnl != null ? String(pnl) : null
   );
-  return { id: info.lastInsertRowid };
+  return { id: info.changes ? info.lastInsertRowid : null, changes: info.changes };
 }
 
 function getTrades(playerId) {

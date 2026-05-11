@@ -342,6 +342,7 @@ export function useGmx() {
   // in the file can fire without referencing the const before its TDZ
   // window closes. Populated immediately after the const declaration.
   const claimGoldRef = useRef(null);
+  const importFillsRef = useRef(null);
   // Address → symbol map cached from the V2 /tokens endpoint. Used to
   // translate a position's `collateralTokenAddress` into the
   // `collateralToken: "USDC"` string the /orders/txns/prepare endpoint
@@ -612,10 +613,9 @@ export function useGmx() {
     return () => clearInterval(iv);
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount, fetchPositions, fetchOrders]);
 
-  // Periodic claim-gold heartbeat. Same cadence as useAvantis: kick once
-  // ~3s after mount (catches a stale "pending claim" from the worker if
-  // it polled while the panel was closed) and every 30s after that. The
-  // server endpoint is idempotent + cursor-gated, so over-calling is safe.
+  // Periodic rewards heartbeat. GMX is indexed from Subsquid, so ask the
+  // futures server to import recent fills first, then claim. This keeps
+  // tasks/gold close to real-time while the 60s worker remains a backstop.
   //
   // We dispatch through `claimGoldRef.current` instead of the callback
   // directly so this effect can sit ABOVE the `const claimGold = …` decl
@@ -623,11 +623,65 @@ export function useGmx() {
   // 'claimGold' before initialization`). The ref is populated below.
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;
-    const fire = () => { const fn = claimGoldRef.current; if (typeof fn === 'function') fn(); };
+    const fire = async () => {
+      const importFn = importFillsRef.current;
+      if (typeof importFn === 'function') {
+        await importFn({ attempts: 1, lookbackSeconds: 15 * 60 });
+      }
+      const claimFn = claimGoldRef.current;
+      if (typeof claimFn === 'function') claimFn();
+    };
     const kickoff = setTimeout(fire, 3000);
     const iv = setInterval(fire, 30_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
+
+  const importGmxFills = useCallback(async ({ attempts = 3, lookbackSeconds = 15 * 60, delayMs = 1500 } = {}) => {
+    if (!walletAddr) return null;
+    const token = window._playerToken || (player && player.token) || null;
+    if (!token) {
+      console.warn('[useGmx] import-fills skipped - no token yet');
+      return null;
+    }
+    try {
+      const res = await fetch('/api/futures/gmx/import-fills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token, 'x-dex': 'gmx' },
+        body: JSON.stringify({
+          wallet: walletAddr,
+          attempts,
+          lookback_seconds: lookbackSeconds,
+          delay_ms: delayMs,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.warn('[useGmx] import-fills failed:', res.status, data?.error || data?.reason || '(no body)');
+        return data;
+      }
+      if (data.imported > 0) console.log('[useGmx] imported GMX fills', data);
+      return data;
+    } catch (e) {
+      console.warn('[useGmx] import-fills network error:', e?.message || e);
+      return null;
+    }
+  }, [walletAddr, player]);
+
+  importFillsRef.current = importGmxFills;
+
+  const syncGmxRewards = useCallback((label = 'trade') => {
+    if (!walletAddr) return;
+    const run = async (attempts, delayMs) => {
+      const imported = await importGmxFills({ attempts, delayMs, lookbackSeconds: 15 * 60 });
+      const claimFn = claimGoldRef.current;
+      if (typeof claimFn === 'function') await claimFn();
+      if (imported?.imported > 0) {
+        console.log(`[useGmx] rewards synced after ${label}`, imported);
+      }
+    };
+    run(5, 1500);
+    setTimeout(() => run(2, 1500), 12_000);
+  }, [walletAddr, importGmxFills]);
 
   // ───── Writes (V2 prepareOrder API) ─────
   // Every write goes through GMX's `/orders/txns/prepare` endpoint in
@@ -883,6 +937,7 @@ export function useGmx() {
       fetchAccount();
       fetchPositions();
       fetchOrders();
+      syncGmxRewards('market order');
       return confirmed ? { success: true, txHash: hash } : { success: true, pending: true, txHash: hash };
     } catch (e) {
       const msg = decodeWriteError(e, 'GMX market order failed');
@@ -893,7 +948,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders]);
+  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
 
   /**
    * Limit order = increase order with `orderType: 'limit'` and a trigger
@@ -1106,6 +1161,7 @@ export function useGmx() {
       // Final sync — pulls the now-empty positions list into React state
       // so the card disappears from the panel.
       fetchPositions();
+      syncGmxRewards('close');
       return { success: true, txHash: hash };
     } catch (e) {
       const msg = decodeWriteError(e, 'GMX close failed');
@@ -1116,7 +1172,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders]);
+  }, [walletAddr, ensureChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
 
   /**
    * Submit Take-Profit and/or Stop-Loss orders against an open position.

@@ -6,6 +6,7 @@ const avantis = require('./avantis');
 const deposit = require('./deposit');
 const decibel = require('./decibel');
 const gmx = require('./gmx');
+const gmxRewards = require('./gmx-rewards-worker');
 const phoenixRewards = require('./phoenix-rewards-worker');
 
 const router = express.Router();
@@ -1115,6 +1116,35 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
   } catch (e) {
     console.warn('[phoenix] import-fills failed:', e.message);
     res.status(502).json({ error: 'Failed to import Phoenix fills', detail: e.message });
+  }
+});
+
+router.post('/gmx/import-fills', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'gmx') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to gmx before importing GMX fills.`,
+      });
+    }
+    const wallet = normalizeEvmAddress(req.body?.wallet || req.playerWallet);
+    const playerWallet = normalizeEvmAddress(req.playerWallet);
+    if (!wallet) return res.status(400).json({ error: 'wallet required (0x...)' });
+    if (playerWallet && wallet !== playerWallet) {
+      return res.status(409).json({ error: 'wallet does not match player account' });
+    }
+
+    const result = await gmxRewards.importTradesForPlayer(req.playerId, wallet, {
+      lookbackSeconds: req.body?.lookback_seconds,
+      attempts: req.body?.attempts,
+      delayMs: req.body?.delay_ms,
+    });
+    if (result.imported > 0) {
+      console.log(`[gmx] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${wallet.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[gmx] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import GMX fills', detail: e.message });
   }
 });
 

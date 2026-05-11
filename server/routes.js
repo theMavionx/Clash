@@ -1690,6 +1690,20 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet || '');
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
+    // GMX briefly used a $50 minimum notional in this claim path. That let
+    // task progress see verified trade_history rows while gold/tournament
+    // volume skipped them and still advanced last_trade_id. If a GMX row has
+    // never paid anything, rewind the cursor once so those verified rows can
+    // be credited under the no-threshold GMX rules below.
+    if (dex === 'gmx'
+      && Number(reward.last_trade_id || 0) > 0
+      && Number(reward.total_volume || 0) === 0
+      && Number(reward.total_gold || 0) === 0) {
+      db.db.prepare('UPDATE trading_rewards SET last_trade_id = 0 WHERE player_id = ? AND dex = ?')
+        .run(req.player.id, dex);
+      reward = { ...reward, last_trade_id: 0 };
+      console.log(`[claim-gold gmx] rewound zero-credit cursor for player=${req.player.name}`);
+    }
     let newTrades = [];
     try {
       // Avantis/GMX stay worker-only. Decibel uses server rows as the
@@ -1765,7 +1779,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // Decibel was at $1 — too low because Decibel min_size per market lets
     // self-traded $1 fills count as legitimate. Bumped to $10 to match
     // a sensible micro-trade floor across all four DEXes.
-    const SANE_MIN_NOTIONAL = (dex === 'decibel' || dex === 'monad' || dex === 'phoenix') ? 10 : 50;
+    const SANE_MIN_NOTIONAL = dex === 'gmx'
+      ? 0
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -2114,13 +2130,15 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'phoenix') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
         const sourceClause = dex === 'decibel'
           ? "AND verified_source IN ('worker', 'server')"
-          : "AND verified_source = 'worker'";
+          : dex === 'monad'
+            ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
+            : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
           FROM trade_history
