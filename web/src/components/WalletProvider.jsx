@@ -15,13 +15,14 @@ import {
   isUserDismissedWalletError,
 } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { DEFAULT_SOLANA_RPC_URL, SOLANA_RPC_URLS } from '../lib/solanaRpc';
+import {
+  DEFAULT_SOLANA_RPC_URL,
+  SOLANA_RPC_URLS,
+  selectFreshSolanaRpcUrl,
+  solanaRpcHost,
+} from '../lib/solanaRpc';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
-
-function rpcHost(url) {
-  try { return new URL(url, window.location.origin).host; } catch { return String(url || 'unknown'); }
-}
 
 // Mobile Wallet Adapter — registered for every session but only resolves
 // to "Installed" on Saga/Seeker (devices with the Solana Mobile Stack
@@ -49,44 +50,37 @@ function useBestRpc() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const url of SOLANA_RPC_URLS) {
-        try {
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 3000);
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify([
-              { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [{ commitment: 'confirmed' }] },
-              { jsonrpc: '2.0', id: 2, method: 'getBlockHeight', params: [{ commitment: 'confirmed' }] },
-            ]),
-            signal: controller.signal,
-          });
-          clearTimeout(timeout);
-          const data = await res.json().catch(() => null);
-          const rows = Array.isArray(data) ? data : [];
-          const latest = rows.find(row => row?.id === 1)?.result?.value;
-          const currentHeight = Number(rows.find(row => row?.id === 2)?.result);
-          const lastValidBlockHeight = Number(latest?.lastValidBlockHeight);
-          const usable = !!latest?.blockhash
-            && Number.isFinite(currentHeight)
-            && Number.isFinite(lastValidBlockHeight)
-            && lastValidBlockHeight - currentHeight > 20;
-          if (res.ok && usable && !cancelled) {
-            setRpc(url);
-            return;
-          }
-          addClientBreadcrumb('solana_rpc.rejected', {
-            host: rpcHost(url),
-            current_block_height: Number.isFinite(currentHeight) ? currentHeight : null,
-            last_valid_block_height: Number.isFinite(lastValidBlockHeight) ? lastValidBlockHeight : null,
-            remaining_blocks: Number.isFinite(currentHeight) && Number.isFinite(lastValidBlockHeight)
-              ? lastValidBlockHeight - currentHeight
-              : null,
-          }, 'warn');
-        } catch {
-          addClientBreadcrumb('solana_rpc.probe_failed', { host: rpcHost(url) }, 'warn');
-        }
+      const result = await selectFreshSolanaRpcUrl(SOLANA_RPC_URLS);
+      if (cancelled) return;
+
+      for (const probe of result.probes) {
+        if (probe.usable) continue;
+        const type = probe.ok ? 'solana_rpc.rejected' : 'solana_rpc.probe_failed';
+        addClientBreadcrumb(type, {
+          host: probe.host || solanaRpcHost(probe.url),
+          current_block_height: probe.currentBlockHeight ?? null,
+          cluster_block_height: probe.clusterBlockHeight ?? null,
+          lag_blocks: probe.lagBlocks ?? null,
+          last_valid_block_height: probe.lastValidBlockHeight ?? null,
+          remaining_blocks: probe.remainingBlocks ?? null,
+          remaining_cluster_blocks: probe.remainingClusterBlocks ?? null,
+          error: probe.error || null,
+        }, 'warn');
+      }
+
+      if (result.selected?.url) {
+        setRpc(result.selected.url);
+        addClientBreadcrumb('solana_rpc.selected', {
+          host: result.selected.host || solanaRpcHost(result.selected.url),
+          current_block_height: result.selected.currentBlockHeight ?? null,
+          cluster_block_height: result.selected.clusterBlockHeight ?? null,
+          lag_blocks: result.selected.lagBlocks ?? null,
+          remaining_cluster_blocks: result.selected.remainingClusterBlocks ?? null,
+        });
+      } else {
+        addClientBreadcrumb('solana_rpc.no_fresh_endpoint', {
+          hosts: result.probes.map(p => p.host || solanaRpcHost(p.url)).slice(0, 8),
+        }, 'error');
       }
     })();
     return () => { cancelled = true; };

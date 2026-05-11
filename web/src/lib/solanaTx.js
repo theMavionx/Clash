@@ -1,6 +1,13 @@
-import { ComputeBudgetProgram, Transaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, Connection, Transaction } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
+import {
+  SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG,
+  SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS,
+  SOLANA_RPC_PROBE_TIMEOUT_MS,
+  SOLANA_RPC_URLS,
+  solanaRpcHost,
+} from './solanaRpc';
 
 const DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS = 25_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -20,7 +27,7 @@ function shortSig(signature) {
 }
 
 function rpcHost(connection) {
-  try { return new URL(connection?.rpcEndpoint || '').host || null; } catch { return null; }
+  return solanaRpcHost(connection?.rpcEndpoint || '');
 }
 
 function logTx(label, type, data = {}, level = 'info') {
@@ -32,10 +39,193 @@ function logTx(label, type, data = {}, level = 'info') {
   } catch {}
 }
 
+function normalizeRpcEndpoint(endpoint) {
+  const raw = String(endpoint || '');
+  try {
+    const base = typeof window !== 'undefined' && window.location?.origin
+      ? window.location.origin
+      : 'https://clashofperps.fun';
+    const url = new URL(raw, base);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+function connectionCandidate(connection, index, source = 'primary') {
+  return {
+    connection,
+    endpoint: normalizeRpcEndpoint(connection?.rpcEndpoint),
+    host: rpcHost(connection),
+    index,
+    source,
+  };
+}
+
+function buildConnectionCandidates(primaryConnection) {
+  const candidates = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    if (!candidate?.connection || !candidate.endpoint || seen.has(candidate.endpoint)) return;
+    seen.add(candidate.endpoint);
+    candidates.push({ ...candidate, index: candidates.length });
+  };
+  add(connectionCandidate(primaryConnection, 0, 'provider'));
+  for (const url of SOLANA_RPC_URLS) {
+    const endpoint = normalizeRpcEndpoint(url);
+    if (!endpoint || seen.has(endpoint)) continue;
+    add(connectionCandidate(new Connection(endpoint, { commitment: 'confirmed' }), candidates.length, 'fallback'));
+  }
+  return candidates;
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function getCurrentEpochSnapshot(connection) {
+  const epochInfo = await connection.getEpochInfo('confirmed');
+  const blockHeight = Number(epochInfo?.blockHeight);
+  const slot = Number(epochInfo?.absoluteSlot);
+  return {
+    blockHeight: Number.isFinite(blockHeight) ? blockHeight : null,
+    slot: Number.isFinite(slot) ? slot : null,
+  };
+}
+
+async function getCurrentBlockHeight(connection) {
+  const snapshot = await getCurrentEpochSnapshot(connection);
+  return snapshot.blockHeight;
+}
+
+async function probeConnection(candidate) {
+  try {
+    const [latest, currentEpoch] = await withTimeout(Promise.all([
+      candidate.connection.getLatestBlockhash('confirmed'),
+      getCurrentEpochSnapshot(candidate.connection),
+    ]), SOLANA_RPC_PROBE_TIMEOUT_MS, 'Solana RPC probe timeout');
+    const lastValidBlockHeight = Number(latest?.lastValidBlockHeight);
+    const height = Number(currentEpoch?.blockHeight);
+    return {
+      ...candidate,
+      ok: !!latest?.blockhash && Number.isFinite(height) && Number.isFinite(lastValidBlockHeight),
+      blockhash: latest?.blockhash || null,
+      currentBlockHeight: Number.isFinite(height) ? height : null,
+      currentSlot: Number.isFinite(Number(currentEpoch?.slot)) ? Number(currentEpoch.slot) : null,
+      lastValidBlockHeight: Number.isFinite(lastValidBlockHeight) ? lastValidBlockHeight : null,
+      remainingBlocks: Number.isFinite(height) && Number.isFinite(lastValidBlockHeight)
+        ? lastValidBlockHeight - height
+        : null,
+    };
+  } catch (error) {
+    return {
+      ...candidate,
+      ok: false,
+      error: error?.message || String(error || 'probe failed'),
+    };
+  }
+}
+
+function compactProbe(probe) {
+  return {
+    host: probe.host,
+    source: probe.source,
+    ok: !!probe.ok,
+    current_block_height: probe.currentBlockHeight ?? null,
+    current_slot: probe.currentSlot ?? null,
+    cluster_block_height: probe.clusterBlockHeight ?? null,
+    lag_blocks: probe.lagBlocks ?? null,
+    last_valid_block_height: probe.lastValidBlockHeight ?? null,
+    remaining_blocks: probe.remainingBlocks ?? null,
+    remaining_cluster_blocks: probe.remainingClusterBlocks ?? null,
+    error: probe.error || null,
+  };
+}
+
+function staleRpcError(message, probes, selected = null) {
+  const err = new Error(message);
+  err.name = 'SolanaRpcStaleBlockhashError';
+  err.rpcProbes = probes.map(compactProbe).slice(0, 8);
+  const best = selected || probes.find(p => p.ok) || probes[0] || null;
+  if (best) {
+    err.currentBlockHeight = best.clusterBlockHeight ?? best.currentBlockHeight;
+    err.lastValidBlockHeight = best.lastValidBlockHeight;
+    err.blockhash = best.blockhash;
+  }
+  return err;
+}
+
+async function selectFreshTransactionConnection(candidates, { label, attempt }) {
+  const probes = await Promise.all(candidates.map(probeConnection));
+  const heights = probes
+    .map(p => Number(p.currentBlockHeight))
+    .filter(Number.isFinite);
+  const clusterBlockHeight = heights.length ? Math.max(...heights) : null;
+  const scored = probes.map((probe) => {
+    const currentBlockHeight = Number(probe.currentBlockHeight);
+    const lastValidBlockHeight = Number(probe.lastValidBlockHeight);
+    const lagBlocks = Number.isFinite(clusterBlockHeight) && Number.isFinite(currentBlockHeight)
+      ? clusterBlockHeight - currentBlockHeight
+      : null;
+    const remainingClusterBlocks = Number.isFinite(clusterBlockHeight) && Number.isFinite(lastValidBlockHeight)
+      ? lastValidBlockHeight - clusterBlockHeight
+      : null;
+    return {
+      ...probe,
+      clusterBlockHeight,
+      lagBlocks,
+      remainingClusterBlocks,
+      usable: !!probe.ok
+        && Number.isFinite(remainingClusterBlocks)
+        && remainingClusterBlocks >= SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS
+        && (!Number.isFinite(lagBlocks) || lagBlocks <= SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG),
+    };
+  });
+  const usable = scored
+    .filter(p => p.usable)
+    .sort((a, b) => (
+      (Number(b.currentBlockHeight) || 0) - (Number(a.currentBlockHeight) || 0)
+      || (Number(b.remainingClusterBlocks) || 0) - (Number(a.remainingClusterBlocks) || 0)
+      || a.index - b.index
+    ));
+
+  const selected = usable[0] || null;
+  if (!selected) {
+    throw staleRpcError('Solana RPCs returned stale latest blockhashes; retrying with fallback RPC', scored);
+  }
+
+  const primary = candidates[0];
+  if (selected.endpoint !== primary?.endpoint) {
+    logTx(label, 'rpc_switched', {
+      attempt,
+      from_rpc_host: primary?.host || null,
+      to_rpc_host: selected.host,
+      current_block_height: selected.currentBlockHeight,
+      cluster_block_height: selected.clusterBlockHeight,
+      lag_blocks: selected.lagBlocks,
+      remaining_cluster_blocks: selected.remainingClusterBlocks,
+      rejected_rpcs: scored.filter(p => !p.usable).map(compactProbe).slice(0, 6),
+    }, 'warn');
+  }
+  return selected;
+}
+
 async function describeSolanaError(error, connection) {
   const details = {
     name: error?.name || null,
     message: error?.message || String(error),
+    rpc_host: rpcHost(connection),
   };
   if (error?.signature) {
     details.signature = String(error.signature);
@@ -49,6 +239,7 @@ async function describeSolanaError(error, connection) {
   if (error?.lastValidBlockHeight != null) details.last_valid_block_height = error.lastValidBlockHeight;
   if (error?.blockhash) details.blockhash = String(error.blockhash).slice(0, 8);
   if (error?.confirmationStatus) details.confirmation_status = error.confirmationStatus;
+  if (Array.isArray(error?.rpcProbes)) details.rpc_probes = error.rpcProbes.slice(0, 8);
   const keys = Object.getOwnPropertyNames(error || {}).filter(Boolean);
   if (keys.length) details.error_keys = keys.slice(0, 30);
   const directLogs = error?.logs || error?.transactionLogs || error?.simulationLogs || error?.cause?.logs;
@@ -176,9 +367,11 @@ export function isBlockhashExpiredError(error) {
   const message = String(error?.message || error || '');
   return (
     name === 'TransactionExpiredBlockheightExceededError'
+    || name === 'SolanaRpcStaleBlockhashError'
     || /block height exceeded/i.test(message)
     || /signature .* has expired/i.test(message)
     || /blockhash.*expired/i.test(message)
+    || /stale.*blockhash/i.test(message)
   );
 }
 
@@ -198,26 +391,38 @@ export async function sendSolanaTransactionWithRetry({
   label = 'transaction',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
+  const candidates = buildConnectionCandidates(connection);
   let lastError = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const tx = new Transaction();
-    if (priorityFeeMicroLamports > 0) {
-      tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }));
-    }
-    for (const ix of list) tx.add(ix);
-
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-    tx.recentBlockhash = blockhash;
-    tx.feePayer = ownerPk;
+    let attemptConnection = connection;
 
     try {
-      const currentBlockHeight = await connection.getBlockHeight('confirmed').catch(() => null);
-      const remainingBlocks = Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null;
-      if (Number.isFinite(remainingBlocks) && remainingBlocks <= 0) {
+      const selected = await selectFreshTransactionConnection(candidates, { label, attempt });
+      attemptConnection = selected.connection;
+
+      const tx = new Transaction();
+      if (priorityFeeMicroLamports > 0) {
+        tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }));
+      }
+      for (const ix of list) tx.add(ix);
+
+      const {
+        blockhash,
+        currentBlockHeight,
+        lastValidBlockHeight,
+        remainingBlocks,
+        remainingClusterBlocks,
+        lagBlocks,
+        clusterBlockHeight,
+      } = selected;
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = ownerPk;
+
+      if (Number.isFinite(remainingClusterBlocks) && remainingClusterBlocks < SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS) {
         const staleError = new Error('Solana RPC returned an expired latest blockhash; switch RPC and retry');
         staleError.name = 'SolanaRpcStaleBlockhashError';
-        staleError.currentBlockHeight = currentBlockHeight;
+        staleError.currentBlockHeight = clusterBlockHeight ?? currentBlockHeight;
         staleError.lastValidBlockHeight = lastValidBlockHeight;
         staleError.blockhash = blockhash;
         throw staleError;
@@ -225,11 +430,15 @@ export async function sendSolanaTransactionWithRetry({
       logTx(label, 'attempt_start', {
         attempt,
         max_attempts: maxAttempts,
-        rpc_host: rpcHost(connection),
+        rpc_host: rpcHost(attemptConnection),
+        rpc_source: selected.source,
         blockhash: String(blockhash).slice(0, 8),
         current_block_height: currentBlockHeight,
+        cluster_block_height: clusterBlockHeight,
+        rpc_lag_blocks: lagBlocks,
         last_valid_block_height: lastValidBlockHeight,
         remaining_blocks: remainingBlocks,
+        remaining_cluster_blocks: remainingClusterBlocks,
         priority_fee_micro_lamports: priorityFeeMicroLamports,
         skip_preflight: !!skipPreflight,
         instruction_count: list.length,
@@ -255,7 +464,7 @@ export async function sendSolanaTransactionWithRetry({
         const decoded = Transaction.from(rawTransaction);
         sig = bs58.encode(decoded.signature);
       } else if (sendTransaction && !privyActive) {
-        sig = await sendTransaction(tx, connection, sendOptions);
+        sig = await sendTransaction(tx, attemptConnection, sendOptions);
       } else if (privyActive && privySendTx && privyWalletObj) {
         const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
         const result = await privySendTx({
@@ -270,13 +479,12 @@ export async function sendSolanaTransactionWithRetry({
 
       logTx(label, 'signed', { attempt, signature_short: shortSig(sig) });
       if (rawTransaction) {
-        await connection.sendRawTransaction(rawTransaction, sendOptions);
-        logTx(label, 'raw_sent', { attempt, signature_short: shortSig(sig) });
+        await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
+        logTx(label, 'raw_sent', { attempt, rpc_host: rpcHost(attemptConnection), signature_short: shortSig(sig) });
       }
       await waitForSignature({
-        connection,
+        connection: attemptConnection,
         signature: sig,
-        blockhash,
         lastValidBlockHeight,
         rawTransaction,
         label,
@@ -286,7 +494,7 @@ export async function sendSolanaTransactionWithRetry({
       return sig;
     } catch (error) {
       lastError = error;
-      const errorDetails = await describeSolanaError(error, connection);
+      const errorDetails = await describeSolanaError(error, attemptConnection);
       logTx(label, 'attempt_error', {
         attempt,
         ...errorDetails,
@@ -302,7 +510,6 @@ export async function sendSolanaTransactionWithRetry({
 async function waitForSignature({
   connection,
   signature,
-  blockhash,
   lastValidBlockHeight,
   rawTransaction = null,
   label,
@@ -324,13 +531,13 @@ async function waitForSignature({
         polls,
         source: state.source,
         signature_short: shortSig(signature),
-        confirmation_status: status.confirmationStatus,
+        confirmation_status: status?.confirmationStatus || (state.transaction ? 'confirmed' : null),
         slot: status?.slot || state.transaction?.slot,
       });
       return true;
     }
 
-    const currentBlockHeight = await connection.getBlockHeight('confirmed').catch(() => null);
+    const currentBlockHeight = await getCurrentBlockHeight(connection).catch(() => null);
     if (Number.isFinite(currentBlockHeight) && currentBlockHeight > lastValidBlockHeight) {
       if (await waitForLateLanding({ connection, signature, label, attempt })) return true;
       const error = new Error(`Signature ${signature} has expired: block height exceeded.`);
