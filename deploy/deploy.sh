@@ -304,6 +304,26 @@ fs.writeFileSync(file, source);
 NODE
 }
 
+preserve_previous_frontend_assets() {
+    local previous_assets="$CURRENT_LINK/web/dist/assets"
+    local new_assets="$WEB_DIST/assets"
+    [ -d "$previous_assets" ] || return 0
+    [ -d "$new_assets" ] || return 0
+
+    local copied=0
+    while IFS= read -r -d '' src; do
+        local dest="$new_assets/$(basename "$src")"
+        if [ ! -e "$dest" ]; then
+            cp -a "$src" "$dest"
+            copied=$((copied + 1))
+        fi
+    done < <(find "$previous_assets" -maxdepth 1 -type f -print0)
+
+    if [ "$copied" -gt 0 ]; then
+        log "Preserved $copied previous frontend asset(s) for active browser sessions"
+    fi
+}
+
 build_frontend() {
     log "[5/9] Building frontend..."
     cd "$WEB_DIR"
@@ -347,6 +367,8 @@ build_frontend() {
             gzip -f -k -9 "$f"
         fi
     done
+
+    preserve_previous_frontend_assets
 }
 
 validate_release() {
