@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks } from '@ellipsis-labs/rise';
+import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import { isFarcasterFrame } from './useFarcaster';
@@ -19,6 +19,8 @@ const POLL_MS = 10_000;
 const PHOENIX_PRICE_CACHE_MS = 15_000;
 const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
 const USDC_DECIMALS = 6;
+const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
+const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 
@@ -977,12 +979,16 @@ export function usePhoenix() {
           baseUnits,
           flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
           priceLimitUsd,
+          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+          minQuoteLotsToFill: '0',
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: sideEnum,
           baseUnits,
           priceLimitUsd,
+          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+          minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
         });
         const ix = await client.ixs.placeMarketOrder({
           authority: walletAddr,
@@ -1082,10 +1088,12 @@ export function usePhoenix() {
           subaccountIndex,
           flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
           reduceOnly: true,
-          selfTradeBehavior: 'CancelProvide',
-          cancelExisting: true,
+          selfTradeBehavior: 'Abort',
+          cancelExisting: false,
           mark,
           priceLimitUsd,
+          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+          minQuoteLotsToFill: '0',
           positionRaw: existing?._raw || null,
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
@@ -1093,9 +1101,11 @@ export function usePhoenix() {
           side: closeSide,
           baseUnits,
           priceLimitUsd,
-          selfTradeBehavior: SelfTradeBehavior.CancelProvide,
+          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
+          minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
+          selfTradeBehavior: SelfTradeBehavior.Abort,
           orderFlags: OrderFlags.ReduceOnly,
-          cancelExisting: true,
+          cancelExisting: false,
         });
         const ix = await client.ixs.placeMarketOrder({
           authority: walletAddr,
