@@ -1,4 +1,5 @@
 import { ComputeBudgetProgram, Connection, Transaction } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 import {
@@ -30,18 +31,37 @@ function rpcHost(connection) {
   return solanaRpcHost(connection?.rpcEndpoint || '');
 }
 
+function isValidTransactionSignature(signature) {
+  try {
+    return bs58.decode(String(signature || '')).length === 64;
+  } catch {
+    return false;
+  }
+}
+
+function errorLogs(error) {
+  const logs = error?.logs
+    || error?.transactionLogs
+    || error?.simulationLogs
+    || error?.simulationResult?.logs
+    || error?.transactionError?.logs
+    || error?.cause?.logs
+    || error?.cause?.transactionLogs
+    || error?.cause?.simulationLogs;
+  return Array.isArray(logs) ? logs : [];
+}
+
 function customProgramErrorCode(error) {
   const text = [
     error?.transactionMessage,
     error?.message,
-    ...(Array.isArray(error?.logs) ? error.logs : []),
-    ...(Array.isArray(error?.transactionLogs) ? error.transactionLogs : []),
-    ...(Array.isArray(error?.simulationLogs) ? error.simulationLogs : []),
-    ...(Array.isArray(error?.transactionError?.logs) ? error.transactionError.logs : []),
+    ...errorLogs(error),
   ].filter(Boolean).join('\n');
   const hexMatch = text.match(/custom program error:\s*(0x[0-9a-f]+)/i);
   if (hexMatch) return hexMatch[1].toLowerCase();
-  const instructionError = error?.transactionError?.InstructionError;
+  const instructionError = error?.transactionError?.InstructionError
+    || error?.simulationErr?.InstructionError
+    || error?.simulationResult?.err?.InstructionError;
   const custom = instructionError?.[1]?.Custom ?? instructionError?.[1]?.custom;
   if (Number.isFinite(Number(custom))) return `0x${Number(custom).toString(16)}`;
   return null;
@@ -250,6 +270,9 @@ async function describeSolanaError(error, connection) {
   }
   if (error?.transactionMessage) details.transaction_message = error.transactionMessage;
   if (error?.transactionError) details.transaction_error = error.transactionError;
+  if (error?.simulationErr) details.simulation_err = error.simulationErr;
+  if (error?.simulationUnitsConsumed != null) details.simulation_units_consumed = error.simulationUnitsConsumed;
+  if (error?.simulationLogsError) details.simulation_logs_error = error.simulationLogsError;
   const code = customProgramErrorCode(error);
   if (code) details.simulation_error_code = code;
   if (error?.source) details.source = error.source;
@@ -261,27 +284,73 @@ async function describeSolanaError(error, connection) {
   if (Array.isArray(error?.rpcProbes)) details.rpc_probes = error.rpcProbes.slice(0, 8);
   const keys = Object.getOwnPropertyNames(error || {}).filter(Boolean);
   if (keys.length) details.error_keys = keys.slice(0, 30);
-  const directLogs = error?.logs
-    || error?.transactionLogs
-    || error?.simulationLogs
-    || error?.transactionError?.logs
-    || error?.cause?.logs;
+  const directLogs = errorLogs(error);
   if (Array.isArray(directLogs)) details.logs = directLogs.slice(-30);
   if (error?.cause?.transactionMessage && !details.transaction_message) {
     details.transaction_message = error.cause.transactionMessage;
   }
   const causeLogs = error?.cause?.logs || error?.cause?.transactionLogs || error?.cause?.simulationLogs;
   if (!details.logs && Array.isArray(causeLogs)) details.logs = causeLogs.slice(-30);
-  if (typeof error?.getLogs === 'function') {
+  if (!details.logs?.length && typeof error?.getLogs === 'function' && isValidTransactionSignature(error?.signature)) {
     try {
       const logs = await error.getLogs(connection);
       if (Array.isArray(logs)) details.logs = logs.slice(-30);
     } catch (logError) {
       details.logs_error = logError?.message || String(logError);
     }
+  } else if (!details.logs?.length && typeof error?.getLogs === 'function' && error?.signature != null) {
+    details.logs_error = 'getLogs unavailable: preflight errors do not include a transaction signature';
   }
   if (error?.cause?.message) details.cause = error.cause.message;
   return details;
+}
+
+async function simulateRawTransactionForLogs(connection, rawTransaction) {
+  if (!connection?.rpcEndpoint || !rawTransaction || typeof fetch !== 'function') return null;
+  const encodedTransaction = Buffer.from(rawTransaction).toString('base64');
+  const response = await fetch(connection.rpcEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: `sim-${Date.now()}`,
+      method: 'simulateTransaction',
+      params: [
+        encodedTransaction,
+        {
+          encoding: 'base64',
+          commitment: 'confirmed',
+          sigVerify: false,
+          replaceRecentBlockhash: false,
+          innerInstructions: true,
+        },
+      ],
+    }),
+  });
+  const json = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`simulateTransaction HTTP ${response.status}`);
+  if (json?.error) throw new Error(json.error.message || 'simulateTransaction RPC error');
+  const value = json?.result?.value || null;
+  if (!value) return null;
+  return {
+    err: value.err || null,
+    logs: Array.isArray(value.logs) ? value.logs : [],
+    unitsConsumed: value.unitsConsumed ?? null,
+  };
+}
+
+async function attachSimulationLogs(error, connection, rawTransaction) {
+  if (!rawTransaction || errorLogs(error).length) return error;
+  try {
+    const simulation = await simulateRawTransactionForLogs(connection, rawTransaction);
+    if (!simulation) return error;
+    error.simulationErr = simulation.err || null;
+    error.simulationLogs = simulation.logs || [];
+    error.simulationUnitsConsumed = simulation.unitsConsumed;
+  } catch (simulationError) {
+    error.simulationLogsError = simulationError?.message || String(simulationError);
+  }
+  return error;
 }
 
 async function readConfirmedTransaction(connection, signature) {
@@ -517,7 +586,11 @@ export async function sendSolanaTransactionWithRetry({
 
       logTx(label, 'signed', { attempt, signature_short: shortSig(sig) });
       if (rawTransaction) {
-        await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
+        try {
+          await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
+        } catch (sendError) {
+          throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
+        }
         logTx(label, 'raw_sent', { attempt, rpc_host: rpcHost(attemptConnection), signature_short: shortSig(sig) });
       }
       await waitForSignature({
