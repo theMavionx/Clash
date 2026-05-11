@@ -122,8 +122,8 @@ function phoenixFundingToDecimal(row) {
 }
 
 function phoenixTickSizeUsd(m) {
-  const tickSizeRaw = Number(m?.tickSize ?? 0);
-  const baseLotsDecimals = Number(m?.baseLotsDecimals ?? 4);
+  const tickSizeRaw = Number(m?.tickSize ?? m?.units?.tickSizeInQuoteLotsPerBaseLot ?? 0);
+  const baseLotsDecimals = Number(m?.baseLotsDecimals ?? m?.units?.baseLotsDecimals ?? 4);
   if (!Number.isFinite(tickSizeRaw) || tickSizeRaw <= 0) return 0.01;
   return tickSizeRaw * 10 ** baseLotsDecimals / 1_000_000;
 }
@@ -131,9 +131,9 @@ function phoenixTickSizeUsd(m) {
 function normalizeMarket(m) {
   const symbol = phoenixSymbol(m?.symbol);
   if (!symbol || String(m?.marketStatus || 'active').toLowerCase() !== 'active') return null;
-  const tickSizeRaw = Number(m?.tickSize || 0);
+  const tickSizeRaw = Number(m?.tickSize ?? m?.units?.tickSizeInQuoteLotsPerBaseLot ?? 0);
   const tickSize = phoenixTickSizeUsd(m);
-  const baseLotsDecimals = Number(m?.baseLotsDecimals ?? 4);
+  const baseLotsDecimals = Number(m?.baseLotsDecimals ?? m?.units?.baseLotsDecimals ?? 4);
   const lotSize = 1 / 10 ** baseLotsDecimals;
   const maxLev = Math.max(1, ...(m?.leverageTiers || []).map(t => Number(t?.maxLeverage || 0)));
   return {
@@ -147,8 +147,8 @@ function normalizeMarket(m) {
     min_order_size: String(lotSize),
     max_leverage: maxLev || 15,
     isolated_only: !!m?.isolatedOnly,
-    maker_fee: Number(m?.makerFee ?? 0.00005),
-    taker_fee: Number(m?.takerFee ?? 0.00035),
+    maker_fee: Number(m?.makerFee ?? m?.fees?.makerFee ?? 0.00005),
+    taker_fee: Number(m?.takerFee ?? m?.fees?.takerFee ?? 0.00035),
     funding_rate: phoenixFundingToDecimal(m),
     next_funding_rate: phoenixFundingToDecimal(m),
     volume_24h: 0,

@@ -49,6 +49,7 @@ export function asPhoenixArray(value) {
   if (Array.isArray(value?.value)) return value.value;
   if (Array.isArray(value?.items)) return value.items;
   if (Array.isArray(value?.stats)) return value.stats;
+  if (Array.isArray(value?.markets)) return value.markets;
   return [];
 }
 

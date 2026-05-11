@@ -186,7 +186,7 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
         if (dex === 'phoenix') {
-          const r = await fetch(`${PHOENIX_API_URL}/v1/traders/${encodeURIComponent(addr)}/trades_v2?limit=100`, {
+          const r = await fetch(`${PHOENIX_API_URL}/trader/${encodeURIComponent(addr)}/trades-history?limit=100`, {
             signal: controller.signal,
           });
           if (!r.ok) throw new Error(`Phoenix history error ${r.status}`);

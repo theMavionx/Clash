@@ -133,6 +133,7 @@ export async function sendSolanaTransactionWithRetry({
   privyWalletObj = null,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   priorityFeeMicroLamports = DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS,
+  skipPreflight = false,
   label = 'transaction',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
@@ -159,10 +160,12 @@ export async function sendSolanaTransactionWithRetry({
         last_valid_block_height: lastValidBlockHeight,
         remaining_blocks: Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null,
         priority_fee_micro_lamports: priorityFeeMicroLamports,
+        skip_preflight: !!skipPreflight,
         instruction_count: list.length,
         wallet_path: privyActive ? (privySignTx ? 'privy_sign_raw' : 'privy_sign_and_send') : (signTransaction ? 'adapter_sign_raw' : 'adapter_send_transaction'),
       });
 
+      const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
       let sig = null;
       let rawTransaction = null;
       if (!privyActive && signTransaction) {
@@ -181,7 +184,7 @@ export async function sendSolanaTransactionWithRetry({
         const decoded = Transaction.from(rawTransaction);
         sig = bs58.encode(decoded.signature);
       } else if (sendTransaction && !privyActive) {
-        sig = await sendTransaction(tx, connection, SEND_OPTIONS);
+        sig = await sendTransaction(tx, connection, sendOptions);
       } else if (privyActive && privySendTx && privyWalletObj) {
         const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
         const result = await privySendTx({
@@ -196,7 +199,7 @@ export async function sendSolanaTransactionWithRetry({
 
       logTx(label, 'signed', { attempt, signature_short: shortSig(sig) });
       if (rawTransaction) {
-        await connection.sendRawTransaction(rawTransaction, SEND_OPTIONS);
+        await connection.sendRawTransaction(rawTransaction, sendOptions);
         logTx(label, 'raw_sent', { attempt, signature_short: shortSig(sig) });
       }
       await waitForSignature({
