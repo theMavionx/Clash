@@ -477,6 +477,8 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
         proxy_ssl_server_name on;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -488,6 +490,8 @@ server {
         proxy_pass https://api.mainnet-beta.solana.com/;
         proxy_http_version 1.1;
         proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
         proxy_ssl_server_name on;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

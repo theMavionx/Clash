@@ -103,12 +103,24 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
         secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReqWs', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
         rewrite: () => '/',
       },
       '/rpc/solana': {
         target: 'https://api.mainnet-beta.solana.com',
         changeOrigin: true,
         secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
         rewrite: () => '/',
       },
       '/rpc/arb-alchemy': {
