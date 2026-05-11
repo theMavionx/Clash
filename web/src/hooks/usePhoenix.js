@@ -1046,6 +1046,9 @@ export function usePhoenix() {
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
         const priceRow = pricesRef.current.find(p => p.symbol === phx);
         const mark = firstFinite(existing?.mark_price, priceRow?.mark, m?._mark, existing?.entry_price);
+        const priceLimitUsd = mark > 0
+          ? mark * (closeSide === Side.Bid ? 1.02 : 0.98)
+          : null;
         console.log('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
@@ -1054,20 +1057,21 @@ export function usePhoenix() {
           openAmount,
           rawFullCloseAmount,
           baseUnits,
-          minBaseUnitsToFill: '0',
-          minQuoteLotsToFill: '0',
+          minBaseUnitsToFill: baseUnits,
+          minQuoteLotsToFill: '1 quote lot',
           fullClose: !!fullClose,
           subaccountIndex,
           mark,
-          priceLimitUsd: null,
+          priceLimitUsd,
+          positionRaw: existing?._raw || null,
         });
         const packet = await client.orderPackets.buildMarketOrderPacket({
           symbol: phx,
           side: closeSide,
           baseUnits,
-          priceLimitUsd: null,
-          minBaseUnitsToFill: '0',
-          minQuoteLotsToFill: quoteLots(0n),
+          priceLimitUsd,
+          minBaseUnitsToFill: baseUnits,
+          minQuoteLotsToFill: quoteLots(1n),
           orderFlags: OrderFlags.ReduceOnly || 128,
           cancelExisting: false,
         });

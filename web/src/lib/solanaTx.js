@@ -33,8 +33,15 @@ async function describeSolanaError(error, connection) {
     name: error?.name || null,
     message: error?.message || String(error),
   };
-  if (error?.signature) details.signature_short = shortSig(error.signature);
+  if (error?.signature) {
+    details.signature = String(error.signature);
+    details.signature_short = shortSig(error.signature);
+  }
   if (error?.transactionMessage) details.transaction_message = error.transactionMessage;
+  if (error?.transactionError) details.transaction_error = error.transactionError;
+  if (error?.source) details.source = error.source;
+  if (error?.slot) details.slot = error.slot;
+  if (error?.confirmationStatus) details.confirmation_status = error.confirmationStatus;
   if (Array.isArray(error?.logs)) details.logs = error.logs.slice(-20);
   if (typeof error?.getLogs === 'function') {
     try {
@@ -48,20 +55,61 @@ async function describeSolanaError(error, connection) {
   return details;
 }
 
+async function readConfirmedTransaction(connection, signature) {
+  return connection.getTransaction(signature, {
+    commitment: 'confirmed',
+    maxSupportedTransactionVersion: 0,
+  }).catch(() => null);
+}
+
+function transactionLogs(tx) {
+  return Array.isArray(tx?.meta?.logMessages) ? tx.meta.logMessages.slice(-30) : [];
+}
+
+function buildStatusError(signature, state) {
+  const err = new Error(`Solana transaction failed: ${JSON.stringify(state.error)}`);
+  err.name = 'SolanaTransactionStatusError';
+  err.signature = signature;
+  err.transactionError = state.error;
+  err.source = state.source;
+  err.slot = state.status?.slot || state.transaction?.slot || null;
+  err.confirmationStatus = state.status?.confirmationStatus || null;
+  err.logs = state.logs || transactionLogs(state.transaction);
+  return err;
+}
+
 async function readSignatureState(connection, signature) {
   const status = await connection.getSignatureStatuses([signature], { searchTransactionHistory: true })
     .then(res => res?.value?.[0] || null)
     .catch(() => null);
-  if (status?.err) return { found: true, ok: false, source: 'status', status, error: status.err };
+  if (status?.err) {
+    const tx = await readConfirmedTransaction(connection, signature);
+    return {
+      found: true,
+      ok: false,
+      source: tx ? 'transaction' : 'status',
+      status,
+      transaction: tx,
+      error: tx?.meta?.err || status.err,
+      logs: transactionLogs(tx),
+    };
+  }
   if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
     return { found: true, ok: true, source: 'status', status };
   }
 
-  const tx = await connection.getTransaction(signature, {
-    commitment: 'confirmed',
-    maxSupportedTransactionVersion: 0,
-  }).catch(() => null);
-  if (tx?.meta?.err) return { found: true, ok: false, source: 'transaction', status, transaction: tx, error: tx.meta.err };
+  const tx = await readConfirmedTransaction(connection, signature);
+  if (tx?.meta?.err) {
+    return {
+      found: true,
+      ok: false,
+      source: 'transaction',
+      status,
+      transaction: tx,
+      error: tx.meta.err,
+      logs: transactionLogs(tx),
+    };
+  }
   if (tx) return { found: true, ok: true, source: 'transaction', status, transaction: tx };
   return { found: !!status, ok: false, source: 'none', status };
 }
@@ -93,9 +141,7 @@ async function waitForLateLanding({ connection, signature, label, attempt, grace
       return true;
     }
     if (state.found && state.error) {
-      const err = new Error(`Solana transaction failed: ${JSON.stringify(state.error)}`);
-      err.name = 'SolanaTransactionStatusError';
-      throw err;
+      throw buildStatusError(signature, state);
     }
     logTx(label, 'late_status_check', {
       attempt,
@@ -245,9 +291,7 @@ async function waitForSignature({
     const status = state.status;
 
     if (state.found && state.error) {
-      const err = new Error(`Solana transaction failed: ${JSON.stringify(state.error)}`);
-      err.name = 'SolanaTransactionStatusError';
-      throw err;
+      throw buildStatusError(signature, state);
     }
     if (state.ok) {
       logTx(label, 'status_ok', {
