@@ -258,8 +258,29 @@ function staleRpcError(message, probes, selected = null) {
   return err;
 }
 
-async function selectFreshTransactionConnection(candidates, { label, attempt }) {
-  const probes = await Promise.all(candidates.map(probeConnection));
+async function selectFreshTransactionConnection(candidates, { label, attempt, forceFullProbe = false }) {
+  const primary = candidates[0] || null;
+  let primaryProbe = null;
+
+  if (primary && !forceFullProbe) {
+    primaryProbe = await probeConnection(primary);
+    const remainingClusterBlocks = primaryProbe.remainingBlocks;
+    const selected = {
+      ...primaryProbe,
+      clusterBlockHeight: primaryProbe.currentBlockHeight,
+      lagBlocks: 0,
+      remainingClusterBlocks,
+      usable: !!primaryProbe.ok
+        && Number.isFinite(remainingClusterBlocks)
+        && remainingClusterBlocks >= SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS,
+      probeMode: 'primary_fast',
+    };
+    if (selected.usable) return selected;
+  }
+
+  const probes = await Promise.all(candidates.map((candidate, index) => (
+    index === 0 && primaryProbe ? primaryProbe : probeConnection(candidate)
+  )));
   const heights = probes
     .map(p => Number(p.currentBlockHeight))
     .filter(Number.isFinite);
@@ -278,6 +299,7 @@ async function selectFreshTransactionConnection(candidates, { label, attempt }) 
       clusterBlockHeight,
       lagBlocks,
       remainingClusterBlocks,
+      probeMode: 'full',
       usable: !!probe.ok
         && Number.isFinite(remainingClusterBlocks)
         && remainingClusterBlocks >= SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS
@@ -297,7 +319,6 @@ async function selectFreshTransactionConnection(candidates, { label, attempt }) 
     throw staleRpcError('Solana RPCs returned stale latest blockhashes; retrying with fallback RPC', scored);
   }
 
-  const primary = candidates[0];
   if (selected.endpoint !== primary?.endpoint) {
     logTx(label, 'rpc_switched', {
       attempt,
@@ -558,12 +579,17 @@ export async function sendSolanaTransactionWithRetry({
   const list = Array.isArray(instructions) ? instructions : [instructions];
   const candidates = buildConnectionCandidates(connection);
   let lastError = null;
+  let forceFullRpcProbe = false;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let attemptConnection = connection;
 
     try {
-      const selected = await selectFreshTransactionConnection(candidates, { label, attempt });
+      const selected = await selectFreshTransactionConnection(candidates, {
+        label,
+        attempt,
+        forceFullProbe: forceFullRpcProbe,
+      });
       attemptConnection = selected.connection;
 
       const tx = new Transaction();
@@ -601,6 +627,7 @@ export async function sendSolanaTransactionWithRetry({
         max_attempts: maxAttempts,
         rpc_host: rpcHost(attemptConnection),
         rpc_source: selected.source,
+        rpc_probe_mode: selected.probeMode || null,
         blockhash: String(blockhash).slice(0, 8),
         current_block_height: currentBlockHeight,
         cluster_block_height: clusterBlockHeight,
@@ -685,11 +712,13 @@ export async function sendSolanaTransactionWithRetry({
       lastError = error;
       const errorDetails = await describeSolanaError(error, attemptConnection);
       if (hasLighthouseAssertionLogs(error)) errorDetails.wallet_assertion_program = 'lighthouse';
+      const blockhashExpired = isBlockhashExpiredError(error);
+      if (blockhashExpired) forceFullRpcProbe = true;
       logTx(label, 'attempt_error', {
         attempt,
         ...errorDetails,
-      }, isBlockhashExpiredError(error) ? 'warn' : 'error');
-      if (!isBlockhashExpiredError(error) || attempt >= maxAttempts) throw error;
+      }, blockhashExpired ? 'warn' : 'error');
+      if (!blockhashExpired || attempt >= maxAttempts) throw error;
       await sleep(500 * attempt);
     }
   }
