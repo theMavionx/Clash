@@ -285,7 +285,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var replay_data: Array = data.get("replay_data", [])
 				var buildings_snapshot: Array = data.get("buildings_snapshot", [])
 				var attacker_name: String = data.get("attacker_name", "Unknown")
-				bs._start_replay(replay_data, buildings_snapshot, attacker_name)
+				var duration: float = float(data.get("duration", 0.0))
+				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration)
 
 
 func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> void:

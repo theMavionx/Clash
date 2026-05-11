@@ -78,6 +78,9 @@ var _battle_timer_active: bool = false
 var _replay_active: bool = false
 var _replay_actions: Array = []
 var _replay_buildings_snapshot: Array = []
+var _replay_duration: float = 0.0
+var _replay_elapsed: float = 0.0
+var _replay_timer_last_remaining: int = -1
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -121,6 +124,9 @@ func reset() -> void:
 	_replay_active = false
 	_replay_actions.clear()
 	_replay_buildings_snapshot.clear()
+	_replay_duration = 0.0
+	_replay_elapsed = 0.0
+	_replay_timer_last_remaining = -1
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = false
@@ -550,6 +556,9 @@ func _return_home() -> void:
 	_replay_active = false
 	_battle_timer_active = false
 	_battle_timer = 0.0
+	_replay_duration = 0.0
+	_replay_elapsed = 0.0
+	_clear_replay_timer()
 	Engine.time_scale = 1.0
 	bs._cannon._exit_ship_cannon_mode()
 	if bs._rally:
@@ -868,11 +877,60 @@ func _replay_fleet_from_actions(actions: Array) -> Array:
 	return fleet
 
 
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String) -> void:
+func _replay_duration_from_actions(actions: Array) -> float:
+	var max_t: float = 0.0
+	for action in actions:
+		if action is Dictionary:
+			max_t = maxf(max_t, float(action.get("t", 0.0)))
+	return max_t
+
+
+func _resolve_replay_duration(explicit_duration: float, actions: Array) -> float:
+	var action_duration: float = _replay_duration_from_actions(actions)
+	var resolved: float = maxf(float(explicit_duration), action_duration)
+	if resolved <= 0.0:
+		return BATTLE_TIME_LIMIT
+	return clampf(resolved, 1.0, BATTLE_TIME_LIMIT)
+
+
+func _send_replay_timer(force: bool = false) -> void:
+	if not bs or not bs._bridge:
+		return
+	if _replay_duration <= 0.0:
+		bs._bridge.send_to_react("battle_timer", {"remaining": null})
+		return
+	var remaining: int = maxi(0, ceili(_replay_duration - _replay_elapsed))
+	if not force and remaining == _replay_timer_last_remaining:
+		return
+	_replay_timer_last_remaining = remaining
+	bs._bridge.send_to_react("battle_timer", {"remaining": remaining, "mode": "replay"})
+
+
+func _clear_replay_timer() -> void:
+	_replay_timer_last_remaining = -1
+	if bs and bs._bridge:
+		bs._bridge.send_to_react("battle_timer", {"remaining": null, "mode": "replay"})
+
+
+func _replay_wait(seconds: float) -> bool:
+	var left: float = maxf(0.0, seconds)
+	while left > 0.0 and _replay_active and is_instance_valid(bs):
+		var step: float = minf(0.25, left)
+		await bs.get_tree().create_timer(step).timeout
+		_replay_elapsed = minf(_replay_duration, _replay_elapsed + step)
+		_send_replay_timer()
+		left -= step
+	return _replay_active and is_instance_valid(bs)
+
+
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0) -> void:
 	bs.get_tree().paused = false
 	_replay_active = true
 	_replay_actions = replay_data
 	_replay_buildings_snapshot = buildings_snapshot
+	_replay_duration = _resolve_replay_duration(duration, _replay_actions)
+	_replay_elapsed = 0.0
+	_replay_timer_last_remaining = -1
 	enemy_info = {"name": attacker_name, "trophies": 0, "buildings": buildings_snapshot}
 	for bsys in bs._building_systems:
 		bsys._production._hide_all_collect_icons()
@@ -890,6 +948,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 			"trophies": 0,
 			"is_replay": true,
 		})
+		_send_replay_timer(true)
 		bridge.send_to_react("cloud_transition", {"visible": true})
 	var _r = bs.get_tree().root
 	if not bs._ship_attack_node or not is_instance_valid(bs._ship_attack_node):
@@ -943,6 +1002,7 @@ func _replay_playback() -> void:
 	actions.sort_custom(func(a, b): return float(a.get("t", 0.0)) < float(b.get("t", 0.0)))
 	if actions.is_empty():
 		_replay_active = false
+		_clear_replay_timer()
 		return
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 	var prev_t: float = 0.0
@@ -953,7 +1013,9 @@ func _replay_playback() -> void:
 		var t: float = action.get("t", 0.0)
 		var delay: float = t - prev_t
 		if delay > 0:
-			await bs.get_tree().create_timer(delay).timeout
+			var action_wait_ok: bool = await _replay_wait(delay)
+			if not action_wait_ok:
+				return
 		if not _replay_active or not is_instance_valid(bs):
 			return
 		prev_t = t
@@ -965,7 +1027,9 @@ func _replay_playback() -> void:
 			"rally_drop":
 				_replay_rally_drop(action)
 	while _replay_active and is_instance_valid(bs):
-		await bs.get_tree().create_timer(0.5).timeout
+		var settle_wait_ok: bool = await _replay_wait(0.5)
+		if not settle_wait_ok:
+			return
 		if not _replay_active:
 			return
 		var th_alive: bool = false
@@ -980,8 +1044,9 @@ func _replay_playback() -> void:
 		if troops_alive == 0:
 			break
 	if _replay_active:
-		await bs.get_tree().create_timer(2.0).timeout
+		await _replay_wait(2.0)
 	Engine.time_scale = 1.0
+	_clear_replay_timer()
 	if _replay_active and bs._bridge:
 		bs._bridge.send_to_react("battle_result", {"type": "replay_end", "reason": "Replay finished"})
 	_replay_active = false

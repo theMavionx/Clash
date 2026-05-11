@@ -4,6 +4,7 @@ import { toSolanaWalletConnectors, useCreateWallet as useCreateSolanaWallet, use
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
+import { DEFAULT_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
 // Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
 // locally in monadConfig and import the same object both here (Privy's
 // supportedChains list) and in EvmWalletContext (chain switch helper).
@@ -17,10 +18,8 @@ import { monadChain } from '../lib/monadConfig';
 // children without wrapping them, so every Privy hook downstream warns.
 // Adding Monad here is fine when appId is set.)
 
-// publicnode has no SSL/cert issues and is open. api.mainnet-beta fails with
-// ERR_CERT_AUTHORITY_INVALID on some networks, breaking Privy's send-TX flow.
-const SOLANA_RPC_HTTP = 'https://solana-rpc.publicnode.com';
-const SOLANA_RPC_WS = 'wss://solana-rpc.publicnode.com';
+const SOLANA_RPC_HTTP = DEFAULT_SOLANA_RPC_URL;
+const SOLANA_RPC_WS = solanaWsUrl(SOLANA_RPC_HTTP);
 const solanaWalletConnectors = toSolanaWalletConnectors({ shouldAutoConnect: false });
 const OPTIONAL_PRIVY_DEFAULT = {
   enabled: false,

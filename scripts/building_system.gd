@@ -4210,8 +4210,8 @@ func _switch_to_enemy_island() -> void:
 
 
 ## Start replay playback — loads buildings snapshot and replays recorded actions.
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String) -> void:
-	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name)
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0) -> void:
+	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name, duration)
 
 
 ## Plays back recorded actions at their original timestamps.

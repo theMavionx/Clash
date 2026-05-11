@@ -295,9 +295,17 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
 // ── Replay HUD (shown during replay mode) ────────────────────────────────
 const REPLAY_SPEEDS = [1, 2, 4];
 
-function ReplayHUD({ onReturnHome }) {
+const formatReplayTime = (seconds) => {
+  const safe = Math.max(0, Math.ceil(Number(seconds) || 0));
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+};
+
+function ReplayHUD({ onReturnHome, battleTimer }) {
   const { sendToGodot } = useSend();
   const [speedIdx, setSpeedIdx] = useState(0);
+  const remaining = Number.isFinite(Number(battleTimer)) ? Math.max(0, Math.ceil(Number(battleTimer))) : null;
 
   const handleSpeed = useCallback(() => {
     const next = (speedIdx + 1) % REPLAY_SPEEDS.length;
@@ -306,7 +314,14 @@ function ReplayHUD({ onReturnHome }) {
   }, [speedIdx, sendToGodot]);
 
   return (
-    <div style={hud.wrapTopRight}>
+    <>
+      {remaining != null && (
+        <div style={hud.replayCountdownWrap} aria-live="polite">
+          <div style={hud.replayCountdownLabel}>REPLAY ENDS IN</div>
+          <div style={hud.replayCountdownTime}>{formatReplayTime(remaining)}</div>
+        </div>
+      )}
+      <div style={hud.wrapTopRight}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <button style={hud.speedBtn} onClick={handleSpeed} title="Change speed"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
@@ -322,7 +337,8 @@ function ReplayHUD({ onReturnHome }) {
           <span style={{ fontSize: 26, lineHeight: 1 }}>🏳️</span>
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -429,7 +445,7 @@ function ActionButtons({ onOpenBattleLog }) {
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
     if (enemyMode.is_replay) {
-      return <ReplayHUD onReturnHome={handleReturnHome} />;
+      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} />;
     }
     return (
       <>
@@ -702,7 +718,7 @@ const hud = {
     border: '2px solid rgba(40,130,195,0.55)',
     borderRadius: 10,
     fontSize: 20, fontWeight: 900,
-    letterSpacing: '1px',
+    letterSpacing: 0,
     textShadow: '0 0 8px rgba(60,220,255,0.5)',
   },
   homeBtn: {
@@ -723,6 +739,38 @@ const hud = {
     color: '#7df4ff', fontSize: 14, fontWeight: 900,
     letterSpacing: '1px',
     textShadow: '0 0 8px rgba(60,220,255,0.5)',
+  },
+  replayCountdownWrap: {
+    position: 'fixed',
+    top: 74,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 11,
+    pointerEvents: 'none',
+    minWidth: 128,
+    padding: '8px 16px 10px',
+    background: 'linear-gradient(180deg, rgba(15,55,95,0.86), rgba(8,30,58,0.94))',
+    border: '2px solid rgba(125,244,255,0.45)',
+    borderRadius: 12,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)',
+    color: '#f7fbff',
+    textAlign: 'center',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  replayCountdownLabel: {
+    color: 'rgba(190,235,255,0.84)',
+    fontSize: 10,
+    fontWeight: 900,
+    letterSpacing: 0,
+    lineHeight: 1.1,
+    marginBottom: 4,
+  },
+  replayCountdownTime: {
+    color: '#ffffff',
+    fontSize: 30,
+    fontWeight: 900,
+    lineHeight: 1,
+    textShadow: '0 2px 0 rgba(0,0,0,0.55), 0 0 10px rgba(125,244,255,0.42)',
   },
   speedBtn: {
     width: 56, height: 56,

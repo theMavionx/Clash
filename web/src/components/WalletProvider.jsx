@@ -15,8 +15,13 @@ import {
   isUserDismissedWalletError,
 } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import { DEFAULT_SOLANA_RPC_URL, SOLANA_RPC_URLS } from '../lib/solanaRpc';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
+
+function rpcHost(url) {
+  try { return new URL(url, window.location.origin).host; } catch { return String(url || 'unknown'); }
+}
 
 // Mobile Wallet Adapter — registered for every session but only resolves
 // to "Installed" on Saga/Seeker (devices with the Solana Mobile Stack
@@ -38,34 +43,50 @@ const SEEKER_MWA_ADAPTER = new SolanaMobileWalletAdapter({
   onWalletNotFound: createDefaultWalletNotFoundHandler(),
 });
 
-const RPC_LIST = [
-  'https://solana-rpc.publicnode.com',
-  'https://api.mainnet-beta.solana.com',
-  'https://solana.drpc.org',
-];
-
 function useBestRpc() {
-  const [rpc, setRpc] = useState(RPC_LIST[0]);
+  const [rpc, setRpc] = useState(DEFAULT_SOLANA_RPC_URL);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      for (const url of RPC_LIST) {
+      for (const url of SOLANA_RPC_URLS) {
         try {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 3000);
           const res = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' }),
+            body: JSON.stringify([
+              { jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash', params: [{ commitment: 'confirmed' }] },
+              { jsonrpc: '2.0', id: 2, method: 'getBlockHeight', params: [{ commitment: 'confirmed' }] },
+            ]),
             signal: controller.signal,
           });
           clearTimeout(timeout);
-          if (res.ok && !cancelled) {
+          const data = await res.json().catch(() => null);
+          const rows = Array.isArray(data) ? data : [];
+          const latest = rows.find(row => row?.id === 1)?.result?.value;
+          const currentHeight = Number(rows.find(row => row?.id === 2)?.result);
+          const lastValidBlockHeight = Number(latest?.lastValidBlockHeight);
+          const usable = !!latest?.blockhash
+            && Number.isFinite(currentHeight)
+            && Number.isFinite(lastValidBlockHeight)
+            && lastValidBlockHeight - currentHeight > 20;
+          if (res.ok && usable && !cancelled) {
             setRpc(url);
             return;
           }
-        } catch {}
+          addClientBreadcrumb('solana_rpc.rejected', {
+            host: rpcHost(url),
+            current_block_height: Number.isFinite(currentHeight) ? currentHeight : null,
+            last_valid_block_height: Number.isFinite(lastValidBlockHeight) ? lastValidBlockHeight : null,
+            remaining_blocks: Number.isFinite(currentHeight) && Number.isFinite(lastValidBlockHeight)
+              ? lastValidBlockHeight - currentHeight
+              : null,
+          }, 'warn');
+        } catch {
+          addClientBreadcrumb('solana_rpc.probe_failed', { host: rpcHost(url) }, 'warn');
+        }
       }
     })();
     return () => { cancelled = true; };

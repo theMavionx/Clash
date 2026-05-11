@@ -158,7 +158,7 @@ export function GodotProvider({ children }) {
             setCannonEnergy({ energy: 10, nextCost: 1, rallyNextCost: 1 }); setBattleResult(null);
             setRallyMode(false);
           }
-          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); }
+          if (!data.active) { setSelectedBuilding(null); setCannonMode(false); setRallyMode(false); setSelectedTroopIdx(0); setBattleTimer(null); }
           break;
         case 'troop_idx_changed':
           setSelectedTroopIdx(data.idx ?? 0);
@@ -171,6 +171,7 @@ export function GodotProvider({ children }) {
           break;
         case 'battle_result':
           setBattleResult(data);
+          setBattleTimer(null);
           if (data.casualties && Object.values(data.casualties).some(c => c > 0)) {
             setPendingCasualties(data.casualties);
           }

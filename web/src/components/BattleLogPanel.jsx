@@ -70,6 +70,7 @@ function BattleLogPanel({ onClose }) {
         replay_data: battle.replay_data,
         buildings_snapshot: battle.buildings_snapshot,
         attacker_name: battle.opponent_name,
+        duration: battle.duration || 0,
       });
     }, 100);
   }, [sendToGodot, onClose]);

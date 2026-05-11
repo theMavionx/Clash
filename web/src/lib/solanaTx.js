@@ -19,6 +19,10 @@ function shortSig(signature) {
   return s.length > 18 ? `${s.slice(0, 8)}...${s.slice(-8)}` : s;
 }
 
+function rpcHost(connection) {
+  try { return new URL(connection?.rpcEndpoint || '').host || null; } catch { return null; }
+}
+
 function logTx(label, type, data = {}, level = 'info') {
   const payload = { label, ...data };
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
@@ -41,6 +45,9 @@ async function describeSolanaError(error, connection) {
   if (error?.transactionError) details.transaction_error = error.transactionError;
   if (error?.source) details.source = error.source;
   if (error?.slot) details.slot = error.slot;
+  if (error?.currentBlockHeight != null) details.current_block_height = error.currentBlockHeight;
+  if (error?.lastValidBlockHeight != null) details.last_valid_block_height = error.lastValidBlockHeight;
+  if (error?.blockhash) details.blockhash = String(error.blockhash).slice(0, 8);
   if (error?.confirmationStatus) details.confirmation_status = error.confirmationStatus;
   const keys = Object.getOwnPropertyNames(error || {}).filter(Boolean);
   if (keys.length) details.error_keys = keys.slice(0, 30);
@@ -206,13 +213,23 @@ export async function sendSolanaTransactionWithRetry({
 
     try {
       const currentBlockHeight = await connection.getBlockHeight('confirmed').catch(() => null);
+      const remainingBlocks = Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null;
+      if (Number.isFinite(remainingBlocks) && remainingBlocks <= 0) {
+        const staleError = new Error('Solana RPC returned an expired latest blockhash; switch RPC and retry');
+        staleError.name = 'SolanaRpcStaleBlockhashError';
+        staleError.currentBlockHeight = currentBlockHeight;
+        staleError.lastValidBlockHeight = lastValidBlockHeight;
+        staleError.blockhash = blockhash;
+        throw staleError;
+      }
       logTx(label, 'attempt_start', {
         attempt,
         max_attempts: maxAttempts,
+        rpc_host: rpcHost(connection),
         blockhash: String(blockhash).slice(0, 8),
         current_block_height: currentBlockHeight,
         last_valid_block_height: lastValidBlockHeight,
-        remaining_blocks: Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null,
+        remaining_blocks: remainingBlocks,
         priority_fee_micro_lamports: priorityFeeMicroLamports,
         skip_preflight: !!skipPreflight,
         instruction_count: list.length,
