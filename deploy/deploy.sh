@@ -198,10 +198,6 @@ EOF
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"
-    if grep -qi "^VITE_SOLANA_RPC_URL=.*solana-rpc\.publicnode\.com" "$ENV_FILE" 2>/dev/null; then
-        log "Removing broken publicnode Solana RPC from VITE_SOLANA_RPC_URL; frontend will use the same-origin Solana RPC proxy."
-        set_env_value "VITE_SOLANA_RPC_URL" ""
-    fi
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
 

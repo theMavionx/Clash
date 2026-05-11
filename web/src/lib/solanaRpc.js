@@ -1,5 +1,14 @@
 const rawEnvSolanaRpc = (import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
 
+// Browser-side public RPCs. These must support CORS because wallet-adapter,
+// Privy embedded Solana wallets, and Phoenix all call them from the user's
+// browser. Keeping these client-side spreads free-tier rate limits across
+// user IPs instead of funnelling every trade through our VPS.
+const BROWSER_SOLANA_RPC_URLS = [
+  'https://solana-rpc.publicnode.com/',
+  'https://solana.leorpc.com/?api_key=FREE',
+];
+
 function siteOrigin() {
   if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
@@ -17,27 +26,22 @@ function normalizeRpcUrl(url) {
   return url;
 }
 
-const isKnownBrokenRpc = (url) => {
-  const host = new URL(url, siteOrigin()).host;
-  return /(^|\.)solana-rpc\.publicnode\.com$/i.test(host)
-    || /^api\.mainnet-beta\.solana\.com$/i.test(host);
-};
-
 let envSolanaRpc = '';
 try {
-  const normalized = normalizeRpcUrl(rawEnvSolanaRpc);
-  envSolanaRpc = normalized && !isKnownBrokenRpc(normalized) ? normalized : '';
+  envSolanaRpc = normalizeRpcUrl(rawEnvSolanaRpc);
 } catch {
   envSolanaRpc = '';
 }
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
-export const DEFAULT_SOLANA_RPC_URL = envSolanaRpc || SAME_ORIGIN_SOLANA_RPC_URL;
 
 export const SOLANA_RPC_URLS = [
   envSolanaRpc,
+  ...BROWSER_SOLANA_RPC_URLS,
   SAME_ORIGIN_SOLANA_RPC_URL,
 ].filter((url, index, all) => url && all.indexOf(url) === index);
+
+export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 
 export function solanaWsUrl(httpUrl = DEFAULT_SOLANA_RPC_URL) {
   const raw = String(httpUrl || '');
