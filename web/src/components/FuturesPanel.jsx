@@ -76,7 +76,16 @@ function humanizeTradeError(message) {
   if (/PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|423/i.test(text)) {
     return 'That Perpl access code is invalid or already exhausted. Check the code and try again.';
   }
-  if (/Trader not found|Phoenix access code required|not whitelisted|invite/i.test(text)) {
+  // Phoenix returns `{"error":"invalid_invite_code"}` for bad/used/expired codes.
+  // Check this before the generic "not registered" branch so a wrong code
+  // doesn't get reported as "enter a code" (which is what the user already did).
+  if (/invalid_invite_code|invite[_\s-]?code[_\s-]?(invalid|expired|used|exhausted)|invalid invite/i.test(text)) {
+    return 'That Phoenix code is invalid, already used, or expired. Check the code and try again.';
+  }
+  if (/Too Many Requests|rate[_\s-]?limit|\b429\b/i.test(text)) {
+    return 'Phoenix is rate-limiting requests. Wait a few seconds, then try again.';
+  }
+  if (/Trader not found|Phoenix access code required|not whitelisted|invite_required|invite required|needs an invite/i.test(text)) {
     return 'Enter your Phoenix access code, then create the trader account.';
   }
   const insufficient = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+)\s*<\s*([0-9.]+)/i);
