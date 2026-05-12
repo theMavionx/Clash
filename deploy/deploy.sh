@@ -22,6 +22,7 @@ CURRENT_LINK="$DEPLOY_ROOT/current"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
+SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
 GIT_SHA="$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || echo manual)"
 RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
@@ -49,6 +50,22 @@ die() {
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
         die "Run this script with sudo/root."
+    fi
+}
+
+validate_source_dir() {
+    local current_real releases_real
+    current_real="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+    releases_real="$(readlink -f "$RELEASES_DIR" 2>/dev/null || true)"
+
+    [ -d "$SOURCE_DIR" ] || die "Source checkout not found: $SOURCE_DIR"
+    [ -d "$SOURCE_DIR/.git" ] || die "Source checkout must be a git repo: $SOURCE_DIR"
+
+    if [ -n "$current_real" ] && [[ "$SOURCE_DIR" == "$current_real"* ]]; then
+        die "Refusing to deploy from current release ($SOURCE_DIR). Use /opt/clash as the source checkout."
+    fi
+    if [ -n "$releases_real" ] && [[ "$SOURCE_DIR" == "$releases_real"* ]]; then
+        die "Refusing to deploy from an immutable release ($SOURCE_DIR). Use /opt/clash as the source checkout."
     fi
 }
 
@@ -263,6 +280,34 @@ copy_source_to_release() {
 
     [ -f "$WEB_DIR/public/godot/Work.pck" ] \
         || die "Godot export missing at $WEB_DIR/public/godot/Work.pck. Export locally and upload web/public/godot before deploy."
+    validate_godot_export_freshness
+}
+
+validate_godot_export_freshness() {
+    local export_pck="$WEB_DIR/public/godot/Work.pck"
+    local stale_source=""
+    local paths=(
+        "$RELEASE_DIR/project.godot"
+        "$RELEASE_DIR/export_presets.cfg"
+        "$RELEASE_DIR/scripts"
+        "$RELEASE_DIR/scenes"
+        "$RELEASE_DIR/shaders"
+        "$RELEASE_DIR/Model"
+        "$RELEASE_DIR/textures"
+        "$RELEASE_DIR/assets"
+    )
+
+    stale_source="$(
+        find "${paths[@]}" \
+            -type f \
+            \( -name '*.gd' -o -name '*.tscn' -o -name '*.tres' -o -name '*.res' -o -name '*.glb' -o -name '*.gltf' -o -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.webp' -o -name 'project.godot' -o -name 'export_presets.cfg' \) \
+            -newer "$export_pck" \
+            -print -quit 2>/dev/null || true
+    )"
+
+    if [ -n "$stale_source" ] && [ "${CLASH_ALLOW_STALE_GODOT_EXPORT:-0}" != "1" ]; then
+        die "Godot export is older than $stale_source. Export locally, upload web/public/godot to $SOURCE_DIR/web/public/godot, then deploy again. Set CLASH_ALLOW_STALE_GODOT_EXPORT=1 only if you are sure no Godot-visible files changed."
+    fi
 }
 
 install_release_dependencies() {
@@ -342,7 +387,7 @@ build_frontend() {
         if grep -q "__BUILD_HASH__" "$WEB_DIST/sw.js"; then
             die "Service worker cache placeholder was not replaced."
         fi
-        log "SW cache version: clash-godot-$BUILD_HASH"
+        log "SW cache version: clash-runtime-$BUILD_HASH"
     fi
 
     if [ -f "$WEB_DIST/godot/Work.js" ]; then
@@ -405,13 +450,6 @@ switch_current_release() {
     ln -sfn "$RELEASE_DIR" "$tmp_link"
     mv -Tf "$tmp_link" "$CURRENT_LINK"
     SWITCHED=1
-
-    mkdir -p "$DEPLOY_ROOT/deploy"
-    cat > "$DEPLOY_ROOT/deploy/update.sh" << 'EOF'
-#!/bin/bash
-exec bash /opt/clash/current/deploy/update.sh "$@"
-EOF
-    chmod +x "$DEPLOY_ROOT/deploy/update.sh"
 }
 
 write_nginx_config() {
@@ -701,6 +739,7 @@ cleanup_old_releases() {
 
 main() {
     require_root
+    validate_source_dir
     log "=== Atomic deploy $DOMAIN ($RELEASE_ID) ==="
     log "Source: $SOURCE_DIR"
 

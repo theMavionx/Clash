@@ -8,8 +8,95 @@ const splashBg = '/splash-bg.png';
 const splashLogo = '/splash-logo.png?v=splash-art';
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
-const CACHE_BUST = '?v=' + Date.now(); // Force fresh load after deploy
+const GODOT_BUILD_TOKEN = String(
+  import.meta.env.VITE_BUILD_ID ||
+  import.meta.env.VITE_COMMIT_SHA ||
+  Date.now()
+);
+const CACHE_BUST = '?v=' + encodeURIComponent(GODOT_BUILD_TOKEN); // Force fresh load after deploy
 const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
+const GODOT_CACHE_PREFIXES = ['clash-godot-', 'clash-godot-resource-icons-'];
+const GODOT_RUNTIME_RELOAD_KEY = `clash_godot_runtime_reloaded_${GODOT_BUILD_TOKEN}`;
+
+function isGodotRuntimeAsset(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl), window.location.href);
+    return url.origin === window.location.origin && /^\/godot\/Work\.(js|wasm|pck)$/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function withGodotCacheBust(rawUrl) {
+  const url = new URL(String(rawUrl), window.location.href);
+  url.searchParams.set('v', GODOT_BUILD_TOKEN);
+  return url.href;
+}
+
+function installGodotFetchCacheBust() {
+  if (typeof window.fetch !== 'function') return () => {};
+
+  const originalFetch = window.fetch;
+  const boundFetch = originalFetch.bind(window);
+  const patchedFetch = (input, init) => {
+    try {
+      const rawUrl = typeof input === 'string' || input instanceof URL ? input : input?.url;
+      if (rawUrl && isGodotRuntimeAsset(rawUrl)) {
+        const bustedUrl = withGodotCacheBust(rawUrl);
+        const nextInit = { ...(init || {}), cache: 'reload' };
+        if (typeof Request !== 'undefined' && input instanceof Request) {
+          return boundFetch(new Request(bustedUrl, input), nextInit);
+        }
+        return boundFetch(bustedUrl, nextInit);
+      }
+    } catch {
+      // Fall through to the original fetch.
+    }
+    return boundFetch(input, init);
+  };
+
+  window.fetch = patchedFetch;
+  return () => {
+    if (window.fetch === patchedFetch) window.fetch = originalFetch;
+  };
+}
+
+function clearGodotRuntimeCaches() {
+  const tasks = [];
+
+  if (window.caches?.keys) {
+    tasks.push(
+      window.caches.keys()
+        .then((names) => Promise.all(
+          names
+            .filter((name) => GODOT_CACHE_PREFIXES.some((prefix) => name.startsWith(prefix)))
+            .map((name) => window.caches.delete(name))
+        ))
+    );
+  }
+
+  if (navigator.serviceWorker?.getRegistrations) {
+    tasks.push(
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(
+          registrations
+            .filter((registration) => {
+              const scriptUrl = registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL;
+              if (!scriptUrl) return false;
+              try {
+                const url = new URL(scriptUrl);
+                return url.origin === window.location.origin && url.pathname === '/sw.js';
+              } catch {
+                return false;
+              }
+            })
+            .map((registration) => registration.update().catch(() => {}))
+        ))
+    );
+  }
+
+  return Promise.all(tasks.map((task) => task.catch(() => {})));
+}
 
 function loadGodotEngineScript() {
   if (window.Engine || window.Godot) return Promise.resolve();
@@ -76,6 +163,40 @@ function formatGlobalError(event) {
     : '';
 
   return [message, location, stack].filter(Boolean).join('\n');
+}
+
+function isGodotWasmCacheMismatch(errorLike) {
+  const error = errorLike?.error || errorLike?.reason || errorLike;
+  const text = [
+    describeGlobalError(errorLike),
+    error?.message,
+    error?.stack,
+  ].filter(Boolean).join('\n');
+
+  return /WebAssembly\.instantiate/i.test(text)
+    && /Import #0/i.test(text)
+    && /env/i.test(text)
+    && /module is not an object or function/i.test(text);
+}
+
+function recoverOnceFromGodotCacheMismatch(errorLike) {
+  if (!isGodotWasmCacheMismatch(errorLike)) return false;
+
+  try {
+    if (window.sessionStorage?.getItem(GODOT_RUNTIME_RELOAD_KEY)) return false;
+    window.sessionStorage?.setItem(GODOT_RUNTIME_RELOAD_KEY, '1');
+  } catch {
+    // If storage is blocked, still attempt one recovery reload.
+  }
+
+  addClientBreadcrumb('godot.cache_mismatch_recover', {
+    message: describeGlobalError(errorLike),
+  }, 'warning');
+
+  clearGodotRuntimeCaches().finally(() => {
+    window.location.reload();
+  });
+  return true;
 }
 
 const overlayStyle = {
@@ -185,10 +306,12 @@ function GodotCanvas({ onEngineReady }) {
     let loadedTimeoutId = null;
     let stage2DelayId = null;
     let lastProgressBucket = -1;
+    let restoreGodotFetch = null;
 
     // Catch unhandled errors for mobile debug
     const errHandler = (e) => {
       if (disposed) return;
+      if (recoverOnceFromGodotCacheMismatch(e)) return;
       addClientBreadcrumb('godot.global_error', {
         message: describeGlobalError(e),
         progress: lastProgressRef.current.value,
@@ -320,6 +443,10 @@ function GodotCanvas({ onEngineReady }) {
         // pause 450ms at 100%, then start stage 2.
         console.log('[load] engine.startGame resolved → easing stage 1 → 100');
         addClientBreadcrumb('godot.engine_ready');
+        if (restoreGodotFetch) {
+          restoreGodotFetch();
+          restoreGodotFetch = null;
+        }
         resizeCanvas();
         if (onEngineReadyRef.current) onEngineReadyRef.current(engine);
         const from = lastProgressRef.current.value;
@@ -335,6 +462,11 @@ function GodotCanvas({ onEngineReady }) {
         easeRafId = requestAnimationFrame(easeTick);
       }).catch(err => {
         if (disposed) return;
+        if (recoverOnceFromGodotCacheMismatch(err)) return;
+        if (restoreGodotFetch) {
+          restoreGodotFetch();
+          restoreGodotFetch = null;
+        }
         addClientBreadcrumb('godot.start_error', {
           message: err?.message || String(err || ''),
         }, 'error');
@@ -342,10 +474,19 @@ function GodotCanvas({ onEngineReady }) {
         setErrorMsg(String(err?.message || err));
       });
     };
-    loadGodotEngineScript()
+    clearGodotRuntimeCaches()
+      .then(() => {
+        restoreGodotFetch = installGodotFetchCacheBust();
+        return loadGodotEngineScript();
+      })
       .then(startGodot)
       .catch(err => {
         if (!disposed) {
+          if (recoverOnceFromGodotCacheMismatch(err)) return;
+          if (restoreGodotFetch) {
+            restoreGodotFetch();
+            restoreGodotFetch = null;
+          }
           addClientBreadcrumb('godot.script_load_error', {
             message: err?.message || String(err || ''),
           }, 'error');
@@ -364,6 +505,7 @@ function GodotCanvas({ onEngineReady }) {
       if (stage2DelayId) clearTimeout(stage2DelayId);
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;
       if (window.godotBuildingsLoaded) window.godotBuildingsLoaded = null;
+      if (restoreGodotFetch) restoreGodotFetch();
       try { engine?.requestQuit?.(); } catch { /* best-effort cleanup */ }
     };
   }, []);

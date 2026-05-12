@@ -38,6 +38,13 @@ web/public/godot/
 # Decibel test wallet - contains private key, never commit
 aptos-test-wallet.txt
 backups/
+.tmp/
+
+# Production runtime folders when /opt/clash is used as the canonical checkout.
+# They are created by deploy/deploy.sh and must not be copied back into git.
+/current
+/releases/
+/shared/
 
 # Android signing keystore + the password file living next to it.
 # CRITICAL: leaking either == anyone can sign updates impersonating us

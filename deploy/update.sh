@@ -1,13 +1,19 @@
 #!/bin/bash
-# Pull the source checkout, then run the atomic deploy script.
+# Pull the canonical source checkout, then run the atomic deploy script.
 #
-# Production source checkout defaults to /home/bloxxdotfun/Clash. The live app
-# is served from /opt/clash/current and should not be edited directly.
+# Production is intentionally anchored at /opt/clash:
+#   /opt/clash/.git      canonical checkout
+#   /opt/clash/current   live symlink
+#   /opt/clash/releases  immutable releases
+#   /opt/clash/shared    env + databases
+#
+# Godot web export is produced locally and uploaded into:
+#   /opt/clash/web/public/godot
 
 set -Eeuo pipefail
 
 BRANCH="${CLASH_BRANCH:-main}"
-SOURCE_DIR="${CLASH_SOURCE_DIR:-/home/bloxxdotfun/Clash}"
+SOURCE_DIR="${CLASH_SOURCE_DIR:-/opt/clash}"
 DEPLOY_ROOT="${CLASH_DEPLOY_ROOT:-/opt/clash}"
 
 if [ ! -d "$SOURCE_DIR/.git" ]; then
@@ -23,6 +29,7 @@ fi
 
 echo "=== Atomic Update ==="
 echo "Source: $SOURCE_DIR"
+echo "Deploy root: $DEPLOY_ROOT"
 echo "Branch: $BRANCH"
 
 cd "$SOURCE_DIR"
@@ -30,16 +37,16 @@ git fetch origin "$BRANCH"
 git pull --ff-only origin "$BRANCH"
 
 # web/public/godot is intentionally gitignored because the export is large.
-# If the source checkout lacks it, preserve the currently-live export so
-# backend/frontend-only updates can still deploy without producing 404s.
+# Normal flow: export Godot locally and upload it here before deploying.
 if [ ! -f "$SOURCE_DIR/web/public/godot/Work.pck" ]; then
-    if [ -f "$DEPLOY_ROOT/current/web/public/godot/Work.pck" ]; then
+    if [ "${CLASH_REUSE_GODOT_EXPORT:-0}" = "1" ] && [ -f "$DEPLOY_ROOT/current/web/public/godot/Work.pck" ]; then
         echo "Source Godot export missing; reusing current live export."
         mkdir -p "$SOURCE_DIR/web/public"
         rsync -a --delete "$DEPLOY_ROOT/current/web/public/godot" "$SOURCE_DIR/web/public/"
     else
         echo "ERROR: source Godot export missing at web/public/godot/Work.pck" >&2
-        echo "Export Godot locally and upload web/public/godot before deploying." >&2
+        echo "Export Godot locally and upload it to $SOURCE_DIR/web/public/godot before deploying." >&2
+        echo "Set CLASH_REUSE_GODOT_EXPORT=1 only for backend/frontend-only emergency deploys." >&2
         exit 1
     fi
 fi
