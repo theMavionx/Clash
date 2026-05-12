@@ -326,8 +326,18 @@ function rewardInfoFromPlaceOrder(args, txResponse) {
   const clientNotional = Number(args.rewardNotionalUsd ?? args.notional_usd ?? 0);
   if (Number.isFinite(clientNotional) && clientNotional > 0) {
     const drift = Math.abs(clientNotional - notional) / Math.max(notional, 1);
-    if (drift > 0.10) {
+    // The server-side notional is authoritative either way (reward.notional_usd
+    // is what downstream credits). The drift check just guards against a
+    // confused client. Stable client/server drift sits around 15-20% on
+    // Decibel because the client reports pre-fee mark notional while the
+    // server reconstructs from on-chain placement units — refusing to credit
+    // the reward in that band loses gold for honest users, so widen the
+    // tolerance and log the band instead of throwing.
+    if (drift > 0.25) {
       throw new Error(`reward notional mismatch: client ${clientNotional}, server ${notional}`);
+    }
+    if (drift > 0.05) {
+      console.warn(`[decibel] reward notional drift: client ${clientNotional}, server ${notional}, drift ${(drift * 100).toFixed(1)}%`);
     }
   }
   const isReduceOnly = !!args.isReduceOnly;
