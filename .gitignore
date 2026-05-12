@@ -21,6 +21,8 @@ server-futures/server.log
 
 # Environment
 .env
+.env.*
+secrets/
 *.orig
 .asset-backups/
 
