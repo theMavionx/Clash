@@ -816,6 +816,20 @@ async function getPrices() {
 
 // ---------- Trading ----------
 
+// Avantis contract reverts with BELOW_MIN_POS when collateral * leverage
+// falls under the protocol minimum notional (currently $5 USDC, set
+// conservatively at $10 to leave headroom against price slippage between
+// quoting and execution). Catching this client-side saves the user the
+// failed-tx gas fee — without it the wallet pays for a revert.
+const AVANTIS_MIN_NOTIONAL_USDC = 10;
+
+function assertAboveMinNotional(collateralUsdc, levNum) {
+  const notional = Number(collateralUsdc) * Number(levNum);
+  if (!Number.isFinite(notional) || notional < AVANTIS_MIN_NOTIONAL_USDC) {
+    throw new Error(`Trade notional $${notional.toFixed(2)} is below Avantis minimum $${AVANTIS_MIN_NOTIONAL_USDC.toFixed(2)} (collateral * leverage). Increase collateral or leverage.`);
+  }
+}
+
 async function createMarketOrder(privateKey, {
   symbol,
   side,        // 'long' or 'short' (also accept 'buy'/'sell'/'bid'/'ask')
@@ -831,6 +845,7 @@ async function createMarketOrder(privateKey, {
   // chain or corrupt trade_history.notional_usd.
   const collateralUsdc = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
   const levNum = assertFiniteAmount(leverage, { min: 0, max: 1000 });
+  assertAboveMinNotional(collateralUsdc, levNum);
   // Slippage must be > 0 — 0 (or any non-positive) makes Avantis revert on the
   // slightest price drift. Clamp to sane window.
   const slipNum = Math.max(0.1, Math.min(Number(slippage_percent) || 1, 50));
@@ -930,6 +945,7 @@ async function createLimitOrder(privateKey, {
   await assertBaseMainnet();
   const collateralUsdc = assertFiniteAmount(amount, { min: 0, max: 1_000_000 });
   const levNum = assertFiniteAmount(leverage, { min: 0, max: 1000 });
+  assertAboveMinNotional(collateralUsdc, levNum);
   const priceNum = assertFiniteAmount(price, { min: 0, max: 1e12 });
   const slipNum = Math.max(0.1, Math.min(Number(slippage_percent) || 1, 50));
 

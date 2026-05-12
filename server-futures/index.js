@@ -127,14 +127,26 @@ app.get('/', (req, res) => {
 app.use('/api', routes);
 
 // Error handler — production logs compact message, dev keeps full stack.
+// Body-parser malformed-JSON errors are client mistakes, not server bugs,
+// so they get a 400 response and a single-line WARN (not stderr noise with
+// a stack frame to a generic JSON.parse pointer that says nothing).
 app.use((err, req, res, _next) => {
+  const isBodyParseError = err && (
+    err.type === 'entity.parse.failed'
+    || (err instanceof SyntaxError && err.status === 400 && 'body' in err)
+  );
+  if (isBodyParseError) {
+    console.warn(`[warn] ${req.method} ${req.url} → malformed request body: ${err.message}`);
+    return res.status(400).json({ error: 'Malformed request body' });
+  }
   if (process.env.NODE_ENV === 'production') {
     const firstFrame = String(err.stack || '').split('\n')[1] || '';
     console.error(`[err] ${req.method} ${req.url} → ${err.message} ${firstFrame.trim()}`);
   } else {
     console.error(err.stack);
   }
-  res.status(500).json({ error: 'Internal server error' });
+  const status = Number.isInteger(err?.status) && err.status >= 400 && err.status < 600 ? err.status : 500;
+  res.status(status).json({ error: status === 500 ? 'Internal server error' : (err.message || 'Request failed') });
 });
 
 app.listen(PORT, '127.0.0.1', () => {

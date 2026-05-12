@@ -388,9 +388,29 @@ async function fetchPacificaPaginated(account, since, label, maxPages = PACIFICA
     let r, j;
     try {
       r = await fetch(`https://api.pacifica.fi/api/v1/trades/history?${params.toString()}`);
-      j = await r.json();
     } catch (e) {
-      console.warn(`[pacifica fetch] ${label} page=${page} FAILED:`, e.message);
+      console.warn(`[pacifica fetch] ${label} page=${page} network error:`, e.message);
+      break;
+    }
+    // Pacifica returns plain-text "Rate limit exceeded" on 429 (not JSON).
+    // Read raw text first, then try to parse — so we can log a clean
+    // rate-limit message instead of a misleading JSON-parse stack frame.
+    let bodyText = '';
+    try { bodyText = await r.text(); } catch { /* swallow — handled below */ }
+    if (r.status === 429) {
+      console.warn(`[pacifica fetch] ${label} page=${page} rate limited (429) — backing off this run`);
+      break;
+    }
+    if (!r.ok) {
+      const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
+      console.warn(`[pacifica fetch] ${label} page=${page} HTTP ${r.status}: ${snippet}`);
+      break;
+    }
+    try {
+      j = bodyText ? JSON.parse(bodyText) : null;
+    } catch (e) {
+      const snippet = bodyText.length > 120 ? `${bodyText.slice(0, 120)}…` : bodyText;
+      console.warn(`[pacifica fetch] ${label} page=${page} non-JSON body: ${snippet}`);
       break;
     }
     const ms = Date.now() - t0;
