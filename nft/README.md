@@ -40,9 +40,9 @@ npm run doctor
 npm run compile:base
 npm run deploy:base
 npm run deploy:base-shop
-npm run token:base-shop -- clash allow
+npm run token:base-shop -- cop allow
 npm run transfer:base-shop
-npm run quote:base-shop -- clash 0xBuyer 1
+npm run quote:base-shop -- cop 0xBuyer 1
 npm run set-price:base
 npm run sale:base -- open
 npm run deploy:solana
@@ -71,13 +71,13 @@ withdrawals also send only to `owner()`.
 
 Target pricing:
 
-- Base CLASH: `$5.00` per NFT. Set `NFT_BASE_CLASH_TOKEN` after CLASH launches,
-  and set/provide `NFT_CLASH_USD_PRICE` until a DEX/oracle price source is wired.
+- Base CoP: `$5.00` per NFT. Set `NFT_BASE_CLASH_TOKEN` after CoP launches.
+  `NFT_COP_USD_PRICE` can override the DexScreener price if needed.
 - Base ETH/USDC shop quotes: `$8.90` per NFT if enabled.
 - Solana SOL/USDC Candy Machine groups: `$8.90` per NFT.
 
 `quote:base-shop` computes native ETH from live ETH/USD, fixed USDC units, or
-CLASH units from `NFT_CLASH_USD_PRICE`, then signs the EIP-712 quote. Keep the
+CoP units from `NFT_COP_USD_PRICE` or DexScreener, then signs the EIP-712 quote. Keep the
 quote TTL short; default is 300 seconds.
 
 The Solana Candy Machine also starts closed by default via a far-future

@@ -866,9 +866,11 @@ export function useDecibel() {
       nextAllowedAt: 0,
       lastWarnAt: 0,
     };
-    if (address) D.log('Petra wallet connected:', address);
-    else D.log('Petra wallet disconnected');
-  }, [address]);
+    if (isActiveDex) {
+      if (address) D.log('Petra wallet connected:', address);
+      else D.log('Petra wallet disconnected');
+    }
+  }, [address, isActiveDex]);
 
   // ───── Read paths ─────
 

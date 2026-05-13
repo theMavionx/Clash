@@ -1,4 +1,5 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
+import { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl } from './solanaRpc';
 
 export const NFT_SHOP_ABI = [
   {
@@ -98,6 +99,245 @@ export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1 }) {
   return { hash, receipt, quote: quoteResponse };
 }
 
+export async function mintSolanaNft({ solWallet, config, payment }) {
+  const address = solWallet?.publicKey?.toBase58?.();
+  if (!address) throw new Error('Solana wallet is not connected');
+  if (!solWallet?.signTransaction) throw new Error('This Solana wallet cannot sign transactions');
+  if (!config?.candyMachine || !config?.candyGuard || !config?.collection) {
+    throw new Error('Solana Candy Machine is not configured');
+  }
+  if (!config.saleActive) throw new Error('Solana sale is closed');
+
+  const group = payment === 'sol' ? 'sol' : 'usdc';
+  const groupConfig = config.paymentGroups?.[group] || config.groups?.[group] || null;
+  if (!groupConfig) throw new Error(`Solana ${group.toUpperCase()} payment is not configured`);
+
+  const [
+    { Connection, PublicKey: Web3PublicKey },
+    { createUmi },
+    { generateSigner, publicKey, signerIdentity, some },
+    { mplCore },
+    { mintV1, mplCandyMachine },
+    { fromWeb3JsTransaction, toWeb3JsTransaction },
+    bs58Module,
+  ] = await Promise.all([
+    import('@solana/web3.js'),
+    import('@metaplex-foundation/umi-bundle-defaults'),
+    import('@metaplex-foundation/umi'),
+    import('@metaplex-foundation/mpl-core'),
+    import('@metaplex-foundation/mpl-core-candy-machine'),
+    import('@metaplex-foundation/umi-web3js-adapters'),
+    import('bs58'),
+  ]);
+  const bs58 = bs58Module.default || bs58Module;
+  const rpcSelection = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => null);
+  const rpcUrl = rpcSelection?.selected?.url || DEFAULT_SOLANA_RPC_URL;
+  await assertSolanaMintBalances({
+    Connection,
+    Web3PublicKey,
+    address,
+    group,
+    groupConfig,
+    config,
+    rpcUrl,
+  });
+
+  const walletSigner = createSolanaWalletSigner({
+    publicKey,
+    wallet: solWallet,
+    toWeb3JsTransaction,
+    fromWeb3JsTransaction,
+  });
+  const umi = createUmi(rpcUrl)
+    .use(mplCore())
+    .use(mplCandyMachine())
+    .use(signerIdentity(walletSigner, true));
+  const asset = generateSigner(umi);
+
+  const mintArgs = group === 'sol'
+    ? { solPayment: some({ destination: publicKey(groupConfig.destination || config.treasury) }) }
+    : {
+        tokenPayment: some({
+          mint: publicKey(groupConfig.mint),
+          destinationAta: publicKey(groupConfig.destinationAta),
+        }),
+      };
+
+  let signature;
+  let result;
+  try {
+    signature = await mintV1(umi, {
+      candyMachine: publicKey(config.candyMachine),
+      candyGuard: publicKey(config.candyGuard),
+      asset,
+      collection: publicKey(config.collection),
+      owner: publicKey(address),
+      group: some(group),
+      mintArgs,
+    }).send(umi, { skipPreflight: false });
+    result = await confirmSolanaSignatureHttp({
+      Connection,
+      rpcUrl,
+      signature: typeof signature === 'string' ? signature : bs58.encode(signature),
+    });
+  } catch (err) {
+    throw explainSolanaMintError(err, { group, groupConfig, config });
+  }
+  const tx = typeof signature === 'string' ? signature : bs58.encode(signature);
+  return {
+    tx,
+    signature: tx,
+    asset: asset.publicKey.toString(),
+    result,
+    group,
+  };
+}
+
+async function confirmSolanaSignatureHttp({ Connection, rpcUrl, signature }) {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const startedAt = Date.now();
+  const timeoutMs = 45_000;
+  let lastStatus = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await connection.getSignatureStatuses([signature], { searchTransactionHistory: false });
+    const status = response?.value?.[0] || null;
+    lastStatus = status;
+    if (status?.err) {
+      const error = new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
+      error.transactionStatus = status;
+      throw error;
+    }
+    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+      return {
+        context: response.context,
+        value: status,
+        confirmationStatus: status.confirmationStatus,
+      };
+    }
+    await sleep(900);
+  }
+
+  return {
+    value: lastStatus,
+    confirmationStatus: lastStatus?.confirmationStatus || 'sent',
+    timeout: true,
+  };
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function assertSolanaMintBalances({ Connection, Web3PublicKey, address, group, groupConfig, config, rpcUrl }) {
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const owner = new Web3PublicKey(address);
+  let solLamports = null;
+
+  try {
+    solLamports = BigInt(await connection.getBalance(owner, 'confirmed'));
+  } catch {
+    solLamports = null;
+  }
+
+  if (group === 'sol') {
+    const requiredLamports = BigInt(groupConfig.lamports || config.priceLamports || 0);
+    if (solLamports != null && requiredLamports > 0n && solLamports < requiredLamports) {
+      throw friendlySolanaError(
+        `Not enough SOL: mint costs ${formatSol(requiredLamports)} SOL, wallet has ${formatSol(solLamports)} SOL. Choose USDC or add SOL.`,
+        'not_enough_sol',
+      );
+    }
+    return;
+  }
+
+  const requiredUsdc = BigInt(groupConfig.amount || 0);
+  if (requiredUsdc > 0n && groupConfig.mint) {
+    try {
+      const accounts = await connection.getParsedTokenAccountsByOwner(owner, {
+        mint: new Web3PublicKey(groupConfig.mint),
+      });
+      const usdcBalance = accounts.value.reduce((sum, item) => {
+        const raw = item?.account?.data?.parsed?.info?.tokenAmount?.amount || '0';
+        try { return sum + BigInt(raw); } catch { return sum; }
+      }, 0n);
+      if (usdcBalance < requiredUsdc) {
+        throw friendlySolanaError(
+          `Not enough USDC: mint costs ${formatTokenAmount(requiredUsdc, 6)} USDC, wallet has ${formatTokenAmount(usdcBalance, 6)} USDC.`,
+          'not_enough_usdc',
+        );
+      }
+    } catch (err) {
+      if (err?.code === 'not_enough_usdc') throw err;
+    }
+  }
+
+  const feeFloorLamports = 3_000_000n;
+  if (solLamports != null && solLamports < feeFloorLamports) {
+    throw friendlySolanaError(
+      `Need a little SOL for Solana fees/rent even with USDC. Add at least ${formatSol(feeFloorLamports)} SOL.`,
+      'not_enough_sol_fees',
+    );
+  }
+}
+
+function explainSolanaMintError(err, { group, groupConfig, config }) {
+  const text = collectErrorText(err);
+  if (/0x1781|MintNotLive/i.test(text)) {
+    return friendlySolanaError('Solana sale is not live yet. Refresh and try again.', 'mint_not_live', err);
+  }
+  if (/0x1782|NotEnoughSOL/i.test(text)) {
+    const requiredLamports = BigInt(groupConfig?.lamports || config?.priceLamports || 0);
+    const price = requiredLamports > 0n ? `${formatSol(requiredLamports)} SOL` : 'the SOL mint price';
+    const message = group === 'sol'
+      ? `Not enough SOL: mint costs ${price}. Choose USDC or add SOL.`
+      : 'Need a little SOL for Solana fees/rent even with USDC.';
+    return friendlySolanaError(message, 'not_enough_sol', err);
+  }
+  if (/0x1784|NotEnoughTokens/i.test(text)) {
+    const requiredUsdc = BigInt(groupConfig?.amount || 0);
+    const price = requiredUsdc > 0n ? `${formatTokenAmount(requiredUsdc, 6)} USDC` : 'the USDC mint price';
+    return friendlySolanaError(`Not enough USDC: mint costs ${price}.`, 'not_enough_usdc', err);
+  }
+  return err;
+}
+
+function collectErrorText(err) {
+  return [
+    err?.message,
+    err?.shortMessage,
+    err?.name,
+    err?.transactionMessage,
+    err?.cause?.message,
+    err?.cause?.transactionMessage,
+    ...(Array.isArray(err?.logs) ? err.logs : []),
+    ...(Array.isArray(err?.transactionLogs) ? err.transactionLogs : []),
+    ...(Array.isArray(err?.simulationLogs) ? err.simulationLogs : []),
+  ].filter(Boolean).join('\n');
+}
+
+function friendlySolanaError(message, code, cause = null) {
+  const error = new Error(message);
+  error.shortMessage = message;
+  error.code = code;
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function formatSol(lamports) {
+  const value = Number(lamports) / 1_000_000_000;
+  if (!Number.isFinite(value)) return '0';
+  return value >= 1 ? value.toFixed(3) : value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function formatTokenAmount(rawAmount, decimals) {
+  const divisor = 10n ** BigInt(decimals);
+  const whole = rawAmount / divisor;
+  const fraction = rawAmount % divisor;
+  const fractionText = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+  return fractionText ? `${whole}.${fractionText}` : whole.toString();
+}
+
 function normalizeQuote(quote) {
   return {
     buyer: quote.buyer,
@@ -107,5 +347,30 @@ function normalizeQuote(quote) {
     usdPriceE6: BigInt(quote.usdPriceE6),
     nonce: BigInt(quote.nonce),
     deadline: BigInt(quote.deadline),
+  };
+}
+
+function createSolanaWalletSigner({ publicKey, wallet, toWeb3JsTransaction, fromWeb3JsTransaction }) {
+  const walletPublicKey = publicKey(wallet.publicKey.toBase58());
+  const signTransaction = async (transaction) => {
+    const web3Transaction = toWeb3JsTransaction(transaction);
+    const signed = await wallet.signTransaction(web3Transaction);
+    return fromWeb3JsTransaction(signed);
+  };
+
+  return {
+    publicKey: walletPublicKey,
+    signMessage: async (message) => {
+      if (!wallet.signMessage) throw new Error('This Solana wallet cannot sign messages');
+      return wallet.signMessage(message);
+    },
+    signTransaction,
+    signAllTransactions: async (transactions) => {
+      if (wallet.signAllTransactions) {
+        const signed = await wallet.signAllTransactions(transactions.map(toWeb3JsTransaction));
+        return signed.map(fromWeb3JsTransaction);
+      }
+      return Promise.all(transactions.map(signTransaction));
+    },
   };
 }

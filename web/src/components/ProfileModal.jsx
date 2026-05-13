@@ -32,7 +32,7 @@ function ProfileModal({ onClose }) {
   const { dex } = useDex();
   const { mode: futuresMode, setMode: setFuturesMode } = useFuturesMode();
   const { disconnect: evmDisconnect, setExternalProvider: setEvmProvider } = useEvmWallet();
-  const { disconnect: aptosDisconnect } = useAptosWallet();
+  const { disconnect: aptosDisconnect, connect: aptosConnect } = useAptosWallet();
   const pacificaHook = usePacifica();
   const avantisHook = useAvantis();
   const decibelHook = useDecibel();
@@ -71,20 +71,22 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const activeWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
-    ? (walletAddr || player?.wallet || null)            // EVM from useAvantis/useGmx/useMonad
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
+    ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
-    ? (walletAddr || player?.wallet || null)            // Aptos from useDecibel
+    ? (walletAddr || null)            // Aptos from useDecibel
     : dex === 'phoenix'
-    ? (walletAddr || player?.wallet || null)            // Solana from usePhoenix
-    : (adapterAddr || walletAddr || player?.wallet || null); // Solana adapter / Privy
+    ? (walletAddr || null)            // Solana from usePhoenix
+    : (adapterAddr || walletAddr || null); // Solana adapter / Privy
+  const linkedWallet = player?.wallet || null;
+  const activeWallet = liveWallet || linkedWallet;
   const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad')
-    ? (walletAddr ? 'evm' : null)
+    ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
-    ? (walletAddr ? 'aptos' : null)
+    ? (liveWallet ? 'aptos' : null)
     : dex === 'phoenix'
-    ? (walletAddr ? 'solana' : null)
-    : (adapterAddr ? 'adapter' : (activeWallet ? 'privy' : null));
+    ? (liveWallet ? 'solana' : null)
+    : (adapterAddr ? 'adapter' : (liveWallet ? 'privy' : null));
 
   // Seeker `.skr` handle for the active wallet (Solana DEXes only — the
   // hook bails out for EVM / Aptos addresses on its own). Surfaced as a
@@ -323,10 +325,13 @@ function ProfileModal({ onClose }) {
           {activeWallet ? (
             <div style={S.connectedBox}>
               <div style={{display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'}}>
-                <div style={S.dot} />
+                <div style={liveWallet ? S.dot : S.offlineDot} />
                 <span style={{fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: '#5C3A21'}}>
                   {copied ? 'Copied' : `${activeWallet.slice(0, 6)}...${activeWallet.slice(-4)}`}
                 </span>
+                {!liveWallet && (
+                  <span style={S.offlineChip}>wallet offline</span>
+                )}
                 {seekerHandle?.full && (
                   <span
                     title={`Seeker .skr handle for ${activeWallet}`}
@@ -404,6 +409,27 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={openSolanaConnect}
             >CONNECT WALLET</button>
+          )}
+
+          {activeWallet && !liveWallet && (
+            <div style={S.walletRepair}>
+              <div style={S.walletRepairText}>
+                This game session is active, but the signing wallet for the selected DEX is not connected.
+              </div>
+              <div style={S.walletRepairActions}>
+                <button
+                  style={S.walletRepairBtn}
+                  onClick={() => {
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') setEvmModalOpen(true);
+                    else if (dex === 'decibel') aptosConnect?.();
+                    else openSolanaConnect();
+                  }}
+                >
+                  Reconnect
+                </button>
+                <button style={S.walletRepairLogout} onClick={handleDisconnect}>Log out</button>
+              </div>
+            </div>
           )}
 
           {/* Avantis self-custody funding callout */}
@@ -556,6 +582,30 @@ const S = {
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 14px',
   },
   dot: { width: 10, height: 10, borderRadius: '50%', background: '#4CAF50', boxShadow: '0 0 6px #4CAF50' },
+  offlineDot: { width: 10, height: 10, borderRadius: '50%', background: '#a3906a', boxShadow: '0 0 6px rgba(163,144,106,0.5)' },
+  offlineChip: {
+    padding: '2px 7px', borderRadius: 999,
+    background: 'rgba(163,144,106,0.16)', border: '1px solid rgba(163,144,106,0.45)',
+    color: '#77573d', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  walletRepair: {
+    padding: '10px 12px', borderRadius: 12,
+    background: 'linear-gradient(180deg, #FFF8E1 0%, #FFE9A6 100%)',
+    border: '3px solid #D79A1E',
+    boxShadow: '0 3px 0 #b57812, 0 4px 8px rgba(0,0,0,0.12)',
+  },
+  walletRepairText: { color: '#6b421d', fontSize: 11, fontWeight: 800, lineHeight: 1.35 },
+  walletRepairActions: { display: 'flex', gap: 8, marginTop: 8 },
+  walletRepairBtn: {
+    flex: 1, padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
+    background: 'linear-gradient(180deg, #6F5CFF 0%, #4530E0 100%)',
+    border: '2px solid #3720a6', color: '#fff', fontSize: 11, fontWeight: 900,
+  },
+  walletRepairLogout: {
+    padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
+    background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
+    border: '2px solid #8b2a2a', color: '#fff', fontSize: 11, fontWeight: 900,
+  },
   disconnectBtn: {
     padding: '5px 12px', background: '#E53935', border: '2px solid #B71C1C',
     borderRadius: 8, color: '#fff', fontWeight: 800, fontSize: 11, cursor: 'pointer',

@@ -9,6 +9,11 @@ function setPerplProxyOrigin(proxyReq) {
 const viteEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
 const API_PROXY_TARGET = process.env.VITE_API_PROXY || viteEnv.VITE_API_PROXY || '';
 const WS_PROXY_TARGET = process.env.VITE_WS_PROXY || viteEnv.VITE_WS_PROXY || '';
+const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
+  || viteEnv.ARBITRUM_ALCHEMY_KEY
+  || process.env.VITE_ARBITRUM_ALCHEMY_KEY
+  || viteEnv.VITE_ARBITRUM_ALCHEMY_KEY
+  || '';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
   || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
@@ -93,11 +98,8 @@ export default defineConfig({
       // ration aggressively under multicall load; switching providers is
       // cheaper than asking the user to buy a paid endpoint).
       // PRIMARY (when configured): Alchemy paid endpoint, server-side proxy
-      // so the API key NEVER ships in the browser bundle. The path
-      // `/rpc/arb-alchemy` is what `web/.env` points VITE_ARBITRUM_RPC_URL
-      // at; the actual `https://arb-mainnet.g.alchemy.com/v2/<key>` URL
-      // lives only in this file and never reaches the client.
-      // 100M compute units / month free = far beyond what testing burns.
+      // so the API key NEVER ships in the browser bundle. Set
+      // ARBITRUM_ALCHEMY_KEY locally; do not commit provider keys here.
       '/rpc/solana-ws': {
         target: 'wss://api.mainnet-beta.solana.com',
         ws: true,
@@ -138,7 +140,7 @@ export default defineConfig({
       '/rpc/arb-alchemy': {
         target: 'https://arb-mainnet.g.alchemy.com',
         changeOrigin: true, secure: true,
-        rewrite: () => '/v2/_wtFjwex46SgJDz2fx2c6',
+        rewrite: () => ARBITRUM_ALCHEMY_KEY ? `/v2/${ARBITRUM_ALCHEMY_KEY}` : '/v2/',
       },
       // Anonymous Arbitrum RPC pool — used only when env override is unset.
       // PRIMARY = Pocket Network public node (arb-pokt.nodies.app) — most

@@ -4,13 +4,13 @@ import crypto from 'node:crypto';
 import { createWalletClient, getAddress, http, zeroAddress } from 'viem';
 import { base } from 'viem/chains';
 import { loadEnv, NFT_DIR, parseEthAccount } from './lib-env.mjs';
-import { fetchUsdPrice, unitsToDecimalString, usdToNativeUnits, usdToTokenUnits } from './lib-prices.mjs';
+import { fetchTokenUsdPrice, fetchUsdPrice, unitsToDecimalString, usdToNativeUnits, usdToTokenUnits } from './lib-prices.mjs';
 
 const payment = (process.argv[2] || '').toLowerCase();
 const buyerArg = process.argv[3] || '';
 const quantity = BigInt(process.argv[4] || '1');
 if (!payment || !buyerArg) {
-  console.error('Usage: npm run quote:base-shop -- native|usdc|clash 0xBuyer [quantity]');
+  console.error('Usage: npm run quote:base-shop -- native|usdc|cop 0xBuyer [quantity]');
   process.exit(1);
 }
 
@@ -48,15 +48,14 @@ if (payment === 'native' || payment === 'eth') {
   usdPrice = env.NFT_BASE_USDC_USD_PRICE || env.NFT_BASE_USD_PRICE || '8.9';
   usdPriceE6 = usdToTokenUnits(usdPrice, 6);
   unitPrice = usdToTokenUnits(usdPrice, decimals);
-} else if (payment === 'clash') {
+} else if (payment === 'cop' || payment === 'clash') {
   paymentToken = getAddress(env.NFT_BASE_CLASH_TOKEN || env.CLASH_BASE_TOKEN || deployment.clashToken);
   decimals = Number(env.NFT_BASE_CLASH_DECIMALS || 18);
   usdPrice = env.NFT_BASE_CLASH_USD_PRICE || '5';
   usdPriceE6 = usdToTokenUnits(usdPrice, 6);
-  const clashUsd = env.NFT_CLASH_USD_PRICE || env.CLASH_USD_PRICE;
-  if (!clashUsd) throw new Error('Set NFT_CLASH_USD_PRICE after CLASH launches.');
-  unitPrice = usdToNativeUnits(usdPrice, clashUsd, decimals);
-  priceSource = `CLASH/USD ${clashUsd}`;
+  const clashUsd = await fetchTokenUsdPrice(env, paymentToken, 'cop');
+  unitPrice = usdToNativeUnits(usdPrice, clashUsd.price, decimals);
+  priceSource = `CoP/USD ${clashUsd.price} (${clashUsd.source})`;
 } else {
   throw new Error(`Unsupported payment mode: ${payment}`);
 }

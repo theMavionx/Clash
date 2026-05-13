@@ -92,6 +92,7 @@ const EvmWalletContext = createContext({
   error: null,
   source: null,
   setExternalProvider: () => {},
+  reconnectStoredProvider: async () => false,
   disconnect: () => {},
 });
 
@@ -107,6 +108,16 @@ export function EvmWalletProvider({ children }) {
   const [error, setError] = useState(null);
 
   const { isInFrame, loading: fcLoading } = useFarcaster();
+
+  const setPersistedExternalProvider = useCallback((prov, addr, rdns = null, src = 'external') => {
+    setExternalProvider(prov);
+    setExternalAddress(addr);
+    setExternalSource(src);
+    setError(null);
+    if (rdns) {
+      try { localStorage.setItem(LAST_WALLET_KEY, rdns); } catch { /* storage disabled */ }
+    }
+  }, []);
 
   // Farcaster auto-reconnect: inside a mini-app frame the EVM provider is
   // always available via sdk.wallet.getEthereumProvider(). On a page reload
@@ -207,8 +218,80 @@ export function EvmWalletProvider({ children }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Privy embedded wallet — auto-picked when user logs in via email.
-  // `usePrivyEvmWallets()` returns ONLY Ethereum wallets (no chainType filter needed).
+  // Manual/retry entrypoint used by the session repair UI. Some EVM wallets
+  // announce late on cold page loads, so this asks EIP-6963 again and falls
+  // back to legacy window.ethereum without opening a popup.
+  const reconnectStoredProvider = useCallback(async () => {
+    let storedRdns = null;
+    try { storedRdns = localStorage.getItem(LAST_WALLET_KEY); } catch { /* storage disabled */ }
+    if (!storedRdns || externalAddress) return false;
+
+    const announced = [];
+    const onAnnounce = (e) => {
+      const d = e?.detail;
+      if (!d?.provider || !d?.info) return;
+      if ((d.info.rdns || d.info.name) === storedRdns) announced.push(d.provider);
+    };
+
+    const tryProvider = async (provider) => {
+      if (!provider || externalAddress) return false;
+      try {
+        const accounts = await provider.request({ method: 'eth_accounts' });
+        const addr = accounts && accounts[0];
+        if (!addr) return false;
+        setPersistedExternalProvider(provider, addr, storedRdns, 'external');
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    window.addEventListener('eip6963:announceProvider', onAnnounce);
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+    await new Promise(resolve => setTimeout(resolve, 350));
+    window.removeEventListener('eip6963:announceProvider', onAnnounce);
+
+    for (const provider of announced) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await tryProvider(provider)) return true;
+    }
+
+    const eth = typeof window !== 'undefined' ? window.ethereum : null;
+    if (!eth) return false;
+    const legacy = Array.isArray(eth.providers) ? eth.providers : [eth];
+    for (const p of legacy) {
+      const name = p.isMetaMask ? 'legacy.metamask'
+        : p.isCoinbaseWallet ? 'legacy.coinbasewallet'
+        : p.isRabby ? 'legacy.rabby'
+        : p.isPhantom ? 'legacy.phantom'
+        : p.isTrust ? 'legacy.trust'
+        : p.isOkxWallet ? 'legacy.okxwallet'
+        : null;
+      if (!name || !storedRdns.startsWith(name)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      if (await tryProvider(p)) return true;
+    }
+    return false;
+  }, [externalAddress, setPersistedExternalProvider]);
+
+  useEffect(() => {
+    let stopped = false;
+    const timers = [];
+    const run = async () => {
+      if (stopped || externalAddress) return;
+      const ok = await reconnectStoredProvider();
+      if (ok) stopped = true;
+    };
+    for (const delay of [700, 1600, 3200, 6000]) {
+      timers.push(setTimeout(run, delay));
+    }
+    return () => {
+      stopped = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [externalAddress, reconnectStoredProvider]);
+
+  // Privy embedded wallet is auto-picked when the user logs in via email.
   const { authenticated, evmWallets: privyWallets } = useOptionalPrivy();
   const privyWallet = authenticated
     ? (privyWallets || []).find(w => w?.walletClientType === 'privy')
@@ -374,21 +457,10 @@ export function EvmWalletProvider({ children }) {
     getWalletClient,
     getPublicClient,
     source,
-    setExternalProvider: (prov, addr, rdns = null, src = 'external') => {
-      setExternalProvider(prov);
-      setExternalAddress(addr);
-      setExternalSource(src);
-      setError(null);
-      // Remember the chosen wallet so the next page load can silently
-      // reconnect via EIP-6963 (eth_accounts, no popup). Omit rdns for
-      // Farcaster / non-persistent sources — we don't want to try to
-      // reconnect them outside their original context.
-      if (rdns) {
-        try { localStorage.setItem(LAST_WALLET_KEY, rdns); } catch { /* storage disabled */ }
-      }
-    },
+    setExternalProvider: setPersistedExternalProvider,
+    reconnectStoredProvider,
     disconnect,
-  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, disconnect]);
+  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, setPersistedExternalProvider, reconnectStoredProvider, disconnect]);
 
   return <EvmWalletContext.Provider value={value}>{children}</EvmWalletContext.Provider>;
 }

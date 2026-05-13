@@ -7,7 +7,7 @@ import { loadEnv, NFT_DIR, parseEthAccount } from './lib-env.mjs';
 const tokenArg = process.argv[2] || '';
 const mode = (process.argv[3] || 'allow').toLowerCase();
 if (!tokenArg || !['allow', 'deny'].includes(mode)) {
-  console.error('Usage: npm run token:base-shop -- native|usdc|clash|0xToken allow|deny');
+  console.error('Usage: npm run token:base-shop -- native|usdc|cop|0xToken allow|deny');
   process.exit(1);
 }
 
@@ -22,7 +22,7 @@ const token = tokenArg.toLowerCase() === 'native'
   ? zeroAddress
   : tokenArg.toLowerCase() === 'usdc'
     ? getAddress(env.NFT_BASE_USDC_TOKEN || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913')
-    : tokenArg.toLowerCase() === 'clash'
+    : tokenArg.toLowerCase() === 'cop' || tokenArg.toLowerCase() === 'clash'
       ? getAddress(env.NFT_BASE_CLASH_TOKEN || env.CLASH_BASE_TOKEN)
       : getAddress(tokenArg);
 const rpcUrl = env.NFT_BASE_RPC_URL || env.BASE_RPC_URL || env.VITE_BASE_RPC_URL || 'https://base-rpc.publicnode.com';

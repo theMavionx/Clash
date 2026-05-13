@@ -9,6 +9,9 @@ const TRAVEL_SECONDS: float = 4.0
 const UNLOAD_PAUSE_SECONDS: float = 3.0
 const POST_UNLOAD_PAUSE_SECONDS: float = 1.0
 const PAUSE_SECONDS: float = 1.2
+const CART_BODY_COLOR: Color = Color(0.82, 0.48, 0.25, 1.0)
+const CART_ORE_COLOR: Color = Color(0.34, 0.34, 0.32, 1.0)
+const CART_WHEEL_COLOR: Color = Color(0.28, 0.25, 0.22, 1.0)
 
 var _cart: Node3D = null
 var _iron: Node3D = null
@@ -17,16 +20,20 @@ var _start_pos: Vector3 = Vector3.ZERO
 var _end_pos: Vector3 = Vector3.ZERO
 var _tween: Tween = null
 
+func _enter_tree() -> void:
+	_refresh_refs()
+	_fix_cart_materials()
+
 func _ready() -> void:
 	# Wildcard match guards against Godot's glTF importer adding suffixes
 	# (e.g. "wheels" → "wheels_MeshInstance"). first arg is a string pattern,
 	# not an exact name.
-	_cart = find_child("minecart*", true, false) as Node3D
-	_iron = find_child("iron*", true, false) as Node3D
-	_rails = find_child("reyki*", true, false) as Node3D
+	_refresh_refs()
 	if _cart == null or _iron == null or _rails == null:
 		push_warning("[mine_cart] cart/iron/rails not found in %s — animation disabled" % name)
 		return
+	_fix_cart_materials()
+	call_deferred("_fix_cart_materials")
 	# Wait one frame so global transforms reflect the building_system's
 	# scale/rotation that wraps this model after add_child.
 	await get_tree().process_frame
@@ -36,15 +43,26 @@ func _ready() -> void:
 	_compute_endpoints()
 	_start_loop()
 
+func _refresh_refs() -> void:
+	# Godot can append suffixes to imported glTF nodes, so these are
+	# wildcard lookups instead of exact names.
+	if _cart == null:
+		_cart = find_child("minecart*", true, false) as Node3D
+	if _iron == null:
+		_iron = find_child("iron*", true, false) as Node3D
+	if _rails == null:
+		_rails = find_child("reyki*", true, false) as Node3D
+
 # The cart mesh imports with very dark vertex colors plus a metallic material,
 # so Godot renders it almost black in-game. Override the cart pieces with
 # simple low-poly materials that stay readable under the island lighting.
 func _fix_cart_materials() -> void:
+	_refresh_refs()
 	if _cart == null:
 		return
-	var body_mat := _cart_material(Color(0.76, 0.43, 0.22, 1.0), 0.28)
-	var ore_mat := _cart_material(Color(0.30, 0.29, 0.27, 1.0), 0.14)
-	var wheel_mat := _cart_material(Color(0.24, 0.22, 0.20, 1.0), 0.12)
+	var body_mat := _cart_material(CART_BODY_COLOR)
+	var ore_mat := _cart_material(CART_ORE_COLOR)
+	var wheel_mat := _cart_material(CART_WHEEL_COLOR)
 	var stack: Array = [_cart]
 	while not stack.is_empty():
 		var n: Node = stack.pop_back()
@@ -76,17 +94,14 @@ func _node_name_chain_lc(node: Node) -> String:
 		cur = cur.get_parent()
 	return "/".join(names)
 
-func _cart_material(albedo: Color, emission_energy: float) -> StandardMaterial3D:
+func _cart_material(albedo: Color) -> StandardMaterial3D:
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.albedo_color = albedo
 	mat.vertex_color_use_as_albedo = false
 	mat.metallic = 0.0
 	mat.metallic_specular = 0.1
-	mat.roughness = 0.82
-	mat.emission_enabled = true
-	mat.emission = albedo.lightened(0.28)
-	mat.emission_energy_multiplier = emission_energy
-	mat.emission_operator = BaseMaterial3D.EMISSION_OP_ADD
+	mat.roughness = 0.9
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	return mat
 
 func _compute_endpoints() -> void:

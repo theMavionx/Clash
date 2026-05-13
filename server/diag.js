@@ -51,7 +51,7 @@ function loadOrGenerateKeypair() {
   const kp = nacl.box.keyPair();
   cachedSecret = kp.secretKey;
   cachedPublic = kp.publicKey;
-  console.warn(`[diag] generated EPHEMERAL keypair (no DIAG_SERVER_SECRET_B58 in env). To persist across restarts, add this to /opt/clash/.env:\nDIAG_SERVER_SECRET_B58=${bs58.encode(cachedSecret)}`);
+  console.warn('[diag] generated EPHEMERAL keypair (no DIAG_SERVER_SECRET_B58 in env); set a persistent secret out-of-band if decrypting old reports matters.');
   return { secret: cachedSecret, public: cachedPublic };
 }
 

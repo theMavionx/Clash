@@ -71,6 +71,24 @@ const NFT_IMAGE_PATH = path.join(__dirname, 'public', 'nft', 'demonking.png');
 const ZERO_EVM_ADDRESS = '0x0000000000000000000000000000000000000000';
 const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
+let clashUsdPriceCache = null;
+const nftQuoteRateBuckets = new Map();
+const BASE_NFT_SUPPLY_ABI = [
+  {
+    name: 'totalMinted',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    name: 'maxSupply',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+];
 
 function nftPublicBase(req) {
   const configured = process.env.NFT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_PUBLIC_URL;
@@ -167,6 +185,45 @@ function decimalToUnits(value, decimals) {
     + BigInt((frac + '0'.repeat(decimals)).slice(0, decimals));
 }
 
+function parsePositiveInteger(value, fallback, max) {
+  const raw = value == null || value === '' ? fallback : value;
+  const number = Number(raw);
+  if (!Number.isSafeInteger(number) || number < 1 || number > max) {
+    throw new Error(`Quantity must be an integer from 1 to ${max}`);
+  }
+  return number;
+}
+
+function requestIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function checkNftQuoteRateLimit(req) {
+  const windowMs = Math.max(1_000, Number(process.env.NFT_QUOTE_RATE_WINDOW_MS || 60_000));
+  const max = Math.max(1, Number(process.env.NFT_QUOTE_RATE_LIMIT || 30));
+  const now = Date.now();
+  const ip = requestIp(req);
+  const bucket = nftQuoteRateBuckets.get(ip) || { count: 0, resetAt: now + windowMs };
+  if (bucket.resetAt <= now) {
+    bucket.count = 0;
+    bucket.resetAt = now + windowMs;
+  }
+  bucket.count += 1;
+  nftQuoteRateBuckets.set(ip, bucket);
+
+  if (nftQuoteRateBuckets.size > 5_000) {
+    for (const [key, value] of nftQuoteRateBuckets) {
+      if (value.resetAt <= now) nftQuoteRateBuckets.delete(key);
+    }
+  }
+
+  return {
+    ok: bucket.count <= max,
+    retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)),
+  };
+}
+
 function unitsToDecimalString(units, decimals) {
   const scale = 10n ** BigInt(decimals);
   const whole = units / scale;
@@ -203,6 +260,54 @@ async function fetchNftUsdPrice(asset) {
     if (!json?.price) throw new Error('Binance price missing');
     return String(json.price);
   }
+}
+
+async function fetchClashUsdPrice(config) {
+  const override = process.env.NFT_COP_USD_PRICE
+    || process.env.COP_USD_PRICE
+    || process.env.NFT_CLASH_USD_PRICE
+    || process.env.CLASH_USD_PRICE;
+  if (override) return { price: String(override), source: 'env' };
+
+  const token = String(config?.clashToken || '').toLowerCase();
+  if (!token || /^0x0{40}$/i.test(token)) {
+    throw new Error('CoP token is not configured');
+  }
+
+  const now = Date.now();
+  const cacheMs = Math.max(5_000, Number(process.env.NFT_CLASH_PRICE_CACHE_MS || 30_000));
+  if (clashUsdPriceCache?.token === token && clashUsdPriceCache.expiresAt > now) {
+    return clashUsdPriceCache.value;
+  }
+
+  const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+  if (!r.ok) throw new Error(`DexScreener ${r.status}`);
+  const json = await r.json();
+  const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
+  const minLiquidityUsd = Math.max(0, Number(process.env.NFT_CLASH_MIN_LIQUIDITY_USD || 10_000));
+  const bestPair = pairs
+    .filter((pair) => (
+      String(pair?.chainId || '').toLowerCase() === 'base'
+      && String(pair?.baseToken?.address || '').toLowerCase() === token
+      && Number(pair?.priceUsd) > 0
+      && Number(pair?.liquidity?.usd || 0) >= minLiquidityUsd
+      && ['WETH', 'ETH', 'USDC', 'USDBC'].includes(String(pair?.quoteToken?.symbol || '').toUpperCase())
+    ))
+    .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
+
+  if (!bestPair) throw new Error(`CoP/USD price missing or liquidity below ${minLiquidityUsd}`);
+  const priceNumber = Number(bestPair.priceUsd);
+  const minPrice = Number(process.env.NFT_CLASH_MIN_USD || 0);
+  const maxPrice = Number(process.env.NFT_CLASH_MAX_USD || 0);
+  if (minPrice > 0 && priceNumber < minPrice) throw new Error('CoP/USD price below safety floor');
+  if (maxPrice > 0 && priceNumber > maxPrice) throw new Error('CoP/USD price above safety ceiling');
+
+  const value = {
+    price: String(bestPair.priceUsd),
+    source: `DexScreener ${bestPair.dexId || 'base'} ${bestPair.pairAddress || ''}`.trim(),
+  };
+  clashUsdPriceCache = { token, value, expiresAt: now + cacheMs };
+  return value;
 }
 
 async function parseNftEvmAccount() {
@@ -246,22 +351,126 @@ function baseNftConfig() {
   };
 }
 
-router.get('/nft/mint/config', (req, res) => {
+function fallbackNftSupply(source = 'fallback') {
+  return {
+    totalMinted: null,
+    maxSupply: NFT_MAX_SUPPLY,
+    remaining: null,
+    source,
+  };
+}
+
+async function readBaseNftSupply(config) {
+  if (!config?.nft) return fallbackNftSupply('not_deployed');
+
+  const { createPublicClient, getAddress, http } = await import('viem');
+  const { base } = await import('viem/chains');
+  const rpcUrl = process.env.NFT_BASE_RPC_URL
+    || process.env.BASE_RPC_URL
+    || process.env.VITE_BASE_RPC_URL
+    || 'https://mainnet.base.org';
+  const publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) });
+  const address = getAddress(config.nft);
+  const [totalMinted, maxSupply] = await Promise.all([
+    publicClient.readContract({ address, abi: BASE_NFT_SUPPLY_ABI, functionName: 'totalMinted' }),
+    publicClient.readContract({ address, abi: BASE_NFT_SUPPLY_ABI, functionName: 'maxSupply' }),
+  ]);
+  const minted = Number(totalMinted);
+  const max = Number(maxSupply);
+  return {
+    totalMinted: minted,
+    maxSupply: max,
+    remaining: Math.max(0, max - minted),
+    source: 'rpc',
+  };
+}
+
+async function readSolanaNftSupply(deployment) {
+  if (!deployment?.candyMachine) {
+    return fallbackNftSupply('not_deployed');
+  }
+
+  const { Connection, PublicKey } = require('@solana/web3.js');
+  const rpcUrl = process.env.NFT_SOLANA_RPC_URL
+    || process.env.SOLANA_RPC_URL
+    || process.env.VITE_SOLANA_RPC_URL
+    || deployment.rpcUrl
+    || 'https://solana-rpc.publicnode.com';
+  const maxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || deployment.maxSupply || NFT_MAX_SUPPLY);
+  const connection = new Connection(rpcUrl, 'confirmed');
+  const account = await connection.getAccountInfo(new PublicKey(deployment.candyMachine), 'confirmed');
+  if (!account?.data || account.data.length < 112) {
+    return {
+      totalMinted: 0,
+      maxSupply,
+      remaining: maxSupply,
+      source: 'missing_account',
+    };
+  }
+
+  const totalMinted = Number(account.data.readBigUInt64LE(104));
+  return {
+    totalMinted,
+    maxSupply,
+    remaining: Math.max(0, maxSupply - totalMinted),
+    source: 'rpc',
+  };
+}
+
+router.get('/nft/mint/config', async (req, res) => {
   const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
+  const baseConfig = baseNftConfig();
+  let baseSupply = fallbackNftSupply();
+  let solanaSupply = fallbackNftSupply();
+  try {
+    baseSupply = await readBaseNftSupply(baseConfig);
+  } catch (err) {
+    console.warn('[NFT] failed to read Base supply', err?.message || err);
+  }
+  try {
+    solanaSupply = await readSolanaNftSupply(solanaDeployment);
+  } catch (err) {
+    console.warn('[NFT] failed to read Solana supply', err?.message || err);
+    const solanaMaxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || solanaDeployment.maxSupply || NFT_MAX_SUPPLY);
+    const solanaMinted = Number(solanaDeployment.totalMinted ?? solanaDeployment.minted ?? 0);
+    solanaSupply = {
+      totalMinted: solanaMinted,
+      maxSupply: solanaMaxSupply,
+      remaining: solanaDeployment.remaining ?? Math.max(0, solanaMaxSupply - solanaMinted),
+      source: 'fallback',
+    };
+  }
+  const solanaSaleActive = process.env.NFT_SOLANA_SALE_ACTIVE
+    ? process.env.NFT_SOLANA_SALE_ACTIVE !== '0'
+    : !!solanaDeployment.saleActive;
   res.set('Cache-Control', 'no-store');
   res.json({
-    base: baseNftConfig(),
+    base: {
+      ...baseConfig,
+      supply: baseSupply,
+    },
     solana: {
       collection: process.env.NFT_SOLANA_COLLECTION || solanaDeployment.collection || null,
       candyMachine: process.env.NFT_SOLANA_CANDY_MACHINE || solanaDeployment.candyMachine || null,
       candyGuard: process.env.NFT_SOLANA_CANDY_GUARD || solanaDeployment.candyGuard || null,
+      saleActive: solanaSaleActive,
+      startDate: solanaSaleActive ? null : (process.env.NFT_SOLANA_START_DATE || solanaDeployment.startDate || null),
+      priceLamports: String(process.env.NFT_SOLANA_PRICE_LAMPORTS || solanaDeployment.priceLamports || '0'),
       groups: solanaDeployment.groups || solanaDeployment.paymentGroups || null,
+      paymentGroups: solanaDeployment.paymentGroups || solanaDeployment.groups || null,
+      supply: solanaSupply,
     },
   });
 });
 
 router.post('/nft/base/quote', async (req, res) => {
   try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT quote requests. Try again shortly.' });
+    }
+
     const { getAddress, zeroAddress } = await import('viem');
     const config = baseNftConfig();
     if (!config.shop) return res.status(503).json({ error: 'Base shop is not deployed' });
@@ -271,7 +480,7 @@ router.post('/nft/base/quote', async (req, res) => {
 
     const buyer = getAddress(String(req.body?.buyer || ''));
     const payment = String(req.body?.payment || '').toLowerCase();
-    const quantity = BigInt(Math.max(1, Math.min(10, Number(req.body?.quantity || 1))));
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
     const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_BASE_QUOTE_TTL_SECONDS || 300)));
     const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
     const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
@@ -292,15 +501,14 @@ router.post('/nft/base/quote', async (req, res) => {
       paymentToken = getAddress(config.usdcToken);
       decimals = Number(process.env.NFT_BASE_USDC_DECIMALS || 6);
       unitPrice = usdPriceE6 * 10n ** BigInt(Math.max(0, decimals - 6));
-    } else if (payment === 'clash') {
-      if (!config.clashReady) return res.status(409).json({ error: 'CLASH is not live yet' });
-      const clashUsd = process.env.NFT_CLASH_USD_PRICE || process.env.CLASH_USD_PRICE;
-      if (!clashUsd) return res.status(503).json({ error: 'CLASH price is not configured' });
+    } else if (payment === 'cop' || payment === 'clash') {
+      if (!config.clashReady) return res.status(409).json({ error: 'CoP is not live yet' });
+      const clashUsd = await fetchClashUsdPrice(config);
       paymentToken = getAddress(config.clashToken);
       decimals = Number(process.env.NFT_BASE_CLASH_DECIMALS || 18);
       usdPriceE6 = BigInt(config.clashUsdPriceE6);
-      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd, decimals);
-      priceSource = `CLASH/USD ${clashUsd}`;
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
+      priceSource = `CoP/USD ${clashUsd.price} (${clashUsd.source})`;
     } else {
       return res.status(400).json({ error: 'Unsupported payment method' });
     }

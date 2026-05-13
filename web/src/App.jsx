@@ -14,6 +14,7 @@ import { usePreloadPanelAssets } from './hooks/usePreloadPanelAssets';
 import { useOptionalPrivy } from './components/PrivyAuthProvider';
 import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload, setClientLogContext } from './lib/clientLogger';
+import WalletSessionRecovery from './components/WalletSessionRecovery';
 // Loading splash assets — served directly from `web/public/` so art can be
 // swapped without rebuilding the bundle. We layer background + logo
 // separately so the logo can be hidden on narrow (phone-portrait) screens
@@ -178,6 +179,7 @@ export default function App() {
                       the player's `futures_mode` from the player state context. */}
                   <FuturesModeProvider>
                     <ClientLogContextBridge />
+                    <WalletSessionRecovery />
                     <AppInner />
                   </FuturesModeProvider>
                 </GodotProvider>

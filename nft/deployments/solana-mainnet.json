@@ -10,8 +10,8 @@
   "maxSupply": 250,
   "priceLamports": "95340118",
   "treasury": "BoioDvoTv4sbpfYb2M533732vfkJrsqKF7BvEpxz7iau",
-  "saleActive": false,
-  "startDate": "2100-01-01T00:00:00.000Z",
+  "saleActive": true,
+  "startDate": null,
   "metadataBase": "https://clashofperps.fun/api/nft/solana/",
   "metadataMode": "hidden-settings",
   "collectionUri": "https://clashofperps.fun/api/nft/solana/collection",
@@ -32,5 +32,5 @@
       "destinationAta": "GcwB9jo3xb8HPEVd1KAWA7uxqcuTr6DKr6h3BzJRCXjY"
     }
   },
-  "updatedAt": "2026-05-13T13:19:51.441Z"
+  "updatedAt": "2026-05-13T18:30:00.000Z"
 }

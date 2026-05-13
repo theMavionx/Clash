@@ -191,7 +191,7 @@ DECIBEL_BUILDER_FEE_BPS=2
 CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
 EOF
             chmod 600 "$ENV_FILE"
-            log "Generated new shared .env with ADMIN_KEY=$ADMIN_KEY"
+            log "Generated new shared .env with fresh ADMIN_KEY/REWARD_SECRET/CLASH_WALLET_ENCRYPTION_KEY"
         fi
     fi
 
@@ -472,6 +472,11 @@ HTTPCONF
         certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
     fi
 
+    ARBITRUM_ALCHEMY_KEY=""
+    if [ -f "$ENV_FILE" ]; then
+        ARBITRUM_ALCHEMY_KEY="$(grep -E '^ARBITRUM_ALCHEMY_KEY=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\"'\''[:space:]')"
+    fi
+
     cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
 server {
     listen 80;
@@ -577,7 +582,7 @@ server {
     }
 
     location /rpc/arb-alchemy {
-        proxy_pass https://arb-mainnet.g.alchemy.com/v2/_wtFjwex46SgJDz2fx2c6;
+        proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;
         proxy_http_version 1.1;
         proxy_set_header Host arb-mainnet.g.alchemy.com;
         proxy_ssl_server_name on;
@@ -688,6 +693,13 @@ server {
     client_max_body_size 200M;
 }
 SSLCONF
+
+    if [ -n "$ARBITRUM_ALCHEMY_KEY" ]; then
+        sed -i "s|__ARBITRUM_ALCHEMY_KEY__|$ARBITRUM_ALCHEMY_KEY|g" /etc/nginx/sites-available/$DOMAIN
+    else
+        sed -i 's|proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
+    fi
 
     ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
