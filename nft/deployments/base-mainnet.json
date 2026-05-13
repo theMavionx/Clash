@@ -1,0 +1,13 @@
+{
+  "chain": "base",
+  "chainId": 8453,
+  "contract": "0x8fc6e18371ddd76654ab1f0859099c040aed255a",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "txHash": "0xd0f4717838c2d096a9f262036da0ae6c713ad2ccd93aea1b947cb2623ff5dcea",
+  "blockNumber": "45943110",
+  "maxSupply": 250,
+  "baseTokenUri": "https://clashofperps.fun/api/nft/base/",
+  "contractUri": "https://clashofperps.fun/api/nft/base/contract",
+  "initialPriceWei": "0",
+  "deployedAt": "2026-05-13T12:32:52.069Z"
+}

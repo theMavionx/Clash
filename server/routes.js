@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
@@ -59,6 +61,100 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
     `SELECT * FROM players WHERE ${where} ORDER BY COALESCE(trophies, 0) DESC, id DESC LIMIT 1`
   ).get(...params);
 }
+
+// ---------- NFT metadata proxy ----------
+// Keep on-chain token URIs stable while letting us replace image/metadata
+// content from the server via env/deploy changes.
+const NFT_MAX_SUPPLY = 250;
+const NFT_IMAGE_PATH = path.join(__dirname, 'public', 'nft', 'demonking.png');
+
+function nftPublicBase(req) {
+  const configured = process.env.NFT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_PUBLIC_URL;
+  if (configured) return configured.replace(/\/+$/, '');
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  return `${proto}://${req.get('host')}`;
+}
+
+function nftImageUrl(req) {
+  return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
+}
+
+function nftTokenMetadata(req, chain, tokenId) {
+  const name = process.env.NFT_NAME || 'Demon King';
+  const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
+  const id = Number(tokenId);
+  return {
+    name: `${name} #${id}`,
+    symbol: process.env.NFT_SYMBOL || 'DMNK',
+    description,
+    image: nftImageUrl(req),
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Character', value: 'Demon King' },
+      { trait_type: 'Chain', value: chain },
+      { trait_type: 'Edition', value: id },
+      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: nftImageUrl(req), type: 'image/png' }],
+    },
+  };
+}
+
+function sendNftMetadata(req, res, chain, rawTokenId) {
+  const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
+  if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
+  const id = Number(tokenId);
+  if (id < 1 || id > NFT_MAX_SUPPLY) return res.status(404).json({ error: 'token metadata not found' });
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json(nftTokenMetadata(req, chain, id));
+}
+
+router.get('/nft/image', (req, res) => {
+  if (process.env.NFT_IMAGE_URL) return res.redirect(302, process.env.NFT_IMAGE_URL);
+  if (!fs.existsSync(NFT_IMAGE_PATH)) return res.status(404).json({ error: 'image missing' });
+  res.set('Cache-Control', process.env.NFT_IMAGE_CACHE || 'public, max-age=300');
+  res.sendFile(NFT_IMAGE_PATH);
+});
+
+router.get('/nft/base/contract', (req, res) => {
+  const name = process.env.NFT_NAME || 'Demon King';
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json({
+    name,
+    description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
+    image: nftImageUrl(req),
+    external_link: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    seller_fee_basis_points: Number(process.env.NFT_SELLER_FEE_BASIS_POINTS || 0),
+    fee_recipient: process.env.NFT_FEE_RECIPIENT || '',
+  });
+});
+
+router.get('/nft/base/:tokenId', (req, res) => sendNftMetadata(req, res, 'Base', req.params.tokenId));
+router.get('/nft/base/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Base', req.params.tokenId));
+router.get('/nft/solana/collection', (req, res) => {
+  const name = process.env.NFT_NAME || 'Demon King';
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json({
+    name,
+    symbol: process.env.NFT_SYMBOL || 'DMNK',
+    description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
+    image: nftImageUrl(req),
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: nftImageUrl(req), type: 'image/png' }],
+    },
+  });
+});
+router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
+router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 
 // Per-DEX canonical lookup. Each (wallet, dex) pair is unique post-migration,
 // so this returns at most one row. Uses the same Aptos zero-padding fan-out
