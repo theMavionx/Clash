@@ -39,20 +39,56 @@ npm install
 npm run doctor
 npm run compile:base
 npm run deploy:base
+npm run deploy:base-shop
+npm run token:base-shop -- clash allow
+npm run transfer:base-shop
+npm run quote:base-shop -- clash 0xBuyer 1
 npm run set-price:base
 npm run sale:base -- open
 npm run deploy:solana
+npm run set-payments:solana
 npm run set-price:solana
 npm run sale:solana -- open
+npm run quote:prices -- 8.9
 ```
 
 The Base contract starts paused with `saleActive=false`. Set the price and
 unpause/open sale only when the mint UI is ready.
 
+## Shop Payment Layer
+
+The already deployed Base NFT contract only accepts native ETH in its direct
+`mint` function. For the in-game shop, use `DemonKingBaseShop` instead:
+
+- deploy `DemonKingBaseShop`;
+- allow the payment tokens we want;
+- transfer NFT ownership to the shop contract;
+- have the backend/frontend request short-lived signed quotes;
+- users call `mintWithQuote`.
+
+Payments are forwarded directly to the contract owner/deployer address. Rescue
+withdrawals also send only to `owner()`.
+
+Target pricing:
+
+- Base CLASH: `$5.00` per NFT. Set `NFT_BASE_CLASH_TOKEN` after CLASH launches,
+  and set/provide `NFT_CLASH_USD_PRICE` until a DEX/oracle price source is wired.
+- Base ETH/USDC shop quotes: `$8.90` per NFT if enabled.
+- Solana SOL/USDC Candy Machine groups: `$8.90` per NFT.
+
+`quote:base-shop` computes native ETH from live ETH/USD, fixed USDC units, or
+CLASH units from `NFT_CLASH_USD_PRICE`, then signs the EIP-712 quote. Keep the
+quote TTL short; default is 300 seconds.
+
 The Solana Candy Machine also starts closed by default via a far-future
 `startDate` guard. Set `NFT_SOLANA_PRICE_SOL` and run `npm run sale:solana --
 open` only when the mint UI is ready. To deploy it open immediately, set
 `NFT_SOLANA_SALE_ACTIVE=1` before `npm run deploy:solana`.
+
+`set-payments:solana` computes `$8.90` in SOL from live SOL/USD and configures
+USDC as exactly `8.900000` USDC. If a previously deployed Candy Guard account is
+too small to add payment groups, deploy a fresh Candy Machine with the groups
+from the start before opening the public sale.
 
 Solana deploy now defaults to Metaplex Core Candy Machine `hiddenSettings`.
 That keeps one stable metadata URI on-chain:

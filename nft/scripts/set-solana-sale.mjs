@@ -11,6 +11,7 @@ import {
   requirePublicKey,
   solanaPriceLamports,
 } from './lib-env.mjs';
+import { buildSolanaGuardConfig } from './lib-solana-guards.mjs';
 
 const mode = (process.argv[2] || '').toLowerCase();
 if (!['open', 'close'].includes(mode)) {
@@ -38,23 +39,30 @@ const destination = env.NFT_SOLANA_TREASURY
   ? requirePublicKey(env.NFT_SOLANA_TREASURY, 'NFT_SOLANA_TREASURY').toBase58()
   : publicKey(deployment.treasury || umi.identity.publicKey);
 
-const sig = await updateCandyGuard(umi, {
-  candyGuard: publicKey(deployment.candyGuard),
-  authority: umi.identity,
-  guards: {
-    solPayment: some({
-      lamports: lamports(priceLamports),
-      destination,
-    }),
-    startDate: startDate ? some({ date: dateTime(startDate) }) : none(),
-  },
-  groups: [],
-}).sendAndConfirm(umi);
-
 deployment.priceLamports = priceLamports.toString();
 deployment.treasury = destination.toString();
 deployment.saleActive = saleActive;
 deployment.startDate = startDate;
+if (!deployment.paymentGroups) {
+  deployment.paymentGroups = {
+    sol: {
+      lamports: priceLamports.toString(),
+      destination: destination.toString(),
+    },
+  };
+} else if (deployment.paymentGroups.sol) {
+  deployment.paymentGroups.sol.lamports = priceLamports.toString();
+  deployment.paymentGroups.sol.destination = destination.toString();
+}
+
+const guardConfig = buildSolanaGuardConfig(deployment, { dateTime, lamports, none, publicKey, some });
+
+const sig = await updateCandyGuard(umi, {
+  candyGuard: publicKey(deployment.candyGuard),
+  authority: umi.identity,
+  ...guardConfig,
+}).sendAndConfirm(umi);
+
 deployment.updatedAt = new Date().toISOString();
 fs.writeFileSync(deploymentPath, `${JSON.stringify(deployment, null, 2)}\n`);
 console.log(`Solana sale ${mode}; signature=${sig.signature}`);

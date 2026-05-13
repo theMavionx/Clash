@@ -6,11 +6,17 @@
   "scripts": {
     "compile:base": "node scripts/compile-base.mjs",
     "deploy:base": "node scripts/deploy-base.mjs",
+    "deploy:base-shop": "node scripts/deploy-base-shop.mjs",
     "set-price:base": "node scripts/set-base-price.mjs",
     "sale:base": "node scripts/set-base-sale.mjs",
+    "token:base-shop": "node scripts/set-base-shop-token.mjs",
+    "transfer:base-shop": "node scripts/transfer-base-nft-to-shop.mjs",
+    "quote:base-shop": "node scripts/quote-base-shop.mjs",
     "deploy:solana": "node scripts/deploy-solana-core-candy-machine.mjs",
     "set-price:solana": "node scripts/set-solana-price.mjs",
+    "set-payments:solana": "node scripts/set-solana-payments.mjs",
     "sale:solana": "node scripts/set-solana-sale.mjs",
+    "quote:prices": "node scripts/price-quote.mjs",
     "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
@@ -19,6 +25,7 @@
     "@metaplex-foundation/umi": "^1.5.1",
     "@metaplex-foundation/umi-bundle-defaults": "^1.5.1",
     "@openzeppelin/contracts": "^5.6.1",
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "bs58": "^6.0.0",
     "solc": "^0.8.35",
