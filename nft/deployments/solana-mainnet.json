@@ -1,0 +1,21 @@
+{
+  "chain": "solana",
+  "standard": "metaplex-core-candy-machine",
+  "rpcUrl": "https://solana-rpc.publicnode.com",
+  "authority": "BoioDvoTv4sbpfYb2M533732vfkJrsqKF7BvEpxz7iau",
+  "collection": "FaNGuNf3rQjrWZaUeaGvwj63oAGuh5J3mc8wPUtHas4m",
+  "candyMachine": "9jQnKxVfaZyw3GUiPw5GxhgNtLEc2rpLWNE3s1MsjWAu",
+  "candyGuard": "2PUDARWhLau4imSspLnKJgk6TDVgMKDT1mMVskj5vguT",
+  "deployTx": "3PUmo9MSWAyuLQHqJzZxCAMPezLtjmBwJu1ZeX8TSFMPtY2WYruxtZebuVQif22jkFwVTQLXfqafRYjYWJsAj1r",
+  "maxSupply": 250,
+  "priceLamports": "0",
+  "treasury": "BoioDvoTv4sbpfYb2M533732vfkJrsqKF7BvEpxz7iau",
+  "saleActive": false,
+  "startDate": "2100-01-01T00:00:00.000Z",
+  "metadataBase": "https://clashofperps.fun/api/nft/solana/",
+  "metadataMode": "hidden-settings",
+  "collectionUri": "https://clashofperps.fun/api/nft/solana/collection",
+  "hiddenUri": "https://clashofperps.fun/api/nft/solana/hidden",
+  "hiddenHash": "ae38cd9677a6e4540bf6f8bd9c5b2a233dd31561c6ecc5854cf3a3d04f5bf8d3",
+  "deployedAt": "2026-05-13T12:52:36.764Z"
+}
