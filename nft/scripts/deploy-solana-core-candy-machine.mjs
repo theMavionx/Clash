@@ -51,7 +51,7 @@ if (balance < Math.ceil(minSol * LAMPORTS_PER_SOL)) {
 }
 
 const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-const { dateTime, generateSigner, keypairIdentity, lamports, none, some } = await import('@metaplex-foundation/umi');
+const { dateTime, generateSigner, keypairIdentity, lamports, none, some, transactionBuilder } = await import('@metaplex-foundation/umi');
 const { mplCore, createCollectionV1 } = await import('@metaplex-foundation/mpl-core');
 const {
   addConfigLines,
@@ -103,32 +103,33 @@ const hiddenSettings = useConfigLines
     });
 
 console.log(`Creating MPL Core collection: ${collection.publicKey}`);
-await createCollectionV1(umi, {
-  collection,
-  name,
-  uri: collectionUri,
-  plugins: none(),
-}).sendAndConfirm(umi);
-
 console.log(`Creating Core Candy Machine: ${candyMachine.publicKey}`);
-await (await create(umi, {
-  candyMachine,
-  collection: collection.publicKey,
-  collectionUpdateAuthority: umi.identity,
-  itemsAvailable: maxSupply,
-  maxEditionSupply: 0,
-  isMutable: true,
-  configLineSettings,
-  hiddenSettings,
-  guards: {
-    solPayment: some({
-      lamports: lamports(priceLamports),
-      destination,
-    }),
-    startDate: startDate ? some({ date: dateTime(startDate) }) : none(),
-  },
-  groups: [],
-})).sendAndConfirm(umi);
+await transactionBuilder()
+  .add(createCollectionV1(umi, {
+    collection,
+    name,
+    uri: collectionUri,
+    plugins: none(),
+  }))
+  .add(await create(umi, {
+    candyMachine,
+    collection: collection.publicKey,
+    collectionUpdateAuthority: umi.identity,
+    itemsAvailable: maxSupply,
+    maxEditionSupply: 0,
+    isMutable: true,
+    configLineSettings,
+    hiddenSettings,
+    guards: {
+      solPayment: some({
+        lamports: lamports(priceLamports),
+        destination,
+      }),
+      startDate: startDate ? some({ date: dateTime(startDate) }) : none(),
+    },
+    groups: [],
+  }))
+  .sendAndConfirm(umi);
 
 if (useConfigLines) {
   const batchSize = Number(env.NFT_SOLANA_CONFIG_BATCH_SIZE || 8);
