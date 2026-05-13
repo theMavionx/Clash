@@ -313,7 +313,7 @@ validate_godot_export_freshness() {
 install_release_dependencies() {
     log "[4/9] Installing release dependencies..."
     cd "$SERVER_DIR"
-    npm ci --omit=dev
+    npm ci --omit=dev --legacy-peer-deps
 
     if [ -d "$FUTURES_DIR" ]; then
         cd "$FUTURES_DIR"
