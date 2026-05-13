@@ -103,6 +103,28 @@ function nftTokenMetadata(req, chain, tokenId) {
   };
 }
 
+function nftHiddenMetadata(req, chain) {
+  const name = process.env.NFT_NAME || 'Demon King';
+  const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
+  return {
+    name,
+    symbol: process.env.NFT_SYMBOL || 'DMNK',
+    description,
+    image: nftImageUrl(req),
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Character', value: 'Demon King' },
+      { trait_type: 'Chain', value: chain },
+      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: nftImageUrl(req), type: 'image/png' }],
+    },
+  };
+}
+
 function sendNftMetadata(req, res, chain, rawTokenId) {
   const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
   if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
@@ -152,6 +174,14 @@ router.get('/nft/solana/collection', (req, res) => {
       files: [{ uri: nftImageUrl(req), type: 'image/png' }],
     },
   });
+});
+router.get('/nft/solana/hidden', (req, res) => {
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json(nftHiddenMetadata(req, 'Solana'));
+});
+router.get('/nft/solana/hidden.json', (req, res) => {
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json(nftHiddenMetadata(req, 'Solana'));
 });
 router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));

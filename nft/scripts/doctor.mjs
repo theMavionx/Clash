@@ -26,9 +26,22 @@ try {
   const rpcUrl = env.NFT_SOLANA_RPC_URL || env.SOLANA_RPC_URL || env.VITE_SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
   const connection = new Connection(rpcUrl, 'confirmed');
   const balance = await connection.getBalance(keypair.publicKey);
+  const maxSupply = Number(env.NFT_SOLANA_SUPPLY || env.NFT_SUPPLY || 250);
+  const useConfigLines = env.NFT_SOLANA_USE_CONFIG_LINES === '1'
+    || String(env.NFT_SOLANA_METADATA_MODE || '').toLowerCase() === 'config-lines';
+  const { getCandyMachineSize } = await import('@metaplex-foundation/mpl-core-candy-machine');
+  const { none } = await import('@metaplex-foundation/umi');
+  const hiddenCmSize = getCandyMachineSize(maxSupply, none());
+  const configCmSize = getCandyMachineSize(maxSupply, { nameLength: 32, uriLength: 200 });
+  const [hiddenCmRent, configCmRent] = await Promise.all([
+    connection.getMinimumBalanceForRentExemption(hiddenCmSize),
+    connection.getMinimumBalanceForRentExemption(configCmSize),
+  ]);
   console.log(`Solana address: ${keypair.publicKey.toBase58()}`);
   console.log(`Solana RPC: ${rpcUrl}`);
   console.log(`Solana balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+  console.log(`Solana metadata mode: ${useConfigLines ? 'config-lines' : 'hidden-settings'}`);
+  console.log(`Solana Candy Machine rent estimate: hidden=${hiddenCmRent / LAMPORTS_PER_SOL} SOL, config-lines=${configCmRent / LAMPORTS_PER_SOL} SOL`);
 } catch (err) {
   console.log(`Solana check failed: ${err.message}`);
 }

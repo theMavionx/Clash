@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
   loadEnv,
   NFT_DIR,
@@ -7,6 +8,7 @@ import {
   publicBaseUrl,
   requirePublicKey,
   solanaCollectionUri,
+  solanaHiddenUri,
   solanaItemUri,
   solanaPriceLamports,
 } from './lib-env.mjs';
@@ -33,12 +35,16 @@ const env = loadEnv();
 const rpcUrl = env.NFT_SOLANA_RPC_URL || env.SOLANA_RPC_URL || env.VITE_SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
 const maxSupply = Number(env.NFT_SOLANA_SUPPLY || env.NFT_SUPPLY || 250);
 if (maxSupply !== 250) throw new Error('This drop is expected to have exactly 250 Solana NFTs.');
+const useConfigLines = env.NFT_SOLANA_USE_CONFIG_LINES === '1'
+  || String(env.NFT_SOLANA_METADATA_MODE || '').toLowerCase() === 'config-lines';
+const metadataMode = useConfigLines ? 'config-lines' : 'hidden-settings';
 
 const solanaKeypair = parseSolanaKeypair(env);
 const balance = await getSolanaBalance(rpcUrl, solanaKeypair.publicKey.toBase58());
-const minSol = Number(env.NFT_SOLANA_DEPLOY_MIN_SOL || '0.05');
+const minSol = Number(env.NFT_SOLANA_DEPLOY_MIN_SOL || (useConfigLines ? '0.45' : '0.015'));
 console.log(`Solana deployer: ${solanaKeypair.publicKey.toBase58()}`);
 console.log(`Solana balance: ${balance / LAMPORTS_PER_SOL} SOL`);
+console.log(`Solana metadata mode: ${metadataMode}`);
 if (balance < Math.ceil(minSol * LAMPORTS_PER_SOL)) {
   console.error(`Solana balance is below ${minSol} SOL. Fund deployer before creating collection/candy machine.`);
   process.exit(1);
@@ -68,6 +74,30 @@ const destination = env.NFT_SOLANA_TREASURY
 const collection = generateSigner(umi);
 const candyMachine = generateSigner(umi);
 const collectionUri = solanaCollectionUri(env);
+const hiddenUri = solanaHiddenUri(env);
+const hiddenHash = Uint8Array.from(
+  crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ name, symbol, hiddenUri, maxSupply }))
+    .digest()
+);
+
+const configLineSettings = useConfigLines
+  ? {
+      prefixName: '',
+      nameLength: 32,
+      prefixUri: '',
+      uriLength: 200,
+      isSequential: true,
+    }
+  : none();
+const hiddenSettings = useConfigLines
+  ? none()
+  : some({
+      name,
+      uri: hiddenUri,
+      hash: hiddenHash,
+    });
 
 console.log(`Creating MPL Core collection: ${collection.publicKey}`);
 await createCollectionV1(umi, {
@@ -85,14 +115,8 @@ await (await create(umi, {
   itemsAvailable: maxSupply,
   maxEditionSupply: 0,
   isMutable: true,
-  configLineSettings: {
-    prefixName: '',
-    nameLength: 32,
-    prefixUri: '',
-    uriLength: 200,
-    isSequential: true,
-  },
-  hiddenSettings: none(),
+  configLineSettings,
+  hiddenSettings,
   guards: {
     solPayment: some({
       lamports: lamports(priceLamports),
@@ -102,21 +126,25 @@ await (await create(umi, {
   groups: [],
 })).sendAndConfirm(umi);
 
-const batchSize = Number(env.NFT_SOLANA_CONFIG_BATCH_SIZE || 8);
-for (let start = 0; start < maxSupply; start += batchSize) {
-  const configLines = [];
-  for (let i = start + 1; i <= Math.min(start + batchSize, maxSupply); i++) {
-    configLines.push({
-      name: `${name} #${i}`,
-      uri: solanaItemUri(env, i),
-    });
+if (useConfigLines) {
+  const batchSize = Number(env.NFT_SOLANA_CONFIG_BATCH_SIZE || 8);
+  for (let start = 0; start < maxSupply; start += batchSize) {
+    const configLines = [];
+    for (let i = start + 1; i <= Math.min(start + batchSize, maxSupply); i++) {
+      configLines.push({
+        name: `${name} #${i}`,
+        uri: solanaItemUri(env, i),
+      });
+    }
+    console.log(`Adding config lines ${start + 1}-${start + configLines.length}`);
+    await addConfigLines(umi, {
+      candyMachine: candyMachine.publicKey,
+      index: start,
+      configLines,
+    }).sendAndConfirm(umi);
   }
-  console.log(`Adding config lines ${start + 1}-${start + configLines.length}`);
-  await addConfigLines(umi, {
-    candyMachine: candyMachine.publicKey,
-    index: start,
-    configLines,
-  }).sendAndConfirm(umi);
+} else {
+  console.log(`Using hidden settings metadata: ${hiddenUri}`);
 }
 
 const [candyGuard] = findCandyGuardPda(umi, { base: candyMachine.publicKey });
@@ -132,7 +160,10 @@ const deployment = {
   priceLamports: priceLamports.toString(),
   treasury: destination,
   metadataBase: `${publicBaseUrl(env)}/api/nft/solana/`,
+  metadataMode,
   collectionUri,
+  hiddenUri: useConfigLines ? null : hiddenUri,
+  hiddenHash: useConfigLines ? null : Buffer.from(hiddenHash).toString('hex'),
   deployedAt: new Date().toISOString(),
 };
 fs.mkdirSync(path.join(NFT_DIR, 'deployments'), { recursive: true });

@@ -50,6 +50,10 @@ export function solanaCollectionUri(env) {
   return env.NFT_SOLANA_COLLECTION_URI || `${publicBaseUrl(env)}/api/nft/solana/collection`;
 }
 
+export function solanaHiddenUri(env) {
+  return env.NFT_SOLANA_HIDDEN_URI || `${publicBaseUrl(env)}/api/nft/solana/hidden`;
+}
+
 export function solanaPriceLamports(env) {
   if (env.NFT_SOLANA_PRICE_LAMPORTS) return BigInt(env.NFT_SOLANA_PRICE_LAMPORTS);
   const sol = env.NFT_SOLANA_PRICE_SOL || env.NFT_PRICE_SOL || '0';

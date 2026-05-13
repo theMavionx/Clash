@@ -7,6 +7,7 @@
     "compile:base": "node scripts/compile-base.mjs",
     "deploy:base": "node scripts/deploy-base.mjs",
     "set-price:base": "node scripts/set-base-price.mjs",
+    "sale:base": "node scripts/set-base-sale.mjs",
     "deploy:solana": "node scripts/deploy-solana-core-candy-machine.mjs",
     "set-price:solana": "node scripts/set-solana-price.mjs",
     "doctor": "node scripts/doctor.mjs"
