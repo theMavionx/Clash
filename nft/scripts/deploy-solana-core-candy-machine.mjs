@@ -51,7 +51,7 @@ if (balance < Math.ceil(minSol * LAMPORTS_PER_SOL)) {
 }
 
 const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-const { generateSigner, keypairIdentity, lamports, none, some } = await import('@metaplex-foundation/umi');
+const { dateTime, generateSigner, keypairIdentity, lamports, none, some } = await import('@metaplex-foundation/umi');
 const { mplCore, createCollectionV1 } = await import('@metaplex-foundation/mpl-core');
 const {
   addConfigLines,
@@ -67,6 +67,9 @@ umi.use(keypairIdentity(umiKeypair));
 const name = env.NFT_NAME || 'Demon King';
 const symbol = env.NFT_SYMBOL || 'DMNK';
 const priceLamports = solanaPriceLamports(env);
+const saleActive = env.NFT_SOLANA_SALE_ACTIVE === '1' || String(env.NFT_SOLANA_SALE_ACTIVE || '').toLowerCase() === 'true';
+const closedStartDate = env.NFT_SOLANA_CLOSED_START_DATE || '2100-01-01T00:00:00.000Z';
+const startDate = env.NFT_SOLANA_START_DATE || (saleActive ? null : closedStartDate);
 const destination = env.NFT_SOLANA_TREASURY
   ? requirePublicKey(env.NFT_SOLANA_TREASURY, 'NFT_SOLANA_TREASURY').toBase58()
   : umi.identity.publicKey;
@@ -122,6 +125,7 @@ await (await create(umi, {
       lamports: lamports(priceLamports),
       destination,
     }),
+    startDate: startDate ? some({ date: dateTime(startDate) }) : none(),
   },
   groups: [],
 })).sendAndConfirm(umi);
@@ -159,6 +163,8 @@ const deployment = {
   maxSupply,
   priceLamports: priceLamports.toString(),
   treasury: destination,
+  saleActive,
+  startDate,
   metadataBase: `${publicBaseUrl(env)}/api/nft/solana/`,
   metadataMode,
   collectionUri,

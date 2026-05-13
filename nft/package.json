@@ -10,6 +10,7 @@
     "sale:base": "node scripts/set-base-sale.mjs",
     "deploy:solana": "node scripts/deploy-solana-core-candy-machine.mjs",
     "set-price:solana": "node scripts/set-solana-price.mjs",
+    "sale:solana": "node scripts/set-solana-sale.mjs",
     "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {

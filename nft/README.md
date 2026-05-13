@@ -42,10 +42,17 @@ npm run deploy:base
 npm run set-price:base
 npm run sale:base -- open
 npm run deploy:solana
+npm run set-price:solana
+npm run sale:solana -- open
 ```
 
 The Base contract starts paused with `saleActive=false`. Set the price and
 unpause/open sale only when the mint UI is ready.
+
+The Solana Candy Machine also starts closed by default via a far-future
+`startDate` guard. Set `NFT_SOLANA_PRICE_SOL` and run `npm run sale:solana --
+open` only when the mint UI is ready. To deploy it open immediately, set
+`NFT_SOLANA_SALE_ACTIVE=1` before `npm run deploy:solana`.
 
 Solana deploy now defaults to Metaplex Core Candy Machine `hiddenSettings`.
 That keeps one stable metadata URI on-chain:

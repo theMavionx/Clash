@@ -12,6 +12,12 @@ import {
   solanaPriceLamports,
 } from './lib-env.mjs';
 
+const mode = (process.argv[2] || '').toLowerCase();
+if (!['open', 'close'].includes(mode)) {
+  console.error('Usage: npm run sale:solana -- open|close');
+  process.exit(1);
+}
+
 const env = loadEnv();
 const deploymentPath = path.join(NFT_DIR, 'deployments', 'solana-mainnet.json');
 if (!fs.existsSync(deploymentPath)) throw new Error('Missing deployments/solana-mainnet.json');
@@ -22,11 +28,12 @@ const keypair = parseSolanaKeypair(env);
 const umi = createUmi(rpcUrl).use(mplCore()).use(mplCandyMachine());
 umi.use(keypairIdentity(umi.eddsa.createKeypairFromSecretKey(keypair.secretKey)));
 
-const priceLamports = solanaPriceLamports(env);
-const saleActive = deployment.saleActive === true;
-const startDate = env.NFT_SOLANA_START_DATE
-  || deployment.startDate
-  || (saleActive ? null : (env.NFT_SOLANA_CLOSED_START_DATE || '2100-01-01T00:00:00.000Z'));
+const saleActive = mode === 'open';
+const closedStartDate = env.NFT_SOLANA_CLOSED_START_DATE || '2100-01-01T00:00:00.000Z';
+const startDate = saleActive ? null : closedStartDate;
+const priceLamports = env.NFT_SOLANA_PRICE_LAMPORTS || env.NFT_SOLANA_PRICE_SOL || env.NFT_PRICE_SOL
+  ? solanaPriceLamports(env)
+  : BigInt(deployment.priceLamports || '0');
 const destination = env.NFT_SOLANA_TREASURY
   ? requirePublicKey(env.NFT_SOLANA_TREASURY, 'NFT_SOLANA_TREASURY').toBase58()
   : publicKey(deployment.treasury || umi.identity.publicKey);
@@ -50,4 +57,4 @@ deployment.saleActive = saleActive;
 deployment.startDate = startDate;
 deployment.updatedAt = new Date().toISOString();
 fs.writeFileSync(deploymentPath, `${JSON.stringify(deployment, null, 2)}\n`);
-console.log(`Solana price updated to ${priceLamports.toString()} lamports; signature=${sig.signature}`);
+console.log(`Solana sale ${mode}; signature=${sig.signature}`);
