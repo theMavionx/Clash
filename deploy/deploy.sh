@@ -474,7 +474,7 @@ HTTPCONF
 
     ARBITRUM_ALCHEMY_KEY=""
     if [ -f "$ENV_FILE" ]; then
-        ARBITRUM_ALCHEMY_KEY="$(grep -E '^ARBITRUM_ALCHEMY_KEY=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\"'\''[:space:]')"
+        ARBITRUM_ALCHEMY_KEY="$(grep -E '^ARBITRUM_ALCHEMY_KEY=' "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\"'\''[:space:]' || true)"
     fi
 
     cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
