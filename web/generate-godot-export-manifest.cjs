@@ -10,6 +10,8 @@ const output = path.join(root, 'scenes', 'export_manifest.tscn');
 // packs just because their .tres/.tscn files reference each other.
 const scanRoots = ['scripts', 'scenes', 'shaders'];
 const scanExts = new Set(['.gd', '.tscn', '.tres', '.gdshader']);
+const sceneExts = new Set(['.glb', '.gltf']);
+const textureExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const sourceRefPattern = /["'](res:\/\/[^"']+)["']/g;
 // Roots where every script must be force-included regardless of whether the
 // scanner saw it referenced as a string. Required because GDScript resolves
@@ -86,6 +88,94 @@ function resourceType(resPath) {
   return 'Resource';
 }
 
+function imageExtForMime(mimeType) {
+  const mime = String(mimeType || '').toLowerCase();
+  if (mime.includes('jpeg') || mime.includes('jpg')) return '.jpg';
+  if (mime.includes('webp')) return '.webp';
+  return '.png';
+}
+
+function safeImageName(name, fallback, ext) {
+  let out = String(name || fallback || 'image').replace(/[\\/:*?"<>|]/g, '_');
+  if (!path.extname(out)) out += ext;
+  return out;
+}
+
+function parseGlb(filePath) {
+  const data = fs.readFileSync(filePath);
+  if (data.toString('utf8', 0, 4) !== 'glTF') return null;
+  let offset = 12;
+  let json = null;
+  let binOffset = 0;
+  while (offset + 8 <= data.length) {
+    const length = data.readUInt32LE(offset);
+    const type = data.toString('utf8', offset + 4, offset + 8);
+    const payloadOffset = offset + 8;
+    if (type === 'JSON') {
+      json = JSON.parse(data.toString('utf8', payloadOffset, payloadOffset + length).trim());
+    } else if (type === 'BIN\0') {
+      binOffset = payloadOffset;
+    }
+    offset = payloadOffset + length;
+  }
+  return json ? { data, json, binOffset } : null;
+}
+
+function ensureEmbeddedGlbImage(glbPath, parsed, image, index) {
+  if (image.bufferView == null || !parsed?.binOffset) return null;
+  const view = parsed.json.bufferViews?.[image.bufferView];
+  if (!view || view.buffer !== 0) return null;
+  const ext = imageExtForMime(image.mimeType);
+  const glbBase = path.basename(glbPath, path.extname(glbPath));
+  const imageName = safeImageName(image.name, String(index), ext);
+  const outPath = path.join(path.dirname(glbPath), `${glbBase}_${imageName}`);
+  if (!fs.existsSync(outPath)) {
+    const start = parsed.binOffset + (view.byteOffset || 0);
+    const end = start + view.byteLength;
+    fs.writeFileSync(outPath, parsed.data.subarray(start, end));
+  }
+  return fsToRes(outPath);
+}
+
+function textureDepsForScene(resPath) {
+  const deps = [];
+  const filePath = resToFs(resPath);
+  const ext = path.extname(filePath).toLowerCase();
+  if (!sceneExts.has(ext) || !fs.existsSync(filePath)) return deps;
+
+  try {
+    if (ext === '.gltf') {
+      const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      for (const image of json.images || []) {
+        const uri = image.uri || '';
+        if (!uri || /^data:/i.test(uri)) continue;
+        const texturePath = path.resolve(path.dirname(filePath), decodeURIComponent(uri));
+        if (fs.existsSync(texturePath) && textureExts.has(path.extname(texturePath).toLowerCase())) {
+          deps.push(fsToRes(texturePath));
+        }
+      }
+      return deps;
+    }
+
+    const parsed = parseGlb(filePath);
+    if (!parsed) return deps;
+    for (const [index, image] of (parsed.json.images || []).entries()) {
+      if (image.uri && !/^data:/i.test(image.uri)) {
+        const texturePath = path.resolve(path.dirname(filePath), decodeURIComponent(image.uri));
+        if (fs.existsSync(texturePath) && textureExts.has(path.extname(texturePath).toLowerCase())) {
+          deps.push(fsToRes(texturePath));
+        }
+      } else {
+        const extracted = ensureEmbeddedGlbImage(filePath, parsed, image, index);
+        if (extracted && existsAsResource(extracted)) deps.push(extracted);
+      }
+    }
+  } catch (e) {
+    console.warn(`Skipping texture dependency scan for ${resPath}: ${e.message || e}`);
+  }
+  return deps;
+}
+
 const refs = new Set();
 const files = [];
 
@@ -125,6 +215,14 @@ for (const dir of forceIncludeScriptRoots) {
 }
 
 refs.add('res://scenes/Main.tscn');
+
+// Godot's scene export can miss texture dependencies hidden behind imported
+// glTF/GLB scenes, causing runtime "No loader found for resource ... Texture2D"
+// errors. Include only the images referenced by scene assets we already know
+// are needed, instead of sweeping every texture under Model/.
+for (const resPath of [...refs]) {
+  for (const dep of textureDepsForScene(resPath)) refs.add(dep);
+}
 
 const sorted = [...refs].sort();
 const lines = [];

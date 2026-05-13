@@ -64,6 +64,12 @@ func _response_matches_requested_dex(response: Dictionary, requested_dex: String
 		return true
 	return String(response.get("dex", "")).to_lower() == requested_dex.to_lower()
 
+func _safe_str(value, fallback: String = "") -> String:
+	return fallback if value == null else String(value)
+
+func _safe_int(value, fallback: int = 0) -> int:
+	return fallback if value == null else int(value)
+
 func has_token() -> bool:
 	return token != ""
 
@@ -95,11 +101,11 @@ func register(player_name: String, wallet: String = "", dex: String = "", fid: i
 				"requested_dex": dex,
 				"actual_dex": String(response.get("dex", "")),
 			}
-		token = response["token"]
-		player_id = response["id"]
-		display_name = response["name"]
-		trophies = response.get("trophies", 0)
-		wallet = response.get("wallet", "")
+		token = _safe_str(response.get("token"))
+		player_id = _safe_str(response.get("id"))
+		display_name = _safe_str(response.get("name"))
+		trophies = _safe_int(response.get("trophies"))
+		wallet = _safe_str(response.get("wallet"))
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -109,10 +115,10 @@ func register(player_name: String, wallet: String = "", dex: String = "", fid: i
 func login() -> Dictionary:
 	var response = await _http_get("/state")
 	if response.has("id"):
-		player_id = response["id"]
-		display_name = response["name"]
-		trophies = response.get("trophies", 0)
-		wallet = response.get("wallet", "")
+		player_id = _safe_str(response.get("id"))
+		display_name = _safe_str(response.get("name"))
+		trophies = _safe_int(response.get("trophies"))
+		wallet = _safe_str(response.get("wallet"))
 		auth_ok.emit(response)
 	return response
 
@@ -141,11 +147,11 @@ func login_by_wallet(wallet: String, dex: String = "") -> Dictionary:
 				"requested_dex": dex,
 				"actual_dex": String(response.get("dex", "")),
 			}
-		token = response["token"]
-		player_id = response["id"]
-		display_name = response["name"]
-		trophies = response.get("trophies", 0)
-		wallet = response.get("wallet", "")
+		token = _safe_str(response.get("token"))
+		player_id = _safe_str(response.get("id"))
+		display_name = _safe_str(response.get("name"))
+		trophies = _safe_int(response.get("trophies"))
+		wallet = _safe_str(response.get("wallet"))
 		_save_token()
 		auth_ok.emit(response)
 	return response
@@ -239,11 +245,11 @@ func link_wallet(w: String) -> void:
 	# hand us that account's canonical token. Switch our session to it so
 	# desktop and Farcaster players share the same progress.
 	if response.get("switched_account", false) and response.has("token"):
-		token = response["token"]
-		player_id = response.get("id", player_id)
-		display_name = response.get("name", display_name)
-		trophies = response.get("trophies", trophies)
-		wallet = response.get("wallet", w)
+		token = _safe_str(response.get("token"), token)
+		player_id = _safe_str(response.get("id"), player_id)
+		display_name = _safe_str(response.get("name"), display_name)
+		trophies = _safe_int(response.get("trophies"), trophies)
+		wallet = _safe_str(response.get("wallet"), w)
 		_save_token()
 		auth_ok.emit(response)
 	elif response.get("success", false):
@@ -304,7 +310,7 @@ func get_trophies() -> Dictionary:
 func recalculate_trophies() -> Dictionary:
 	var response = await _http_post("/trophies/recalculate", {})
 	if not response.has("error"):
-		trophies = response.get("trophies", trophies)
+		trophies = _safe_int(response.get("trophies"), trophies)
 	return response
 
 # ── HTTP Helpers ──────────────────────────────────────────────

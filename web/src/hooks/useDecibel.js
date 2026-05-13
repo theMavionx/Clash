@@ -63,6 +63,12 @@ function bpsToChainUnits(bps) { return Math.round(Number(bps) * 100); }
 // indexer can lag a couple of seconds). Cap reads so a stuck request
 // doesn't block the polling loop forever.
 const READ_TIMEOUT_MS = 8_000;
+const ACCOUNT_READ_TIMEOUT_MS = READ_TIMEOUT_MS;
+const DECIBEL_STATE_POLL_MS = 15_000;
+const DECIBEL_PRICE_POLL_MS = 5_000;
+const ACCOUNT_WARN_THROTTLE_MS = 60_000;
+const ACCOUNT_BACKOFF_BASE_MS = 10_000;
+const ACCOUNT_BACKOFF_MAX_MS = 60_000;
 const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const FUTURES_API = '/api/futures';
@@ -102,14 +108,52 @@ async function aptosView(functionId, args = [], typeArguments = []) {
   return r.json();
 }
 
+function timeoutError(ms, label) {
+  return new Error(`${label || 'request'} timed out after ${ms}ms`);
+}
+
 function withTimeout(promise, ms, label) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error(`${label || 'request'} timed out after ${ms}ms`)),
-      ms,
-    )),
-  ]);
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError(ms, label)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function isAbortLikeError(e) {
+  const name = String(e?.name || '');
+  const msg = String(e?.message || e || '');
+  return name === 'AbortError' || /aborted|aborterror/i.test(msg);
+}
+
+async function withAbortableRead(factory, ms, label) {
+  if (typeof AbortController === 'undefined') {
+    return withTimeout(factory({}), ms, label);
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      reject(timeoutError(ms, label));
+    }, ms);
+  });
+  try {
+    return await Promise.race([
+      factory({ signal: controller.signal }),
+      timeout,
+    ]);
+  } catch (e) {
+    if (timedOut || isAbortLikeError(e)) throw timeoutError(ms, label);
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (!timedOut) controller.abort();
+  }
 }
 
 function txHashFrom(response) {
@@ -576,8 +620,8 @@ async function fetchTradingDelegationOnChain(sub, apiAddr) {
 
 async function fetchDelegations(sub) {
   const read = await getReadClient();
-  const list = await withTimeout(
-    read.delegations.getAll({ subAddr: sub }),
+  const list = await withAbortableRead(
+    fetchOptions => read.delegations.getAll({ subAddr: sub, fetchOptions }),
     READ_TIMEOUT_MS,
     'delegations',
   );
@@ -672,6 +716,12 @@ export function useDecibel() {
   // Builder subaccount cache (deterministic, but resolution touches REST +
   // SDK helpers so we avoid repeating the work on every trade).
   const builderSubRef = useRef(null);
+  const accountFetchRef = useRef({
+    promise: null,
+    failCount: 0,
+    nextAllowedAt: 0,
+    lastWarnAt: 0,
+  });
 
   const decibelServerRequest = useCallback(async (path, body, method = 'POST') => {
     const token = tokenRef.current || window._playerToken;
@@ -732,8 +782,8 @@ export function useDecibel() {
       // returns the canonical subaccount the contract knows about.
       const read = await getReadClient();
       try {
-        const list = await withTimeout(
-          read.userSubaccounts.getByAddr({ ownerAddr: BUILDER_ADDR }),
+        const list = await withAbortableRead(
+          fetchOptions => read.userSubaccounts.getByAddr({ ownerAddr: BUILDER_ADDR, fetchOptions }),
           READ_TIMEOUT_MS,
           'builder-subaccounts'
         );
@@ -757,8 +807,8 @@ export function useDecibel() {
       }
       D.log('resolveBuilderSubaccount: derived', derived, '— verifying on-chain…');
       try {
-        const acct = await withTimeout(
-          read.accountOverview.getByAddr({ subAddr: derived }),
+        const acct = await withAbortableRead(
+          fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
           READ_TIMEOUT_MS,
           'builder-overview'
         );
@@ -810,6 +860,12 @@ export function useDecibel() {
     setSetupVerified(null);
     setActivationStep(null);
     activationInFlightRef.current = false;
+    accountFetchRef.current = {
+      promise: null,
+      failCount: 0,
+      nextAllowedAt: 0,
+      lastWarnAt: 0,
+    };
     if (address) D.log('Petra wallet connected:', address);
     else D.log('Petra wallet disconnected');
   }, [address]);
@@ -819,7 +875,11 @@ export function useDecibel() {
   const fetchMarkets = useCallback(async () => {
     try {
       const read = await getReadClient();
-      const list = await withTimeout(read.markets.getAll(), READ_TIMEOUT_MS, 'markets');
+      const list = await withAbortableRead(
+        fetchOptions => read.markets.getAll({ fetchOptions }),
+        READ_TIMEOUT_MS,
+        'markets',
+      );
       const arr = Array.isArray(list) ? list : (list?.data || []);
       const norm = arr.map((m, i) => normalizeMarket(m, i));
       D.log(`fetchMarkets: ${norm.length} markets loaded`);
@@ -833,7 +893,11 @@ export function useDecibel() {
   const fetchPrices = useCallback(async () => {
     try {
       const read = await getReadClient();
-      const list = await withTimeout(read.marketPrices.getAll(), READ_TIMEOUT_MS, 'prices');
+      const list = await withAbortableRead(
+        fetchOptions => read.marketPrices.getAll({ fetchOptions }),
+        READ_TIMEOUT_MS,
+        'prices',
+      );
       const arr = Array.isArray(list) ? list : (list?.data || []);
       const norm = arr.map(p => normalizePrice(p, marketsRef.current));
       setPrices(prev => {
@@ -878,8 +942,8 @@ export function useDecibel() {
       const read = await getReadClient();
       let exists = false;
       try {
-        const acct = await withTimeout(
-          read.accountOverview.getByAddr({ subAddr: derived }),
+        const acct = await withAbortableRead(
+          fetchOptions => read.accountOverview.getByAddr({ subAddr: derived, fetchOptions }),
           READ_TIMEOUT_MS,
           'subaccount-probe',
         );
@@ -905,39 +969,82 @@ export function useDecibel() {
   // master address returns an empty/error response, which the previous
   // code was silently treating as "no balance". Gate on having resolved a
   // subaccount first; before activation there's just no account to read.
-  const fetchAccount = useCallback(async () => {
-    if (!address) return;
-    try {
-      const sub = await ensureSubaccount();
-      if (!sub) {
-        setAccount(null);
-        setAccountReady(false);
-        return;
+  const fetchAccount = useCallback(async (options = {}) => {
+    if (!address) return null;
+    const force = !!options?.force;
+    const quiet = !!options?.quiet;
+    const state = accountFetchRef.current;
+    if (state.promise) return state.promise;
+    if (!force && state.nextAllowedAt && Date.now() < state.nextAllowedAt) return null;
+    const gen = walletGenRef.current;
+
+    const run = (async () => {
+      try {
+        const sub = await ensureSubaccount();
+        if (walletGenRef.current !== gen) return null;
+        if (!sub) {
+          setAccount(null);
+          setAccountReady(false);
+          accountFetchRef.current.failCount = 0;
+          accountFetchRef.current.nextAllowedAt = 0;
+          return null;
+        }
+        const read = await getReadClient();
+        const acct = await withAbortableRead(
+          fetchOptions => read.accountOverview.getByAddr({ subAddr: sub, fetchOptions }),
+          ACCOUNT_READ_TIMEOUT_MS,
+          'account'
+        );
+        if (walletGenRef.current !== gen) return null;
+        accountFetchRef.current.failCount = 0;
+        accountFetchRef.current.nextAllowedAt = 0;
+        accountFetchRef.current.lastWarnAt = 0;
+
+        const hasBalanceFields = acct && typeof acct === 'object' && (
+          Object.prototype.hasOwnProperty.call(acct, 'perp_equity_balance')
+          || Object.prototype.hasOwnProperty.call(acct, 'usdc_cross_withdrawable_balance')
+          || Object.prototype.hasOwnProperty.call(acct, 'usdc_isolated_withdrawable_balance')
+        );
+        if (!hasBalanceFields) {
+          D.warn('fetchAccount: overview loaded without balance fields; keeping account unreadable for UI gate');
+          setAccountReady(false);
+          return acct || null;
+        }
+        const equity = Number(acct?.perp_equity_balance ?? 0);
+        const cross = Number(acct?.usdc_cross_withdrawable_balance ?? 0);
+        D.log(`fetchAccount: equity=$${equity.toFixed(4)} cross=$${cross.toFixed(4)}`);
+        setAccount(acct);
+        setAccountReady(true);
+        return acct;
+      } catch (e) {
+        if (walletGenRef.current !== gen) return null;
+        const msg = e?.message || String(e);
+        const current = accountFetchRef.current;
+        current.failCount = (current.failCount || 0) + 1;
+        const retryInMs = Math.min(
+          ACCOUNT_BACKOFF_MAX_MS,
+          ACCOUNT_BACKOFF_BASE_MS * Math.pow(2, Math.min(current.failCount - 1, 3)),
+        );
+        const now = Date.now();
+        current.nextAllowedAt = now + retryInMs;
+        if (!quiet && (current.failCount === 1 || now - (current.lastWarnAt || 0) > ACCOUNT_WARN_THROTTLE_MS)) {
+          D.warn('fetchAccount failed:', msg, {
+            failures: current.failCount,
+            retry_in_ms: retryInMs,
+          });
+          current.lastWarnAt = now;
+        }
+        return null;
       }
-      const read = await getReadClient();
-      const acct = await withTimeout(
-        read.accountOverview.getByAddr({ subAddr: sub }),
-        READ_TIMEOUT_MS,
-        'account'
-      );
-      const hasBalanceFields = acct && typeof acct === 'object' && (
-        Object.prototype.hasOwnProperty.call(acct, 'perp_equity_balance')
-        || Object.prototype.hasOwnProperty.call(acct, 'usdc_cross_withdrawable_balance')
-        || Object.prototype.hasOwnProperty.call(acct, 'usdc_isolated_withdrawable_balance')
-      );
-      if (!hasBalanceFields) {
-        D.warn('fetchAccount: overview loaded without balance fields; keeping account unreadable for UI gate');
-        setAccountReady(false);
-        return;
+    })();
+
+    accountFetchRef.current.promise = run;
+    run.finally(() => {
+      if (accountFetchRef.current.promise === run) {
+        accountFetchRef.current.promise = null;
       }
-      const equity = Number(acct?.perp_equity_balance ?? 0);
-      const cross = Number(acct?.usdc_cross_withdrawable_balance ?? 0);
-      D.log(`fetchAccount: equity=$${equity.toFixed(4)} cross=$${cross.toFixed(4)}`);
-      setAccount(acct);
-      setAccountReady(true);
-    } catch (e) {
-      D.warn('fetchAccount failed:', e?.message || e);
-    }
+    });
+    return run;
   }, [address, ensureSubaccount]);
 
   // Mirror the most recent positions list into a ref so callbacks like
@@ -951,8 +1058,8 @@ export function useDecibel() {
       const sub = await ensureSubaccount();
       if (!sub) { setPositions([]); positionsRef.current = []; setDataReady(true); return; }
       const read = await getReadClient();
-      const list = await withTimeout(
-        read.userPositions.getByAddr({ subAddr: sub }),
+      const list = await withAbortableRead(
+        fetchOptions => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
         READ_TIMEOUT_MS,
         'positions'
       );
@@ -977,8 +1084,8 @@ export function useDecibel() {
       const sub = await ensureSubaccount();
       if (!sub) { setOrders([]); return; }
       const read = await getReadClient();
-      const list = await withTimeout(
-        read.userOpenOrders.getByAddr({ subAddr: sub }),
+      const list = await withAbortableRead(
+        fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
         READ_TIMEOUT_MS,
         'orders'
       );
@@ -1272,7 +1379,7 @@ export function useDecibel() {
       if (!finalDelegationOk) throw new Error('Trading delegation did not verify on-chain');
       if (isBuilderConfigured() && finalBuilderOk !== true) throw new Error('Builder fee routing did not verify');
       await Promise.all([
-        fetchAccount(),
+        fetchAccount({ force: true, quiet: true }),
         fetchBuilderApproval(),
       ]);
       setApiWalletAddr(apiAddr);
@@ -1469,7 +1576,7 @@ export function useDecibel() {
       });
 
       fetchPositions();
-      fetchAccount();
+      fetchAccount({ force: true });
       fetchBalance();
       scheduleClaim();
       return { tx_hash: txHash, status: 'submitted' };
@@ -1539,7 +1646,7 @@ export function useDecibel() {
       });
 
       fetchOrders();
-      fetchAccount();
+      fetchAccount({ force: true });
       fetchBalance();
       scheduleClaim();
       return { tx_hash: txHash, status: 'open' };
@@ -1613,7 +1720,7 @@ export function useDecibel() {
       });
 
       fetchPositions();
-      fetchAccount();
+      fetchAccount({ force: true });
       fetchBalance();
       scheduleClaim(2500);
       scheduleClaim(8000);
@@ -1794,7 +1901,7 @@ export function useDecibel() {
           functionArguments: [sub, DECIBEL_USDC_MAINNET, usdcRaw.toString()],
         },
       }, 'deposit USDC');
-      fetchAccount();
+      fetchAccount({ force: true });
       fetchBalance();
       return { tx_hash: result.hash, status: 'deposited' };
     } catch (e) {
@@ -1819,7 +1926,7 @@ export function useDecibel() {
           functionArguments: [sub, DECIBEL_USDC_MAINNET, usdcRaw.toString()],
         },
       }, 'withdraw USDC');
-      fetchAccount();
+      fetchAccount({ force: true });
       fetchBalance();
       return { tx_hash: result.hash, status: 'withdrawn' };
     } catch (e) {
@@ -1882,16 +1989,23 @@ export function useDecibel() {
 
   useEffect(() => {
     if (!address || !isActiveDex) return;
-    const tick = () => {
-      fetchAccount();
+    const tickState = () => {
+      fetchAccount({ quiet: true });
       fetchPositions();
       fetchOrders();
-      fetchPrices();
       fetchBalance();
     };
-    tick();
-    const iv = setInterval(tick, 5000);
-    return () => clearInterval(iv);
+    const tickPrices = () => {
+      fetchPrices();
+    };
+    tickState();
+    tickPrices();
+    const stateIv = setInterval(tickState, DECIBEL_STATE_POLL_MS);
+    const priceIv = setInterval(tickPrices, DECIBEL_PRICE_POLL_MS);
+    return () => {
+      clearInterval(stateIv);
+      clearInterval(priceIv);
+    };
   }, [address, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
 
   useEffect(() => {

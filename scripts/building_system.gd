@@ -21,7 +21,7 @@ var building_defs: Dictionary = {
 		"footprint_extra": 0.8,
 		"color": Color(0.55, 0.45, 0.2, 0.5),
 		"height": 0.3,
-		"scene": "res://Model/Mine/1.gltf",
+		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
 		"hp_levels": [1200, 2200, 3800],
@@ -1434,6 +1434,13 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					model.position = offsets[level - 1]
 				else:
 					model.position = def.get("model_offset", Vector3.ZERO)
+				# Mine cart loop — only the mine has minecart/iron/reyki nodes.
+				# Other buildings reuse the same instantiation block, so gate
+				# on building_type to avoid attaching the script everywhere.
+				if building_type == "mine":
+					var mine_cart_script := load("res://scripts/mine_cart.gd")
+					if mine_cart_script != null:
+						model.set_script(mine_cart_script)
 				node.add_child(model)
 				_apply_cel_shader(model)
 
