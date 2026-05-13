@@ -15,7 +15,9 @@ if (!payment || !buyerArg) {
 }
 
 const env = loadEnv();
-const deploymentPath = path.join(NFT_DIR, 'deployments', 'base-shop-mainnet.json');
+const deploymentPath = fs.existsSync(path.join(NFT_DIR, 'deployments', 'base-shop-v2-mainnet.json'))
+  ? path.join(NFT_DIR, 'deployments', 'base-shop-v2-mainnet.json')
+  : path.join(NFT_DIR, 'deployments', 'base-shop-mainnet.json');
 if (!fs.existsSync(deploymentPath)) throw new Error('Missing deployments/base-shop-mainnet.json');
 
 const deployment = JSON.parse(fs.readFileSync(deploymentPath, 'utf8'));
@@ -30,23 +32,27 @@ let paymentToken;
 let unitPrice;
 let decimals;
 let usdPrice;
+let usdPriceE6;
 let priceSource = 'fixed';
 if (payment === 'native' || payment === 'eth') {
   paymentToken = zeroAddress;
   decimals = 18;
   usdPrice = env.NFT_BASE_NATIVE_USD_PRICE || env.NFT_BASE_USD_PRICE || '8.9';
+  usdPriceE6 = usdToTokenUnits(usdPrice, 6);
   const ethUsd = await fetchUsdPrice(env, 'eth');
   unitPrice = usdToNativeUnits(usdPrice, ethUsd, decimals);
   priceSource = `ETH/USD ${ethUsd}`;
 } else if (payment === 'usdc') {
-  paymentToken = getAddress(env.NFT_BASE_USDC_TOKEN || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
+  paymentToken = getAddress(env.NFT_BASE_USDC_TOKEN || deployment.usdcToken || '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
   decimals = Number(env.NFT_BASE_USDC_DECIMALS || 6);
   usdPrice = env.NFT_BASE_USDC_USD_PRICE || env.NFT_BASE_USD_PRICE || '8.9';
+  usdPriceE6 = usdToTokenUnits(usdPrice, 6);
   unitPrice = usdToTokenUnits(usdPrice, decimals);
 } else if (payment === 'clash') {
-  paymentToken = getAddress(env.NFT_BASE_CLASH_TOKEN || env.CLASH_BASE_TOKEN);
+  paymentToken = getAddress(env.NFT_BASE_CLASH_TOKEN || env.CLASH_BASE_TOKEN || deployment.clashToken);
   decimals = Number(env.NFT_BASE_CLASH_DECIMALS || 18);
   usdPrice = env.NFT_BASE_CLASH_USD_PRICE || '5';
+  usdPriceE6 = usdToTokenUnits(usdPrice, 6);
   const clashUsd = env.NFT_CLASH_USD_PRICE || env.CLASH_USD_PRICE;
   if (!clashUsd) throw new Error('Set NFT_CLASH_USD_PRICE after CLASH launches.');
   unitPrice = usdToNativeUnits(usdPrice, clashUsd, decimals);
@@ -67,11 +73,12 @@ const types = {
     { name: 'paymentToken', type: 'address' },
     { name: 'unitPrice', type: 'uint256' },
     { name: 'quantity', type: 'uint256' },
+    { name: 'usdPriceE6', type: 'uint256' },
     { name: 'nonce', type: 'uint256' },
     { name: 'deadline', type: 'uint256' },
   ],
 };
-const message = { buyer, paymentToken, unitPrice, quantity, nonce, deadline };
+const message = { buyer, paymentToken, unitPrice, quantity, usdPriceE6, nonce, deadline };
 const signature = await walletClient.signTypedData({
   account,
   domain,
@@ -92,6 +99,7 @@ console.log(JSON.stringify({
   totalFormatted: unitsToDecimalString(total, decimals),
   decimals,
   usdPrice,
+  usdPriceE6: usdPriceE6.toString(),
   priceSource,
   deadline: deadline.toString(),
   nonce: nonce.toString(),
@@ -100,6 +108,7 @@ console.log(JSON.stringify({
     paymentToken,
     unitPrice: unitPrice.toString(),
     quantity: quantity.toString(),
+    usdPriceE6: usdPriceE6.toString(),
     nonce: nonce.toString(),
     deadline: deadline.toString(),
   },

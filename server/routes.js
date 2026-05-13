@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
@@ -65,8 +66,11 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
 // ---------- NFT metadata proxy ----------
 // Keep on-chain token URIs stable while letting us replace image/metadata
 // content from the server via env/deploy changes.
-const NFT_MAX_SUPPLY = 250;
+const NFT_MAX_SUPPLY = Number(process.env.NFT_MAX_SUPPLY || process.env.NFT_BASE_MAX_SUPPLY || 250);
 const NFT_IMAGE_PATH = path.join(__dirname, 'public', 'nft', 'demonking.png');
+const ZERO_EVM_ADDRESS = '0x0000000000000000000000000000000000000000';
+const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 
 function nftPublicBase(req) {
   const configured = process.env.NFT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_PUBLIC_URL;
@@ -133,6 +137,231 @@ function sendNftMetadata(req, res, chain, rawTokenId) {
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(nftTokenMetadata(req, chain, id));
 }
+
+function readJsonIfExists(file) {
+  try {
+    if (!fs.existsSync(file)) return null;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function nftBaseShopDeployment() {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-v2-mainnet.json'))
+    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-mainnet.json'))
+    || {};
+}
+
+function nftBaseDeployment() {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v2-mainnet.json'))
+    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-mainnet.json'))
+    || {};
+}
+
+function decimalToUnits(value, decimals) {
+  const raw = String(value || '').trim();
+  if (!/^\d+(\.\d+)?$/.test(raw)) throw new Error(`Invalid decimal value: ${value}`);
+  const [whole, frac = ''] = raw.split('.');
+  return BigInt(whole) * 10n ** BigInt(decimals)
+    + BigInt((frac + '0'.repeat(decimals)).slice(0, decimals));
+}
+
+function unitsToDecimalString(units, decimals) {
+  const scale = 10n ** BigInt(decimals);
+  const whole = units / scale;
+  const frac = (units % scale).toString().padStart(decimals, '0').replace(/0+$/, '');
+  return frac ? `${whole}.${frac}` : whole.toString();
+}
+
+function usdToNativeUnits(usdAmount, assetUsd, decimals) {
+  const usd = decimalToUnits(usdAmount, 12);
+  const price = decimalToUnits(assetUsd, 12);
+  const scale = 10n ** BigInt(decimals);
+  return (usd * scale + price - 1n) / price;
+}
+
+async function fetchNftUsdPrice(asset) {
+  const envKey = asset === 'eth' ? 'NFT_ETH_USD' : asset === 'sol' ? 'NFT_SOL_USD' : null;
+  if (envKey && process.env[envKey]) return String(process.env[envKey]);
+
+  const ids = { eth: 'ethereum', sol: 'solana' };
+  const symbols = { eth: 'ETHUSDT', sol: 'SOLUSDT' };
+  if (!ids[asset]) throw new Error(`Unsupported price asset: ${asset}`);
+
+  try {
+    const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids[asset]}&vs_currencies=usd`);
+    if (!r.ok) throw new Error(`CoinGecko ${r.status}`);
+    const json = await r.json();
+    const value = json?.[ids[asset]]?.usd;
+    if (!value) throw new Error('CoinGecko price missing');
+    return String(value);
+  } catch {
+    const r = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbols[asset]}`);
+    if (!r.ok) throw new Error(`Binance ${r.status}`);
+    const json = await r.json();
+    if (!json?.price) throw new Error('Binance price missing');
+    return String(json.price);
+  }
+}
+
+async function parseNftEvmAccount() {
+  const raw = process.env.NFT_BASE_SHOP_QUOTE_KEY
+    || process.env.NFT_EVM_KEY
+    || process.env.NFT_BASE
+    || process.env.BASE_NFT_KEY
+    || process.env.NFT_KEY;
+  if (!raw) throw new Error('NFT quote signer is not configured');
+
+  const { privateKeyToAccount, mnemonicToAccount } = await import('viem/accounts');
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(raw)) {
+    return privateKeyToAccount(raw.startsWith('0x') ? raw : `0x${raw}`);
+  }
+
+  const words = raw.trim().split(/\s+/);
+  if (words.length >= 12 && words.length <= 24 && words.every((word) => /^[a-z]+$/i.test(word))) {
+    const hdPath = process.env.NFT_BASE_MNEMONIC_PATH || "m/44'/60'/0'/0/0";
+    return mnemonicToAccount(raw.trim(), { path: hdPath });
+  }
+
+  throw new Error('NFT quote signer key is not a usable EVM key');
+}
+
+function baseNftConfig() {
+  const nftDeployment = nftBaseDeployment();
+  const shopDeployment = nftBaseShopDeployment();
+  const clashToken = process.env.NFT_BASE_CLASH_TOKEN || process.env.CLASH_BASE_TOKEN || shopDeployment.clashToken || ZERO_EVM_ADDRESS;
+  return {
+    chainId: 8453,
+    nft: process.env.NFT_BASE_CONTRACT || nftDeployment.proxy || nftDeployment.contract || null,
+    shop: process.env.NFT_BASE_SHOP_CONTRACT || shopDeployment.shop || shopDeployment.proxy || null,
+    usdcToken: process.env.NFT_BASE_USDC_TOKEN || shopDeployment.usdcToken || BASE_USDC_TOKEN,
+    clashToken,
+    clashReady: !!clashToken && !/^0x0{40}$/i.test(clashToken),
+    baseUsdPriceE6: String(process.env.NFT_BASE_USD_PRICE_E6 || shopDeployment.baseUsdPriceE6 || '8900000'),
+    clashUsdPriceE6: String(process.env.NFT_BASE_CLASH_USD_PRICE_E6 || shopDeployment.clashUsdPriceE6 || '5000000'),
+    saleActive: process.env.NFT_BASE_SHOP_SALE_ACTIVE
+      ? process.env.NFT_BASE_SHOP_SALE_ACTIVE !== '0'
+      : !!shopDeployment.saleActive,
+  };
+}
+
+router.get('/nft/mint/config', (req, res) => {
+  const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    base: baseNftConfig(),
+    solana: {
+      collection: process.env.NFT_SOLANA_COLLECTION || solanaDeployment.collection || null,
+      candyMachine: process.env.NFT_SOLANA_CANDY_MACHINE || solanaDeployment.candyMachine || null,
+      candyGuard: process.env.NFT_SOLANA_CANDY_GUARD || solanaDeployment.candyGuard || null,
+      groups: solanaDeployment.groups || solanaDeployment.paymentGroups || null,
+    },
+  });
+});
+
+router.post('/nft/base/quote', async (req, res) => {
+  try {
+    const { getAddress, zeroAddress } = await import('viem');
+    const config = baseNftConfig();
+    if (!config.shop) return res.status(503).json({ error: 'Base shop is not deployed' });
+    if (!config.saleActive && process.env.NFT_BASE_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: 'Base NFT sale is not active' });
+    }
+
+    const buyer = getAddress(String(req.body?.buyer || ''));
+    const payment = String(req.body?.payment || '').toLowerCase();
+    const quantity = BigInt(Math.max(1, Math.min(10, Number(req.body?.quantity || 1))));
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_BASE_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+    const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
+
+    let paymentToken = zeroAddress;
+    let unitPrice = 0n;
+    let decimals = 18;
+    let usdPriceE6 = BigInt(config.baseUsdPriceE6);
+    let priceSource = 'fixed';
+
+    if (payment === 'eth' || payment === 'native') {
+      paymentToken = zeroAddress;
+      decimals = 18;
+      const ethUsd = await fetchNftUsdPrice('eth');
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), ethUsd, decimals);
+      priceSource = `ETH/USD ${ethUsd}`;
+    } else if (payment === 'usdc') {
+      paymentToken = getAddress(config.usdcToken);
+      decimals = Number(process.env.NFT_BASE_USDC_DECIMALS || 6);
+      unitPrice = usdPriceE6 * 10n ** BigInt(Math.max(0, decimals - 6));
+    } else if (payment === 'clash') {
+      if (!config.clashReady) return res.status(409).json({ error: 'CLASH is not live yet' });
+      const clashUsd = process.env.NFT_CLASH_USD_PRICE || process.env.CLASH_USD_PRICE;
+      if (!clashUsd) return res.status(503).json({ error: 'CLASH price is not configured' });
+      paymentToken = getAddress(config.clashToken);
+      decimals = Number(process.env.NFT_BASE_CLASH_DECIMALS || 18);
+      usdPriceE6 = BigInt(config.clashUsdPriceE6);
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd, decimals);
+      priceSource = `CLASH/USD ${clashUsd}`;
+    } else {
+      return res.status(400).json({ error: 'Unsupported payment method' });
+    }
+
+    const account = await parseNftEvmAccount();
+    const domain = {
+      name: 'DemonKingBaseShop',
+      version: '1',
+      chainId: 8453,
+      verifyingContract: getAddress(config.shop),
+    };
+    const types = {
+      MintQuote: [
+        { name: 'buyer', type: 'address' },
+        { name: 'paymentToken', type: 'address' },
+        { name: 'unitPrice', type: 'uint256' },
+        { name: 'quantity', type: 'uint256' },
+        { name: 'usdPriceE6', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    };
+    const message = { buyer, paymentToken, unitPrice, quantity, usdPriceE6, nonce, deadline };
+    const signature = await account.signTypedData({
+      domain,
+      types,
+      primaryType: 'MintQuote',
+      message,
+    });
+    const total = unitPrice * quantity;
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chainId: 8453,
+      shop: getAddress(config.shop),
+      payment,
+      priceSource,
+      decimals,
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: total.toString(),
+      totalFormatted: unitsToDecimalString(total, decimals),
+      usdPriceE6: usdPriceE6.toString(),
+      quote: {
+        buyer,
+        paymentToken,
+        unitPrice: unitPrice.toString(),
+        quantity: quantity.toString(),
+        usdPriceE6: usdPriceE6.toString(),
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+      },
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = /address/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
 
 router.get('/nft/image', (req, res) => {
   if (process.env.NFT_IMAGE_URL) return res.redirect(302, process.env.NFT_IMAGE_URL);

@@ -1,0 +1,21 @@
+{
+  "chain": "base",
+  "chainId": 8453,
+  "shop": "0x861dd570f758800c190fd87a1657ba34bcbdefd7",
+  "proxy": "0x861dd570f758800c190fd87a1657ba34bcbdefd7",
+  "implementation": "0x90be93f16267b5f2e6aa627747b7ff25551ae41f",
+  "nft": "0x404807F93E47AF3eaAec0E983f18DCB35E966FEC",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "quoteSigner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "usdcToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "clashToken": "0x0000000000000000000000000000000000000000",
+  "baseUsdPriceE6": "8900000",
+  "clashUsdPriceE6": "5000000",
+  "implementationTxHash": "0x9185b4bcd67b0bc4c09bab3a71ef393f65624daee97f382908357e0a1fc58bb1",
+  "proxyTxHash": "0x07c4a66bf8cc6dc36d834362072b1cb50059a709399f8cd21a87ee8bc513b109",
+  "authorizeMinterTxHash": "0x086085b2056f7c3540a8fd85fd624316407d4919a1ecbd9d67c813dbfe6c47c4",
+  "saleActive": true,
+  "upgradeable": true,
+  "deployedAt": "2026-05-13T14:00:23.823Z"
+}

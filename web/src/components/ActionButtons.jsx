@@ -8,6 +8,7 @@ import goldIcon from '../assets/resources/gold_bar.png';
 import buttonBg from '../assets/resources/file_00000000a6f87246844c6271b76cd436.png';
 import shipImg from '../assets/buildings/shipsmall.png';
 import TournamentPanel from './TournamentPanel';
+import NftMintPanel from './NftMintPanel';
 
 import knightImg  from '../assets/units/knight.png';
 import mageImg    from '../assets/units/mage.png';
@@ -419,6 +420,31 @@ const CrossedSwordsIcon = ({ size = 50 }) => (
   </svg>
 );
 
+// ── NFT mint icon (gem on a stand) — visually distinct from the other
+// HUD glyphs so the cartoon UI still reads cleanly when it sits next to
+// tournament/trade/defense. Keep the line weights matching the existing
+// SVG icons in this file (~2-2.5px strokes, hand-drawn outlines).
+const NftMintIcon = ({ size = 50 }) => (
+  <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
+    {/* Stand base */}
+    <ellipse cx="32" cy="54" rx="20" ry="5" fill="#5C3A21" stroke="#3d1f00" strokeWidth="2" />
+    <ellipse cx="32" cy="52" rx="20" ry="5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="2" />
+    {/* Gem body — diamond cut */}
+    <path d="M32 8 L48 24 L32 50 L16 24 Z" fill="#d72b9c" stroke="#5a0d4a" strokeWidth="2.5" strokeLinejoin="round" />
+    {/* Top facets */}
+    <path d="M32 8 L24 24 L40 24 Z" fill="#ff5fc3" stroke="#5a0d4a" strokeWidth="1.8" strokeLinejoin="round" />
+    <path d="M16 24 L24 24 L32 8" stroke="#5a0d4a" strokeWidth="1.8" />
+    <path d="M48 24 L40 24 L32 8" stroke="#5a0d4a" strokeWidth="1.8" />
+    {/* Bottom facets */}
+    <path d="M24 24 L32 50 L40 24" stroke="#5a0d4a" strokeWidth="1.8" />
+    {/* Highlight */}
+    <path d="M28 12 L24 22" stroke="rgba(255,255,255,0.55)" strokeWidth="2" strokeLinecap="round" />
+    {/* Sparkles */}
+    <path d="M52 14 L54 18 L58 16 L54 14 Z" fill="#fff5a8" stroke="#5C3A21" strokeWidth="1" />
+    <circle cx="10" cy="18" r="2" fill="#fff5a8" stroke="#5C3A21" strokeWidth="1" />
+  </svg>
+);
+
 // ── Shield icon for defense log ───────────────────────────────────────────
 const ShieldIcon = ({ size = 60 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
@@ -439,6 +465,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const [serverCasualties, setServerCasualties] = useState(null);
   const [loadingCasualties, setLoadingCasualties] = useState(false);
   const [showTournament, setShowTournament] = useState(false);
+  const [showNftMint, setShowNftMint] = useState(false);
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape } = useLayout();
@@ -615,13 +642,23 @@ function ActionButtons({ onOpenBattleLog }) {
         <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
           <CrossedSwordsIcon size={mobile ? 38 : 50} />
         </CustomBtn>
-        <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
-          {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
-          <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
-          <span style={styles.btnLabel}>TRADE</span>
-        </CustomBtn>
+        {/* NFT mint sits to the LEFT of Trade on the same row, matching the
+            "small icon next to big CTA" pattern used on the left side
+            (battle log + attack). Wrap them in a horizontal flex so the
+            outer wrapRight column treats the pair as one block. */}
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 8 }}>
+          <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
+            <NftMintIcon size={mobile ? 38 : 50} />
+          </CustomBtn>
+          <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
+            {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
+            <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
+            <span style={styles.btnLabel}>TRADE</span>
+          </CustomBtn>
+        </div>
       </div>
       {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
+      {showNftMint && <NftMintPanel onClose={() => setShowNftMint(false)} />}
       {showReinforce && (serverCasualties || pendingCasualties) && (
         <ReinforceModal
           casualties={serverCasualties?.casualties || pendingCasualties}

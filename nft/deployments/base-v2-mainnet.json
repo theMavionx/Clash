@@ -1,0 +1,21 @@
+{
+  "chain": "base",
+  "chainId": 8453,
+  "proxy": "0x404807f93e47af3eaaec0e983f18dcb35e966fec",
+  "implementation": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "contract": "0x404807f93e47af3eaaec0e983f18dcb35e966fec",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "implementationTxHash": "0x60acabc55ee3526ab284a9de13a891593e22d52e2a6e210283b442639aaa3173",
+  "proxyTxHash": "0xf21fa9079d5fccc70be4ec6e9fa55f20424284531bbcf010493cd4e8ba2e957f",
+  "implementationBlockNumber": "45945719",
+  "proxyBlockNumber": "45945721",
+  "maxSupply": "250",
+  "maxPerTx": "10",
+  "totalMinted": "0",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/base/",
+  "contractUri": "https://clashofperps.fun/api/nft/base/contract",
+  "initialPriceWei": "0",
+  "upgradeable": true,
+  "deployedAt": "2026-05-13T13:59:52.404Z"
+}
