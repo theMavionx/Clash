@@ -639,23 +639,19 @@ function ActionButtons({ onOpenBattleLog }) {
             <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
           </CustomBtn>
         )}
+        {/* NFT mint — small icon button stacked directly above Tournament
+            in this right-side column, on both desktop and mobile. */}
+        <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
+          <NftMintIcon size={mobile ? 38 : 50} />
+        </CustomBtn>
         <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
           <CrossedSwordsIcon size={mobile ? 38 : 50} />
         </CustomBtn>
-        {/* NFT mint sits to the LEFT of Trade on the same row, matching the
-            "small icon next to big CTA" pattern used on the left side
-            (battle log + attack). Wrap them in a horizontal flex so the
-            outer wrapRight column treats the pair as one block. */}
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-end', gap: 8 }}>
-          <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
-            <NftMintIcon size={mobile ? 38 : 50} />
-          </CustomBtn>
-          <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
-            {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
-            <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
-            <span style={styles.btnLabel}>TRADE</span>
-          </CustomBtn>
-        </div>
+        <CustomBtn onClick={handleOpenTrade} width={btnSize} height={btnSize} data-tutorial="trade-btn">
+          {(window._openPositionsCount || 0) > 0 && <div style={styles.notificationBadge}>!</div>}
+          <img src={chartIcon} alt="trade" style={{ ...styles.chartIconImg, ...(mobile ? { width: 90, height: 90 } : {}) }} />
+          <span style={styles.btnLabel}>TRADE</span>
+        </CustomBtn>
       </div>
       {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
       {showNftMint && <NftMintPanel onClose={() => setShowNftMint(false)} />}
