@@ -73,6 +73,7 @@ const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 let clashUsdPriceCache = null;
 const nftQuoteRateBuckets = new Map();
+const utilityQuoteRateBuckets = new Map();
 const BASE_NFT_SUPPLY_ABI = [
   {
     name: 'totalMinted',
@@ -87,6 +88,22 @@ const BASE_NFT_SUPPLY_ABI = [
     stateMutability: 'view',
     inputs: [],
     outputs: [{ type: 'uint256' }],
+  },
+];
+const GAME_PURCHASE_EVENT_ABI = [
+  {
+    type: 'event',
+    name: 'GamePurchase',
+    inputs: [
+      { name: 'buyer', type: 'address', indexed: true },
+      { name: 'paymentToken', type: 'address', indexed: true },
+      { name: 'sku', type: 'bytes32', indexed: true },
+      { name: 'unitPrice', type: 'uint256', indexed: false },
+      { name: 'quantity', type: 'uint256', indexed: false },
+      { name: 'usdPriceE6', type: 'uint256', indexed: false },
+      { name: 'account', type: 'bytes32', indexed: false },
+      { name: 'nonce', type: 'uint256', indexed: false },
+    ],
   },
 ];
 
@@ -224,6 +241,31 @@ function checkNftQuoteRateLimit(req) {
   };
 }
 
+function checkUtilityQuoteRateLimit(req) {
+  const windowMs = Math.max(1_000, Number(process.env.UTILITY_QUOTE_RATE_WINDOW_MS || 60_000));
+  const max = Math.max(1, Number(process.env.UTILITY_QUOTE_RATE_LIMIT || 30));
+  const now = Date.now();
+  const ip = requestIp(req);
+  const bucket = utilityQuoteRateBuckets.get(ip) || { count: 0, resetAt: now + windowMs };
+  if (bucket.resetAt <= now) {
+    bucket.count = 0;
+    bucket.resetAt = now + windowMs;
+  }
+  bucket.count += 1;
+  utilityQuoteRateBuckets.set(ip, bucket);
+
+  if (utilityQuoteRateBuckets.size > 5_000) {
+    for (const [key, value] of utilityQuoteRateBuckets) {
+      if (value.resetAt <= now) utilityQuoteRateBuckets.delete(key);
+    }
+  }
+
+  return {
+    ok: bucket.count <= max,
+    retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)),
+  };
+}
+
 function unitsToDecimalString(units, decimals) {
   const scale = 10n ** BigInt(decimals);
   const whole = units / scale;
@@ -349,6 +391,171 @@ function baseNftConfig() {
       ? process.env.NFT_BASE_SHOP_SALE_ACTIVE !== '0'
       : !!shopDeployment.saleActive,
   };
+}
+
+function gameShopDeployment() {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'game-shop-base-mainnet.json')) || {};
+}
+
+function gameShopConfig() {
+  const deployment = gameShopDeployment();
+  const nftBase = baseNftConfig();
+  const copToken = process.env.GAME_SHOP_COP_TOKEN
+    || process.env.NFT_BASE_CLASH_TOKEN
+    || process.env.CLASH_BASE_TOKEN
+    || deployment.copToken
+    || nftBase.clashToken
+    || ZERO_EVM_ADDRESS;
+  const shop = process.env.GAME_SHOP_BASE_CONTRACT || deployment.shop || deployment.proxy || null;
+  return {
+    chainId: 8453,
+    shop,
+    copToken,
+    copReady: !!copToken && !/^0x0{40}$/i.test(copToken),
+    saleActive: process.env.GAME_SHOP_SALE_ACTIVE
+      ? process.env.GAME_SHOP_SALE_ACTIVE !== '0'
+      : !!deployment.saleActive,
+    deployment,
+  };
+}
+
+const GAME_SHOP_PRODUCTS = {
+  shield_24h: {
+    id: 'shield_24h',
+    sku: 'shield_24h',
+    title: '24h Shield',
+    subtitle: 'Protect your base from raids',
+    kind: 'shield',
+    usdPriceE6: '5000000',
+    durationHours: 24,
+    maxQuantity: 3,
+  },
+  resource_pack_s: {
+    id: 'resource_pack_s',
+    sku: 'resource_pack_s',
+    title: 'Resource Pack',
+    subtitle: 'Gold, wood, and ore for upgrades',
+    kind: 'resources',
+    usdPriceE6: '2000000',
+    rewards: { gold: 2500, wood: 2500, ore: 2500 },
+    maxQuantity: 5,
+  },
+  resource_pack_m: {
+    id: 'resource_pack_m',
+    sku: 'resource_pack_m',
+    title: 'War Chest',
+    subtitle: 'A bigger push for your base',
+    kind: 'resources',
+    usdPriceE6: '5000000',
+    rewards: { gold: 7500, wood: 7500, ore: 7500 },
+    maxQuantity: 3,
+  },
+};
+
+function gameShopProductsForClient() {
+  return Object.values(GAME_SHOP_PRODUCTS).map((product) => ({
+    id: product.id,
+    sku: product.sku,
+    skuBytes32: skuToBytes32(product.sku),
+    title: product.title,
+    subtitle: product.subtitle,
+    kind: product.kind,
+    usdPriceE6: product.usdPriceE6,
+    priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
+    durationHours: product.durationHours || null,
+    rewards: product.rewards || null,
+    maxQuantity: product.maxQuantity,
+  }));
+}
+
+function skuToBytes32(sku) {
+  const raw = String(sku || '').trim();
+  const bytes = Buffer.from(raw, 'utf8');
+  if (bytes.length < 1 || bytes.length > 32) throw new Error('Bad SKU');
+  const out = Buffer.alloc(32);
+  bytes.copy(out);
+  return `0x${out.toString('hex')}`;
+}
+
+function bytes32ToSku(value) {
+  const hex = String(value || '').replace(/^0x/i, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) return '';
+  return Buffer.from(hex, 'hex').toString('utf8').replace(/\0+$/g, '');
+}
+
+function gameAccountHash(playerId) {
+  return `0x${crypto.createHash('sha256').update(`clash-player:${playerId}`).digest('hex')}`;
+}
+
+function sqliteDateFromDate(date) {
+  return date.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function extendPlayerShield(playerId, durationHours) {
+  const player = db.stmts.getPlayerById.get(playerId);
+  if (!player) return null;
+  const now = new Date();
+  const currentUntil = player.shield_until ? new Date(`${player.shield_until}Z`) : null;
+  const baseTime = currentUntil && currentUntil > now ? currentUntil.getTime() : now.getTime();
+  const next = new Date(baseTime + Math.max(1, durationHours) * 3600_000);
+  const shieldUntil = sqliteDateFromDate(next);
+  db.db.prepare('UPDATE players SET shield_until = ? WHERE id = ?').run(shieldUntil, playerId);
+  return shieldUntil;
+}
+
+function applyGameShopProduct(playerId, product, quantity) {
+  if (product.kind === 'shield') {
+    const shieldUntil = extendPlayerShield(playerId, (product.durationHours || 24) * quantity);
+    return {
+      shield_until: shieldUntil,
+      resources: db.getResources(playerId),
+    };
+  }
+  if (product.kind === 'resources') {
+    const rewards = product.rewards || {};
+    const resources = db.addResources(
+      playerId,
+      (rewards.gold || 0) * quantity,
+      (rewards.wood || 0) * quantity,
+      (rewards.ore || 0) * quantity,
+    );
+    return { resources };
+  }
+  return {};
+}
+
+async function parseGameShopEvmAccount() {
+  const raw = process.env.GAME_SHOP_QUOTE_KEY
+    || process.env.NFT_BASE_SHOP_QUOTE_KEY
+    || process.env.NFT_EVM_KEY
+    || process.env.NFT_BASE
+    || process.env.BASE_NFT_KEY
+    || process.env.NFT_KEY;
+  if (!raw) throw new Error('Game shop quote signer is not configured');
+
+  const { privateKeyToAccount, mnemonicToAccount } = await import('viem/accounts');
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(raw)) {
+    return privateKeyToAccount(raw.startsWith('0x') ? raw : `0x${raw}`);
+  }
+
+  const words = raw.trim().split(/\s+/);
+  if (words.length >= 12 && words.length <= 24 && words.every((word) => /^[a-z]+$/i.test(word))) {
+    const hdPath = process.env.GAME_SHOP_MNEMONIC_PATH || process.env.NFT_BASE_MNEMONIC_PATH || "m/44'/60'/0'/0/0";
+    return mnemonicToAccount(raw.trim(), { path: hdPath });
+  }
+
+  throw new Error('Game shop quote signer key is not a usable EVM key');
+}
+
+async function createBasePublicClient() {
+  const { createPublicClient, http } = await import('viem');
+  const { base } = await import('viem/chains');
+  const rpcUrl = process.env.GAME_SHOP_BASE_RPC_URL
+    || process.env.NFT_BASE_RPC_URL
+    || process.env.BASE_RPC_URL
+    || process.env.VITE_BASE_RPC_URL
+    || 'https://mainnet.base.org';
+  return createPublicClient({ chain: base, transport: http(rpcUrl) });
 }
 
 function fallbackNftSupply(source = 'fallback') {
@@ -622,6 +829,222 @@ router.get('/nft/solana/hidden.json', (req, res) => {
 });
 router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
+
+// ---------- Game shop: CoP payments on Base, utility granted server-side ----------
+router.get('/shop/config', (req, res) => {
+  const config = gameShopConfig();
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    base: {
+      chainId: config.chainId,
+      shop: config.shop,
+      copToken: config.copToken,
+      copReady: config.copReady,
+      saleActive: config.saleActive,
+    },
+    products: gameShopProductsForClient(),
+  });
+});
+
+router.post('/shop/base/quote', auth, async (req, res) => {
+  try {
+    const rate = checkUtilityQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many shop quote requests. Try again shortly.' });
+    }
+
+    const { getAddress } = await import('viem');
+    const config = gameShopConfig();
+    if (!config.shop) return res.status(503).json({ error: 'Game shop is not deployed' });
+    if (!config.copReady) return res.status(503).json({ error: 'CoP token is not configured' });
+    if (!config.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: 'Game shop sale is not active' });
+    }
+
+    const buyer = getAddress(String(req.body?.buyer || ''));
+    const sku = String(req.body?.sku || '').trim();
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10));
+    const paymentToken = getAddress(config.copToken);
+    const decimals = Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18);
+    const usdPriceE6 = BigInt(product.usdPriceE6);
+    const clashUsd = await fetchClashUsdPrice({ clashToken: paymentToken });
+    const unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+    const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
+    const account = gameAccountHash(req.player.id);
+    const skuBytes32 = skuToBytes32(product.sku);
+
+    const signer = await parseGameShopEvmAccount();
+    const domain = {
+      name: 'ClashGameShop',
+      version: '1',
+      chainId: 8453,
+      verifyingContract: getAddress(config.shop),
+    };
+    const types = {
+      PurchaseQuote: [
+        { name: 'buyer', type: 'address' },
+        { name: 'paymentToken', type: 'address' },
+        { name: 'sku', type: 'bytes32' },
+        { name: 'unitPrice', type: 'uint256' },
+        { name: 'quantity', type: 'uint256' },
+        { name: 'usdPriceE6', type: 'uint256' },
+        { name: 'account', type: 'bytes32' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    };
+    const message = { buyer, paymentToken, sku: skuBytes32, unitPrice, quantity, usdPriceE6, account, nonce, deadline };
+    const signature = await signer.signTypedData({
+      domain,
+      types,
+      primaryType: 'PurchaseQuote',
+      message,
+    });
+    const total = unitPrice * quantity;
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chainId: 8453,
+      shop: getAddress(config.shop),
+      payment: 'cop',
+      priceSource: `CoP/USD ${clashUsd.price} (${clashUsd.source})`,
+      decimals,
+      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: total.toString(),
+      totalFormatted: unitsToDecimalString(total, decimals),
+      quote: {
+        buyer,
+        paymentToken,
+        sku: skuBytes32,
+        unitPrice: unitPrice.toString(),
+        quantity: quantity.toString(),
+        usdPriceE6: usdPriceE6.toString(),
+        account,
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+      },
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.post('/shop/base/redeem', auth, async (req, res) => {
+  try {
+    const txHash = String(req.body?.txHash || req.body?.hash || '').trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ error: 'Bad transaction hash' });
+    }
+
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        product: GAME_SHOP_PRODUCTS[existing.utility] || null,
+        shield_until: existing.shield_until || null,
+        resources: db.getResources(req.player.id),
+      });
+    }
+
+    const config = gameShopConfig();
+    if (!config.shop) return res.status(503).json({ error: 'Game shop is not deployed' });
+    const { decodeEventLog, getAddress } = await import('viem');
+    const publicClient = await createBasePublicClient();
+    const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
+    if (!receipt || receipt.status !== 'success') {
+      return res.status(400).json({ error: 'Purchase transaction is not confirmed' });
+    }
+
+    const shopAddress = getAddress(config.shop).toLowerCase();
+    let purchase = null;
+    for (const log of receipt.logs || []) {
+      if (String(log.address || '').toLowerCase() !== shopAddress) continue;
+      try {
+        const decoded = decodeEventLog({
+          abi: GAME_PURCHASE_EVENT_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded?.eventName === 'GamePurchase') {
+          purchase = decoded.args;
+          break;
+        }
+      } catch {
+        // This shop can emit admin/config events too; ignore non-purchase logs.
+      }
+    }
+    if (!purchase) return res.status(400).json({ error: 'Game purchase event not found' });
+
+    const expectedAccount = gameAccountHash(req.player.id).toLowerCase();
+    if (String(purchase.account || '').toLowerCase() !== expectedAccount) {
+      return res.status(403).json({ error: 'Purchase belongs to another game account' });
+    }
+    const paymentToken = getAddress(purchase.paymentToken);
+    if (config.copReady && paymentToken.toLowerCase() !== getAddress(config.copToken).toLowerCase()) {
+      return res.status(400).json({ error: 'Purchase was not paid with CoP' });
+    }
+
+    const sku = bytes32ToSku(purchase.sku);
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    const quantity = Number(purchase.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
+      return res.status(400).json({ error: 'Bad purchase quantity' });
+    }
+
+    const grant = db.db.transaction(() => {
+      const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+      if (duplicate) {
+        const err = new Error('Purchase already redeemed');
+        err.status = 409;
+        throw err;
+      }
+      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      db.db.prepare(`
+        INSERT INTO utility_purchases
+          (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.player.id,
+        sku,
+        'base',
+        txHash,
+        getAddress(purchase.buyer),
+        paymentToken,
+        config.deployment?.treasury || '',
+        (BigInt(purchase.unitPrice) * BigInt(purchase.quantity)).toString(),
+        purchase.usdPriceE6?.toString?.() || String(product.usdPriceE6),
+        product.durationHours ? product.durationHours * quantity : null,
+        applied.shield_until || null,
+      );
+      return applied;
+    })();
+
+    res.json({
+      success: true,
+      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      quantity,
+      txHash,
+      ...grant,
+    });
+  } catch (err) {
+    const message = err?.message || 'redeem failed';
+    res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
 
 // Per-DEX canonical lookup. Each (wallet, dex) pair is unique post-migration,
 // so this returns at most one row. Uses the same Aptos zero-padding fan-out

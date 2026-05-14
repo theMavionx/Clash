@@ -1,17 +1,27 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { createPublicClient, createWalletClient, custom, http } from 'viem';
+import { base } from 'viem/chains';
 import EvmWalletModal from './EvmWalletModal';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
-import { BASE_CHAIN_ID } from '../lib/avantisContract';
+import { usePlayer } from '../hooks/useGodot';
+import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { fetchGameShopConfig, buyGameShopItem } from '../lib/gameShop';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft } from '../lib/nftMint';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const demonKingImg = '/api/nft/image';
 const copLogoImg = '/icons/icon-192.png';
+const nftBasePublicClient = createPublicClient({ chain: base, transport: http() });
+
+const SHOP_TABS = [
+  { id: 'nft', label: 'NFT' },
+  { id: 'resources', label: 'Game Resources' },
+];
 
 const CHAIN_OPTIONS = [
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC / CoP', badge: 'EVM' },
@@ -74,6 +84,23 @@ function chainIdFromHex(value) {
   if (typeof value === 'number') return value;
   const raw = String(value);
   return raw.startsWith('0x') ? Number.parseInt(raw, 16) : Number(raw);
+}
+
+function makeNftEvmWallet(provider, address) {
+  if (!provider || !address) return null;
+  return {
+    address,
+    provider,
+    source: 'nft',
+    isReady: true,
+    ensureChain: async () => ensureBaseChain(provider),
+    getPublicClient: () => nftBasePublicClient,
+    getWalletClient: () => createWalletClient({
+      account: address,
+      chain: base,
+      transport: custom(provider),
+    }),
+  };
 }
 
 function recommendedChain(dex) {
@@ -142,19 +169,23 @@ function getTotalSupplyInfo(baseSupply, solanaSupply) {
 
 function NftMintPanel({ onClose }) {
   const { dex } = useDex();
-  const evmWallet = useEvmWallet();
+  const player = usePlayer();
+  const tradingEvmWallet = useEvmWallet();
   const solWallet = useSolWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const { isInFrame } = useFarcaster();
 
+  const [activeShopTab, setActiveShopTab] = useState('nft');
   const [step, setStep] = useState('chain');
   const [selectedChain, setSelectedChain] = useState(() => recommendedChain(dex));
   const [selectedPayment, setSelectedPayment] = useState(() => defaultPaymentForChain(recommendedChain(dex)));
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+  const [nftEvmWallet, setNftEvmWallet] = useState(null);
   const [evmChainId, setEvmChainId] = useState(null);
   const [busy, setBusy] = useState(null);
   const [notice, setNotice] = useState(null);
   const [mintConfig, setMintConfig] = useState(null);
+  const [gameShopConfig, setGameShopConfig] = useState(null);
   // Overlay state machine: idle = normal panel, pending = signing/waiting
   // for tx confirmation, success = celebration animation. Failure resets
   // to idle and surfaces the message through `notice` like before so the
@@ -162,9 +193,18 @@ function NftMintPanel({ onClose }) {
   const [mintStatus, setMintStatus] = useState('idle');
   const [mintResult, setMintResult] = useState(null);
 
+  const localEvmWallet = useMemo(
+    () => makeNftEvmWallet(nftEvmWallet?.provider, nftEvmWallet?.address),
+    [nftEvmWallet?.provider, nftEvmWallet?.address],
+  );
+  const evmWallet = localEvmWallet || tradingEvmWallet;
+  const usingLocalEvmWallet = !!localEvmWallet;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const evmAddress = evmWallet?.address || null;
   const evmOnBase = evmChainId === BASE_CHAIN_ID;
+  const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+  const gameProducts = gameShopConfig?.products || [];
+  const gameShopReady = !!gameShopConfig?.base?.shop && !!gameShopConfig?.base?.copReady && !!gameShopConfig?.base?.saleActive;
   const paymentOptions = useMemo(() => {
     const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
     return baseOptions.map((option) => ({
@@ -199,6 +239,19 @@ function NftMintPanel({ onClose }) {
     }
   }, []);
 
+  const refreshGameShopConfig = useCallback(async ({ apply = true, log = true } = {}) => {
+    try {
+      const config = await fetchGameShopConfig();
+      if (apply) setGameShopConfig(config);
+      return config;
+    } catch (err) {
+      if (log) {
+        addClientBreadcrumb('shop.config_failed', { message: err?.message || String(err) }, 'warn');
+      }
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     refreshMintConfig({ apply: false }).then((config) => {
@@ -206,6 +259,14 @@ function NftMintPanel({ onClose }) {
     });
     return () => { cancelled = true; };
   }, [refreshMintConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+    refreshGameShopConfig({ apply: false }).then((config) => {
+      if (!cancelled && config) setGameShopConfig(config);
+    });
+    return () => { cancelled = true; };
+  }, [refreshGameShopConfig]);
 
   useEffect(() => {
     if (step !== 'chain') return;
@@ -241,6 +302,30 @@ function NftMintPanel({ onClose }) {
       }
     };
   }, [evmWallet?.provider]);
+
+  useEffect(() => {
+    const provider = nftEvmWallet?.provider;
+    if (!provider || typeof provider.on !== 'function') return undefined;
+    const onAccountsChanged = (accounts) => {
+      const next = accounts?.[0] || null;
+      if (!next) {
+        setNftEvmWallet(null);
+        setEvmChainId(null);
+        return;
+      }
+      setNftEvmWallet((prev) => (
+        prev?.provider === provider && prev.address !== next
+          ? { ...prev, address: next }
+          : prev
+      ));
+    };
+    provider.on('accountsChanged', onAccountsChanged);
+    return () => {
+      if (typeof provider.removeListener === 'function') {
+        provider.removeListener('accountsChanged', onAccountsChanged);
+      }
+    };
+  }, [nftEvmWallet?.provider]);
 
   const handleSelectChain = useCallback((chain) => {
     setSelectedChain(chain);
@@ -342,6 +427,53 @@ function NftMintPanel({ onClose }) {
     }
   }, [dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
 
+  const handleBuyGameProduct = useCallback(async (product) => {
+    if (!sessionToken) {
+      setNotice('Game account is still loading. Try again in a moment.');
+      return;
+    }
+    if (!gameShopReady) {
+      setNotice('CoP game shop is not live yet.');
+      return;
+    }
+    if (!evmAddress || !evmOnBase) {
+      await handleBaseReady();
+      return;
+    }
+
+    setBusy(`shop:${product.id}`);
+    setNotice(null);
+    try {
+      const result = await buyGameShopItem({
+        evmWallet,
+        buyer: evmAddress,
+        token: sessionToken,
+        sku: product.sku,
+        quantity: 1,
+      });
+      const grant = result.grant || {};
+      if (grant.resources) {
+        window.onGodotMessage?.({ action: 'resources', data: grant.resources });
+      }
+      if (grant.shield_until) {
+        window.onGodotMessage?.({ action: 'state', data: { shield_until: grant.shield_until } });
+      }
+      setNotice(`${product.title} added to your base.`);
+      addClientBreadcrumb('shop.purchase_success', {
+        dex,
+        sku: product.sku,
+        tx: result.hash,
+      });
+      void refreshGameShopConfig({ log: false });
+    } catch (err) {
+      const message = err?.shortMessage || err?.message || 'Purchase failed';
+      setNotice(message.slice(0, 160));
+      addClientBreadcrumb('shop.purchase_failed', { dex, sku: product.sku, message }, 'warn');
+    } finally {
+      setBusy(null);
+    }
+  }, [dex, evmAddress, evmOnBase, evmWallet, gameShopReady, handleBaseReady, refreshGameShopConfig, sessionToken]);
+
   const primaryState = getPrimaryState({
     selected,
     evmAddress,
@@ -362,11 +494,17 @@ function NftMintPanel({ onClose }) {
   }, [onClose]);
 
   const handleDisconnectEvm = useCallback(() => {
-    try { evmWallet?.disconnect?.(); } catch { /* ignore */ }
-    setEvmChainId(null);
-    setNotice('Base wallet disconnected.');
-    addClientBreadcrumb('nft.disconnect_evm', { dex });
-  }, [dex, evmWallet]);
+    if (usingLocalEvmWallet) {
+      setNftEvmWallet(null);
+      setEvmChainId(null);
+      setNotice('Base payment wallet disconnected.');
+      addClientBreadcrumb('nft.disconnect_evm', { dex, scope: 'shop' });
+      return;
+    }
+    setEvmModalOpen(true);
+    setNotice('Choose a Base wallet for this shop purchase.');
+    addClientBreadcrumb('nft.change_evm_wallet', { dex, scope: 'shop' });
+  }, [dex, usingLocalEvmWallet]);
 
   const handleDisconnectSolana = useCallback(async () => {
     try {
@@ -389,14 +527,14 @@ function NftMintPanel({ onClose }) {
       >
         <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
           <div style={styles.header}>
-            {step === 'payment' ? (
+            {activeShopTab === 'nft' && step === 'payment' ? (
               <button style={styles.backBtn} onClick={handleBackToChains} aria-label="Back">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
                   <path d="M15 18 9 12l6-6" />
                 </svg>
               </button>
             ) : <span style={styles.headerSpacer} />}
-            <span style={styles.title}>Demon King</span>
+            <span style={styles.title}>Battle Shop</span>
             <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -406,6 +544,24 @@ function NftMintPanel({ onClose }) {
           </div>
 
           <div style={styles.body}>
+            <div style={styles.shopTabs}>
+              {SHOP_TABS.map((tab) => {
+                const active = activeShopTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => { setActiveShopTab(tab.id); setNotice(null); }}
+                    style={{
+                      ...styles.shopTabBtn,
+                      ...(active ? styles.shopTabBtnActive : null),
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
             <div style={styles.topRow}>
               <div style={styles.heroFrame}>
                 <div style={styles.heroGlow} />
@@ -413,11 +569,43 @@ function NftMintPanel({ onClose }) {
               </div>
 
               <div style={styles.summary}>
-                <span style={styles.heroName}>Demon King</span>
+                <span style={styles.heroName}>{activeShopTab === 'nft' ? 'Demon King' : 'Game Resources'}</span>
                 <span style={styles.editionTag}>
-                  Genesis supply {formatCount(step === 'chain' ? totalSupplyInfo.maxSupply : supplyInfo.maxSupply)}
+                  {activeShopTab === 'nft'
+                    ? `Genesis supply ${formatCount(step === 'chain' ? totalSupplyInfo.maxSupply : supplyInfo.maxSupply)}`
+                    : 'Pay with CoP on Base'}
                 </span>
-                {step === 'payment' ? (
+                {activeShopTab === 'resources' ? (
+                  <div style={styles.chainChipGroup}>
+                    <button
+                      type="button"
+                      onClick={evmAddress ? handleBaseReady : () => setEvmModalOpen(true)}
+                      style={styles.chainChip}
+                      title={evmAddress ? 'Switch to Base' : 'Connect Base wallet'}
+                    >
+                      <span style={styles.chainChipBadge}>EVM</span>
+                      <span style={styles.chainChipName}>
+                        {evmAddress ? shortAddress(evmAddress) : 'Base wallet'}
+                      </span>
+                      <span style={styles.chainChipArrow}>РІвЂ“С•</span>
+                    </button>
+                    {evmAddress && (
+                      <button
+                        type="button"
+                        onClick={handleDisconnectEvm}
+                        style={styles.chainChipDisconnect}
+                        title="Disconnect / change wallet"
+                        aria-label="Disconnect wallet"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M9 7H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3" />
+                          <path d="M14 7h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4" />
+                          <line x1="9" y1="12" x2="14" y2="12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ) : step === 'payment' ? (
                   // Connection chip вЂ” doubles as chain-switcher + wallet
                   // disconnect. When a wallet is connected we display the
                   // short address; otherwise the chain name as a hint.
@@ -469,107 +657,118 @@ function NftMintPanel({ onClose }) {
               </div>
             </div>
 
-            {step === 'chain' ? (
-              <SupplyOverview total={totalSupplyInfo} base={baseSupplyInfo} solana={solanaSupplyInfo} />
-            ) : (
-              <SupplyProgress supply={supplyInfo} />
-            )}
-
-            {step === 'chain' ? (
+            {activeShopTab === 'nft' ? (
               <>
-                {COP_DISCOUNT && (
-                  <button type="button" onClick={handleSelectCop} style={styles.clashBanner}>
-                    <span style={styles.clashBannerLogo}>
-                      <img src={copLogoImg} alt="" style={styles.clashBannerLogoImg} />
-                    </span>
-                    <div style={styles.clashBannerCopy}>
-                      <span style={styles.clashBannerTitle}>
-                        Save {COP_DISCOUNT.percent}% - pay with $CoP on Base
-                      </span>
-                      <span style={styles.clashBannerSub}>
-                        ${COP_DISCOUNT.clashUsd.toFixed(2)} CoP vs ${COP_DISCOUNT.baselineUsd.toFixed(2)} ETH/USDC/SOL
-                        <span style={styles.clashBannerSubAccent}>
-                          {' '} - you keep ${COP_DISCOUNT.savedUsd.toFixed(2)}
-                        </span>
-                      </span>
-                    </div>
-                  </button>
+                {step === 'chain' ? (
+                  <SupplyOverview total={totalSupplyInfo} base={baseSupplyInfo} solana={solanaSupplyInfo} />
+                ) : (
+                  <SupplyProgress supply={supplyInfo} />
                 )}
-                <div style={styles.sectionHeader}>
-                  <span style={styles.sectionHeaderText}>Choose network</span>
-                  <span style={styles.sectionHeaderHint}>Where to mint</span>
-                </div>
-                <div style={styles.chainGrid}>
-                {CHAIN_OPTIONS.map((chain) => (
-                  // Wrapper supplies the rotating gradient halo (CSS in
-                  // MINT_ANIM_CSS). Inner button keeps the cartoon-cream
-                  // look and just sits on top with z-index:1.
-                  <div
-                    key={chain.id}
-                    className={`nft-chain-glow nft-chain-glow-${chain.id}`}
-                  >
+
+                {step === 'chain' ? (
+                  <>
+                    {COP_DISCOUNT && (
+                      <button type="button" onClick={handleSelectCop} style={styles.clashBanner}>
+                        <span style={styles.clashBannerLogo}>
+                          <img src={copLogoImg} alt="" style={styles.clashBannerLogoImg} />
+                        </span>
+                        <div style={styles.clashBannerCopy}>
+                          <span style={styles.clashBannerTitle}>
+                            Save {COP_DISCOUNT.percent}% - pay with $CoP on Base
+                          </span>
+                          <span style={styles.clashBannerSub}>
+                            ${COP_DISCOUNT.clashUsd.toFixed(2)} CoP vs ${COP_DISCOUNT.baselineUsd.toFixed(2)} ETH/USDC/SOL
+                            <span style={styles.clashBannerSubAccent}>
+                              {' '} - you keep ${COP_DISCOUNT.savedUsd.toFixed(2)}
+                            </span>
+                          </span>
+                        </div>
+                      </button>
+                    )}
+                    <div style={styles.sectionHeader}>
+                      <span style={styles.sectionHeaderText}>Choose network</span>
+                      <span style={styles.sectionHeaderHint}>Where to mint</span>
+                    </div>
+                    <div style={styles.chainGrid}>
+                    {CHAIN_OPTIONS.map((chain) => (
+                      <div
+                        key={chain.id}
+                        className={`nft-chain-glow nft-chain-glow-${chain.id}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleSelectChain(chain.id)}
+                          style={styles.chainBtn}
+                        >
+                          <span style={styles.chainTitle}>{chain.title}</span>
+                          <span style={styles.chainSubtitle}>{chain.subtitle}</span>
+                        </button>
+                      </div>
+                    ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={styles.options}>
+                      {paymentOptions.map((option) => {
+                        const active = option.id === selectedPayment;
+                        return (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
+                            disabled={option.soon}
+                            style={{
+                              ...styles.optionBtn,
+                              ...(active ? styles.optionBtnActive : null),
+                              ...(option.soon ? styles.optionBtnDisabled : null),
+                            }}
+                          >
+                            <span style={styles.optionBadge}>{option.token}</span>
+                            <span style={styles.optionMain}>
+                              {option.method}
+                              {option.requiresClash && COP_DISCOUNT && (
+                                <span style={styles.optionDiscountChip}>
+                                  -{COP_DISCOUNT.percent}%
+                                </span>
+                              )}
+                            </span>
+                            <span style={styles.optionPrice}>{option.price}</span>
+                            {option.soon && <span style={styles.soonBadge}>SOON</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+
                     <button
-                      type="button"
-                      onClick={() => handleSelectChain(chain.id)}
-                      style={styles.chainBtn}
+                      style={{
+                        ...styles.mintBtn,
+                        ...(primaryState.ready ? styles.mintBtnReady : null),
+                        ...(selected.soon ? styles.mintBtnDisabled : null),
+                        cursor: busy || selected.soon ? 'not-allowed' : 'pointer',
+                      }}
+                      onClick={handlePrimary}
+                      disabled={!!busy || selected.soon}
                     >
-                      <span style={styles.chainTitle}>{chain.title}</span>
-                      <span style={styles.chainSubtitle}>{chain.subtitle}</span>
+                      <span style={styles.mintBtnGlyph}>{primaryState.glyph}</span>
+                      <span>{primaryState.label}</span>
                     </button>
-                  </div>
-                ))}
-                </div>
+                  </>
+                )}
               </>
             ) : (
-              <>
-                <div style={styles.options}>
-                  {paymentOptions.map((option) => {
-                    const active = option.id === selectedPayment;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
-                        disabled={option.soon}
-                        style={{
-                          ...styles.optionBtn,
-                          ...(active ? styles.optionBtnActive : null),
-                          ...(option.soon ? styles.optionBtnDisabled : null),
-                        }}
-                      >
-                        <span style={styles.optionBadge}>{option.token}</span>
-                        <span style={styles.optionMain}>
-                          {option.method}
-                          {option.requiresClash && COP_DISCOUNT && (
-                            <span style={styles.optionDiscountChip}>
-                              -{COP_DISCOUNT.percent}%
-                            </span>
-                          )}
-                        </span>
-                        <span style={styles.optionPrice}>{option.price}</span>
-                        {option.soon && <span style={styles.soonBadge}>SOON</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  style={{
-                    ...styles.mintBtn,
-                    ...(primaryState.ready ? styles.mintBtnReady : null),
-                    ...(selected.soon ? styles.mintBtnDisabled : null),
-                    cursor: busy || selected.soon ? 'not-allowed' : 'pointer',
-                  }}
-                  onClick={handlePrimary}
-                  disabled={!!busy || selected.soon}
-                >
-                  <span style={styles.mintBtnGlyph}>{primaryState.glyph}</span>
-                  <span>{primaryState.label}</span>
-                </button>
-              </>
+              <GameResourcesTab
+                products={gameProducts}
+                ready={gameShopReady}
+                evmAddress={evmAddress}
+                evmOnBase={evmOnBase}
+                busy={busy}
+                onConnectBase={handleBaseReady}
+                onBuy={handleBuyGameProduct}
+              />
             )}
 
-            {notice && <div style={primaryState.ready ? styles.noticeReady : styles.notice}>{notice}</div>}
+            {notice && <div style={activeShopTab === 'nft' && primaryState.ready ? styles.noticeReady : styles.notice}>{notice}</div>}
           </div>
 
           {mintStatus !== 'idle' && (
@@ -587,15 +786,96 @@ function NftMintPanel({ onClose }) {
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
         onConnected={({ provider, address, rdns }) => {
-          evmWallet.setExternalProvider(provider, address, rdns, 'external');
+          setNftEvmWallet({ provider, address, rdns });
           setEvmChainId(BASE_CHAIN_ID);
           setEvmModalOpen(false);
           setNotice('Base wallet connected.');
-          addClientBreadcrumb('nft.connect_base_success', { dex });
+          addClientBreadcrumb('nft.connect_base_success', { dex, scope: 'nft' });
         }}
       />
     </>
   );
+}
+
+function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConnectBase, onBuy }) {
+  const connectLabel = evmAddress && !evmOnBase ? 'Switch Base' : 'Connect Base';
+  return (
+    <>
+      <div style={styles.sectionHeader}>
+        <span style={styles.sectionHeaderText}>Game resources</span>
+        <span style={styles.sectionHeaderHint}>CoP utility</span>
+      </div>
+      <div style={styles.resourceGrid}>
+        {products.map((product) => {
+          const isBusy = busy === `shop:${product.id}`;
+          const actionLabel = !evmAddress || !evmOnBase
+            ? connectLabel
+            : isBusy
+              ? 'Buying...'
+              : 'Buy with CoP';
+          return (
+            <div key={product.id} style={styles.resourceCard}>
+              <div style={styles.resourceIconWrap}>
+                {product.kind === 'shield' ? <ShieldGlyph size={48} /> : <ResourceGlyph size={48} />}
+              </div>
+              <div style={styles.resourceInfo}>
+                <span style={styles.resourceTitle}>{product.title}</span>
+                <span style={styles.resourceSubtitle}>{product.subtitle}</span>
+                <div style={styles.resourceMetaRow}>
+                  <span style={styles.resourcePrice}>${product.priceUsd}</span>
+                  {product.durationHours && <span style={styles.resourceMeta}>{product.durationHours}h</span>}
+                  {product.rewards && <span style={styles.resourceMeta}>{formatRewards(product.rewards)}</span>}
+                </div>
+              </div>
+              <button
+                type="button"
+                style={{
+                  ...styles.resourceBuyBtn,
+                  ...((ready && evmAddress && evmOnBase) ? styles.resourceBuyBtnReady : null),
+                  ...(!ready ? styles.resourceBuyBtnDisabled : null),
+                }}
+                disabled={!ready || !!busy}
+                onClick={() => {
+                  if (!evmAddress || !evmOnBase) onConnectBase();
+                  else onBuy(product);
+                }}
+              >
+                {actionLabel}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function ShieldGlyph({ size = 48 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
+      <path d="M32 6 L52 15 L52 31 C52 45 43 54 32 59 C21 54 12 45 12 31 L12 15 Z" fill="#3b7dd8" stroke="#173d73" strokeWidth="3" />
+      <path d="M25 31 L30 36 L40 24" stroke="#fff" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M32 11 L47 18 L47 31 C47 42 40 49 32 53" stroke="rgba(255,255,255,0.35)" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ResourceGlyph({ size = 48 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
+      <path d="M15 24 L32 14 L49 24 V44 L32 54 L15 44 Z" fill="#d59a2f" stroke="#6b3d12" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M15 24 L32 34 L49 24" stroke="#6b3d12" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M32 34 V54" stroke="#6b3d12" strokeWidth="3" />
+      <path d="M25 20 L41 29" stroke="rgba(255,255,255,0.45)" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function formatRewards(rewards) {
+  const values = [rewards.gold, rewards.wood, rewards.ore].filter(Boolean);
+  if (!values.length) return '';
+  const first = values[0] || 0;
+  return `${first.toLocaleString()} each`;
 }
 
 function getContextLine(dex) {
@@ -1216,6 +1496,32 @@ const styles = {
     display: 'flex', flexDirection: 'column', gap: 10,
     overflowY: 'auto',
   },
+  shopTabs: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 6,
+    padding: 4,
+    borderRadius: 12,
+    background: '#e8dfc8',
+    border: '2px solid #d4c8b0',
+  },
+  shopTabBtn: {
+    minHeight: 34,
+    border: '2px solid transparent',
+    borderRadius: 9,
+    background: 'transparent',
+    color: '#77573d',
+    fontSize: 12,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  shopTabBtnActive: {
+    background: '#fff8df',
+    borderColor: '#bba882',
+    color: '#5C3A21',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
+  },
   topRow: {
     display: 'grid',
     gridTemplateColumns: '120px 1fr',
@@ -1319,6 +1625,94 @@ const styles = {
     cursor: 'pointer',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
     transition: 'filter 0.12s, background 0.12s',
+  },
+  resourceGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr',
+    gap: 9,
+  },
+  resourceCard: {
+    display: 'grid',
+    gridTemplateColumns: '58px minmax(0, 1fr) auto',
+    alignItems: 'center',
+    gap: 10,
+    border: '3px solid #d4c8b0',
+    borderRadius: 13,
+    background: 'linear-gradient(180deg, #fff8df 0%, #ead9b2 100%)',
+    padding: 10,
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
+  },
+  resourceIconWrap: {
+    width: 58,
+    height: 58,
+    borderRadius: 12,
+    background: '#e8dfc8',
+    border: '2px solid #c2ae83',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  resourceInfo: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+  },
+  resourceTitle: {
+    color: '#5C3A21',
+    fontSize: 14,
+    fontWeight: 900,
+    lineHeight: 1.1,
+  },
+  resourceSubtitle: {
+    color: '#77573d',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.2,
+  },
+  resourceMetaRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginTop: 3,
+  },
+  resourcePrice: {
+    color: '#1f6d34',
+    fontSize: 12,
+    fontWeight: 900,
+  },
+  resourceMeta: {
+    padding: '2px 6px',
+    borderRadius: 7,
+    background: '#e8dfc8',
+    color: '#6b502d',
+    fontSize: 10,
+    fontWeight: 900,
+  },
+  resourceBuyBtn: {
+    minWidth: 104,
+    minHeight: 38,
+    borderRadius: 11,
+    border: '3px solid #9f8759',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
+    color: '#5C3A21',
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    boxShadow: '0 4px 8px rgba(0,0,0,0.18), inset 0 2px 0 rgba(255,255,255,0.5)',
+  },
+  resourceBuyBtnReady: {
+    borderColor: '#1f6d34',
+    background: 'linear-gradient(180deg, #87d95f 0%, #3d9b42 100%)',
+    color: '#fff',
+    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+  },
+  resourceBuyBtnDisabled: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
+    filter: 'grayscale(0.35)',
   },
   supplyBox: {
     border: '3px solid #d4c8b0',

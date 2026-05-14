@@ -1,6 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { CANONICAL_GRID_CONFIG } = require('./combat_defs');
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
 
@@ -264,6 +265,30 @@ try {
     )
   `);
 } catch {}
+
+// Paid utility purchases. Kept separate from `players.wallet`: a player can
+// be logged in through Aptos/Solana/etc. and still pay from a one-off Base
+// wallet without changing their DEX identity.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS utility_purchases (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id      TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      utility        TEXT NOT NULL,
+      chain          TEXT NOT NULL,
+      tx_hash        TEXT NOT NULL UNIQUE,
+      payer          TEXT NOT NULL,
+      token          TEXT NOT NULL,
+      recipient      TEXT NOT NULL,
+      amount         TEXT NOT NULL,
+      usd_price_e6   TEXT,
+      duration_hours INTEGER,
+      shield_until   TEXT,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_utility_purchases_player ON utility_purchases(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] utility_purchases migration:', e.message); }
 
 // ---------- Indexes on hot player_id columns (tables defined above) ----------
 // Without these, /battle-log and /buildings endpoints degrade to full-table
@@ -1189,6 +1214,10 @@ function findEnemy(playerId) {
     attack_cost_gold: attackCostGold,
     battle_session_id: sessionId,
     battle_session_expires_at: reservedUntil,
+    // Canonical island grid — the Godot client reads this from its own
+    // scene, but a headless agent can't. Ship it so the agent can build a
+    // valid `battle_start` action without guessing coordinates.
+    grid_config: CANONICAL_GRID_CONFIG,
   };
   })();
 }
