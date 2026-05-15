@@ -102,6 +102,22 @@ export function GodotProvider({ children }) {
               if (window.requestIdleCallback) window.requestIdleCallback(doFetch, { timeout: 800 });
               else setTimeout(doFetch, 500);
             }
+            // Hydrate shield_until from server (Godot bridge doesn't push it).
+            // Without this, the shield indicator would only appear after a
+            // purchase in the current session and disappear on reload.
+            const shieldFetchToken = data.token;
+            fetch('/api/state', { headers: { 'x-token': shieldFetchToken } })
+              .then(r => r.ok ? r.json() : null)
+              .then(state => {
+                if (!state || !state.shield_until) return;
+                if (window._playerToken !== shieldFetchToken) return;
+                setPlayerState(prev => {
+                  if (!prev) return prev;
+                  if (prev.shield_until === state.shield_until) return prev;
+                  return { ...prev, shield_until: state.shield_until };
+                });
+              })
+              .catch(() => {});
           } else {
             // Logout (js_bridge emits empty token on _do_logout). Clear the
             // guard + reset tutorial state so the next account's token starts

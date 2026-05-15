@@ -318,7 +318,14 @@ async function fetchClashUsdPrice(config) {
   }
 
   const now = Date.now();
-  const cacheMs = Math.max(5_000, Number(process.env.NFT_CLASH_PRICE_CACHE_MS || 30_000));
+  // 10-minute cache: every quote inside the same window prices the SKU at
+  // the same CoP amount, so a single approve covers any number of repeat
+  // purchases without surprise allowance shortfalls when the dex price
+  // wobbles a few % between requests. Combined with the buy-side retry the
+  // 600s cache also keeps "Quote expired" reverts inside the same 10-min
+  // session from happening because the unitPrice doesn't drift between the
+  // pre-flight quote and the actual purchase quote.
+  const cacheMs = Math.max(5_000, Number(process.env.NFT_CLASH_PRICE_CACHE_MS || 600_000));
   if (clashUsdPriceCache?.token === token && clashUsdPriceCache.expiresAt > now) {
     return clashUsdPriceCache.value;
   }
@@ -873,7 +880,11 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const usdPriceE6 = BigInt(product.usdPriceE6);
     const clashUsd = await fetchClashUsdPrice({ clashToken: paymentToken });
     const unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
-    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 300)));
+    // 600s default: gives the buy flow comfortable headroom for two wallet
+    // signatures (approve + purchase) plus block confirmation. The previous
+    // 300s window occasionally expired between approve and purchase on
+    // slower wallets and the contract reverted with "Quote expired".
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));
     const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
     const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
     const account = gameAccountHash(req.player.id);
@@ -3560,6 +3571,100 @@ router.get('/admin/players', adminAuth, (req, res) => {
       last_seen_age_sec: lastSeenMs ? Math.floor(ageMs / 1000) : null,
     };
   }));
+});
+
+// One-shot fix: seed a Town Hall for every player who is missing one.
+// Without a town_hall row, findEnemyCandidates excludes the account from
+// matchmaking, so a fresh registrant who never placed buildings becomes
+// invisible as a target and the matchmaker keeps reporting "all bases
+// shielded" even when there are unshielded accounts. Picks an unoccupied
+// cell on grid 0 starting from the centre and spiralling outward; town_hall
+// occupies a 4x4 footprint so we keep clearance from existing buildings.
+router.post('/admin/seed-town-halls', adminAuth, (req, res) => {
+  const TH_HP = 3500; // BUILDING_DEFS.town_hall.hp_levels[0]
+  const TH_FOOTPRINT = 4;
+  const GRID_SIZE = 27;
+  const SEED_CENTER = 12;
+
+  const missing = db.db.prepare(`
+    SELECT p.id
+    FROM players p
+    WHERE NOT EXISTS (
+      SELECT 1 FROM buildings b
+      WHERE b.player_id = p.id AND b.type = 'town_hall'
+    )
+  `).all();
+
+  const fetchOccupiedCells = db.db.prepare(`
+    SELECT grid_x, grid_z FROM buildings WHERE player_id = ? AND grid_index = 0
+  `);
+  const insertBuilding = db.db.prepare(`
+    INSERT INTO buildings (player_id, type, level, grid_x, grid_z, grid_index, hp, max_hp)
+    VALUES (?, 'town_hall', 1, ?, ?, 0, ?, ?)
+  `);
+
+  // Spiral cell order from (SEED_CENTER, SEED_CENTER) outward — first free
+  // 4x4 block wins. Footprint check is conservative: rejects the cell if
+  // any 4x4 corner cell is taken or off-grid.
+  function makeSpiral() {
+    const order = [];
+    const seen = new Set();
+    for (let r = 0; r <= GRID_SIZE; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dz = -r; dz <= r; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          const x = SEED_CENTER + dx;
+          const z = SEED_CENTER + dz;
+          if (x < 0 || z < 0) continue;
+          if (x + TH_FOOTPRINT > GRID_SIZE || z + TH_FOOTPRINT > GRID_SIZE) continue;
+          const key = `${x},${z}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          order.push([x, z]);
+        }
+      }
+    }
+    return order;
+  }
+  const spiral = makeSpiral();
+
+  function fits(playerCells, x, z) {
+    for (let dx = 0; dx < TH_FOOTPRINT; dx++) {
+      for (let dz = 0; dz < TH_FOOTPRINT; dz++) {
+        if (playerCells.has(`${x + dx},${z + dz}`)) return false;
+      }
+    }
+    return true;
+  }
+
+  const result = db.db.transaction(() => {
+    let seeded = 0;
+    let skipped = 0;
+    for (const { id } of missing) {
+      const occupied = new Set();
+      for (const cell of fetchOccupiedCells.all(id)) {
+        occupied.add(`${cell.grid_x},${cell.grid_z}`);
+      }
+      let placed = false;
+      for (const [x, z] of spiral) {
+        if (!fits(occupied, x, z)) continue;
+        try {
+          insertBuilding.run(id, x, z, TH_HP, TH_HP);
+          seeded++;
+          placed = true;
+          break;
+        } catch {
+          // Tight UNIQUE constraint race or footprint clash with a building
+          // we don't track in `occupied` (different grid_index) — fall
+          // through and try the next cell.
+        }
+      }
+      if (!placed) skipped++;
+    }
+    return { missing: missing.length, seeded, skipped };
+  })();
+
+  res.json(result);
 });
 
 // All battle replays with full details

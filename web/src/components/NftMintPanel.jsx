@@ -10,6 +10,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import { usePlayer } from '../hooks/useGodot';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { fetchGameShopConfig, buyGameShopItem } from '../lib/gameShop';
+import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft } from '../lib/nftMint';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
@@ -192,6 +193,8 @@ function NftMintPanel({ onClose }) {
   // user can retry without reopening the modal.
   const [mintStatus, setMintStatus] = useState('idle');
   const [mintResult, setMintResult] = useState(null);
+  const [shopPurchaseStatus, setShopPurchaseStatus] = useState('idle');
+  const [shopPurchaseResult, setShopPurchaseResult] = useState(null);
 
   const localEvmWallet = useMemo(
     () => makeNftEvmWallet(nftEvmWallet?.provider, nftEvmWallet?.address),
@@ -443,6 +446,8 @@ function NftMintPanel({ onClose }) {
 
     setBusy(`shop:${product.id}`);
     setNotice(null);
+    setShopPurchaseStatus('pending');
+    setShopPurchaseResult({ product });
     try {
       const result = await buyGameShopItem({
         evmWallet,
@@ -453,12 +458,31 @@ function NftMintPanel({ onClose }) {
       });
       const grant = result.grant || {};
       if (grant.resources) {
+        // Update React HUD immediately + push the new totals into Godot so
+        // its local resource counters don't drift and clobber React on the
+        // next sync. Without the godotBridge call, Godot would re-broadcast
+        // the stale gold/wood/ore the next time _update_resource_ui ran.
         window.onGodotMessage?.({ action: 'resources', data: grant.resources });
+        try {
+          window.godotBridge?.(JSON.stringify({ action: 'set_resources', data: grant.resources }));
+        } catch {}
       }
       if (grant.shield_until) {
         window.onGodotMessage?.({ action: 'state', data: { shield_until: grant.shield_until } });
       }
-      setNotice(`${product.title} added to your base.`);
+      // Stash the per-resource delta on the result so the success popup's
+      // "Done" handler can fire the fly-to-bar animation. We deliberately
+      // DON'T fly here — the burst would happen behind the success overlay
+      // that's about to cover the screen, which the player wouldn't see.
+      const flyRewards = product.rewards
+        ? {
+            gold: product.rewards.gold || 0,
+            wood: product.rewards.wood || 0,
+            ore:  product.rewards.ore  || 0,
+          }
+        : null;
+      setShopPurchaseResult({ product, grant, tx: result.hash, flyRewards });
+      setShopPurchaseStatus('success');
       addClientBreadcrumb('shop.purchase_success', {
         dex,
         sku: product.sku,
@@ -467,12 +491,26 @@ function NftMintPanel({ onClose }) {
       void refreshGameShopConfig({ log: false });
     } catch (err) {
       const message = err?.shortMessage || err?.message || 'Purchase failed';
+      setShopPurchaseStatus('idle');
+      setShopPurchaseResult(null);
       setNotice(message.slice(0, 160));
       addClientBreadcrumb('shop.purchase_failed', { dex, sku: product.sku, message }, 'warn');
     } finally {
       setBusy(null);
     }
   }, [dex, evmAddress, evmOnBase, evmWallet, gameShopReady, handleBaseReady, refreshGameShopConfig, sessionToken]);
+
+  const handleDismissShopPurchase = useCallback(() => {
+    // Fire the fly-to-bar burst when the user dismisses the success popup.
+    // Doing it here (instead of right after grant) means the icons travel
+    // across the now-uncovered screen and the user actually sees them land.
+    const fly = shopPurchaseResult?.flyRewards;
+    if (fly && (fly.gold || fly.wood || fly.ore)) {
+      flyResourcesToBars(fly);
+    }
+    setShopPurchaseStatus('idle');
+    setShopPurchaseResult(null);
+  }, [shopPurchaseResult]);
 
   const primaryState = getPrimaryState({
     selected,
@@ -562,11 +600,18 @@ function NftMintPanel({ onClose }) {
                 );
               })}
             </div>
-            <div style={styles.topRow}>
-              <div style={styles.heroFrame}>
-                <div style={styles.heroGlow} />
-                <img src={demonKingImg} alt="Demon King" style={styles.heroImg} />
-              </div>
+            <div
+              style={{
+                ...styles.topRow,
+                ...(activeShopTab === 'resources' ? styles.topRowResources : null),
+              }}
+            >
+              {activeShopTab === 'nft' && (
+                <div style={styles.heroFrame}>
+                  <div style={styles.heroGlow} />
+                  <img src={demonKingImg} alt="Demon King" style={styles.heroImg} />
+                </div>
+              )}
 
               <div style={styles.summary}>
                 <span style={styles.heroName}>{activeShopTab === 'nft' ? 'Demon King' : 'Game Resources'}</span>
@@ -575,37 +620,8 @@ function NftMintPanel({ onClose }) {
                     ? `Genesis supply ${formatCount(step === 'chain' ? totalSupplyInfo.maxSupply : supplyInfo.maxSupply)}`
                     : 'Pay with CoP on Base'}
                 </span>
-                {activeShopTab === 'resources' ? (
-                  <div style={styles.chainChipGroup}>
-                    <button
-                      type="button"
-                      onClick={evmAddress ? handleBaseReady : () => setEvmModalOpen(true)}
-                      style={styles.chainChip}
-                      title={evmAddress ? 'Switch to Base' : 'Connect Base wallet'}
-                    >
-                      <span style={styles.chainChipBadge}>EVM</span>
-                      <span style={styles.chainChipName}>
-                        {evmAddress ? shortAddress(evmAddress) : 'Base wallet'}
-                      </span>
-                      <span style={styles.chainChipArrow}>РІвЂ“С•</span>
-                    </button>
-                    {evmAddress && (
-                      <button
-                        type="button"
-                        onClick={handleDisconnectEvm}
-                        style={styles.chainChipDisconnect}
-                        title="Disconnect / change wallet"
-                        aria-label="Disconnect wallet"
-                      >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M9 7H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3" />
-                          <path d="M14 7h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4" />
-                          <line x1="9" y1="12" x2="14" y2="12" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
-                ) : step === 'payment' ? (
+                {activeShopTab === 'resources' ? null
+                  : step === 'payment' ? (
                   // Connection chip вЂ” doubles as chain-switcher + wallet
                   // disconnect. When a wallet is connected we display the
                   // short address; otherwise the chain name as a hint.
@@ -631,7 +647,7 @@ function NftMintPanel({ onClose }) {
                           <span style={styles.chainChipName}>
                             {addr ? shortAddress(addr) : (isSol ? 'Solana' : 'Base')}
                           </span>
-                          <span style={styles.chainChipArrow}>в–ѕ</span>
+                          <span style={styles.chainChipArrow}>{'▾'}</span>
                         </button>
                         {onDisc && (
                           <button
@@ -655,6 +671,38 @@ function NftMintPanel({ onClose }) {
                   <span style={styles.contextChip}>{contextLine}</span>
                 )}
               </div>
+
+              {activeShopTab === 'resources' && (
+                <div style={styles.chainChipGroup}>
+                  <button
+                    type="button"
+                    onClick={evmAddress ? handleBaseReady : () => setEvmModalOpen(true)}
+                    style={styles.chainChip}
+                    title={evmAddress ? 'Switch to Base' : 'Connect Base wallet'}
+                  >
+                    <span style={styles.chainChipBadge}>EVM</span>
+                    <span style={styles.chainChipName}>
+                      {evmAddress ? shortAddress(evmAddress) : 'Base wallet'}
+                    </span>
+                    <span style={styles.chainChipArrow}>{'▾'}</span>
+                  </button>
+                  {evmAddress && (
+                    <button
+                      type="button"
+                      onClick={handleDisconnectEvm}
+                      style={styles.chainChipDisconnect}
+                      title="Disconnect / change wallet"
+                      aria-label="Disconnect wallet"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 7H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3" />
+                        <path d="M14 7h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4" />
+                        <line x1="9" y1="12" x2="14" y2="12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {activeShopTab === 'nft' ? (
@@ -779,6 +827,14 @@ function NftMintPanel({ onClose }) {
               onDismiss={handleDismissSuccess}
             />
           )}
+
+          {shopPurchaseStatus !== 'idle' && (
+            <ShopPurchaseOverlay
+              status={shopPurchaseStatus}
+              result={shopPurchaseResult}
+              onDismiss={handleDismissShopPurchase}
+            />
+          )}
         </div>
       </div>
 
@@ -816,7 +872,7 @@ function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConn
           return (
             <div key={product.id} style={styles.resourceCard}>
               <div style={styles.resourceIconWrap}>
-                {product.kind === 'shield' ? <ShieldGlyph size={48} /> : <ResourceGlyph size={48} />}
+                <ResourceProductIcon product={product} />
               </div>
               <div style={styles.resourceInfo}>
                 <span style={styles.resourceTitle}>{product.title}</span>
@@ -848,6 +904,20 @@ function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConn
       </div>
     </>
   );
+}
+
+const RESOURCE_PRODUCT_ICONS = {
+  resource_pack_s: '/icons/resource-pack.png',
+  resource_pack_m: '/icons/war-chest.png',
+};
+
+function ResourceProductIcon({ product }) {
+  const customIcon = RESOURCE_PRODUCT_ICONS[product.id];
+  if (customIcon) {
+    return <img src={customIcon} alt="" style={styles.resourceIconImg} />;
+  }
+  if (product.kind === 'shield') return <ShieldGlyph size={48} />;
+  return <ResourceGlyph size={48} />;
 }
 
 function ShieldGlyph({ size = 48 }) {
@@ -1163,6 +1233,140 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
   );
 }
 
+function ShopPurchaseOverlay({ status, result, onDismiss }) {
+  const pending = status === 'pending';
+  const success = status === 'success';
+  const product = result?.product;
+  const grant = result?.grant;
+  const customIcon = product ? RESOURCE_PRODUCT_ICONS[product.id] : null;
+  const isShield = product?.kind === 'shield';
+
+  let successHeadline = 'Purchase Complete';
+  let successDetail = null;
+  if (success && product) {
+    if (isShield) {
+      const until = grant?.shield_until ? new Date(grant.shield_until + 'Z') : null;
+      successHeadline = 'Shield Activated';
+      successDetail = until
+        ? `Base protected until ${until.toLocaleString()}`
+        : `Your base is protected for ${product.durationHours || 24}h.`;
+    } else if (grant?.resources) {
+      const rewards = product.rewards || {};
+      const parts = [];
+      if (rewards.gold) parts.push(`+${rewards.gold.toLocaleString()} gold`);
+      if (rewards.wood) parts.push(`+${rewards.wood.toLocaleString()} wood`);
+      if (rewards.ore) parts.push(`+${rewards.ore.toLocaleString()} ore`);
+      successHeadline = `${product.title} Delivered`;
+      successDetail = parts.length ? parts.join('  ·  ') : 'Resources added to your stockpile.';
+    } else {
+      successHeadline = `${product.title} Purchased`;
+      successDetail = 'The item is now active on your base.';
+    }
+  }
+
+  return (
+    <div style={overlayStyles.root}>
+      <div style={overlayStyles.backdrop} className="nft-mint-backdrop" />
+
+      {success && (
+        <>
+          <div style={overlayStyles.rays} className="nft-mint-rays" />
+          <div style={overlayStyles.successHalo} className="nft-mint-halo" />
+          {CONFETTI.map((bit, i) => (
+            <span
+              key={i}
+              style={{
+                ...overlayStyles.confetti,
+                background: bit.hue,
+                width: bit.size,
+                height: bit.size,
+                '--tx': `${bit.x}px`,
+                '--ty': `${bit.y}px`,
+                animationDelay: `${bit.delay}ms`,
+              }}
+              className="nft-mint-confetti"
+            />
+          ))}
+        </>
+      )}
+
+      <div style={overlayStyles.content}>
+        <div
+          style={{
+            ...overlayStyles.cardStage,
+            ...(success ? overlayStyles.cardStageSuccess : null),
+          }}
+        >
+          <div
+            style={{ ...overlayStyles.card, ...overlayStyles.cardBare }}
+            className={success ? 'nft-mint-card-spin-bare' : 'nft-mint-card-pulse-bare'}
+          >
+            {customIcon ? (
+              <img src={customIcon} alt="" style={overlayStyles.cardImgBare} />
+            ) : isShield ? (
+              <div style={overlayStyles.cardGlyph}>
+                <ShieldGlyph size={130} />
+              </div>
+            ) : (
+              <div style={overlayStyles.cardGlyph}>
+                <ResourceGlyph size={130} />
+              </div>
+            )}
+          </div>
+
+          {pending && (
+            <>
+              <div style={overlayStyles.ring} className="nft-mint-ring" />
+              <div style={overlayStyles.ringInner} className="nft-mint-ring-inner" />
+            </>
+          )}
+        </div>
+
+        <div style={overlayStyles.copy}>
+          {pending ? (
+            <>
+              <span style={overlayStyles.titleSpinner}>
+                Buying {product?.title || 'item'}
+              </span>
+              <span style={overlayStyles.subtitle}>
+                Confirm in wallet, then waiting for tx<span className="nft-mint-dots" />
+              </span>
+              <span style={overlayStyles.hint}>
+                Keep this window open — paying with $CoP on Base.
+              </span>
+            </>
+          ) : (
+            <>
+              <span style={overlayStyles.titleSuccess}>{successHeadline}</span>
+              {successDetail && (
+                <span style={overlayStyles.subtitleSuccess}>{successDetail}</span>
+              )}
+              {result?.tx && (
+                <span style={overlayStyles.txChip}>tx · {shortAddress(result.tx)}</span>
+              )}
+              <div style={overlayStyles.actionRow}>
+                {result?.tx && (
+                  <a
+                    href={`https://basescan.org/tx/${result.tx}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={overlayStyles.linkBtn}
+                  >
+                    View on BaseScan
+                  </a>
+                )}
+                <button type="button" style={overlayStyles.doneBtn} onClick={onDismiss}>
+                  Done
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const overlayStyles = {
   root: {
     position: 'absolute', inset: 0,
@@ -1223,6 +1427,23 @@ const overlayStyles = {
   cardImg: {
     width: '100%', height: '100%',
     objectFit: 'contain',
+    filter: 'drop-shadow(0 8px 14px rgba(0,0,0,0.55))',
+  },
+  cardBare: {
+    background: 'transparent',
+    border: 'none',
+    borderRadius: 0,
+    boxShadow: 'none',
+    overflow: 'visible',
+  },
+  cardImgBare: {
+    width: '120%', height: '120%',
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 10px 18px rgba(0,0,0,0.55))',
+  },
+  cardGlyph: {
+    width: '100%', height: '100%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
     filter: 'drop-shadow(0 8px 14px rgba(0,0,0,0.55))',
   },
   cardShine: {
@@ -1361,6 +1582,27 @@ const MINT_ANIM_CSS = `
       nft-mint-card-pulse 3.6s ease-in-out 1.4s infinite;
   }
 
+  /* Bare variants for the shop overlay — transform only, no card chrome
+     (background / border / box-shadow) baked into the animation, so the
+     icon floats freely without the golden frame the NFT card uses. */
+  @keyframes nft-mint-bare-pulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.06); }
+  }
+  .nft-mint-bare-pulse { animation: nft-mint-bare-pulse 1.9s ease-in-out infinite; }
+
+  @keyframes nft-mint-bare-spin {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.18) rotate(8deg); }
+    65%  { transform: scale(0.96) rotate(-4deg); }
+    100% { transform: scale(1); }
+  }
+  .nft-mint-bare-spin {
+    animation:
+      nft-mint-bare-spin 1.0s cubic-bezier(0.22, 1.1, 0.36, 1) 1 forwards,
+      nft-mint-bare-pulse 3.2s ease-in-out 1.0s infinite;
+  }
+
   /* Light sheen that wipes across the card right after the flip lands. */
   @keyframes nft-mint-card-shine {
     0%   { left: -60%; opacity: 0; }
@@ -1391,6 +1633,28 @@ const MINT_ANIM_CSS = `
     100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(1) rotate(540deg); opacity: 0; }
   }
   .nft-mint-confetti { animation: nft-mint-confetti-fly 1.6s cubic-bezier(0.22, 0.8, 0.4, 1) forwards; }
+
+  /* Bare variants — same motion as the framed card animations but without the
+     glowing brown box-shadow keyframes that would otherwise re-introduce the
+     card frame on the shop purchase overlay (which renders just an icon). */
+  @keyframes nft-mint-card-pulse-bare {
+    0%, 100% { transform: scale(1) rotateY(0deg); }
+    50%      { transform: scale(1.04) rotateY(6deg); }
+  }
+  .nft-mint-card-pulse-bare { animation: nft-mint-card-pulse-bare 1.9s ease-in-out infinite; }
+
+  @keyframes nft-mint-card-spin-bare {
+    0%   { transform: rotateY(0deg)   scale(1); }
+    35%  { transform: rotateY(540deg) scale(1.1); }
+    55%  { transform: rotateY(720deg) scale(0.96); }
+    75%  { transform: rotateY(720deg) scale(1.04); }
+    100% { transform: rotateY(720deg) scale(1); }
+  }
+  .nft-mint-card-spin-bare {
+    animation:
+      nft-mint-card-spin-bare 1.4s cubic-bezier(0.22, 1.1, 0.36, 1) 1 forwards,
+      nft-mint-card-pulse-bare 3.6s ease-in-out 1.4s infinite;
+  }
 
   /* Chain-card halo: thin ring made by a rotating conic-gradient that
      extends past the card so corners stay smooth. Wrapper crops it with
@@ -1518,7 +1782,7 @@ const styles = {
   },
   shopTabBtnActive: {
     background: '#fff8df',
-    borderColor: '#bba882',
+    border: '2px solid #bba882',
     color: '#5C3A21',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
   },
@@ -1527,6 +1791,14 @@ const styles = {
     gridTemplateColumns: '120px 1fr',
     gap: 12,
     alignItems: 'center',
+  },
+  topRowResources: {
+    display: 'flex',
+    gridTemplateColumns: 'unset',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
   },
   heroFrame: {
     position: 'relative',
@@ -1633,7 +1905,7 @@ const styles = {
   },
   resourceCard: {
     display: 'grid',
-    gridTemplateColumns: '58px minmax(0, 1fr) auto',
+    gridTemplateColumns: '92px minmax(0, 1fr) auto',
     alignItems: 'center',
     gap: 10,
     border: '3px solid #d4c8b0',
@@ -1643,14 +1915,22 @@ const styles = {
     boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
   },
   resourceIconWrap: {
-    width: 58,
-    height: 58,
-    borderRadius: 12,
+    width: 92,
+    height: 92,
+    borderRadius: 16,
     background: '#e8dfc8',
     border: '2px solid #c2ae83',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  resourceIconImg: {
+    width: '128%',
+    height: '128%',
+    objectFit: 'contain',
+    display: 'block',
+    transform: 'translateY(2%)',
   },
   resourceInfo: {
     minWidth: 0,
@@ -1704,7 +1984,7 @@ const styles = {
     boxShadow: '0 4px 8px rgba(0,0,0,0.18), inset 0 2px 0 rgba(255,255,255,0.5)',
   },
   resourceBuyBtnReady: {
-    borderColor: '#1f6d34',
+    border: '3px solid #1f6d34',
     background: 'linear-gradient(180deg, #87d95f 0%, #3d9b42 100%)',
     color: '#fff',
     textShadow: '0 1px 1px rgba(0,0,0,0.35)',

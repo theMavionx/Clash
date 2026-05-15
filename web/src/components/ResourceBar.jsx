@@ -32,6 +32,7 @@ function ResourceBar() {
     const publish = () => {
       const dpr = window.devicePixelRatio || 1;
       const out = {};
+      const outCss = {};
       for (const key of ['gold', 'wood', 'ore']) {
         const el = iconRefs.current[key];
         if (!el) continue;
@@ -40,8 +41,16 @@ function ResourceBar() {
           x: Math.round((r.left + r.width / 2) * dpr),
           y: Math.round((r.top + r.height / 2) * dpr),
         };
+        outCss[key] = {
+          x: r.left + r.width / 2,
+          y: r.top + r.height / 2,
+        };
       }
       window.godotResourceIconPositions = out;
+      // CSS-pixel variant for React-side overlays (purchase fly animation,
+      // floating gain numbers). DPR-scaled coords above target Godot's native
+      // canvas where 1 unit == 1 device pixel; React DOM uses CSS pixels.
+      window.__clashResourceBarPositionsCss = outCss;
     };
     publish();
     const ro = new ResizeObserver(publish);

@@ -1,3 +1,28 @@
+const fs = require('fs');
+const path = require('path');
+
+// Load .env files BEFORE requiring routes so process.env is populated by the
+// time route modules read config (game shop quote signer, NFT keys, CoP token,
+// etc.). Mirrors the precedence used by nft/scripts/lib-env.mjs so the same
+// keys configured for nft tooling work for the running server.
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match) continue;
+    if (process.env[match[1]] !== undefined) continue;
+    let value = match[2];
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    process.env[match[1]] = value;
+  }
+}
+const REPO_ROOT = path.resolve(__dirname, '..');
+loadEnvFile(path.join(__dirname, '.env'));
+loadEnvFile(path.join(REPO_ROOT, '.env'));
+loadEnvFile(path.join(REPO_ROOT, 'web', '.env'));
+
 const express = require('express');
 const cors = require('cors');
 const http = require('http');

@@ -188,6 +188,14 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"add_resources":
 			if bs:
 				bs._on_add_resource(data.get("resource", "gold"))
+		"set_resources":
+			# Server-of-truth totals (after a shop purchase, attack reward, etc.)
+			# pushed in from React. Without this, Godot's local resource counters
+			# would drift from the DB and a subsequent _update_resource_ui() call
+			# would broadcast the stale Godot value back to React, undoing the
+			# purchase visually.
+			if bs and data is Dictionary:
+				bs._apply_resources_from_server(data)
 		"open_shop":
 			if bs:
 				send_to_react("shop_toggled", {"open": true})
