@@ -427,6 +427,46 @@ function gameShopConfig() {
   };
 }
 
+// Solana shop runs an off-chain "memo'd transfer" model — there's no
+// deployed program. Treasury is a regular wallet, USDC mint is the standard
+// Circle one, and SOL payments use SystemProgram.transfer. The redeem
+// endpoint verifies the on-chain tx itself (recipient, amount, memo, sig).
+const SOLANA_USDC_MINT_DEFAULT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const SOLANA_MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
+
+function gameShopSolanaConfig() {
+  // Treasury can be configured per-env or pulled from the nft deployment
+  // (reuse the same Solana wallet the NFT mint uses — they're the same
+  // server identity, no reason to maintain two recipients). Falls back to
+  // null when not configured so the client knows the Solana shop is off.
+  const deployment = gameShopDeployment();
+  const nftDeployment = readJsonIfExists(
+    path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json'),
+  ) || {};
+  const treasury = process.env.GAME_SHOP_SOLANA_TREASURY
+    || process.env.NFT_SOLANA_TREASURY
+    || deployment.solanaTreasury
+    || nftDeployment.treasury
+    || nftDeployment.owner
+    || null;
+  const usdcMint = process.env.GAME_SHOP_SOLANA_USDC_MINT
+    || process.env.NFT_SOLANA_USDC_MINT
+    || nftDeployment.usdcMint
+    || SOLANA_USDC_MINT_DEFAULT;
+  const saleActive = process.env.GAME_SHOP_SOLANA_SALE_ACTIVE
+    ? process.env.GAME_SHOP_SOLANA_SALE_ACTIVE !== '0'
+    : !!treasury; // any wallet that's configured = open
+  return {
+    chain: 'solana',
+    cluster: process.env.GAME_SHOP_SOLANA_CLUSTER || 'mainnet-beta',
+    treasury,
+    usdcMint,
+    memoProgram: SOLANA_MEMO_PROGRAM_ID,
+    saleActive,
+    ready: !!treasury,
+  };
+}
+
 const GAME_SHOP_PRODUCTS = {
   shield_24h: {
     id: 'shield_24h',
@@ -553,6 +593,67 @@ async function parseGameShopEvmAccount() {
   }
 
   throw new Error('Game shop quote signer key is not a usable EVM key');
+}
+
+// Parse the server's Solana signing keypair. We reuse the same env vars
+// the nft/scripts/lib-env.mjs convention uses: NFT_KEY (Solana base58),
+// SOLANA_NFT_KEY, or NFT_SOLANA_KEY. The keypair is used only to sign the
+// quote memo bytes (off-chain ed25519) — it does NOT pay for the user's
+// purchase tx, so the wallet doesn't need SOL on it. Cached after first
+// call so we don't re-derive on every quote.
+let _solanaSignerKeypair = null;
+function getSolanaSignerKeypair() {
+  if (_solanaSignerKeypair) return _solanaSignerKeypair;
+  const raw = String(
+    process.env.GAME_SHOP_SOLANA_QUOTE_KEY
+    || process.env.SOLANA_NFT_KEY
+    || process.env.NFT_SOLANA_KEY
+    || process.env.NFT_KEY
+    || '',
+  ).trim();
+  if (!raw) throw new Error('Solana game shop signer is not configured');
+  const { Keypair } = require('@solana/web3.js');
+  // Accept JSON byte array, hex (32 or 64), or base58 (32 or 64). Mirrors
+  // parseSolanaKeypair in nft/scripts/lib-env.mjs.
+  if (/^\s*\[/.test(raw)) {
+    const bytes = Uint8Array.from(JSON.parse(raw));
+    if (bytes.length === 64) {
+      _solanaSignerKeypair = Keypair.fromSecretKey(bytes);
+      return _solanaSignerKeypair;
+    }
+    if (bytes.length === 32) {
+      _solanaSignerKeypair = Keypair.fromSeed(bytes);
+      return _solanaSignerKeypair;
+    }
+    throw new Error(`Unsupported Solana key byte length: ${bytes.length}`);
+  }
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(raw)) {
+    const hex = raw.startsWith('0x') ? raw.slice(2) : raw;
+    _solanaSignerKeypair = Keypair.fromSeed(Uint8Array.from(Buffer.from(hex, 'hex')));
+    return _solanaSignerKeypair;
+  }
+  const decoded = bs58.decode(raw);
+  if (decoded.length === 64) {
+    _solanaSignerKeypair = Keypair.fromSecretKey(decoded);
+    return _solanaSignerKeypair;
+  }
+  if (decoded.length === 32) {
+    _solanaSignerKeypair = Keypair.fromSeed(decoded);
+    return _solanaSignerKeypair;
+  }
+  throw new Error(`Unsupported Solana key length: ${decoded.length} bytes`);
+}
+
+let _solanaConnectionCache = null;
+function getSolanaConnection() {
+  if (_solanaConnectionCache) return _solanaConnectionCache;
+  const { Connection } = require('@solana/web3.js');
+  const rpcUrl = process.env.NFT_SOLANA_RPC_URL
+    || process.env.SOLANA_RPC_URL
+    || process.env.VITE_SOLANA_RPC_URL
+    || 'https://solana-rpc.publicnode.com';
+  _solanaConnectionCache = new Connection(rpcUrl, 'confirmed');
+  return _solanaConnectionCache;
 }
 
 async function createBasePublicClient() {
@@ -841,6 +942,7 @@ router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 
 // ---------- Game shop: CoP payments on Base, utility granted server-side ----------
 router.get('/shop/config', (req, res) => {
   const config = gameShopConfig();
+  const solana = gameShopSolanaConfig();
   res.set('Cache-Control', 'no-store');
   res.json({
     base: {
@@ -849,6 +951,15 @@ router.get('/shop/config', (req, res) => {
       copToken: config.copToken,
       copReady: config.copReady,
       saleActive: config.saleActive,
+    },
+    solana: {
+      chain: solana.chain,
+      cluster: solana.cluster,
+      treasury: solana.treasury,
+      usdcMint: solana.usdcMint,
+      memoProgram: solana.memoProgram,
+      saleActive: solana.saleActive,
+      ready: solana.ready,
     },
     products: gameShopProductsForClient(),
   });
@@ -1055,6 +1166,346 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
   } catch (err) {
     const message = err?.message || 'redeem failed';
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
+
+// ---------- Game shop: Solana payments (USDC or SOL), utility granted server-side ----------
+
+function buildSolanaShopMemo({ sku, quantity, account, nonce, deadline, payment, amount }) {
+  // Compact JSON payload — client puts these bytes inside a Memo program
+  // instruction on their purchase tx. Server's redeem path verifies (a) the
+  // memo bytes match what was signed, (b) the ed25519 signature recovers to
+  // the configured signer pubkey. Without (a) an attacker who saw a quote
+  // could mint a different (cheaper) tx with the same signature; without
+  // (b) anyone could fabricate a memo for any account.
+  return JSON.stringify({
+    v: 1,
+    sku,
+    qty: Number(quantity),
+    acc: account,
+    nonce,
+    deadline: Number(deadline),
+    pay: payment,
+    amt: String(amount),
+  });
+}
+
+function signSolanaShopMemo(payload) {
+  const keypair = getSolanaSignerKeypair();
+  const msg = new TextEncoder().encode(payload);
+  const sig = nacl.sign.detached(msg, keypair.secretKey);
+  return bs58.encode(sig);
+}
+
+function verifySolanaShopMemoSignature(memoString, signatureB58) {
+  try {
+    const keypair = getSolanaSignerKeypair();
+    const msg = new TextEncoder().encode(memoString);
+    const sig = bs58.decode(signatureB58);
+    if (sig.length !== 64) return false;
+    return nacl.sign.detached.verify(msg, sig, keypair.publicKey.toBytes());
+  } catch { return false; }
+}
+
+// Parse the {memo, signature} pair our quote emitted out of a confirmed
+// Solana tx. We don't trust the client's body for these — we re-extract
+// them from the on-chain memo instruction so the signature check actually
+// proves the user paid for the SKU we'll grant.
+function extractShopMemoFromTx(parsedTx, memoProgramId) {
+  const instructions = parsedTx?.transaction?.message?.instructions || [];
+  for (const ix of instructions) {
+    const program = ix.program || ix.programId?.toString?.() || '';
+    const pid = ix.programId?.toString?.() || '';
+    if (program === 'spl-memo' || pid === memoProgramId) {
+      const raw = typeof ix.parsed === 'string' ? ix.parsed : (ix.parsed?.info?.data ?? ix.data);
+      if (typeof raw === 'string' && raw.trim().startsWith('{')) {
+        try {
+          const parsed = JSON.parse(raw);
+          return { memo: raw, parsed };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Return true if the tx contains a SystemProgram.transfer or SPL-token
+// transferChecked/transfer instruction that delivers `expectedAmount` raw
+// units of `expectedMint` (or native SOL when expectedMint is null) to
+// `expectedTreasury`. We check parsed instructions only — opaque raw
+// instructions are rejected so a tx with hand-rolled CPI can't slip past.
+function txTransfersToTreasury({ parsedTx, expectedMint, expectedTreasury, expectedAmount }) {
+  const expected = BigInt(expectedAmount);
+  const instructions = parsedTx?.transaction?.message?.instructions || [];
+  const innerSets = parsedTx?.meta?.innerInstructions || [];
+  const allIxs = instructions.concat(...innerSets.map((s) => s.instructions || []));
+
+  for (const ix of allIxs) {
+    const program = ix.program || '';
+    const type = ix.parsed?.type || '';
+    const info = ix.parsed?.info || {};
+    if (expectedMint == null) {
+      // Native SOL transfer
+      if (program === 'system' && (type === 'transfer' || type === 'transferWithSeed')) {
+        if (String(info.destination) !== String(expectedTreasury)) continue;
+        const lamports = BigInt(info.lamports || 0);
+        if (lamports >= expected) return true;
+      }
+    } else {
+      // SPL token transfer to the treasury's associated token account.
+      // We accept either `transferChecked` (preferred — includes mint) or
+      // legacy `transfer` (mint not in instruction; we cross-reference
+      // via post-token-balances below as a safety net).
+      if (program === 'spl-token' && (type === 'transferChecked' || type === 'transferCheckedWithFee' || type === 'transfer')) {
+        const amount = BigInt(info.tokenAmount?.amount ?? info.amount ?? 0);
+        const mint = info.mint ? String(info.mint) : null;
+        if (type === 'transferChecked' || type === 'transferCheckedWithFee') {
+          if (mint !== String(expectedMint)) continue;
+        }
+        // For legacy `transfer`, the mint isn't in the instruction. Verify
+        // the destination ATA owner via postTokenBalances.
+        const dest = String(info.destination || '');
+        const post = (parsedTx?.meta?.postTokenBalances || []).find((b) => b.accountIndex != null
+          && String(parsedTx.transaction.message.accountKeys?.[b.accountIndex]?.pubkey || parsedTx.transaction.message.accountKeys?.[b.accountIndex] || '') === dest);
+        if (post && (String(post.owner) !== String(expectedTreasury) || String(post.mint) !== String(expectedMint))) continue;
+        if (amount >= expected) return true;
+      }
+    }
+  }
+  return false;
+}
+
+router.post('/shop/solana/redeem', auth, async (req, res) => {
+  try {
+    const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
+    // Solana tx signature is base58 of 64 bytes → 87-88 chars.
+    if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(signature)) {
+      return res.status(400).json({ error: 'Bad Solana tx signature' });
+    }
+
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(signature);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        product: GAME_SHOP_PRODUCTS[existing.utility] || null,
+        shield_until: existing.shield_until || null,
+        resources: db.getResources(req.player.id),
+      });
+    }
+
+    const solana = gameShopSolanaConfig();
+    if (!solana.ready) return res.status(503).json({ error: 'Solana game shop is not configured' });
+
+    const connection = getSolanaConnection();
+    const parsedTx = await connection.getParsedTransaction(signature, {
+      commitment: 'confirmed',
+      maxSupportedTransactionVersion: 0,
+    });
+    if (!parsedTx) return res.status(400).json({ error: 'Solana tx not found or not confirmed yet' });
+    if (parsedTx.meta?.err) {
+      return res.status(400).json({ error: 'Solana tx failed on-chain' });
+    }
+
+    const memoInfo = extractShopMemoFromTx(parsedTx, solana.memoProgram);
+    if (!memoInfo) return res.status(400).json({ error: 'Shop memo not found in tx' });
+
+    // The memo is the canonical source of truth — we re-verify the server's
+    // signature against the memo bytes before we trust anything in it.
+    // Without this, an attacker could craft a tx that pays $0.01 with a
+    // fake memo claiming a $5 shield.
+    const memoSig = String(req.body?.signature || req.body?.serverSignature || '').trim();
+    if (!memoSig) return res.status(400).json({ error: 'Missing memo signature' });
+    if (!verifySolanaShopMemoSignature(memoInfo.memo, memoSig)) {
+      return res.status(403).json({ error: 'Bad memo signature' });
+    }
+
+    const memoData = memoInfo.parsed;
+    if (memoData?.v !== 1) return res.status(400).json({ error: 'Unsupported memo version' });
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Number(memoData.deadline) < nowSec - 600) {
+      // 10-minute grace beyond the original deadline so a tx confirmed at
+      // T-1s before expiry but processed by us a minute later still counts.
+      return res.status(400).json({ error: 'Quote deadline expired' });
+    }
+
+    const expectedAccount = gameAccountHash(req.player.id);
+    if (String(memoData.acc).toLowerCase() !== expectedAccount.toLowerCase()) {
+      return res.status(403).json({ error: 'Purchase belongs to another game account' });
+    }
+
+    const sku = String(memoData.sku || '');
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+
+    const quantity = Number(memoData.qty);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
+      return res.status(400).json({ error: 'Bad purchase quantity' });
+    }
+
+    const payment = String(memoData.pay || 'usdc');
+    if (payment !== 'usdc' && payment !== 'sol') {
+      return res.status(400).json({ error: 'Bad memo payment token' });
+    }
+    const expectedAmount = BigInt(memoData.amt);
+    const expectedMint = payment === 'usdc' ? solana.usdcMint : null;
+
+    if (!txTransfersToTreasury({
+      parsedTx,
+      expectedMint,
+      expectedTreasury: solana.treasury,
+      expectedAmount,
+    })) {
+      return res.status(400).json({
+        error: payment === 'usdc'
+          ? 'USDC transfer to treasury not found or under-paid'
+          : 'SOL transfer to treasury not found or under-paid',
+      });
+    }
+
+    const decimals = payment === 'usdc' ? 6 : 9;
+    const grant = db.db.transaction(() => {
+      const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
+      if (duplicate) {
+        const err = new Error('Purchase already redeemed');
+        err.status = 409;
+        throw err;
+      }
+      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      db.db.prepare(`
+        INSERT INTO utility_purchases
+          (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.player.id,
+        sku,
+        'solana',
+        signature,
+        String(req.body?.buyer || ''),                       // payer (Solana pubkey) — best-effort, not load-bearing
+        payment === 'usdc' ? expectedMint : 'SOL',
+        solana.treasury,
+        expectedAmount.toString(),
+        (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+        product.durationHours ? product.durationHours * quantity : null,
+        applied.shield_until || null,
+      );
+      return applied;
+    })();
+
+    res.json({
+      success: true,
+      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      quantity,
+      txSignature: signature,
+      payment,
+      amount: expectedAmount.toString(),
+      amountFormatted: unitsToDecimalString(expectedAmount, decimals),
+      ...grant,
+    });
+  } catch (err) {
+    const message = err?.message || 'redeem failed';
+    res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.post('/shop/solana/quote', auth, async (req, res) => {
+  try {
+    const rate = checkUtilityQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many shop quote requests. Try again shortly.' });
+    }
+
+    const solana = gameShopSolanaConfig();
+    if (!solana.ready) return res.status(503).json({ error: 'Solana game shop is not configured' });
+    if (!solana.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: 'Solana game shop sale is not active' });
+    }
+
+    const sku = String(req.body?.sku || '').trim();
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+
+    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    if (payment !== 'usdc' && payment !== 'sol') {
+      return res.status(400).json({ error: 'Bad payment token (usdc or sol)' });
+    }
+
+    const buyer = String(req.body?.buyer || '').trim();
+    if (!buyer || !SOLANA_WALLET_RE.test(buyer)) {
+      return res.status(400).json({ error: 'Invalid Solana buyer address' });
+    }
+
+    const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
+    const usdPriceE6 = BigInt(product.usdPriceE6) * BigInt(quantity);
+    const usdAmount = unitsToDecimalString(usdPriceE6, 6);
+
+    let amount;       // raw on-chain units (lamports for SOL, 1e6 for USDC)
+    let decimals;     // tokens decimals
+    let priceSource;  // human-readable label for the UI/log
+    let mint = null;  // null for native SOL
+    if (payment === 'usdc') {
+      // USDC pegged ~1:1 to USD. We don't oracle-correct the de-pegs since
+      // it's a $2-5 utility purchase and Circle's USDC has been ±0.1% for
+      // years. usdToNativeUnits with assetUsd='1' just multiplies by 1e6.
+      amount = usdToNativeUnits(usdAmount, '1', 6);
+      decimals = 6;
+      priceSource = 'USDC 1:1 USD';
+      mint = solana.usdcMint;
+    } else {
+      const solUsd = await fetchNftUsdPrice('sol');
+      amount = usdToNativeUnits(usdAmount, solUsd, 9); // lamports
+      decimals = 9;
+      priceSource = `SOL/USD ${solUsd}`;
+    }
+
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));
+    const deadline = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const nonce = `0x${crypto.randomBytes(16).toString('hex')}`;
+    const account = gameAccountHash(req.player.id);
+
+    const memo = buildSolanaShopMemo({
+      sku: product.sku,
+      quantity,
+      account,
+      nonce,
+      deadline,
+      payment,
+      amount,
+    });
+    const signature = signSolanaShopMemo(memo);
+    const signerPubkey = getSolanaSignerKeypair().publicKey.toBase58();
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chain: 'solana',
+      cluster: solana.cluster,
+      treasury: solana.treasury,
+      memoProgram: solana.memoProgram,
+      payment,
+      mint,                                 // null for native SOL transfer
+      decimals,
+      priceSource,
+      product: gameShopProductsForClient().find((item) => item.id === product.id),
+      quantity,
+      amount: amount.toString(),            // raw units for transfer instruction
+      amountFormatted: unitsToDecimalString(amount, decimals),
+      usdAmount,
+      nonce,
+      account,
+      deadline,
+      memo,
+      signature,
+      signerPubkey,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
   }
 });
 

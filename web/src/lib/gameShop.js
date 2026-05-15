@@ -251,3 +251,195 @@ function normalizeShopQuote(quote) {
     deadline: BigInt(quote.deadline),
   };
 }
+
+// =====================================================================
+// Solana shop — pays via SPL USDC transfer or native SOL transfer + memo.
+// No deployed program: the server's redeem endpoint verifies the on-chain
+// tx itself (recipient, amount, memo, ed25519 signature of the memo).
+// =====================================================================
+
+export async function fetchSolanaShopQuote({ token, buyer, sku, quantity = 1, payment }) {
+  const response = await fetch('/api/shop/solana/quote', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ buyer, sku, quantity, payment }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Solana shop quote failed (${response.status})`);
+  return json;
+}
+
+export async function redeemSolanaShopPurchase({ token, txSignature, buyer, serverSignature }) {
+  const response = await fetch('/api/shop/solana/redeem', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ txSignature, buyer, signature: serverSignature }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Solana redeem failed (${response.status})`);
+  return json;
+}
+
+class InsufficientSolanaBalanceError extends Error {
+  constructor(payment, required, balance, decimals) {
+    const fmt = (v) => {
+      const scale = 10n ** BigInt(decimals);
+      const whole = v / scale;
+      const frac = v % scale;
+      if (frac === 0n) return whole.toString();
+      const fs = frac.toString().padStart(decimals, '0').slice(0, 4).replace(/0+$/, '');
+      return fs ? `${whole}.${fs}` : whole.toString();
+    };
+    super(`Not enough ${payment.toUpperCase()} on Solana. Need ${fmt(required)} ${payment.toUpperCase()}, your wallet has ${fmt(balance)}.`);
+    this.name = 'InsufficientSolanaBalanceError';
+    this.required = required;
+    this.balance = balance;
+  }
+}
+
+export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment = 'usdc', quantity = 1 }) {
+  if (!token) throw new Error('Game session is not ready');
+  const address = solWallet?.publicKey?.toBase58?.() || buyer;
+  if (!address) throw new Error('Solana wallet is not connected');
+  if (!solWallet?.signTransaction) throw new Error('This Solana wallet cannot sign transactions');
+
+  // Dynamic imports keep solana deps out of the Base-only path bundle. They
+  // ship lazily when the user first touches the Solana tab.
+  const [
+    { Connection, PublicKey, Transaction, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
+    splToken,
+    { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl },
+  ] = await Promise.all([
+    import('@solana/web3.js'),
+    import('@solana/spl-token'),
+    import('./solanaRpc'),
+  ]);
+
+  const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment });
+  if (!quote?.treasury) throw new Error('Solana treasury not configured');
+
+  const rpcSelection = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => null);
+  const rpcUrl = rpcSelection?.selected?.url || DEFAULT_SOLANA_RPC_URL;
+  const connection = new Connection(rpcUrl, 'confirmed');
+
+  const buyerPk = new PublicKey(address);
+  const treasuryPk = new PublicKey(quote.treasury);
+  const memoProgramPk = new PublicKey(quote.memoProgram);
+  const amount = BigInt(quote.amount);
+
+  // Pre-flight balance check — clear "not enough" error before MetaMask /
+  // Phantom modal pops. Without this the wallet shows a generic "tx will
+  // fail" preview and the user has to guess why.
+  if (payment === 'sol') {
+    const lamports = BigInt(await connection.getBalance(buyerPk));
+    // Reserve ~0.001 SOL for fees; tx fee is ~0.000005 but ATA-creation can
+    // push it higher. Keeping a buffer avoids "would leave 0 SOL" reverts.
+    const reserve = 1_000_000n;
+    if (lamports < amount + reserve) {
+      throw new InsufficientSolanaBalanceError('sol', amount, lamports, 9);
+    }
+  } else {
+    const mintPk = new PublicKey(quote.mint);
+    const buyerAta = await splToken.getAssociatedTokenAddress(mintPk, buyerPk, false);
+    let buyerBalance = 0n;
+    try {
+      const acct = await splToken.getAccount(connection, buyerAta);
+      buyerBalance = BigInt(acct.amount);
+    } catch {
+      buyerBalance = 0n;
+    }
+    if (buyerBalance < amount) {
+      throw new InsufficientSolanaBalanceError('usdc', amount, buyerBalance, 6);
+    }
+  }
+
+  // Build the transfer + memo tx. Single tx, both instructions atomic —
+  // either the user gets credited AND the funds move, or neither happens.
+  const instructions = [];
+
+  // Bump priority fee a touch so confirmations don't drag during congested
+  // periods. 50_000 micro-lamports per CU ≈ ~$0.00005 extra on a 200k-CU tx.
+  instructions.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
+  instructions.push(ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }));
+
+  if (payment === 'sol') {
+    instructions.push(SystemProgram.transfer({
+      fromPubkey: buyerPk,
+      toPubkey: treasuryPk,
+      lamports: amount,
+    }));
+  } else {
+    const mintPk = new PublicKey(quote.mint);
+    const buyerAta = await splToken.getAssociatedTokenAddress(mintPk, buyerPk, false);
+    const treasuryAta = await splToken.getAssociatedTokenAddress(mintPk, treasuryPk, false);
+    // Create treasury's ATA if it doesn't exist yet. The buyer pays the
+    // ~0.002 SOL rent — once created it's persistent so subsequent buyers
+    // pay nothing. ATA-creation is a no-op when the account already exists.
+    const treasuryAtaInfo = await connection.getAccountInfo(treasuryAta);
+    if (!treasuryAtaInfo) {
+      instructions.push(splToken.createAssociatedTokenAccountInstruction(
+        buyerPk,        // payer
+        treasuryAta,    // ata
+        treasuryPk,     // owner
+        mintPk,
+      ));
+    }
+    instructions.push(splToken.createTransferCheckedInstruction(
+      buyerAta,
+      mintPk,
+      treasuryAta,
+      buyerPk,
+      amount,
+      quote.decimals,
+    ));
+  }
+
+  // Memo instruction — server reads this back from the on-chain tx and
+  // verifies its signature before crediting the user. We put it LAST so
+  // an explorer rendering it as "purchase note" lines up with the transfer
+  // above it in the UI.
+  instructions.push(new TransactionInstruction({
+    keys: [],
+    programId: memoProgramPk,
+    data: Buffer.from(quote.memo, 'utf8'),
+  }));
+
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const tx = new Transaction({
+    feePayer: buyerPk,
+    recentBlockhash: blockhash,
+    lastValidBlockHeight,
+  });
+  tx.add(...instructions);
+
+  const signed = await solWallet.signTransaction(tx);
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+  });
+
+  // Wait for confirmation. We use the blockheight strategy (preferred over
+  // signatureStatus polling because it bounds the wait by chain progress
+  // rather than wall clock).
+  const confirm = await connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    'confirmed',
+  );
+  if (confirm.value?.err) {
+    throw new Error(`Solana tx failed: ${JSON.stringify(confirm.value.err)}`);
+  }
+
+  const grant = await redeemSolanaShopPurchase({
+    token,
+    txSignature: signature,
+    buyer: address,
+    serverSignature: quote.signature,
+  });
+  return { signature, quote, grant };
+}

@@ -10,7 +10,7 @@ import { useFarcaster } from '../hooks/useFarcaster';
 import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
-import { fetchGameShopConfig, buyGameShopItem } from '../lib/gameShop';
+import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft } from '../lib/nftMint';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
@@ -209,6 +209,13 @@ function NftMintPanel({ onClose }) {
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const gameProducts = gameShopConfig?.products || [];
   const gameShopReady = !!gameShopConfig?.base?.shop && !!gameShopConfig?.base?.copReady && !!gameShopConfig?.base?.saleActive;
+  const solanaShopReady = !!gameShopConfig?.solana?.ready && !!gameShopConfig?.solana?.saleActive;
+  // Per-tab chain selector for the shop. Defaults to Base since CoP shop is
+  // primary; user can switch to Solana for USDC/SOL payments. Persisted on
+  // the component instance only — no localStorage so a wallet swap doesn't
+  // strand the user on a chain they no longer have a connected wallet for.
+  const [shopChain, setShopChain] = useState('base');
+  const [shopPayment, setShopPayment] = useState('usdc'); // 'usdc' | 'sol' (Solana only)
   const paymentOptions = useMemo(() => {
     const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
     return baseOptions.map((option) => ({
@@ -436,13 +443,25 @@ function NftMintPanel({ onClose }) {
       setNotice('Game account is still loading. Try again in a moment.');
       return;
     }
-    if (!gameShopReady) {
-      setNotice('CoP game shop is not live yet.');
-      return;
-    }
-    if (!evmAddress || !evmOnBase) {
-      await handleBaseReady();
-      return;
+    const isSolana = shopChain === 'solana';
+    if (isSolana) {
+      if (!solanaShopReady) {
+        setNotice('Solana game shop is not live yet.');
+        return;
+      }
+      if (!solAddress) {
+        handleSolanaReady();
+        return;
+      }
+    } else {
+      if (!gameShopReady) {
+        setNotice('CoP game shop is not live yet.');
+        return;
+      }
+      if (!evmAddress || !evmOnBase) {
+        await handleBaseReady();
+        return;
+      }
     }
 
     setBusy(`shop:${product.id}`);
@@ -450,13 +469,22 @@ function NftMintPanel({ onClose }) {
     setShopPurchaseStatus('pending');
     setShopPurchaseResult({ product });
     try {
-      const result = await buyGameShopItem({
-        evmWallet,
-        buyer: evmAddress,
-        token: sessionToken,
-        sku: product.sku,
-        quantity: 1,
-      });
+      const result = isSolana
+        ? await buySolanaShopItem({
+            solWallet,
+            buyer: solAddress,
+            token: sessionToken,
+            sku: product.sku,
+            payment: shopPayment,
+            quantity: 1,
+          })
+        : await buyGameShopItem({
+            evmWallet,
+            buyer: evmAddress,
+            token: sessionToken,
+            sku: product.sku,
+            quantity: 1,
+          });
       const grant = result.grant || {};
       if (grant.resources) {
         // Update React HUD immediately + push the new totals into Godot so
@@ -482,12 +510,15 @@ function NftMintPanel({ onClose }) {
             ore:  product.rewards.ore  || 0,
           }
         : null;
-      setShopPurchaseResult({ product, grant, tx: result.hash, flyRewards });
+      const txId = isSolana ? result.signature : result.hash;
+      setShopPurchaseResult({ product, grant, tx: txId, flyRewards, chain: shopChain });
       setShopPurchaseStatus('success');
       addClientBreadcrumb('shop.purchase_success', {
         dex,
+        chain: shopChain,
+        payment: isSolana ? shopPayment : 'cop',
         sku: product.sku,
-        tx: result.hash,
+        tx: txId,
       });
       void refreshGameShopConfig({ log: false });
     } catch (err) {
@@ -495,11 +526,11 @@ function NftMintPanel({ onClose }) {
       setShopPurchaseStatus('idle');
       setShopPurchaseResult(null);
       setNotice(message.slice(0, 160));
-      addClientBreadcrumb('shop.purchase_failed', { dex, sku: product.sku, message }, 'warn');
+      addClientBreadcrumb('shop.purchase_failed', { dex, chain: shopChain, sku: product.sku, message }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [dex, evmAddress, evmOnBase, evmWallet, gameShopReady, handleBaseReady, refreshGameShopConfig, sessionToken]);
+  }, [dex, evmAddress, evmOnBase, evmWallet, gameShopReady, handleBaseReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopPayment, solAddress, solanaShopReady, solWallet]);
 
   const handleDismissShopPurchase = useCallback(() => {
     // Fire the fly-to-bar burst when the user dismisses the success popup.
@@ -808,12 +839,18 @@ function NftMintPanel({ onClose }) {
             ) : (
               <GameResourcesTab
                 products={gameProducts}
-                ready={gameShopReady}
+                ready={shopChain === 'solana' ? solanaShopReady : gameShopReady}
                 loading={gameShopConfig === null}
+                chain={shopChain}
+                onChainChange={setShopChain}
+                payment={shopPayment}
+                onPaymentChange={setShopPayment}
                 evmAddress={evmAddress}
                 evmOnBase={evmOnBase}
+                solAddress={solAddress}
                 busy={busy}
                 onConnectBase={handleBaseReady}
+                onConnectSolana={handleSolanaReady}
                 onBuy={handleBuyGameProduct}
               />
             )}
@@ -855,19 +892,45 @@ function NftMintPanel({ onClose }) {
   );
 }
 
-function GameResourcesTab({ products, ready, loading, evmAddress, evmOnBase, busy, onConnectBase, onBuy }) {
-  const { isMobile } = useLayout();
-  // On mobile keep the labels short — "Connect Base" + "Buy with CoP" wrap
-  // onto two lines inside the chrome-y green pill and the card looks
-  // squashed. Compact wording reads "this is the action" without wrapping.
-  const connectLabel = evmAddress && !evmOnBase
-    ? (isMobile ? 'Switch' : 'Switch Base')
-    : (isMobile ? 'Connect' : 'Connect Base');
+const SHOP_CHAIN_OPTIONS = [
+  { id: 'base',   label: 'Base',   sub: 'CoP' },
+  { id: 'solana', label: 'Solana', sub: 'USDC · SOL' },
+];
 
-  // Skeleton while /api/shop/config is in flight (initial mount, ~500ms-2s
-  // depending on network). Without this the user sees only the "Game
-  // resources" header for the duration and has no signal that anything
-  // is happening — easy to mistake for an empty/broken panel.
+const SHOP_SOLANA_PAYMENTS = [
+  { id: 'usdc', label: 'USDC', sub: 'Stable' },
+  { id: 'sol',  label: 'SOL',  sub: 'Native' },
+];
+
+function GameResourcesTab({
+  products,
+  ready,
+  loading,
+  chain,
+  onChainChange,
+  payment,
+  onPaymentChange,
+  evmAddress,
+  evmOnBase,
+  solAddress,
+  busy,
+  onConnectBase,
+  onConnectSolana,
+  onBuy,
+}) {
+  const { isMobile } = useLayout();
+  const isSolana = chain === 'solana';
+  const walletConnected = isSolana ? !!solAddress : (!!evmAddress && evmOnBase);
+  const paymentLabel = isSolana ? (payment === 'sol' ? 'SOL' : 'USDC') : 'CoP';
+  // On mobile keep the labels short — full-width "Connect Base" + "Buy with
+  // CoP" wraps onto two lines inside the green pill on a 360px viewport.
+  const connectLabel = isSolana
+    ? (solAddress ? (isMobile ? 'Solana' : 'Solana connected') : (isMobile ? 'Connect' : 'Connect Solana'))
+    : (evmAddress && !evmOnBase
+        ? (isMobile ? 'Switch' : 'Switch Base')
+        : (isMobile ? 'Connect' : 'Connect Base'));
+
+  // Skeleton while /api/shop/config is in flight.
   if (loading) {
     return (
       <>
@@ -888,20 +951,66 @@ function GameResourcesTab({ products, ready, loading, evmAddress, evmOnBase, bus
     <>
       <div style={styles.sectionHeader}>
         <span style={styles.sectionHeaderText}>Game resources</span>
-        <span style={styles.sectionHeaderHint}>CoP utility</span>
+        <span style={styles.sectionHeaderHint}>{paymentLabel} utility</span>
       </div>
+
+      {/* Chain selector — top-of-tab segmented control. Two-option toggle
+          keeps the choice obvious without burying it in a dropdown. */}
+      <div style={styles.shopChainRow}>
+        {SHOP_CHAIN_OPTIONS.map((option) => {
+          const active = option.id === chain;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onChainChange?.(option.id)}
+              style={{
+                ...styles.shopChainBtn,
+                ...(active ? styles.shopChainBtnActive : null),
+              }}
+            >
+              <span style={styles.shopChainLabel}>{option.label}</span>
+              <span style={styles.shopChainSub}>{option.sub}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Solana sub-payment toggle — only shown when Solana is selected.
+          Mirrors the NFT mint flow where the player picks USDC vs SOL after
+          choosing the chain. */}
+      {isSolana && (
+        <div style={styles.shopPaymentRow}>
+          {SHOP_SOLANA_PAYMENTS.map((opt) => {
+            const active = opt.id === payment;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => onPaymentChange?.(opt.id)}
+                style={{
+                  ...styles.shopPaymentBtn,
+                  ...(active ? styles.shopPaymentBtnActive : null),
+                }}
+              >
+                <span style={styles.shopPaymentLabel}>{opt.label}</span>
+                <span style={styles.shopPaymentSub}>{opt.sub}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div style={styles.resourceGrid}>
         {products.map((product) => {
           const isBusy = busy === `shop:${product.id}`;
-          const actionLabel = !evmAddress || !evmOnBase
+          const actionLabel = !walletConnected
             ? connectLabel
             : isBusy
               ? (isMobile ? 'Buying' : 'Buying...')
-              : (isMobile ? 'Buy' : 'Buy with CoP');
-          // Mobile layout: icon+text on one row, full-width button below.
-          // Avoids the 3-column squeeze where a 92px icon + 100px button
-          // leaves only ~60px for the title and "24h Shield" wraps to four
-          // lines on a 360-wide phone.
+              : isSolana
+                ? (isMobile ? 'Buy' : `Buy with ${paymentLabel}`)
+                : (isMobile ? 'Buy' : 'Buy with CoP');
           const cardStyle = {
             ...styles.resourceCard,
             ...(isMobile ? styles.resourceCardMobile : null),
@@ -913,7 +1022,7 @@ function GameResourcesTab({ products, ready, loading, evmAddress, evmOnBase, bus
           const buyBtnStyle = {
             ...styles.resourceBuyBtn,
             ...(isMobile ? styles.resourceBuyBtnMobile : null),
-            ...((ready && evmAddress && evmOnBase) ? styles.resourceBuyBtnReady : null),
+            ...((ready && walletConnected) ? styles.resourceBuyBtnReady : null),
             ...(!ready ? styles.resourceBuyBtnDisabled : null),
           };
           const infoStyle = isMobile
@@ -938,8 +1047,12 @@ function GameResourcesTab({ products, ready, loading, evmAddress, evmOnBase, bus
                 style={buyBtnStyle}
                 disabled={!ready || !!busy}
                 onClick={() => {
-                  if (!evmAddress || !evmOnBase) onConnectBase();
-                  else onBuy(product);
+                  if (!walletConnected) {
+                    if (isSolana) onConnectSolana?.();
+                    else onConnectBase?.();
+                  } else {
+                    onBuy(product);
+                  }
                 }}
               >
                 {actionLabel}
@@ -1996,6 +2109,79 @@ const styles = {
     cursor: 'pointer',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 2px 4px rgba(0,0,0,0.12)',
     transition: 'filter 0.12s, background 0.12s',
+  },
+  // Chain + payment toggles for the Game Resources tab.
+  shopChainRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 8,
+    marginBottom: 10,
+  },
+  shopChainBtn: {
+    minHeight: 42,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+    border: '2px solid #d4c8b0',
+    borderRadius: 11,
+    background: '#fff8df',
+    color: '#77573d',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    padding: '4px 8px',
+  },
+  shopChainBtnActive: {
+    border: '2px solid #8c6a3c',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
+    color: '#5C3A21',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 2px 4px rgba(0,0,0,0.18)',
+  },
+  shopChainLabel: {
+    fontSize: 13,
+    fontWeight: 900,
+    letterSpacing: 0.3,
+  },
+  shopChainSub: {
+    fontSize: 10,
+    fontWeight: 800,
+    opacity: 0.75,
+  },
+  shopPaymentRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 8,
+    marginBottom: 10,
+  },
+  shopPaymentBtn: {
+    minHeight: 36,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    border: '2px solid #c2ae83',
+    borderRadius: 9,
+    background: '#fff',
+    color: '#77573d',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    padding: '2px 6px',
+  },
+  shopPaymentBtnActive: {
+    border: '2px solid #1d6fe0',
+    background: 'linear-gradient(180deg, #e8f1ff 0%, #c5dbff 100%)',
+    color: '#0e3a72',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 3px rgba(0,0,0,0.12)',
+  },
+  shopPaymentLabel: {
+    fontSize: 12,
+    fontWeight: 900,
+  },
+  shopPaymentSub: {
+    fontSize: 9,
+    fontWeight: 800,
+    opacity: 0.7,
   },
   resourceGrid: {
     display: 'grid',
