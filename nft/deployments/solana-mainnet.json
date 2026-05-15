@@ -8,8 +8,8 @@
   "candyGuard": "2PUDARWhLau4imSspLnKJgk6TDVgMKDT1mMVskj5vguT",
   "deployTx": "3PUmo9MSWAyuLQHqJzZxCAMPezLtjmBwJu1ZeX8TSFMPtY2WYruxtZebuVQif22jkFwVTQLXfqafRYjYWJsAj1r",
   "maxSupply": 250,
-  "priceLamports": "95340118",
-  "treasury": "BoioDvoTv4sbpfYb2M533732vfkJrsqKF7BvEpxz7iau",
+  "priceLamports": "99274959",
+  "treasury": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA",
   "saleActive": true,
   "startDate": null,
   "metadataBase": "https://clashofperps.fun/api/nft/solana/",
@@ -21,16 +21,16 @@
   "paymentGroups": {
     "sol": {
       "usdPrice": "8.9",
-      "solUsd": "93.35",
-      "lamports": "95340118",
-      "destination": "BoioDvoTv4sbpfYb2M533732vfkJrsqKF7BvEpxz7iau"
+      "solUsd": "89.65",
+      "lamports": "99274959",
+      "destination": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA"
     },
     "usdc": {
       "usdPrice": "8.9",
       "amount": "8900000",
       "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      "destinationAta": "GcwB9jo3xb8HPEVd1KAWA7uxqcuTr6DKr6h3BzJRCXjY"
+      "destinationAta": "GK4MSDXytdku6kf7b6AVvGdSLYxekiVocdxn8zf4tBMC"
     }
   },
-  "updatedAt": "2026-05-13T18:30:00.000Z"
+  "updatedAt": "2026-05-15T17:26:36.848Z"
 }
