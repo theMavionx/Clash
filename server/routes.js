@@ -1156,6 +1156,12 @@ const insertClientLogBatch = db.db.transaction((rows) => {
     );
   }
 });
+const insertReplayTelemetry = db.db.prepare(`
+  INSERT INTO replay_telemetry
+    (player_id, battle_session_id, replay_label, attacker_name, expected_result,
+     expected_duration, actual_elapsed, summary, events)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
 
 function clampText(v, max) {
   if (v == null) return null;
@@ -1226,6 +1232,37 @@ router.post('/client-log', (req, res) => {
 
 router.all('/client-log', (_req, res) => {
   res.status(204).end();
+});
+
+router.post('/replay-telemetry', (req, res) => {
+  let player = null;
+  try {
+    const token = req.headers['x-token'];
+    if (typeof token === 'string' && token.length > 10) {
+      player = db.authenticatePlayer(token);
+    }
+  } catch {}
+  if (!player) return res.status(401).json({ ok: false, error: 'Invalid token' });
+
+  const body = req.body || {};
+  try {
+    const info = body.replay || {};
+    insertReplayTelemetry.run(
+      player.id,
+      clampText(info.battle_session_id || body.battle_session_id, 128),
+      clampText(info.replay_label || body.replay_label, 128),
+      clampText(info.attacker_name || body.attacker_name, 128),
+      clampText(info.expected_result || body.expected_result, 32),
+      Number(info.expected_duration ?? body.expected_duration ?? 0) || 0,
+      Number(info.actual_elapsed ?? body.actual_elapsed ?? 0) || 0,
+      clampText(body.summary || {}, 32_000),
+      clampText(body.events || [], 250_000)
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.warn('[replay-telemetry] insert failed:', e.message);
+    res.status(500).json({ ok: false });
+  }
 });
 
 // ==================== PLAYERS ====================
@@ -3677,6 +3714,124 @@ router.post('/admin/seed-town-halls', adminAuth, (req, res) => {
   })();
 
   res.json(result);
+});
+
+// Shop stats — aggregated view over utility_purchases. Returns summary
+// counters, per-SKU breakdown, top buyers, and the recent purchase tail.
+// USD figures are derived from usd_price_e6 (microdollars × quantity);
+// quantity is encoded in `amount` only as a raw token-units string so we
+// fall back to 1× when the SKU lookup fails (unknown SKU shipped before
+// a migration). Wrapped in try/catch so a fresh DB without purchases
+// returns empty buckets instead of a 500.
+router.get('/admin/shop', adminAuth, (req, res) => {
+  try {
+    // Aggregate counts by SKU, joined with the live product table so the
+    // panel can show a readable title even after a SKU is delisted.
+    const bySku = db.db.prepare(`
+      SELECT utility AS sku,
+             COUNT(*) AS purchases,
+             COUNT(DISTINCT player_id) AS unique_buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             MIN(created_at) AS first_at,
+             MAX(created_at) AS last_at
+      FROM utility_purchases
+      GROUP BY utility
+      ORDER BY purchases DESC
+    `).all();
+    const productsByid = Object.fromEntries(
+      gameShopProductsForClient().map((p) => [p.sku, p]),
+    );
+    const bySkuEnriched = bySku.map((row) => {
+      const product = productsByid[row.sku] || null;
+      return {
+        sku: row.sku,
+        title: product?.title || row.sku,
+        kind: product?.kind || null,
+        purchases: row.purchases,
+        unique_buyers: row.unique_buyers,
+        revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+        first_at: row.first_at,
+        last_at: row.last_at,
+      };
+    });
+
+    // Per-player rollup. The buyer's display name comes from the players
+    // table; players who deleted their account leave a NULL name and we
+    // surface "(deleted)" so the row still renders rather than disappearing.
+    const topBuyers = db.db.prepare(`
+      SELECT u.player_id,
+             COALESCE(p.name, '(deleted)') AS name,
+             COALESCE(p.dex, '-') AS dex,
+             COUNT(*) AS purchases,
+             COALESCE(SUM(CAST(u.usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             MAX(u.created_at) AS last_at
+      FROM utility_purchases u
+      LEFT JOIN players p ON p.id = u.player_id
+      GROUP BY u.player_id
+      ORDER BY usd_e6_sum DESC, purchases DESC
+      LIMIT 100
+    `).all().map((r) => ({
+      player_id: r.player_id,
+      name: r.name,
+      dex: r.dex,
+      purchases: r.purchases,
+      spent_usd: (Number(r.usd_e6_sum) || 0) / 1_000_000,
+      last_at: r.last_at,
+    }));
+
+    // Recent purchase tail — newest 200. Includes tx_hash so the operator
+    // can pop the on-chain receipt straight from the panel.
+    const recent = db.db.prepare(`
+      SELECT u.id, u.player_id,
+             COALESCE(p.name, '(deleted)') AS name,
+             u.utility AS sku,
+             u.chain, u.tx_hash, u.payer, u.token,
+             u.amount, u.usd_price_e6,
+             u.duration_hours, u.shield_until, u.created_at
+      FROM utility_purchases u
+      LEFT JOIN players p ON p.id = u.player_id
+      ORDER BY u.id DESC
+      LIMIT 200
+    `).all().map((r) => ({
+      ...r,
+      title: productsByid[r.sku]?.title || r.sku,
+      price_usd: (Number(r.usd_price_e6) || 0) / 1_000_000,
+    }));
+
+    // Window counters — separate one-hour and 24-hour buckets so the panel
+    // shows velocity at a glance without scrolling the recent list.
+    const totals = db.db.prepare(`
+      SELECT COUNT(*) AS purchases,
+             COUNT(DISTINCT player_id) AS unique_buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum
+      FROM utility_purchases
+    `).get();
+    const windowed = db.db.prepare(`
+      SELECT
+        COUNT(CASE WHEN created_at > datetime('now', '-1 hour')  THEN 1 END) AS h1,
+        COUNT(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 END) AS h24,
+        COUNT(CASE WHEN created_at > datetime('now', '-7 days')   THEN 1 END) AS d7,
+        COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN CAST(usd_price_e6 AS INTEGER) END), 0) AS h24_usd_e6
+      FROM utility_purchases
+    `).get();
+
+    res.json({
+      summary: {
+        total_purchases: totals.purchases || 0,
+        unique_buyers: totals.unique_buyers || 0,
+        total_revenue_usd: (Number(totals.usd_e6_sum) || 0) / 1_000_000,
+        last_1h_purchases: windowed.h1 || 0,
+        last_24h_purchases: windowed.h24 || 0,
+        last_7d_purchases: windowed.d7 || 0,
+        last_24h_revenue_usd: (Number(windowed.h24_usd_e6) || 0) / 1_000_000,
+      },
+      by_sku: bySkuEnriched,
+      top_buyers: topBuyers,
+      recent,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'shop stats failed' });
+  }
 });
 
 // All battle replays with full details

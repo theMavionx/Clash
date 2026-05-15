@@ -8,6 +8,7 @@ import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { usePlayer } from '../hooks/useGodot';
+import { useLayout } from '../hooks/useIsMobile';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { fetchGameShopConfig, buyGameShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
@@ -854,7 +855,13 @@ function NftMintPanel({ onClose }) {
 }
 
 function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConnectBase, onBuy }) {
-  const connectLabel = evmAddress && !evmOnBase ? 'Switch Base' : 'Connect Base';
+  const { isMobile } = useLayout();
+  // On mobile keep the labels short — "Connect Base" + "Buy with CoP" wrap
+  // onto two lines inside the chrome-y green pill and the card looks
+  // squashed. Compact wording reads "this is the action" without wrapping.
+  const connectLabel = evmAddress && !evmOnBase
+    ? (isMobile ? 'Switch' : 'Switch Base')
+    : (isMobile ? 'Connect' : 'Connect Base');
   return (
     <>
       <div style={styles.sectionHeader}>
@@ -867,14 +874,35 @@ function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConn
           const actionLabel = !evmAddress || !evmOnBase
             ? connectLabel
             : isBusy
-              ? 'Buying...'
-              : 'Buy with CoP';
+              ? (isMobile ? 'Buying' : 'Buying...')
+              : (isMobile ? 'Buy' : 'Buy with CoP');
+          // Mobile layout: icon+text on one row, full-width button below.
+          // Avoids the 3-column squeeze where a 92px icon + 100px button
+          // leaves only ~60px for the title and "24h Shield" wraps to four
+          // lines on a 360-wide phone.
+          const cardStyle = {
+            ...styles.resourceCard,
+            ...(isMobile ? styles.resourceCardMobile : null),
+          };
+          const iconWrapStyle = {
+            ...styles.resourceIconWrap,
+            ...(isMobile ? styles.resourceIconWrapMobile : null),
+          };
+          const buyBtnStyle = {
+            ...styles.resourceBuyBtn,
+            ...(isMobile ? styles.resourceBuyBtnMobile : null),
+            ...((ready && evmAddress && evmOnBase) ? styles.resourceBuyBtnReady : null),
+            ...(!ready ? styles.resourceBuyBtnDisabled : null),
+          };
+          const infoStyle = isMobile
+            ? { ...styles.resourceInfo, ...styles.resourceInfoMobile }
+            : styles.resourceInfo;
           return (
-            <div key={product.id} style={styles.resourceCard}>
-              <div style={styles.resourceIconWrap}>
+            <div key={product.id} style={cardStyle}>
+              <div style={iconWrapStyle}>
                 <ResourceProductIcon product={product} />
               </div>
-              <div style={styles.resourceInfo}>
+              <div style={infoStyle}>
                 <span style={styles.resourceTitle}>{product.title}</span>
                 <span style={styles.resourceSubtitle}>{product.subtitle}</span>
                 <div style={styles.resourceMetaRow}>
@@ -885,11 +913,7 @@ function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConn
               </div>
               <button
                 type="button"
-                style={{
-                  ...styles.resourceBuyBtn,
-                  ...((ready && evmAddress && evmOnBase) ? styles.resourceBuyBtnReady : null),
-                  ...(!ready ? styles.resourceBuyBtnDisabled : null),
-                }}
+                style={buyBtnStyle}
                 disabled={!ready || !!busy}
                 onClick={() => {
                   if (!evmAddress || !evmOnBase) onConnectBase();
@@ -1917,12 +1941,27 @@ const styles = {
     padding: 10,
     boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55), 0 4px 10px rgba(0,0,0,0.12)',
   },
+  // Mobile: icon + text on one row, full-width button on a row below. The
+  // 3-column desktop layout collapses to 2 columns + a wrapping button so
+  // the title doesn't fall to four lines on a 360-wide phone.
+  resourceCardMobile: {
+    gridTemplateColumns: '72px minmax(0, 1fr)',
+    gridTemplateAreas: '"icon info" "btn btn"',
+    rowGap: 10,
+    columnGap: 10,
+    padding: 12,
+  },
   resourceIconWrap: {
     width: 92,
     height: 92,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  resourceIconWrapMobile: {
+    width: 72,
+    height: 72,
+    gridArea: 'icon',
   },
   resourceIconImg: {
     width: '128%',
@@ -1936,6 +1975,9 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 3,
+  },
+  resourceInfoMobile: {
+    gridArea: 'info',
   },
   resourceTitle: {
     color: '#5C3A21',
@@ -1981,6 +2023,14 @@ const styles = {
     cursor: 'pointer',
     fontFamily: 'inherit',
     boxShadow: '0 4px 8px rgba(0,0,0,0.18), inset 0 2px 0 rgba(255,255,255,0.5)',
+  },
+  resourceBuyBtnMobile: {
+    width: '100%',
+    minWidth: 0,
+    minHeight: 42,
+    fontSize: 13,
+    gridArea: 'btn',
+    padding: '0 12px',
   },
   resourceBuyBtnReady: {
     border: '3px solid #1f6d34',

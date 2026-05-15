@@ -407,6 +407,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('client')">Client Logs</div>
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
+    <div class="tab" onclick="switchTab('shop')">Shop</div>
   </div>
 
   <div class="panel active" id="tab-players">
@@ -584,6 +585,29 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
       • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).
     </div>
+  </div>
+
+  <div class="panel" id="tab-shop">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="color:#f59e0b;font-size:20px">CoP Shop Purchases</h2>
+      <button class="btn" onclick="loadShop()">Refresh</button>
+    </div>
+    <div class="stats" id="shopSummary"></div>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">By Product</h2>
+    <table><thead><tr>
+      <th>Product</th><th>SKU</th><th>Kind</th><th>Purchases</th><th>Unique buyers</th><th>Revenue (USD)</th><th>First</th><th>Last</th>
+    </tr></thead><tbody id="shopBySkuBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Top Buyers</h2>
+    <table><thead><tr>
+      <th>#</th><th>Player</th><th>DEX</th><th>Purchases</th><th>Spent (USD)</th><th>Last buy</th>
+    </tr></thead><tbody id="shopTopBuyersBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent purchases (200)</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Product</th><th>Price</th><th>Payer (Base)</th><th>Tx</th>
+    </tr></thead><tbody id="shopRecentBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-elfa">
@@ -1768,6 +1792,71 @@ async function loadEarnings(force) {
   }
 }
 
+async function loadShop() {
+  try {
+    const data = await api('/admin/shop');
+    const s = data.summary || {};
+    const fmtUsd = (v) => '$' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtTime = (t) => t ? new Date(t.replace(' ', 'T') + 'Z').toLocaleString() : '—';
+    const txLink = (chain, hash) => {
+      if (!hash) return '—';
+      const explorer = chain === 'base' ? 'https://basescan.org/tx/' : null;
+      const short = '<code class="mono">' + esc(hash.slice(0, 10) + '…' + hash.slice(-6)) + '</code>';
+      return explorer ? '<a href="' + explorer + esc(hash) + '" target="_blank" style="color:#fbbf24">' + short + '</a>' : short;
+    };
+
+    document.getElementById('shopSummary').innerHTML =
+      '<div class="stat"><div class="v">' + (s.total_purchases || 0) + '</div><div class="l">Total purchases</div></div>' +
+      '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(s.total_revenue_usd) + '</div><div class="l">Total revenue</div></div>' +
+      '<div class="stat" style="border-color:#0ea5e9"><div class="v" style="color:#38bdf8">' + (s.unique_buyers || 0) + '</div><div class="l">Unique buyers</div></div>' +
+      '<div class="stat"><div class="v">' + (s.last_1h_purchases || 0) + '</div><div class="l">1h purchases</div></div>' +
+      '<div class="stat"><div class="v">' + (s.last_24h_purchases || 0) + '</div><div class="l">24h purchases</div></div>' +
+      '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.last_24h_revenue_usd) + '</div><div class="l">24h revenue</div></div>' +
+      '<div class="stat"><div class="v">' + (s.last_7d_purchases || 0) + '</div><div class="l">7d purchases</div></div>';
+
+    const bySku = data.by_sku || [];
+    document.getElementById('shopBySkuBody').innerHTML = bySku.length === 0
+      ? '<tr><td colspan="8" style="color:#6b7280;text-align:center;padding:24px">No purchases yet</td></tr>'
+      : bySku.map((row) => '<tr>' +
+          '<td style="font-weight:700">' + esc(row.title) + '</td>' +
+          '<td class="mono">' + esc(row.sku) + '</td>' +
+          '<td>' + (row.kind ? '<span class="badge badge-shield">' + esc(row.kind) + '</span>' : '—') + '</td>' +
+          '<td>' + row.purchases + '</td>' +
+          '<td>' + row.unique_buyers + '</td>' +
+          '<td style="color:#4ade80;font-weight:700">' + fmtUsd(row.revenue_usd) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.first_at)) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+        '</tr>').join('');
+
+    const top = data.top_buyers || [];
+    document.getElementById('shopTopBuyersBody').innerHTML = top.length === 0
+      ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No buyers</td></tr>'
+      : top.map((row, i) => '<tr>' +
+          '<td style="color:#9ca3af">' + (i + 1) + '</td>' +
+          '<td style="font-weight:700">' + esc(row.name) + '</td>' +
+          '<td>' + esc(row.dex || '-') + '</td>' +
+          '<td>' + row.purchases + '</td>' +
+          '<td style="color:#4ade80;font-weight:700">' + fmtUsd(row.spent_usd) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+        '</tr>').join('');
+
+    const recent = data.recent || [];
+    document.getElementById('shopRecentBody').innerHTML = recent.length === 0
+      ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No recent purchases</td></tr>'
+      : recent.map((row) => '<tr>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + '</td>' +
+          '<td style="font-weight:700">' + esc(row.name) + '</td>' +
+          '<td>' + esc(row.title) + '</td>' +
+          '<td style="color:#4ade80">' + fmtUsd(row.price_usd) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + (row.payer ? esc(row.payer.slice(0, 8) + '…' + row.payer.slice(-4)) : '—') + '</td>' +
+          '<td>' + txLink(row.chain, row.tx_hash) + '</td>' +
+        '</tr>').join('');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('shopSummary').innerHTML = '<div style="color:#ef4444">Failed to load: ' + esc(e?.message || String(e)) + '</div>';
+  }
+}
+
 // Load logs/stats when switching to those tabs
 const origSwitch = switchTab;
 switchTab = function(name) {
@@ -1779,6 +1868,7 @@ switchTab = function(name) {
   if (name === 'tournaments') loadTournaments();
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
+  if (name === 'shop') loadShop();
 };
 
 // Auto-login if key saved
