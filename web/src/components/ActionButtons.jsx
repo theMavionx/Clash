@@ -303,7 +303,7 @@ const formatReplayTime = (seconds) => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
+function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel = 'REPLAY' }) {
   const { sendToGodot } = useSend();
   const { isMobile: mobile } = useLayout();
   const [speedIdx, setSpeedIdx] = useState(0);
@@ -384,7 +384,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0 }) {
         >
           <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
         </button>
-        {!mobile && <div style={hud.replayBadge}>REPLAY</div>}
+        <div style={mobile ? { ...hud.replayBadge, ...hud.replayBadgeMobile } : hud.replayBadge}>{replayLabel}</div>
         <button style={homeBtnStyle} onClick={onReturnHome} title="Return Home"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
           onMouseOut={e => e.currentTarget.style.filter = 'none'}
@@ -482,7 +482,7 @@ function ActionButtons({ onOpenBattleLog }) {
     const thLevel = buildingDefs?.th_level || 1;
     let count = 0;
     for (const [id, def] of Object.entries(defs)) {
-      if (id === 'barracks' || id === 'flag') continue;
+      if (id === 'flag') continue;
       // Check TH unlock
       const unlockAt = thUnlock[id];
       if (unlockAt && thLevel < unlockAt) continue;
@@ -526,7 +526,7 @@ function ActionButtons({ onOpenBattleLog }) {
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
     if (enemyMode.is_replay) {
-      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} replayDuration={enemyMode.duration} />;
+      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} replayDuration={enemyMode.duration} replayLabel={enemyMode.replay_label || 'REPLAY'} />;
     }
     return (
       <>
@@ -826,6 +826,16 @@ const hud = {
     color: '#7df4ff', fontSize: 14, fontWeight: 900,
     letterSpacing: '1px',
     textShadow: '0 0 8px rgba(60,220,255,0.5)',
+  },
+  replayBadgeMobile: {
+    padding: '7px 9px',
+    borderRadius: 9,
+    fontSize: 10,
+    letterSpacing: 0,
+    maxWidth: 112,
+    textAlign: 'center',
+    whiteSpace: 'normal',
+    lineHeight: 1.1,
   },
   replayCountdownWrap: {
     position: 'fixed',

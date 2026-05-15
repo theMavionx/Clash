@@ -9,6 +9,7 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
+const { broadcastToPlayer } = require('./websocket');
 
 const router = express.Router();
 
@@ -1104,6 +1105,20 @@ function auth(req, res, next) {
   next();
 }
 
+function extractAgentKey(req) {
+  const authHeader = String(req.headers.authorization || '');
+  const bearer = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (bearer) return bearer[1].trim();
+  return String(req.headers['x-ai-agent-key'] || '').trim();
+}
+
+function agentAuth(req, res, next) {
+  const session = db.authenticateAiAgentKey(extractAgentKey(req));
+  if (!session) return res.status(401).json({ error: 'Invalid or missing AI agent key' });
+  req.agentSession = session;
+  next();
+}
+
 // ==================== CLIENT LOGS (no auth) ====================
 // Per-IP rate limit — no auth, so only the IP is usable as a key. Bucket
 // cleans up expired entries every 5 minutes to bound memory growth under
@@ -1350,6 +1365,43 @@ router.get('/players/me', auth, (req, res) => {
   res.json(state);
 });
 
+router.get('/players/ai-keys', auth, (req, res) => {
+  res.json({ keys: db.listAiAgentKeys(req.player.id) });
+});
+
+router.post('/players/ai-keys', auth, (req, res) => {
+  const name = typeof req.body?.name === 'string' ? req.body.name : 'AI Agent';
+  const result = db.createAiAgentKey(req.player.id, name);
+  if (result.error) return res.status(400).json(result);
+  logAuth('AI agent key created', { player_id: req.player.id, key_id: result.id });
+  res.json(result);
+});
+
+router.delete('/players/ai-keys/:id', auth, (req, res) => {
+  const result = db.revokeAiAgentKey(req.player.id, req.params.id);
+  if (result.error) return res.status(404).json(result);
+  logAuth('AI agent key revoked', { player_id: req.player.id, key_id: req.params.id });
+  res.json(result);
+});
+
+router.post('/agent-events/emit', agentAuth, (req, res) => {
+  const action = String(req.body?.action || '').trim();
+  const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
+  if (!action) return res.status(400).json({ error: 'action required' });
+
+  const event = {
+    type: 'agent_action',
+    data: {
+      action,
+      payload,
+      key: req.agentSession.key,
+      at: new Date().toISOString(),
+    },
+  };
+  const delivered = broadcastToPlayer(req.agentSession.player.id, event);
+  res.json({ success: true, delivered });
+});
+
 // Link a wallet to the current account. Per-DEX canonical: a wallet is
 // allowed to be bound to MULTIPLE rows as long as those rows belong to
 // different DEXes. Collision check therefore compares against rows on
@@ -1483,8 +1535,8 @@ router.post('/buildings/place', auth, (req, res) => {
   if (grid_x < 0 || grid_x > GRID_MAX_COORD || grid_z < 0 || grid_z > GRID_MAX_COORD) {
     return res.status(400).json({ error: `grid_x and grid_z must be in [0, ${GRID_MAX_COORD}]` });
   }
-  if (!Number.isInteger(grid_index) || grid_index < 0 || grid_index > 3) {
-    return res.status(400).json({ error: 'grid_index must be 0..3' });
+  if (!Number.isInteger(grid_index) || ![0, 1, 2].includes(grid_index)) {
+    return res.status(400).json({ error: 'grid_index must be 0, 1, or 2' });
   }
   const result = db.placeBuilding(req.player.id, type, grid_x, grid_z, grid_index);
   if (result.error) return res.status(400).json(result);
@@ -1525,11 +1577,13 @@ router.post('/buildings/:id/move', auth, (req, res) => {
   if (grid_x < 0 || grid_x > GRID_MAX_COORD || grid_z < 0 || grid_z > GRID_MAX_COORD) {
     return res.status(400).json({ error: `grid_x and grid_z must be in [0, ${GRID_MAX_COORD}]` });
   }
-  const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
-  if (!building) return res.status(404).json({ error: 'Building not found' });
-  db.db.prepare('UPDATE buildings SET grid_x = ?, grid_z = ? WHERE id = ?').run(grid_x, grid_z, buildingId);
-  const resources = db.getResources(req.player.id);
-  res.json({ success: true, resources });
+  const grid_index = req.body.grid_index == null ? null : parseInt(req.body.grid_index, 10);
+  if (grid_index != null && (!Number.isInteger(grid_index) || ![0, 1, 2].includes(grid_index))) {
+    return res.status(400).json({ error: 'grid_index must be 0, 1, or 2' });
+  }
+  const result = db.moveBuilding(req.player.id, buildingId, grid_x, grid_z, grid_index);
+  if (result.error) return res.status(result.error === 'Building not found' ? 404 : 400).json(result);
+  res.json(result);
 });
 
 // Buy a ship at a port
@@ -1707,8 +1761,11 @@ router.post('/attack/result', auth, (req, res) => {
   const storedAcceptReason = replayStatus === 'ACCEPTED'
     ? verification.reason
     : `${replayStatus}: ${replayReason}`;
+  const serverResolvedResult = verification.resolvedResult || (
+    (verification.townHallDestroyed || (verification.townHallHpPct ?? 1) <= 0.02) ? 'victory' : 'defeat'
+  );
 
-  logBattle(`${claimedResult} ${replayStatus}`, {
+  logBattle(`${claimedResult}->${serverResolvedResult} ${replayStatus}`, {
     attacker: req.player.id, defender: defender_id,
     reason: replayReason,
     thHp: Math.round((verification.townHallHpPct || 0) * 100) + '%',
@@ -1716,7 +1773,7 @@ router.post('/attack/result', auth, (req, res) => {
     rallies: gameActions.filter(a => a.type === 'rally_drop').length,
     destroyed: verification.buildingsDestroyed,
   });
-  console.log(`[BATTLE] ${claimedResult} ${replayStatus} by ${req.player.id} vs ${defender_id}: ${replayReason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
+  console.log(`[BATTLE] ${claimedResult}->${serverResolvedResult} ${replayStatus} by ${req.player.id} vs ${defender_id}: ${replayReason} (TH ${Math.round((verification.townHallHpPct || 0) * 100)}%)`);
   console.log(`[BATTLE] Ships: ${gameActions.filter(a => a.type === 'place_ship').length}, Rallies: ${gameActions.filter(a => a.type === 'rally_drop').length}, Troops spawned: ${verification._troopsSpawned || '?'}, Buildings destroyed: ${verification.buildingsDestroyed}`);
   console.log(`[BATTLE] Actions:`, JSON.stringify(gameActions.filter(a => a.type === 'place_ship').map(a => ({t: a.t, troops: a.troops, troopType: a.troopType, x: a.x?.toFixed(2), z: a.z?.toFixed(2)}))));
   console.log(`[BATTLE] Grid:`, JSON.stringify(gridConfig));
@@ -1745,7 +1802,7 @@ router.post('/attack/result', auth, (req, res) => {
   }
 
   // Victory verified — grant loot
-  if (claimedResult === 'victory') {
+  if (serverResolvedResult === 'victory') {
     const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
@@ -1814,7 +1871,7 @@ router.get('/find-enemy', auth, (req, res) => {
     } catch {}
   }
   if (totalTroopsLoaded === 0) {
-    return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barracks first.' });
+    return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barn first.' });
   }
 
   const result = db.findEnemy(req.player.id);

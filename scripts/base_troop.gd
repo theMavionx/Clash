@@ -295,9 +295,9 @@ func _ready() -> void:
 	max_hp = hp
 	_setup_animations()
 	_setup_weapons()
-	# Stagger checks across troops to spread per-frame load
-	_sep_counter = randi() % 3
-	_retarget_counter = randi() % 10
+	# Keep combat replay deterministic and aligned with the server simulator.
+	_sep_counter = 0
+	_retarget_counter = 0
 
 
 ## Override to set hp, damage, atk_speed, move_speed, attack_range, attack_anim, anim_files

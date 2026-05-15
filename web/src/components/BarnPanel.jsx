@@ -128,7 +128,7 @@ const ProgressBar = ({ label, value, max, gradient, showAsTime = false }) => {
   );
 };
 
-function BarracksPanel({ building, onClose }) {
+function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
@@ -177,7 +177,7 @@ function BarracksPanel({ building, onClose }) {
     if (timeoutId) return () => clearTimeout(timeoutId);
   }, [lvl, currentTroopName]);
 
-  if (!building || !building.is_barracks) return null;
+  if (!building || !building.is_barn) return null;
   
   if (troopNames.length === 0) return null;
   
@@ -305,7 +305,7 @@ function BarracksPanel({ building, onClose }) {
   );
 }
 
-export default memo(BarracksPanel);
+export default memo(BarnPanel);
 
 const styles = {
   overlay: {

@@ -942,7 +942,7 @@ func _replay_wait(seconds: float) -> bool:
 	return _replay_active and is_instance_valid(bs)
 
 
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0) -> void:
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "") -> void:
 	bs.get_tree().paused = false
 	_replay_active = true
 	_replay_actions = replay_data
@@ -961,11 +961,15 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
+		var display_name: String = "Replay: " + attacker_name
+		if replay_label.strip_edges() != "":
+			display_name = replay_label
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
-			"name": "Replay: " + attacker_name,
+			"name": display_name,
 			"trophies": 0,
 			"is_replay": true,
+			"replay_label": replay_label,
 			"duration": _replay_duration,
 		})
 		_send_replay_timer(true)
@@ -1107,10 +1111,29 @@ func _replay_place_ship(action: Dictionary, attack_system: Node) -> void:
 	bs.troop_levels[level_key] = original_level
 
 
+func _replay_building_pos(server_id: int) -> Vector3:
+	if server_id <= 0:
+		return Vector3.INF
+	for building_sys in BaseTroop._get_building_systems_cached():
+		if not is_instance_valid(building_sys) or not ("placed_buildings" in building_sys):
+			continue
+		for building in building_sys.placed_buildings:
+			if int(building.get("server_id", -1)) != server_id:
+				continue
+			var node: Node3D = building.get("node", null)
+			if is_instance_valid(node):
+				return node.global_position
+	return Vector3.INF
+
+
 func _replay_rally_drop(action: Dictionary) -> void:
 	if not bs._rally or not bs._rally.has_method("replay_drop_rally"):
 		return
-	var pos: Vector3 = Vector3(float(action.get("x", 0.0)), bs.grid_y, float(action.get("z", 0.0)))
+	var pos: Vector3 = _replay_building_pos(int(action.get("buildingId", action.get("building_id", -1))))
+	if pos == Vector3.INF:
+		pos = Vector3(float(action.get("x", 0.0)), bs.grid_y, float(action.get("z", 0.0)))
+	else:
+		pos.y = bs.grid_y
 	bs._rally.replay_drop_rally(pos, float(action.get("flight_time", -1.0)))
 
 

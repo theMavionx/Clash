@@ -139,7 +139,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         </button>
       )}
 
-      {(building.id === 'barn' || building.is_barracks) && !building.is_enemy && (
+      {(building.id === 'barn' || building.is_barn) && !building.is_enemy && (
         <button 
           style={{ ...styles.circleBtn, ...styles.btnTroops }} 
           onClick={onOpenTroops}

@@ -117,7 +117,9 @@ func _process(delta: float) -> void:
 
 func _pick_idle_wait() -> void:
 	_idle_timer = 0.0
-	_idle_duration = randf_range(1.5, 4.0)
+	# Keep guards posted at the tombstone until an enemy enters detection range.
+	# Server replay simulation uses the same stationary pre-aggro behavior.
+	_idle_duration = INF
 	state = State.IDLE
 	if anim_player and anim_player.has_animation("Idle_A"):
 		anim_player.play("Idle_A")
@@ -180,9 +182,12 @@ func _do_relocate(delta: float) -> void:
 # ── Patrol: walk to random point on a ring around tombstone ───
 
 func _pick_patrol_target() -> void:
-	var angle = randf() * TAU
-	# Pick distance on a ring OUTSIDE the building body
-	var dist = randf_range(patrol_inner_radius, patrol_radius)
+	var from_tomb = global_position - tombstone_pos
+	from_tomb.y = 0
+	var base_angle = atan2(from_tomb.z, from_tomb.x) if from_tomb.length_squared() > 0.0001 else 0.0
+	var angle = base_angle + TAU * 0.333
+	# Pick a fixed point on the ring outside the building body.
+	var dist = (patrol_inner_radius + patrol_radius) * 0.5
 	_patrol_target = tombstone_pos + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
 	_patrol_target.y = global_position.y
 	state = State.PATROL

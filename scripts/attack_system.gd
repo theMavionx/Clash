@@ -30,9 +30,9 @@ const FLAG_Y_OFFSET: float = -0.08    ## Vertical offset so flag sits on water
 # Separation constants
 # ---------------------------------------------------------------------------
 ## Minimum lateral distance between ship landing positions (world units)
-const SHIP_MIN_SEPARATION: float = 0.252
+const SHIP_MIN_SEPARATION: float = 0.09
 ## Radius within which ships push each other apart while sailing
-const SHIP_PUSH_RADIUS: float = 0.4
+const SHIP_PUSH_RADIUS: float = 0.12
 
 # ---------------------------------------------------------------------------
 # Preloaded resources — loaded once at startup, never at runtime
@@ -481,12 +481,20 @@ func _get_sail_dir() -> Vector3:
 	return sail_dir
 
 
+func _get_lateral_dir() -> Vector3:
+	_refresh_placement_bounds()
+	if ship_plane == null:
+		return Vector3(1, 0, 0)
+	var lateral_dir: Vector3 = ship_plane.global_transform.basis.x.normalized()
+	lateral_dir.y = 0
+	return lateral_dir.normalized()
+
+
 func _stop_pos_from_troop_spawn_pos(spawn_pos: Vector3) -> Vector3:
 	_refresh_placement_bounds()
 	if ship_plane == null:
 		return spawn_pos
-	var pb: Basis = ship_plane.global_transform.basis
-	var lat_dir: Vector3 = pb.x.normalized()
+	var lat_dir: Vector3 = _get_lateral_dir()
 	var sail_dir: Vector3 = _get_sail_dir()
 	var stop_pos: Vector3 = spawn_pos + sail_dir * (plane_extent_z * 0.5) + lat_dir * 0.2
 	stop_pos.y = water_y
@@ -525,8 +533,7 @@ func _spawn_single_ship(target: Vector3, ship_idx: int = -1, target_is_stop_pos:
 	var sail_dir: Vector3 = _get_sail_dir()
 
 	# Ship stops at inner edge of ShipPlane (closest to buildings)
-	var pb: Basis = ship_plane.global_transform.basis
-	var lateral_dir: Vector3 = pb.x.normalized()
+	var lateral_dir: Vector3 = _get_lateral_dir()
 	var stop_pos: Vector3
 	if target_is_stop_pos:
 		stop_pos = target
@@ -606,9 +613,31 @@ func replay_place_ship_from_spawn(action: Dictionary) -> bool:
 			break
 	_refresh_placement_bounds()
 	var spawn_pos: Vector3 = Vector3(float(action.get("x", 0.0)), water_y, float(action.get("z", 0.0)))
-	var stop_pos: Vector3 = _stop_pos_from_troop_spawn_pos(spawn_pos)
+	var has_explicit_stop: bool = action.has("stop_x") and action.has("stop_z")
+	var stop_pos: Vector3
+	if has_explicit_stop:
+		stop_pos = Vector3(float(action.get("stop_x", 0.0)), water_y, float(action.get("stop_z", 0.0)))
+	else:
+		stop_pos = _stop_pos_from_troop_spawn_pos(spawn_pos)
 	if not _spawn_single_ship(stop_pos, ship_idx, true):
 		return replay_deploy_troops_at_spawn(action)
+	if has_explicit_stop and (action.has("troop_x") or action.has("x")):
+		var replay_spawn := Vector3(
+			float(action.get("troop_x", action.get("x", 0.0))),
+			water_y,
+			float(action.get("troop_z", action.get("z", 0.0)))
+		)
+		_fleet[ship_idx]["_replay_troop_spawn"] = replay_spawn
+		_fleet[ship_idx]["_replay_exact_spawn"] = true
+	var raw_spawns = action.get("troop_spawns", [])
+	if raw_spawns is Array and not raw_spawns.is_empty():
+		var exact_spawns: Array = []
+		for raw in raw_spawns:
+			if raw is Dictionary:
+				exact_spawns.append(Vector3(float(raw.get("x", action.get("x", 0.0))), water_y, float(raw.get("z", action.get("z", 0.0)))))
+		if not exact_spawns.is_empty():
+			_fleet[ship_idx]["_replay_troop_spawns"] = exact_spawns
+			_fleet[ship_idx]["_replay_exact_spawn"] = true
 	_fleet[ship_idx]["_placed"] = true
 	_ships_placed += 1
 	_total_ships_launched += 1
@@ -659,8 +688,7 @@ func _base_troop_spawn_pos(stop_pos: Vector3) -> Vector3:
 	_refresh_placement_bounds()
 	if ship_plane == null:
 		return stop_pos
-	var pb: Basis = ship_plane.global_transform.basis
-	var lat_dir: Vector3 = pb.x.normalized()
+	var lat_dir: Vector3 = _get_lateral_dir()
 	var sail_dir: Vector3 = _get_sail_dir()
 	var p: Vector3 = stop_pos - sail_dir * (plane_extent_z * 0.5) - lat_dir * 0.2
 	p.y = stop_pos.y
@@ -682,14 +710,18 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		recorded_levels = raw_recorded_levels
 
 	_refresh_placement_bounds()
-	var lat_dir: Vector3 = Vector3(1, 0, 0)
-	if ship_plane != null:
-		var pb2: Basis = ship_plane.global_transform.basis
-		lat_dir = pb2.x.normalized()
+	var lat_dir: Vector3 = _get_lateral_dir()
 	# `sail_dir` param kept for call-site compatibility; the spawn position
 	# is now computed by `_base_troop_spawn_pos` so the same formula feeds
 	# both the actual troop spawn AND the replay-logged coordinate.
 	var spawn_pos: Vector3 = _base_troop_spawn_pos(ship_pos)
+	if ship_data.has("_replay_troop_spawn"):
+		var replay_spawn = ship_data.get("_replay_troop_spawn")
+		if replay_spawn is Vector3:
+			spawn_pos = replay_spawn
+			spawn_pos.y = ship_pos.y
+	var exact_spawn: bool = ship_data.get("_replay_exact_spawn", false) == true
+	var exact_spawns: Array = ship_data.get("_replay_troop_spawns", [])
 
 	# Get building Y and troop levels — reuse BaseTroop's per-frame cache
 	# instead of a fresh scene-tree scan on every ship arrival.
@@ -723,16 +755,30 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		var lvl: int = troop_level
 		var m_res: Resource = model_res
 		var s_res: Resource = script_res
+		var troop_spawn_pos: Vector3 = spawn_pos
+		if i < exact_spawns.size() and exact_spawns[i] is Vector3:
+			troop_spawn_pos = exact_spawns[i]
+			troop_spawn_pos.y = spawn_pos.y
+		var troop_node_name: String = "Troop_%d" % (randi() % 99999)
+		if exact_spawn:
+			troop_node_name = "ReplayTroop_%d_%d" % [ship_idx, i]
 		timer.timeout.connect(func():
 			var troop = m_res.instantiate()
 			troop.set_script(s_res)
-			troop.name = "Troop_%d" % (randi() % 99999)
+			troop.name = troop_node_name
 			get_tree().current_scene.add_child(troop)
 			troop._spawn_scale = troop_scale
 			troop.scale = Vector3(troop_scale, troop_scale, troop_scale)
-			var offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
-			troop.global_position = BaseTroop._clamp_to_island(spawn_pos + offset)
+			var offset = Vector3.ZERO
+			if not exact_spawn:
+				offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
+			troop.global_position = BaseTroop._clamp_to_island(troop_spawn_pos + offset)
 			troop.global_position.y = building_y
+			if exact_spawn:
+				troop._sep_counter = 0
+				troop._retarget_counter = 0
+				troop._orbit_angle = 0.0
+				troop._last_pos = troop.global_position
 			troop.visible = true
 			if lvl > 1 and troop.has_method("upgrade_to"):
 				troop.upgrade_to(lvl)
@@ -750,10 +796,7 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 	if troop_names.is_empty():
 		return
 	_refresh_placement_bounds()
-	var lat_dir: Vector3 = Vector3(1, 0, 0)
-	if ship_plane != null:
-		var pb2: Basis = ship_plane.global_transform.basis
-		lat_dir = pb2.x.normalized()
+	var lat_dir: Vector3 = _get_lateral_dir()
 
 	var building_y: float = spawn_pos.y
 	var bs_ref: Node = null

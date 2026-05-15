@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { CANONICAL_GRID_CONFIG } = require('./combat_defs');
 
@@ -76,6 +77,25 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // so the WS clients map stayed empty and admin always showed everyone
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ai_agent_keys (
+      id           TEXT PRIMARY KEY,
+      player_id    TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      name         TEXT NOT NULL DEFAULT 'AI Agent',
+      key_hash     TEXT NOT NULL UNIQUE,
+      key_prefix   TEXT NOT NULL,
+      key_suffix   TEXT NOT NULL,
+      scopes       TEXT NOT NULL DEFAULT '["game:read","game:write"]',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_agent_keys_player ON ai_agent_keys(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_agent_keys_active_hash ON ai_agent_keys(key_hash) WHERE revoked_at IS NULL;
+  `);
+} catch (e) { console.warn('[db] ai_agent_keys migration:', e.message); }
 
 // Browser console/error ingestion. Public endpoint writes bounded rows here so
 // production client failures survive PM2 log rotation and can be queried from
@@ -379,6 +399,46 @@ const stmts = {
   // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
   // datetime() comparisons work directly.
   bumpPlayerLastSeen: db.prepare(`UPDATE players SET last_seen_at = datetime('now') WHERE id = ?`),
+  insertAiAgentKey: db.prepare(`
+    INSERT INTO ai_agent_keys (id, player_id, name, key_hash, key_prefix, key_suffix, scopes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `),
+  listAiAgentKeys: db.prepare(`
+    SELECT id, name, key_prefix, key_suffix, scopes, created_at, last_used_at, revoked_at
+    FROM ai_agent_keys
+    WHERE player_id = ?
+    ORDER BY created_at DESC
+  `),
+  getAiAgentKeyById: db.prepare(`
+    SELECT id, name, key_prefix, key_suffix, scopes, created_at, last_used_at, revoked_at
+    FROM ai_agent_keys
+    WHERE id = ? AND player_id = ?
+  `),
+  getAiAgentKeyByHash: db.prepare(`
+    SELECT
+      k.*,
+      p.id AS auth_player_id,
+      p.name AS auth_player_name,
+      p.wallet AS auth_player_wallet,
+      p.dex AS auth_player_dex,
+      p.trophies AS auth_player_trophies,
+      p.level AS auth_player_level
+    FROM ai_agent_keys k
+    JOIN players p ON p.id = k.player_id
+    WHERE k.key_hash = ? AND k.revoked_at IS NULL
+    LIMIT 1
+  `),
+  touchAiAgentKey: db.prepare(`UPDATE ai_agent_keys SET last_used_at = datetime('now') WHERE id = ?`),
+  revokeAiAgentKey: db.prepare(`
+    UPDATE ai_agent_keys
+    SET revoked_at = COALESCE(revoked_at, datetime('now'))
+    WHERE id = ? AND player_id = ?
+  `),
+  countActiveAiAgentKeys: db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM ai_agent_keys
+    WHERE player_id = ? AND revoked_at IS NULL
+  `),
 
   // Find enemy candidates (not self, no shield, has a town hall).
   // The town-hall existence check excludes accounts that registered but
@@ -420,6 +480,7 @@ const stmts = {
   upgradeBuilding: db.prepare(`
     UPDATE buildings SET level = ?, hp = ?, max_hp = ? WHERE id = ? AND player_id = ?
   `),
+  moveBuilding: db.prepare(`UPDATE buildings SET grid_x = ?, grid_z = ?, grid_index = ? WHERE id = ? AND player_id = ?`),
   removeBuilding: db.prepare(`DELETE FROM buildings WHERE id = ? AND player_id = ?`),
   updateBuildingHp: db.prepare(`UPDATE buildings SET hp = ? WHERE id = ? AND player_id = ?`),
 
@@ -704,7 +765,6 @@ const TH_MAX_COUNT = {
   tombstone:    [0, 1, 3],  // unlocked at TH2
   turret:       [0, 0, 3],  // unlocked at TH3
   storage:      [0, 1, 2],  // unlocked at TH2
-  barracks:     [1, 1, 2],
   town_hall:    [1, 1, 1],
 };
 
@@ -770,12 +830,6 @@ const BUILDING_DEFS = {
     cost: { gold: 400, wood: 1500, ore: 0 },
     max_count: 4,
   },
-  barracks: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [1500, 2800, 4500],
-    cost: { gold: 300, wood: 1000, ore: 0 },
-    max_count: 2,
-  },
 };
 
 // ---------- Troop Definitions ----------
@@ -786,6 +840,12 @@ const TROOP_DEFS = {
   barbarian: { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 150 }, { gold: 350, wood: 0, ore: 350 },  { gold: 700, wood: 0, ore: 700 }] },
   archer:    { max_level: 3, cost: [{ gold: 150, wood: 150, ore: 0 }, { gold: 350, wood: 350, ore: 0 },  { gold: 700, wood: 700, ore: 0 }] },
   ranger:    { max_level: 3, cost: [{ gold: 120, wood: 120, ore: 0 }, { gold: 250, wood: 250, ore: 0 },  { gold: 500, wood: 500, ore: 0 }] },
+};
+
+const GRID_SPECS = {
+  0: { width: 27, height: 27, label: 'main island', allowed: null, blocked: ['port'] },
+  1: { width: 27, height: 3, label: 'port coast', allowed: ['port'], blocked: [] },
+  2: { width: 27, height: 5, label: 'attack approach', allowed: ['flag'], blocked: [] },
 };
 
 // ---------- Trophy Points per Building (type -> level -> trophies) ----------
@@ -807,6 +867,215 @@ const TROPHY_TABLE = {
 };
 
 // ---------- Helper Functions ----------
+
+function parseScopes(scopes) {
+  try {
+    const parsed = JSON.parse(scopes || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function publicAiAgentKeyRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    key_prefix: row.key_prefix,
+    key_suffix: row.key_suffix,
+    scopes: parseScopes(row.scopes),
+    created_at: row.created_at,
+    last_used_at: row.last_used_at || null,
+    revoked_at: row.revoked_at || null,
+  };
+}
+
+function hashAiAgentKey(key) {
+  return crypto.createHash('sha256').update(String(key || '')).digest('hex');
+}
+
+function createAiAgentKey(playerId, name = 'AI Agent') {
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { error: 'Player not found' };
+  const activeCount = stmts.countActiveAiAgentKeys.get(playerId)?.count || 0;
+  if (activeCount >= 10) return { error: 'Maximum 10 active AI keys reached' };
+
+  const rawKey = `cop_ai_${crypto.randomBytes(32).toString('base64url')}`;
+  const safeName = String(name || 'AI Agent').trim().slice(0, 40) || 'AI Agent';
+  const id = uuidv4();
+  const scopes = JSON.stringify(['game:read', 'game:write']);
+  stmts.insertAiAgentKey.run(
+    id,
+    playerId,
+    safeName,
+    hashAiAgentKey(rawKey),
+    rawKey.slice(0, 10),
+    rawKey.slice(-4),
+    scopes
+  );
+  const row = stmts.getAiAgentKeyById.get(id, playerId);
+  return { ...publicAiAgentKeyRow(row), key: rawKey };
+}
+
+function listAiAgentKeys(playerId) {
+  return stmts.listAiAgentKeys.all(playerId).map(publicAiAgentKeyRow);
+}
+
+function revokeAiAgentKey(playerId, keyId) {
+  const id = String(keyId || '').trim();
+  if (!id) return { error: 'key id required' };
+  const info = stmts.revokeAiAgentKey.run(id, playerId);
+  if (!info.changes) return { error: 'AI key not found' };
+  return { success: true };
+}
+
+function authenticateAiAgentKey(rawKey) {
+  const key = String(rawKey || '').trim();
+  if (!key || !key.startsWith('cop_ai_')) return null;
+  const row = stmts.getAiAgentKeyByHash.get(hashAiAgentKey(key));
+  if (!row) return null;
+  try { stmts.touchAiAgentKey.run(row.id); } catch {}
+  return {
+    key: publicAiAgentKeyRow(row),
+    player: {
+      id: row.auth_player_id,
+      name: row.auth_player_name,
+      wallet: row.auth_player_wallet,
+      dex: row.auth_player_dex,
+      trophies: row.auth_player_trophies,
+      level: row.auth_player_level,
+    },
+  };
+}
+
+function getGridSpec(gridIndex = 0) {
+  return GRID_SPECS[Number(gridIndex)] || null;
+}
+
+function canPlaceBuildingAt(playerId, type, gridX, gridZ, gridIndex = 0, ignoreBuildingId = null) {
+  const def = BUILDING_DEFS[type];
+  if (!def) return { ok: false, error: `Unknown building type: ${type}` };
+  const spec = getGridSpec(gridIndex);
+  if (!spec) return { ok: false, error: 'grid_index must be 0, 1, or 2' };
+  if (spec.allowed && !spec.allowed.includes(type)) {
+    return { ok: false, error: `${type} can only be placed on another grid` };
+  }
+  if (spec.blocked?.includes(type)) {
+    return { ok: false, error: `${type} cannot be placed on grid ${gridIndex}` };
+  }
+  if (!Number.isInteger(gridX) || !Number.isInteger(gridZ)) {
+    return { ok: false, error: 'grid_x and grid_z must be integers' };
+  }
+  const [w, h] = def.size || [1, 1];
+  if (gridX < 0 || gridZ < 0 || gridX + w > spec.width || gridZ + h > spec.height) {
+    return { ok: false, error: `${type} footprint must fit inside ${spec.width}x${spec.height} grid` };
+  }
+
+  const blockers = [];
+  for (const b of stmts.getBuildings.all(playerId)) {
+    if (ignoreBuildingId != null && Number(b.id) === Number(ignoreBuildingId)) continue;
+    if ((b.grid_index || 0) !== Number(gridIndex)) continue;
+    const bDef = BUILDING_DEFS[b.type] || { size: [1, 1] };
+    const [bw, bh] = bDef.size || [1, 1];
+    const overlaps = gridX < b.grid_x + bw
+      && gridX + w > b.grid_x
+      && gridZ < b.grid_z + bh
+      && gridZ + h > b.grid_z;
+    if (overlaps) blockers.push({ id: b.id, type: b.type, grid_x: b.grid_x, grid_z: b.grid_z });
+  }
+  if (blockers.length) {
+    return { ok: false, error: 'Grid cells are occupied', blockers };
+  }
+  return { ok: true, size: { width: w, height: h }, grid: spec };
+}
+
+function findOpenBuildingSlots(playerId, type, gridIndex = 0, limit = 20) {
+  const def = BUILDING_DEFS[type];
+  const spec = getGridSpec(gridIndex);
+  if (!def || !spec) return [];
+  const [w, h] = def.size || [1, 1];
+  const slots = [];
+  for (let z = 0; z <= spec.height - h; z++) {
+    for (let x = 0; x <= spec.width - w; x++) {
+      const check = canPlaceBuildingAt(playerId, type, x, z, gridIndex);
+      if (check.ok) slots.push({ grid_x: x, grid_z: z, grid_index: Number(gridIndex) });
+      if (slots.length >= limit) return slots;
+    }
+  }
+  return slots;
+}
+
+function normalizeLegacyBarracksRows() {
+  try {
+    const legacyPlayers = db.prepare(`
+      SELECT DISTINCT player_id
+      FROM buildings
+      WHERE type = 'barracks'
+    `).all().map((row) => row.player_id);
+    if (legacyPlayers.length === 0) return;
+
+    const getLegacyRows = db.prepare(`
+      SELECT *
+      FROM buildings
+      WHERE player_id = ? AND type = 'barracks'
+      ORDER BY id ASC
+    `);
+    const getBarn = db.prepare(`
+      SELECT id
+      FROM buildings
+      WHERE player_id = ? AND type = 'barn'
+      LIMIT 1
+    `);
+    const deleteBuilding = db.prepare(`DELETE FROM buildings WHERE id = ?`);
+    const convertToBarn = db.prepare(`
+      UPDATE buildings
+      SET type = 'barn', grid_x = ?, grid_z = ?, grid_index = ?, hp = ?, max_hp = ?
+      WHERE id = ?
+    `);
+
+    db.transaction((playerIds) => {
+      for (const playerId of playerIds) {
+        const legacyRows = getLegacyRows.all(playerId);
+        if (legacyRows.length === 0) continue;
+
+        if (getBarn.get(playerId)) {
+          for (const row of legacyRows) deleteBuilding.run(row.id);
+          continue;
+        }
+
+        const primary = legacyRows[0];
+        for (const row of legacyRows.slice(1)) deleteBuilding.run(row.id);
+
+        let target = {
+          grid_x: Number(primary.grid_x) || 0,
+          grid_z: Number(primary.grid_z) || 0,
+          grid_index: 0,
+        };
+        const placement = canPlaceBuildingAt(playerId, 'barn', target.grid_x, target.grid_z, target.grid_index, primary.id);
+        if (!placement.ok) {
+          const slot = findOpenBuildingSlots(playerId, 'barn', 0, 1)[0];
+          if (!slot) {
+            deleteBuilding.run(primary.id);
+            continue;
+          }
+          target = slot;
+        }
+
+        const level = Math.min(Math.max(Number(primary.level) || 1, 1), BUILDING_DEFS.barn.hp_levels.length);
+        const maxHp = BUILDING_DEFS.barn.hp_levels[level - 1] || BUILDING_DEFS.barn.hp_levels[0];
+        const hp = Math.min(Math.max(Number(primary.hp) || maxHp, 1), maxHp);
+        convertToBarn.run(target.grid_x, target.grid_z, target.grid_index, hp, maxHp, primary.id);
+      }
+    })(legacyPlayers);
+
+    console.log(`[db] normalized legacy barracks rows for ${legacyPlayers.length} player(s)`);
+  } catch (e) {
+    console.warn('[db] legacy barracks normalization warning:', e.message);
+  }
+}
+
+normalizeLegacyBarracksRows();
 
 function registerPlayer(name) {
   const id = uuidv4();
@@ -904,6 +1173,8 @@ function getTownHallLevel(playerId) {
 function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
   const def = BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
+  const placement = canPlaceBuildingAt(playerId, type, gridX, gridZ, gridIndex);
+  if (!placement.ok) return { error: placement.error, blockers: placement.blockers };
 
   // Require Mine and Sawmill before any other building (except town_hall)
   if (type !== 'town_hall' && type !== 'mine' && type !== 'sawmill') {
@@ -1016,6 +1287,28 @@ function removeBuilding(playerId, buildingId) {
   if (!building) return { error: 'Building not found' };
   stmts.removeBuilding.run(buildingId, playerId);
   return { removed: buildingId, type: building.type };
+}
+
+function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
+  const building = stmts.getBuildingById.get(buildingId, playerId);
+  if (!building) return { error: 'Building not found' };
+  if (building.type === 'port' && building.has_ship) {
+    return { error: 'Cannot move a port with a docked ship' };
+  }
+  const nextGridIndex = gridIndex == null ? (building.grid_index || 0) : Number(gridIndex);
+  const placement = canPlaceBuildingAt(playerId, building.type, gridX, gridZ, nextGridIndex, buildingId);
+  if (!placement.ok) return { error: placement.error, blockers: placement.blockers };
+  stmts.moveBuilding.run(gridX, gridZ, nextGridIndex, buildingId, playerId);
+  return {
+    success: true,
+    id: buildingId,
+    type: building.type,
+    level: building.level,
+    grid_x: gridX,
+    grid_z: gridZ,
+    grid_index: nextGridIndex,
+    resources: getResources(playerId),
+  };
 }
 
 function getPlayerBuildings(playerId) {
@@ -1461,15 +1754,23 @@ module.exports = {
   TH_UNLOCK,
   TH_MAX_COUNT,
   TH_UPGRADE_REQUIRES,
+  GRID_SPECS,
   TROOP_DEFS,
   registerPlayer,
   authenticatePlayer,
+  createAiAgentKey,
+  listAiAgentKeys,
+  revokeAiAgentKey,
+  authenticateAiAgentKey,
   getResources,
   addResources,
   canAfford,
   subtractResources,
+  canPlaceBuildingAt,
+  findOpenBuildingSlots,
   placeBuilding,
   upgradeBuilding,
+  moveBuilding,
   removeBuilding,
   getPlayerBuildings,
   upgradeTroop,

@@ -74,6 +74,44 @@ function cannonShotCost(shotNumber) { return shotNumber; }
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
 const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
 
+// Canonical world-space grid config from scenes/Main.tscn. Browser clients
+// submit their live scene values, but headless agents need deterministic
+// coordinates for server-side replay verification and live replay playback.
+const CANONICAL_GRID_CONFIGS = {
+  0: {
+    grid_width: 27,
+    grid_height: 27,
+    cell_size: 0.12222223374545819,
+    grid_extent_x: 3.300000311127371,
+    grid_extent_z: 3.300000311127371,
+    grid_center_x: -1.701780044116269,
+    grid_center_z: 0.10582136452253298,
+    grid_rotation: 0.7640877583113884,
+  },
+  1: {
+    grid_width: 27,
+    grid_height: 3,
+    cell_size: 0.122212192924287,
+    grid_extent_x: 3.2997292089557484,
+    grid_extent_z: 0.3690982433634925,
+    grid_center_x: -2.955702452109811,
+    grid_center_z: 1.4870169076729116,
+    grid_rotation: 0.7526225606300321,
+  },
+  2: {
+    grid_width: 27,
+    grid_height: 5,
+    cell_size: 0.01782970062824279,
+    grid_extent_x: 0.48140191696255535,
+    grid_extent_z: 3.175276220889994,
+    grid_center_x: -3.078210570574297,
+    grid_center_z: -1.1433936797630364,
+    grid_rotation: 2.3219863304604607,
+  },
+};
+
+const CANONICAL_GRID_CONFIG = CANONICAL_GRID_CONFIGS[0];
+
 module.exports = {
   TROOP_STATS,
   DEFENSE_STATS,
@@ -89,4 +127,6 @@ module.exports = {
   CANNON_ENERGY_PER_DESTROY,
   CANNON_DAMAGE,
   cannonShotCost,
+  CANONICAL_GRID_CONFIG,
+  CANONICAL_GRID_CONFIGS,
 };

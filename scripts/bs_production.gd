@@ -313,6 +313,48 @@ func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 
 # ── Cleanup ────────────────────────────────────────────────────
 
+## Animate a server-authoritative resource collection performed by an AI agent.
+## This mirrors a local click without sending another collect request.
+func _animate_agent_collection(b: Dictionary, result: Dictionary) -> void:
+	if result.has("error"):
+		return
+	var def: Dictionary = bs.building_defs.get(b.get("id", ""), {})
+	var res_type: String = String(result.get("resource", def.get("produces", "gold")))
+	var icon: Control = b.get("_collect_icon")
+	var start_pos: Vector2 = Vector2.ZERO
+	if is_instance_valid(icon):
+		start_pos = icon.global_position + icon.size / 2.0
+		icon.visible = false
+		icon.set_meta("anim_scale", 0.0)
+	else:
+		var node := b.get("node") as Node3D
+		var cam := BaseTroop._get_camera_cached()
+		if is_instance_valid(node) and cam and not cam.is_position_behind(node.global_position):
+			start_pos = cam.unproject_position(node.global_position)
+		else:
+			start_pos = bs.get_viewport().get_visible_rect().size / 2.0
+	_spawn_collection_flying_icon(start_pos, res_type)
+	b["stored"] = 0.0
+
+	var old_val: int = int(bs.resources.get(res_type, 0))
+	var resources_after: Dictionary = result.get("resources", {})
+	var target_val: int = int(resources_after.get(res_type, old_val + int(result.get("collected", 0))))
+	for k in ["gold", "wood", "ore"]:
+		if k != res_type and resources_after.has(k):
+			bs.resources[k] = resources_after[k]
+
+	var tw := bs.create_tween().set_trans(Tween.TRANS_LINEAR).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_method(
+		func(v: int) -> void:
+			bs.resources[res_type] = v
+			bs._update_resource_ui()
+			var bridge = bs._bridge
+			if bridge:
+				bridge.send_to_react("resources", bs.resources),
+		old_val, target_val, 1.2
+	)
+
+
 ## Remove and free all visible collect icons (e.g. when entering attack mode).
 func _hide_all_collect_icons() -> void:
 	for b in bs.placed_buildings:

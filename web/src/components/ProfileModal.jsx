@@ -54,6 +54,12 @@ function ProfileModal({ onClose }) {
   const [tradingStats, setTradingStats] = useState(null);
   const [copied, setCopied] = useState(false);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+  const [aiKeys, setAiKeys] = useState([]);
+  const [aiKeyName, setAiKeyName] = useState('Base agent');
+  const [newAiKey, setNewAiKey] = useState(null);
+  const [aiKeyBusy, setAiKeyBusy] = useState(false);
+  const [aiKeyError, setAiKeyError] = useState('');
+  const [aiKeyCopied, setAiKeyCopied] = useState(false);
 
   // Privy logout — hook only called when provider is mounted (build-time flag).
   let privyLogout = null, privyAuthed = false;
@@ -158,6 +164,67 @@ function ProfileModal({ onClose }) {
   // to Bob after an account switch — or render `{error: "Invalid token"}`
   // as if it were stats after admin-wipe invalidated the token mid-fetch.
   const token = player?.token || null;
+
+  const fetchAiKeys = useCallback(async () => {
+    if (!token) { setAiKeys([]); setAiKeyError(''); setNewAiKey(null); return; }
+    try {
+      const r = await fetch('/api/players/ai-keys', { headers: { 'x-token': token } });
+      if (!r.ok) throw new Error('Failed to load AI keys');
+      const d = await r.json();
+      setAiKeys(Array.isArray(d.keys) ? d.keys : []);
+    } catch (e) {
+      setAiKeyError(e?.message || 'Failed to load AI keys');
+    }
+  }, [token]);
+
+  useEffect(() => {
+    fetchAiKeys();
+  }, [fetchAiKeys]);
+
+  const createAiKey = useCallback(async () => {
+    if (!token || aiKeyBusy) return;
+    setAiKeyBusy(true);
+    setAiKeyError('');
+    setAiKeyCopied(false);
+    try {
+      const r = await fetch('/api/players/ai-keys', {
+        method: 'POST',
+        headers: { 'x-token': token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: aiKeyName || 'Base agent' }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Failed to create AI key');
+      setNewAiKey(d);
+      setAiKeyName('Base agent');
+      await fetchAiKeys();
+      window.dispatchEvent(new Event('clash-ai-keys-changed'));
+    } catch (e) {
+      setAiKeyError(e?.message || 'Failed to create AI key');
+    } finally {
+      setAiKeyBusy(false);
+    }
+  }, [aiKeyBusy, aiKeyName, fetchAiKeys, token]);
+
+  const revokeAiKey = useCallback(async (id) => {
+    if (!token || !id || aiKeyBusy) return;
+    setAiKeyBusy(true);
+    setAiKeyError('');
+    try {
+      const r = await fetch(`/api/players/ai-keys/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'x-token': token },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'Failed to revoke AI key');
+      await fetchAiKeys();
+      window.dispatchEvent(new Event('clash-ai-keys-changed'));
+    } catch (e) {
+      setAiKeyError(e?.message || 'Failed to revoke AI key');
+    } finally {
+      setAiKeyBusy(false);
+    }
+  }, [aiKeyBusy, fetchAiKeys, token]);
+
   useEffect(() => {
     if (!token) { setTradingStats(null); return; }
     let cancelled = false;
@@ -432,6 +499,64 @@ function ProfileModal({ onClose }) {
             </div>
           )}
 
+          {token && (
+            <>
+              <div style={S.sectionTitle}>AI Agent</div>
+              <div style={S.aiBox}>
+                <div style={S.aiCreateRow}>
+                  <input
+                    value={aiKeyName}
+                    onChange={(e) => setAiKeyName(e.target.value)}
+                    maxLength={40}
+                    placeholder="Key name"
+                    style={S.aiInput}
+                  />
+                  <button style={S.aiPrimaryBtn} disabled={aiKeyBusy} onClick={createAiKey}>
+                    {aiKeyBusy ? '...' : 'Create'}
+                  </button>
+                </div>
+
+                {newAiKey?.key && (
+                  <div style={S.aiSecretBox}>
+                    <div style={S.aiSecretText}>{newAiKey.key}</div>
+                    <button
+                      style={S.aiCopyBtn}
+                      onClick={async () => {
+                        try { await navigator.clipboard.writeText(newAiKey.key); } catch {}
+                        setAiKeyCopied(true);
+                        setTimeout(() => setAiKeyCopied(false), 1500);
+                      }}
+                    >
+                      {aiKeyCopied ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                )}
+
+                <div style={S.aiHint}>MCP: <span style={S.aiMono}>/mcp</span> with <span style={S.aiMono}>Authorization: Bearer key</span></div>
+
+                {aiKeyError && <div style={S.aiError}>{aiKeyError}</div>}
+                {aiKeys.length > 0 && (
+                  <div style={S.aiKeyList}>
+                    {aiKeys.map((k) => (
+                      <div key={k.id} style={S.aiKeyRow}>
+                        <div style={{minWidth: 0}}>
+                          <div style={S.aiKeyName}>{k.name || 'AI Agent'}</div>
+                          <div style={S.aiKeyMeta}>
+                            {k.key_prefix}...{k.key_suffix}
+                            {k.last_used_at ? ` - used ${k.last_used_at.split(' ')[0]}` : ''}
+                          </div>
+                        </div>
+                        <button style={S.aiRevokeBtn} disabled={aiKeyBusy || !!k.revoked_at} onClick={() => revokeAiKey(k.id)}>
+                          {k.revoked_at ? 'Revoked' : 'Revoke'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
           {/* Avantis self-custody funding callout */}
           {dex === 'avantis' && activeWallet && (
             <div style={{
@@ -605,6 +730,58 @@ const S = {
     padding: '8px 10px', borderRadius: 9, cursor: 'pointer',
     background: 'linear-gradient(180deg, #ef5350 0%, #d32f2f 100%)',
     border: '2px solid #8b2a2a', color: '#fff', fontSize: 11, fontWeight: 900,
+  },
+  aiBox: {
+    display: 'flex', flexDirection: 'column', gap: 8,
+    padding: '10px 12px', borderRadius: 12,
+    background: '#e8dfc8', border: '2px solid #d4c8b0',
+  },
+  aiCreateRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' },
+  aiInput: {
+    minWidth: 0, height: 34, borderRadius: 8, border: '2px solid #d4c8b0',
+    background: '#fffaf0', color: '#5C3A21', padding: '0 10px',
+    fontSize: 12, fontWeight: 800, outline: 'none',
+  },
+  aiPrimaryBtn: {
+    height: 34, padding: '0 12px', borderRadius: 8, cursor: 'pointer',
+    background: 'linear-gradient(180deg, #0EA5E9 0%, #0369A1 100%)',
+    border: '2px solid #025b8d', color: '#fff', fontSize: 11, fontWeight: 900,
+  },
+  aiSecretBox: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8,
+    alignItems: 'center', padding: 8, borderRadius: 8,
+    background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(92,58,33,0.2)',
+  },
+  aiSecretText: {
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontFamily: 'monospace', fontSize: 11, fontWeight: 800, color: '#5C3A21',
+  },
+  aiCopyBtn: {
+    padding: '6px 9px', borderRadius: 7, cursor: 'pointer',
+    background: '#6ab344', border: '2px solid #4d7a2e',
+    color: '#fff', fontSize: 10, fontWeight: 900,
+  },
+  aiHint: { fontSize: 10, fontWeight: 800, color: '#77573d', lineHeight: 1.35 },
+  aiMono: { fontFamily: 'monospace', color: '#5C3A21' },
+  aiError: { fontSize: 11, fontWeight: 800, color: '#B71C1C' },
+  aiKeyList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  aiKeyRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center',
+    padding: '7px 8px', borderRadius: 8, background: 'rgba(255,255,255,0.42)',
+    border: '1px solid rgba(92,58,33,0.16)',
+  },
+  aiKeyName: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontSize: 12, fontWeight: 900, color: '#5C3A21',
+  },
+  aiKeyMeta: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontFamily: 'monospace', fontSize: 10, color: '#77573d', marginTop: 1,
+  },
+  aiRevokeBtn: {
+    padding: '5px 8px', borderRadius: 7, cursor: 'pointer',
+    background: '#f4e8d1', border: '1px solid #c9b590',
+    color: '#77573d', fontSize: 10, fontWeight: 900,
   },
   disconnectBtn: {
     padding: '5px 12px', background: '#E53935', border: '2px solid #B71C1C',

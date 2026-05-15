@@ -115,7 +115,7 @@ func send_to_react(action: String, data: Dictionary) -> void:
 
 func _send_initial_state() -> void:
 	send_to_react("godot_ready", {})
-	# Send building/troop definitions so React can render shop & barracks
+	# Send building/troop definitions so React can render shop & barn panel
 	var bs = _get_building_system()
 	if bs:
 		var defs := {}
@@ -286,7 +286,67 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var buildings_snapshot: Array = data.get("buildings_snapshot", [])
 				var attacker_name: String = data.get("attacker_name", "Unknown")
 				var duration: float = float(data.get("duration", 0.0))
-				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration)
+				var replay_label: String = String(data.get("replay_label", ""))
+				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
+		"agent_action":
+			_handle_agent_action(data)
+
+
+func _handle_agent_action(event: Dictionary) -> void:
+	_refresh_cache()
+	var action: String = String(event.get("action", ""))
+	var payload: Dictionary = event.get("payload", {})
+	if action == "":
+		return
+	if action == "ai_attack_replay":
+		var bs: Node = _get_building_system()
+		if bs and not bs._replay_active and not bs.is_viewing_enemy:
+			var replay_data: Array = payload.get("replay_data", [])
+			var buildings_snapshot: Array = payload.get("buildings_snapshot", [])
+			var attacker_name: String = String(payload.get("attacker_name", "AI Agent"))
+			var duration: float = float(payload.get("duration", 0.0))
+			var replay_label: String = String(payload.get("replay_label", "AI AGENT ATTACK"))
+			bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
+		return
+	for bsys in _bs_cache:
+		if not is_instance_valid(bsys):
+			continue
+		if bsys.is_viewing_enemy or bsys._replay_active:
+			continue
+		match action:
+			"place_building":
+				if bsys.has_method("_apply_agent_place_building"):
+					bsys._apply_agent_place_building(payload)
+			"upgrade_building":
+				if bsys.has_method("_apply_agent_upgrade_building"):
+					bsys._apply_agent_upgrade_building(payload)
+			"collect_resources":
+				if bsys.has_method("_apply_agent_collect_resources"):
+					bsys._apply_agent_collect_resources(payload)
+			"buy_ship":
+				if bsys.has_method("_apply_agent_buy_ship"):
+					bsys._apply_agent_buy_ship(payload)
+			"load_ship_troop":
+				if bsys.has_method("_apply_agent_ship_troops"):
+					bsys._apply_agent_ship_troops(payload)
+			"swap_ship_troop":
+				if bsys.has_method("_apply_agent_ship_troops"):
+					bsys._apply_agent_ship_troops(payload)
+			"unload_ship_troops":
+				if bsys.has_method("_apply_agent_ship_troops"):
+					bsys._apply_agent_ship_troops(payload)
+			"reinforce_ships":
+				if bsys.has_method("_apply_agent_reinforce_ships"):
+					bsys._apply_agent_reinforce_ships(payload)
+			"upgrade_troop":
+				if bsys.has_method("_apply_agent_upgrade_troop"):
+					bsys._apply_agent_upgrade_troop(payload)
+			"move_building":
+				if bsys.has_method("_apply_agent_move_building"):
+					bsys._apply_agent_move_building(payload)
+			"remove_building":
+				if bsys.has_method("_apply_agent_remove_building"):
+					bsys._apply_agent_remove_building(payload)
 
 
 func _do_register(player_name: String, wallet: String = "", dex: String = "", fid: int = 0) -> void:

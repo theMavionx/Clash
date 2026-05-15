@@ -151,7 +151,7 @@ function ShopPanel({ onClose }) {
   // Build list with status: available, maxed, locked, unaffordable
   const filteredBuildings = useMemo(
     () => Object.entries(buildings)
-      .filter(([id]) => id !== 'barracks' && id !== 'flag' && id !== 'ruins' && getCategory(id) === activeTab)
+      .filter(([id]) => id !== 'flag' && id !== 'ruins' && getCategory(id) === activeTab)
       .map(([id, def]) => {
         const placed = placedCounts[id] || 0;
         const maxCount = thMaxCounts[id] ?? (def.max_count > 0 ? def.max_count : 99);

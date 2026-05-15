@@ -132,7 +132,7 @@ func _move_to_board(delta: float) -> void:
 		if d < separation_radius and d > 0.001:
 			sep += to_other.normalized() * (separation_radius - d) / separation_radius
 
-	# Building avoidance — steer around buildings between barracks and port
+	# Building avoidance — steer around buildings between barn and port
 	for bs_node in get_tree().get_nodes_in_group("building_systems"):
 		if not "placed_buildings" in bs_node:
 			continue

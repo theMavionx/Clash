@@ -67,17 +67,6 @@ var building_defs: Dictionary = {
 		"produce_rate": [8, 15, 24],
 		"produce_max": [250, 500, 1000],
 	},
-	"barracks": {
-		"name": "Barracks",
-		"cells": Vector2i(3, 3),
-		"color": Color(0.6, 0.35, 0.15, 0.5),
-		"height": 0.4,
-		"scene": "res://Model/Barn/1.glb",
-		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
-		"model_scale": 0.25,
-		"hp_levels": [1500, 2800, 4500],
-		"cost": {"gold": 300, "wood": 1000},
-	},
 	"town_hall": {
 		"name": "Town Hall",
 		"cells": Vector2i(4, 4),
@@ -474,9 +463,9 @@ const SHIP_MODELS: Array[String] = [
 ]
 const SHIP_DISPLAY_SCALE: float = 0.05
 
-# ── Barracks ──────────────────────────────────────────────────
-var barracks_panel: PanelContainer
-var barracks_vbox: VBoxContainer
+# ── Barn troop panel ──────────────────────────────────────────
+var barn_panel: PanelContainer
+var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
 	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1,
 }
@@ -593,7 +582,7 @@ func _ready() -> void:
 	if create_ui:
 		_create_ui()
 		_create_building_panel()
-		_create_barracks_panel()
+		_create_barn_panel()
 		_create_port_panel()
 		_create_fps_label()
 		# In web builds — hide Godot UI, React renders its own
@@ -693,6 +682,252 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 
 func _collect_and_animate(b: Dictionary, res_type: String) -> void:
 	_production._collect_and_animate(b, res_type)
+
+
+func _find_building_by_server_id(server_id: int) -> Dictionary:
+	for b in placed_buildings:
+		if int(b.get("server_id", -1)) == server_id:
+			return b
+	return {}
+
+
+func _collect_building_resource(server_id: int) -> void:
+	var b: Dictionary = _find_building_by_server_id(server_id)
+	if b.is_empty():
+		return
+	var def: Dictionary = building_defs.get(b.get("id", ""), {})
+	if not def.has("produces"):
+		return
+	var icon: Control = b.get("_collect_icon")
+	if is_instance_valid(icon):
+		_production._click_collect_icon(icon, b, String(def.get("produces", "gold")))
+	else:
+		_production._collect_and_animate(b, String(def.get("produces", "gold")))
+
+
+func _apply_agent_place_building(payload: Dictionary) -> void:
+	var building: Dictionary = payload.get("building", payload)
+	if int(building.get("grid_index", 0)) != _get_grid_index():
+		return
+	var sid: int = int(building.get("id", -1))
+	if sid >= 0 and not _find_building_by_server_id(sid).is_empty():
+		if payload.has("resources"):
+			_apply_resources_from_server(payload.resources)
+		return
+	var building_id: String = String(building.get("type", ""))
+	if not building_defs.has(building_id):
+		return
+	var gp := Vector2i(int(building.get("grid_x", 0)), int(building.get("grid_z", 0)))
+	_spawn_building_locally(building_id, gp, building_defs[building_id], sid)
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if not b.is_empty():
+		b["level"] = int(building.get("level", b.get("level", 1)))
+		b["hp"] = int(building.get("hp", b.get("hp", 1)))
+		b["max_hp"] = int(building.get("max_hp", b.get("max_hp", b.get("hp", 1))))
+		if building_id == "port" and int(building.get("has_ship", 0)) == 1:
+			var pnode: Node3D = b.get("node", null)
+			if is_instance_valid(pnode):
+				pnode.set_meta("has_ship", true)
+				pnode.set_meta("ship_level", b.get("level", 1))
+				pnode.set_meta("ship_troops", building.get("ship_troops", []))
+				_port._spawn_port_ship(b)
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	_sync_react_buildings()
+
+
+func _apply_agent_upgrade_building(payload: Dictionary) -> void:
+	var sid: int = int(payload.get("building_id", payload.get("id", -1)))
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty() or not building_defs.has(b.get("id", "")):
+		return
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	var target_level: int = int(payload.get("level", b.get("level", 1) + 1))
+	if int(b.get("level", 1)) >= target_level:
+		return
+	b["is_upgrading"] = true
+	_run_upgrade_sequence(b, building_defs[b.id], target_level)
+
+
+func _apply_agent_collect_resources(payload: Dictionary) -> void:
+	if payload.has("results") and payload.results is Array:
+		for row in payload.results:
+			if row is Dictionary:
+				_apply_agent_collect_resources(row)
+		return
+	var sid: int = int(payload.get("building_id", payload.get("id", -1)))
+	var result: Dictionary = payload.get("result", payload)
+	if result.has("error"):
+		return
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty():
+		return
+	_production._animate_agent_collection(b, result)
+
+
+func _apply_agent_buy_ship(payload: Dictionary) -> void:
+	var sid: int = int(payload.get("port_id", payload.get("building_id", -1)))
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty() or b.get("id") != "port":
+		return
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	var pnode: Node3D = b.get("node", null)
+	if not is_instance_valid(pnode):
+		return
+	if not pnode.has_meta("has_ship"):
+		pnode.set_meta("has_ship", true)
+		pnode.set_meta("ship_level", b.get("level", 1))
+		pnode.set_meta("ship_troops", payload.get("ship_troops", []))
+		owned_ships += 1
+		if _port:
+			_port.owned_ships += 1
+		_port._spawn_port_ship(b)
+	_refresh_port_panel()
+	_emit_ship_update(b)
+
+
+func _apply_agent_ship_troops(payload: Dictionary) -> void:
+	var sid: int = int(payload.get("port_id", payload.get("building_id", payload.get("id", -1))))
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty() or b.get("id") != "port":
+		return
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	var pnode: Node3D = b.get("node", null)
+	if not is_instance_valid(pnode):
+		return
+	if payload.has("ship_troops"):
+		pnode.set_meta("ship_troops", payload.ship_troops)
+	if payload.has("ship_level"):
+		pnode.set_meta("ship_level", int(payload.ship_level))
+	elif not pnode.has_meta("ship_level"):
+		pnode.set_meta("ship_level", b.get("level", 1))
+	if not pnode.has_meta("has_ship"):
+		pnode.set_meta("has_ship", true)
+		_port._spawn_port_ship(b)
+	_refresh_port_panel()
+	_emit_ship_update(b)
+
+
+func _apply_agent_reinforce_ships(payload: Dictionary) -> void:
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	if not payload.has("ships") or not (payload.ships is Array):
+		return
+	for ship_data in payload.ships:
+		if ship_data is Dictionary:
+			_apply_agent_ship_troops(ship_data)
+	var bridge = _bridge
+	if bridge:
+		bridge.send_to_react("reinforced", {"cost": payload.get("cost", 0), "restored": payload.get("restored", 0)})
+
+
+func _apply_agent_upgrade_troop(payload: Dictionary) -> void:
+	var raw_type: String = String(payload.get("troop_type", ""))
+	if raw_type == "":
+		return
+	var local_name: String = raw_type.capitalize()
+	for name in troop_levels.keys():
+		if String(name).to_lower() == raw_type.to_lower():
+			local_name = String(name)
+			break
+	troop_levels[local_name] = int(payload.get("level", troop_levels.get(local_name, 1)))
+	if payload.has("resources"):
+		_apply_resources_from_server(payload.resources)
+	_refresh_barn_panel()
+	var bridge = _bridge
+	if bridge:
+		bridge.send_to_react("troop_levels", troop_levels)
+
+
+func _apply_agent_move_building(payload: Dictionary) -> void:
+	var sid: int = int(payload.get("building_id", payload.get("id", -1)))
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty() or int(payload.get("grid_index", _get_grid_index())) != _get_grid_index():
+		return
+	var def: Dictionary = building_defs.get(b.get("id", ""), {})
+	if def.is_empty() or not is_instance_valid(b.get("node", null)):
+		return
+	var old_gp: Vector2i = b.get("grid_pos", Vector2i.ZERO)
+	for x in range(def.cells.x):
+		for z in range(def.cells.y):
+			var old_idx: int = (old_gp.y + z) * grid_width + (old_gp.x + x)
+			if old_idx >= 0 and old_idx < grid.size():
+				grid[old_idx] = false
+	var new_gp := Vector2i(int(payload.get("grid_x", old_gp.x)), int(payload.get("grid_z", old_gp.y)))
+	for x in range(def.cells.x):
+		for z in range(def.cells.y):
+			var idx: int = (new_gp.y + z) * grid_width + (new_gp.x + x)
+			if idx >= 0 and idx < grid.size():
+				grid[idx] = true
+	b["grid_pos"] = new_gp
+	var sx = def.cells.x * cell_size
+	var sz = def.cells.y * cell_size
+	var local_pos = _grid_to_local(new_gp)
+	local_pos.x += sx / 2.0
+	local_pos.z += sz / 2.0
+	local_pos.y = 0
+	create_tween().tween_property(b.node, "position", local_pos, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	_sync_react_buildings()
+	if selected_building == b:
+		_select_building(b)
+
+
+func _apply_agent_remove_building(payload: Dictionary) -> void:
+	var sid: int = int(payload.get("building_id", payload.get("removed", -1)))
+	var b: Dictionary = _find_building_by_server_id(sid)
+	if b.is_empty():
+		return
+	_remove_building_local_only(b)
+
+
+func _remove_building_local_only(b: Dictionary) -> void:
+	var idx: int = placed_buildings.find(b)
+	if idx < 0:
+		return
+	var def: Dictionary = building_defs.get(b.get("id", ""), {})
+	var gp: Vector2i = b.get("grid_pos", Vector2i.ZERO)
+	if not def.is_empty():
+		for x in range(def.cells.x):
+			for z in range(def.cells.y):
+				var cell_idx: int = (gp.y + z) * grid_width + (gp.x + x)
+				if cell_idx >= 0 and cell_idx < grid.size():
+					grid[cell_idx] = false
+	if b.get("id") == "tombstone":
+		_remove_tombstone_skeletons(b)
+	if b.get("id") == "port":
+		var pnode: Node3D = b.get("node", null)
+		if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
+			var ship: Node3D = pnode.get_meta("ship_node")
+			if is_instance_valid(ship):
+				_sink_ship(ship)
+	if b.has("hp_bar") and is_instance_valid(b.hp_bar):
+		b.hp_bar.queue_free()
+	var icon: Control = b.get("_collect_icon")
+	if is_instance_valid(icon):
+		icon.queue_free()
+	if is_instance_valid(b.get("node", null)):
+		explode_building_with_swell(b.node, b.get("id", ""))
+	placed_buildings.remove_at(idx)
+	if selected_building == b:
+		_deselect_building()
+	_sync_react_buildings()
+
+
+func _emit_ship_update(b: Dictionary) -> void:
+	var pnode: Node3D = b.get("node", null)
+	if not is_instance_valid(pnode):
+		return
+	var ship_level: int = pnode.get_meta("ship_level", b.get("level", 1))
+	var bridge = _bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_level": ship_level,
+			"ship_troops": pnode.get_meta("ship_troops", []),
+			"ship_capacity": ship_level * 3,
+		})
 
 
 
@@ -1469,6 +1704,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"server_id": server_id,
 		}
 		placed_buildings.append(b_data)
+		_apply_building_runtime_level(b_data)
 		# Spawn tower unit (archer on top)
 		if def.has("tower_unit"):
 			_spawn_tower_unit(b_data, def)
@@ -1630,6 +1866,8 @@ func _get_grid_index() -> int:
 	var plane = get_node_or_null(grid_plane_path)
 	if plane and plane.name == "gridPlane2":
 		return 1
+	if plane and plane.name == "shipPlane":
+		return 2
 	return 0
 
 
@@ -2206,6 +2444,18 @@ func _can_place(pos: Vector2i, size: Vector2i) -> bool:
 	return true
 
 
+func _set_grid_occupied(gp: Vector2i, size: Vector2i, occupied: bool) -> void:
+	for x in range(size.x):
+		for z in range(size.y):
+			var cx: int = gp.x + x
+			var cz: int = gp.y + z
+			if cx < 0 or cx >= grid_width or cz < 0 or cz >= grid_height:
+				continue
+			var idx: int = cz * grid_width + cx
+			if idx >= 0 and idx < grid.size():
+				grid[idx] = occupied
+
+
 func _try_place_building() -> bool:
 	if not ghost or not ghost.visible:
 		return false
@@ -2260,10 +2510,7 @@ func _request_place_building(building_id: String, grid_pos: Vector2i, def: Dicti
 
 func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dictionary, server_id: int) -> void:
 	# Mark grid
-	for x in range(def.cells.x):
-		for z in range(def.cells.y):
-			var idx = (grid_pos.y + z) * grid_width + (grid_pos.x + x)
-			grid[idx] = true
+	_set_grid_occupied(grid_pos, def.cells, true)
 
 	# Save current_building_id temporarily for _create_placed_building
 	var prev_id = current_building_id
@@ -2302,6 +2549,7 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 		"server_id": server_id,
 	}
 	placed_buildings.append(b_data)
+	_apply_building_runtime_level(b_data)
 	_sync_react_buildings()
 
 	# Spawn tower unit (archer on top)
@@ -2458,7 +2706,7 @@ func _select_building(b: Dictionary) -> void:
 			"next_hp": next_hp,
 			"upgrade_cost": upgrade_cost,
 			"is_enemy": is_viewing_enemy,
-			"is_barracks": b.id in ["barracks", "barn"],
+			"is_barn": b.id == "barn",
 			"is_upgrading": b.get("is_upgrading", false),
 			"has_ship": bs_has_ship,
 			"ship_level": bs_ship_level,
@@ -2483,7 +2731,7 @@ func _select_building(b: Dictionary) -> void:
 	else:
 		_hide_move_arrows()
 
-	# When viewing enemy — only show HP info, no upgrade/barracks
+	# When viewing enemy — only show HP info, no upgrade/troop panel
 	if is_viewing_enemy:
 		if building_panel_title:
 			building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
@@ -2511,10 +2759,10 @@ func _select_building(b: Dictionary) -> void:
 			cam.zoom_blocked = true
 		return
 
-	# Barracks / Barn = troop upgrade panel
-	if b.id in ["barracks", "barn"] and barracks_panel:
-		_refresh_barracks_panel()
-		barracks_panel.visible = true
+	# Barn = troop upgrade panel
+	if b.id == "barn" and barn_panel:
+		_refresh_barn_panel()
+		barn_panel.visible = true
 		if building_panel:
 			building_panel.visible = false
 		var cam = get_node_or_null("/root/IslandScene/CameraRig")
@@ -2549,8 +2797,8 @@ func _deselect_building() -> void:
 		bridge.send_to_react("building_deselected", {})
 	if building_panel:
 		building_panel.visible = false
-	if barracks_panel:
-		barracks_panel.visible = false
+	if barn_panel:
+		barn_panel.visible = false
 	if port_panel:
 		port_panel.visible = false
 	var cam = get_node_or_null("/root/IslandScene/CameraRig")
@@ -2724,6 +2972,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	# Respawn tower unit after model swap
 	if def.has("tower_unit"):
 		_spawn_tower_unit(b, def)
+	_apply_building_runtime_level(b)
 
 	# Bounce UP (reveal)
 	var tw_up = create_tween()
@@ -2996,6 +3245,15 @@ const SKELETON_SCRIPT = "res://scripts/skeleton_guard.gd"
 const SKELETON_SCALE = 0.1
 const TOWER_ARCHER_SCRIPT_PATH = "res://scripts/tower_archer.gd"
 
+func _apply_building_runtime_level(b: Dictionary) -> void:
+	var lvl: int = int(b.get("level", 1))
+	var node: Node = b.get("node", null)
+	if is_instance_valid(node) and node.has_method("set_level"):
+		node.set_level(lvl)
+	var tower_unit: Node = b.get("tower_unit_node", null)
+	if is_instance_valid(tower_unit) and tower_unit.has_method("set_level"):
+		tower_unit.set_level(lvl)
+
 # ---------------------------------------------------------------------------
 # Defense unit resource cache — loaded once at boot so the first skeleton
 # spawn or first archer-tower load never triggers a synchronous `load()`
@@ -3079,8 +3337,9 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
-		var angle = randf() * TAU
-		var offset = Vector3(cos(angle) * 0.18, 0, sin(angle) * 0.18)
+		var spawn_index: int = alive.size()
+		var angle := (TAU * float(spawn_index)) / maxf(float(target_count), 1.0)
+		var offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
 		get_tree().current_scene.add_child(skel)
 		skel.global_position = tomb_pos + offset
 		skel.tombstone_pos = tomb_pos
@@ -3549,7 +3808,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 			"next_hp": 600,
 			"upgrade_cost": {},
 			"is_enemy": is_viewing_enemy,
-			"is_barracks": false,
+			"is_barn": false,
 			"is_upgrading": false,
 			"has_ship": true,
 			"ship_level": ship_level,
@@ -3651,12 +3910,12 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	_port._spawn_port_ship(b_override)
 
 
-func _create_barracks_panel() -> void:
+func _create_barn_panel() -> void:
 	if not canvas:
 		return
-	barracks_panel = PanelContainer.new()
-	barracks_panel.visible = false
-	barracks_panel.custom_minimum_size = Vector2(550, 750)
+	barn_panel = PanelContainer.new()
+	barn_panel.visible = false
+	barn_panel.custom_minimum_size = Vector2(550, 750)
 	var style = StyleBoxFlat.new()
 	style.bg_color = Color(0.1, 0.12, 0.18, 1.0)
 	style.corner_radius_top_left = 14
@@ -3668,38 +3927,38 @@ func _create_barracks_panel() -> void:
 	style.border_width_top = 2
 	style.border_width_bottom = 2
 	style.border_color = Color(0.4, 0.35, 0.2, 1.0)
-	barracks_panel.add_theme_stylebox_override("panel", style)
-	barracks_panel.anchor_left = 0.5
-	barracks_panel.anchor_right = 0.5
-	barracks_panel.anchor_top = 0.5
-	barracks_panel.anchor_bottom = 0.5
-	barracks_panel.offset_left = -275
-	barracks_panel.offset_right = 275
-	barracks_panel.offset_top = -375
-	barracks_panel.offset_bottom = 375
-	canvas.add_child(barracks_panel)
+	barn_panel.add_theme_stylebox_override("panel", style)
+	barn_panel.anchor_left = 0.5
+	barn_panel.anchor_right = 0.5
+	barn_panel.anchor_top = 0.5
+	barn_panel.anchor_bottom = 0.5
+	barn_panel.offset_left = -275
+	barn_panel.offset_right = 275
+	barn_panel.offset_top = -375
+	barn_panel.offset_bottom = 375
+	canvas.add_child(barn_panel)
 
 	var margin = MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 14)
 	margin.add_theme_constant_override("margin_right", 14)
 	margin.add_theme_constant_override("margin_top", 14)
 	margin.add_theme_constant_override("margin_bottom", 14)
-	barracks_panel.add_child(margin)
+	barn_panel.add_child(margin)
 
 	var scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	margin.add_child(scroll)
 
-	barracks_vbox = VBoxContainer.new()
-	barracks_vbox.add_theme_constant_override("separation", 10)
-	barracks_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(barracks_vbox)
+	barn_vbox = VBoxContainer.new()
+	barn_vbox.add_theme_constant_override("separation", 10)
+	barn_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(barn_vbox)
 
 
-func _refresh_barracks_panel() -> void:
-	if not barracks_vbox:
+func _refresh_barn_panel() -> void:
+	if not barn_vbox:
 		return
-	for child in barracks_vbox.get_children():
+	for child in barn_vbox.get_children():
 		child.queue_free()
 
 	# Building info
@@ -3709,16 +3968,16 @@ func _refresh_barracks_panel() -> void:
 	var bmax_hp = selected_building.get("max_hp", 1)
 
 	var title = Label.new()
-	title.text = "Barracks (Lv. %d)" % bld_level
+	title.text = "Barn (Lv. %d)" % bld_level
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	barracks_vbox.add_child(title)
+	barn_vbox.add_child(title)
 
 	var hp_label = Label.new()
 	hp_label.text = "HP: %d / %d" % [bhp, bmax_hp]
 	hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hp_label.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
-	barracks_vbox.add_child(hp_label)
+	barn_vbox.add_child(hp_label)
 
 	var max_bld_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	if bld_level < max_bld_level:
@@ -3737,7 +3996,7 @@ func _refresh_barracks_panel() -> void:
 		cost_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		cost_lbl.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
 		cost_lbl.add_theme_font_size_override("font_size", 13)
-		barracks_vbox.add_child(cost_lbl)
+		barn_vbox.add_child(cost_lbl)
 
 		var upgrade_bld_btn = Button.new()
 		upgrade_bld_btn.text = "Upgrade Building"
@@ -3745,24 +4004,24 @@ func _refresh_barracks_panel() -> void:
 		_style_button(upgrade_bld_btn, Color(0.2, 0.45, 0.6), Color(0.25, 0.5, 0.65))
 		upgrade_bld_btn.pressed.connect(func():
 			_upgrade_selected()
-			_refresh_barracks_panel()
+			_refresh_barn_panel()
 		)
-		barracks_vbox.add_child(upgrade_bld_btn)
+		barn_vbox.add_child(upgrade_bld_btn)
 	elif bld_level >= max_bld_level:
 		var max_lbl = Label.new()
 		max_lbl.text = "MAX LEVEL"
 		max_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		max_lbl.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-		barracks_vbox.add_child(max_lbl)
+		barn_vbox.add_child(max_lbl)
 
 	var sep = HSeparator.new()
-	barracks_vbox.add_child(sep)
+	barn_vbox.add_child(sep)
 
 	var troops_title = Label.new()
 	troops_title.text = "Troops"
 	troops_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	troops_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	barracks_vbox.add_child(troops_title)
+	barn_vbox.add_child(troops_title)
 
 	for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
 		var tdef = troop_defs[troop_name]
@@ -3776,7 +4035,7 @@ func _refresh_barracks_panel() -> void:
 		card_style.corner_radius_bottom_left = 8
 		card_style.corner_radius_bottom_right = 8
 		card.add_theme_stylebox_override("panel", card_style)
-		barracks_vbox.add_child(card)
+		barn_vbox.add_child(card)
 
 		var card_margin = MarginContainer.new()
 		card_margin.add_theme_constant_override("margin_left", 10)
@@ -3837,7 +4096,7 @@ func _refresh_barracks_panel() -> void:
 
 	# ── Buy Troops section ──
 	var sep2 = HSeparator.new()
-	barracks_vbox.add_child(sep2)
+	barn_vbox.add_child(sep2)
 
 	var total_capacity = _get_total_ship_capacity()
 	var slots_free = _port._get_free_ship_slots()
@@ -3847,14 +4106,14 @@ func _refresh_barracks_panel() -> void:
 	buy_title.text = "Buy Troops — %d / %d slots" % [total_troops, total_capacity]
 	buy_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	buy_title.add_theme_color_override("font_color", Color(0.9, 0.75, 0.3))
-	barracks_vbox.add_child(buy_title)
+	barn_vbox.add_child(buy_title)
 
 	if total_capacity <= 0:
 		var no_ship_lbl = Label.new()
 		no_ship_lbl.text = "Buy a ship at Port first!"
 		no_ship_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		no_ship_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-		barracks_vbox.add_child(no_ship_lbl)
+		barn_vbox.add_child(no_ship_lbl)
 	else:
 		for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
 			var lvl2 = troop_levels[troop_name]
@@ -3870,13 +4129,13 @@ func _refresh_barracks_panel() -> void:
 				buy_btn.disabled = true
 			var tn2 = troop_name
 			buy_btn.pressed.connect(func(): _buy_troop(tn2))
-			barracks_vbox.add_child(buy_btn)
+			barn_vbox.add_child(buy_btn)
 		if slots_free <= 0 and total_capacity > 0:
 			var full_lbl = Label.new()
 			full_lbl.text = "All ship slots full!"
 			full_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			full_lbl.add_theme_color_override("font_color", Color(0.9, 0.5, 0.3))
-			barracks_vbox.add_child(full_lbl)
+			barn_vbox.add_child(full_lbl)
 
 	# Close button
 	var close_btn = Button.new()
@@ -3884,12 +4143,12 @@ func _refresh_barracks_panel() -> void:
 	close_btn.custom_minimum_size = Vector2(0, 60)
 	_style_button(close_btn, Color(0.5, 0.2, 0.2), Color(0.6, 0.25, 0.25))
 	close_btn.pressed.connect(func():
-		barracks_panel.visible = false
+		barn_panel.visible = false
 		var cam = get_tree().current_scene.find_child("CameraRig", true, false)
 		if cam:
 			cam.zoom_blocked = false
 	)
-	barracks_vbox.add_child(close_btn)
+	barn_vbox.add_child(close_btn)
 
 
 func _can_afford(costs: Dictionary) -> bool:
@@ -3965,7 +4224,7 @@ func _upgrade_troop(troop_name: String) -> void:
 	var troop = get_tree().current_scene.find_child(troop_name, true, false)
 	if troop and troop.has_method("upgrade_to"):
 		troop.upgrade_to(next_lvl)
-	_refresh_barracks_panel()
+	_refresh_barn_panel()
 	# Refetch from server to ensure React shows authoritative data
 	_refresh_troop_levels_from_server()
 
@@ -3984,7 +4243,7 @@ func _buy_troop(troop_name: String) -> void:
 	var script_path: String = tdef.get("script", "")
 	if model_path == "" or script_path == "":
 		return
-	# Find port with free slot from barracks position
+	# Find port with free slot from barn position
 	var spawn_pos: Vector3 = _get_building_spawn_pos()
 	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos)
 	if port_info.is_empty():
@@ -4009,7 +4268,7 @@ func _buy_troop(troop_name: String) -> void:
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	ship_troops.append(troop_name)
 	port_node.set_meta("ship_troops", ship_troops)
-	_refresh_barracks_panel()
+	_refresh_barn_panel()
 	# Spawn the actual combat troop model (same as attack troops).
 	# Reuse AttackSystem's cache so recruitment never re-loads GLBs that are
 	# already in memory from the attack path.
@@ -4217,8 +4476,8 @@ func _switch_to_enemy_island() -> void:
 
 
 ## Start replay playback — loads buildings snapshot and replays recorded actions.
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0) -> void:
-	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name, duration)
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "") -> void:
+	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
 
 
 ## Plays back recorded actions at their original timestamps.
@@ -4414,10 +4673,7 @@ func _start_move(b: Dictionary) -> void:
 	_move_source_pos = b["node"].position
 	var def = building_defs[b.id]
 	# Free grid cells temporarily so validity check works while dragging
-	for x in range(def.cells.x):
-		for z in range(def.cells.y):
-			var idx = (b.grid_pos.y + z) * grid_width + (b.grid_pos.x + x)
-			grid[idx] = false
+	_set_grid_occupied(b.grid_pos, def.cells, false)
 	_hide_move_arrows()
 	_hide_range_indicator()
 	current_building_id = b.id
@@ -4478,10 +4734,7 @@ func _confirm_move() -> void:
 	if not _can_place(current_grid_pos, def.cells):
 		return
 	# Occupy new grid cells
-	for x in range(def.cells.x):
-		for z in range(def.cells.y):
-			var idx = (current_grid_pos.y + z) * grid_width + (current_grid_pos.x + x)
-			grid[idx] = true
+	_set_grid_occupied(current_grid_pos, def.cells, true)
 	b["grid_pos"] = current_grid_pos
 	# b.node is already at the new position (moved by _update_move_building)
 	# Tombstone: respawn dead skeletons and relocate alive ones
@@ -4504,10 +4757,7 @@ func _cancel_move(reselect: bool = true) -> void:
 	if b.size() > 0:
 		# Restore original grid cells
 		var def = building_defs[b.id]
-		for x in range(def.cells.x):
-			for z in range(def.cells.y):
-				var idx = (_move_source_gp.y + z) * grid_width + (_move_source_gp.x + x)
-				grid[idx] = true
+		_set_grid_occupied(_move_source_gp, def.cells, true)
 		# Move building back to original position
 		if is_instance_valid(b.get("node", null)):
 			b["node"].position = _move_source_pos

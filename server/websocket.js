@@ -1,12 +1,14 @@
 const WebSocket = require('ws');
 const db = require('./db');
 
-const clients = new Map(); // token -> { ws, playerId, playerName }
+const clients = new Map(); // clientId -> { ws, playerId, playerName, token }
+let nextClientId = 1;
 
 function setupWebSocket(server) {
   const wss = new WebSocket.Server({ server, path: '/ws' });
 
   wss.on('connection', (ws, req) => {
+    const clientId = nextClientId++;
     let playerId = null;
     let playerToken = null;
 
@@ -33,7 +35,7 @@ function setupWebSocket(server) {
         }
         playerId = player.id;
         playerToken = msg.token;
-        clients.set(playerToken, { ws, playerId: player.id, playerName: player.name });
+        clients.set(clientId, { ws, playerId: player.id, playerName: player.name, token: playerToken });
         console.log(`\x1b[35mWS\x1b[0m auth \x1b[90m${player.name} (${player.id.slice(0,8)})\x1b[0m`);
 
         ws.send(JSON.stringify({
@@ -57,8 +59,8 @@ function setupWebSocket(server) {
 
     ws.on('close', () => {
       if (playerToken) {
-        const info = clients.get(playerToken);
-        clients.delete(playerToken);
+        const info = clients.get(clientId);
+        clients.delete(clientId);
         if (info) {
           console.log(`\x1b[35mWS\x1b[0m disconnect \x1b[90m${info.playerName}\x1b[0m`);
           broadcast({
@@ -145,18 +147,34 @@ function handleMessage(ws, playerId, msg) {
 
 function broadcast(data, excludeToken = null) {
   const payload = JSON.stringify(data);
-  for (const [token, client] of clients) {
-    if (token !== excludeToken && client.ws.readyState === WebSocket.OPEN) {
+  for (const client of clients.values()) {
+    if (client.token !== excludeToken && client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(payload);
     }
   }
 }
 
-function getOnlinePlayers() {
-  return Array.from(clients.values()).map(c => ({
-    player_id: c.playerId,
-    name: c.playerName,
-  }));
+function broadcastToPlayer(playerId, data) {
+  const payload = JSON.stringify(data);
+  let sent = 0;
+  for (const client of clients.values()) {
+    if (client.playerId === playerId && client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(payload);
+      sent++;
+    }
+  }
+  return sent;
 }
 
-module.exports = { setupWebSocket, broadcast, getOnlinePlayers };
+function getOnlinePlayers() {
+  const seen = new Set();
+  const rows = [];
+  for (const c of clients.values()) {
+    if (seen.has(c.playerId)) continue;
+    seen.add(c.playerId);
+    rows.push({ player_id: c.playerId, name: c.playerName });
+  }
+  return rows;
+}
+
+module.exports = { setupWebSocket, broadcast, broadcastToPlayer, getOnlinePlayers };

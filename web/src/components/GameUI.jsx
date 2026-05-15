@@ -4,7 +4,7 @@ import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
 import ShopPanel from './ShopPanel';
 import BuildingInfoPanel from './BuildingInfoPanel';
-import BarracksPanel from './BarracksPanel';
+import BarnPanel from './BarnPanel';
 import RegisterPanel from './RegisterPanel';
 import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
@@ -12,6 +12,7 @@ import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay from './TutorialOverlay';
 import { useSend, useUI, useSelectedBuilding, useTutorial } from '../hooks/useGodot';
+import { useAgentActions } from '../hooks/useAgentActions';
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 
@@ -30,6 +31,7 @@ export default function GameUI() {
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const { selectedBuilding } = useSelectedBuilding();
+  useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -47,9 +49,9 @@ export default function GameUI() {
     }
   }, [enemyMode?.active]);
 
-  // Pause island when heavy overlay panels are open (futures, shop, barracks, profile)
-  const barracksOpen = showTroops;
-  const anyPanelOpen = !!(futuresOpen || shopOpen || barracksOpen || showProfile || showBattleLog || showLeaderboard);
+  // Pause island when heavy overlay panels are open (futures, shop, barn, profile)
+  const barnOpen = showTroops;
+  const anyPanelOpen = !!(futuresOpen || shopOpen || barnOpen || showProfile || showBattleLog || showLeaderboard);
   useEffect(() => {
     sendToGodot('ui_overlay', { active: anyPanelOpen });
   }, [anyPanelOpen, sendToGodot]);
@@ -162,9 +164,9 @@ export default function GameUI() {
         />
       )}
 
-      {!enemyMode?.active && showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barracks) && !selectedBuilding.is_enemy ? (
-        <BarracksPanel
-          building={{ ...selectedBuilding, is_barracks: true }}
+      {!enemyMode?.active && showTroops && selectedBuilding && (selectedBuilding.id === 'barn' || selectedBuilding.is_barn) && !selectedBuilding.is_enemy ? (
+        <BarnPanel
+          building={{ ...selectedBuilding, is_barn: true }}
           onClose={handleCloseTroops}
         />
       ) : !enemyMode?.active && selectedBuilding ? (

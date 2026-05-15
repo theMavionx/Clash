@@ -48,7 +48,7 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Cl
 ### Buildings
 Defined in `scripts/building_system.gd` → `building_defs` dictionary.
 Server definitions in `server/db.js` → `BUILDING_DEFS`.
-Types: Town Hall, Mine, Barn, Port, Sawmill, Barracks, Turret, Storage, Archer Tower, Tombstone.
+Types: Town Hall, Mine, Barn, Port, Sawmill, Turret, Storage, Archer Tower, Tombstone.
 
 ### Troops
 Base class: `scripts/base_troop.gd`. Individual: knight, mage, barbarian, archer, ranger.

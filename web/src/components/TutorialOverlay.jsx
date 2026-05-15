@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useCallback, useRef } from 'react';
 
 // ── Tutorial flags (bitmask) ──────────────────────────────────────
 const FLAG_BASE = 1;    // welcome, TH, buildings, resources
-const FLAG_ARMY = 2;    // port, ship, barracks, load troops
+const FLAG_ARMY = 2;    // port, ship, barn, load troops
 const FLAG_ATTACK = 4;  // first attack guide (cannon, energy, ships)
 const FLAG_TRADE = 8;   // trading intro
 
@@ -16,7 +16,7 @@ const BASE_STEPS = [
 
 const ARMY_STEPS = [
   { title: 'Port & Ship', text: 'Build a Port and buy a Ship. Ships carry your troops into battle.', icon: '⛵', target: 'build-btn' },
-  { title: 'Barracks', text: 'Open your Barracks (Barn) to view and upgrade your troops. Stronger troops = easier victories.', icon: '🛡️' },
+  { title: 'Barn', text: 'Open your Barn to view and upgrade your troops. Stronger troops = easier victories.', icon: '🛡️' },
   { title: 'Load Troops', text: 'Tap your Port → choose troops to load onto your ship. Each ship level adds a troop slot.', icon: '👥' },
 ];
 
