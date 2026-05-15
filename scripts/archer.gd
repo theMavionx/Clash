@@ -111,10 +111,10 @@ func _exit_tree() -> void:
 
 ## Advances the attack timer and fires an arrow when the timer expires.
 func _do_attack(delta: float) -> void:
-	if not _has_valid_target():
-		_find_next_target()
+	if _resume_chase_if_target_far():
 		return
 
+	_face_current_target()
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed

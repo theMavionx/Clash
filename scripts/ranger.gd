@@ -112,10 +112,10 @@ func _exit_tree() -> void:
 
 ## Advances the attack timer and fires a bolt at shoot_threshold into the animation.
 func _do_attack(delta: float) -> void:
-	if not _has_valid_target():
-		_find_next_target()
+	if _resume_chase_if_target_far():
 		return
 
+	_face_current_target()
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed
@@ -124,12 +124,9 @@ func _do_attack(delta: float) -> void:
 			anim_player.stop()
 			anim_player.play(attack_anim)
 
-	# Spawn bolt at the right moment in the animation
-	if not _shot_this_cycle and anim_player.is_playing() and anim_player.current_animation == attack_anim:
-		var anim_len = anim_player.current_animation_length
-		if anim_len > 0 and anim_player.current_animation_position / anim_len >= shoot_threshold:
-			_shot_this_cycle = true
-			_spawn_bolt()
+	if not _shot_this_cycle and attack_timer >= atk_speed * shoot_threshold:
+		_shot_this_cycle = true
+		_spawn_bolt()
 
 
 func _spawn_bolt() -> void:

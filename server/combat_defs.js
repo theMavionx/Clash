@@ -69,6 +69,11 @@ const LOOT_PERCENT = 0.15;
 const CANNON_INITIAL_ENERGY = 10;
 const CANNON_ENERGY_PER_DESTROY = 2;
 const CANNON_DAMAGE = 500;
+const CANNON_RELOAD_SEC = 1.0;
+const CANNON_SPEED = 1.2;
+const CANNON_MIN_FLIGHT_SEC = 1.5;
+const CANNON_START_POS = { x: -0.15186018, y: 0.2418113, z: 5.3458157 };
+const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
@@ -126,6 +131,11 @@ module.exports = {
   CANNON_INITIAL_ENERGY,
   CANNON_ENERGY_PER_DESTROY,
   CANNON_DAMAGE,
+  CANNON_RELOAD_SEC,
+  CANNON_SPEED,
+  CANNON_MIN_FLIGHT_SEC,
+  CANNON_START_POS,
+  CANNON_TARGET_Y,
   cannonShotCost,
   CANONICAL_GRID_CONFIG,
   CANONICAL_GRID_CONFIGS,

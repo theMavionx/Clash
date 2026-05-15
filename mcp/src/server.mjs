@@ -23,6 +23,18 @@ const SHIP_TROOP_COST = 100;
 const REINFORCE_COST = 50;
 const AI_ATTACK_SLOT_COUNT = 5;
 const AI_ATTACK_REPLAY_LABEL = 'AI AGENT ATTACK';
+const AI_CANNON_TARGET_TYPES = ['turret', 'archer_tower'];
+const AI_CANNON_DEFAULT_START_SEC = 4.0;
+const AI_CANNON_DEFAULT_STEP_SEC = (combat.CANNON_RELOAD_SEC || 1.0) + 0.1;
+
+function defaultCannonShotTime(index) {
+  return AI_CANNON_DEFAULT_START_SEC + index * AI_CANNON_DEFAULT_STEP_SEC;
+}
+
+function cannonShotTime(shot, index) {
+  const t = Number(shot?.t);
+  return Number.isFinite(t) ? t : defaultCannonShotTime(index);
+}
 
 function readSkill() {
   try { return fs.readFileSync(SKILL_PATH, 'utf8'); } catch { return ''; }
@@ -262,6 +274,7 @@ function normalizeTargetName(value) {
   const target = String(value || '').trim().toLowerCase();
   if (!target || target === 'auto') return 'town_hall';
   if (target === 'th') return 'town_hall';
+  if (target === 'defense_tower' || target === 'defense_towers') return 'strongest_defense';
   return target;
 }
 
@@ -275,17 +288,21 @@ function resolveBuildingTarget(selector = {}, defenderBuildings = []) {
 
   const targetType = normalizeTargetName(selector.target_type || selector.target);
   if (targetType === 'strongest_defense') {
-    const defenses = defenderBuildings.filter((b) => ['turret', 'archer_tower', 'tombstone'].includes(b.type));
+    const defenses = defenderBuildings.filter((b) => AI_CANNON_TARGET_TYPES.includes(b.type));
     return defenses.sort((a, b) => (b.level - a.level) || (b.hp - a.hp) || (a.id - b.id))[0] || null;
   }
   if (targetType === 'weakest_defense') {
-    const defenses = defenderBuildings.filter((b) => ['turret', 'archer_tower', 'tombstone'].includes(b.type));
+    const defenses = defenderBuildings.filter((b) => AI_CANNON_TARGET_TYPES.includes(b.type));
     return defenses.sort((a, b) => (a.hp - b.hp) || (b.level - a.level) || (a.id - b.id))[0] || null;
   }
 
   return defenderBuildings
     .filter((b) => b.type === targetType)
     .sort((a, b) => (b.level - a.level) || (b.hp - a.hp) || (a.id - b.id))[0] || null;
+}
+
+function isAiCannonTarget(building) {
+  return !!building && AI_CANNON_TARGET_TYPES.includes(building.type);
 }
 
 function resolveWorldPoint(selector = {}, defenderBuildings = []) {
@@ -332,11 +349,19 @@ function validateAiAttackEnergy(cannonShots = [], rallyMarker = null) {
   let energy = combat.CANNON_INITIAL_ENERGY;
   let shotNumber = 0;
   const sorted = [
-    ...cannonShots.map((shot, index) => ({ kind: 'shot', t: Number(shot.t ?? (4 + index * 0.8)) })),
+    ...cannonShots.map((shot, index) => ({ kind: 'shot', t: cannonShotTime(shot, index) })),
     ...(rallyMarker ? [{ kind: 'rally', t: Number(rallyMarker.t ?? 5.0) }] : []),
   ].sort((a, b) => a.t - b.t);
   let rallyCount = 0;
+  let lastShotT = -Infinity;
   for (const item of sorted) {
+    if (item.kind === 'shot') {
+      const reload = combat.CANNON_RELOAD_SEC || 1.0;
+      if (item.t + 0.0001 < lastShotT + reload) {
+        return { ok: false, error: `Cannon shots must be at least ${reload}s apart` };
+      }
+      lastShotT = item.t;
+    }
     const cost = item.kind === 'shot'
       ? combat.cannonShotCost(++shotNumber)
       : ++rallyCount;
@@ -651,11 +676,13 @@ function registerTools(server, session, agentKey) {
         max_ships: combat.MAX_SHIPS,
         cannon_initial_energy: combat.CANNON_INITIAL_ENERGY,
         cannon_shot_cost: 'shot number: 1, 2, 3...',
+        cannon_reload_sec: combat.CANNON_RELOAD_SEC,
+        cannon_damage_timing: 'damage applies on cannonball impact, not at launch',
+        cannon_targets: 'AI cannon shots should target defensive towers only: turret or archer_tower',
         rally_marker_cost: 'marker number: 1, 2, 3...',
         request_shape: {
           ships: [{ ship_index: 0, slot: 0, t: 0.2 }],
-          cannon_shots: [{ target_type: 'town_hall', t: 4.0 }],
-          rally_marker: { target_type: 'town_hall', t: 5.0, flight_time: 0.8 },
+          cannon_shots: [{ target_type: 'strongest_defense', t: 4.0 }, { target_type: 'weakest_defense', t: 5.1 }],
         },
       },
     })
@@ -743,8 +770,12 @@ function registerTools(server, session, agentKey) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
           return toolError(`Cannon target not found for shot ${i + 1}`);
         }
+        if (!isAiCannonTarget(target)) {
+          game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
+          return toolError(`AI cannon shots must target defensive towers only (turret or archer_tower), not ${target.type}`);
+        }
         actions.push({
-          t: Number.isFinite(Number(shot.t)) ? Number(shot.t) : 4.0 + i * 0.8,
+          t: cannonShotTime(shot, i),
           type: 'cannon_fire',
           buildingId: target.id,
         });

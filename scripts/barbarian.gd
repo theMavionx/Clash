@@ -37,11 +37,11 @@ func _setup_weapons() -> void:
 ## Advances the attack timer and deals damage once the axe animation passes
 ## hit_anim_threshold and the weapon is within hit_distance of the target.
 func _do_attack(delta: float) -> void:
-	if not _has_valid_target():
+	if _resume_chase_if_target_far():
 		_hit_this_swing = false
-		_find_next_target()
 		return
 
+	_face_current_target()
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed
@@ -50,13 +50,6 @@ func _do_attack(delta: float) -> void:
 			anim_player.stop()
 			anim_player.play(attack_anim)
 
-	# Hit only after animation passes threshold AND weapon is close
-	if not _hit_this_swing and _axe_attachment and _has_valid_target():
-		if anim_player.is_playing() and anim_player.current_animation == attack_anim:
-			var anim_len = anim_player.current_animation_length
-			if anim_len > 0 and anim_player.current_animation_position / anim_len >= hit_anim_threshold:
-				var axe_pos = _axe_attachment.global_position
-				var t_pos = _get_target_position()
-				if axe_pos.distance_to(t_pos) <= hit_distance:
-					_hit_this_swing = true
-					_deal_target_damage()
+	if not _hit_this_swing and attack_timer >= atk_speed * hit_anim_threshold:
+		_hit_this_swing = true
+		_deal_target_damage()

@@ -81,6 +81,13 @@ var _replay_buildings_snapshot: Array = []
 var _replay_duration: float = 0.0
 var _replay_elapsed: float = 0.0
 var _replay_timer_last_remaining: int = -1
+var _replay_telemetry: Array = []
+var _replay_telemetry_seq: int = 0
+var _replay_telemetry_dropped: int = 0
+var _replay_attacker_name: String = ""
+var _replay_label: String = ""
+var _replay_wall_start_msec: int = 0
+const REPLAY_TELEMETRY_MAX_EVENTS: int = 600
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -127,6 +134,12 @@ func reset() -> void:
 	_replay_duration = 0.0
 	_replay_elapsed = 0.0
 	_replay_timer_last_remaining = -1
+	_replay_telemetry.clear()
+	_replay_telemetry_seq = 0
+	_replay_telemetry_dropped = 0
+	_replay_attacker_name = ""
+	_replay_label = ""
+	_replay_wall_start_msec = 0
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = false
@@ -139,6 +152,86 @@ func _battle_elapsed_sec() -> float:
 	if _battle_start_time <= 0.0:
 		return maxf(0.0, _battle_timer)
 	return maxf(0.0, (Time.get_ticks_msec() / 1000.0) - _battle_start_time)
+
+
+func _replay_wall_elapsed_sec() -> float:
+	if _replay_wall_start_msec <= 0:
+		return 0.0
+	return maxf(0.0, float(Time.get_ticks_msec() - _replay_wall_start_msec) / 1000.0)
+
+
+func _replay_info() -> Dictionary:
+	var info: Dictionary = {
+		"battle_session_id": "",
+		"expected_result": "",
+		"expected_duration": _replay_duration,
+	}
+	for action in _replay_actions:
+		if not (action is Dictionary):
+			continue
+		var action_type: String = str(action.get("type", ""))
+		if action_type == "battle_start":
+			info.battle_session_id = str(action.get("battle_session_id", ""))
+		elif action_type == "battle_end":
+			info.expected_result = str(action.get("result", ""))
+			info.expected_duration = float(action.get("t", _replay_duration))
+	return info
+
+
+func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
+	if not _replay_active:
+		return
+	_replay_telemetry_seq += 1
+	if _replay_telemetry.size() >= REPLAY_TELEMETRY_MAX_EVENTS:
+		_replay_telemetry_dropped += 1
+		return
+	var event: Dictionary = {
+		"seq": _replay_telemetry_seq,
+		"t": snappedf(_replay_elapsed, 0.01),
+		"wall_t": snappedf(_replay_wall_elapsed_sec(), 0.01),
+		"kind": kind,
+	}
+	for key in data:
+		event[key] = data[key]
+	_replay_telemetry.append(event)
+
+
+func _replay_telemetry_summary() -> Dictionary:
+	var counts: Dictionary = {}
+	for event in _replay_telemetry:
+		var kind: String = str(event.get("kind", "unknown"))
+		counts[kind] = counts.get(kind, 0) + 1
+	var buildings_alive: Array = []
+	for bsys in bs._building_systems:
+		for b in bsys.placed_buildings:
+			buildings_alive.append({
+				"type": str(b.get("id", "")),
+				"server_id": int(b.get("server_id", -1)),
+				"hp": int(b.get("hp", 0)),
+			})
+	return {
+		"counts": counts,
+		"events_recorded": _replay_telemetry.size(),
+		"events_dropped": _replay_telemetry_dropped,
+		"troops_alive": BaseTroop._get_troops_cached().size(),
+		"guards_alive": BaseTroop._get_guards_list_cached().size(),
+		"buildings_alive": buildings_alive,
+	}
+
+
+func _send_replay_telemetry() -> void:
+	if not bs or not bs._bridge:
+		return
+	var info: Dictionary = _replay_info()
+	info.attacker_name = _replay_attacker_name
+	info.replay_label = _replay_label
+	info.actual_elapsed = snappedf(_replay_elapsed, 0.01)
+	info.actual_wall_elapsed = snappedf(_replay_wall_elapsed_sec(), 0.01)
+	bs._bridge.send_to_react("replay_telemetry", {
+		"replay": info,
+		"summary": _replay_telemetry_summary(),
+		"events": _replay_telemetry,
+	})
 
 
 func _record_battle_end(result: String) -> void:
@@ -950,7 +1043,7 @@ func _replay_wait(seconds: float) -> bool:
 	while left > 0.0 and _replay_active and is_instance_valid(bs):
 		var step: float = minf(0.25, left)
 		await bs.get_tree().create_timer(step).timeout
-		_replay_elapsed = minf(_replay_duration, _replay_elapsed + step)
+		_replay_elapsed += step
 		_send_replay_timer()
 		left -= step
 	return _replay_active and is_instance_valid(bs)
@@ -964,7 +1057,18 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	_replay_duration = _resolve_replay_duration(duration, _replay_actions)
 	_replay_elapsed = 0.0
 	_replay_timer_last_remaining = -1
+	_replay_telemetry.clear()
+	_replay_telemetry_seq = 0
+	_replay_telemetry_dropped = 0
+	_replay_attacker_name = attacker_name
+	_replay_label = replay_label
+	_replay_wall_start_msec = Time.get_ticks_msec()
 	enemy_info = {"name": attacker_name, "trophies": 0, "buildings": buildings_snapshot}
+	record_replay_telemetry("replay_start", {
+		"attacker_name": attacker_name,
+		"replay_label": replay_label,
+		"duration": _replay_duration,
+	})
 	for bsys in bs._building_systems:
 		bsys._production._hide_all_collect_icons()
 		# Deselect any home-side building before flipping to enemy view —
@@ -1092,6 +1196,8 @@ func _replay_playback() -> void:
 	Engine.time_scale = 1.0
 	_clear_replay_timer()
 	if _replay_active and bs._bridge:
+		record_replay_telemetry("replay_end", {"elapsed": snappedf(_replay_elapsed, 0.01)})
+		_send_replay_telemetry()
 		bs._bridge.send_to_react("battle_result", {"type": "replay_end", "reason": "Replay finished"})
 	_replay_active = false
 

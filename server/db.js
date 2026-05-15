@@ -126,6 +126,29 @@ try {
   `);
 } catch (e) { console.warn('[db] client_logs migration:', e.message); }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS replay_telemetry (
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id           TEXT REFERENCES players(id) ON DELETE SET NULL,
+      battle_session_id   TEXT,
+      replay_label        TEXT,
+      attacker_name       TEXT,
+      expected_result     TEXT,
+      expected_duration   REAL,
+      actual_elapsed      REAL,
+      actual_wall_elapsed REAL,
+      summary             TEXT,
+      events              TEXT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_replay_telemetry_recent ON replay_telemetry(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_replay_telemetry_player_recent ON replay_telemetry(player_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_replay_telemetry_session ON replay_telemetry(battle_session_id);
+  `);
+} catch (e) { console.warn('[db] replay_telemetry migration:', e.message); }
+try { db.exec(`ALTER TABLE replay_telemetry ADD COLUMN actual_wall_elapsed REAL`); } catch {}
+
 // Tournaments — admin-curated competitions per DEX. While a player is
 // joined ("active in tournament"), their main `players.trophies` is
 // FROZEN (reads still happen, writes from battle/quest paths skip them

@@ -15,6 +15,8 @@ const {
   TROOP_STATS, DEFENSE_STATS, SKELETON_GUARD,
   MAX_SHIPS, TROOPS_PER_SHIP, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   CANNON_DAMAGE, CANNON_INITIAL_ENERGY, CANNON_ENERGY_PER_DESTROY,
+  CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
+  CANNON_START_POS, CANNON_TARGET_Y,
   cannonShotCost, VALID_TROOP_TYPES,
 } = require('./combat_defs');
 const { BUILDING_DEFS } = require('./db');
@@ -51,6 +53,21 @@ function distSq2d(ax, az, bx, bz) {
 
 function dist2d(ax, az, bx, bz) {
   return Math.sqrt(distSq2d(ax, az, bx, bz));
+}
+
+function dist3d(ax, ay, az, bx, by, bz) {
+  const dx = ax - bx;
+  const dy = ay - by;
+  const dz = az - bz;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+function cannonFlightTime(target) {
+  const dist = dist3d(
+    CANNON_START_POS.x, CANNON_START_POS.y, CANNON_START_POS.z,
+    target.x, CANNON_TARGET_Y, target.z
+  );
+  return Math.max(dist / CANNON_SPEED, CANNON_MIN_FLIGHT_SEC);
 }
 
 function moveToward(entity, tx, tz, speed, dt) {
@@ -299,9 +316,12 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
   let nextTroopId = 0;
   let shipsPlaced = 0;
   const pendingSpawns = [];
+  const pendingCannonballs = [];
 
   let cannonEnergy = CANNON_INITIAL_ENERGY;
   let cannonShotsFired = 0;
+  let cannonEventsIgnored = 0;
+  let cannonReadyAt = 0;
   let rallyDropsUsed = 0;
   let rallyFocus = null;
   let rallyEventsAccepted = 0;
@@ -390,12 +410,26 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       }
 
       if (act.type === 'cannon_fire') {
-        cannonShotsFired++;
-        cannonEnergy -= cannonShotCost(cannonShotsFired);
+        if (time + 0.0001 < cannonReadyAt) {
+          cannonEventsIgnored++;
+          continue;
+        }
+        const cost = cannonShotCost(cannonShotsFired + 1);
+        if (cannonEnergy < cost) {
+          cannonEventsIgnored++;
+          continue;
+        }
         const target = buildings.find(b => b.id === act.buildingId && b.hp > 0);
         if (target) {
-          target.hp -= CANNON_DAMAGE;
-          if (target.hp <= 0) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+          cannonShotsFired++;
+          cannonEnergy -= cost;
+          cannonReadyAt = time + CANNON_RELOAD_SEC;
+          pendingCannonballs.push({
+            time: time + cannonFlightTime(target),
+            target,
+          });
+        } else {
+          cannonEventsIgnored++;
         }
       }
 
@@ -453,6 +487,18 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           _currentTarget: null,      // sticky target ref
           _currentTargetIsGuard: false,
         });
+      }
+    }
+
+    // Ship cannonballs apply damage only on impact, matching BSCannon.
+    for (let i = pendingCannonballs.length - 1; i >= 0; i--) {
+      if (pendingCannonballs[i].time <= time) {
+        const shot = pendingCannonballs.splice(i, 1)[0];
+        const target = shot.target;
+        if (target && target.hp > 0) {
+          target.hp -= CANNON_DAMAGE;
+          if (target.hp <= 0 && target.type) cannonEnergy += CANNON_ENERGY_PER_DESTROY;
+        }
       }
     }
 
@@ -779,7 +825,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     if (thCheck && thCheck.hp <= 0) break;
 
     const anyAlive = aliveTroops.length > 0;
-    if (!anyAlive && pendingSpawns.length === 0 && actionIdx >= sortedActions.length) break;
+    if (!anyAlive && pendingSpawns.length === 0 && pendingCannonballs.length === 0 && actionIdx >= sortedActions.length) break;
 
     time += TICK_DT;
   }
@@ -804,6 +850,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     _guardsAlive: guards.filter(g => g.hp > 0).length,
     _totalProjectilesFired: projectiles.length,
     _pendingSpawnsLeft: pendingSpawns.length,
+    _pendingCannonballsLeft: pendingCannonballs.length,
+    _cannonShotsAccepted: cannonShotsFired,
+    _cannonEventsIgnored: cannonEventsIgnored,
     _rallyDropsUsed: rallyDropsUsed,
     _rallyEventsAccepted: rallyEventsAccepted,
     _rallyEventsIgnored: rallyEventsIgnored,

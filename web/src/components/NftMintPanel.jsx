@@ -809,6 +809,7 @@ function NftMintPanel({ onClose }) {
               <GameResourcesTab
                 products={gameProducts}
                 ready={gameShopReady}
+                loading={gameShopConfig === null}
                 evmAddress={evmAddress}
                 evmOnBase={evmOnBase}
                 busy={busy}
@@ -854,7 +855,7 @@ function NftMintPanel({ onClose }) {
   );
 }
 
-function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConnectBase, onBuy }) {
+function GameResourcesTab({ products, ready, loading, evmAddress, evmOnBase, busy, onConnectBase, onBuy }) {
   const { isMobile } = useLayout();
   // On mobile keep the labels short — "Connect Base" + "Buy with CoP" wrap
   // onto two lines inside the chrome-y green pill and the card looks
@@ -862,6 +863,27 @@ function GameResourcesTab({ products, ready, evmAddress, evmOnBase, busy, onConn
   const connectLabel = evmAddress && !evmOnBase
     ? (isMobile ? 'Switch' : 'Switch Base')
     : (isMobile ? 'Connect' : 'Connect Base');
+
+  // Skeleton while /api/shop/config is in flight (initial mount, ~500ms-2s
+  // depending on network). Without this the user sees only the "Game
+  // resources" header for the duration and has no signal that anything
+  // is happening — easy to mistake for an empty/broken panel.
+  if (loading) {
+    return (
+      <>
+        <div style={styles.sectionHeader}>
+          <span style={styles.sectionHeaderText}>Game resources</span>
+          <span style={styles.sectionHeaderHint}>Loading…</span>
+        </div>
+        <div style={styles.resourceGrid}>
+          {[0, 1, 2].map((i) => (
+            <ResourceCardSkeleton key={i} isMobile={isMobile} />
+          ))}
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <div style={styles.sectionHeader}>
@@ -945,6 +967,38 @@ function ResourceProductIcon({ product }) {
   // 128% — a 76px shield reads roughly the same on the row.
   if (product.kind === 'shield') return <ShieldGlyph size={76} />;
   return <ResourceGlyph size={76} />;
+}
+
+function ResourceCardSkeleton({ isMobile }) {
+  const cardStyle = {
+    ...styles.resourceCard,
+    ...(isMobile ? styles.resourceCardMobile : null),
+  };
+  const iconWrapStyle = {
+    ...styles.resourceIconWrap,
+    ...(isMobile ? styles.resourceIconWrapMobile : null),
+  };
+  const btnStyle = {
+    ...styles.resourceBuyBtn,
+    ...(isMobile ? styles.resourceBuyBtnMobile : null),
+    background: 'linear-gradient(90deg, #e6d9b7 0%, #f0e4c4 50%, #e6d9b7 100%)',
+    backgroundSize: '200% 100%',
+    color: 'transparent',
+    border: '3px solid #d4c8b0',
+  };
+  return (
+    <div style={cardStyle}>
+      <div style={iconWrapStyle}>
+        <div style={styles.resourceSkeletonBlock} className="nft-shop-shimmer" />
+      </div>
+      <div style={{ ...styles.resourceInfo, ...(isMobile ? styles.resourceInfoMobile : null) }}>
+        <div style={{ ...styles.resourceSkeletonLine, width: '60%' }} className="nft-shop-shimmer" />
+        <div style={{ ...styles.resourceSkeletonLine, width: '85%', height: 10 }} className="nft-shop-shimmer" />
+        <div style={{ ...styles.resourceSkeletonLine, width: '40%', height: 10, marginTop: 4 }} className="nft-shop-shimmer" />
+      </div>
+      <button type="button" disabled style={btnStyle} className="nft-shop-shimmer">…</button>
+    </div>
+  );
 }
 
 function ShieldGlyph({ size = 48 }) {
@@ -1612,6 +1666,24 @@ const MINT_ANIM_CSS = `
   /* Bare variants for the shop overlay — transform only, no card chrome
      (background / border / box-shadow) baked into the animation, so the
      icon floats freely without the golden frame the NFT card uses. */
+  /* Shop loading skeleton — moves a soft highlight across the placeholder
+     blocks so the user sees the panel is alive, not stalled. Used while
+     /api/shop/config is in flight (initial mount, before products land). */
+  @keyframes nft-shop-shimmer {
+    0%   { background-position: -150% 0; }
+    100% { background-position: 250% 0; }
+  }
+  .nft-shop-shimmer {
+    background-image: linear-gradient(
+      90deg,
+      rgba(212, 200, 176, 0.55) 0%,
+      rgba(255, 248, 223, 0.95) 50%,
+      rgba(212, 200, 176, 0.55) 100%
+    );
+    background-size: 200% 100%;
+    animation: nft-shop-shimmer 1.4s ease-in-out infinite;
+  }
+
   @keyframes nft-mint-bare-pulse {
     0%, 100% { transform: scale(1); }
     50%      { transform: scale(1.06); }
@@ -1962,6 +2034,18 @@ const styles = {
     width: 72,
     height: 72,
     gridArea: 'icon',
+  },
+  resourceSkeletonBlock: {
+    width: '80%',
+    height: '80%',
+    borderRadius: 12,
+    background: 'rgba(212, 200, 176, 0.55)',
+  },
+  resourceSkeletonLine: {
+    height: 12,
+    borderRadius: 6,
+    background: 'rgba(212, 200, 176, 0.55)',
+    marginBottom: 4,
   },
   resourceIconImg: {
     width: '128%',

@@ -127,6 +127,7 @@ var _last_hp_band: int = -1  # cache to skip redundant color updates
 var _retarget_counter: int = 0
 ## Guard threat radius multiplier — guards within this * attack_range trigger immediate switch
 const GUARD_THREAT_MULT: float = 1.5
+const ATTACK_MAX_RANGE_MULT: float = 2.0
 
 ## Pre-allocated HP bar colors — avoids Color allocation every frame
 static var _HP_COLORS: Array = [
@@ -327,6 +328,7 @@ func activate() -> void:
 	state = State.IDLE
 	add_to_group("troops")
 	_create_hp_bar()
+	_record_replay_telemetry("troop_spawn", {})
 	_find_next_target()
 
 
@@ -562,6 +564,7 @@ func _apply_rally_target() -> bool:
 			target_building = {}
 			target_bs = null
 			_orbit_angle = 0.0
+			_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -578,6 +581,7 @@ func _apply_rally_target() -> bool:
 			target_bs = _rally_target_bs
 			target_guard = null
 			_orbit_angle = 0.0
+			_record_replay_telemetry("target_switch", _building_target_payload(target_building))
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -617,6 +621,7 @@ func _find_alternative_target() -> void:
 		target_bs = second_bs
 		target_guard = null
 		_orbit_angle = 0.0
+		_record_replay_telemetry("target_switch", _building_target_payload(target_building))
 		state = State.RUNNING
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -673,6 +678,7 @@ func _find_next_target() -> void:
 			target_building = {}
 			target_bs = null
 			_orbit_angle = 0.0
+			_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -683,6 +689,7 @@ func _find_next_target() -> void:
 			target_bs = nearest_bs_ref
 			target_guard = null
 			_orbit_angle = 0.0
+			_record_replay_telemetry("target_switch", _building_target_payload(target_building))
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -723,6 +730,7 @@ func _check_guard_threat() -> void:
 		target_building = {}
 		target_bs = null
 		_orbit_angle = 0.0
+		_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
 		state = State.RUNNING
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -755,6 +763,7 @@ func take_damage(dmg: int) -> void:
 	hp -= dmg
 	if hp <= 0:
 		_is_dead = true
+		_record_replay_telemetry("troop_death", {"damage": dmg})
 		if is_in_group("troops"):
 			remove_from_group("troops")
 		_report_death()
@@ -793,6 +802,41 @@ func _get_troop_name() -> String:
 	return ""
 
 
+func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
+	var payload: Dictionary = data.duplicate(true)
+	payload.troop = _get_troop_name()
+	payload.level = level
+	payload.hp = hp
+	payload.x = snappedf(global_position.x, 0.001)
+	payload.z = snappedf(global_position.z, 0.001)
+	for bs_node in _get_building_systems_cached():
+		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
+			bs_node.record_replay_telemetry(kind, payload)
+			return
+
+
+func _building_target_payload(b: Dictionary) -> Dictionary:
+	return {
+		"target_kind": "building",
+		"target_type": str(b.get("id", "")),
+		"target_server_id": int(b.get("server_id", -1)),
+		"target_hp": int(b.get("hp", 0)),
+	}
+
+
+func _guard_target_payload(guard: Node3D) -> Dictionary:
+	var target_payload: Dictionary = {
+		"target_kind": "guard",
+		"target_instance": int(guard.get_instance_id()) if is_instance_valid(guard) else -1,
+	}
+	if is_instance_valid(guard):
+		var guard_hp: Variant = guard.get("hp")
+		target_payload.target_hp = int(guard_hp) if guard_hp != null else -1
+		target_payload.target_x = snappedf(guard.global_position.x, 0.001)
+		target_payload.target_z = snappedf(guard.global_position.z, 0.001)
+	return target_payload
+
+
 func _has_valid_target() -> bool:
 	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree():
 		return true
@@ -805,6 +849,35 @@ func _get_target_position() -> Vector3:
 	if target_building.size() > 0 and is_instance_valid(target_building.get("node")):
 		return target_building.get("node").global_position
 	return global_position
+
+
+func _target_flat_distance() -> float:
+	var target_pos: Vector3 = _get_target_position()
+	var dx: float = target_pos.x - global_position.x
+	var dz: float = target_pos.z - global_position.z
+	return sqrt(dx * dx + dz * dz)
+
+
+func _resume_chase_if_target_far() -> bool:
+	if not _has_valid_target():
+		_find_next_target()
+		return true
+	if _target_flat_distance() > attack_range * ATTACK_MAX_RANGE_MULT:
+		state = State.RUNNING
+		if anim_player and anim_player.has_animation("Running_A"):
+			anim_player.play("Running_A")
+		return true
+	return false
+
+
+func _face_current_target() -> void:
+	var target_pos: Vector3 = _get_target_position()
+	var to_target: Vector3 = target_pos - global_position
+	to_target.y = 0
+	if to_target.length_squared() > 0.001:
+		var face_dir: Vector3 = to_target.normalized()
+		look_at(global_position + face_dir, Vector3.UP)
+		rotate_y(PI)
 
 
 func _deal_target_damage() -> void:
@@ -913,8 +986,7 @@ func _check_stuck(delta: float, my_angle: float) -> void:
 		if moved < move_speed * 0.02:
 			_orbit_angle += 0.8
 			if _orbit_angle > my_angle + TAU:
-				_find_alternative_target()
-				_orbit_angle = 0.0
+				_orbit_angle = my_angle
 		else:
 			_orbit_angle = lerpf(_orbit_angle, my_angle, 0.3)
 		_last_pos = global_position

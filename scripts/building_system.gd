@@ -438,6 +438,21 @@ var _replay_active: bool:
 	set(v):
 		if _battle: _battle._replay_active = v
 
+func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
+	if _battle and _battle._replay_active:
+		_battle.record_replay_telemetry(kind, data)
+		return
+	var systems: Array = _building_systems
+	if systems.is_empty() and is_inside_tree():
+		systems = get_tree().get_nodes_in_group("building_systems")
+	for bs_node in systems:
+		if not is_instance_valid(bs_node) or bs_node == self:
+			continue
+		var battle_helper: BSBattle = bs_node.get("_battle")
+		if battle_helper and battle_helper._replay_active:
+			battle_helper.record_replay_telemetry(kind, data)
+			return
+
 # ── Ship cannon (proxied to _cannon helper) ──────────────────
 var _ship_cannon_mode: bool:
 	get: return _cannon._ship_cannon_mode if _cannon else false
@@ -3094,6 +3109,14 @@ func remove_building(b: Dictionary) -> void:
 	var idx: int = placed_buildings.find(b)
 	if idx < 0:
 		return
+	if _replay_active:
+		record_replay_telemetry("building_destroyed", {
+			"type": str(b.get("id", "")),
+			"server_id": int(b.get("server_id", -1)),
+			"grid_x": int(b.get("grid_pos", Vector2i.ZERO).x),
+			"grid_z": int(b.get("grid_pos", Vector2i.ZERO).y),
+			"hp": int(b.get("hp", 0)),
+		})
 	# Town Hall destroyed during attack → explode TH first, then chain-destroy remaining
 	# Skip during replay — replay handles its own end screen
 	if b.id == "town_hall" and is_viewing_enemy and not _replay_active:

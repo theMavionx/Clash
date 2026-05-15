@@ -18,6 +18,25 @@ function shallowEqualObject(a, b) {
   return aKeys.every(key => a[key] === b[key]);
 }
 
+function postReplayTelemetry(data, tokenOverride = null) {
+  const token = tokenOverride || window._playerToken;
+  if (!token) {
+    return false;
+  }
+  fetch('/api/replay-telemetry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-token': token },
+    body: JSON.stringify(data || {}),
+    keepalive: true,
+  }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.info('[replay_telemetry] stored', data?.replay || {}, data?.summary || {});
+  }).catch((err) => {
+    console.warn('[replay_telemetry] failed', err?.message || err);
+  });
+  return true;
+}
+
 export function GodotProvider({ children }) {
   const [ready, setReady] = useState(false);
   const [playerState, setPlayerState] = useState(null);
@@ -55,6 +74,15 @@ export function GodotProvider({ children }) {
   // previous account's tutorial flags (0xFF if previous one was completed),
   // so new-account tutorials would never appear.
   const tutorialTokenRef = useRef(null);
+  const playerTokenRef = useRef(null);
+  const replayTelemetryQueueRef = useRef([]);
+
+  const flushReplayTelemetryQueue = useCallback(() => {
+    const token = playerTokenRef.current || window._playerToken;
+    if (!token || replayTelemetryQueueRef.current.length === 0) return;
+    const queued = replayTelemetryQueueRef.current.splice(0);
+    queued.forEach((item) => postReplayTelemetry(item, token));
+  }, []);
 
   useEffect(() => {
     const handleGodotMessage = (msg) => {
@@ -69,8 +97,22 @@ export function GodotProvider({ children }) {
             if (shallowEqualObject(next, prev)) return prev;
             return next;
           });
-          if (data.token) {
-            window._playerToken = data.token;
+          if (Object.prototype.hasOwnProperty.call(data, 'token')) {
+            if (data.token) {
+              window._playerToken = data.token;
+              playerTokenRef.current = data.token;
+              flushReplayTelemetryQueue();
+            } else {
+              // Logout (js_bridge emits empty token on _do_logout). Do not
+              // clear the token for ordinary state patches that omit `token`,
+              // such as building sync messages during replay playback.
+              window._playerToken = null;
+              playerTokenRef.current = null;
+              tutorialTokenRef.current = null;
+              setTutorialFlags(0xFF);
+              setTutorialPhase(null);
+              break;
+            }
             // Fetch tutorial progress per-token (Godot bridge doesn't include it).
             // Re-fetch when the token CHANGES so logout→register and account
             // switches hydrate the new account's flags; a plain "once" gate
@@ -118,14 +160,6 @@ export function GodotProvider({ children }) {
                 });
               })
               .catch(() => {});
-          } else {
-            // Logout (js_bridge emits empty token on _do_logout). Clear the
-            // guard + reset tutorial state so the next account's token starts
-            // fresh rather than inheriting whatever was on screen last.
-            window._playerToken = null;
-            tutorialTokenRef.current = null;
-            setTutorialFlags(0xFF);
-            setTutorialPhase(null);
           }
           break;
         case 'resources':
@@ -190,6 +224,13 @@ export function GodotProvider({ children }) {
           setBattleTimer(null);
           if (data.casualties && Object.values(data.casualties).some(c => c > 0)) {
             setPendingCasualties(data.casualties);
+          }
+          break;
+        case 'replay_telemetry':
+          if (!postReplayTelemetry(data, playerTokenRef.current || window._playerToken)) {
+            replayTelemetryQueueRef.current.push(data);
+            if (replayTelemetryQueueRef.current.length > 20) replayTelemetryQueueRef.current.shift();
+            console.warn('[replay_telemetry] queued: no player token yet', data?.replay || {});
           }
           break;
         case 'battle_timer':

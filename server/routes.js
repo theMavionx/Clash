@@ -1159,8 +1159,8 @@ const insertClientLogBatch = db.db.transaction((rows) => {
 const insertReplayTelemetry = db.db.prepare(`
   INSERT INTO replay_telemetry
     (player_id, battle_session_id, replay_label, attacker_name, expected_result,
-     expected_duration, actual_elapsed, summary, events)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     expected_duration, actual_elapsed, actual_wall_elapsed, summary, events)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 function clampText(v, max) {
@@ -1255,6 +1255,7 @@ router.post('/replay-telemetry', (req, res) => {
       clampText(info.expected_result || body.expected_result, 32),
       Number(info.expected_duration ?? body.expected_duration ?? 0) || 0,
       Number(info.actual_elapsed ?? body.actual_elapsed ?? 0) || 0,
+      Number(info.actual_wall_elapsed ?? body.actual_wall_elapsed ?? 0) || 0,
       clampText(body.summary || {}, 32_000),
       clampText(body.events || [], 250_000)
     );

@@ -7,8 +7,7 @@ extends Node3D
 signal died(guard: Node3D)
 
 const BLADE_SCENE = "res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf"
-const HIT_ANIM_THRESHOLD = 0.4
-const HIT_DISTANCE = 0.2
+const HIT_DELAY_RATIO = 0.4
 const ATTACK_ANIM = "Melee_1H_Attack_Chop"
 
 const ANIM_FILES = [
@@ -92,6 +91,7 @@ func _ready() -> void:
 	_setup_animations()
 	_setup_weapon()
 	_create_hp_bar()
+	_record_replay_telemetry("guard_spawn", {})
 	_pick_idle_wait()
 
 
@@ -131,6 +131,7 @@ func _do_idle(delta: float) -> void:
 	var enemy: Node3D = _find_nearest_enemy()
 	if enemy:
 		_target_troop = enemy
+		_record_replay_telemetry("guard_target_acquired", _troop_target_payload(enemy))
 		state = State.CHASE
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -200,6 +201,7 @@ func _do_patrol(delta: float) -> void:
 	var enemy: Node3D = _find_nearest_enemy()
 	if enemy:
 		_target_troop = enemy
+		_record_replay_telemetry("guard_target_acquired", _troop_target_payload(enemy))
 		state = State.CHASE
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -243,7 +245,7 @@ func _do_chase(delta: float) -> void:
 		return
 
 	# If target troop moved too far from tombstone, give up and return
-	var troop_dist_to_tomb = _target_troop.global_position.distance_to(tombstone_pos)
+	var troop_dist_to_tomb = _flat_distance(_target_troop.global_position, tombstone_pos)
 	if troop_dist_to_tomb > detection_radius * 2.0:
 		_target_troop = null
 		_pick_idle_wait()
@@ -259,8 +261,10 @@ func _do_chase(delta: float) -> void:
 		rotate_y(PI)
 		var move_vec: Vector3 = dir * move_speed * delta
 		move_vec += _compute_separation(dir, delta)
-		move_vec += _compute_building_avoidance(delta)
-		global_position += move_vec
+		var new_pos: Vector3 = global_position + move_vec
+		if _flat_distance(new_pos, _target_troop.global_position) > dist:
+			new_pos = global_position + dir * move_speed * delta
+		global_position = new_pos
 
 	if dist <= attack_range:
 		state = State.ATTACK
@@ -289,14 +293,16 @@ func _do_attack(delta: float) -> void:
 		look_at(global_position + dir, Vector3.UP)
 		rotate_y(PI)
 
-	# Separation while attacking
+	# Light separation while attacking, but keep combat logic deterministic.
+	# The server simulation does not use weapon-bone reach or building push here.
 	var sep: Vector3 = _compute_separation(diff.normalized() if diff.length() > 0.01 else Vector3.FORWARD, delta)
-	sep += _compute_building_avoidance(delta)
 	if sep.length() > 0.001:
-		global_position += sep
+		var new_pos: Vector3 = global_position + sep
+		if _flat_distance(new_pos, _target_troop.global_position) <= attack_range * 1.2:
+			global_position = new_pos
 
 	# If target moved out of range, chase again
-	if diff.length() > attack_range * 1.5:
+	if _flat_distance(global_position, _target_troop.global_position) > attack_range * 1.5:
 		state = State.CHASE
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -310,23 +316,17 @@ func _do_attack(delta: float) -> void:
 			anim_player.stop()
 			anim_player.play(ATTACK_ANIM)
 
-	# Hit check at animation threshold
-	if not _hit_this_swing and _blade_attachment and is_instance_valid(_target_troop):
-		if anim_player.is_playing() and anim_player.current_animation == ATTACK_ANIM:
-			var anim_len: float = anim_player.current_animation_length
-			if anim_len > 0 and anim_player.current_animation_position / anim_len >= HIT_ANIM_THRESHOLD:
-				var blade_pos: Vector3 = _blade_attachment.global_position
-				var troop_pos: Vector3 = _target_troop.global_position
-				if blade_pos.distance_to(troop_pos) <= HIT_DISTANCE:
-					_hit_this_swing = true
-					if _target_troop.has_method("take_damage"):
-						_target_troop.take_damage(damage)
-					if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
-						_target_troop = null
-						if _are_all_troops_dead():
-							_trigger_victory_all()
-						else:
-							_pick_idle_wait()
+	if not _hit_this_swing and _attack_timer >= atk_speed * HIT_DELAY_RATIO:
+		_hit_this_swing = true
+		if is_instance_valid(_target_troop) and _flat_distance(global_position, _target_troop.global_position) <= attack_range * 1.5:
+			if _target_troop.has_method("take_damage"):
+				_target_troop.take_damage(damage)
+			if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
+				_target_troop = null
+				if _are_all_troops_dead():
+					_trigger_victory_all()
+				else:
+					_pick_idle_wait()
 
 
 ## Applies [param dmg] hit points of damage to this guard.
@@ -334,6 +334,7 @@ func _do_attack(delta: float) -> void:
 func take_damage(dmg: int) -> void:
 	hp -= dmg
 	if hp <= 0:
+		_record_replay_telemetry("guard_death", {"damage": dmg})
 		if is_in_group("skeleton_guards"):
 			remove_from_group("skeleton_guards")
 		died.emit(self)
@@ -377,11 +378,44 @@ func _find_nearest_enemy() -> Node3D:
 	for troop in BaseTroop._get_troops_cached():
 		if not is_instance_valid(troop):
 			continue
-		var d = troop.global_position.distance_to(tombstone_pos)
+		var d = _flat_distance(troop.global_position, tombstone_pos)
 		if d < nearest_dist:
 			nearest_dist = d
 			nearest = troop
 	return nearest
+
+
+func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
+	var payload: Dictionary = data.duplicate(true)
+	payload.guard_instance = int(get_instance_id())
+	payload.hp = hp
+	payload.x = snappedf(global_position.x, 0.001)
+	payload.z = snappedf(global_position.z, 0.001)
+	payload.tomb_x = snappedf(tombstone_pos.x, 0.001)
+	payload.tomb_z = snappedf(tombstone_pos.z, 0.001)
+	for bs_node in BaseTroop._get_building_systems_cached():
+		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
+			bs_node.record_replay_telemetry(kind, payload)
+			return
+
+
+func _troop_target_payload(troop: Node3D) -> Dictionary:
+	var payload: Dictionary = {
+		"target_instance": int(troop.get_instance_id()) if is_instance_valid(troop) else -1,
+	}
+	if is_instance_valid(troop):
+		var script_res: Script = troop.get_script()
+		payload.target_type = script_res.resource_path.get_file().get_basename() if script_res else ""
+		payload.target_hp = int(troop.get("hp")) if troop.get("hp") != null else -1
+		payload.target_x = snappedf(troop.global_position.x, 0.001)
+		payload.target_z = snappedf(troop.global_position.z, 0.001)
+	return payload
+
+
+func _flat_distance(a: Vector3, b: Vector3) -> float:
+	var dx: float = a.x - b.x
+	var dz: float = a.z - b.z
+	return sqrt(dx * dx + dz * dz)
 
 
 # ── Separation & building avoidance (same logic as BaseTroop) ─
