@@ -570,6 +570,20 @@ func _switch_to_enemy_island_after_sail() -> void:
 func _return_home() -> void:
 	if not is_viewing_enemy:
 		return
+	# Surrender — record it so the matchmaker's 24h personal cooldown excludes
+	# this defender from the next Find Enemy. We deliberately DON'T submit a
+	# full battle_replays row (no replay payload, no trophy/loot transfer);
+	# the server's lightweight /battle/surrender endpoint just stamps the
+	# battle_session row. Skipped on victory return-home or replay playback.
+	if not _replay_active and not _victory_declared:
+		var net_surrender: Node = bs._net
+		var def_id_surrender: String = enemy_info.get("id", "")
+		var sid_surrender: String = str(enemy_info.get("battle_session_id", ""))
+		if net_surrender and net_surrender.has_token() and def_id_surrender != "" and net_surrender.has_method("submit_surrender"):
+			_victory_declared = true  # block _force_defeat / check_defeat from firing
+			_record_battle_end("surrendered")
+			# Fire-and-forget: don't block return-home animation on the round-trip.
+			net_surrender.submit_surrender(def_id_surrender, sid_surrender)
 	_replay_active = false
 	_battle_timer_active = false
 	_battle_timer = 0.0

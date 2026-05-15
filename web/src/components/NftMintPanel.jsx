@@ -916,8 +916,11 @@ function ResourceProductIcon({ product }) {
   if (customIcon) {
     return <img src={customIcon} alt="" style={styles.resourceIconImg} />;
   }
-  if (product.kind === 'shield') return <ShieldGlyph size={48} />;
-  return <ResourceGlyph size={48} />;
+  // SVG glyphs render at their nominal size, so push the shield closer to
+  // the visual weight of the chest/pack PNGs which fill the 92px wrap at
+  // 128% — a 76px shield reads roughly the same on the row.
+  if (product.kind === 'shield') return <ShieldGlyph size={76} />;
+  return <ResourceGlyph size={76} />;
 }
 
 function ShieldGlyph({ size = 48 }) {
@@ -1917,20 +1920,16 @@ const styles = {
   resourceIconWrap: {
     width: 92,
     height: 92,
-    borderRadius: 16,
-    background: '#e8dfc8',
-    border: '2px solid #c2ae83',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
   },
   resourceIconImg: {
     width: '128%',
     height: '128%',
     objectFit: 'contain',
     display: 'block',
-    transform: 'translateY(2%)',
+    filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.25))',
   },
   resourceInfo: {
     minWidth: 0,

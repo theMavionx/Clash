@@ -1862,6 +1862,18 @@ router.post('/troops/:type/upgrade', auth, (req, res) => {
 
 // ==================== MATCHMAKING ====================
 
+// Surrender — lightweight battle exit. Doesn't write a battle_replays row,
+// doesn't move trophies or loot; just stamps the matchmaker cooldown so
+// /find-enemy excludes this defender from this attacker's pool for 24h.
+router.post('/battle/surrender', auth, (req, res) => {
+  const defenderId = String(req.body?.defender_id || '').trim();
+  if (!defenderId) return res.status(400).json({ error: 'defender_id required' });
+  if (defenderId === req.player.id) return res.status(400).json({ error: 'Cannot surrender to yourself' });
+  const sessionId = String(req.body?.battle_session_id || req.body?.session_id || '').trim();
+  const stamped = db.markSurrender(req.player.id, defenderId, sessionId);
+  res.json({ ok: true, stamped, cooldown_hours: 24 });
+});
+
 // Find enemy with closest trophies
 router.get('/find-enemy', auth, (req, res) => {
   // Pre-flight: player must have a port with a ship loaded with troops

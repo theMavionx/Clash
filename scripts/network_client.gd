@@ -273,6 +273,16 @@ func submit_battle_result(defender_id: String, actions: Array, result: String, c
 	return await _http_post("/attack/result", payload)
 
 
+## Lightweight surrender — no replay, no trophy/loot transfer; just stamps the
+## battle_session so the server's matchmaker excludes this defender from this
+## attacker's Find Enemy pool for the next 24 hours.
+func submit_surrender(defender_id: String, battle_session_id: String = "") -> Dictionary:
+	var payload: Dictionary = {"defender_id": defender_id}
+	if battle_session_id != "":
+		payload["battle_session_id"] = battle_session_id
+	return await _http_post("/battle/surrender", payload)
+
+
 func remove_building(building_id: int) -> Dictionary:
 	var http = HTTPRequest.new()
 	add_child(http)

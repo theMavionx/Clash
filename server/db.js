@@ -60,6 +60,11 @@ try { db.exec(`ALTER TABLE players ADD COLUMN shield_until TEXT`); } catch {}
 // Attack cooldown: prevent re-attacking same player
 try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_by TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN last_attacked_at TEXT`); } catch {}
+// Surrender stamp: when an attacker bails on a battle without finishing it,
+// we record the surrender on their session row (instead of writing a fake
+// battle_replays entry). The matchmaker reads this column to enforce the
+// 24h personal cooldown on surrendered defenders.
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
 // Tutorial progress: bitmask of completed tutorial phases
 try { db.exec(`ALTER TABLE players ADD COLUMN tutorial_flags INTEGER NOT NULL DEFAULT 0`); } catch {}
 // DEX preference: 'pacifica' (Solana) or 'avantis' (Base). Chosen at register time.
@@ -440,13 +445,20 @@ const stmts = {
     WHERE player_id = ? AND revoked_at IS NULL
   `),
 
-  // Find enemy candidates (not self, no shield, has a town hall).
+  // Find enemy candidates (not self, no shield, has a town hall, not in a
+  // 24h personal cooldown after a loss/surrender).
   // The town-hall existence check excludes accounts that registered but
   // never built a base — attacking them would land you on an empty island
   // with nothing to destroy. Treating them as "unavailable" lets the same
   // error message ("all bases under shield, try again later") cover both
   // genuinely shielded targets and these orphan accounts, so the player
   // never lands in an unwinnable empty raid.
+  // The 24h personal cooldown excludes any defender this attacker has
+  // already lost to or surrendered against in the past day. Without it the
+  // matchmaker keeps re-pairing the player against the same base that just
+  // beat them (defeat doesn't grant the defender a shield), turning Find
+  // Enemy into a frustration loop. The two `?` placeholders both bind to
+  // the calling player's id (self-exclusion + cooldown subquery scope).
   findEnemyCandidates: db.prepare(`
     SELECT id, name, trophies, level FROM players
     WHERE id != ?
@@ -461,6 +473,20 @@ const stmts = {
         SELECT 1 FROM buildings
         WHERE buildings.player_id = players.id
           AND buildings.type = 'town_hall'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM battle_replays r
+        WHERE r.attacker_id = ?
+          AND r.defender_id = players.id
+          AND r.claimed_result = 'defeat'
+          AND r.created_at > datetime('now', '-24 hours')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM battle_sessions bs2
+        WHERE bs2.attacker_id = ?
+          AND bs2.defender_id = players.id
+          AND bs2.surrendered_at IS NOT NULL
+          AND bs2.surrendered_at > datetime('now', '-24 hours')
       )
     ORDER BY RANDOM()
     LIMIT 20
@@ -535,6 +561,40 @@ const stmts = {
     UPDATE battle_sessions
     SET status = ?, completed_at = datetime('now')
     WHERE attacker_id = ? AND defender_id = ? AND status = 'active'
+  `),
+  // Surrender stamp by session id — used when the client passes a known
+  // battle_session_id from /find-enemy. Idempotent: re-stamping the same
+  // row updates surrendered_at to the latest call so the 24h cooldown
+  // window restarts (unlikely race, but defensive).
+  markSurrenderById: db.prepare(`
+    UPDATE battle_sessions
+    SET surrendered_at = datetime('now'),
+        status = 'cancelled',
+        completed_at = COALESCE(completed_at, datetime('now'))
+    WHERE id = ? AND attacker_id = ?
+  `),
+  // Surrender stamp by attacker+defender pair — fallback used when the
+  // client lost the session id (page reload, sailor abandon). Targets the
+  // most recent active or recently-completed session for the pair.
+  markSurrenderByPair: db.prepare(`
+    UPDATE battle_sessions
+    SET surrendered_at = datetime('now'),
+        status = CASE WHEN status = 'active' THEN 'cancelled' ELSE status END,
+        completed_at = COALESCE(completed_at, datetime('now'))
+    WHERE id = (
+      SELECT id FROM battle_sessions
+      WHERE attacker_id = ? AND defender_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+    )
+  `),
+  // Insert-only fallback when no battle_session row exists for this pair
+  // (extremely rare — find-enemy always creates one, but guards against
+  // stale data on legacy accounts). Acts as a pure cooldown marker; the
+  // matchmaker only reads `surrendered_at`, not `status` or `reserved_until`.
+  insertSurrenderMarker: db.prepare(`
+    INSERT INTO battle_sessions (id, attacker_id, defender_id, status, reserved_until, surrendered_at, completed_at)
+    VALUES (?, ?, ?, 'cancelled', datetime('now'), datetime('now'), datetime('now'))
   `),
 
   // Tournaments — used by battle paths to detect whether a player is
@@ -1455,7 +1515,7 @@ function findEnemy(playerId) {
   // Find Enemy again, the newest target replaces the previous lock.
   stmts.cancelBattleSessionsForAttacker.run(playerId);
   const myStrength = getBaseStrength(playerId);
-  const candidates = stmts.findEnemyCandidates.all(playerId);
+  const candidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId);
   // Friendly user-facing message — same wording for "everybody is shielded"
   // and "no real bases registered yet" because from the player's POV they
   // both mean the same thing: come back later.
@@ -1513,6 +1573,28 @@ function findEnemy(playerId) {
     grid_config: CANONICAL_GRID_CONFIG,
   };
   })();
+}
+
+// Stamps the matchmaker cooldown for a surrender. Tries the session id
+// first (precise), then falls back to the most recent attacker/defender
+// session, then inserts a synthetic marker row if no session exists at all.
+// Returns true when a row was actually stamped — useful for the route to
+// confirm the cooldown is now in place.
+function markSurrender(attackerId, defenderId, sessionId = '') {
+  if (!attackerId || !defenderId) return false;
+  const sid = normalizeBattleSessionId(sessionId);
+  if (sid) {
+    const r = stmts.markSurrenderById.run(sid, attackerId);
+    if (r.changes > 0) return true;
+  }
+  const pair = stmts.markSurrenderByPair.run(attackerId, defenderId);
+  if (pair.changes > 0) return true;
+  try {
+    stmts.insertSurrenderMarker.run(uuidv4(), attackerId, defenderId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function validateBattleSession(sessionId, attackerId, defenderId) {
@@ -1784,6 +1866,7 @@ module.exports = {
   buyShip,
   battleVictory,
   battleDefeat,
+  markSurrender,
   validateBattleSession,
   finishBattleSession,
   // Tournament hooks — exported so server/routes.js claim-gold path and
