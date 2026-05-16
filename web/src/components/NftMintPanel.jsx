@@ -2225,7 +2225,7 @@ const MINT_ANIM_CSS = `
   .shop-scroll::-webkit-scrollbar-corner { background: transparent; }
   /* Windows Chrome/Edge render up/down increment buttons on the track
      by default — they break the soft parchment look. Hide them so the
-     scrollbar is just track + thumb. `display: none` collapses both
+     scrollbar is just track + thumb. display:none collapses both
      single and double-button variants. */
   .shop-scroll::-webkit-scrollbar-button,
   .shop-scroll::-webkit-scrollbar-button:start,
