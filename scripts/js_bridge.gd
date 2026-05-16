@@ -353,7 +353,7 @@ func _start_agent_attack_replay(payload: Dictionary) -> bool:
 	var buildings_snapshot: Array = payload.get("buildings_snapshot", [])
 	var attacker_name: String = String(payload.get("attacker_name", "AI Agent"))
 	var duration: float = float(payload.get("duration", 0.0))
-	var replay_label: String = String(payload.get("replay_label", "AI AGENT ATTACK"))
+	var replay_label: String = String(payload.get("replay_label", "AI ONLINE BATTLE"))
 	var enemy_payload: Dictionary = payload.get("enemy", {})
 	var base_owner_name: String = String(payload.get("base_owner_name", enemy_payload.get("name", "")))
 	var session_id: String = _agent_attack_session_id_from_payload(payload)

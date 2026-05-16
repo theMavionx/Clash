@@ -23,7 +23,7 @@ Useful loop:
 4. Upgrade buildings with `upgrade_building`; upgrade troops with `upgrade_troop`.
 5. For attacks, make sure a port has a ship: `buy_ship`, then `load_ship_troop` until the ship has enough units.
 6. Call `get_attack_slots` before attacking. It returns 5 stable ship slots (`0..4`) spread across the attack line so ships do not clump.
-7. Use `execute_ai_attack_plan` as one full attack request. By default `auto_tactics: true` lets the MCP server inspect the matched enemy and choose landing slots plus cannon targets. The server validates the replay, settles victory/defeat, stores the replay, and broadcasts `AI AGENT ATTACK` to any open browser.
+7. Use `execute_ai_attack_plan` as one full attack request. The MCP server allows one AI battle per player per minute. By default `auto_tactics: true` lets the MCP server inspect the matched enemy and choose landing slots plus cannon targets. The server validates the replay, settles victory/defeat, stores the replay, and broadcasts a live `AI ONLINE BATTLE` to any open browser.
 8. Use `swap_ship_troop`, `unload_ship_troops`, and `reinforce_ships` to keep ship loadouts usable after battles.
 
 Attack best practices:

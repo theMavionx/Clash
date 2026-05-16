@@ -420,6 +420,10 @@ func _reconcile_replay_destroyed_building_telemetry() -> void:
 
 
 func _send_replay_telemetry() -> void:
+	# Replay telemetry upload is disabled for now to keep local/mobile sessions
+	# light. Keep the recorder helpers intact so we can re-enable diagnostics
+	# later without touching combat logic.
+	return
 	if not bs or not bs._bridge:
 		return
 	_reconcile_replay_destroyed_building_telemetry()
@@ -1447,11 +1451,13 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
+		var live_agent_battle: bool = replay_label.to_upper() == "AI ONLINE BATTLE"
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
 			"name": display_name_for_base,
 			"trophies": 0,
 			"is_replay": true,
+			"live_agent_battle": live_agent_battle,
 			"replay_label": replay_label,
 			"duration": _replay_duration,
 		})

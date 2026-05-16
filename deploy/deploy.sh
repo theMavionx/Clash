@@ -222,6 +222,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_MCP_CORS_ORIGINS" "https://$DOMAIN,https://www.$DOMAIN,https://$MCP_DOMAIN"
     ensure_env_default "CLASH_MCP_RATE_WINDOW_MS" "60000"
     ensure_env_default "CLASH_MCP_RATE_LIMIT" "180"
+    ensure_env_default "CLASH_MCP_AI_ATTACK_COOLDOWN_MS" "60000"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"

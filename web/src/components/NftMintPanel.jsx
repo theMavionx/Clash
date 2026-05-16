@@ -17,14 +17,16 @@ import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNf
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
+import NftMarketplacePanel from './NftMarketplacePanel';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
 const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http() });
 
 const SHOP_TABS = [
-  { id: 'nft', label: 'NFT' },
-  { id: 'resources', label: 'Game Resources' },
+  { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
+  { id: 'nft',         label: 'NFT',            mobileLabel: 'NFT' },
+  { id: 'marketplace', label: 'Marketplace',    mobileLabel: 'Market' },
 ];
 
 const CHAIN_OPTIONS = [
@@ -261,6 +263,7 @@ function NftMintPanel({ onClose }) {
   const aptosWallet = useAptosWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const { isInFrame } = useFarcaster();
+  const { isMobile: panelMobile } = useLayout();
 
   const [activeShopTab, setActiveShopTab] = useState('nft');
   // Skip the legacy chain-picker step on open — the player's chain comes
@@ -824,7 +827,12 @@ function NftMintPanel({ onClose }) {
               />
             ) : (
             <>
-            <div style={styles.shopTabs}>
+            <div
+              style={{
+                ...styles.shopTabs,
+                gridTemplateColumns: `repeat(${SHOP_TABS.length}, minmax(0, 1fr))`,
+              }}
+            >
               {SHOP_TABS.map((tab) => {
                 const active = activeShopTab === tab.id;
                 return (
@@ -837,156 +845,200 @@ function NftMintPanel({ onClose }) {
                       ...(active ? styles.shopTabBtnActive : null),
                     }}
                   >
-                    {tab.label}
+                    {panelMobile ? (tab.mobileLabel || tab.label) : tab.label}
                   </button>
                 );
               })}
             </div>
-            <div
-              style={{
-                ...styles.topRow,
-                ...(activeShopTab === 'resources' ? styles.topRowResources : null),
-              }}
-            >
-              {activeShopTab === 'nft' && (
-                <div style={styles.heroFrame}>
-                  <div style={styles.heroGlow} />
-                  <img src={demonKingImg} alt="Demon King" style={styles.heroImg} />
-                </div>
-              )}
-
-              <div style={styles.summary}>
-                <span style={styles.heroName}>{activeShopTab === 'nft' ? 'Demon King' : 'Game Resources'}</span>
-                <span style={styles.editionTag}>
-                  {activeShopTab === 'nft'
-                    // Always show the GLOBAL cap (500 across all chains) so
-                    // the headline stays consistent whether the user is on
-                    // Base, Solana, Arbitrum, Monad or Aptos.
-                    ? `Genesis supply ${formatCount(totalSupplyInfo.maxSupply)}`
-                    : 'Pay with CoP on Base'}
-                </span>
-                {/* Bridge entry-point lives next to the hero image instead of
-                    the modal header — the header was getting squished with
-                    two icons in the top-right corner. NFT tab only; resources
-                    don't have a cross-chain bridge concept. */}
-                {activeShopTab === 'nft' && view === 'shop' && (
-                  <button
-                    type="button"
-                    onClick={() => { setView('bridge'); setNotice(null); }}
-                    style={styles.heroBridgeBtn}
-                    title="Bridge NFT between chains"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M7 7h12l-3-3" />
-                      <path d="M17 17H5l3 3" />
-                    </svg>
-                    <span>Bridge</span>
-                  </button>
-                )}
-              </div>
-
-            </div>
-
-            {activeShopTab === 'nft' ? (
-              <>
-                {/* Always show the GLOBAL supply bar (X / 500 across all chains).
-                    The legacy "Choose Network" step was removed — the chain
-                    is auto-derived from the player's DEX. They can still flip
-                    chains via the chip at the top if they want to mint cheaper
-                    on a different network. */}
-                <SupplyProgress supply={totalSupplyInfo} />
-
-                {NFT_MINT_SUPPORTED.has(selectedChain) ? (
-                  <>
-                    <div style={styles.options}>
-                      {paymentOptions.map((option) => {
-                        const active = option.id === selectedPayment;
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
-                            disabled={option.soon}
-                            style={{
-                              ...styles.optionBtn,
-                              ...(active ? styles.optionBtnActive : null),
-                              ...(option.soon ? styles.optionBtnDisabled : null),
-                            }}
-                          >
-                            <span style={styles.optionBadge}>{option.token}</span>
-                            <span style={styles.optionMain}>
-                              {option.method}
-                              {option.requiresClash && COP_DISCOUNT && (
-                                <span style={styles.optionDiscountChip}>
-                                  -{COP_DISCOUNT.percent}%
-                                </span>
-                              )}
-                            </span>
-                            <span style={styles.optionPrice}>{option.price}</span>
-                            {option.soon && <span style={styles.soonBadge}>SOON</span>}
-                          </button>
-                        );
-                      })}
+            {/* Slider viewport — three tab bodies sit side-by-side in a
+                flex track and we slide via transform: translateX(). The
+                viewport clips overflow so only the active tab is visible;
+                each slide owns its own vertical scroll so the panel size
+                stays stable across tabs. */}
+            <div style={styles.sliderViewport}>
+              <div
+                style={{
+                  ...styles.sliderTrack,
+                  transform: `translateX(-${SHOP_TABS.findIndex((t) => t.id === activeShopTab) * 100}%)`,
+                }}
+              >
+                {/* ─── Resources slide (index 0) ───────────────────── */}
+                <div
+                  className="shop-scroll"
+                  style={styles.slide}
+                  aria-hidden={activeShopTab !== 'resources'}
+                  inert={activeShopTab !== 'resources' ? '' : undefined}
+                >
+                  <div style={{ ...styles.topRow, ...styles.topRowResources }}>
+                    <div style={styles.summary}>
+                      <span style={styles.heroName}>Game Resources</span>
+                      <span style={styles.editionTag}>Pay with CoP on Base</span>
                     </div>
-
-                    <button
-                      style={{
-                        ...styles.mintBtn,
-                        ...(primaryState.ready ? styles.mintBtnReady : null),
-                        ...(selected.soon ? styles.mintBtnDisabled : null),
-                        cursor: busy || selected.soon ? 'not-allowed' : 'pointer',
-                      }}
-                      onClick={handlePrimary}
-                      disabled={!!busy || selected.soon}
-                    >
-                      <span style={styles.mintBtnGlyph}>{primaryState.glyph}</span>
-                      <span>{primaryState.label}</span>
-                    </button>
-                  </>
-                ) : (
-                  // The player's chain (Arbitrum / Monad / Aptos) has the V3
-                  // contract but no fresh-mint endpoint — mint happens on
-                  // Base or Solana, then bridge over. Surface that path
-                  // explicitly instead of silently rerouting to Base.
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 4px' }}>
-                    <div style={{ fontSize: 13, color: '#5C3A21', lineHeight: 1.4 }}>
-                      Fresh mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
-                      Mint on Base or Solana, then use the bridge to move the NFT to your chain — the level is preserved.
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setView('bridge')}
-                      style={{
-                        padding: '10px 14px', borderRadius: 12, fontSize: 14, fontWeight: 800,
-                        background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Open bridge →
-                    </button>
                   </div>
-                )}
-              </>
-            ) : (
-              <GameResourcesTab
-                products={gameProducts}
-                ready={shopChainReady}
-                loading={gameShopConfig === null}
-                chain={shopChain}
-                payment={shopPayment}
-                onPaymentChange={setShopPayment}
-                skrReady={!!gameShopConfig?.solana?.skrReady}
-                evmAddress={evmAddress}
-                evmOnBase={evmOnBase}
-                solAddress={solAddress}
-                aptosAddress={aptosWallet?.address || null}
-                busy={busy}
-                onConnectBase={handleBaseReady}
-                onConnectSolana={handleSolanaReady}
-                onConnectAptos={() => aptosWallet?.connect?.()}
-                onBuy={handleBuyGameProduct}
-              />
-            )}
+                  <GameResourcesTab
+                    products={gameProducts}
+                    ready={shopChainReady}
+                    loading={gameShopConfig === null}
+                    chain={shopChain}
+                    payment={shopPayment}
+                    onPaymentChange={setShopPayment}
+                    skrReady={!!gameShopConfig?.solana?.skrReady}
+                    evmAddress={evmAddress}
+                    evmOnBase={evmOnBase}
+                    solAddress={solAddress}
+                    aptosAddress={aptosWallet?.address || null}
+                    busy={busy}
+                    onConnectBase={handleBaseReady}
+                    onConnectSolana={handleSolanaReady}
+                    onConnectAptos={() => aptosWallet?.connect?.()}
+                    onBuy={handleBuyGameProduct}
+                  />
+                </div>
+
+                {/* ─── NFT slide (index 1) ─────────────────────────── */}
+                <div
+                  className="shop-scroll"
+                  style={styles.slide}
+                  aria-hidden={activeShopTab !== 'nft'}
+                  inert={activeShopTab !== 'nft' ? '' : undefined}
+                >
+                  <div style={styles.topRow}>
+                    <div style={styles.heroFrame}>
+                      <div style={styles.heroGlow} />
+                      <img src={demonKingImg} alt="Demon King" style={styles.heroImg} />
+                    </div>
+                    <div style={styles.summary}>
+                      <span style={styles.heroName}>Demon King</span>
+                      <span style={styles.editionTag}>
+                        Genesis supply {formatCount(totalSupplyInfo.maxSupply)}
+                      </span>
+                      {view === 'shop' && (
+                        <button
+                          type="button"
+                          onClick={() => { setView('bridge'); setNotice(null); }}
+                          style={styles.heroBridgeBtn}
+                          title="Bridge NFT between chains"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M7 7h12l-3-3" />
+                            <path d="M17 17H5l3 3" />
+                          </svg>
+                          <span>Bridge</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <SupplyProgress supply={totalSupplyInfo} />
+
+                  {NFT_MINT_SUPPORTED.has(selectedChain) ? (
+                    <>
+                      <div style={styles.options}>
+                        {paymentOptions.map((option) => {
+                          const active = option.id === selectedPayment;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
+                              disabled={option.soon}
+                              style={{
+                                ...styles.optionBtn,
+                                ...(active ? styles.optionBtnActive : null),
+                                ...(option.soon ? styles.optionBtnDisabled : null),
+                              }}
+                            >
+                              <span style={styles.optionBadge}>{option.token}</span>
+                              <span style={styles.optionMain}>
+                                {option.method}
+                                {option.requiresClash && COP_DISCOUNT && (
+                                  <span style={styles.optionDiscountChip}>
+                                    -{COP_DISCOUNT.percent}%
+                                  </span>
+                                )}
+                              </span>
+                              <span style={styles.optionPrice}>{option.price}</span>
+                              {option.soon && <span style={styles.soonBadge}>SOON</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        style={{
+                          ...styles.mintBtn,
+                          ...(primaryState.ready ? styles.mintBtnReady : null),
+                          ...(selected.soon ? styles.mintBtnDisabled : null),
+                          cursor: busy || selected.soon ? 'not-allowed' : 'pointer',
+                        }}
+                        onClick={handlePrimary}
+                        disabled={!!busy || selected.soon}
+                      >
+                        <span style={styles.mintBtnGlyph}>{primaryState.glyph}</span>
+                        <span>{primaryState.label}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 4px' }}>
+                      <div style={{ fontSize: 13, color: '#5C3A21', lineHeight: 1.4 }}>
+                        Fresh mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
+                        Mint on Base or Solana, then use the bridge to move the NFT to your chain — the level is preserved.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setView('bridge')}
+                        style={{
+                          padding: '10px 14px', borderRadius: 12, fontSize: 14, fontWeight: 800,
+                          background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Open bridge →
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* ─── Marketplace slide (index 2) ─────────────────────
+                    Marketplace UI is built and contracts are deployed but
+                    we're still verifying flows on mainnet. The full panel
+                    renders behind a dim overlay so the player can preview
+                    what's coming while interactions are blocked. Remove the
+                    `comingSoonOverlay` block when the marketplace ships. */}
+                <div
+                  className="shop-scroll"
+                  style={{ ...styles.slide, position: 'relative' }}
+                  aria-hidden={activeShopTab !== 'marketplace'}
+                  inert={activeShopTab !== 'marketplace' ? '' : undefined}
+                >
+                  <div style={{ ...styles.topRow, ...styles.topRowResources }}>
+                    <div style={styles.summary}>
+                      <span style={styles.heroName}>Marketplace</span>
+                      <span style={styles.editionTag}>Player-to-player trading on Base</span>
+                    </div>
+                  </div>
+                  <NftMarketplacePanel
+                    evmAddress={evmAddress}
+                    evmWallet={evmWallet}
+                    evmOnBase={evmOnBase}
+                    onConnectBase={handleBaseReady}
+                    onOpenEvmModal={() => setEvmModalOpen(true)}
+                  />
+
+                  {/* Coming-soon dim layer. Position is sticky-via-absolute
+                      to the slide root (`position: relative` above) so the
+                      overlay covers all scrolled content. */}
+                  <div style={styles.comingSoonOverlay} aria-hidden>
+                    <div style={styles.comingSoonBadge}>IN TESTING</div>
+                    <div style={styles.comingSoonTitle}>Marketplace coming soon</div>
+                    <div style={styles.comingSoonSub}>
+                      We're still verifying flows on mainnet. List / buy will
+                      open once mainnet testing wraps up.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             {notice && <div style={activeShopTab === 'nft' && primaryState.ready ? styles.noticeReady : styles.notice}>{notice}</div>}
             </>
@@ -2151,6 +2203,41 @@ const MINT_ANIM_CSS = `
       rgba(108,40,200,0) 360deg
     );
   }
+
+  /* ── Parchment scrollbar — shared with the rest of the shop UI ──
+     Used on the tab slides + any scrollable container in the marketplace.
+     Slim, brown-on-cream, matches the borders/buttons rather than the
+     OS default. WebKit (Chrome/Safari/Edge) styles via these rules;
+     Firefox uses scrollbar-width/-color set inline on the elements. */
+  .shop-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .shop-scroll::-webkit-scrollbar-track {
+    background: #fdf8e7;
+    border-radius: 4px;
+  }
+  .shop-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #d4c8b0 0%, #bba882 100%);
+    border-radius: 4px;
+    border: 1px solid #fdf8e7;
+  }
+  .shop-scroll::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #bba882 0%, #a3906a 100%);
+  }
+  .shop-scroll::-webkit-scrollbar-corner { background: transparent; }
+  /* Windows Chrome/Edge render up/down increment buttons on the track
+     by default — they break the soft parchment look. Hide them so the
+     scrollbar is just track + thumb. `display: none` collapses both
+     single and double-button variants. */
+  .shop-scroll::-webkit-scrollbar-button,
+  .shop-scroll::-webkit-scrollbar-button:start,
+  .shop-scroll::-webkit-scrollbar-button:end,
+  .shop-scroll::-webkit-scrollbar-button:vertical:start,
+  .shop-scroll::-webkit-scrollbar-button:vertical:end,
+  .shop-scroll::-webkit-scrollbar-button:horizontal:start,
+  .shop-scroll::-webkit-scrollbar-button:horizontal:end {
+    display: none;
+    height: 0;
+    width: 0;
+  }
 `;
 
 const styles = {
@@ -2161,7 +2248,14 @@ const styles = {
     padding: 12,
   },
   panel: {
-    width: 500, maxWidth: '96vw', maxHeight: '92vh', background: '#fdf8e7',
+    width: 500, maxWidth: '96vw',
+    // Stable height — sized to comfortably fit the NFT tab (the shortest
+    // of the three) with a small margin, so neither does the panel jerk
+    // between tabs nor look half-empty on NFT. Taller tabs (marketplace
+    // listings) scroll inside their own slide instead of growing the
+    // panel. Capped at 92vh for short viewports.
+    height: 'min(600px, 92vh)',
+    background: '#fdf8e7',
     border: '6px solid #d4c8b0', borderRadius: 22,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     overflow: 'hidden', fontFamily: '"Inter","Segoe UI",sans-serif',
@@ -2213,9 +2307,78 @@ const styles = {
     boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
   },
   body: {
+    flex: 1, minHeight: 0,
     padding: '14px 16px',
     display: 'flex', flexDirection: 'column', gap: 10,
+    // The slider viewport handles overflow internally so each slide can
+    // scroll independently — the body itself never scrolls.
+    overflow: 'hidden',
+  },
+  // ── Tab slider ────────────────────────────────────────────────────
+  // Viewport clips the wider track; the track holds all three slides
+  // side-by-side and translates between them. Each slide scrolls its
+  // own content vertically so the modal height stays constant.
+  sliderViewport: {
+    flex: 1, minHeight: 0,
+    overflow: 'hidden',
+    // Negative side margin cancels the body's 16px horizontal padding so
+    // slides reach the panel edges; each slide adds the padding back via
+    // its own paddingLeft/Right. This keeps the carousel motion edge-to-
+    // edge instead of a narrow strip in the middle.
+    margin: '0 -16px',
+  },
+  sliderTrack: {
+    display: 'flex',
+    width: '100%', height: '100%',
+    transition: 'transform 320ms cubic-bezier(0.32, 0.72, 0, 1)',
+    willChange: 'transform',
+  },
+  slide: {
+    flex: '0 0 100%',
+    minWidth: 0,
+    height: '100%',
     overflowY: 'auto',
+    padding: '0 16px',
+    display: 'flex', flexDirection: 'column', gap: 10,
+    // Firefox-specific scrollbar tint — thumb/track colors. WebKit-based
+    // browsers pick up the `.shop-scroll::-webkit-scrollbar*` rules in
+    // MINT_ANIM_CSS so they match the parchment palette across engines.
+    scrollbarWidth: 'thin',
+    scrollbarColor: '#bba882 #fdf8e7',
+  },
+  // ── Marketplace "coming soon" overlay ─────────────────────────────
+  // Fixed (relative to the slide) dim layer that covers the entire
+  // marketplace preview while we finish mainnet testing. Catches all
+  // pointer events so the underlying form is non-interactive even
+  // though it stays visible behind the dim wash.
+  comingSoonOverlay: {
+    position: 'absolute', inset: 0,
+    background: 'rgba(20, 12, 4, 0.62)',
+    backdropFilter: 'blur(2px)',
+    WebkitBackdropFilter: 'blur(2px)',
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+    gap: 10, padding: '20px 28px',
+    textAlign: 'center',
+    pointerEvents: 'auto',
+    zIndex: 5,
+  },
+  comingSoonBadge: {
+    padding: '5px 12px', borderRadius: 999,
+    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
+    border: '2px solid #5C3A21', color: '#3a1f00',
+    fontSize: 11, fontWeight: 900, letterSpacing: 1.2,
+    boxShadow: '0 4px 10px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
+  },
+  comingSoonTitle: {
+    color: '#fff7df', fontSize: 22, fontWeight: 900,
+    textShadow: '0 2px 6px rgba(0,0,0,0.6)',
+    lineHeight: 1.1,
+  },
+  comingSoonSub: {
+    color: 'rgba(255,247,223,0.85)', fontSize: 13, fontWeight: 700,
+    maxWidth: 320, lineHeight: 1.45,
+    textShadow: '0 1px 3px rgba(0,0,0,0.5)',
   },
   shopTabs: {
     display: 'grid',
@@ -2228,6 +2391,8 @@ const styles = {
   },
   shopTabBtn: {
     minHeight: 34,
+    minWidth: 0,
+    padding: '0 6px',
     border: '2px solid transparent',
     borderRadius: 9,
     background: 'transparent',
@@ -2236,6 +2401,10 @@ const styles = {
     fontWeight: 900,
     cursor: 'pointer',
     fontFamily: 'inherit',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    textAlign: 'center',
   },
   shopTabBtnActive: {
     background: '#fff8df',

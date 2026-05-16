@@ -108,6 +108,9 @@ and unauthenticated `401` challenge.
   `Mcp-Session-Id`, and `Last-Event-ID` headers.
 - Rate limiting is enforced in the MCP process with
   `CLASH_MCP_RATE_WINDOW_MS` and `CLASH_MCP_RATE_LIMIT`.
+- AI battle execution has an additional per-player cooldown:
+  `CLASH_MCP_AI_ATTACK_COOLDOWN_MS` defaults to `60000` for one MCP battle per
+  minute.
 
 ## References
 

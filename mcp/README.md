@@ -56,6 +56,7 @@ CLASH_MCP_HOST=127.0.0.1
 CLASH_MCP_PUBLIC_URL=https://mcp.clashofperps.fun
 CLASH_GAME_API_URL=http://127.0.0.1:4000/api
 CLASH_MCP_CORS_ORIGINS=https://clashofperps.fun,https://www.clashofperps.fun,https://mcp.clashofperps.fun
+CLASH_MCP_AI_ATTACK_COOLDOWN_MS=60000
 ```
 
 When hosting, proxy the whole subdomain to this service and preserve the
@@ -66,3 +67,6 @@ Write tools notify the main game server after a successful action so online
 players can watch the AI build, collect, upgrade, and manage ships live over
 `/ws`. Set `CLASH_GAME_API_URL` if the game API is not at
 `http://127.0.0.1:4000/api`.
+
+AI attacks through `execute_ai_attack_plan` are limited to one battle per
+player per minute by default. Tune this with `CLASH_MCP_AI_ATTACK_COOLDOWN_MS`.

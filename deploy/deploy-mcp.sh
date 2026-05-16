@@ -64,6 +64,7 @@ ensure_env_file() {
             printf '%s=%s\n' CLASH_MCP_CORS_ORIGINS "https://$MAIN_DOMAIN,https://www.$MAIN_DOMAIN,https://$MCP_DOMAIN"
             printf '%s\n' CLASH_MCP_RATE_WINDOW_MS=60000
             printf '%s\n' CLASH_MCP_RATE_LIMIT=180
+            printf '%s\n' CLASH_MCP_AI_ATTACK_COOLDOWN_MS=60000
         } > "$ENV_FILE"
         chmod 600 "$ENV_FILE"
         log "Created $ENV_FILE"
@@ -97,6 +98,7 @@ prepare_env() {
     ensure_env_default CLASH_MCP_HOST 127.0.0.1
     ensure_env_default CLASH_MCP_RATE_WINDOW_MS 60000
     ensure_env_default CLASH_MCP_RATE_LIMIT 180
+    ensure_env_default CLASH_MCP_AI_ATTACK_COOLDOWN_MS 60000
     set_env_value CLASH_MCP_PUBLIC_URL "https://$MCP_DOMAIN"
     set_env_value CLASH_GAME_API_URL "http://127.0.0.1:4000/api"
     set_env_value CLASH_MCP_CORS_ORIGINS "https://$MAIN_DOMAIN,https://www.$MAIN_DOMAIN,https://$MCP_DOMAIN"

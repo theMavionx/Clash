@@ -18,7 +18,14 @@ function shallowEqualObject(a, b) {
   return aKeys.every(key => a[key] === b[key]);
 }
 
+const REPLAY_TELEMETRY_ENABLED = false;
+
 function postReplayTelemetry(data, tokenOverride = null) {
+  // Replay telemetry upload is intentionally disabled for now. Godot can still
+  // collect local combat diagnostics, but the browser no longer posts the large
+  // event payloads to `/api/replay-telemetry`.
+  if (!REPLAY_TELEMETRY_ENABLED) return true;
+
   const token = tokenOverride || window._playerToken;
   if (!token) {
     return false;

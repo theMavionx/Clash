@@ -303,13 +303,14 @@ const formatReplayTime = (seconds) => {
   return `${mins}:${String(secs).padStart(2, '0')}`;
 };
 
-function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel = 'REPLAY' }) {
+function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel = 'REPLAY', liveAgentBattle = false }) {
   const { sendToGodot } = useSend();
   const { isMobile: mobile } = useLayout();
   const [speedIdx, setSpeedIdx] = useState(0);
   const [fallbackRemaining, setFallbackRemaining] = useState(null);
   const fallbackRef = useRef({ remaining: null, lastTick: 0, speed: 1 });
   const replayDurationSec = Number.isFinite(Number(replayDuration)) ? Math.max(0, Number(replayDuration)) : 0;
+  const isLiveAgentBattle = liveAgentBattle || String(replayLabel || '').toUpperCase().includes('AI ONLINE');
 
   useEffect(() => {
     const remaining = replayDurationSec > 0 ? Math.ceil(replayDurationSec) : null;
@@ -367,10 +368,17 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
   const replayCountdownStyle = mobile ? { ...hud.replayCountdownWrap, ...hud.replayCountdownMobile } : hud.replayCountdownWrap;
   const replayCountdownLabelStyle = mobile ? { ...hud.replayCountdownLabel, fontSize: 8, marginBottom: 2 } : hud.replayCountdownLabel;
   const replayCountdownTimeStyle = mobile ? { ...hud.replayCountdownTime, fontSize: 24 } : hud.replayCountdownTime;
+  const liveBattleStyle = mobile ? { ...hud.liveBattleWrap, ...hud.liveBattleMobile } : hud.liveBattleWrap;
+  const badgeLabel = isLiveAgentBattle ? 'AI ONLINE' : replayLabel;
 
   return (
     <>
-      {remaining != null && (
+      {isLiveAgentBattle ? (
+        <div style={liveBattleStyle} aria-live="polite">
+          <div style={hud.liveBattleKicker}>AI ONLINE</div>
+          <div style={hud.liveBattleTitle}>LIVE BATTLE</div>
+        </div>
+      ) : remaining != null && (
         <div style={replayCountdownStyle} aria-live="polite">
           <div style={replayCountdownLabelStyle}>REPLAY ENDS IN</div>
           <div style={replayCountdownTimeStyle}>{formatReplayTime(remaining)}</div>
@@ -386,7 +394,7 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
             <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
           </button>
         )}
-        <div style={mobile ? { ...hud.replayBadge, ...hud.replayBadgeMobile } : hud.replayBadge}>{replayLabel}</div>
+        <div style={mobile ? { ...hud.replayBadge, ...hud.replayBadgeMobile } : hud.replayBadge}>{badgeLabel}</div>
         <button style={homeBtnStyle} onClick={onReturnHome} title="Return Home"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
           onMouseOut={e => e.currentTarget.style.filter = 'none'}
@@ -528,7 +536,15 @@ function ActionButtons({ onOpenBattleLog }) {
   if (enemyMode.active) {
     // Replay mode — only show return button, no attack controls
     if (enemyMode.is_replay) {
-      return <ReplayHUD onReturnHome={handleReturnHome} battleTimer={battleTimer} replayDuration={enemyMode.duration} replayLabel={enemyMode.replay_label || 'REPLAY'} />;
+      return (
+        <ReplayHUD
+          onReturnHome={handleReturnHome}
+          battleTimer={battleTimer}
+          replayDuration={enemyMode.duration}
+          replayLabel={enemyMode.replay_label || 'REPLAY'}
+          liveAgentBattle={!!enemyMode.live_agent_battle}
+        />
+      );
     }
     return (
       <>
@@ -577,14 +593,34 @@ function ActionButtons({ onOpenBattleLog }) {
 
   const btnSize = mobile ? 110 : 140;
   const btnSmall = mobile ? 88 : 110;
+  const replayBtnSize = mobile ? Math.round(btnSmall / 1.5) : btnSmall;
+  const battleLogButton = (
+    <CustomBtn onClick={onOpenBattleLog} width={replayBtnSize} height={replayBtnSize}>
+      <ShieldIcon size={mobile ? 27 : 60} />
+    </CustomBtn>
+  );
+  const shopButton = (
+    <CustomBtn onClick={handleOpenShop} width={btnSmall} height={btnSmall} data-tutorial="build-btn">
+      {affordableCount > 0 && <div style={styles.notificationBadgeSmall}>{affordableCount}</div>}
+      <img src={buildIcon} alt="build" style={{ ...styles.buildIconImgSmall, ...(mobile ? { width: 75, height: 75 } : {}) }} />
+    </CustomBtn>
+  );
+  const nftMintButton = (
+    <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
+      <NftMintIcon size={mobile ? 38 : 50} />
+    </CustomBtn>
+  );
 
   return (
     <>
+      {mobile && (
+        <div style={styles.mobileBattleLogWrap}>
+          {battleLogButton}
+        </div>
+      )}
       <div style={{ ...styles.wrapLeft, ...(mobile ? { bottom: 8, left: 8, gap: 4 } : {}) }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
-          <CustomBtn onClick={onOpenBattleLog} width={btnSmall} height={btnSmall}>
-            <ShieldIcon size={mobile ? 40 : 60} />
-          </CustomBtn>
+          {mobile ? nftMintButton : battleLogButton}
           <CustomBtn onClick={handleFindEnemy} width={btnSize} height={btnSize} data-tutorial="attack-btn">
             <img src={attackIcon} alt="attack" style={{ ...styles.attackIconImg, ...(mobile ? { width: 95, height: 95 } : {}) }} />
             <div style={{ ...styles.attackCostBadge, ...(canAffordAttack ? {} : styles.attackCostBadgeLocked), ...(mobile ? styles.attackCostBadgeMobile : {}) }}>
@@ -594,10 +630,7 @@ function ActionButtons({ onOpenBattleLog }) {
             <span style={styles.btnLabel}>ATTACK</span>
           </CustomBtn>
         </div>
-        <CustomBtn onClick={handleOpenShop} width={btnSmall} height={btnSmall} data-tutorial="build-btn">
-          {affordableCount > 0 && <div style={styles.notificationBadgeSmall}>{affordableCount}</div>}
-          <img src={buildIcon} alt="build" style={{ ...styles.buildIconImgSmall, ...(mobile ? { width: 75, height: 75 } : {}) }} />
-        </CustomBtn>
+        {shopButton}
       </div>
       <div style={{ ...styles.wrapRight, ...(mobile ? { bottom: 8, right: 8 } : {}) }}>
         {pendingCasualties && (
@@ -641,11 +674,9 @@ function ActionButtons({ onOpenBattleLog }) {
             <span style={{...styles.btnLabel, bottom: mobile ? 16 : 22, fontSize: mobile ? 9 : 11}}>REINFORCE</span>
           </CustomBtn>
         )}
-        {/* NFT mint — small icon button stacked directly above Tournament
-            in this right-side column, on both desktop and mobile. */}
-        <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
-          <NftMintIcon size={mobile ? 38 : 50} />
-        </CustomBtn>
+        {/* NFT mint stays in the right-side stack on desktop; mobile uses
+            the old battle-log slot above ATTACK. */}
+        {!mobile && nftMintButton}
         <CustomBtn onClick={() => setShowTournament(true)} width={btnSmall} height={btnSmall} data-tutorial="tournament-btn">
           <CrossedSwordsIcon size={mobile ? 38 : 50} />
         </CustomBtn>
@@ -881,6 +912,49 @@ const hud = {
     lineHeight: 1,
     textShadow: '0 2px 0 rgba(0,0,0,0.55), 0 0 10px rgba(125,244,255,0.42)',
   },
+  liveBattleWrap: {
+    position: 'fixed',
+    top: 20,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 11,
+    pointerEvents: 'none',
+    minWidth: 156,
+    padding: '8px 18px 10px',
+    background: 'linear-gradient(180deg, rgba(11,75,70,0.92), rgba(7,38,58,0.96))',
+    border: '2px solid rgba(88,255,218,0.48)',
+    borderRadius: 12,
+    boxShadow: '0 8px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.14)',
+    color: '#f7fbff',
+    textAlign: 'center',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  liveBattleMobile: {
+    top: 'calc(env(safe-area-inset-top, 0px) + 66px)',
+    right: 10,
+    left: 'auto',
+    transform: 'none',
+    minWidth: 112,
+    padding: '6px 10px 8px',
+    borderRadius: 10,
+    zIndex: 101,
+  },
+  liveBattleKicker: {
+    color: '#8effe7',
+    fontSize: 10,
+    fontWeight: 950,
+    letterSpacing: 0,
+    lineHeight: 1.1,
+    marginBottom: 3,
+    textShadow: '0 0 8px rgba(88,255,218,0.55)',
+  },
+  liveBattleTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: 950,
+    lineHeight: 1,
+    textShadow: '0 2px 0 rgba(0,0,0,0.55), 0 0 10px rgba(88,255,218,0.42)',
+  },
   speedBtn: {
     width: 56, height: 56,
     background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
@@ -1052,6 +1126,14 @@ const base = { position: 'fixed', bottom: 12, display: 'flex', pointerEvents: 'a
 const styles = {
   wrapLeft:  { ...base, left: 12, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
   wrapRight: { ...base, right: 12, flexDirection: 'column', alignItems: 'flex-end', gap: 12 },
+  mobileBattleLogWrap: {
+    position: 'fixed',
+    top: 'calc(env(safe-area-inset-top, 0px) + 86px)',
+    left: 8,
+    display: 'flex',
+    pointerEvents: 'all',
+    zIndex: 11,
+  },
   buildIconImgSmall: {
     width: 95, height: 95, objectFit: 'contain',
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',

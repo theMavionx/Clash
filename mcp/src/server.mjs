@@ -35,11 +35,12 @@ const CORS_ORIGINS = (process.env.CLASH_MCP_CORS_ORIGINS || DEFAULT_CORS_ORIGINS
   .filter(Boolean);
 const RATE_LIMIT_WINDOW_MS = Number(process.env.CLASH_MCP_RATE_WINDOW_MS || 60_000);
 const RATE_LIMIT_MAX = Number(process.env.CLASH_MCP_RATE_LIMIT || 180);
+const AI_ATTACK_COOLDOWN_MS = Number(process.env.CLASH_MCP_AI_ATTACK_COOLDOWN_MS || 60_000);
 const VALID_SHIP_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 const SHIP_TROOP_COST = 100;
 const REINFORCE_COST = 50;
 const AI_ATTACK_SLOT_COUNT = 5;
-const AI_ATTACK_REPLAY_LABEL = 'AI AGENT ATTACK';
+const AI_ATTACK_REPLAY_LABEL = 'AI ONLINE BATTLE';
 const AI_CANNON_TARGET_TYPES = ['turret', 'archer_tower'];
 const AI_CANNON_DEFAULT_START_SEC = 4.0;
 const AI_CANNON_DEFAULT_STEP_SEC = (combat.CANNON_RELOAD_SEC || 1.0) + 0.1;
@@ -85,6 +86,29 @@ function protectedResourceMetadata(req) {
 }
 
 const rateBuckets = new Map();
+const aiAttackCooldowns = new Map();
+
+function reserveAiAttackCooldown(playerId) {
+  if (!Number.isFinite(AI_ATTACK_COOLDOWN_MS) || AI_ATTACK_COOLDOWN_MS <= 0) return { ok: true };
+  const now = Date.now();
+  const current = aiAttackCooldowns.get(playerId);
+  if (current && now < current.until) {
+    return {
+      ok: false,
+      retryAfterMs: current.until - now,
+      resetAt: current.until,
+    };
+  }
+  aiAttackCooldowns.set(playerId, {
+    startedAt: now,
+    until: now + AI_ATTACK_COOLDOWN_MS,
+  });
+  return { ok: true };
+}
+
+function releaseAiAttackCooldown(playerId) {
+  aiAttackCooldowns.delete(playerId);
+}
 
 function rateLimit(req, res, next) {
   if (!Number.isFinite(RATE_LIMIT_WINDOW_MS) || RATE_LIMIT_WINDOW_MS <= 0 || !Number.isFinite(RATE_LIMIT_MAX) || RATE_LIMIT_MAX <= 0) {
@@ -1014,7 +1038,7 @@ function registerTools(server, session, agentKey) {
     'execute_ai_attack_plan',
     {
       title: 'Execute AI Attack Plan',
-      description: 'Find an enemy, validate one full AI attack plan, settle victory/defeat, store replay, and broadcast AI AGENT ATTACK replay to open browsers.',
+      description: 'Find an enemy, validate one full AI attack plan, settle victory/defeat, store replay, and broadcast a live AI online battle to open browsers. Limited to one MCP battle per player per minute.',
       inputSchema: {
         ships: z.array(z.object({
           ship_index: z.number().int().min(0).max(4).optional(),
@@ -1043,13 +1067,26 @@ function registerTools(server, session, agentKey) {
       const fleet = getFleet(playerId);
       if (fleet.length === 0) return toolError('No loaded ships. Buy ships and load troops first.');
 
+      const cooldown = reserveAiAttackCooldown(playerId);
+      if (!cooldown.ok) {
+        const retryAfterSeconds = Math.max(1, Math.ceil(cooldown.retryAfterMs / 1000));
+        return toolError(`AI battle cooldown active. Wait ${retryAfterSeconds}s before launching another MCP battle.`, {
+          retry_after_seconds: retryAfterSeconds,
+          reset_at: new Date(cooldown.resetAt).toISOString(),
+        });
+      }
+      const abortAiAttack = (message, extra = {}) => {
+        releaseAiAttackCooldown(playerId);
+        return toolError(message, extra);
+      };
+
       const enemy = game.findEnemy(playerId);
-      if (enemy.error) return toolError(enemy.error, enemy);
+      if (enemy.error) return abortAiAttack(enemy.error, enemy);
 
       const defenderBuildings = game.getPlayerBuildings(enemy.id);
       if (!defenderBuildings.length) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-        return toolError('Enemy has no buildings');
+        return abortAiAttack('Enemy has no buildings');
       }
 
       const hasShipsInput = Array.isArray(ships) && ships.length > 0;
@@ -1063,12 +1100,12 @@ function registerTools(server, session, agentKey) {
       const shipsPlan = normalizeAiShipsPlan(resolvedShips, fleet);
       if (shipsPlan.error) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-        return toolError(shipsPlan.error, { fleet, slots: buildAttackSlots() });
+        return abortAiAttack(shipsPlan.error, { fleet, slots: buildAttackSlots() });
       }
       const energyCheck = validateAiAttackEnergy(resolvedCannonShots, resolvedRallyMarker);
       if (!energyCheck.ok) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-        return toolError(energyCheck.error);
+        return abortAiAttack(energyCheck.error);
       }
 
       const actions = [{
@@ -1106,11 +1143,11 @@ function registerTools(server, session, agentKey) {
         const target = resolveBuildingTarget(shot, defenderBuildings);
         if (!target) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-          return toolError(`Cannon target not found for shot ${i + 1}`);
+          return abortAiAttack(`Cannon target not found for shot ${i + 1}`);
         }
         if (!isAiCannonTarget(target)) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-          return toolError(`AI cannon shots must target defensive towers only (turret or archer_tower), not ${target.type}`);
+          return abortAiAttack(`AI cannon shots must target defensive towers only (turret or archer_tower), not ${target.type}`);
         }
         actions.push({
           t: cannonShotTime(shot, i),
@@ -1127,7 +1164,7 @@ function registerTools(server, session, agentKey) {
           : (hasExplicitPoint ? resolveWorldPoint(resolvedRallyMarker, defenderBuildings) : null);
         if (!point) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
-          return toolError('Rally marker target not found');
+          return abortAiAttack('Rally marker target not found');
         }
         actions.push({
           t: Number.isFinite(Number(resolvedRallyMarker.t)) ? Number(resolvedRallyMarker.t) : 5.0,
@@ -1168,7 +1205,7 @@ function registerTools(server, session, agentKey) {
       if (!verification.valid) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
         game.storeReplay(playerId, enemy.id, actions, defenderBuildings, finalResult, 'rejected', verification.reason, null, verification);
-        return toolError('AI attack rejected by replay verification', { reason: verification.reason });
+        return abortAiAttack('AI attack rejected by replay verification', { reason: verification.reason });
       }
       if (BATTLE_DEBUG_TRACE) {
         console.log(`[MCP AI ATTACK TRACE] session=${enemy.battle_session_id} enemy=${enemy.id} result=${finalResult} simTime=${verification._simTimeSec || '?'} events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0}`);
@@ -1182,7 +1219,7 @@ function registerTools(server, session, agentKey) {
         battleResult = game.battleVictory(playerId, enemy.id, enemy.battle_session_id);
         if (battleResult.error) {
           game.storeReplay(playerId, enemy.id, actions, defenderBuildings, finalResult, 'error', battleResult.error, null, verification);
-          return toolError(battleResult.error, battleResult);
+          return abortAiAttack(battleResult.error, battleResult);
         }
         game.storeReplay(playerId, enemy.id, actions, defenderBuildings, finalResult, 'accepted', verification.reason, battleResult.loot, verification);
       } else {
