@@ -1,0 +1,88 @@
+{
+  "chain": "solana",
+  "fromStandard": "metaplex-core",
+  "toStandard": "token2022",
+  "collection": "FaNGuNf3rQjrWZaUeaGvwj63oAGuh5J3mc8wPUtHas4m",
+  "entries": [
+    {
+      "oldAsset": "BBpcDYfpftzcTCu1mc6jGpMJWahZ2j9CovUa5jpvpuUf",
+      "owner": "5ezo4PhWa2gYeN6GdeEmj38ZrBKwRWvahVygsGbm7u2C",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/HXzmWbNEPBxkpJLVwCQekdUmSdiiKUX2gstQsfsb7wja?level=1&collection=demon-king-token2022-v1&src=migration%3ABBpcDYfpftzcTCu1mc6jGpMJWahZ2j9CovUa5jpvpuUf",
+      "newMint": "HXzmWbNEPBxkpJLVwCQekdUmSdiiKUX2gstQsfsb7wja",
+      "tokenAccount": "7Sg6w2qptFYv93gjDnKfiMWSLpc6CEqD4KREwaPeuqtk",
+      "txSig": "41PTzN2f4KZXV4Rbq9YKwPeCfChan8eFiYipND48pjUSTzocpojJsjBUzRwNqU62WQfZdKx6GeZon48PWACD2yCX",
+      "setupSig": "4cDD7DbY7VsiaJ7TrmQwKjjqzJrsbWdqYKRh9S4z3qiW9GaRtp1MqJyj9dh8xhLTX6EkedcQy6tMSufnQYbFrXpU",
+      "metadataSig": null,
+      "migratedAt": "2026-05-16T18:57:14.248Z"
+    },
+    {
+      "oldAsset": "CFcfMmHNo8zZwDRxSncBwwbTzxveS4oqWfojFpbhUpZ9",
+      "owner": "5ezo4PhWa2gYeN6GdeEmj38ZrBKwRWvahVygsGbm7u2C",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/55HDmNrz8zhpoXZsC2sfBAJKkemtvResdztwbtHpMfQv?level=1&collection=demon-king-token2022-v1&src=migration%3ACFcfMmHNo8zZwDRxSncBwwbTzxveS4oqWfojFpbhUpZ9",
+      "newMint": "55HDmNrz8zhpoXZsC2sfBAJKkemtvResdztwbtHpMfQv",
+      "tokenAccount": "EiEqAvjWYcXxKjgq9r7XZvNEe3JfKVToci3V2rkze9dg",
+      "txSig": "5sUiAz3pLFSGAXLp2sDEfzsqggTmFwvws4FwqRDTtexW7aRa5MCrajJQbstqtURVAnJ14LcQzdcjgbXsAmNRnLUF",
+      "setupSig": "4B1LXQkAPJB9XzdMayL5Bwmvq2jMXmDagWj4uWD5yCkwMdwEAUNzkZt46C9SHpie1WLpEXTbNJ4tT9hCdwq8odSr",
+      "metadataSig": "34xswA3uBckNUwawTNFzu625BytaN6E3VnCTmTVG5XGXBUrvvXYSDQasZigrRhMvtwKVVGazLys5NKGsv7wUuTyY",
+      "migratedAt": "2026-05-16T18:57:21.711Z"
+    },
+    {
+      "oldAsset": "9Sqpzijk1CA8pNjK6vULuv1UQA924L7mYRqinss6WqoH",
+      "owner": "5ezo4PhWa2gYeN6GdeEmj38ZrBKwRWvahVygsGbm7u2C",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/58ZT5QrycD9nYBAXsYbuZ3H3TVSy2R5PAKyLtzyFSQqT?level=1&collection=demon-king-token2022-v1&src=migration%3A9Sqpzijk1CA8pNjK6vULuv1UQA924L7mYRqinss6WqoH",
+      "newMint": "58ZT5QrycD9nYBAXsYbuZ3H3TVSy2R5PAKyLtzyFSQqT",
+      "tokenAccount": "AnTpTqtXFWkp2iVLPaRz1JnT76YgopHGyEZo1nFLeS9i",
+      "txSig": "3cMDYG7bPXDBMUopnDSbn33WF9EHhjsK8VgiMPN5txhrF8DXUPbg5R9kxoPWEN7FVSPRieagXGo8sntqeaCjtrks",
+      "setupSig": "66rvpenA54XqxrjutxTe4cggPpJyRmnQvsViJW4e2FAQRcbbfMPqJfpS15xo8ZYxcQn566iU6kTftdkATkUgDTsT",
+      "metadataSig": "EbqSeBEL17GtqRB7Tg6PjdLCZBKmiyUAY2oUxTyAcrJz4norgCBveLgYefckC52vf7tXGPALPxtjb9yhUSr57zz",
+      "migratedAt": "2026-05-16T18:57:29.137Z"
+    },
+    {
+      "oldAsset": "HgJwEibqLVjVu3Hhbg26w3iZ7AFzviYhcgeSgrTw81eS",
+      "owner": "5ezo4PhWa2gYeN6GdeEmj38ZrBKwRWvahVygsGbm7u2C",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/6MFqjPwFeSFrzejkwyQU3qu2Ze6cfnSBCY5NneUrNL3q?level=1&collection=demon-king-token2022-v1&src=migration%3AHgJwEibqLVjVu3Hhbg26w3iZ7AFzviYhcgeSgrTw81eS",
+      "newMint": "6MFqjPwFeSFrzejkwyQU3qu2Ze6cfnSBCY5NneUrNL3q",
+      "tokenAccount": "EuuySuGCcmQxwebi2EbBjuYXGYj35Gix93hq3QPRUwkw",
+      "txSig": "3FHSiWsCNzCbVAx1LZ479RvLkzePXuAqNebWfpbknuKnbLZRTGS62kBmjNGcShdnAV9Gmi1g8JommvUZwUdk5PQq",
+      "setupSig": "2SCCsgin4bYJKmTsuYQBCa3KfefeyQpgNnRogLWJR7awfwM4RftftwqRXmaAMFrRRhDCJaANShvDdjLNkoHq48Gn",
+      "metadataSig": "31iKD5UCKZN6Ju5dmXJRB5oaHayrYeEkW7gYBHiXno6prtU6iUCsZKkeqG3a5JVLQ1xg1uqvAdAyr3XugNf8Ukm",
+      "migratedAt": "2026-05-16T18:57:36.486Z"
+    },
+    {
+      "oldAsset": "39URTvUsTqomzS1yseJotA65dqGy4R7pQwaP6bPUyHE8",
+      "owner": "4Ze3bbJbmBjAUutV3LT1XUmqZG67fAR5PUr7vkXUgU2g",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/6uUMTemdVPSFCDcjaeAfPoTUBEZSMcssty5uF8GjcQ8w?level=1&collection=demon-king-token2022-v1&src=migration%3A39URTvUsTqomzS1yseJotA65dqGy4R7pQwaP6bPUyHE8",
+      "newMint": "6uUMTemdVPSFCDcjaeAfPoTUBEZSMcssty5uF8GjcQ8w",
+      "tokenAccount": "52zxncRvefvCX66fS9Ei3fJDbU5QtyJhsUXncXdCGECr",
+      "txSig": "Bs9RLNEdRKVtyePmZvNm359xHBQzxkany7TW3zJzpvNqFBbUPz678neAF4UVFAEMC3c5stWWULibCCGP2ZAvfGj",
+      "setupSig": "4mg6Gxe1sbzkMYoZMLEjof4zzGzBKjdVQcibFeXo4trSTvPZDZadkftbPgMYYAdvmcFdD8CnR2iXENtFhMSLGNq6",
+      "metadataSig": "2Vug1Nphu8ocTD7VWxNrgRkGhokyU49XqaVbAu1wddSSaAMJTsdupjUCuJWw7J7R8yZHrgQreCUztziPfkfDo5gy",
+      "migratedAt": "2026-05-16T18:57:43.885Z"
+    },
+    {
+      "oldAsset": "BSYWFAmZvdUpLrLQkFqSLF3n9oWUtkxdAZwqHKf1ExvZ",
+      "owner": "5ezo4PhWa2gYeN6GdeEmj38ZrBKwRWvahVygsGbm7u2C",
+      "level": 1,
+      "name": "Demon King",
+      "uri": "https://clashofperps.fun/api/nft/solana/token2022/7rF8zQqEszzYfgZwnj1qjqWE3ryVNDmwUR8988cPiRMf?level=1&collection=demon-king-token2022-v1&src=migration%3ABSYWFAmZvdUpLrLQkFqSLF3n9oWUtkxdAZwqHKf1ExvZ",
+      "newMint": "7rF8zQqEszzYfgZwnj1qjqWE3ryVNDmwUR8988cPiRMf",
+      "tokenAccount": "6NZGcyCNtMnvCpcS351KqpU7HN9dK6DBAcdVDVsMh8rX",
+      "txSig": "4zfRB9DhtJ18nTkxdgV7x1xWeXuKLDsTMa2x9J1GykPdj5oZTJjfqThi318BjujYKvHd71A6cdsbmEFL2KzDLonD",
+      "setupSig": "4bfsEWeQL3Mn63p9HxDbgR5d4XSUHmqvyoopdt8gshrBqiFviuqtUs5taTmAryDF37UtWMDddFmPb9MCYyqytpeH",
+      "metadataSig": "4hG9ZFdJtLgRgj4GneQM9LnQ6eqUWeBjj7BgY9H7LdFUmdEAWBUTSyuPPCyfk37DTgN4dCKEGDB9csXxHshzQuqn",
+      "migratedAt": "2026-05-16T18:57:51.274Z"
+    }
+  ],
+  "updatedAt": "2026-05-16T18:57:51.276Z",
+  "count": 6
+}

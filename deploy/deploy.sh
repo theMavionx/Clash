@@ -1,5 +1,5 @@
 #!/bin/bash
-# Atomic deploy script for clashofperps.fun.
+# Atomic deploy script for clashofperps.fun and mcp.clashofperps.fun.
 #
 # Layout after deploy:
 #   /opt/clash/current -> /opt/clash/releases/<release-id>
@@ -8,12 +8,14 @@
 #   /opt/clash/shared/server/*.db shared main SQLite DB
 #   /opt/clash/shared/server-futures/*.db shared futures SQLite DB
 #
-# Nginx serves /opt/clash/current/web/dist. A new build is prepared in a fresh
-# release directory first; only after validation do we atomically swap current.
+# Nginx serves /opt/clash/current/web/dist and proxies API/MCP processes.
+# A new build is prepared in a fresh release directory first; only after
+# validation do we atomically swap current.
 
 set -Eeuo pipefail
 
 DOMAIN="clashofperps.fun"
+MCP_DOMAIN="${CLASH_MCP_DOMAIN:-mcp.clashofperps.fun}"
 EMAIL="egor4042007@gmail.com"
 DEPLOY_ROOT="/opt/clash"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
@@ -28,6 +30,7 @@ RELEASE_ID="$(date -u +%Y%m%d%H%M%S)-$GIT_SHA"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
 SERVER_DIR="$RELEASE_DIR/server"
 FUTURES_DIR="$RELEASE_DIR/server-futures"
+MCP_DIR="$RELEASE_DIR/mcp"
 WEB_DIR="$RELEASE_DIR/web"
 WEB_DIST="$WEB_DIR/dist"
 
@@ -212,11 +215,20 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
     ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
     ensure_env_default "VITE_DECIBEL_GAS_STATION_API_KEY" ""
+    ensure_env_default "CLASH_MCP_PORT" "4100"
+    ensure_env_default "CLASH_MCP_HOST" "127.0.0.1"
+    ensure_env_default "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
+    ensure_env_default "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
+    ensure_env_default "CLASH_MCP_CORS_ORIGINS" "https://$DOMAIN,https://www.$DOMAIN,https://$MCP_DOMAIN"
+    ensure_env_default "CLASH_MCP_RATE_WINDOW_MS" "60000"
+    ensure_env_default "CLASH_MCP_RATE_LIMIT" "180"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "2"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
+    set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
+    set_env_value "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
         if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then
@@ -318,6 +330,15 @@ install_release_dependencies() {
     if [ -d "$FUTURES_DIR" ]; then
         cd "$FUTURES_DIR"
         npm install --omit=dev --legacy-peer-deps
+    fi
+
+    if [ -d "$MCP_DIR" ]; then
+        cd "$MCP_DIR"
+        if [ -f package-lock.json ]; then
+            npm ci --omit=dev --legacy-peer-deps
+        else
+            npm install --omit=dev --legacy-peer-deps
+        fi
     fi
 
     if ! grep -q '^DIAG_SERVER_SECRET_B58=' "$ENV_FILE"; then
@@ -427,6 +448,10 @@ validate_release() {
     [ -f "$WEB_DIST/godot/Work.js" ] || die "Missing web/dist/godot/Work.js"
     node --check "$SERVER_DIR/db.js"
     node --check "$SERVER_DIR/routes.js"
+    if [ -f "$MCP_DIR/src/server.mjs" ]; then
+        node --check "$MCP_DIR/src/server.mjs"
+        [ -f "$MCP_DIR/SKILLS.md" ] || die "Missing mcp/SKILLS.md"
+    fi
     if [ -f "$FUTURES_DIR/index.js" ]; then
         node --check "$FUTURES_DIR/index.js"
     fi
@@ -440,6 +465,7 @@ sync_legacy_databases_before_switch() {
     log "Stopping old services briefly for one-time DB migration..."
     pm2 stop clash-api 2>/dev/null || true
     pm2 stop clash-futures 2>/dev/null || true
+    pm2 stop clash-mcp 2>/dev/null || true
     copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db" || true
     copy_db_family "$DEPLOY_ROOT/server-futures" "$SHARED_FUTURES_DIR" "futures.db" || true
 }
@@ -470,6 +496,21 @@ HTTPCONF
         nginx -t
         systemctl reload nginx
         certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
+    fi
+
+    if [ ! -f "/etc/letsencrypt/live/$MCP_DOMAIN/fullchain.pem" ]; then
+        cat > /etc/nginx/sites-available/$MCP_DOMAIN << MCPTEMPCONF
+server {
+    listen 80;
+    server_name $MCP_DOMAIN;
+    location / { return 200 'clash-ai-mcp certificate bootstrap'; add_header Content-Type text/plain; }
+}
+MCPTEMPCONF
+
+        ln -sf /etc/nginx/sites-available/$MCP_DOMAIN /etc/nginx/sites-enabled/
+        nginx -t
+        systemctl reload nginx
+        certbot --nginx -d "$MCP_DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
     fi
 
     ARBITRUM_ALCHEMY_KEY=""
@@ -694,6 +735,45 @@ server {
 }
 SSLCONF
 
+    cat > /etc/nginx/sites-available/$MCP_DOMAIN << MCPCONF
+server {
+    listen 80;
+    server_name $MCP_DOMAIN;
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $MCP_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/$MCP_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$MCP_DOMAIN/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:4100;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Authorization \$http_authorization;
+        proxy_set_header MCP-Protocol-Version \$http_mcp_protocol_version;
+        proxy_set_header Mcp-Session-Id \$http_mcp_session_id;
+        proxy_set_header Last-Event-ID \$http_last_event_id;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+        add_header X-Accel-Buffering no always;
+    }
+
+    client_max_body_size 5M;
+}
+MCPCONF
+
     if [ -n "$ARBITRUM_ALCHEMY_KEY" ]; then
         sed -i "s|__ARBITRUM_ALCHEMY_KEY__|$ARBITRUM_ALCHEMY_KEY|g" /etc/nginx/sites-available/$DOMAIN
     else
@@ -702,6 +782,7 @@ SSLCONF
     fi
 
     ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+    ln -sf /etc/nginx/sites-available/$MCP_DOMAIN /etc/nginx/sites-enabled/
     rm -f /etc/nginx/sites-enabled/default
 
     if nginx -V 2>&1 | grep -q brotli; then
@@ -728,6 +809,15 @@ restart_services() {
         pm2 start "$CURRENT_LINK/server-futures/index.js" \
             --name clash-futures \
             --cwd "$CURRENT_LINK/server-futures" \
+            --env production \
+            --node-args="--env-file=$ENV_FILE"
+    fi
+
+    if [ -f "$CURRENT_LINK/mcp/src/server.mjs" ]; then
+        pm2 delete clash-mcp 2>/dev/null || true
+        pm2 start "$CURRENT_LINK/mcp/src/server.mjs" \
+            --name clash-mcp \
+            --cwd "$CURRENT_LINK/mcp" \
             --env production \
             --node-args="--env-file=$ENV_FILE"
     fi
@@ -771,12 +861,15 @@ main() {
     log "=== Deploy complete ==="
     echo "Frontend:  https://$DOMAIN"
     echo "API:       https://$DOMAIN/api/"
+    echo "MCP:       https://$MCP_DOMAIN/mcp"
+    echo "Skills:    https://$MCP_DOMAIN/skills.md"
     echo "Release:   $RELEASE_DIR"
     echo "Current:   $(readlink -f "$CURRENT_LINK")"
     echo ""
     echo "Useful commands:"
     echo "  pm2 logs clash-api"
     echo "  pm2 logs clash-futures"
+    echo "  pm2 logs clash-mcp"
     echo "  bash $DEPLOY_ROOT/deploy/update.sh"
     echo "  ln -sfn <release-dir> $DEPLOY_ROOT/.current.rollback && mv -Tf $DEPLOY_ROOT/.current.rollback $CURRENT_LINK"
 }

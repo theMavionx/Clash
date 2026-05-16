@@ -1,5 +1,5 @@
-
-vs def_gns8u3
-3m ago
-
-+30node_modules/
+node_modules/
+.env
+*.log
+*.err.log
+*.out.log

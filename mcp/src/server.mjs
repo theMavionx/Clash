@@ -15,9 +15,26 @@ const { verifyReplay } = require('../../server/combat_session.js');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SKILL_PATH = path.resolve(__dirname, '..', 'AGENT_SKILL.md');
+const SKILL_PATHS = [
+  process.env.CLASH_MCP_SKILLS_PATH,
+  path.resolve(__dirname, '..', 'SKILLS.md'),
+  path.resolve(__dirname, '..', 'AGENT_SKILL.md'),
+].filter(Boolean);
 const PORT = Number(process.env.CLASH_MCP_PORT || 4100);
+const HOST = process.env.CLASH_MCP_HOST || '127.0.0.1';
+const PUBLIC_URL = (process.env.CLASH_MCP_PUBLIC_URL || 'https://mcp.clashofperps.fun').replace(/\/+$/, '');
 const GAME_API_URL = (process.env.CLASH_GAME_API_URL || 'http://127.0.0.1:4000/api').replace(/\/+$/, '');
+const DEFAULT_CORS_ORIGINS = [
+  'https://clashofperps.fun',
+  'https://www.clashofperps.fun',
+  'https://mcp.clashofperps.fun',
+];
+const CORS_ORIGINS = (process.env.CLASH_MCP_CORS_ORIGINS || DEFAULT_CORS_ORIGINS.join(','))
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const RATE_LIMIT_WINDOW_MS = Number(process.env.CLASH_MCP_RATE_WINDOW_MS || 60_000);
+const RATE_LIMIT_MAX = Number(process.env.CLASH_MCP_RATE_LIMIT || 180);
 const VALID_SHIP_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 const SHIP_TROOP_COST = 100;
 const REINFORCE_COST = 50;
@@ -41,7 +58,56 @@ function cannonShotTime(shot, index) {
 }
 
 function readSkill() {
-  try { return fs.readFileSync(SKILL_PATH, 'utf8'); } catch { return ''; }
+  for (const skillPath of SKILL_PATHS) {
+    try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
+  }
+  return '';
+}
+
+function publicUrlForReq(req) {
+  if (PUBLIC_URL) return PUBLIC_URL;
+  const host = req.get('host') || `127.0.0.1:${PORT}`;
+  const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+  return `${proto}://${host}`.replace(/\/+$/, '');
+}
+
+function protectedResourceMetadata(req) {
+  const base = publicUrlForReq(req);
+  return {
+    resource: `${base}/mcp`,
+    authorization_servers: ['https://clashofperps.fun'],
+    scopes_supported: ['clash:agent'],
+    bearer_methods_supported: ['header'],
+    resource_documentation: `${base}/skills.md`,
+    clash_agent_key_issuer: 'https://clashofperps.fun/profile',
+    note: 'Phase 1 uses player-generated cop_ai_ bearer keys. Full OAuth can be layered on top of this protected resource metadata later.',
+  };
+}
+
+const rateBuckets = new Map();
+
+function rateLimit(req, res, next) {
+  if (!Number.isFinite(RATE_LIMIT_WINDOW_MS) || RATE_LIMIT_WINDOW_MS <= 0 || !Number.isFinite(RATE_LIMIT_MAX) || RATE_LIMIT_MAX <= 0) {
+    return next();
+  }
+  const now = Date.now();
+  const rawKey = extractAgentKey(req);
+  const bucketKey = rawKey ? `agent:${rawKey.slice(0, 24)}` : `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+  const bucket = rateBuckets.get(bucketKey) || { resetAt: now + RATE_LIMIT_WINDOW_MS, count: 0 };
+  if (now > bucket.resetAt) {
+    bucket.resetAt = now + RATE_LIMIT_WINDOW_MS;
+    bucket.count = 0;
+  }
+  bucket.count += 1;
+  rateBuckets.set(bucketKey, bucket);
+  res.set('RateLimit-Limit', String(RATE_LIMIT_MAX));
+  res.set('RateLimit-Remaining', String(Math.max(0, RATE_LIMIT_MAX - bucket.count)));
+  res.set('RateLimit-Reset', String(Math.ceil(bucket.resetAt / 1000)));
+  if (bucket.count > RATE_LIMIT_MAX) {
+    res.set('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+    return res.status(429).json({ error: 'MCP rate limit exceeded' });
+  }
+  return next();
 }
 
 function jsonResult(payload) {
@@ -66,7 +132,15 @@ function extractAgentKey(req) {
 function agentAuth(req, res, next) {
   const rawKey = extractAgentKey(req);
   const session = game.authenticateAiAgentKey(rawKey);
-  if (!session) return res.status(401).json({ error: 'Invalid or missing AI agent key' });
+  if (!session) {
+    const metadataUrl = `${publicUrlForReq(req)}/.well-known/oauth-protected-resource`;
+    res.set('WWW-Authenticate', `Bearer realm="clash-ai-mcp", resource_metadata="${metadataUrl}"`);
+    return res.status(401).json({
+      error: 'Invalid or missing AI agent key',
+      resource_metadata: metadataUrl,
+      skill: `${publicUrlForReq(req)}/skills.md`,
+    });
+  }
   req.agentSession = session;
   req.agentKey = rawKey;
   next();
@@ -868,6 +942,23 @@ function registerTools(server, session, agentKey) {
     })
   );
 
+  server.registerPrompt(
+    'clash_agent_onboarding',
+    {
+      title: 'Clash Agent Onboarding',
+      description: 'Load the current Clash of Perps AI playbook before managing a base or launching attacks.',
+    },
+    async () => ({
+      messages: [{
+        role: 'user',
+        content: {
+          type: 'text',
+          text: readSkill(),
+        },
+      }],
+    })
+  );
+
   server.registerTool(
     'get_base_state',
     {
@@ -1404,25 +1495,40 @@ function createServer(session, agentKey) {
 }
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors({
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     if (/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)) return cb(null, true);
-    if (origin === 'https://clashofperps.fun' || origin === 'https://www.clashofperps.fun') return cb(null, true);
+    if (CORS_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error(`CORS: origin '${origin}' not allowed`));
   },
 }));
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'clash-ai-mcp' });
+  res.json({
+    ok: true,
+    service: 'clash-ai-mcp',
+    transport: 'streamable-http',
+    mcp_endpoint: `${PUBLIC_URL}/mcp`,
+    skill: `${PUBLIC_URL}/skills.md`,
+  });
 });
 
 app.get('/skill', (_req, res) => {
   res.type('text/markdown').send(readSkill());
 });
 
-app.all('/mcp', agentAuth, async (req, res) => {
+app.get('/skills.md', (_req, res) => {
+  res.type('text/markdown').send(readSkill());
+});
+
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+  res.json(protectedResourceMetadata(req));
+});
+
+app.all('/mcp', rateLimit, agentAuth, async (req, res) => {
   const mcpServer = createServer(req.agentSession, req.agentKey);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
@@ -1442,6 +1548,7 @@ app.all('/mcp', agentAuth, async (req, res) => {
   }
 });
 
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Clash AI MCP running on http://127.0.0.1:${PORT}/mcp`);
+app.listen(PORT, HOST, () => {
+  console.log(`Clash AI MCP running on http://${HOST}:${PORT}/mcp`);
+  console.log(`Public MCP endpoint: ${PUBLIC_URL}/mcp`);
 });

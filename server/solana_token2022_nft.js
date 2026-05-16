@@ -91,15 +91,75 @@ async function sendAndConfirmFresh(connection, transaction, signers, label) {
     preflightCommitment: 'confirmed',
     maxRetries: 5,
   });
-  const confirmed = await connection.confirmTransaction({
-    signature,
-    blockhash: latest.blockhash,
-    lastValidBlockHeight: latest.lastValidBlockHeight,
-  }, 'confirmed');
+  let confirmed;
+  try {
+    confirmed = await connection.confirmTransaction({
+      signature,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    }, 'confirmed');
+  } catch (err) {
+    return recoverExpiredSignatureIfLanded(connection, err, label || 'Solana transaction');
+  }
   if (confirmed.value?.err) {
     throw new Error(`${label || 'Solana transaction'} failed: ${JSON.stringify(confirmed.value.err)}`);
   }
   return signature;
+}
+
+async function recoverExpiredSignatureIfLanded(connection, err, label) {
+  const signature = err?.signature;
+  if (!signature) throw err;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    const status = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    }).catch(() => null);
+    const value = status?.value?.[0];
+    if (value?.err) {
+      throw new Error(`${label || 'Solana transaction'} failed: ${JSON.stringify(value.err)}`);
+    }
+    if (value && ['confirmed', 'finalized'].includes(value.confirmationStatus)) {
+      return signature;
+    }
+  }
+  throw err;
+}
+
+function payerFromSecretKey(payerSecretKey) {
+  if (!payerSecretKey) throw new Error('Solana payer secret key required');
+  if (payerSecretKey.secretKey) {
+    return Keypair.fromSecretKey(Uint8Array.from(payerSecretKey.secretKey));
+  }
+  return Keypair.fromSecretKey(Uint8Array.from(payerSecretKey));
+}
+
+async function initializeToken2022MetadataWithRecover({
+  conn,
+  payer,
+  mint,
+  level,
+  uri,
+}) {
+  try {
+    return await tokenMetadataInitializeWithRentTransfer(
+      conn,
+      payer,
+      mint,
+      payer.publicKey,
+      payer,
+      token2022Name(level),
+      solanaToken2022Symbol(),
+      uri,
+      [],
+      { commitment: 'confirmed', preflightCommitment: 'confirmed', maxRetries: 5 },
+      TOKEN_2022_PROGRAM_ID,
+    );
+  } catch (err) {
+    return recoverExpiredSignatureIfLanded(conn, err, 'Token-2022 NFT metadata');
+  }
 }
 
 function token2022MintRentBytes() {
@@ -132,9 +192,7 @@ async function estimateToken2022NftRent(connection = new Connection(solanaRpcUrl
 async function mintToken2022Nft({ recipient, level = 1, sourceRef = null, payerSecretKey = null, connection = null } = {}) {
   if (!recipient) throw new Error('recipient required');
   const conn = connection || new Connection(solanaRpcUrl(), 'confirmed');
-  const payer = payerSecretKey instanceof Keypair
-    ? payerSecretKey
-    : Keypair.fromSecretKey(payerSecretKey);
+  const payer = payerFromSecretKey(payerSecretKey);
   const recipientPk = new PublicKey(recipient);
   const mint = Keypair.generate();
   const mintBytes = token2022MintRentBytes();
@@ -172,19 +230,13 @@ async function mintToken2022Nft({ recipient, level = 1, sourceRef = null, payerS
   );
   const setupSig = await sendAndConfirmFresh(conn, setupTx, [payer, mint], 'Token-2022 NFT setup');
 
-  const metadataSig = await tokenMetadataInitializeWithRentTransfer(
+  const metadataSig = await initializeToken2022MetadataWithRecover({
     conn,
     payer,
-    mint.publicKey,
-    payer.publicKey,
-    payer,
-    token2022Name(level),
-    solanaToken2022Symbol(),
+    mint: mint.publicKey,
+    level,
     uri,
-    [],
-    { commitment: 'confirmed', preflightCommitment: 'confirmed', maxRetries: 5 },
-    TOKEN_2022_PROGRAM_ID,
-  );
+  });
 
   const mintTx = new Transaction().add(
     createAssociatedTokenAccountIdempotentInstruction(
@@ -228,6 +280,109 @@ async function mintToken2022Nft({ recipient, level = 1, sourceRef = null, payerS
     assetAddress: mint.publicKey.toBase58(),
     mint: mint.publicKey.toBase58(),
     tokenAccount: ata.toBase58(),
+    txSig: mintSig,
+    setupSig,
+    metadataSig,
+    uri,
+    level: normalizeLevel(level),
+  };
+}
+
+async function completeExistingToken2022NftMint({
+  mint,
+  recipient,
+  level = 1,
+  sourceRef = null,
+  payerSecretKey = null,
+  connection = null,
+  setupSig = null,
+} = {}) {
+  if (!mint) throw new Error('mint required');
+  if (!recipient) throw new Error('recipient required');
+  const conn = connection || new Connection(solanaRpcUrl(), 'confirmed');
+  const payer = payerFromSecretKey(payerSecretKey);
+  const recipientPk = new PublicKey(recipient);
+  const mintPk = new PublicKey(mint);
+  const uri = token2022MetadataUri({ mint: mintPk.toBase58(), level, sourceRef });
+  const ata = getAssociatedTokenAddressSync(
+    mintPk,
+    recipientPk,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  );
+
+  let metadataSig = null;
+  const existingMeta = await getTokenMetadata(conn, mintPk, 'confirmed', TOKEN_2022_PROGRAM_ID).catch(() => null);
+  if (!token2022LooksLikeDemonKing(existingMeta)) {
+    metadataSig = await initializeToken2022MetadataWithRecover({
+      conn,
+      payer,
+      mint: mintPk,
+      level,
+      uri,
+    });
+  }
+
+  const mintInfo = await getMint(conn, mintPk, 'confirmed', TOKEN_2022_PROGRAM_ID);
+  const supply = BigInt(mintInfo.supply);
+  let mintSig = null;
+  if (supply === 0n) {
+    const mintTx = new Transaction().add(
+      createAssociatedTokenAccountIdempotentInstruction(
+        payer.publicKey,
+        ata,
+        recipientPk,
+        mintPk,
+        TOKEN_2022_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      ),
+      createMintToCheckedInstruction(
+        mintPk,
+        ata,
+        payer.publicKey,
+        1,
+        0,
+        [],
+        TOKEN_2022_PROGRAM_ID,
+      ),
+      createSetAuthorityInstruction(
+        mintPk,
+        payer.publicKey,
+        AuthorityType.MintTokens,
+        null,
+        [],
+        TOKEN_2022_PROGRAM_ID,
+      ),
+      createSetAuthorityInstruction(
+        mintPk,
+        payer.publicKey,
+        AuthorityType.FreezeAccount,
+        null,
+        [],
+        TOKEN_2022_PROGRAM_ID,
+      ),
+    );
+    mintSig = await sendAndConfirmFresh(conn, mintTx, [payer], 'Token-2022 NFT mint');
+  } else if (supply !== 1n) {
+    throw new Error(`Token-2022 mint has unexpected supply ${supply.toString()}`);
+  }
+
+  const accounts = await conn.getParsedTokenAccountsByOwner(recipientPk, { mint: mintPk }, 'confirmed');
+  const tokenAccount = (accounts.value || []).find((row) => {
+    const parsed = row?.account?.data?.parsed?.info;
+    return String(parsed?.mint || '') === mintPk.toBase58()
+      && String(parsed?.owner || '') === recipientPk.toBase58()
+      && String(parsed?.tokenAmount?.amount || '') === '1'
+      && Number(parsed?.tokenAmount?.decimals) === 0;
+  });
+  if (!tokenAccount) throw new Error('Token-2022 recipient token account was not found after mint');
+
+  return {
+    standard: 'token2022',
+    assetAddress: mintPk.toBase58(),
+    mint: mintPk.toBase58(),
+    tokenAccount: tokenAccount.pubkey.toBase58(),
     txSig: mintSig,
     setupSig,
     metadataSig,
@@ -316,6 +471,7 @@ module.exports = {
   levelFromToken2022Metadata,
   estimateToken2022NftRent,
   mintToken2022Nft,
+  completeExistingToken2022NftMint,
   getToken2022NftInfo,
   createToken2022BurnInstructions,
 };

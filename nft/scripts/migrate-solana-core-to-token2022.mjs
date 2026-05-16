@@ -19,12 +19,18 @@ import { publicKey } from '@metaplex-foundation/umi';
 import { loadEnv, NFT_DIR, parseSolanaKeypair } from './lib-env.mjs';
 
 const require = createRequire(import.meta.url);
-const { mintToken2022Nft } = require('../../server/solana_token2022_nft');
+const {
+  completeExistingToken2022NftMint,
+  mintToken2022Nft,
+} = require('../../server/solana_token2022_nft');
 
 const env = loadEnv();
 const execute = process.argv.includes('--execute');
 const limitArg = process.argv.find((arg) => arg.startsWith('--limit='))?.split('=')[1];
 const limit = limitArg ? Math.max(0, Number(limitArg) || 0) : 0;
+const resumeOld = process.argv.find((arg) => arg.startsWith('--resume-old='))?.split('=')[1] || '';
+const resumeMint = process.argv.find((arg) => arg.startsWith('--resume-mint='))?.split('=')[1] || '';
+const resumeSetupSig = process.argv.find((arg) => arg.startsWith('--resume-setup-sig='))?.split('=')[1] || null;
 const deploymentPath = path.join(NFT_DIR, 'deployments', 'solana-mainnet.json');
 const migrationPath = path.join(NFT_DIR, 'deployments', 'solana-token2022-migration-mainnet.json');
 
@@ -94,12 +100,15 @@ if (!execute) {
   for (const row of candidates) {
     const existing = migration.entries.find((entry) => String(entry.oldAsset || '') === row.oldAsset);
     if (existing) continue;
-    const mint = await mintToken2022Nft({
+    const resumeThisMint = resumeOld && resumeMint && row.oldAsset === resumeOld;
+    const mint = await (resumeThisMint ? completeExistingToken2022NftMint : mintToken2022Nft)({
+      mint: resumeThisMint ? resumeMint : undefined,
       recipient: row.owner,
       level: row.level,
       sourceRef: `migration:${row.oldAsset}`,
-      payerSecretKey: payer,
+      payerSecretKey: payer.secretKey,
       connection,
+      setupSig: resumeThisMint ? resumeSetupSig : undefined,
     });
     const entry = {
       ...row,

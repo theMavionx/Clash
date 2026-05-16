@@ -1,5 +1,10 @@
 #!/bin/bash
 # Pull the canonical source checkout, then run the atomic deploy script.
+# The deploy script updates the frontend/API plus the remote MCP host:
+#   https://mcp.clashofperps.fun/mcp
+#
+# MCP-only one-click update:
+#   sudo bash /opt/clash/deploy/update-mcp.sh
 #
 # Production is intentionally anchored at /opt/clash:
 #   /opt/clash/.git      canonical checkout

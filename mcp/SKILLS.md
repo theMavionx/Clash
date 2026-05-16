@@ -54,6 +54,7 @@ Minimal smart attack request:
 ```json
 {}
 ```
+
 Calling `execute_ai_attack_plan` with no manual plan uses the server auto-tactics. It chooses landing slots, defense cannon shots, and a single rally marker when a useful nearby non-defense focus exists. Use `auto_tactics: false` only when you need exact manual replay coordinates.
 
 Attack target selectors:
