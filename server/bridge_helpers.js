@@ -471,6 +471,17 @@ function solanaAssetLevel(asset) {
   return [1, 2, 3].includes(level) ? level : 1;
 }
 
+async function isSolanaToken2022Account(assetPubkey) {
+  try {
+    const { PublicKey } = require('@solana/web3.js');
+    const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+    const account = await solanaConnection().getAccountInfo(new PublicKey(assetPubkey), 'confirmed');
+    return !!account?.owner?.equals?.(TOKEN_2022_PROGRAM_ID);
+  } catch {
+    return false;
+  }
+}
+
 async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   const dep = deploymentOf('solana');
   if (!dep?.collection) throw new Error('Solana collection not configured');
@@ -484,6 +495,10 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
     });
   } catch (err) {
     const msg = String(err?.message || err);
+    if (await isSolanaToken2022Account(assetPubkey)) {
+      err.status = err.status || 400;
+      throw err;
+    }
     if (!/Token-2022|token|mint|owner|1-of-1|Demon King/i.test(msg)) throw err;
   }
   const migrated = solanaMigratedCoreAsset(assetPubkey);

@@ -405,6 +405,9 @@ async function getToken2022NftInfo({ mint, expectedOwner, connection = null, col
   if (!token2022LooksLikeDemonKing(meta)) {
     throw new Error('Solana Token-2022 mint is not a Demon King NFT');
   }
+  if (mintInfo && BigInt(mintInfo.supply) === 0n) {
+    throw new Error('Solana Token-2022 mint is already burned (supply is 0)');
+  }
   if (!mintInfo || Number(mintInfo.decimals) !== 0 || BigInt(mintInfo.supply) !== 1n) {
     throw new Error('Solana Token-2022 mint is not a 1-of-1 NFT');
   }

@@ -100,6 +100,62 @@ function shortAddr(s, head = 6, tail = 4) {
   return s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSolanaExpiryError(err) {
+  const msg = String(err?.message || err || '');
+  return /block height exceeded|expired/i.test(msg);
+}
+
+function extractSolanaSignatureFromError(err) {
+  if (err?.signature) return String(err.signature);
+  const msg = String(err?.message || err || '');
+  return msg.match(/[1-9A-HJ-NP-Za-km-z]{80,100}/)?.[0] || '';
+}
+
+function isToken2022SolanaBurn(burn) {
+  const program = String(burn?.program || burn?.standard || '').toLowerCase();
+  return program.includes('token-2022')
+    || program.includes('token2022')
+    || !!burn?.tokenAccount
+    || (burn?.mint && burn?.mint === burn?.asset);
+}
+
+async function waitForSolanaLateLanding(connection, signature, label = 'Solana transaction') {
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    const statusRes = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    }).catch(() => null);
+    const status = statusRes?.value?.[0];
+    if (status?.err) {
+      throw new Error(`${label} failed: ${JSON.stringify(status.err)}`);
+    }
+    if (status && ['confirmed', 'finalized'].includes(status.confirmationStatus)) {
+      return true;
+    }
+    await sleep(2000);
+  }
+  return false;
+}
+
+async function confirmSolanaSignatureOrRecover(connection, confirmation, label) {
+  try {
+    const confirmed = await connection.confirmTransaction(confirmation, 'confirmed');
+    if (confirmed.value?.err) {
+      throw new Error(`${label} failed: ${JSON.stringify(confirmed.value.err)}`);
+    }
+    return true;
+  } catch (err) {
+    if (isSolanaExpiryError(err)) {
+      const landed = await waitForSolanaLateLanding(connection, confirmation.signature, label);
+      if (landed) return true;
+    }
+    throw err;
+  }
+}
+
 export default function NftBridgePanel({ styles, onBack, onClose }) {
   const tradingEvmWallet = useEvmWallet();
   const solWallet = useSolWallet();
@@ -293,7 +349,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
       // mpl-core burn ix + memo ix. Adapter only signs; tx construction
       // happens here. Lazy-load deps to keep the bundle small for the
       // EVM-only majority of users.
-      if (initRes.burn?.program === 'spl-token-2022') {
+      if (isToken2022SolanaBurn(initRes.burn)) {
         const [
           { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction },
           {
@@ -365,14 +421,11 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
           preflightCommitment: 'confirmed',
           maxRetries: 5,
         });
-        const confirmed = await conn.confirmTransaction({
+        await confirmSolanaSignatureOrRecover(conn, {
           signature,
           blockhash: latest.blockhash,
           lastValidBlockHeight: latest.lastValidBlockHeight,
-        }, 'confirmed');
-        if (confirmed.value?.err) {
-          throw new Error(`Solana Token-2022 burn failed: ${JSON.stringify(confirmed.value.err)}`);
-        }
+        }, 'Solana Token-2022 burn');
         return signature;
       }
 
@@ -380,7 +433,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
       const { publicKey, transactionBuilder } = await import('@metaplex-foundation/umi');
       const { mplCore, burn, fetchAsset, fetchCollection } = await import('@metaplex-foundation/mpl-core');
       const { fromWeb3JsInstruction } = await import('@metaplex-foundation/umi-web3js-adapters');
-      const { PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
+      const { Connection, PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
 
       const umi = createUmi(DEFAULT_SOLANA_RPC_URL).use(mplCore());
       // We can't use a keypairIdentity here because the user wallet is a
@@ -416,12 +469,23 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         built = built.add({ bytesCreatedOnChain: 0, instruction: feeIx, signers: [] });
       }
       built = built.add({ bytesCreatedOnChain: 0, instruction: memoIx, signers: [] });
-      const sigRes = await built.sendAndConfirm(umi, {
-        send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
-        confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
-      });
       const { base58 } = await import('@metaplex-foundation/umi/serializers');
-      return base58.deserialize(sigRes.signature)[0];
+      try {
+        const sigRes = await built.sendAndConfirm(umi, {
+          send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
+          confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+        });
+        return base58.deserialize(sigRes.signature)[0];
+      } catch (err) {
+        const signature = extractSolanaSignatureFromError(err);
+        if (signature && isSolanaExpiryError(err)) {
+          const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
+          const conn = new Connection(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+          const landed = await waitForSolanaLateLanding(conn, signature, 'Solana Core burn');
+          if (landed) return signature;
+        }
+        throw err;
+      }
     }
     throw new Error(`Unsupported source kind ${kind}`);
   }, [sourceChain, evmAddress, solAddress, tradingEvmWallet, aptosWallet, solWallet]);
