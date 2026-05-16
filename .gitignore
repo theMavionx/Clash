@@ -42,6 +42,19 @@ aptos-test-wallet.txt
 backups/
 .tmp/
 
+# Aptos CLI binary downloaded locally for Move publishing (~130MB)
+tools/aptos-cli/
+
+# Hardhat caches/artifacts (Hardhat is used only for V3 fork tests;
+# production deploys use the legacy solc compile script in nft/scripts/).
+nft/artifacts-hh/
+nft/cache-hh/
+nft/.hh-cache/
+
+# Move build outputs + per-project aptos profiles (contain devnet privkeys)
+nft/move/**/build/
+nft/move/**/.aptos/
+
 # Production runtime folders when /opt/clash is used as the canonical checkout.
 # They are created by deploy/deploy.sh and must not be copied back into git.
 /current

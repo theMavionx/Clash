@@ -53,6 +53,8 @@ const SKELETON_GUARD = {
   moveSpeed: 0.45,
   detectionRadius: 1.0,
   attackRange: 0.15,
+  separationRadius: 0.15,
+  separationForce: 0.4,
   hitDelay: 0.4,
   hitDistance: 0.2,
 };
@@ -61,7 +63,7 @@ const SKELETON_GUARD = {
 const MAX_SHIPS = 5;
 const TROOPS_PER_SHIP = 9;                      // 3x original (was 3)
 const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP;  // 45
-const SAIL_DELAY_SEC = 3;
+const SAIL_DELAY_SEC = 3.0;
 const TIME_LIMIT_SEC = 180;
 const LOOT_PERCENT = 0.15;
 
@@ -86,32 +88,32 @@ const CANONICAL_GRID_CONFIGS = {
   0: {
     grid_width: 27,
     grid_height: 27,
-    cell_size: 0.12222223374545819,
-    grid_extent_x: 3.300000311127371,
-    grid_extent_z: 3.300000311127371,
-    grid_center_x: -1.701780044116269,
-    grid_center_z: 0.10582136452253298,
-    grid_rotation: 0.7640877583113884,
+    cell_size: 0.122222238117,
+    grid_extent_x: 3.300000429153,
+    grid_extent_z: 3.300000429153,
+    grid_center_x: 0.010449171066,
+    grid_center_z: 1.757227778435,
+    grid_rotation: 0.764087796211,
   },
   1: {
     grid_width: 27,
     grid_height: 3,
-    cell_size: 0.122212192924287,
-    grid_extent_x: 3.2997292089557484,
-    grid_extent_z: 0.3690982433634925,
-    grid_center_x: -2.955702452109811,
-    grid_center_z: 1.4870169076729116,
-    grid_rotation: 0.7526225606300321,
+    cell_size: 0.122222238117,
+    grid_extent_x: 3.300000429153,
+    grid_extent_z: 0.366666465998,
+    grid_center_x: 1.302690863609,
+    grid_center_z: 3.102639913559,
+    grid_rotation: 0.764087736607,
   },
   2: {
     grid_width: 27,
     grid_height: 5,
-    cell_size: 0.01782970062824279,
-    grid_extent_x: 0.48140191696255535,
-    grid_extent_z: 3.175276220889994,
-    grid_center_x: -3.078210570574297,
-    grid_center_z: -1.1433936797630364,
-    grid_rotation: 2.3219863304604607,
+    cell_size: 0.117602825165,
+    grid_extent_x: 3.175276279449,
+    grid_extent_z: 0.497041463852,
+    grid_center_x: -1.329941034317,
+    grid_center_z: 3.045037269592,
+    grid_rotation: 2.321985960007,
   },
 };
 

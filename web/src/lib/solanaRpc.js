@@ -1,17 +1,20 @@
 const rawEnvSolanaRpc = (import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
-const allowDirectBrowserRpc = import.meta.env.DEV
-  || /^(1|true|yes)$/i.test(String(import.meta.env.VITE_ALLOW_DIRECT_SOLANA_RPC || ''));
+const rawDirectSolanaRpc = (import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || '').trim();
+const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS || '').trim();
+const heliusApiKey = (
+  import.meta.env.VITE_HELIUS_API_KEY
+  || import.meta.env.VITE_SOLANA_HELIUS_API_KEY
+  || ''
+).trim();
+const allowProxyFallback = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || ''));
+const preferProxyRpc = allowProxyFallback
+  && /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || ''));
 const defaultDirectBrowserRpc = ['https://solana-rpc', 'publicnode.com'].join('.');
+const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
 export const SOLANA_RPC_PROBE_TIMEOUT_MS = 3_000;
-
-// Direct public RPCs are fine in local dev, but production trading should go
-// through same-origin proxies unless an operator explicitly opts in.
-const BROWSER_SOLANA_RPC_URLS = allowDirectBrowserRpc
-  ? [import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || defaultDirectBrowserRpc]
-  : [];
 
 function siteOrigin() {
   if (typeof window !== 'undefined' && window.location?.origin) {
@@ -24,27 +27,68 @@ function sameOriginPath(path) {
   return `${siteOrigin()}${path}`;
 }
 
+function splitRpcUrls(raw) {
+  return String(raw || '')
+    .split(/[,\s]+/)
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+function isSameOriginRpcUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return false;
+  if (raw.startsWith('/')) return true;
+  try {
+    const parsed = new URL(raw, siteOrigin());
+    const origin = new URL(siteOrigin());
+    return parsed.origin === origin.origin && parsed.pathname.startsWith('/rpc/solana');
+  } catch {
+    return false;
+  }
+}
+
 function normalizeRpcUrl(url) {
   if (!url) return '';
   if (url.startsWith('/')) return sameOriginPath(url);
   return url;
 }
 
-let envSolanaRpc = '';
+let envDirectSolanaRpc = '';
+let envProxySolanaRpc = '';
 try {
-  envSolanaRpc = normalizeRpcUrl(rawEnvSolanaRpc);
+  if (isSameOriginRpcUrl(rawEnvSolanaRpc)) {
+    envProxySolanaRpc = normalizeRpcUrl(rawEnvSolanaRpc);
+  } else {
+    envDirectSolanaRpc = normalizeRpcUrl(rawEnvSolanaRpc);
+  }
 } catch {
-  envSolanaRpc = '';
+  envDirectSolanaRpc = '';
+  envProxySolanaRpc = '';
 }
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
 export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
 
+const DIRECT_SOLANA_RPC_URLS = [
+  envDirectSolanaRpc,
+  ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
+  rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
+  heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}` : '',
+  defaultDirectBrowserRpc,
+  officialDirectBrowserRpc,
+];
+
+const PROXY_SOLANA_RPC_URLS = [
+  envProxySolanaRpc,
+  ...(allowProxyFallback ? [
+    SAME_ORIGIN_SOLANA_RPC_URL,
+    SAME_ORIGIN_SOLANA_LEORPC_URL,
+  ] : []),
+];
+
 export const SOLANA_RPC_URLS = [
-  envSolanaRpc,
-  SAME_ORIGIN_SOLANA_RPC_URL,
-  SAME_ORIGIN_SOLANA_LEORPC_URL,
-  ...BROWSER_SOLANA_RPC_URLS,
+  ...(preferProxyRpc ? PROXY_SOLANA_RPC_URLS : DIRECT_SOLANA_RPC_URLS),
+  ...(preferProxyRpc ? DIRECT_SOLANA_RPC_URLS : PROXY_SOLANA_RPC_URLS),
 ].filter((url, index, all) => url && all.indexOf(url) === index);
 
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;

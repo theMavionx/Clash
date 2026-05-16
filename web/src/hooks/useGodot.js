@@ -23,14 +23,14 @@ function postReplayTelemetry(data, tokenOverride = null) {
   if (!token) {
     return false;
   }
+  const body = JSON.stringify(data || {});
   fetch('/api/replay-telemetry', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-token': token },
-    body: JSON.stringify(data || {}),
-    keepalive: true,
+    body,
   }).then((res) => {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    console.info('[replay_telemetry] stored', data?.replay || {}, data?.summary || {});
+    console.info('[replay_telemetry] stored', data?.replay || {}, data?.summary || {}, { bytes: body.length });
   }).catch((err) => {
     console.warn('[replay_telemetry] failed', err?.message || err);
   });

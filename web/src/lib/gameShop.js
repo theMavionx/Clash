@@ -355,7 +355,10 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       buyerBalance = 0n;
     }
     if (buyerBalance < amount) {
-      throw new InsufficientSolanaBalanceError('usdc', amount, buyerBalance, 6);
+      // payment is 'usdc' or 'skr' in the SPL branch; decimals comes
+      // from the quote so SKR's 6 decimals (or whatever a future token
+      // uses) render correctly without hardcoding.
+      throw new InsufficientSolanaBalanceError(payment, amount, buyerBalance, quote.decimals);
     }
   }
 
@@ -442,4 +445,249 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     serverSignature: quote.signature,
   });
   return { signature, quote, grant };
+}
+
+// =====================================================================
+// Generic EVM shop (Arbitrum, Monad). No deployed contract — just a
+// plain ERC20.transfer(treasury, exactAmount) where the server has
+// signed a memo binding (sku, qty, account, amount) and verifies the
+// resulting tx-receipt server-side.
+// =====================================================================
+
+const ERC20_SHOP_ABI = [
+  {
+    name: 'transfer',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'to', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ type: 'bool' }],
+  },
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'a', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+];
+
+export async function fetchEvmShopQuote({ token, chain, buyer, sku, payment = 'usdc', quantity = 1 }) {
+  const response = await fetch('/api/shop/evm/quote', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ chain, buyer, sku, payment, quantity }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Shop quote failed (${response.status})`);
+  return json;
+}
+
+export async function redeemEvmShopPurchase({ token, chain, txHash, memo, signature }) {
+  const response = await fetch('/api/shop/evm/redeem', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ chain, txHash, memo, signature }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Redeem failed (${response.status})`);
+  return json;
+}
+
+// Per-chain switchChain shim. Caller passes the right chainId object;
+// we don't keep a hardcoded list to avoid coupling shop logic to the
+// trading-side chain configs.
+async function ensureEvmChain(evmWallet, chainId) {
+  if (typeof evmWallet?.ensureChain === 'function') {
+    await evmWallet.ensureChain(chainId);
+    return;
+  }
+  if (!evmWallet?.provider?.request) return;
+  const chainHex = '0x' + Number(chainId).toString(16);
+  try {
+    await evmWallet.provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainHex }] });
+  } catch (err) {
+    if (err?.code === 4902) {
+      throw new Error(`Add ${chainId} to your wallet first`);
+    }
+    throw err;
+  }
+}
+
+export async function buyEvmShopItem({ evmWallet, buyer, token, chain, sku, payment = 'usdc', quantity = 1 }) {
+  if (!token) throw new Error('Game session is not ready');
+  if (!evmWallet?.provider || !buyer) throw new Error('EVM wallet is not connected');
+  if (!chain) throw new Error('Chain not specified');
+
+  const quote = await fetchEvmShopQuote({ token, chain, buyer, sku, payment, quantity });
+  if (!quote?.treasury) throw new Error('Shop treasury not configured');
+  if (quote.kind === 'erc20' && !quote.mint) throw new Error('ERC20 mint missing in quote');
+
+  await ensureEvmChain(evmWallet, quote.chainId);
+  const publicClient = evmWallet.getPublicClient(quote.chainId);
+  const walletClient = evmWallet.getWalletClient(quote.chainId);
+  if (!publicClient || !walletClient) throw new Error('EVM wallet client is not ready');
+
+  const required = BigInt(quote.amount);
+  const fmt = (v) => {
+    const scale = 10n ** BigInt(quote.decimals);
+    const whole = v / scale;
+    const frac = v % scale;
+    if (frac === 0n) return whole.toString();
+    const fs = frac.toString().padStart(quote.decimals, '0').slice(0, 4).replace(/0+$/, '');
+    return fs ? `${whole}.${fs}` : whole.toString();
+  };
+  const tokenLabel = String(quote.payment || 'usdc').toUpperCase();
+  const chainLabel = quote.label || chain;
+
+  let txHash;
+  if (quote.kind === 'native') {
+    // Native pay (ETH on Arbitrum, MON on Monad). Just send `value` to the
+    // treasury — no token contract involved. Pre-flight checks raw balance
+    // and tries to leave a tiny reserve for gas so we don't drain the
+    // wallet to where the tx itself can't ship.
+    const balance = await publicClient.getBalance({ address: buyer });
+    // 0.0002 of native (rough safety margin for a ~21k-gas plain transfer
+    // on Arbitrum/Monad, even with priority fee). Cheap chains; this is
+    // conservative.
+    const gasReserve = 200_000_000_000_000n; // 0.0002 ETH/MON
+    if (BigInt(balance) < required + gasReserve) {
+      throw new Error(`Not enough ${tokenLabel} on ${chainLabel}. Need ${fmt(required)} + gas, your wallet has ${fmt(BigInt(balance))}.`);
+    }
+    txHash = await walletClient.sendTransaction({
+      to: quote.treasury,
+      value: required,
+    });
+  } else {
+    // ERC20 pay (USDC). transfer() to treasury, then redeem on the server.
+    const balance = await publicClient.readContract({
+      address: quote.mint,
+      abi: ERC20_SHOP_ABI,
+      functionName: 'balanceOf',
+      args: [buyer],
+    });
+    if (BigInt(balance) < required) {
+      throw new Error(`Not enough ${tokenLabel} on ${chainLabel}. Need ${fmt(required)}, your wallet has ${fmt(BigInt(balance))}.`);
+    }
+    txHash = await walletClient.writeContract({
+      address: quote.mint,
+      abi: ERC20_SHOP_ABI,
+      functionName: 'transfer',
+      args: [quote.treasury, required],
+    });
+  }
+  await publicClient.waitForTransactionReceipt({ hash: txHash });
+
+  const grant = await redeemEvmShopPurchase({
+    token,
+    chain,
+    txHash,
+    memo: quote.memo,
+    signature: quote.signature,
+  });
+  return { txHash, quote, grant };
+}
+
+// =====================================================================
+// Aptos shop (Decibel). Uses 0x1::primary_fungible_store::transfer for
+// USDC (FA) or 0x1::aptos_account::transfer for native APT. Aptos wallet
+// adapter contracts expose signAndSubmitTransaction which builds the tx
+// for us — we only have to assemble the entry-function payload.
+// =====================================================================
+
+export async function fetchAptosShopQuote({ token, buyer, sku, payment = 'usdc', quantity = 1 }) {
+  const response = await fetch('/api/shop/aptos/quote', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ buyer, sku, payment, quantity }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Aptos shop quote failed (${response.status})`);
+  return json;
+}
+
+export async function redeemAptosShopPurchase({ token, txHash, memo, signature }) {
+  const response = await fetch('/api/shop/aptos/redeem', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-token': token } : {}),
+    },
+    body: JSON.stringify({ txHash, memo, signature }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Aptos redeem failed (${response.status})`);
+  return json;
+}
+
+export async function buyAptosShopItem({ aptosWallet, buyer, token, sku, payment = 'usdc', quantity = 1 }) {
+  if (!token) throw new Error('Game session is not ready');
+  if (!aptosWallet) throw new Error('Aptos wallet is not connected');
+  const address = buyer || aptosWallet?.address || aptosWallet?.account?.address;
+  if (!address) throw new Error('Aptos buyer address missing');
+
+  const quote = await fetchAptosShopQuote({ token, buyer: address, sku, payment, quantity });
+  if (!quote?.treasury) throw new Error('Aptos treasury not configured');
+
+  // Build InputTransactionData payload (new @aptos-labs SDK shape). The
+  // FA primary-store transfer works for any fungible asset; APT after the
+  // FA migration is also addressable this way via mint 0xa. The wallet
+  // adapter accepts `{ data: { function, typeArguments, functionArguments } }`
+  // and injects `sender` itself.
+  const payload = {
+    data: {
+      function: '0x1::primary_fungible_store::transfer',
+      typeArguments: ['0x1::fungible_asset::Metadata'],
+      functionArguments: [quote.asset, quote.treasury, String(quote.amount)],
+    },
+  };
+
+  // Use the AptosWalletContext wrapper if present (`loginSignAndSubmit`),
+  // otherwise fall back to the raw adapter's `signAndSubmitTransaction`.
+  // Petra/Pontem both work through this wrapper after the AIP-62 migration.
+  const submitFn = aptosWallet.loginSignAndSubmit
+    || aptosWallet.signAndSubmitTransaction
+    || aptosWallet.signAndSubmit;
+  if (typeof submitFn !== 'function') {
+    throw new Error('Connected Aptos wallet cannot sign transactions');
+  }
+  const submitResult = await submitFn.call(aptosWallet, payload);
+  const txHash = submitResult?.hash
+    || submitResult?.txnHash
+    || submitResult?.transactionHash
+    || submitResult?.signature;
+  if (!txHash) throw new Error('Aptos tx submission returned no hash');
+
+  // Wait for transaction confirmation via the public Aptos fullnode.
+  // Adapter wallets typically don't expose a confirm helper, so we poll.
+  const fullnode = (typeof window !== 'undefined' && window.APTOS_FULLNODE)
+    || 'https://fullnode.mainnet.aptoslabs.com/v1';
+  for (let i = 0; i < 30; i++) {
+    const r = await fetch(`${fullnode}/transactions/by_hash/${txHash}`).catch(() => null);
+    if (r && r.ok) {
+      const data = await r.json().catch(() => null);
+      if (data?.success === true) break;
+      if (data?.success === false) throw new Error(`Aptos tx failed on-chain: ${data?.vm_status || 'unknown'}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+
+  const grant = await redeemAptosShopPurchase({
+    token,
+    txHash,
+    memo: quote.memo,
+    signature: quote.signature,
+  });
+  return { txHash, quote, grant };
 }

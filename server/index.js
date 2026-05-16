@@ -49,7 +49,7 @@ app.use(cors({
   },
   credentials: false,
 }));
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: process.env.CLASH_JSON_LIMIT || '2mb' }));
 
 function dashboardAuth(req, res, next) {
   if (process.env.PUBLIC_DASHBOARD === '1') return next();
@@ -1906,4 +1906,51 @@ setupWebSocket(server);
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Clash server running on http://127.0.0.1:${PORT}`);
   console.log(`WebSocket available at ws://127.0.0.1:${PORT}/ws`);
+
+  // Marketplace event indexer. Polls each chain for Listed/Cancelled/Sold
+  // events and writes them into marketplace_listings.
+  //
+  //   CLASH_MARKETPLACE_INDEXER=0           → disable entirely (use this if
+  //                                            running multiple replicas — only
+  //                                            one should poll).
+  //   CLASH_MARKETPLACE_CHAINS=base,arbitrum → explicit chain list.
+  //   (no env)                              → auto-detect from
+  //                                            nft/deployments/*-marketplace-mainnet.json
+  if (process.env.CLASH_MARKETPLACE_INDEXER !== '0') {
+    try {
+      const { startMarketplaceIndexer } = require('./marketplace_indexer');
+      const fs = require('node:fs');
+      const path = require('node:path');
+      const deployDir = path.resolve(__dirname, '..', 'nft', 'deployments');
+      let chains;
+      if (process.env.CLASH_MARKETPLACE_CHAINS) {
+        chains = process.env.CLASH_MARKETPLACE_CHAINS.split(',').map((s) => s.trim()).filter(Boolean);
+      } else {
+        try {
+          chains = fs.readdirSync(deployDir)
+            .filter((f) => /-marketplace-mainnet\.json$/.test(f))
+            .map((f) => f.replace(/-marketplace-mainnet\.json$/, ''));
+        } catch { chains = ['base']; }
+      }
+      for (const c of chains) {
+        startMarketplaceIndexer({ chain: c })
+          .then((h) => h && console.log(`[marketplace-indexer] started for ${c} (${h.contract})`))
+          .catch((err) => console.warn(`[marketplace-indexer] ${c} failed to start:`, err?.message || err));
+      }
+    } catch (err) {
+      console.warn('[marketplace-indexer] init failed:', err?.message || err);
+    }
+  }
 });
+
+// Graceful shutdown of the indexer's poll loop. SIGTERM is the platform-
+// agnostic signal; on Windows PM2/nodemon also issue SIGINT.
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => {
+    try {
+      const { stopMarketplaceIndexer } = require('./marketplace_indexer');
+      stopMarketplaceIndexer();
+    } catch { /* ignore */ }
+    process.exit(0);
+  });
+}

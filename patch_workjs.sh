@@ -25,3 +25,46 @@ NODE
 else
     echo "Work.js not found"
 fi
+
+HTML_FILE="web/public/godot/Work.html"
+if [ -f "$HTML_FILE" ]; then
+    node - "$HTML_FILE" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+let source = fs.readFileSync(file, 'utf8');
+
+const guardMarker = 'data-clash-title-guard';
+const titleGuard = `\t\t<script ${guardMarker}>
+(function () {
+\tvar title = 'Clash of Perps';
+\tfunction keepTitle() {
+\t\tif (document.title !== title) document.title = title;
+\t}
+\tkeepTitle();
+\tvar titleNode = document.querySelector('title');
+\tif (titleNode && window.MutationObserver) {
+\t\tnew MutationObserver(keepTitle).observe(titleNode, {
+\t\t\tchildList: true,
+\t\t\tcharacterData: true,
+\t\t\tsubtree: true
+\t\t});
+\t}
+\twindow.addEventListener('load', keepTitle);
+\tsetInterval(keepTitle, 500);
+})();
+\t\t</script>`;
+
+if (!source.includes(guardMarker)) {
+    if (!source.includes('</head>')) {
+        console.error('Work.html </head> not found');
+        process.exit(1);
+    }
+    source = source.replace('</head>', `${titleGuard}\n\t</head>`);
+}
+
+fs.writeFileSync(file, source);
+NODE
+    echo "Patched $HTML_FILE"
+else
+    echo "Work.html not found"
+fi

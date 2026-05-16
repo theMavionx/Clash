@@ -1,0 +1,52 @@
+{
+  "chain": "monad",
+  "chainId": 143,
+  "proxy": "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F",
+  "contract": "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F",
+  "v2Implementation": "0x8fc6e18371ddd76654ab1f0859099c040aed255a",
+  "v3Implementation": "0xc7d0c9b1a3b7e461ff37e36ec6c2695a6ce0570f",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "quoteSigner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "usdcToken": "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
+  "copToken": "0x0000000000000000000000000000000000000000",
+  "royaltyReceiver": "0xC024884ad9C5540996492Cc2DD080964941A3094",
+  "royaltyBps": 250,
+  "eip712Name": "DemonKingMonad",
+  "eip712Version": "3",
+  "totalMintedAtUpgrade": "0",
+  "maxSupplyAtUpgrade": "500",
+  "implTxHash": "0xd972d63e0b5a7b5b9cdaffe1ed78ee9fcfdade5a9bd127478a41054a46abe167",
+  "upgradeTxHash": "0x6ade1aed754d7f04106fd4e61f9af5abcf1e1819b6b1768d841dbdc6cfa1b0bb",
+  "implBlockNumber": "74914219",
+  "upgradeBlockNumber": "74914229",
+  "upgradedAt": "2026-05-16T06:34:19.780Z",
+  "v3ImplementationPrevious": "0x8290ab5e90db8bbf46c900b536bb5fdd7500d5e2",
+  "v3SwapHistory": [
+    {
+      "fromImpl": "0xd49d7a216a66dee594401ebf37f7a7e6e4b0a60d",
+      "toImpl": "0xdFDDd5B07Dd334D89e2c2731682ca877303BAB05",
+      "implTxHash": "0xf84fe3b0d908557f9a8411af608e8a38d18dc11bdf31c88517ee4945e25681ff",
+      "upgradeTxHash": "0x281bba2a7627a3d1565c4a05009e5e3fbbf888f5513338fa6456e2c750b4a7ce",
+      "swappedAt": "2026-05-16T06:52:25.006Z",
+      "note": "V3.1 — N-to-N bridge: bridgeBurn now takes destinationChainId; BridgeReceipt includes destinationChainId in EIP-712 hash."
+    },
+    {
+      "fromImpl": "0x8290ab5e90db8bbf46c900b536bb5fdd7500d5e2",
+      "toImpl": "0xCf6B53155B66CE72214233fd166840d92F98B197",
+      "implTxHash": "0x1b38928d306ec8352f85fe6f8788092754cee622571f970c9da135fa13ab0b0a",
+      "upgradeTxHash": "0x6592cf1ba01feb7327ab37259c9af1478c4113219439139166e387f7bbaa0380",
+      "swappedAt": "2026-05-16T14:05:27.514Z",
+      "note": "V3.2 — burn accounting: add totalBurned + currentSupply() so bridge round-trips net to zero on global supply counter."
+    }
+  ],
+  "v3PreviousImplementation": "0xF14d46681f1491c842c510b84C1f5C584C62A00c",
+  "revUpgradeTxHash": "0x946ebf0c6e0335e54f23ebf158f59d15c50fd502922f94a8e134ec5e98a3b4bd",
+  "revUpgradeImplTxHash": "0x8fcdb79b4c4fd5e6b8faa522e89ae5d13fb572fe1c0a7fbbccdc21503f44c559",
+  "revUpgradeBlockNumber": "75021356",
+  "revUpgradedAt": "2026-05-16T18:31:23.051Z",
+  "fullMeshBridge": true,
+  "bridgeFeeWei": "6000000000000000000",
+  "bridgeFeeTxHash": "0x4e648cb76ddc46ae12503d2727bf23c17feba2d8cfd3e270eb810d33bb30c0e5",
+  "bridgeFeeUpdatedAt": "2026-05-16T16:13:37.584Z"
+}

@@ -26,6 +26,10 @@ const AI_ATTACK_REPLAY_LABEL = 'AI AGENT ATTACK';
 const AI_CANNON_TARGET_TYPES = ['turret', 'archer_tower'];
 const AI_CANNON_DEFAULT_START_SEC = 4.0;
 const AI_CANNON_DEFAULT_STEP_SEC = (combat.CANNON_RELOAD_SEC || 1.0) + 0.1;
+const AI_AUTO_CANNON_MAX_SHOTS = 3;
+const AI_AUTO_RALLY_T_SEC = 5.0;
+const AI_AUTO_RALLY_FLIGHT_SEC = 0.8;
+const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
 
 function defaultCannonShotTime(index) {
   return AI_CANNON_DEFAULT_START_SEC + index * AI_CANNON_DEFAULT_STEP_SEC;
@@ -185,6 +189,230 @@ function buildAttackSlots() {
   });
 }
 
+function dist2(a, b) {
+  const dx = Number(a.x) - Number(b.x);
+  const dz = Number(a.z) - Number(b.z);
+  return Math.sqrt(dx * dx + dz * dz);
+}
+
+function combatBuildingValue(type) {
+  const values = {
+    turret: 7.0,
+    archer_tower: 6.5,
+    tombstone: 5.5,
+    storage: 3.2,
+    barn: 2.7,
+    town_hall: 2.5,
+    mine: 2.2,
+    sawmill: 2.2,
+    port: 1.5,
+  };
+  return values[type] || 1.0;
+}
+
+function landingBuildingValue(type) {
+  const values = {
+    tombstone: 4.5,
+    storage: 3.8,
+    barn: 3.3,
+    mine: 3.0,
+    sawmill: 3.0,
+    port: 2.2,
+    town_hall: 1.8,
+    turret: 1.2,
+    archer_tower: 1.2,
+  };
+  return values[type] || 1.0;
+}
+
+function defenseThreatScore(building) {
+  const type = building?.type;
+  if (!AI_CANNON_TARGET_TYPES.includes(type)) return 0;
+  const level = Math.max(1, Math.floor(Number(building.level) || 1));
+  const stats = combat.DEFENSE_STATS?.[type]?.[level] || combat.DEFENSE_STATS?.[type]?.[1] || {};
+  const damage = Number(stats.damage || 0);
+  const fireRate = Math.max(0.1, Number(stats.fireRate || 1));
+  return (damage / fireRate) + level * 20 + Math.max(0, Number(building.hp || 0)) / 45;
+}
+
+function slotEntryScores(defenderBuildings) {
+  const slots = buildAttackSlots();
+  const positioned = defenderBuildings.map((building) => ({
+    ...building,
+    world: buildingWorldPosition(building),
+  }));
+
+  return slots.map((slot) => {
+    const point = { x: slot.stop_x, z: slot.stop_z };
+    let valueScore = 0;
+    let threatPenalty = 0;
+    let nearestUseful = Infinity;
+    for (const building of positioned) {
+      const d = dist2(point, building.world);
+      const value = landingBuildingValue(building.type);
+      valueScore += value / (0.65 + d);
+      if (building.type !== 'town_hall' && value >= 2) nearestUseful = Math.min(nearestUseful, d);
+      const threat = defenseThreatScore(building);
+      if (threat > 0) threatPenalty += threat / (0.45 + d) * 0.032;
+    }
+    return {
+      slot: slot.slot,
+      score: valueScore - threatPenalty - (Number.isFinite(nearestUseful) ? nearestUseful * 0.08 : 0),
+      valueScore,
+      threatPenalty,
+      nearestUseful,
+    };
+  });
+}
+
+function contiguousSlotsAround(bestSlot, count, scores) {
+  const n = Math.max(1, Math.min(AI_ATTACK_SLOT_COUNT, Math.floor(Number(count) || 1)));
+  if (n >= AI_ATTACK_SLOT_COUNT) return [0, 1, 2, 3, 4];
+  if (n === 1) return [bestSlot];
+  const starts = [];
+  for (let start = 0; start <= AI_ATTACK_SLOT_COUNT - n; start++) starts.push(start);
+  const bestStart = starts
+    .map((start) => {
+      const window = Array.from({ length: n }, (_unused, offset) => start + offset);
+      const score = window.reduce((sum, slot) => sum + (scores.find((s) => s.slot === slot)?.score || 0), 0)
+        - Math.abs((start + (n - 1) / 2) - bestSlot) * 0.35;
+      return { start, score };
+    })
+    .sort((a, b) => b.score - a.score || Math.abs(a.start - bestSlot) - Math.abs(b.start - bestSlot))[0]?.start || 0;
+  return Array.from({ length: n }, (_unused, offset) => bestStart + offset);
+}
+
+function buildAutoShipPlan(fleet, defenderBuildings) {
+  const count = Math.max(1, Math.min(AI_ATTACK_SLOT_COUNT, fleet.length));
+  const scores = slotEntryScores(defenderBuildings);
+  const bestScore = scores
+    .slice()
+    .sort((a, b) => b.score - a.score || Math.abs(a.slot - 2) - Math.abs(b.slot - 2))[0] || { slot: 2, score: 0, threatPenalty: 0 };
+  const bestSlot = bestScore.slot;
+  const highPressure = bestScore.score < -45 || bestScore.threatPenalty > 65;
+  const pressurePatterns = {
+    1: [bestSlot],
+    2: [0, 4],
+    3: [0, 2, 4],
+    4: [0, 1, 3, 4],
+    5: [0, 1, 2, 3, 4],
+  };
+  const slots = highPressure
+    ? pressurePatterns[count]
+    : contiguousSlotsAround(bestSlot, count, scores);
+  return {
+    ships: slots.map((slot, index) => ({
+      ship_index: index,
+      slot,
+      t: Number((0.2 + index * 0.35).toFixed(2)),
+    })),
+    analysis: {
+      best_slot: bestSlot,
+      high_pressure: highPressure,
+      slot_scores: scores.map((score) => ({
+        slot: score.slot,
+        score: Number(score.score.toFixed(3)),
+        value: Number(score.valueScore.toFixed(3)),
+        threat_penalty: Number(score.threatPenalty.toFixed(3)),
+      })),
+    },
+  };
+}
+
+function buildAutoCannonShots(defenderBuildings, shipsPlan, maxShots = AI_AUTO_CANNON_MAX_SHOTS) {
+  const slots = buildAttackSlots();
+  const usedSlots = (shipsPlan || []).map((row) => slots[Number(row.slot)]).filter(Boolean);
+  const entryCenter = usedSlots.length
+    ? {
+        x: usedSlots.reduce((sum, slot) => sum + slot.stop_x, 0) / usedSlots.length,
+        z: usedSlots.reduce((sum, slot) => sum + slot.stop_z, 0) / usedSlots.length,
+      }
+    : { x: slots[2].stop_x, z: slots[2].stop_z };
+
+  const ranked = defenderBuildings
+    .filter((building) => AI_CANNON_TARGET_TYPES.includes(building.type))
+    .map((building) => {
+      const world = buildingWorldPosition(building);
+      const d = dist2(entryCenter, world);
+      return {
+        building,
+        score: defenseThreatScore(building) + Math.max(0, 3.5 - d) * 65,
+      };
+    })
+    .sort((a, b) => b.score - a.score || (b.building.level - a.building.level) || (a.building.id - b.building.id))
+    .map((row) => ({ ...row, assignedDamage: 0 }));
+  if (ranked.length === 0) return [];
+
+  const shots = [];
+  const preferredOrder = [0, 1, 0, 2, 0, 3];
+  for (let index = 0; index < maxShots; index++) {
+    let target = ranked[preferredOrder[index] ?? index] || ranked[0];
+    if (target.assignedDamage >= Number(target.building.hp || target.building.max_hp || 0)) {
+      target = ranked.find((row) => row.assignedDamage < Number(row.building.hp || row.building.max_hp || 0)) || target;
+    }
+    target.assignedDamage += combat.CANNON_DAMAGE;
+    shots.push({
+      building_id: target.building.id,
+      target_type: target.building.type,
+      t: Number((AI_CANNON_DEFAULT_START_SEC + index * AI_CANNON_DEFAULT_STEP_SEC).toFixed(2)),
+    });
+  }
+  return shots;
+}
+
+function buildAutoRallyMarker(defenderBuildings, shipsPlan, cannonShots) {
+  const slots = buildAttackSlots();
+  const usedSlots = (shipsPlan || []).map((row) => slots[Number(row.slot)]).filter(Boolean);
+  const entryCenter = usedSlots.length
+    ? {
+        x: usedSlots.reduce((sum, slot) => sum + slot.stop_x, 0) / usedSlots.length,
+        z: usedSlots.reduce((sum, slot) => sum + slot.stop_z, 0) / usedSlots.length,
+      }
+    : { x: slots[2].stop_x, z: slots[2].stop_z };
+  const cannonTargetIds = new Set((cannonShots || []).map((shot) => Number(shot.building_id)).filter(Boolean));
+  const candidates = defenderBuildings
+    .filter((building) => building.type !== 'town_hall')
+    .map((building) => {
+      const world = buildingWorldPosition(building);
+      const d = dist2(entryCenter, world);
+      const cannoned = cannonTargetIds.has(Number(building.id));
+      const expectedHp = Number(building.hp || building.max_hp || 0) - (cannoned ? combat.CANNON_DAMAGE : 0);
+      const value = combatBuildingValue(building.type) + (building.type === 'tombstone' ? 1.5 : 0);
+      return {
+        building,
+        score: value / (0.35 + d) + (building.type === 'tombstone' ? 2.5 : 0),
+        expectedHp,
+      };
+    })
+    .filter((row) => row.expectedHp > 0)
+    .sort((a, b) => b.score - a.score || (a.building.id - b.building.id));
+  const nonDefense = candidates.filter((row) => !AI_CANNON_TARGET_TYPES.includes(row.building.type));
+  const target = (nonDefense[0] || candidates[0])?.building;
+  if (!target) return null;
+  return {
+    t: AI_AUTO_RALLY_T_SEC,
+    building_id: target.id,
+    target_type: target.type,
+    flight_time: AI_AUTO_RALLY_FLIGHT_SEC,
+  };
+}
+
+function buildAutoAttackPlan(fleet, defenderBuildings, options = {}) {
+  const ships = buildAutoShipPlan(fleet, defenderBuildings);
+  const reserveMarkerEnergy = !!options.reserveMarkerEnergy;
+  let cannonShots = buildAutoCannonShots(defenderBuildings, ships.ships, AI_AUTO_CANNON_MAX_SHOTS);
+  const rallyMarker = reserveMarkerEnergy ? null : buildAutoRallyMarker(defenderBuildings, ships.ships, cannonShots);
+  if (!reserveMarkerEnergy && !rallyMarker) {
+    cannonShots = buildAutoCannonShots(defenderBuildings, ships.ships, 4);
+  }
+  return {
+    ships: ships.ships,
+    cannon_shots: cannonShots,
+    rally_marker: rallyMarker,
+    analysis: ships.analysis,
+  };
+}
+
 function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -228,8 +456,8 @@ function gridToWorld(gridX, gridZ, sizeX, sizeZ, gc) {
   const cosR = Math.cos(gc.grid_rotation);
   const sinR = Math.sin(gc.grid_rotation);
   return {
-    x: gc.grid_center_x + localX * cosR - localZ * sinR,
-    z: gc.grid_center_z + localX * sinR + localZ * cosR,
+    x: gc.grid_center_x + localX * cosR + localZ * sinR,
+    z: gc.grid_center_z - localX * sinR + localZ * cosR,
   };
 }
 
@@ -680,9 +908,12 @@ function registerTools(server, session, agentKey) {
         cannon_damage_timing: 'damage applies on cannonball impact, not at launch',
         cannon_targets: 'AI cannon shots should target defensive towers only: turret or archer_tower',
         rally_marker_cost: 'marker number: 1, 2, 3...',
+        auto_tactics: 'By default execute_ai_attack_plan analyzes the enemy base, chooses focused-or-split landing slots, fires cannon shots at high-threat defenses, and drops one rally marker on a nearby non-defense priority target when useful. Pass auto_tactics:false for a fully manual plan.',
         request_shape: {
+          auto_tactics: true,
           ships: [{ ship_index: 0, slot: 0, t: 0.2 }],
           cannon_shots: [{ target_type: 'strongest_defense', t: 4.0 }, { target_type: 'weakest_defense', t: 5.1 }],
+          rally_marker: { target_type: 'tombstone', t: 5.0, flight_time: 0.8 },
         },
       },
     })
@@ -699,6 +930,7 @@ function registerTools(server, session, agentKey) {
           slot: z.number().int().min(0).max(4),
           t: z.number().min(0).max(60).optional(),
         })).min(1).max(5).optional(),
+        auto_tactics: z.boolean().optional(),
         cannon_shots: z.array(z.object({
           t: z.number().min(0).max(120).optional(),
           building_id: z.number().int().positive().optional(),
@@ -716,14 +948,9 @@ function registerTools(server, session, agentKey) {
         }).optional(),
       },
     },
-    async ({ ships = [], cannon_shots = [], rally_marker = null }) => {
+    async ({ ships = [], auto_tactics = true, cannon_shots = [], rally_marker = null }) => {
       const fleet = getFleet(playerId);
       if (fleet.length === 0) return toolError('No loaded ships. Buy ships and load troops first.');
-
-      const shipsPlan = normalizeAiShipsPlan(ships, fleet);
-      if (shipsPlan.error) return toolError(shipsPlan.error, { fleet, slots: buildAttackSlots() });
-      const energyCheck = validateAiAttackEnergy(cannon_shots, rally_marker);
-      if (!energyCheck.ok) return toolError(energyCheck.error);
 
       const enemy = game.findEnemy(playerId);
       if (enemy.error) return toolError(enemy.error, enemy);
@@ -732,6 +959,25 @@ function registerTools(server, session, agentKey) {
       if (!defenderBuildings.length) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
         return toolError('Enemy has no buildings');
+      }
+
+      const hasShipsInput = Array.isArray(ships) && ships.length > 0;
+      const hasCannonInput = Array.isArray(cannon_shots) && cannon_shots.length > 0;
+      const hasRallyInput = !!rally_marker;
+      const autoPlan = auto_tactics ? buildAutoAttackPlan(fleet, defenderBuildings, { reserveMarkerEnergy: hasRallyInput }) : null;
+      const resolvedShips = hasShipsInput ? ships : (autoPlan?.ships || ships);
+      const resolvedCannonShots = hasCannonInput ? cannon_shots : (autoPlan?.cannon_shots || cannon_shots);
+      const resolvedRallyMarker = hasRallyInput ? rally_marker : (autoPlan?.rally_marker || rally_marker);
+
+      const shipsPlan = normalizeAiShipsPlan(resolvedShips, fleet);
+      if (shipsPlan.error) {
+        game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
+        return toolError(shipsPlan.error, { fleet, slots: buildAttackSlots() });
+      }
+      const energyCheck = validateAiAttackEnergy(resolvedCannonShots, resolvedRallyMarker);
+      if (!energyCheck.ok) {
+        game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
+        return toolError(energyCheck.error);
       }
 
       const actions = [{
@@ -748,6 +994,7 @@ function registerTools(server, session, agentKey) {
         actions.push({
           t: planned.t,
           type: 'place_ship',
+          ship_index: planned.shipIndex,
           x: planned.slot.spawn_x,
           z: planned.slot.spawn_z,
           troop_x: planned.slot.spawn_x,
@@ -763,8 +1010,8 @@ function registerTools(server, session, agentKey) {
         });
       }
 
-      for (let i = 0; i < cannon_shots.length; i++) {
-        const shot = cannon_shots[i] || {};
+      for (let i = 0; i < resolvedCannonShots.length; i++) {
+        const shot = resolvedCannonShots[i] || {};
         const target = resolveBuildingTarget(shot, defenderBuildings);
         if (!target) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
@@ -781,23 +1028,23 @@ function registerTools(server, session, agentKey) {
         });
       }
 
-      if (rally_marker) {
-        const hasExplicitPoint = Number.isFinite(Number(rally_marker.x)) && Number.isFinite(Number(rally_marker.z));
-        const rallyBuilding = hasExplicitPoint ? null : resolveBuildingTarget(rally_marker, defenderBuildings);
-        const point = hasExplicitPoint
-          ? resolveWorldPoint(rally_marker, defenderBuildings)
-          : (rallyBuilding ? buildingWorldPosition(rallyBuilding) : null);
+      if (resolvedRallyMarker) {
+        const rallyBuilding = resolveBuildingTarget(resolvedRallyMarker, defenderBuildings);
+        const hasExplicitPoint = Number.isFinite(Number(resolvedRallyMarker.x)) && Number.isFinite(Number(resolvedRallyMarker.z));
+        const point = rallyBuilding
+          ? buildingWorldPosition(rallyBuilding)
+          : (hasExplicitPoint ? resolveWorldPoint(resolvedRallyMarker, defenderBuildings) : null);
         if (!point) {
           game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
           return toolError('Rally marker target not found');
         }
         actions.push({
-          t: Number.isFinite(Number(rally_marker.t)) ? Number(rally_marker.t) : 5.0,
+          t: Number.isFinite(Number(resolvedRallyMarker.t)) ? Number(resolvedRallyMarker.t) : 5.0,
           type: 'rally_drop',
           ...(rallyBuilding ? { buildingId: rallyBuilding.id } : {}),
           x: Number(point.x.toFixed(4)),
           z: Number(point.z.toFixed(4)),
-          flight_time: Number.isFinite(Number(rally_marker.flight_time)) ? Number(rally_marker.flight_time) : 0.8,
+          flight_time: Number.isFinite(Number(resolvedRallyMarker.flight_time)) ? Number(resolvedRallyMarker.flight_time) : 0.8,
         });
       }
 
@@ -813,6 +1060,7 @@ function registerTools(server, session, agentKey) {
         gridConfig: combat.CANONICAL_GRID_CONFIG,
         gridConfigs: combat.CANONICAL_GRID_CONFIGS,
         serverTroopLevels,
+        debugTrace: BATTLE_DEBUG_TRACE,
       });
       const finalResult = victoryCheck.valid ? 'victory' : 'defeat';
       const verification = victoryCheck.valid
@@ -824,11 +1072,15 @@ function registerTools(server, session, agentKey) {
             gridConfig: combat.CANONICAL_GRID_CONFIG,
             gridConfigs: combat.CANONICAL_GRID_CONFIGS,
             serverTroopLevels,
+            debugTrace: BATTLE_DEBUG_TRACE,
           });
       if (!verification.valid) {
         game.finishBattleSession(enemy.battle_session_id, playerId, enemy.id, 'cancelled');
         game.storeReplay(playerId, enemy.id, actions, defenderBuildings, finalResult, 'rejected', verification.reason, null, verification);
         return toolError('AI attack rejected by replay verification', { reason: verification.reason });
+      }
+      if (BATTLE_DEBUG_TRACE) {
+        console.log(`[MCP AI ATTACK TRACE] session=${enemy.battle_session_id} enemy=${enemy.id} result=${finalResult} simTime=${verification._simTimeSec || '?'} events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0}`);
       }
 
       const duration = replayDuration(actions, verification);
@@ -864,6 +1116,9 @@ function registerTools(server, session, agentKey) {
         battle: battleResult,
         verification: {
           reason: verification.reason,
+          simTimeSec: verification._simTimeSec,
+          traceEvents: verification._traceEvents,
+          traceDropped: verification._traceDropped,
           townHallHpPct: verification.townHallHpPct,
           buildingsDestroyed: verification.buildingsDestroyed,
           casualties: verification.casualties || {},
@@ -876,6 +1131,20 @@ function registerTools(server, session, agentKey) {
           stop_x: row.slot.stop_x,
           stop_z: row.slot.stop_z,
         })),
+        strategy: {
+          auto_tactics,
+          generated: {
+            ships: !hasShipsInput,
+            cannon_shots: !hasCannonInput,
+            rally_marker: !hasRallyInput && !!resolvedRallyMarker,
+          },
+          plan: {
+            ships: resolvedShips,
+            cannon_shots: resolvedCannonShots,
+            rally_marker: resolvedRallyMarker,
+          },
+          analysis: autoPlan?.analysis || null,
+        },
         resources: game.getResources(playerId),
       };
       await notifyAgentAction(agentKey, 'ai_attack_replay', livePayload);

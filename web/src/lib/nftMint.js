@@ -99,6 +99,99 @@ export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1 }) {
   return { hash, receipt, quote: quoteResponse };
 }
 
+// Mint on Arbitrum or Monad. The server-side `/nft/evm/quote` returns the
+// same shape as Base — buyer + signature + quote payload — so this helper
+// mirrors mintBaseNft but parametrises the chain. Aptos is not supported
+// here (no Aptos NFT mint endpoint yet — bridge only).
+const EVM_NFT_CHAIN_IDS = { arbitrum: 42161, monad: 143 };
+
+export async function fetchEvmMintQuote({ chain, buyer, payment, quantity = 1 }) {
+  const response = await fetch('/api/nft/evm/quote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chain, buyer, payment, quantity }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Quote failed (${response.status})`);
+  return json;
+}
+
+export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 1 }) {
+  const chainId = EVM_NFT_CHAIN_IDS[chain];
+  if (!chainId) throw new Error(`mintEvmNft: unsupported chain "${chain}"`);
+  if (!evmWallet?.provider || !buyer) throw new Error(`${chain} wallet is not connected`);
+  await evmWallet.ensureChain(chainId);
+
+  const quoteResponse = await fetchEvmMintQuote({ chain, buyer, payment, quantity });
+  const quote = normalizeQuote(quoteResponse.quote);
+  const shop = quoteResponse.shop;
+  const publicClient = evmWallet.getPublicClient(chainId);
+  const walletClient = evmWallet.getWalletClient(chainId);
+  if (!publicClient || !walletClient) throw new Error(`${chain} wallet client is not ready`);
+
+  const paymentToken = String(quote.paymentToken || '').toLowerCase();
+  const nativePayment = /^0x0{40}$/i.test(paymentToken);
+  const total = BigInt(quoteResponse.total);
+
+  if (!nativePayment) {
+    await ensureErc20Allowance({
+      publicClient,
+      walletClient,
+      token: quote.paymentToken,
+      owner: buyer,
+      spender: shop,
+      amount: total,
+    });
+  }
+
+  const hash = await walletClient.writeContract({
+    address: shop,
+    abi: NFT_SHOP_ABI,
+    functionName: 'mintWithQuote',
+    args: [quote, quoteResponse.signature],
+    value: nativePayment ? total : 0n,
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  return { hash, receipt, quote: quoteResponse };
+}
+
+// Aptos NFT mint. The Move module accepts USDC through the legacy quote
+// entrypoint and APT through the payment-aware quote entrypoint.
+// Server signs an ed25519 quote that the Move function verifies on-chain
+// before pulling the selected FA via primary_fungible_store::transfer.
+//
+// Caller passes `aptosWallet` from AptosWalletContext (its
+// loginSignAndSubmit is what we invoke — wallet must already be connected
+// as the buyer). The server-returned `callData.functionArguments` are
+// passed through verbatim, since the Move signature is bound to them.
+export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc' }) {
+  const response = await fetch('/api/nft/aptos/quote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ buyer, quantity, payment }),
+  });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(json?.error || `Aptos quote failed (${response.status})`);
+  return json;
+}
+
+export async function mintAptosNft({ aptosWallet, buyer, quantity = 1, payment = 'usdc' }) {
+  if (!aptosWallet || !buyer) throw new Error('Aptos wallet is not connected');
+  const quote = await fetchAptosMintQuote({ buyer, quantity, payment });
+
+  const result = await aptosWallet.loginSignAndSubmit({
+    data: {
+      function: quote.callData.functionId,
+      typeArguments: quote.callData.typeArguments || [],
+      functionArguments: quote.callData.functionArguments,
+    },
+  });
+  // Different wallets return slightly different shapes — Petra: { hash },
+  // Pontem/Martian: { txnHash }. Normalize for the caller.
+  const txHash = result?.hash || result?.txnHash || result;
+  return { hash: txHash, quote };
+}
+
 export async function mintSolanaNft({ solWallet, config, payment }) {
   const address = solWallet?.publicKey?.toBase58?.();
   if (!address) throw new Error('Solana wallet is not connected');

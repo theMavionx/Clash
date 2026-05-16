@@ -2,7 +2,75 @@ const WebSocket = require('ws');
 const db = require('./db');
 
 const clients = new Map(); // clientId -> { ws, playerId, playerName, token }
+const pendingAgentEvents = new Map(); // playerId -> [{ event, queuedAt }]
+const PENDING_AGENT_EVENT_TTL_MS = 2 * 60 * 1000;
+const MAX_PENDING_AGENT_EVENTS = 10;
 let nextClientId = 1;
+
+function pendingEventIdentity(event) {
+  return event?.data?.event_id || event?.data?.payload?.battle_session_id || null;
+}
+
+function shouldQueuePendingAgentEvent(event) {
+  // AI attack replays are a live spectating experience. If the player was
+  // offline when the agent attacked, do not auto-start an old replay when
+  // they open the browser later.
+  return event?.data?.action !== 'ai_attack_replay';
+}
+
+function prunePendingAgentEvents(playerId) {
+  const now = Date.now();
+  const events = pendingAgentEvents.get(playerId) || [];
+  const fresh = events.filter((entry) => (
+    shouldQueuePendingAgentEvent(entry.event)
+    && now - entry.queuedAt <= PENDING_AGENT_EVENT_TTL_MS
+  ));
+  if (fresh.length > 0) {
+    pendingAgentEvents.set(playerId, fresh.slice(-MAX_PENDING_AGENT_EVENTS));
+  } else {
+    pendingAgentEvents.delete(playerId);
+  }
+  return pendingAgentEvents.get(playerId) || [];
+}
+
+function queuePendingAgentEvent(playerId, event) {
+  const events = prunePendingAgentEvents(playerId);
+  events.push({ event, queuedAt: Date.now() });
+  pendingAgentEvents.set(playerId, events.slice(-MAX_PENDING_AGENT_EVENTS));
+}
+
+function removePendingAgentEvent(playerId, event) {
+  const id = pendingEventIdentity(event);
+  if (!id) return;
+  const events = prunePendingAgentEvents(playerId);
+  const remaining = events.filter((entry) => pendingEventIdentity(entry.event) !== id);
+  if (remaining.length > 0) pendingAgentEvents.set(playerId, remaining);
+  else pendingAgentEvents.delete(playerId);
+}
+
+function flushPendingAgentEvents(playerId, ws, { log = true } = {}) {
+  if (ws.readyState !== WebSocket.OPEN) return 0;
+  const events = prunePendingAgentEvents(playerId);
+  let sent = 0;
+  const remaining = [];
+  for (const entry of events) {
+    try {
+      ws.send(JSON.stringify(entry.event));
+      sent++;
+    } catch {
+      remaining.push(entry);
+    }
+  }
+  if (remaining.length > 0) {
+    pendingAgentEvents.set(playerId, remaining);
+  } else if (sent > 0) {
+    pendingAgentEvents.delete(playerId);
+  }
+  if (log && sent > 0) {
+    console.log(`\x1b[35mWS\x1b[0m flushed ${sent} pending agent event(s) \x1b[90m${playerId.slice(0,8)}\x1b[0m`);
+  }
+  return sent;
+}
 
 function setupWebSocket(server) {
   const wss = new WebSocket.Server({ server, path: '/ws' });
@@ -42,6 +110,7 @@ function setupWebSocket(server) {
           type: 'auth_ok',
           player: db.getFullPlayerState(player.id),
         }));
+        flushPendingAgentEvents(player.id, ws);
 
         // Notify others
         broadcast({
@@ -72,6 +141,17 @@ function setupWebSocket(server) {
       }
     });
   });
+
+  const pendingFlushTimer = setInterval(() => {
+    for (const client of clients.values()) {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        flushPendingAgentEvents(client.playerId, client.ws, { log: false });
+      }
+    }
+  }, 2000);
+  pendingFlushTimer.unref?.();
+
+  wss.on('close', () => clearInterval(pendingFlushTimer));
 
   return wss;
 }
@@ -163,7 +243,21 @@ function broadcastToPlayer(playerId, data) {
       sent++;
     }
   }
+  if (data?.type === 'agent_action') {
+    if (sent === 0 && shouldQueuePendingAgentEvent(data)) queuePendingAgentEvent(playerId, data);
+    else removePendingAgentEvent(playerId, data);
+  }
   return sent;
+}
+
+function getPendingAgentEvents(playerId) {
+  return prunePendingAgentEvents(playerId).map((entry) => entry.event);
+}
+
+function consumePendingAgentEvents(playerId) {
+  const events = prunePendingAgentEvents(playerId).map((entry) => entry.event);
+  pendingAgentEvents.delete(playerId);
+  return events;
 }
 
 function getOnlinePlayers() {
@@ -177,4 +271,4 @@ function getOnlinePlayers() {
   return rows;
 }
 
-module.exports = { setupWebSocket, broadcast, broadcastToPlayer, getOnlinePlayers };
+module.exports = { setupWebSocket, broadcast, broadcastToPlayer, getPendingAgentEvents, consumePendingAgentEvents, getOnlinePlayers };

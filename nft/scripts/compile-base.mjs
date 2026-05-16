@@ -26,9 +26,11 @@ const input = {
   sources,
   settings: {
     optimizer: { enabled: true, runs: 200 },
+    viaIR: true,           // needed for V3's initializeV3Fresh (>12 locals)
+    evmVersion: 'cancun',  // matches Hardhat config + Base mainnet target
     outputSelection: {
       '*': {
-        '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object', 'metadata'],
+        '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object', 'metadata', 'storageLayout'],
       },
     },
   },
@@ -56,6 +58,7 @@ for (const [sourceName, contracts] of Object.entries(output.contracts)) {
       bytecode: `0x${compiled.evm.bytecode.object}`,
       deployedBytecode: `0x${compiled.evm.deployedBytecode.object}`,
       metadata: JSON.parse(compiled.metadata),
+      storageLayout: compiled.storageLayout || null,
       compiler: `solc ${solc.version()}`,
     };
     fs.writeFileSync(path.join(outDir, `${contractName}.json`), `${JSON.stringify(artifact, null, 2)}\n`);

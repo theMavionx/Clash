@@ -47,10 +47,14 @@ func _setup_weapons() -> void:
 
 
 ## Builds the orb pool on first activation, then delegates to super and
-## advances all in-flight projectiles each frame.
-func _process(delta: float) -> void:
-	delta = minf(delta, 0.1)
+## advances all in-flight projectiles on the fixed combat tick.
+func _physics_process(delta: float) -> void:
+	if _is_dead:
+		return
+	delta = BaseTroop.combat_delta(delta)
 	super(delta)
+	if _is_dead:
+		return
 	if not _pool_ready and state != State.INACTIVE:
 		_build_pool()
 	_update_projectiles(delta)
@@ -133,6 +137,18 @@ func _return_to_pool(b: Dictionary) -> void:
 	b.node.visible = false
 
 
+func _remove_active_projectile_at(index: int) -> void:
+	if index >= 0 and index < _active.size():
+		_active.remove_at(index)
+
+
+func _clear_owned_projectiles() -> void:
+	for p in _active:
+		if p is Dictionary:
+			_return_to_pool(p)
+	_active.clear()
+
+
 func _exit_tree() -> void:
 	for b in _pool:
 		if is_instance_valid(b.node):
@@ -169,6 +185,10 @@ func _spawn_projectile() -> void:
 	b.node.visible = true
 
 	_active.append(b)
+	_record_projectile_telemetry("troop_projectile_fire", b.target_ref, b.target_guard_ref, b.node.global_position, {
+		"projectile_speed": projectile_fly_speed,
+		"pool_active": _active.size(),
+	})
 
 
 ## Moves all in-flight orbs toward their targets and applies damage on hit.
@@ -178,7 +198,7 @@ func _update_projectiles(delta: float) -> void:
 	while i >= 0:
 		var p = _active[i]
 		if not is_instance_valid(p.node):
-			_active.remove_at(i)
+			_remove_active_projectile_at(i)
 			i -= 1
 			continue
 
@@ -187,16 +207,20 @@ func _update_projectiles(delta: float) -> void:
 		var target_pos: Vector3
 		var has_target: bool = false
 
-		if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.is_inside_tree():
+		if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.is_inside_tree() and guard_ref.get("hp") != null and int(guard_ref.get("hp")) > 0:
 			target_pos = guard_ref.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
-		elif target_ref.size() > 0 and is_instance_valid(target_ref.get("node")):
+		elif target_ref.size() > 0 and int(target_ref.get("hp", 0)) > 0 and is_instance_valid(target_ref.get("node")):
 			target_pos = target_ref.node.global_position + Vector3(0, BaseTroop.TARGET_AIM_Y, 0)
 			has_target = true
 
 		if not has_target:
+			_record_projectile_telemetry("troop_projectile_lost_target", target_ref, guard_ref, p.node.global_position, {
+				"projectile_speed": projectile_fly_speed,
+				"reason": "target_invalid",
+			})
 			_return_to_pool(p)
-			_active.remove_at(i)
+			_remove_active_projectile_at(i)
 			i -= 1
 			continue
 
@@ -206,17 +230,36 @@ func _update_projectiles(delta: float) -> void:
 		var dy = p.node.global_position.y - target_pos.y
 		var dz = p.node.global_position.z - target_pos.z
 		if dx * dx + dy * dy + dz * dz < HIT_DIST_SQ:
+			var hit_target_payload: Dictionary = _target_payload_from_refs(target_ref, guard_ref)
+			var hp_before: int = 0
+			if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.get("hp") != null:
+				hp_before = int(guard_ref.get("hp"))
+			elif target_ref.size() > 0:
+				hp_before = int(target_ref.get("hp", 0))
 			if guard_ref != null and is_instance_valid(guard_ref):
 				guard_ref.take_damage(damage)
-				if not is_instance_valid(guard_ref) or not guard_ref.is_inside_tree():
-					_find_next_target()
 			else:
 				target_ref["hp"] = target_ref.hp - damage
+			var hp_after: int = hp_before - damage
+			if guard_ref != null and is_instance_valid(guard_ref) and guard_ref.get("hp") != null:
+				hp_after = int(guard_ref.get("hp"))
+			elif target_ref.size() > 0:
+				hp_after = int(target_ref.get("hp", hp_after))
+			_record_projectile_payload("troop_projectile_hit", hit_target_payload, p.node.global_position, {
+				"projectile_speed": projectile_fly_speed,
+				"hp_before": hp_before,
+				"hp_after": hp_after,
+				"hit_dist_sq": snappedf(dx * dx + dy * dy + dz * dz, 0.0001),
+			})
+			if guard_ref != null and (not is_instance_valid(guard_ref) or not guard_ref.is_inside_tree()):
+				_find_next_target()
+			elif target_ref.size() > 0:
 				if target_ref.hp <= 0:
 					var bs_ref = p.target_bs_ref
+					_record_building_destroyed_once(target_ref, bs_ref, "projectile_hit")
 					if bs_ref and bs_ref.has_method("remove_building"):
 						bs_ref.remove_building(target_ref)
 					_find_next_target()
 			_return_to_pool(p)
-			_active.remove_at(i)
+			_remove_active_projectile_at(i)
 		i -= 1

@@ -125,7 +125,7 @@ export default defineConfig({
         },
         rewrite: () => '/?api_key=FREE',
       },
-      '/rpc/solana': {
+      '^/rpc/solana$': {
         target: 'https://solana-rpc.publicnode.com',
         changeOrigin: true,
         secure: true,

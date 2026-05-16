@@ -63,14 +63,17 @@ function BattleLogPanel({ onClose }) {
 
   const handleWatchReplay = useCallback((battle) => {
     if (!battle.replay_data || !battle.buildings_snapshot) return;
+    const replayLabel = battle.replay_data?.[0]?.ai_agent ? 'AI AGENT ATTACK' : '';
     // Close panel first (unpauses tree), then send replay after a tick
     onClose();
     setTimeout(() => {
       sendToGodot('watch_replay', {
         replay_data: battle.replay_data,
         buildings_snapshot: battle.buildings_snapshot,
-        attacker_name: battle.opponent_name,
+        attacker_name: battle.attacker_name || battle.opponent_name,
+        base_owner_name: battle.defender_name || battle.opponent_name,
         duration: battle.duration || 0,
+        replay_label: replayLabel,
       });
     }, 100);
   }, [sendToGodot, onClose]);

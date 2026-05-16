@@ -31,10 +31,9 @@ const CACHE_KEY = 'clash_skr_name_cache_v1';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const RPC_TIMEOUT_MS = 6000;
 
-// Reuse the same RPC list as WalletProvider — the lookup is independent of
-// the user's wallet adapter connection (it only needs read-only access),
-// but browser clients still go through our proxy to avoid direct public RPC
-// certificate and CORS failures.
+// Reuse the same RPC list as WalletProvider. It is direct-browser first so
+// this lookup does not burn the app server/proxy unless every direct RPC is
+// unavailable.
 const RPC_FALLBACKS = SOLANA_RPC_URLS;
 
 let parserPromise = null;

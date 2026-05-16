@@ -206,8 +206,8 @@ func set_level(lvl: int) -> void:
 	_apply_stats()
 
 
-func _process(delta: float) -> void:
-	delta = minf(delta, 0.1)
+func _physics_process(delta: float) -> void:
+	delta = BaseTroop.combat_delta(delta)
 	# Lazy init model/barrel (runs once)
 	if not _model:
 		# Find the actual turret model (has "RootNode" child), skip base outline
@@ -258,7 +258,7 @@ func _process(delta: float) -> void:
 		_target_search_timer = 0.0
 		_find_target()
 
-	if _target and is_instance_valid(_target):
+	if _target and BaseTroop.is_live_troop(_target):
 		var diff: Vector3 = _target.global_position - global_position
 		diff.y = 0
 		var d_sq: float = diff.length_squared()
@@ -292,7 +292,7 @@ func _process(delta: float) -> void:
 
 func _find_target() -> void:
 	var detect_sq: float = detect_range * detect_range
-	if _target and is_instance_valid(_target):
+	if _target and BaseTroop.is_live_troop(_target):
 		var dx = global_position.x - _target.global_position.x
 		var dz = global_position.z - _target.global_position.z
 		if dx * dx + dz * dz <= detect_sq:
@@ -301,7 +301,7 @@ func _find_target() -> void:
 	var nearest_dist_sq: float = detect_sq
 	var my_pos: Vector3 = global_position
 	for troop in BaseTroop._get_troops_cached():
-		if not is_instance_valid(troop):
+		if not BaseTroop.is_live_troop(troop):
 			continue
 		var dx: float = my_pos.x - troop.global_position.x
 		var dz: float = my_pos.z - troop.global_position.z
@@ -316,6 +316,35 @@ func _get_muzzle_pos() -> Vector3:
 		var barrel_dir: Vector3 = _aim_node.global_transform.basis.z
 		return _barrel.global_position + Vector3(0, 0.05, 0) + barrel_dir * 205.0
 	return global_position + Vector3(0, 0.18, 0)
+
+
+func _record_defense_telemetry(kind: String, target: Node3D, extra: Dictionary = {}) -> void:
+	if not is_instance_valid(target):
+		return
+	var payload := {
+		"defense_type": "turret",
+		"server_id": int(get_meta("server_id", -1)),
+		"target_instance": int(target.get_instance_id()),
+		"target_x": snappedf(target.global_position.x, 0.001),
+		"target_z": snappedf(target.global_position.z, 0.001),
+	}
+	var target_hp: Variant = target.get("hp")
+	if target_hp != null:
+		payload["target_hp"] = int(target_hp)
+	var target_level: Variant = target.get("level")
+	if target_level != null:
+		payload["target_level"] = int(target_level)
+	var target_name := ""
+	if target.has_method("_get_troop_name"):
+		target_name = str(target.call("_get_troop_name"))
+	if target_name != "":
+		payload["target_troop"] = target_name
+	for key in extra.keys():
+		payload[key] = extra[key]
+	for bs_node in BaseTroop._get_building_systems_cached():
+		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
+			bs_node.record_replay_telemetry(kind, payload)
+			return
 
 
 func _spawn_bullet() -> void:
@@ -349,6 +378,13 @@ func _spawn_bullet() -> void:
 		_flash_mat.albedo_texture = _flash_textures[0]
 
 	_active_bullets.append(b)
+	_record_defense_telemetry("defense_fire", _target, {
+		"damage": damage,
+		"projectile_x": snappedf(spawn_pos.x, 0.001),
+		"projectile_y": snappedf(spawn_pos.y, 0.001),
+		"projectile_z": snappedf(spawn_pos.z, 0.001),
+		"pool_active": _active_bullets.size(),
+	})
 
 
 func _update_bullets(delta: float) -> void:
@@ -374,7 +410,7 @@ func _update_bullets(delta: float) -> void:
 				b.flash.visible = false
 
 		# Target died — return to pool
-		if not is_instance_valid(b.target):
+		if not BaseTroop.is_live_troop(b.target):
 			_return_to_pool(b)
 			_active_bullets.remove_at(i)
 			i -= 1
@@ -409,12 +445,23 @@ func _update_bullets(delta: float) -> void:
 		# Hit detection
 		var hit_diff: Vector3 = b.node.global_position - target_pos
 		if hit_diff.length_squared() < 0.0009:  # 0.03²
+			var hp_before: int = int(b.target.get("hp")) if b.target.get("hp") != null else 0
 			if b.target.has_method("take_damage"):
 				b.target.take_damage(damage)
 			elif "hp" in b.target:
 				b.target.hp -= damage
 				if b.target.hp <= 0:
 					b.target.queue_free()
+			var hp_after: int = int(b.target.get("hp")) if is_instance_valid(b.target) and b.target.get("hp") != null else hp_before - damage
+			_record_defense_telemetry("defense_projectile_hit", b.target, {
+				"damage": damage,
+				"hp_before": hp_before,
+				"hp_after": hp_after,
+				"projectile_x": snappedf(b.node.global_position.x, 0.001),
+				"projectile_y": snappedf(b.node.global_position.y, 0.001),
+				"projectile_z": snappedf(b.node.global_position.z, 0.001),
+				"hit_dist_sq": snappedf(hit_diff.length_squared(), 0.0001),
+			})
 			_return_to_pool(b)
 			_active_bullets.remove_at(i)
 		i -= 1

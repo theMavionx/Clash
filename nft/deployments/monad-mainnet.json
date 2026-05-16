@@ -1,0 +1,21 @@
+{
+  "chain": "monad",
+  "chainId": 143,
+  "proxy": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "implementation": "0x8fc6e18371ddd76654ab1f0859099c040aed255a",
+  "contract": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "implementationTxHash": "0x6c974409fedf36265161acd8ad753e6cace596356b6cadc3f4a9f9b48c83fce9",
+  "proxyTxHash": "0x65ca33ab85ab10b8742536c6b4bf41df54b83520704bf91fa40e319818422d5c",
+  "implementationBlockNumber": "74815205",
+  "proxyBlockNumber": "74815215",
+  "maxSupply": "500",
+  "maxPerTx": "10",
+  "totalMinted": "0",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/base/",
+  "contractUri": "https://clashofperps.fun/api/nft/base/contract",
+  "initialPriceWei": "0",
+  "upgradeable": true,
+  "deployedAt": "2026-05-15T19:34:47.000Z"
+}

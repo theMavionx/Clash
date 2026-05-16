@@ -9,7 +9,11 @@ const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
 const earnings = require('./earnings');
-const { broadcastToPlayer } = require('./websocket');
+const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
+const {
+  solanaToken2022CollectionId,
+  solanaToken2022Symbol,
+} = require('./solana_token2022_nft');
 
 const router = express.Router();
 
@@ -17,6 +21,7 @@ const router = express.Router();
 // logs/stores all mismatch diagnostics, but does not block player rewards unless
 // explicitly re-enabled with BATTLE_REPLAY_STRICT=1.
 const STRICT_BATTLE_REPLAY_VERIFICATION = process.env.BATTLE_REPLAY_STRICT === '1';
+const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
 
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
@@ -68,7 +73,63 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
 // Keep on-chain token URIs stable while letting us replace image/metadata
 // content from the server via env/deploy changes.
 const NFT_MAX_SUPPLY = Number(process.env.NFT_MAX_SUPPLY || process.env.NFT_BASE_MAX_SUPPLY || 250);
+// Marketplace-hub bridge mints can create Base token IDs above Base's
+// original sale cap. Keep metadata available up to the global cap by
+// default; override if a future migration needs a wider tokenId window.
+const NFT_METADATA_MAX_TOKEN_ID = Number(
+  process.env.NFT_METADATA_MAX_TOKEN_ID
+  || process.env.NFT_GLOBAL_SUPPLY_CAP
+  || Math.max(NFT_MAX_SUPPLY, 500)
+);
+const NFT_METADATA_SUPPLY_LABEL = Number(
+  process.env.NFT_GLOBAL_SUPPLY_CAP
+  || NFT_METADATA_MAX_TOKEN_ID
+);
 const NFT_IMAGE_PATH = path.join(__dirname, 'public', 'nft', 'demonking.png');
+const NFT_LEVEL_IMAGE_PATHS = {
+  1: path.join(__dirname, 'public', 'nft', 'L1.jpg'),
+  2: path.join(__dirname, 'public', 'nft', 'L2.jpg'),
+  3: path.join(__dirname, 'public', 'nft', 'L3.jpg'),
+};
+
+// Cache of (chain, tokenId) → level reads, 60s TTL. Keeps metadata reads
+// cheap when marketplaces refresh every NFT after an upgrade.
+const _nftLevelCache = new Map();
+async function readNftLevelCached(chainKey, tokenId) {
+  const key = `${chainKey}:${tokenId}`;
+  const hit = _nftLevelCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < 60_000) return hit.level;
+  let level = 1;
+  try {
+    const cfg = (typeof evmNftChainConfig === 'function') ? evmNftChainConfig(chainKey) : null;
+    const addr = cfg?.nft || null;
+    if (addr) {
+      const { createPublicClient, http, getAddress } = await import('viem');
+      const rpcMap = {
+        base: process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+        arbitrum: process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
+        monad: process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+      };
+      const rpcUrl = rpcMap[chainKey];
+      const client = createPublicClient({ transport: http(rpcUrl) });
+      const raw = await client.readContract({
+        address: getAddress(addr),
+        abi: [{ name: 'tokenLevel', type: 'function', stateMutability: 'view',
+                inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }],
+        functionName: 'tokenLevel', args: [BigInt(tokenId)],
+      });
+      level = Math.max(1, Math.min(3, Number(raw) || 1));
+    }
+  } catch {
+    // V2 contracts don't have tokenLevel → falls back to L1.
+  }
+  _nftLevelCache.set(key, { level, at: now });
+  return level;
+}
+function invalidateNftLevelCache(chainKey, tokenId) {
+  _nftLevelCache.delete(`${chainKey}:${tokenId}`);
+}
 const ZERO_EVM_ADDRESS = '0x0000000000000000000000000000000000000000';
 const BASE_USDC_TOKEN = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
@@ -78,6 +139,23 @@ const utilityQuoteRateBuckets = new Map();
 const BASE_NFT_SUPPLY_ABI = [
   {
     name: 'totalMinted',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  // V3.2+ exposes currentSupply() = totalMinted - totalBurned. Older V3
+  // implementations don't have it; readers fall back to totalMinted in
+  // that case so the server still works during a partial rollout.
+  {
+    name: 'currentSupply',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'uint256' }],
+  },
+  {
+    name: 'totalBurned',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
@@ -115,30 +193,37 @@ function nftPublicBase(req) {
   return `${proto}://${req.get('host')}`;
 }
 
-function nftImageUrl(req) {
+function nftImageUrl(req, level) {
+  if (level && [1, 2, 3].includes(Number(level))) {
+    return `${nftPublicBase(req)}/api/nft/image/${Number(level)}`;
+  }
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
 }
 
-function nftTokenMetadata(req, chain, tokenId) {
+function nftTokenMetadata(req, chain, tokenId, level) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
+  const lvl = Math.max(1, Math.min(3, Number(level) || 1));
+  const imageUrl = nftImageUrl(req, lvl);
   return {
     name: `${name} #${id}`,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description,
-    image: nftImageUrl(req),
+    image: imageUrl,
     external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
     attributes: [
       { trait_type: 'Game', value: 'Clash of Perps' },
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: chain },
       { trait_type: 'Edition', value: id },
-      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+      { trait_type: 'Level', value: lvl, display_type: 'number' },
+      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
       category: 'image',
-      files: [{ uri: nftImageUrl(req), type: 'image/png' }],
+      files: [{ uri: imageUrl, type: 'image/jpeg' }],
     },
   };
 }
@@ -156,7 +241,7 @@ function nftHiddenMetadata(req, chain) {
       { trait_type: 'Game', value: 'Clash of Perps' },
       { trait_type: 'Character', value: 'Demon King' },
       { trait_type: 'Chain', value: chain },
-      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
       category: 'image',
@@ -165,13 +250,50 @@ function nftHiddenMetadata(req, chain) {
   };
 }
 
-function sendNftMetadata(req, res, chain, rawTokenId) {
+function sendSolanaToken2022Metadata(req, res) {
+  const mint = String(req.params.mint || '').trim();
+  if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'bad mint' });
+  const level = Math.max(1, Math.min(3, Number(req.query.level || 1) || 1));
+  const imageUrl = nftImageUrl(req, level, mint);
+  const name = `${process.env.NFT_NAME || 'Demon King'} L${level}`;
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json({
+    name,
+    symbol: solanaToken2022Symbol(),
+    description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
+    image: imageUrl,
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Character', value: 'Demon King' },
+      { trait_type: 'Chain', value: 'Solana' },
+      { trait_type: 'Standard', value: 'Token-2022' },
+      { trait_type: 'Collection', value: solanaToken2022CollectionId() },
+      { trait_type: 'Level', value: level, display_type: 'number' },
+      { trait_type: 'Stars', value: level, display_type: 'number' },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: imageUrl, type: 'image/jpeg' }],
+    },
+  });
+}
+
+async function sendNftMetadata(req, res, chain, rawTokenId) {
   const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
   if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
   const id = Number(tokenId);
-  if (id < 1 || id > NFT_MAX_SUPPLY) return res.status(404).json({ error: 'token metadata not found' });
+  if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
+  // Map UI chain labels to internal keys for the level read.
+  const chainKeyByLabel = { Base: 'base', Arbitrum: 'arbitrum', Monad: 'monad' };
+  const chainKey = chainKeyByLabel[chain] || null;
+  let level = 1;
+  if (chainKey) {
+    try { level = await readNftLevelCached(chainKey, id); } catch { level = 1; }
+  }
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
-  res.json(nftTokenMetadata(req, chain, id));
+  res.json(nftTokenMetadata(req, chain, id, level));
 }
 
 function readJsonIfExists(file) {
@@ -282,12 +404,34 @@ function usdToNativeUnits(usdAmount, assetUsd, decimals) {
 }
 
 async function fetchNftUsdPrice(asset) {
-  const envKey = asset === 'eth' ? 'NFT_ETH_USD' : asset === 'sol' ? 'NFT_SOL_USD' : null;
+  const envKey = asset === 'eth' ? 'NFT_ETH_USD'
+    : asset === 'sol' ? 'NFT_SOL_USD'
+    : asset === 'apt' ? 'NFT_APT_USD'
+    : asset === 'mon' ? 'NFT_MON_USD'
+    : asset === 'skr' ? 'NFT_SKR_USD'
+    : null;
   if (envKey && process.env[envKey]) return String(process.env[envKey]);
 
-  const ids = { eth: 'ethereum', sol: 'solana' };
-  const symbols = { eth: 'ETHUSDT', sol: 'SOLUSDT' };
-  if (!ids[asset]) throw new Error(`Unsupported price asset: ${asset}`);
+  // SKR — no major CoinGecko/Binance feed (newly launched Solana Mobile
+  // token). Resolve via DexScreener using the SKR mint configured on the
+  // Solana shop. Cached for 60s to avoid hammering on every quote.
+  if (asset === 'skr') {
+    const mint = process.env.GAME_SHOP_SOLANA_SKR_MINT;
+    if (!mint) {
+      throw new Error('SKR price unavailable: GAME_SHOP_SOLANA_SKR_MINT not set');
+    }
+    return fetchSplTokenUsdPrice(mint);
+  }
+
+  // MON (Monad native) and SKR (Solana Mobile Seeker) launched late and
+  // don't yet have stable CoinGecko slugs in some indexers. The env-var
+  // override above is the recommended path for those — falling back to
+  // CoinGecko/Binance below works for ETH/SOL/APT/MON.
+  const ids = { eth: 'ethereum', sol: 'solana', apt: 'aptos', mon: 'monad' };
+  const symbols = { eth: 'ETHUSDT', sol: 'SOLUSDT', apt: 'APTUSDT', mon: 'MONUSDT' };
+  if (!ids[asset]) {
+    throw new Error(`Price for ${asset.toUpperCase()} is not configured. Set ${envKey || `NFT_${asset.toUpperCase()}_USD`} or accept the default oracle path.`);
+  }
 
   try {
     const r = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids[asset]}&vs_currencies=usd`);
@@ -303,6 +447,34 @@ async function fetchNftUsdPrice(asset) {
     if (!json?.price) throw new Error('Binance price missing');
     return String(json.price);
   }
+}
+
+// Generic SPL-token USD price feed via DexScreener. Used for SKR (Solana
+// Mobile Seeker) and any other newer Solana token without a CoinGecko slug.
+// Cached for 60s to keep DexScreener happy across the quote spam window.
+const _splTokenPriceCache = new Map();
+async function fetchSplTokenUsdPrice(mint) {
+  const now = Date.now();
+  const cached = _splTokenPriceCache.get(mint);
+  if (cached && cached.expiresAt > now) return cached.value;
+  const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mint}`);
+  if (!r.ok) throw new Error(`DexScreener ${r.status}`);
+  const json = await r.json();
+  const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
+  // Prefer Solana pairs against USDC/USDT (deep stable liquidity gives the
+  // cleanest spot read). Min-liquidity floor stops a 100-USDC pool from
+  // dictating the price of a multi-million-USD market.
+  const minLiquidityUsd = Math.max(0, Number(process.env.NFT_SPL_MIN_LIQUIDITY_USD || 5_000));
+  const best = pairs
+    .filter((p) => String(p?.chainId || '').toLowerCase() === 'solana'
+      && String(p?.baseToken?.address || '').toLowerCase() === mint.toLowerCase()
+      && Number(p?.priceUsd) > 0
+      && Number(p?.liquidity?.usd || 0) >= minLiquidityUsd)
+    .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
+  if (!best) throw new Error(`No deep DexScreener pair for mint ${mint} (min $${minLiquidityUsd} liquidity)`);
+  const value = String(best.priceUsd);
+  _splTokenPriceCache.set(mint, { value, expiresAt: now + 60_000 });
+  return value;
 }
 
 async function fetchClashUsdPrice(config) {
@@ -401,6 +573,90 @@ function baseNftConfig() {
   };
 }
 
+// Multi-chain NFT deployment registry. Each entry mirrors the Base shape
+// (NFT + shop contracts, USDC + native pricing) so the same quote/mint
+// route handlers can serve every EVM chain. When `nft` or `shop` is null
+// the chain is considered "not yet deployed" — quote endpoints respond
+// 503 instead of trying to sign for a nonexistent contract.
+const NFT_EVM_CHAIN_SPECS = {
+  base: {
+    chainId: 8453,
+    label: 'Base',
+    rpc: () => process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || process.env.VITE_BASE_RPC_URL || 'https://mainnet.base.org',
+    deploymentFile: 'base-shop-v2-mainnet.json',
+    nftDeploymentFile: 'base-v2-mainnet.json',
+    explorer: 'https://basescan.org',
+    domainName: 'DemonKingBaseShop',
+    nativeSymbol: 'ETH',
+    nativeOracleAsset: 'eth',
+    usdcDefault: BASE_USDC_TOKEN,
+    usdcDecimals: 6,
+  },
+  arbitrum: {
+    chainId: 42161,
+    label: 'Arbitrum',
+    rpc: () => process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
+    deploymentFile: 'arbitrum-shop-v2-mainnet.json',
+    nftDeploymentFile: 'arbitrum-mainnet.json',
+    explorer: 'https://arbiscan.io',
+    domainName: 'DemonKingArbitrumShop',
+    nativeSymbol: 'ETH',
+    nativeOracleAsset: 'eth',
+    usdcDefault: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    usdcDecimals: 6,
+  },
+  monad: {
+    chainId: 143,
+    label: 'Monad',
+    rpc: () => process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+    deploymentFile: 'monad-shop-v2-mainnet.json',
+    nftDeploymentFile: 'monad-mainnet.json',
+    explorer: 'https://monadexplorer.com',
+    domainName: 'DemonKingMonadShop',
+    nativeSymbol: 'MON',
+    nativeOracleAsset: 'mon',
+    usdcDefault: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
+    usdcDecimals: 18,
+  },
+};
+
+function evmNftChainConfig(chainKey) {
+  const spec = NFT_EVM_CHAIN_SPECS[chainKey];
+  if (!spec) return null;
+  // Per-chain shop + NFT proxy lookups go via env override → deployment
+  // JSON → null. Falling back to null lets the endpoint surface a clean
+  // "not deployed" 503 instead of attempting to sign for nothing.
+  const shopFile = readJsonIfExists(path.join(NFT_ROOT, 'deployments', spec.deploymentFile)) || {};
+  const nftFile = readJsonIfExists(path.join(NFT_ROOT, 'deployments', spec.nftDeploymentFile)) || {};
+  const envPrefix = `NFT_${chainKey.toUpperCase()}`;
+  const nft = process.env[`${envPrefix}_CONTRACT`] || nftFile.proxy || nftFile.contract || null;
+  const shop = process.env[`${envPrefix}_SHOP_CONTRACT`] || shopFile.shop || shopFile.proxy || null;
+  const usdcToken = process.env[`${envPrefix}_USDC_TOKEN`] || shopFile.usdcToken || spec.usdcDefault;
+  const usdPriceE6 = String(process.env[`${envPrefix}_USD_PRICE_E6`] || shopFile.baseUsdPriceE6 || '8900000');
+  const saleActive = process.env[`${envPrefix}_SHOP_SALE_ACTIVE`]
+    ? process.env[`${envPrefix}_SHOP_SALE_ACTIVE`] !== '0'
+    : !!shopFile.saleActive;
+  return {
+    chainKey,
+    chainId: spec.chainId,
+    label: spec.label,
+    nft,
+    shop,
+    usdcToken,
+    usdcDecimals: spec.usdcDecimals,
+    nativeSymbol: spec.nativeSymbol,
+    nativeOracleAsset: spec.nativeOracleAsset,
+    domainName: spec.domainName,
+    explorer: spec.explorer,
+    usdPriceE6,
+    saleActive,
+    deployed: !!(nft && shop),
+  };
+}
+
+// Global NFT supply tracker — single source of truth aggregating per-chain
+// mint counts, with 10s cache + RPC fallbacks. Defined below at ~line 1109.
+
 function gameShopDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'game-shop-base-mainnet.json')) || {};
 }
@@ -434,6 +690,156 @@ function gameShopConfig() {
 const SOLANA_USDC_MINT_DEFAULT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOLANA_MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
+// =====================================================================
+// Multi-chain EVM shop (Arbitrum, Monad). Base is deliberately separate
+// because it has a deployed ClashGameShopV1 contract with quote signing;
+// these other chains use the lighter "USDC transfer + server-signed memo
+// + tx-receipt verification" model — no on-chain contract needed.
+// =====================================================================
+const GAME_SHOP_EVM_CHAINS = {
+  arbitrum: {
+    chainId: 42161,
+    label: 'Arbitrum',
+    rpcUrl: () => process.env.GAME_SHOP_ARB_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
+    treasuryEnv: 'GAME_SHOP_ARBITRUM_TREASURY',
+    explorer: 'https://arbiscan.io',
+    nativeSymbol: 'ETH',
+    nativeDecimals: 18,
+    payments: {
+      usdc: { kind: 'erc20', token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6, label: 'USDC', stable: true },
+      eth:  { kind: 'native', decimals: 18, label: 'ETH', oracleAsset: 'eth' },
+    },
+  },
+  monad: {
+    chainId: 143,
+    label: 'Monad',
+    rpcUrl: () => process.env.GAME_SHOP_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+    treasuryEnv: 'GAME_SHOP_MONAD_TREASURY',
+    explorer: 'https://monadexplorer.com',
+    nativeSymbol: 'MON',
+    nativeDecimals: 18,
+    payments: {
+      usdc: { kind: 'erc20', token: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603', decimals: 18, label: 'USDC', stable: true }, // non-standard 18 dec on Monad
+      mon:  { kind: 'native', decimals: 18, label: 'MON', oracleAsset: 'mon' },
+    },
+  },
+};
+
+function evmPaymentSpec(chainKey, paymentKey) {
+  const chain = GAME_SHOP_EVM_CHAINS[chainKey];
+  if (!chain) return null;
+  return chain.payments?.[paymentKey] || null;
+}
+
+function defaultEvmPayment(chainKey) {
+  return GAME_SHOP_EVM_CHAINS[chainKey]?.payments?.usdc ? 'usdc' : null;
+}
+
+function gameShopEvmConfig(chainKey) {
+  const spec = GAME_SHOP_EVM_CHAINS[chainKey];
+  if (!spec) return null;
+  // Treasury: per-chain override → shared EVM treasury env → Base treasury
+  // from the on-chain ClashGameShop deployment (because Base shop's owner
+  // already set it). Same wallet across all EVM chains by default — one
+  // place to consolidate revenue, simpler bookkeeping.
+  const deployment = gameShopDeployment();
+  const treasury = process.env[spec.treasuryEnv]
+    || process.env.GAME_SHOP_EVM_TREASURY
+    || deployment.treasury
+    || null;
+  const saleActive = process.env[`GAME_SHOP_${chainKey.toUpperCase()}_SALE_ACTIVE`]
+    ? process.env[`GAME_SHOP_${chainKey.toUpperCase()}_SALE_ACTIVE`] !== '0'
+    : !!treasury;
+  // Surface the per-payment options as a flat array so the client UI can
+  // render its toggle without re-walking the keyed payments object. ID is
+  // stable (used as the `payment` field in quote/redeem); label is for UI.
+  const payments = Object.entries(spec.payments).map(([id, p]) => ({
+    id,
+    kind: p.kind,
+    label: p.label,
+    decimals: p.decimals,
+    stable: !!p.stable,
+    token: p.kind === 'erc20' ? p.token : null,
+  }));
+  // Back-compat fields — older client code reads usdcMint/usdcDecimals.
+  // Surface them only when USDC is actually one of the payments.
+  const usdcSpec = spec.payments?.usdc?.kind === 'erc20' ? spec.payments.usdc : null;
+  return {
+    chain: chainKey,
+    chainId: spec.chainId,
+    label: spec.label,
+    treasury,
+    usdcMint: usdcSpec?.token || null,
+    usdcDecimals: usdcSpec?.decimals || null,
+    nativeSymbol: spec.nativeSymbol,
+    nativeDecimals: spec.nativeDecimals,
+    payments,
+    explorer: spec.explorer,
+    saleActive,
+    ready: !!treasury,
+  };
+}
+
+// =====================================================================
+// Aptos game shop (Decibel). The treasury is derived from the SAME BIP-39
+// mnemonic that already controls the Base treasury (NFT_BASE env), just
+// via the standard Aptos derivation path `m/44'/637'/0'/0'/0'` (SLIP-44
+// coin type 637, ed25519 instead of secp256k1). One seed phrase controls
+// both wallets — no separate Aptos-only secret to backup.
+// =====================================================================
+const APTOS_DERIVATION_PATH = "m/44'/637'/0'/0'/0'";
+
+let _aptosTreasuryCache = null;
+function deriveAptosTreasuryFromMnemonic() {
+  if (_aptosTreasuryCache !== null) return _aptosTreasuryCache;
+  // Direct override (raw ed25519 private key) takes precedence — useful
+  // for a hot/cold split where the shop key isn't derived from the same
+  // mnemonic. Returns null silently on any failure so callers can treat
+  // the shop as "not configured" rather than crash module load.
+  try {
+    const explicitKey = String(process.env.GAME_SHOP_APTOS_KEY || '').trim();
+    const mnemonic = String(
+      process.env.GAME_SHOP_APTOS_MNEMONIC
+      || process.env.NFT_BASE
+      || '',
+    ).trim();
+    if (!explicitKey && !mnemonic) { _aptosTreasuryCache = ''; return ''; }
+    const sdkPath = process.env.APTOS_SDK_PATH
+      || require.resolve('@aptos-labs/ts-sdk', { paths: [path.join(__dirname, '..', 'server-futures', 'node_modules')] });
+    const sdk = require(sdkPath);
+    let account;
+    if (explicitKey) {
+      account = sdk.Account.fromPrivateKey({ privateKey: new sdk.Ed25519PrivateKey(explicitKey) });
+    } else {
+      account = sdk.Account.fromDerivationPath({ path: APTOS_DERIVATION_PATH, mnemonic });
+    }
+    _aptosTreasuryCache = account.accountAddress.toString();
+    return _aptosTreasuryCache;
+  } catch {
+    _aptosTreasuryCache = '';
+    return '';
+  }
+}
+
+function gameShopAptosConfig() {
+  const treasury = process.env.GAME_SHOP_APTOS_TREASURY
+    || deriveAptosTreasuryFromMnemonic()
+    || null;
+  const usdcAddress = process.env.GAME_SHOP_APTOS_USDC
+    || '0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b'; // native Circle USDC (FA)
+  const saleActive = process.env.GAME_SHOP_APTOS_SALE_ACTIVE
+    ? process.env.GAME_SHOP_APTOS_SALE_ACTIVE !== '0'
+    : !!treasury;
+  return {
+    chain: 'aptos',
+    network: process.env.GAME_SHOP_APTOS_NETWORK || 'mainnet',
+    treasury,
+    usdcAddress,
+    saleActive,
+    ready: !!treasury,
+  };
+}
+
 function gameShopSolanaConfig() {
   // Treasury can be configured per-env or pulled from the nft deployment
   // (reuse the same Solana wallet the NFT mint uses — they're the same
@@ -453,6 +859,12 @@ function gameShopSolanaConfig() {
     || process.env.NFT_SOLANA_USDC_MINT
     || nftDeployment.usdcMint
     || SOLANA_USDC_MINT_DEFAULT;
+  // SKR — Solana Mobile Seeker token. No fallback default because Solana
+  // Mobile hadn't published a long-lived mint at code-write time; the
+  // operator wires this in via env when ready. If unset, the SKR
+  // payment option silently disappears from the UI (`ready === false`).
+  const skrMint = process.env.GAME_SHOP_SOLANA_SKR_MINT || null;
+  const skrDecimals = Number(process.env.GAME_SHOP_SOLANA_SKR_DECIMALS || 9);
   const saleActive = process.env.GAME_SHOP_SOLANA_SALE_ACTIVE
     ? process.env.GAME_SHOP_SOLANA_SALE_ACTIVE !== '0'
     : !!treasury; // any wallet that's configured = open
@@ -461,6 +873,9 @@ function gameShopSolanaConfig() {
     cluster: process.env.GAME_SHOP_SOLANA_CLUSTER || 'mainnet-beta',
     treasury,
     usdcMint,
+    skrMint,
+    skrDecimals,
+    skrReady: !!skrMint,
     memoProgram: SOLANA_MEMO_PROGRAM_ID,
     saleActive,
     ready: !!treasury,
@@ -676,6 +1091,240 @@ function fallbackNftSupply(source = 'fallback') {
   };
 }
 
+// Global cross-chain NFT supply cap. The cap of 500 is enforced by the
+// server (single source of truth) across Base + Solana + Arbitrum + Monad
+// + Aptos. EVM contracts still use their per-chain `maxSupply` for primary
+// sale/admin minting, while bridgeMint is allowed to exceed a local cap so
+// Base can serve as the marketplace hub. We sign initial mint quotes only
+// while the SUM of live NFTs across chains is under this global limit.
+// Set via env so we can lift it later without a code change.
+const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || 500);
+
+// Light-weight in-memory cache for the most recent per-chain supply read
+// so a flood of quote requests doesn't fan out RPC calls to every chain.
+// 10s TTL is enough — within that window we trust the cache; outside we
+// re-read on demand. Cache misses fall back to "unknown" which we treat
+// as "let the quote through" to avoid blocking buyers when an RPC is
+// flaky; primary mint contracts still gate their own sale/admin mints.
+let _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
+
+// Generic EVM "live tokens on this chain" reader. Prefers the V3.2+
+// `currentSupply()` view (totalMinted - totalBurned, so a bridge_burn
+// decrements the local count); falls back to plain `totalMinted()` on
+// older implementations.
+async function readEvmCurrentSupplyOrTotalMinted({ address, publicClient }) {
+  const { getAddress } = await import('viem');
+  const checksumAddr = getAddress(address);
+  try {
+    const cs = await publicClient.readContract({
+      address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'currentSupply',
+    });
+    return Number(cs);
+  } catch {
+    // Pre-V3.2 (no currentSupply selector) → use totalMinted.
+    try {
+      const tm = await publicClient.readContract({
+        address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'totalMinted',
+      });
+      return Number(tm);
+    } catch { return null; }
+  }
+}
+
+async function readBaseNftMintedCount(config) {
+  try {
+    if (!config?.nft) return null;
+    const { createPublicClient, http } = await import('viem');
+    const rpcUrl = process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
+    const publicClient = createPublicClient({ transport: http(rpcUrl) });
+    const n = await readEvmCurrentSupplyOrTotalMinted({ address: config.nft, publicClient });
+    if (n != null) return n;
+    // Last-ditch: original readBaseNftSupply path (returns {totalMinted,...}).
+    const r = await readBaseNftSupply(config);
+    return Number.isFinite(r?.totalMinted) ? r.totalMinted : null;
+  } catch { return null; }
+}
+
+async function readSolanaNftMintedCount(deployment) {
+  // Switched from candy_machine.itemsRedeemed → collection.ConcurrentSupply
+  // (mpl-core CollectionV1). The candy-machine counter never decrements
+  // on burnV1 and ignores bridge mints that go around the candy machine,
+  // so it under-reports both ways. The collection's ConcurrentSupply
+  // reflects EVERY mint/burn of an asset pinned to the collection,
+  // matching the EVM `currentSupply()` semantics.
+  try {
+    const collectionAddr = process.env.NFT_SOLANA_COLLECTION || deployment?.collection;
+    if (!collectionAddr) {
+      const r = await readSolanaNftSupply(deployment);
+      return Number.isFinite(r?.totalMinted) ? r.totalMinted : null;
+    }
+    const { Connection, PublicKey } = require('@solana/web3.js');
+    const rpcUrl = process.env.NFT_SOLANA_RPC_URL
+      || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
+    const connection = new Connection(rpcUrl, 'confirmed');
+    // mpl-core CollectionV1 lives at the collection account itself. We use
+    // UMI's deserializer rather than hand-rolling the byte layout — the
+    // `numMinted` and `numBurned` fields are at variable offsets depending
+    // on plugin presence, so we let the SDK figure it out.
+    const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+    const { mplCore, fetchCollection } = await import('@metaplex-foundation/mpl-core');
+    const { publicKey } = await import('@metaplex-foundation/umi');
+    const umi = createUmi(rpcUrl).use(mplCore());
+    const col = await fetchCollection(umi, publicKey(collectionAddr));
+    const numMinted = Number(col.numMinted ?? 0);
+    const numBurned = Number(col.currentSize != null
+      ? (numMinted - Number(col.currentSize)) // some SDK versions expose currentSize directly
+      : 0);
+    // Prefer currentSize when available (already net of burns); otherwise
+    // fall back to numMinted (matches V2 behaviour exactly).
+    if (Number.isFinite(Number(col.currentSize))) return Number(col.currentSize);
+    return Math.max(0, numMinted - numBurned);
+  } catch {
+    // Network failure or unexpected SDK shape — defer to the old reader.
+    try {
+      const r = await readSolanaNftSupply(deployment);
+      return Number.isFinite(r?.totalMinted) ? r.totalMinted : null;
+    } catch { return null; }
+  }
+}
+
+async function readEvmGenericNftMintedCount(chainKey) {
+  // For Arbitrum/Monad — same V3 contract pattern as Base. Prefers V3.2+
+  // currentSupply() so bridge round-trips net to zero; falls back to
+  // totalMinted() on older impls.
+  const deployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`))
+    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-mainnet.json`)) || {};
+  const contractAddr = process.env[`NFT_${chainKey.toUpperCase()}_CONTRACT`] || deployment.proxy || deployment.contract;
+  if (!contractAddr) return null;
+  try {
+    const { createPublicClient, http } = await import('viem');
+    const rpcUrl = GAME_SHOP_EVM_CHAINS[chainKey]?.rpcUrl?.()
+      || `https://${chainKey}.gateway.tenderly.co`; // last-ditch fallback
+    const publicClient = createPublicClient({ transport: http(rpcUrl) });
+    return await readEvmCurrentSupplyOrTotalMinted({ address: contractAddr, publicClient });
+  } catch { return null; }
+}
+
+async function readAptosNftMintedCount() {
+  // Prefer the v3.2+ view function `clash_nft::demon_king::current_supply`
+  // which returns `total_minted - total_burned` so bridge_burn calls
+  // properly decrement the off-chain global counter. Falls back to the
+  // raw ConcurrentSupply read on older deploys (no BurnStats yet).
+  const deployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json')) || {};
+  const collectionAddr = process.env.NFT_APTOS_COLLECTION || deployment.collection;
+  const moduleAddr = deployment.module || (deployment.admin
+    ? `${deployment.admin}::demon_king` : null);
+  const fullnode = process.env.NFT_APTOS_RPC_URL || aptosFullnode();
+  const apiKey = process.env.APTOS_NODE_API_KEY;
+  const headers = apiKey ? { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }
+                          : { 'content-type': 'application/json' };
+
+  if (moduleAddr) {
+    try {
+      const r = await fetch(`${fullnode}/view`, {
+        method: 'POST', headers,
+        body: JSON.stringify({
+          function: `${moduleAddr}::current_supply`,
+          type_arguments: [], arguments: [],
+        }),
+      });
+      if (r.ok) {
+        const arr = await r.json();
+        const v = Array.isArray(arr) ? Number(arr[0]) : null;
+        if (Number.isFinite(v)) return v;
+      }
+    } catch { /* view not deployed yet — fall through */ }
+  }
+
+  if (!collectionAddr) return null;
+  try {
+    const r = await fetch(`${fullnode}/accounts/${collectionAddr}/resource/0x4::collection::ConcurrentSupply`, { headers });
+    if (!r.ok) return null;
+    const json = await r.json();
+    const value = json?.data?.current_supply?.value;
+    if (value == null) return null;
+    const minted = Number(value);
+    return Number.isFinite(minted) ? minted : null;
+  } catch { return null; }
+}
+
+// Per-chain baseline minted counts from deployment JSON. Used as a floor
+// when a chain RPC fails on the very first fetch (no prior cache yet) so
+// the UI never shows a number lower than what we deployed with.
+function nftBaselinePerChain() {
+  const dep = (file) => readJsonIfExists(path.join(NFT_ROOT, 'deployments', file)) || {};
+  const numOr0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const baseV3 = dep('base-v3-mainnet.json');
+  const arbV3  = dep('arbitrum-v3-mainnet.json');
+  const monV3  = dep('monad-v3-mainnet.json');
+  const sol    = dep('solana-mainnet.json');
+  const apt    = dep('aptos-mainnet.json');
+  return {
+    base:     numOr0(baseV3.totalMintedAtUpgrade),
+    arbitrum: numOr0(arbV3.totalMintedAtUpgrade),
+    monad:    numOr0(monV3.totalMintedAtUpgrade),
+    solana:   numOr0(sol.totalMinted),
+    aptos:    numOr0(apt.totalMinted),
+  };
+}
+
+async function readGlobalNftSupply() {
+  const now = Date.now();
+  if (now - _nftGlobalSupplyCache.fetchedAt < 10_000 && Object.keys(_nftGlobalSupplyCache.perChain).length > 0) {
+    return _nftGlobalSupplyCache;
+  }
+  const baseConfig = baseNftConfig();
+  const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
+  const [base, solana, arbitrum, monad, aptos] = await Promise.all([
+    readBaseNftMintedCount(baseConfig),
+    readSolanaNftMintedCount(solanaDeployment),
+    readEvmGenericNftMintedCount('arbitrum'),
+    readEvmGenericNftMintedCount('monad'),
+    readAptosNftMintedCount(),
+  ]);
+  const perChainRaw = { base, solana, arbitrum, monad, aptos };
+
+  // Fallback ladder for each chain:
+  //   1) live RPC reading (preferred)
+  //   2) last known value from previous cache snapshot
+  //   3) baseline from deployment JSON (fresh-boot fallback only)
+  //
+  // Do not ratchet counts upward here. V3 currentSupply() and the Solana/
+  // Aptos collection readers are net-of-bridge-burn, so a legitimate bridge
+  // can make a source chain decrease before the destination mint lands.
+  const prevPerChain = _nftGlobalSupplyCache.perChain || {};
+  const baseline = nftBaselinePerChain();
+  const resolvedPerChain = {};
+  for (const k of Object.keys(perChainRaw)) {
+    const live = Number.isFinite(perChainRaw[k]) ? perChainRaw[k] : null;
+    const prev = Number.isFinite(prevPerChain[k]) ? prevPerChain[k] : null;
+    const floor = baseline[k] || 0;
+    resolvedPerChain[k] = live != null ? live
+      : prev != null ? prev
+      : floor;
+  }
+  const total = Object.values(resolvedPerChain).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+  _nftGlobalSupplyCache = {
+    fetchedAt: now,
+    perChain: resolvedPerChain,
+    perChainRaw,
+    total,
+    cap: NFT_GLOBAL_SUPPLY_CAP,
+  };
+  return _nftGlobalSupplyCache;
+}
+
+// Reusable gate — every quote endpoint calls this before signing.
+async function assertGlobalSupplyAvailable(quantity) {
+  const supply = await readGlobalNftSupply();
+  const wanted = Number(quantity) || 1;
+  if (supply.total + wanted > NFT_GLOBAL_SUPPLY_CAP) {
+    const err = new Error(`Sold out: only ${Math.max(0, NFT_GLOBAL_SUPPLY_CAP - supply.total)} of ${NFT_GLOBAL_SUPPLY_CAP} NFTs remain across all chains`);
+    err.status = 409;
+    throw err;
+  }
+}
+
 async function readBaseNftSupply(config) {
   if (!config?.nft) return fallbackNftSupply('not_deployed');
 
@@ -759,8 +1408,25 @@ router.get('/nft/mint/config', async (req, res) => {
   const solanaSaleActive = process.env.NFT_SOLANA_SALE_ACTIVE
     ? process.env.NFT_SOLANA_SALE_ACTIVE !== '0'
     : !!solanaDeployment.saleActive;
+  // Global supply state across all chains — UI displays this as "X / 500"
+  // and disables mint buttons when remaining=0 even if a single chain has
+  // headroom. Falls back gracefully on RPC errors.
+  let globalSupply = { totalMinted: 0, cap: NFT_GLOBAL_SUPPLY_CAP, remaining: NFT_GLOBAL_SUPPLY_CAP, perChain: {} };
+  try {
+    const s = await readGlobalNftSupply();
+    globalSupply = {
+      totalMinted: s.total,
+      cap: NFT_GLOBAL_SUPPLY_CAP,
+      remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - s.total),
+      perChain: s.perChain,
+    };
+  } catch (err) {
+    console.warn('[NFT] failed to read global supply', err?.message || err);
+  }
+
   res.set('Cache-Control', 'no-store');
   res.json({
+    global: globalSupply,
     base: {
       ...baseConfig,
       supply: baseSupply,
@@ -797,6 +1463,13 @@ router.post('/nft/base/quote', async (req, res) => {
     const buyer = getAddress(String(req.body?.buyer || ''));
     const payment = String(req.body?.payment || '').toLowerCase();
     const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
+    // Global cross-chain supply gate — must pass before we sign anything.
+    // The contract has its own per-chain cap (250 here) but we additionally
+    // refuse to sign when total minted across Base/Solana/Arbitrum/Monad/
+    // Aptos has hit NFT_GLOBAL_SUPPLY_CAP (default 500). Stops the case
+    // where each chain individually has headroom but the global drop is
+    // already exhausted.
+    await assertGlobalSupplyAvailable(Number(quantity));
     const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_BASE_QUOTE_TTL_SECONDS || 300)));
     const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
     const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
@@ -882,16 +1555,317 @@ router.post('/nft/base/quote', async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || 'quote failed';
-    const status = /address/i.test(message) ? 400 : 500;
+    const status = /address/i.test(message) || err?.status === 409 ? (err?.status || 400) : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+// Per-chain NFT shop deployment lookup. Returns null until you deploy
+// DemonKingBaseShopV2 to that chain via `npm run deploy:evm:shop --
+// --chain=arbitrum`. The shop file format matches base-shop-v2-mainnet.json.
+function evmNftShopDeployment(chainKey) {
+  const file = path.join(NFT_ROOT, 'deployments', `${chainKey}-shop-v2-mainnet.json`);
+  return readJsonIfExists(file) || null;
+}
+
+// Generic EVM NFT quote for any chain where we've deployed
+// DemonKingBaseV2 + DemonKingBaseShopV2 (Arbitrum, Monad — Base stays on
+// its dedicated route for back-compat with the client). The flow + EIP-712
+// signing payload are identical to Base's; only the chainId, verifying
+// contract, and USDC mint differ per chain.
+router.post('/nft/evm/quote', async (req, res) => {
+  try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT quote requests. Try again shortly.' });
+    }
+
+    const chainKey = String(req.body?.chain || '').toLowerCase();
+    const evmConfig = GAME_SHOP_EVM_CHAINS[chainKey];
+    if (!evmConfig) return res.status(400).json({ error: 'Unsupported chain. Use arbitrum or monad.' });
+
+    const shopDeployment = evmNftShopDeployment(chainKey);
+    if (!shopDeployment?.shop) {
+      return res.status(503).json({ error: `${chainKey} NFT shop is not deployed yet` });
+    }
+    if (!shopDeployment.saleActive && process.env.NFT_EVM_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: `${chainKey} NFT sale is not active` });
+    }
+
+    const { getAddress, zeroAddress } = await import('viem');
+    const buyer = getAddress(String(req.body?.buyer || ''));
+    const payment = String(req.body?.payment || '').toLowerCase();
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
+    await assertGlobalSupplyAvailable(Number(quantity));
+
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_EVM_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+    const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
+
+    // Per-chain native + stable. Native uses the chain's oracle asset
+    // (eth/mon), USDC is the shop's stored stable. CoP is intentionally
+    // omitted here — only Base ships CoP for now.
+    const usdcDec = shopDeployment.usdcToken
+      ? Number(process.env[`NFT_${chainKey.toUpperCase()}_USDC_DECIMALS`] || evmConfig.payments?.usdc?.decimals || 6)
+      : 6;
+    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || '8900000');
+
+    let paymentToken = zeroAddress;
+    let unitPrice = 0n;
+    let decimals = 18;
+    let usdPriceE6 = baseUsdPriceE6;
+    let priceSource = 'fixed';
+
+    const nativeSpec = evmConfig.payments?.[evmConfig.nativeSymbol.toLowerCase()];
+    if (payment === 'native' || payment === evmConfig.nativeSymbol.toLowerCase()) {
+      paymentToken = zeroAddress;
+      decimals = nativeSpec?.decimals ?? evmConfig.nativeDecimals ?? 18;
+      const assetUsd = await fetchNftUsdPrice(nativeSpec?.oracleAsset || 'eth');
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), assetUsd, decimals);
+      priceSource = `${evmConfig.nativeSymbol}/USD ${assetUsd}`;
+    } else if (payment === 'usdc') {
+      if (!shopDeployment.usdcToken || /^0x0{40}$/i.test(shopDeployment.usdcToken)) {
+        return res.status(400).json({ error: 'USDC payment not configured for this chain' });
+      }
+      paymentToken = getAddress(shopDeployment.usdcToken);
+      decimals = usdcDec;
+      // Same trick as Base USDC: scale to token decimals from the
+      // shop-stored 6-dec USD price. For 6-dec USDC this is identity.
+      unitPrice = usdPriceE6 * 10n ** BigInt(Math.max(0, decimals - 6));
+      priceSource = 'USDC 1:1 USD';
+    } else {
+      return res.status(400).json({ error: `Unsupported payment for ${chainKey}: ${payment}` });
+    }
+
+    const account = await parseNftEvmAccount();
+    const domain = {
+      name: 'DemonKingBaseShop',
+      version: '1',
+      chainId: evmConfig.chainId,
+      verifyingContract: getAddress(shopDeployment.shop || shopDeployment.proxy),
+    };
+    const types = {
+      MintQuote: [
+        { name: 'buyer', type: 'address' },
+        { name: 'paymentToken', type: 'address' },
+        { name: 'unitPrice', type: 'uint256' },
+        { name: 'quantity', type: 'uint256' },
+        { name: 'usdPriceE6', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    };
+    const message = { buyer, paymentToken, unitPrice, quantity, usdPriceE6, nonce, deadline };
+    const signature = await account.signTypedData({
+      domain,
+      types,
+      primaryType: 'MintQuote',
+      message,
+    });
+    const total = unitPrice * quantity;
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chain: chainKey,
+      chainId: evmConfig.chainId,
+      shop: getAddress(shopDeployment.shop || shopDeployment.proxy),
+      payment,
+      priceSource,
+      decimals,
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: total.toString(),
+      totalFormatted: unitsToDecimalString(total, decimals),
+      usdPriceE6: usdPriceE6.toString(),
+      quote: {
+        buyer,
+        paymentToken,
+        unitPrice: unitPrice.toString(),
+        quantity: quantity.toString(),
+        usdPriceE6: usdPriceE6.toString(),
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+      },
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = err?.status === 409 ? 409 : /address|chain/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────────
+// POST /nft/aptos/quote — sign an ed25519 MintQuote that
+// clash_nft::mint_with_quote(_payment) verifies on-chain.
+//
+// Aptos supports USDC and native APT. USDC keeps the original entrypoint for
+// backwards compatibility; APT uses the payment-aware entrypoint added in the
+// v3.3 module upgrade.
+// ────────────────────────────────────────────────────────────────────
+router.post('/nft/aptos/quote', async (req, res) => {
+  try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT quote requests. Try again shortly.' });
+    }
+
+    const aptosDeploy = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json'));
+    if (!aptosDeploy?.module) {
+      return res.status(503).json({ error: 'Aptos NFT module not deployed' });
+    }
+    if (!aptosDeploy.saleActive && process.env.NFT_APTOS_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: 'Aptos NFT sale is not active' });
+    }
+    const { signAptosMintQuote, signAptosMintQuotePayment } = require('./bridge_helpers');
+
+    const buyerRaw = String(req.body?.buyer || '').trim();
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(buyerRaw)) {
+      return res.status(400).json({ error: 'buyer must be a 0x-prefixed Aptos address' });
+    }
+    const buyer = '0x' + buyerRaw.replace(/^0x/, '').padStart(64, '0').toLowerCase();
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
+    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    if (payment !== 'usdc' && payment !== 'apt') {
+      return res.status(400).json({ error: 'Unsupported Aptos NFT payment (use usdc or apt)' });
+    }
+
+    // Global cross-chain supply gate (same one used by Base/Solana/EVM).
+    await assertGlobalSupplyAvailable(Number(quantity));
+
+    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || '8900000');
+    const usdAmount = unitsToDecimalString(usdPriceE6 * quantity, 6);
+    const aptMetadata = '0x000000000000000000000000000000000000000000000000000000000000000a';
+    let decimals, paymentMetadata, unitPrice, totalAmount, priceSource;
+    if (payment === 'usdc') {
+      if (!aptosDeploy.usdcMetadata) {
+        return res.status(503).json({ error: 'Aptos USDC metadata is not configured' });
+      }
+      // Aptos USDC has 6 decimals (same as USD price scale), so unitPrice == usdPriceE6.
+      decimals = 6;
+      paymentMetadata = aptosDeploy.usdcMetadata;
+      unitPrice = usdPriceE6;
+      totalAmount = unitPrice * quantity;
+      priceSource = 'USDC 1:1 USD';
+    } else {
+      decimals = 8;
+      paymentMetadata = aptMetadata;
+      const aptUsd = await fetchNftUsdPrice('apt').catch(() => null);
+      if (!aptUsd) return res.status(503).json({ error: 'APT price unavailable; try USDC' });
+      totalAmount = usdToNativeUnits(usdAmount, aptUsd, decimals);
+      unitPrice = totalAmount / quantity;
+      priceSource = `APT/USD ${aptUsd}`;
+    }
+
+    const ttlSeconds = Math.max(60, Math.min(900, Number(process.env.NFT_APTOS_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+
+    // Move's mint_with_quote takes nonce as vector<u8>. 16 random bytes is plenty.
+    const nonce = '0x' + crypto.randomBytes(16).toString('hex');
+    // account_hash is appended to the signed payload but never validated
+    // on-chain — we leave it empty so any submitter (buyer's wallet) can
+    // include the receipt unchanged.
+    const accountHash = '0x';
+
+    const signature = payment === 'usdc'
+      ? await signAptosMintQuote({
+          buyerAddress: buyer,
+          usdcAmount: totalAmount,
+          quantity,
+          nonce,
+          deadline,
+          accountHash,
+        })
+      : await signAptosMintQuotePayment({
+          buyerAddress: buyer,
+          paymentMetadata,
+          paymentAmount: totalAmount,
+          quantity,
+          nonce,
+          deadline,
+          accountHash,
+        });
+
+    const functionId = payment === 'usdc'
+      ? `${aptosDeploy.module}::mint_with_quote`
+      : `${aptosDeploy.module}::mint_with_quote_payment`;
+    const functionArguments = payment === 'usdc'
+      ? [
+          totalAmount.toString(),
+          quantity.toString(),
+          nonce,
+          deadline.toString(),
+          accountHash,
+          signature,
+        ]
+      : [
+          paymentMetadata,
+          totalAmount.toString(),
+          quantity.toString(),
+          nonce,
+          deadline.toString(),
+          accountHash,
+          signature,
+        ];
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chain: 'aptos',
+      chainId: 1,
+      module: aptosDeploy.module,
+      shop: aptosDeploy.module,                  // alias for UI consistency with EVM response
+      usdcMetadata: aptosDeploy.usdcMetadata,
+      aptMetadata,
+      payment,
+      paymentMetadata,
+      decimals,
+      priceSource,
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: totalAmount.toString(),
+      totalFormatted: unitsToDecimalString(totalAmount, decimals),
+      usdPriceE6: usdPriceE6.toString(),
+      callData: {
+        functionId,
+        typeArguments: [],
+        functionArguments,
+      },
+      signature,
+      nonce,
+      deadline: deadline.toString(),
+    });
+  } catch (err) {
+    const message = err?.message || 'aptos quote failed';
+    const status = err?.status === 409 ? 409 : /address|chain/i.test(message) ? 400 : 500;
     res.status(status).json({ error: message.slice(0, 180) });
   }
 });
 
 router.get('/nft/image', (req, res) => {
+  // Default L1 image when no level is specified (back-compat).
+  const lvl1 = NFT_LEVEL_IMAGE_PATHS[1];
+  if (fs.existsSync(lvl1)) {
+    res.set('Cache-Control', process.env.NFT_IMAGE_CACHE || 'public, max-age=300');
+    return res.sendFile(lvl1);
+  }
   if (process.env.NFT_IMAGE_URL) return res.redirect(302, process.env.NFT_IMAGE_URL);
   if (!fs.existsSync(NFT_IMAGE_PATH)) return res.status(404).json({ error: 'image missing' });
   res.set('Cache-Control', process.env.NFT_IMAGE_CACHE || 'public, max-age=300');
   res.sendFile(NFT_IMAGE_PATH);
+});
+
+// Level-specific images: /api/nft/image/1, /api/nft/image/2, /api/nft/image/3.
+router.get('/nft/image/:level', (req, res) => {
+  const lvl = Number(req.params.level);
+  if (![1, 2, 3].includes(lvl)) return res.status(400).json({ error: 'level must be 1, 2, or 3' });
+  const filePath = NFT_LEVEL_IMAGE_PATHS[lvl];
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: `level ${lvl} image missing` });
+  res.set('Cache-Control', process.env.NFT_IMAGE_CACHE || 'public, max-age=300');
+  res.sendFile(filePath);
 });
 
 router.get('/nft/base/contract', (req, res) => {
@@ -907,8 +1881,12 @@ router.get('/nft/base/contract', (req, res) => {
   });
 });
 
-router.get('/nft/base/:tokenId', (req, res) => sendNftMetadata(req, res, 'Base', req.params.tokenId));
-router.get('/nft/base/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Base', req.params.tokenId));
+router.get('/nft/base/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
+router.get('/nft/base/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Base', req.params.tokenId); });
+router.get('/nft/arbitrum/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });
+router.get('/nft/arbitrum/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });
+router.get('/nft/monad/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
+router.get('/nft/monad/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
 router.get('/nft/solana/collection', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
@@ -920,7 +1898,7 @@ router.get('/nft/solana/collection', (req, res) => {
     external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
     attributes: [
       { trait_type: 'Game', value: 'Clash of Perps' },
-      { trait_type: 'Max Supply', value: NFT_MAX_SUPPLY },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
       category: 'image',
@@ -936,6 +1914,8 @@ router.get('/nft/solana/hidden.json', (req, res) => {
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(nftHiddenMetadata(req, 'Solana'));
 });
+router.get('/nft/solana/token2022/:mint', sendSolanaToken2022Metadata);
+router.get('/nft/solana/token2022/:mint.json', sendSolanaToken2022Metadata);
 router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 
@@ -943,6 +1923,9 @@ router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 
 router.get('/shop/config', (req, res) => {
   const config = gameShopConfig();
   const solana = gameShopSolanaConfig();
+  const arbitrum = gameShopEvmConfig('arbitrum');
+  const monad = gameShopEvmConfig('monad');
+  const aptos = gameShopAptosConfig();
   res.set('Cache-Control', 'no-store');
   res.json({
     base: {
@@ -957,9 +1940,44 @@ router.get('/shop/config', (req, res) => {
       cluster: solana.cluster,
       treasury: solana.treasury,
       usdcMint: solana.usdcMint,
+      skrMint: solana.skrMint,
+      skrDecimals: solana.skrDecimals,
+      skrReady: solana.skrReady,
       memoProgram: solana.memoProgram,
       saleActive: solana.saleActive,
       ready: solana.ready,
+    },
+    arbitrum: {
+      chain: arbitrum.chain,
+      chainId: arbitrum.chainId,
+      treasury: arbitrum.treasury,
+      usdcMint: arbitrum.usdcMint,
+      usdcDecimals: arbitrum.usdcDecimals,
+      nativeSymbol: arbitrum.nativeSymbol,
+      nativeDecimals: arbitrum.nativeDecimals,
+      payments: arbitrum.payments,
+      saleActive: arbitrum.saleActive,
+      ready: arbitrum.ready,
+    },
+    monad: {
+      chain: monad.chain,
+      chainId: monad.chainId,
+      treasury: monad.treasury,
+      usdcMint: monad.usdcMint,
+      usdcDecimals: monad.usdcDecimals,
+      nativeSymbol: monad.nativeSymbol,
+      nativeDecimals: monad.nativeDecimals,
+      payments: monad.payments,
+      saleActive: monad.saleActive,
+      ready: monad.ready,
+    },
+    aptos: {
+      chain: aptos.chain,
+      network: aptos.network,
+      treasury: aptos.treasury,
+      usdcAddress: aptos.usdcAddress,
+      saleActive: aptos.saleActive,
+      ready: aptos.ready,
     },
     products: gameShopProductsForClient(),
   });
@@ -1348,11 +2366,19 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     }
 
     const payment = String(memoData.pay || 'usdc');
-    if (payment !== 'usdc' && payment !== 'sol') {
+    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
       return res.status(400).json({ error: 'Bad memo payment token' });
     }
+    if (payment === 'skr' && !solana.skrReady) {
+      return res.status(503).json({ error: 'SKR shop is not configured on this server' });
+    }
     const expectedAmount = BigInt(memoData.amt);
-    const expectedMint = payment === 'usdc' ? solana.usdcMint : null;
+    const expectedMint = payment === 'usdc' ? solana.usdcMint
+                        : payment === 'skr'  ? solana.skrMint
+                        : null;  // null for native SOL
+    const expectedDecimals = payment === 'usdc' ? 6
+                            : payment === 'skr'  ? solana.skrDecimals
+                            : 9;
 
     if (!txTransfersToTreasury({
       parsedTx,
@@ -1360,14 +2386,12 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       expectedTreasury: solana.treasury,
       expectedAmount,
     })) {
+      const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : 'SOL';
       return res.status(400).json({
-        error: payment === 'usdc'
-          ? 'USDC transfer to treasury not found or under-paid'
-          : 'SOL transfer to treasury not found or under-paid',
+        error: `${tokenLabel} transfer to treasury not found or under-paid`,
       });
     }
 
-    const decimals = payment === 'usdc' ? 6 : 9;
     const grant = db.db.transaction(() => {
       const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
       if (duplicate) {
@@ -1376,6 +2400,9 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         throw err;
       }
       const applied = applyGameShopProduct(req.player.id, product, quantity);
+      const tokenLabel = payment === 'usdc' ? expectedMint
+                       : payment === 'skr'  ? expectedMint
+                       : 'SOL';
       db.db.prepare(`
         INSERT INTO utility_purchases
           (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
@@ -1386,7 +2413,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         'solana',
         signature,
         String(req.body?.buyer || ''),                       // payer (Solana pubkey) — best-effort, not load-bearing
-        payment === 'usdc' ? expectedMint : 'SOL',
+        tokenLabel,
         solana.treasury,
         expectedAmount.toString(),
         (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
@@ -1403,7 +2430,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
       txSignature: signature,
       payment,
       amount: expectedAmount.toString(),
-      amountFormatted: unitsToDecimalString(expectedAmount, decimals),
+      amountFormatted: unitsToDecimalString(expectedAmount, expectedDecimals),
       ...grant,
     });
   } catch (err) {
@@ -1431,8 +2458,11 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
 
     const payment = String(req.body?.payment || 'usdc').toLowerCase();
-    if (payment !== 'usdc' && payment !== 'sol') {
-      return res.status(400).json({ error: 'Bad payment token (usdc or sol)' });
+    if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
+      return res.status(400).json({ error: 'Bad payment token (usdc | sol | skr)' });
+    }
+    if (payment === 'skr' && !solana.skrReady) {
+      return res.status(503).json({ error: 'SKR shop is not configured yet — set GAME_SHOP_SOLANA_SKR_MINT' });
     }
 
     const buyer = String(req.body?.buyer || '').trim();
@@ -1449,18 +2479,25 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     let priceSource;  // human-readable label for the UI/log
     let mint = null;  // null for native SOL
     if (payment === 'usdc') {
-      // USDC pegged ~1:1 to USD. We don't oracle-correct the de-pegs since
-      // it's a $2-5 utility purchase and Circle's USDC has been ±0.1% for
-      // years. usdToNativeUnits with assetUsd='1' just multiplies by 1e6.
       amount = usdToNativeUnits(usdAmount, '1', 6);
       decimals = 6;
       priceSource = 'USDC 1:1 USD';
       mint = solana.usdcMint;
-    } else {
+    } else if (payment === 'sol') {
       const solUsd = await fetchNftUsdPrice('sol');
       amount = usdToNativeUnits(usdAmount, solUsd, 9); // lamports
       decimals = 9;
       priceSource = `SOL/USD ${solUsd}`;
+    } else {
+      // SKR (Solana Mobile Seeker). Oracle price comes from env override
+      // because no major price API has a canonical SKR/USD feed yet —
+      // operator sets NFT_SKR_USD when ready to accept this token. The
+      // mint + decimals come from gameShopSolanaConfig.
+      const skrUsd = await fetchNftUsdPrice('skr');
+      amount = usdToNativeUnits(usdAmount, skrUsd, solana.skrDecimals);
+      decimals = solana.skrDecimals;
+      priceSource = `SKR/USD ${skrUsd}`;
+      mint = solana.skrMint;
     }
 
     const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));
@@ -1506,6 +2543,651 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     const message = err?.message || 'quote failed';
     const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
     res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+// ---------- Game shop: generic EVM (Arbitrum, Monad) USDC transfer ----------
+
+function buildEvmShopMemo({ chainKey, chainId, sku, quantity, account, nonce, deadline, amount, treasury, payment, kind, mint }) {
+  // Mirrors Solana's memo JSON. The buyer's `acc` ties the quote to a
+  // specific game account so a leaked quote can't be redeemed by a
+  // different player. The amount embeds a 3-digit nonce salt so the
+  // on-chain Transfer can be matched back to this exact quote.
+  // `kind` is 'native' (ETH/MON via msg.value) or 'erc20' (USDC etc.).
+  return JSON.stringify({
+    v: 1,
+    chain: chainKey,
+    chainId: Number(chainId),
+    sku,
+    qty: Number(quantity),
+    acc: account,
+    nonce,
+    deadline: Number(deadline),
+    pay: payment,
+    kind,
+    amt: String(amount),
+    to: treasury,
+    mint: kind === 'erc20' ? mint : null,
+  });
+}
+
+function signEvmShopMemo(payload) {
+  // Reuses the Solana ed25519 signer — there's no on-chain verifier here,
+  // we only ever check the signature server-side in /shop/evm/redeem to
+  // confirm the memo came from us. Keeping it in one keypair simplifies
+  // ops.
+  const keypair = getSolanaSignerKeypair();
+  const msg = new TextEncoder().encode(payload);
+  const sig = nacl.sign.detached(msg, keypair.secretKey);
+  return bs58.encode(sig);
+}
+
+function verifyEvmShopMemoSignature(memoString, signatureB58) {
+  try {
+    const keypair = getSolanaSignerKeypair();
+    const msg = new TextEncoder().encode(memoString);
+    const sig = bs58.decode(signatureB58);
+    if (sig.length !== 64) return false;
+    return nacl.sign.detached.verify(msg, sig, keypair.publicKey.toBytes());
+  } catch { return false; }
+}
+
+router.post('/shop/evm/quote', auth, async (req, res) => {
+  try {
+    const rate = checkUtilityQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many shop quote requests. Try again shortly.' });
+    }
+
+    const chainKey = String(req.body?.chain || '').toLowerCase();
+    const config = gameShopEvmConfig(chainKey);
+    if (!config) return res.status(400).json({ error: 'Unsupported chain. Use arbitrum or monad.' });
+    if (!config.ready) return res.status(503).json({ error: `${config.label} shop treasury is not configured` });
+    if (!config.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: `${config.label} shop sale is not active` });
+    }
+
+    const paymentKey = String(req.body?.payment || defaultEvmPayment(chainKey) || 'usdc').toLowerCase();
+    const paymentSpec = evmPaymentSpec(chainKey, paymentKey);
+    if (!paymentSpec) {
+      return res.status(400).json({ error: `Unsupported payment on ${config.label}: ${paymentKey}` });
+    }
+
+    const { getAddress } = await import('viem');
+    const buyer = getAddress(String(req.body?.buyer || ''));
+    const sku = String(req.body?.sku || '').trim();
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
+
+    // Total USD owed for this SKU * quantity. Both USDC (stable, 1:1) and
+    // native (ETH/MON, oracle-priced) flows convert via usdToNativeUnits —
+    // the only difference is the conversion rate.
+    const usdPriceE6 = BigInt(product.usdPriceE6) * BigInt(quantity);
+    const usdAmount = unitsToDecimalString(usdPriceE6, 6);
+
+    let baseAmount;
+    let priceSource;
+    if (paymentSpec.stable) {
+      // USDC pegged 1:1 to USD; assetUsd='1' makes this a pure decimals scale.
+      baseAmount = usdToNativeUnits(usdAmount, '1', paymentSpec.decimals);
+      priceSource = `${paymentSpec.label} 1:1 USD`;
+    } else {
+      const assetUsd = await fetchNftUsdPrice(paymentSpec.oracleAsset);
+      baseAmount = usdToNativeUnits(usdAmount, assetUsd, paymentSpec.decimals);
+      priceSource = `${paymentSpec.label}/USD ${assetUsd}`;
+    }
+
+    // Embed a 3-digit nonce salt in the on-chain amount so two quotes never
+    // produce identical Transfer.value entries — that's how /shop/evm/redeem
+    // distinguishes which quote a tx fulfilled. For native transfers the
+    // salt lives in the tx `value` instead of an ERC20 Transfer log.
+    const nonceRaw = crypto.randomBytes(16);
+    const nonce = `0x${nonceRaw.toString('hex')}`;
+    const salt = BigInt(nonceRaw.readUInt16BE(0)) % 1000n;
+    const amount = baseAmount + salt;
+
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));
+    const deadline = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const account = gameAccountHash(req.player.id);
+
+    const memo = buildEvmShopMemo({
+      chainKey,
+      chainId: config.chainId,
+      sku: product.sku,
+      quantity,
+      account,
+      nonce,
+      deadline,
+      amount,
+      treasury: getAddress(config.treasury),
+      payment: paymentKey,
+      kind: paymentSpec.kind,
+      mint: paymentSpec.kind === 'erc20' ? getAddress(paymentSpec.token) : null,
+    });
+    const signature = signEvmShopMemo(memo);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chain: chainKey,
+      chainId: config.chainId,
+      label: config.label,
+      explorer: config.explorer,
+      treasury: getAddress(config.treasury),
+      payment: paymentKey,
+      kind: paymentSpec.kind,
+      mint: paymentSpec.kind === 'erc20' ? getAddress(paymentSpec.token) : null,
+      decimals: paymentSpec.decimals,
+      priceSource,
+      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      quantity,
+      amount: amount.toString(),
+      amountFormatted: unitsToDecimalString(amount, paymentSpec.decimals),
+      usdAmount,
+      nonce,
+      account,
+      deadline,
+      memo,
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = /address|sku|quantity|item|payment/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.post('/shop/evm/redeem', auth, async (req, res) => {
+  try {
+    const chainKey = String(req.body?.chain || '').toLowerCase();
+    const config = gameShopEvmConfig(chainKey);
+    if (!config) return res.status(400).json({ error: 'Unsupported chain' });
+
+    const txHash = String(req.body?.txHash || '').trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ error: 'Bad transaction hash' });
+    }
+
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        product: GAME_SHOP_PRODUCTS[existing.utility] || null,
+        shield_until: existing.shield_until || null,
+        resources: db.getResources(req.player.id),
+      });
+    }
+
+    const memo = String(req.body?.memo || '');
+    const memoSignature = String(req.body?.signature || '').trim();
+    if (!memo || !memoSignature) {
+      return res.status(400).json({ error: 'Missing memo or signature' });
+    }
+    if (!verifyEvmShopMemoSignature(memo, memoSignature)) {
+      return res.status(403).json({ error: 'Bad memo signature' });
+    }
+    let memoData;
+    try { memoData = JSON.parse(memo); } catch { return res.status(400).json({ error: 'Bad memo payload' }); }
+    if (memoData?.v !== 1) return res.status(400).json({ error: 'Unsupported memo version' });
+    if (String(memoData.chain).toLowerCase() !== chainKey) return res.status(400).json({ error: 'Chain mismatch' });
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Number(memoData.deadline) < nowSec - 600) {
+      return res.status(400).json({ error: 'Quote deadline expired' });
+    }
+
+    const expectedAccount = gameAccountHash(req.player.id);
+    if (String(memoData.acc).toLowerCase() !== expectedAccount.toLowerCase()) {
+      return res.status(403).json({ error: 'Purchase belongs to another game account' });
+    }
+
+    const sku = String(memoData.sku || '');
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    const quantity = Number(memoData.qty);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
+      return res.status(400).json({ error: 'Bad purchase quantity' });
+    }
+
+    const expectedAmount = BigInt(memoData.amt);
+    const memoKind = String(memoData.kind || 'erc20');
+    const memoPayment = String(memoData.pay || 'usdc');
+    const { getAddress } = await import('viem');
+    const expectedTreasury = getAddress(memoData.to).toLowerCase();
+    const expectedMint = memoKind === 'erc20' ? getAddress(memoData.mint).toLowerCase() : null;
+
+    // Resolve the decimals + sender post-verification — both branches set
+    // these so the utility_purchases insert downstream has clean values
+    // independent of which kind was used.
+    let txSender = null;
+    let amountDecimals;
+    const paymentSpec = evmPaymentSpec(chainKey, memoPayment);
+    if (paymentSpec) amountDecimals = paymentSpec.decimals;
+    else amountDecimals = config.usdcDecimals || 18;
+
+    const rpcUrl = GAME_SHOP_EVM_CHAINS[chainKey].rpcUrl();
+
+    if (memoKind === 'native') {
+      // Native (ETH/MON) transfer — need the tx itself, not just the receipt.
+      // Receipt confirms inclusion + status; the value/to live on the tx.
+      const [receiptResp, txResp] = await Promise.all([
+        fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [txHash] }) }),
+        fetch(rpcUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_getTransactionByHash', params: [txHash] }) }),
+      ]);
+      const receipt = (await receiptResp.json().catch(() => ({})))?.result;
+      const txObj = (await txResp.json().catch(() => ({})))?.result;
+      if (!receipt || !txObj) return res.status(400).json({ error: 'Tx not found or not confirmed yet' });
+      if (receipt.status !== '0x1') return res.status(400).json({ error: 'Tx failed on-chain' });
+      const txTo = String(txObj.to || '').toLowerCase();
+      const txValue = BigInt(txObj.value || '0x0');
+      if (txTo !== expectedTreasury) {
+        return res.status(400).json({ error: 'Native transfer recipient mismatch' });
+      }
+      if (txValue < expectedAmount) {
+        return res.status(400).json({ error: `${memoData.pay?.toUpperCase()} transfer under-paid` });
+      }
+      // No log-level scan — the tx itself carries the value transfer. Buyer
+      // is the tx sender by construction (`from` on the tx).
+      txSender = String(txObj.from || receipt.from || '');
+    } else {
+      // ERC20 (USDC) — Transfer event from sender → treasury.
+      const receiptResp = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [txHash] }),
+      });
+      const receipt = (await receiptResp.json().catch(() => ({})))?.result;
+      if (!receipt) return res.status(400).json({ error: 'Tx not found or not confirmed yet' });
+      if (receipt.status !== '0x1') return res.status(400).json({ error: 'Tx failed on-chain' });
+
+      const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+      let matched = false;
+      for (const log of receipt.logs || []) {
+        if (String(log.address || '').toLowerCase() !== expectedMint) continue;
+        if (log.topics?.[0] !== TRANSFER_TOPIC) continue;
+        const from = '0x' + log.topics[1].slice(-40);
+        const to = '0x' + log.topics[2].slice(-40);
+        if (to.toLowerCase() !== expectedTreasury) continue;
+        const txSender = String(receipt.from || '').toLowerCase();
+        if (from.toLowerCase() !== txSender) continue;
+        const value = BigInt(log.data || '0x0');
+        if (value < expectedAmount) continue;
+        matched = true;
+        break;
+      }
+      if (!matched) {
+        return res.status(400).json({ error: 'Token transfer to treasury not found or under-paid' });
+      }
+      txSender = String(receipt.from || '');
+    }
+
+    const grant = db.db.transaction(() => {
+      const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+      if (duplicate) {
+        const err = new Error('Purchase already redeemed');
+        err.status = 409;
+        throw err;
+      }
+      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      db.db.prepare(`
+        INSERT INTO utility_purchases
+          (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.player.id,
+        sku,
+        chainKey,
+        txHash,
+        txSender || '',
+        expectedMint || memoPayment.toUpperCase(),  // 'ETH' / 'MON' for native payments
+        expectedTreasury,
+        expectedAmount.toString(),
+        (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+        product.durationHours ? product.durationHours * quantity : null,
+        applied.shield_until || null,
+      );
+      return applied;
+    })();
+
+    res.json({
+      success: true,
+      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      quantity,
+      chain: chainKey,
+      payment: memoPayment,
+      txHash,
+      amount: expectedAmount.toString(),
+      amountFormatted: unitsToDecimalString(expectedAmount, amountDecimals),
+      ...grant,
+    });
+  } catch (err) {
+    const message = err?.message || 'redeem failed';
+    res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
+
+// ---------- Game shop: Aptos (Decibel-side) USDC/APT transfer ----------
+
+const APTOS_FULLNODE_DEFAULT = 'https://fullnode.mainnet.aptoslabs.com/v1';
+
+function aptosFullnode() {
+  return process.env.GAME_SHOP_APTOS_FULLNODE
+    || process.env.APTOS_FULLNODE
+    || APTOS_FULLNODE_DEFAULT;
+}
+
+async function aptosFetchTx(version) {
+  const base = aptosFullnode().replace(/\/+$/, '');
+  const apiKey = process.env.APTOS_NODE_API_KEY || process.env.DECIBEL_API_KEY;
+  const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+  const r = await fetch(`${base}/transactions/by_hash/${version}`, { headers });
+  if (!r.ok) return null;
+  return r.json().catch(() => null);
+}
+
+function buildAptosShopMemo({ sku, quantity, account, nonce, deadline, payment, amount, treasury, asset }) {
+  return JSON.stringify({
+    v: 1,
+    chain: 'aptos',
+    sku,
+    qty: Number(quantity),
+    acc: account,
+    nonce,
+    deadline: Number(deadline),
+    pay: payment,
+    amt: String(amount),
+    to: treasury,
+    asset,
+  });
+}
+
+router.post('/shop/aptos/quote', auth, async (req, res) => {
+  try {
+    const rate = checkUtilityQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many shop quote requests. Try again shortly.' });
+    }
+
+    const config = gameShopAptosConfig();
+    if (!config.ready) return res.status(503).json({ error: 'Aptos game shop is not configured' });
+    if (!config.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
+      return res.status(423).json({ error: 'Aptos game shop sale is not active' });
+    }
+
+    const sku = String(req.body?.sku || '').trim();
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
+
+    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    if (payment !== 'usdc' && payment !== 'apt') {
+      return res.status(400).json({ error: 'Bad payment token (usdc or apt)' });
+    }
+
+    const buyer = String(req.body?.buyer || '').trim();
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(buyer)) {
+      return res.status(400).json({ error: 'Invalid Aptos buyer address' });
+    }
+
+    const usdPriceE6 = BigInt(product.usdPriceE6) * BigInt(quantity);
+    const usdAmount = unitsToDecimalString(usdPriceE6, 6);
+
+    let amount, decimals, asset, priceSource;
+    if (payment === 'usdc') {
+      // Aptos USDC = 6 decimals like Solana / Arbitrum native.
+      decimals = 6;
+      amount = usdToNativeUnits(usdAmount, '1', decimals);
+      asset = config.usdcAddress;
+      priceSource = 'USDC 1:1 USD';
+    } else {
+      // APT pricing via the same oracle hop NFT mint uses. APT FA = 8 decimals.
+      decimals = 8;
+      const aptUsd = await fetchNftUsdPrice('apt').catch(() => null);
+      if (!aptUsd) return res.status(503).json({ error: 'APT price unavailable; try USDC' });
+      amount = usdToNativeUnits(usdAmount, aptUsd, decimals);
+      asset = '0xa';
+      priceSource = `APT/USD ${aptUsd}`;
+    }
+
+    // Amount-salt anti-replay: like EVM, last 3 raw units come from a per-quote
+    // nonce so two quotes can't share an on-chain Transfer fingerprint.
+    const nonceRaw = crypto.randomBytes(16);
+    const nonce = `0x${nonceRaw.toString('hex')}`;
+    const salt = BigInt(nonceRaw.readUInt16BE(0)) % 1000n;
+    amount = amount + salt;
+
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.GAME_SHOP_QUOTE_TTL_SECONDS || 600)));
+    const deadline = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const account = gameAccountHash(req.player.id);
+
+    const memo = buildAptosShopMemo({
+      sku: product.sku,
+      quantity,
+      account,
+      nonce,
+      deadline,
+      payment,
+      amount,
+      treasury: config.treasury,
+      asset,
+    });
+    const signature = signEvmShopMemo(memo); // same ed25519 server signer
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      chain: 'aptos',
+      network: config.network,
+      treasury: config.treasury,
+      asset,
+      payment,
+      decimals,
+      priceSource,
+      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      quantity,
+      amount: amount.toString(),
+      amountFormatted: unitsToDecimalString(amount, decimals),
+      usdAmount,
+      nonce,
+      account,
+      deadline,
+      memo,
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = /address|sku|quantity|item/i.test(message) ? 400 : 500;
+    res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.post('/shop/aptos/redeem', auth, async (req, res) => {
+  try {
+    const txHash = String(req.body?.txHash || req.body?.signature || req.body?.hash || '').trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ error: 'Bad Aptos tx hash' });
+    }
+
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Purchase already redeemed' });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        product: GAME_SHOP_PRODUCTS[existing.utility] || null,
+        shield_until: existing.shield_until || null,
+        resources: db.getResources(req.player.id),
+      });
+    }
+
+    const config = gameShopAptosConfig();
+    if (!config.ready) return res.status(503).json({ error: 'Aptos game shop is not configured' });
+
+    const memo = String(req.body?.memo || '');
+    const memoSignature = String(req.body?.serverSignature || req.body?.signature || '').trim();
+    if (!memo || !memoSignature) return res.status(400).json({ error: 'Missing memo or signature' });
+    if (!verifyEvmShopMemoSignature(memo, memoSignature)) {
+      return res.status(403).json({ error: 'Bad memo signature' });
+    }
+    let memoData;
+    try { memoData = JSON.parse(memo); } catch { return res.status(400).json({ error: 'Bad memo payload' }); }
+    if (memoData?.v !== 1 || memoData?.chain !== 'aptos') {
+      return res.status(400).json({ error: 'Invalid memo for Aptos shop' });
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (Number(memoData.deadline) < nowSec - 600) {
+      return res.status(400).json({ error: 'Quote deadline expired' });
+    }
+
+    const expectedAccount = gameAccountHash(req.player.id);
+    if (String(memoData.acc).toLowerCase() !== expectedAccount.toLowerCase()) {
+      return res.status(403).json({ error: 'Purchase belongs to another game account' });
+    }
+
+    const sku = String(memoData.sku || '');
+    const product = GAME_SHOP_PRODUCTS[sku];
+    if (!product) return res.status(400).json({ error: 'Unknown purchased item' });
+    const quantity = Number(memoData.qty);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
+      return res.status(400).json({ error: 'Bad purchase quantity' });
+    }
+
+    const payment = String(memoData.pay || 'usdc');
+    if (payment !== 'usdc' && payment !== 'apt') {
+      return res.status(400).json({ error: 'Bad payment token' });
+    }
+    const expectedAmount = BigInt(memoData.amt);
+    const expectedAsset = normalizeAptosWallet(String(memoData.asset || '').toLowerCase());
+    const expectedTreasury = normalizeAptosWallet(String(memoData.to || '').toLowerCase());
+    const { aptosPrimaryFungibleStoreAddress } = require('./bridge_helpers');
+    const expectedPrimaryStore = aptosPrimaryFungibleStoreAddress(expectedTreasury, expectedAsset);
+
+    const tx = await aptosFetchTx(txHash);
+    if (!tx) return res.status(400).json({ error: 'Tx not found or not confirmed' });
+    if (tx.success !== true) return res.status(400).json({ error: 'Tx failed on-chain' });
+
+    // Aptos events emitted by 0x1::primary_fungible_store::deposit (or
+    // 0x1::coin::deposit for legacy CoinStore) on the recipient store
+    // describe the asset transfer. We match deposit-into-treasury-store
+    // events whose `metadata`/`store` ties back to our expected FA address
+    // and accept the amount as the credited value. Belt-and-braces: we
+    // also fall through to checking the legacy CoinStore deposit format
+    // (chain still emits both during the FA migration window).
+    let creditedAmount = 0n;
+    const events = Array.isArray(tx.events) ? tx.events : [];
+    for (const ev of events) {
+      const t = String(ev.type || '');
+      const data = ev.data || {};
+      // Deposit on FA primary store (new model). The deposit event is
+      // emitted on the recipient's store object. Modern Aptos APT events
+      // include `store` but not `owner`, so match the derived primary store
+      // address for the exact treasury + asset pair.
+      if (t === '0x1::fungible_asset::Deposit' || t.endsWith('::fungible_asset::Deposit')) {
+        const store = normalizeAptosWallet(data.store || '');
+        const storeOwner = normalizeAptosWallet(data.owner || data.account || '');
+        const metadata = normalizeAptosWallet(data.metadata || data.store_metadata || '');
+        const amount = BigInt(data.amount || 0);
+        if (
+          (expectedPrimaryStore && store === expectedPrimaryStore)
+          || (storeOwner === expectedTreasury && metadata === expectedAsset)
+        ) {
+          creditedAmount += amount;
+        }
+      }
+      // Legacy CoinStore deposit (pre-FA APT or wrapped coins). We treat
+      // the deposit event as crediting the treasury IFF the event guid's
+      // account_address matches the treasury — that's the Aptos-native
+      // way to tie an event to its owning resource without needing the
+      // store→owner lookup we can't easily do from JSON.
+      if (t === '0x1::coin::DepositEvent' || /::DepositEvent$/.test(t)) {
+        const ownerAccount = String(ev.guid?.account_address || ev.guid?.id?.addr || '').toLowerCase();
+        if (ownerAccount === expectedTreasury) {
+          creditedAmount += BigInt(data.amount || 0);
+        }
+      }
+    }
+
+    // Fallback: if events lookup failed (RPC stripping or relayer), parse
+    // the entry-function payload. We accept the canonical Aptos transfer
+    // forms used by stock wallets so a Petra/Pontem signature still flows.
+    if (creditedAmount === 0n) {
+      const payload = tx.payload || {};
+      const fn = String(payload.function || '');
+      const args = Array.isArray(payload.arguments) ? payload.arguments : [];
+      const isFaTransfer = fn === '0x1::primary_fungible_store::transfer'
+        || fn === '0x1::aptos_account::transfer_fungible_assets';
+      const isCoinTransfer = fn === '0x1::aptos_account::transfer'
+        || fn === '0x1::coin::transfer'
+        || fn === '0x1::aptos_account::transfer_coins';
+      if (isFaTransfer) {
+        // args[0] = metadata (asset), args[1] = recipient, args[2] = amount.
+        // Variants differ; tolerate both orderings.
+        const [a0, a1] = args.map((v) => normalizeAptosWallet(v || ''));
+        if ((a0 === expectedAsset && a1 === expectedTreasury) || (a1 === expectedAsset && a0 === expectedTreasury)) {
+          creditedAmount = BigInt(args[2] || 0);
+        } else if (a0 === expectedTreasury) {
+          // older fungible_asset::transfer signature: (recipient, amount).
+          creditedAmount = BigInt(args[1] || 0);
+        }
+      } else if (isCoinTransfer) {
+        // (recipient, amount)
+        if (normalizeAptosWallet(args[0] || '') === expectedTreasury) {
+          creditedAmount = BigInt(args[1] || 0);
+        }
+      }
+    }
+
+    if (creditedAmount < expectedAmount) {
+      return res.status(400).json({ error: 'Aptos transfer to treasury not found or under-paid' });
+    }
+
+    const grant = db.db.transaction(() => {
+      const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(txHash);
+      if (duplicate) {
+        const err = new Error('Purchase already redeemed');
+        err.status = 409;
+        throw err;
+      }
+      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      db.db.prepare(`
+        INSERT INTO utility_purchases
+          (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.player.id,
+        sku,
+        'aptos',
+        txHash,
+        String(tx.sender || ''),
+        payment === 'usdc' ? expectedAsset : 'APT',
+        expectedTreasury,
+        expectedAmount.toString(),
+        (BigInt(product.usdPriceE6) * BigInt(quantity)).toString(),
+        product.durationHours ? product.durationHours * quantity : null,
+        applied.shield_until || null,
+      );
+      return applied;
+    })();
+
+    res.json({
+      success: true,
+      product: gameShopProductsForClient().find((p) => p.id === product.id),
+      quantity,
+      chain: 'aptos',
+      txHash,
+      payment,
+      amount: expectedAmount.toString(),
+      ...grant,
+    });
+  } catch (err) {
+    const message = err?.message || 'redeem failed';
+    res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
 
@@ -1698,18 +3380,39 @@ router.post('/replay-telemetry', (req, res) => {
   const body = req.body || {};
   try {
     const info = body.replay || {};
+    const expectedDuration = Number(info.expected_duration ?? body.expected_duration ?? 0) || 0;
+    const actualElapsed = Number(info.actual_elapsed ?? body.actual_elapsed ?? 0) || 0;
+    const actualWallElapsed = Number(info.actual_wall_elapsed ?? body.actual_wall_elapsed ?? 0) || 0;
+    const battleSessionId = clampText(info.battle_session_id || body.battle_session_id, 128);
+    const replayLabel = clampText(info.replay_label || body.replay_label, 128);
+    const summary = body.summary || {};
     insertReplayTelemetry.run(
       player.id,
-      clampText(info.battle_session_id || body.battle_session_id, 128),
-      clampText(info.replay_label || body.replay_label, 128),
+      battleSessionId,
+      replayLabel,
       clampText(info.attacker_name || body.attacker_name, 128),
       clampText(info.expected_result || body.expected_result, 32),
-      Number(info.expected_duration ?? body.expected_duration ?? 0) || 0,
-      Number(info.actual_elapsed ?? body.actual_elapsed ?? 0) || 0,
-      Number(info.actual_wall_elapsed ?? body.actual_wall_elapsed ?? 0) || 0,
-      clampText(body.summary || {}, 32_000),
-      clampText(body.events || [], 250_000)
+      expectedDuration,
+      actualElapsed,
+      actualWallElapsed,
+      clampText(summary, 100_000),
+      clampText(body.events || [], 1_500_000)
     );
+    const simDiff = actualElapsed - expectedDuration;
+    const wallDiff = actualWallElapsed - expectedDuration;
+    if (Math.abs(simDiff) >= 1.5 || Math.abs(wallDiff) >= 2.5) {
+      const counts = summary && typeof summary === 'object' ? summary.counts : null;
+      console.warn('[replay-telemetry] drift', {
+        battle_session_id: battleSessionId,
+        replay_label: replayLabel,
+        expected_duration: expectedDuration,
+        actual_elapsed: actualElapsed,
+        actual_wall_elapsed: actualWallElapsed,
+        sim_diff: Number(simDiff.toFixed(2)),
+        wall_diff: Number(wallDiff.toFixed(2)),
+        counts,
+      });
+    }
     res.json({ ok: true });
   } catch (e) {
     console.warn('[replay-telemetry] insert failed:', e.message);
@@ -1888,10 +3591,12 @@ router.post('/agent-events/emit', agentAuth, (req, res) => {
   const action = String(req.body?.action || '').trim();
   const payload = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
   if (!action) return res.status(400).json({ error: 'action required' });
+  const eventId = crypto.randomUUID();
 
   const event = {
     type: 'agent_action',
     data: {
+      event_id: eventId,
       action,
       payload,
       key: req.agentSession.key,
@@ -1899,7 +3604,12 @@ router.post('/agent-events/emit', agentAuth, (req, res) => {
     },
   };
   const delivered = broadcastToPlayer(req.agentSession.player.id, event);
-  res.json({ success: true, delivered });
+  console.log(`[agent-events] ${action} player=${req.agentSession.player.id.slice(0, 8)} delivered=${delivered} event=${eventId}`);
+  res.json({ success: true, delivered, event_id: eventId });
+});
+
+router.get('/agent-events/pending', auth, (req, res) => {
+  res.json({ events: consumePendingAgentEvents(req.player.id) });
 });
 
 // Link a wallet to the current account. Per-DEX canonical: a wallet is
@@ -2251,6 +3961,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
+    debugTrace: BATTLE_DEBUG_TRACE,
   });
 
   const replayReasonParts = [...replayWarnings, verification.reason].filter(Boolean);
@@ -2280,6 +3991,9 @@ router.post('/attack/result', auth, (req, res) => {
   if (gridConfigs) console.log(`[BATTLE] Grids:`, JSON.stringify(gridConfigs));
   console.log(`[BATTLE] TroopLevels:`, JSON.stringify(serverTroopLevels));
   console.log(`[BATTLE] Defender buildings:`, defenderBuildings.length, defenderBuildings.map(b => `${b.type}:lv${b.level}:hp${b.hp}`).join(', '));
+  if (BATTLE_DEBUG_TRACE) {
+    console.log(`[BATTLE TRACE] events=${verification._traceEvents || 0} dropped=${verification._traceDropped || 0} aliveTroops=${verification._troopsAlive || 0} simDebug=stored`);
+  }
 
   if (!verification.valid) {
     const simDebug = {
@@ -2433,7 +4147,7 @@ router.get('/battle-log', auth, (req, res) => {
     LEFT JOIN players pa ON pa.id = r.attacker_id
     LEFT JOIN players pd ON pd.id = r.defender_id
     WHERE (r.defender_id = ? OR r.attacker_id = ?) AND r.verified_result = 'accepted'
-    ORDER BY r.created_at DESC
+    ORDER BY r.created_at DESC, r.id DESC
     LIMIT 50
   `).all(req.player.id, req.player.id);
 
@@ -2446,6 +4160,8 @@ router.get('/battle-log', auth, (req, res) => {
     return {
       id: r.id,
       side: isAttacker ? 'attack' : 'defense',
+      attacker_name: r.attacker_name || 'Unknown',
+      defender_name: r.defender_name || 'Unknown',
       opponent_name: isAttacker ? (r.defender_name || 'Unknown') : (r.attacker_name || 'Unknown'),
       opponent_trophies: isAttacker ? (r.defender_trophies || 0) : (r.attacker_trophies || 0),
       result: r.claimed_result,
@@ -4286,6 +6002,30 @@ router.get('/admin/shop', adminAuth, (req, res) => {
   }
 });
 
+// Global NFT supply admin endpoint. Live RPC reads of per-chain
+// minted-count + the global cap. Returns null for any chain whose
+// contract isn't deployed yet or whose RPC is unreachable; the cap
+// gating still works (we treat null as 0 in the total). Useful for
+// pre-mint reconciliation + admin dashboard.
+router.get('/admin/nft-supply', adminAuth, async (req, res) => {
+  try {
+    // Force-refresh ignores the in-memory 10s cache the quote endpoints
+    // hit — admins want the on-chain truth, not stale data.
+    _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
+    const supply = await readGlobalNftSupply();
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      cap: NFT_GLOBAL_SUPPLY_CAP,
+      total: supply.total,
+      remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - supply.total),
+      perChain: supply.perChain,
+      fetched_at: new Date(supply.fetchedAt).toISOString(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'nft supply read failed' });
+  }
+});
+
 // All battle replays with full details
 router.get('/admin/replays', adminAuth, (req, res) => {
   const rows = db.db.prepare(`
@@ -4316,6 +6056,7 @@ router.get('/admin/replays/:id', adminAuth, (req, res) => {
   if (!row) return res.status(404).json({ error: 'Replay not found' });
   try { row.replay_data = row.replay_data ? JSON.parse(row.replay_data) : null; } catch {}
   try { row.buildings_snapshot = row.buildings_snapshot ? JSON.parse(row.buildings_snapshot) : null; } catch {}
+  try { row.sim_debug = row.sim_debug ? JSON.parse(row.sim_debug) : null; } catch {}
   try { row.verification_data = row.verification_data ? JSON.parse(row.verification_data) : null; } catch {}
   res.json(row);
 });
@@ -5603,5 +7344,24 @@ router.get('/admin/earnings', adminAuth, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// V3 NFT endpoints (upgrade quotes, bridge orchestration, state reads).
+// Implementation lives in ./nft_v3_endpoints.js — mounted onto this same
+// router so all V3 routes share rate limits, logging, and the global
+// supply gate context.
+// ─────────────────────────────────────────────────────────────────────
+try {
+  const { mountNftV3Endpoints } = require('./nft_v3_endpoints');
+  mountNftV3Endpoints(router, {
+    parseNftEvmAccount,
+    fetchNftUsdPrice,
+    fetchClashUsdPrice,
+    assertGlobalSupplyAvailable,
+    logError,
+  });
+} catch (err) {
+  console.warn('[nft-v3] failed to mount V3 endpoints:', err?.message || err);
+}
 
 module.exports = { router, auth, addLog, logBattle, logEconomy, logAuth, logError };

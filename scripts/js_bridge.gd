@@ -7,6 +7,10 @@ signal react_message(action: String, data: Dictionary)
 var _callbacks: Dictionary = {}
 var _is_web: bool = false
 var _perf_timer: float = 0.0
+var _pending_agent_attack_replays: Array = []
+var _seen_agent_attack_sessions: Dictionary = {}
+const AGENT_REPLAY_SEEN_LIMIT: int = 30
+const AGENT_REPLAY_QUEUE_LIMIT: int = 10
 const PERF_INTERVAL: float = 0.25  # send perf data 4x per second
 var _bs_cache: Array = []  # cached building_systems group
 
@@ -33,6 +37,7 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not _is_web:
 		return
+	_flush_pending_agent_attack_replay()
 	_perf_timer += delta
 	if _perf_timer < PERF_INTERVAL:
 		return
@@ -179,8 +184,8 @@ func _on_react_call(args: Array) -> void:
 
 func _handle_react_action(action: String, data: Dictionary) -> void:
 	var bs: Node = _get_building_system()
-	# During replay, only allow return_home, replay_speed, and get_state
-	if bs and bs._replay_active and action not in ["return_home", "get_state", "replay_speed"]:
+	# During replay, only allow return_home, replay_speed, get_state, and queued agent events.
+	if bs and bs._replay_active and action not in ["return_home", "get_state", "replay_speed", "agent_action"]:
 		return
 	match action:
 		"get_state":
@@ -286,18 +291,103 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			_set_island_paused(data.get("active", false))
 		"replay_speed":
 			if bs and bs._replay_active:
-				var spd: float = clampf(float(data.get("speed", 1.0)), 0.5, 4.0)
-				Engine.time_scale = spd
+				# Combat replay is part of server/client sync validation.
+				# Keep the simulation fixed at 1x; changing Engine.time_scale
+				# changes _process(delta) integration and can alter targets/deaths.
+				Engine.time_scale = 1.0
 		"watch_replay":
 			if bs:
 				var replay_data: Array = data.get("replay_data", [])
 				var buildings_snapshot: Array = data.get("buildings_snapshot", [])
 				var attacker_name: String = data.get("attacker_name", "Unknown")
+				var base_owner_name: String = String(data.get("base_owner_name", data.get("defender_name", data.get("opponent_name", ""))))
 				var duration: float = float(data.get("duration", 0.0))
 				var replay_label: String = String(data.get("replay_label", ""))
-				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
+				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name)
 		"agent_action":
 			_handle_agent_action(data)
+
+
+func _agent_replay_can_start(bs: Node) -> bool:
+	if not bs:
+		return false
+	if bs._battle and "_returning_home" in bs._battle and bs._battle._returning_home:
+		return false
+	if bs._replay_active:
+		return false
+	if bs.is_viewing_enemy and bs._battle and bs._battle._battle_timer_active and not bs._battle._victory_declared:
+		return false
+	return true
+
+
+func _agent_attack_session_id_from_payload(payload: Dictionary) -> String:
+	var replay_data: Array = payload.get("replay_data", [])
+	for replay_action in replay_data:
+		if replay_action is Dictionary and String(replay_action.get("type", "")) == "battle_start":
+			return String(replay_action.get("battle_session_id", ""))
+	return String(payload.get("battle_session_id", ""))
+
+
+func _remember_agent_attack_session(session_id: String) -> void:
+	if session_id == "":
+		return
+	_seen_agent_attack_sessions[session_id] = Time.get_ticks_msec()
+	if _seen_agent_attack_sessions.size() <= AGENT_REPLAY_SEEN_LIMIT:
+		return
+	var oldest_key: String = ""
+	var oldest_time: int = 9223372036854775807
+	for key in _seen_agent_attack_sessions.keys():
+		var t: int = int(_seen_agent_attack_sessions[key])
+		if t < oldest_time:
+			oldest_time = t
+			oldest_key = String(key)
+	if oldest_key != "":
+		_seen_agent_attack_sessions.erase(oldest_key)
+
+
+func _start_agent_attack_replay(payload: Dictionary) -> bool:
+	var bs: Node = _get_building_system()
+	if not _agent_replay_can_start(bs):
+		return false
+	var replay_data: Array = payload.get("replay_data", [])
+	var buildings_snapshot: Array = payload.get("buildings_snapshot", [])
+	var attacker_name: String = String(payload.get("attacker_name", "AI Agent"))
+	var duration: float = float(payload.get("duration", 0.0))
+	var replay_label: String = String(payload.get("replay_label", "AI AGENT ATTACK"))
+	var enemy_payload: Dictionary = payload.get("enemy", {})
+	var base_owner_name: String = String(payload.get("base_owner_name", enemy_payload.get("name", "")))
+	var session_id: String = _agent_attack_session_id_from_payload(payload)
+	if session_id != "" and _seen_agent_attack_sessions.has(session_id):
+		print("[agent_action] ignored duplicate ai_attack_replay session=%s" % session_id)
+		return true
+	_remember_agent_attack_session(session_id)
+	print("[agent_action] starting ai_attack_replay session=%s duration=%.2f" % [session_id, duration])
+	bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name)
+	return true
+
+
+func _queue_agent_attack_replay(payload: Dictionary, reason: String) -> void:
+	var session_id: String = _agent_attack_session_id_from_payload(payload)
+	if session_id != "":
+		if _seen_agent_attack_sessions.has(session_id):
+			print("[agent_action] ignored duplicate queued ai_attack_replay session=%s" % session_id)
+			return
+		for queued in _pending_agent_attack_replays:
+			if queued is Dictionary and _agent_attack_session_id_from_payload(queued) == session_id:
+				print("[agent_action] ignored already queued ai_attack_replay session=%s" % session_id)
+				return
+	_pending_agent_attack_replays.append(payload.duplicate(true))
+	while _pending_agent_attack_replays.size() > AGENT_REPLAY_QUEUE_LIMIT:
+		_pending_agent_attack_replays.pop_front()
+	print("[agent_action] queued ai_attack_replay session=%s reason=%s queue=%d" % [session_id, reason, _pending_agent_attack_replays.size()])
+
+
+func _flush_pending_agent_attack_replay() -> void:
+	if _pending_agent_attack_replays.is_empty():
+		return
+	var payload: Dictionary = _pending_agent_attack_replays[0]
+	if _start_agent_attack_replay(payload):
+		_pending_agent_attack_replays.pop_front()
 
 
 func _handle_agent_action(event: Dictionary) -> void:
@@ -307,14 +397,18 @@ func _handle_agent_action(event: Dictionary) -> void:
 	if action == "":
 		return
 	if action == "ai_attack_replay":
-		var bs: Node = _get_building_system()
-		if bs and not bs._replay_active and not bs.is_viewing_enemy:
-			var replay_data: Array = payload.get("replay_data", [])
-			var buildings_snapshot: Array = payload.get("buildings_snapshot", [])
-			var attacker_name: String = String(payload.get("attacker_name", "AI Agent"))
-			var duration: float = float(payload.get("duration", 0.0))
-			var replay_label: String = String(payload.get("replay_label", "AI AGENT ATTACK"))
-			bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
+		var session_id: String = _agent_attack_session_id_from_payload(payload)
+		if session_id != "" and _seen_agent_attack_sessions.has(session_id):
+			print("[agent_action] ignored duplicate ai_attack_replay session=%s" % session_id)
+			return
+		var bs_agent: Node = _get_building_system()
+		if not bs_agent:
+			_queue_agent_attack_replay(payload, "no_building_system")
+			return
+		if not _agent_replay_can_start(bs_agent):
+			_queue_agent_attack_replay(payload, "busy")
+			return
+		_start_agent_attack_replay(payload)
 		return
 	for bsys in _bs_cache:
 		if not is_instance_valid(bsys):

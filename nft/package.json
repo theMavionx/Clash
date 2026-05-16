@@ -9,6 +9,17 @@
     "deploy:base:v2": "node scripts/deploy-base-v2.mjs",
     "deploy:base-shop": "node scripts/deploy-base-shop.mjs",
     "deploy:base-shop:v2": "node scripts/deploy-base-shop-v2.mjs",
+    "deploy:evm:nft": "node scripts/deploy-evm-v2.mjs",
+    "deploy:evm:shop": "node scripts/deploy-evm-shop-v2.mjs",
+    "deploy:evm:v3": "node scripts/deploy-evm-v3.mjs",
+    "deploy:marketplace": "node scripts/deploy-marketplace.mjs",
+    "config:bridge-env": "node scripts/configure-bridge-env.mjs",
+    "config:bridge-fee:evm": "node scripts/set-evm-bridge-fee.mjs",
+    "config:bridge-fee:aptos": "node scripts/set-aptos-bridge-fee.mjs",
+    "check:v3-storage": "node scripts/check-v3-storage.mjs",
+    "test:v3-fork": "hardhat test nodejs --network hardhatMainnet test/v3-fork.test.js",
+    "test:v3-bridge-cap": "hardhat test nodejs test/v3-bridge-cap.test.js",
+    "test:marketplace": "hardhat test nodejs test/marketplace.test.js",
     "deploy:game-shop": "node scripts/deploy-game-shop.mjs",
     "upgrade:game-shop": "node scripts/upgrade-game-shop.mjs",
     "config:base:v2": "node scripts/set-base-v2-config.mjs",
@@ -38,5 +49,10 @@
     "bs58": "^6.0.0",
     "solc": "^0.8.35",
     "viem": "^2.48.11"
+  },
+  "devDependencies": {
+    "@aptos-labs/ts-sdk": "^7.0.1",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.5",
+    "hardhat": "^3.4.5"
   }
 }

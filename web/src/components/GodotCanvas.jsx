@@ -17,6 +17,13 @@ const CACHE_BUST = '?v=' + encodeURIComponent(GODOT_BUILD_TOKEN); // Force fresh
 const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
 const GODOT_CACHE_PREFIXES = ['clash-godot-', 'clash-godot-resource-icons-'];
 const GODOT_RUNTIME_RELOAD_KEY = `clash_godot_runtime_reloaded_${GODOT_BUILD_TOKEN}`;
+const APP_TITLE = 'Clash of Perps';
+
+function keepAppTitle() {
+  if (typeof document !== 'undefined' && document.title !== APP_TITLE) {
+    document.title = APP_TITLE;
+  }
+}
 
 function isGodotRuntimeAsset(rawUrl) {
   try {
@@ -305,8 +312,11 @@ function GodotCanvas({ onEngineReady }) {
     let easeRafId = null;
     let loadedTimeoutId = null;
     let stage2DelayId = null;
+    let titleGuardId = null;
     let lastProgressBucket = -1;
     let restoreGodotFetch = null;
+    keepAppTitle();
+    titleGuardId = window.setInterval(keepAppTitle, 500);
 
     // Catch unhandled errors for mobile debug
     const errHandler = (e) => {
@@ -503,6 +513,7 @@ function GodotCanvas({ onEngineReady }) {
       if (easeRafId) cancelAnimationFrame(easeRafId);
       if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
       if (stage2DelayId) clearTimeout(stage2DelayId);
+      if (titleGuardId) clearInterval(titleGuardId);
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;
       if (window.godotBuildingsLoaded) window.godotBuildingsLoaded = null;
       if (restoreGodotFetch) restoreGodotFetch();

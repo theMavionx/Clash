@@ -1,0 +1,21 @@
+{
+  "chain": "arbitrum",
+  "chainId": 42161,
+  "proxy": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "implementation": "0x8fc6e18371ddd76654ab1f0859099c040aed255a",
+  "contract": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "implementationTxHash": "0xf41062764d724db99133dfca0536f20a56fa3e6d8344de25eefdfc7e748d3305",
+  "proxyTxHash": "0x15af2133cf3467b8f6492833aaca905d2e8ef92b67ea1e0dbb64bf03ea92f2be",
+  "implementationBlockNumber": "463186593",
+  "proxyBlockNumber": "463186604",
+  "maxSupply": "500",
+  "maxPerTx": "10",
+  "totalMinted": "0",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/base/",
+  "contractUri": "https://clashofperps.fun/api/nft/base/contract",
+  "initialPriceWei": "0",
+  "upgradeable": true,
+  "deployedAt": "2026-05-15T19:32:11.280Z"
+}

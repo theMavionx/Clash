@@ -83,6 +83,88 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
 
+// Marketplace indexer state. The indexer reads V3 marketplace events
+// (Listed / Cancelled / Sold) from Base and writes them into the two tables
+// below. `marketplace_listings` is the latest-state view used by the
+// /marketplace/listings endpoint; `marketplace_events` is the full audit
+// log used for debugging and historical queries.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS marketplace_listings (
+      chain          TEXT NOT NULL,
+      token_id       TEXT NOT NULL,
+      seller         TEXT NOT NULL,
+      payment_token  TEXT NOT NULL,
+      price_wei      TEXT NOT NULL,
+      created_at     INTEGER NOT NULL,
+      expires_at     INTEGER NOT NULL DEFAULT 0,
+      active         INTEGER NOT NULL DEFAULT 1,
+      listed_block   INTEGER NOT NULL,
+      listed_tx      TEXT NOT NULL,
+      cancelled_block INTEGER,
+      cancelled_tx   TEXT,
+      sold_block     INTEGER,
+      sold_tx        TEXT,
+      buyer          TEXT,
+      sold_price_wei TEXT,
+      indexed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (chain, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_marketplace_listings_active
+      ON marketplace_listings(chain, active, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_marketplace_listings_seller
+      ON marketplace_listings(seller, chain);
+
+    CREATE TABLE IF NOT EXISTS marketplace_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      chain        TEXT NOT NULL,
+      event_type   TEXT NOT NULL,
+      token_id     TEXT NOT NULL,
+      block_number INTEGER NOT NULL,
+      log_index    INTEGER NOT NULL,
+      tx_hash      TEXT NOT NULL,
+      raw_data     TEXT NOT NULL,
+      indexed_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_marketplace_events_unique
+      ON marketplace_events(chain, tx_hash, log_index);
+    CREATE INDEX IF NOT EXISTS idx_marketplace_events_token
+      ON marketplace_events(chain, token_id, block_number);
+
+    CREATE TABLE IF NOT EXISTS marketplace_indexer_state (
+      chain               TEXT PRIMARY KEY,
+      last_indexed_block  INTEGER NOT NULL,
+      last_indexed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      logs_processed      INTEGER NOT NULL DEFAULT 0,
+      errors_total        INTEGER NOT NULL DEFAULT 0,
+      last_error          TEXT
+    );
+  `);
+} catch (e) { console.warn('[db] marketplace_listings migration:', e.message); }
+
+// Cross-chain bridge ledger. One row per consumed (sourceRef, destChain) tuple
+// so the orchestrator can refuse to re-sign / re-mint receipts for an asset
+// that has already been bridged. EVM and Aptos destinations also enforce
+// replay protection on-chain via `usedBridgeRefs` / `used_nonces`, but Solana
+// destination mints are server-mediated (no on-chain check), so this ledger
+// is the only line of defence there.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS used_bridge_refs (
+      source_ref      TEXT NOT NULL,
+      dest_chain      TEXT NOT NULL,
+      source_chain    TEXT NOT NULL,
+      burn_tx_hash    TEXT NOT NULL,
+      dest_address    TEXT NOT NULL,
+      dest_tx_or_asset TEXT,
+      level           INTEGER NOT NULL,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (source_ref, dest_chain)
+    );
+    CREATE INDEX IF NOT EXISTS idx_used_bridge_refs_burn ON used_bridge_refs(burn_tx_hash);
+  `);
+} catch (e) { console.warn('[db] used_bridge_refs migration:', e.message); }
+
 try {
   db.exec(`
     CREATE TABLE IF NOT EXISTS ai_agent_keys (
@@ -290,11 +372,13 @@ try {
       loot_ore              INTEGER DEFAULT 0,
       sim_th_hp_pct         REAL,
       sim_buildings_destroyed INTEGER DEFAULT 0,
+      sim_debug             TEXT,
       duration_sec          REAL,
       created_at            TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 } catch {}
+try { db.exec(`ALTER TABLE battle_replays ADD COLUMN sim_debug TEXT`); } catch {}
 
 // Battle matchmaking reservations. /find-enemy creates a short-lived session
 // so two attackers cannot be handed the same unshielded defender, play the
@@ -550,8 +634,8 @@ const stmts = {
 
   // Replay
   insertReplay: db.prepare(`
-    INSERT INTO battle_replays (attacker_id, defender_id, claimed_result, verified_result, verification_reason, replay_data, buildings_snapshot, loot_gold, loot_wood, loot_ore, sim_th_hp_pct, sim_buildings_destroyed, duration_sec)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO battle_replays (attacker_id, defender_id, claimed_result, verified_result, verification_reason, replay_data, buildings_snapshot, loot_gold, loot_wood, loot_ore, sim_th_hp_pct, sim_buildings_destroyed, sim_debug, duration_sec)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   // Repair / Ship / Shield
@@ -1837,13 +1921,86 @@ function replayDurationSec(replayData, simResult) {
   return 0;
 }
 
+function compactSimTrace(trace) {
+  const importantKinds = new Set([
+    'building_destroyed',
+    'troop_death',
+    'guard_death',
+    'guard_melee_hit',
+    'guard_target_acquired',
+    'guard_target_lost',
+    'defense_fire',
+    'defense_projectile_hit',
+    'troop_projectile_lost_target',
+    'cannon_fire',
+    'cannon_hit',
+  ]);
+  if (!Array.isArray(trace)) return [];
+  return trace
+    .filter((event) => importantKinds.has(event?.kind))
+    .map((event) => ({
+      kind: event.kind,
+      t: event.t,
+      id: event.buildingId ?? event.guardId ?? event.troopId ?? null,
+      type: event.type ?? event.targetType ?? null,
+      troop: event.troop ?? null,
+      replayOrder: event.replayOrder ?? event.targetReplayOrder ?? event.sourceReplayOrder ?? null,
+      targetId: event.targetId ?? event.target?.id ?? null,
+      targetType: event.targetType ?? event.target?.type ?? null,
+      hp: event.hp ?? event.hpAfter ?? event.target?.hp ?? null,
+      damage: event.damage ?? null,
+      reason: event.reason ?? null,
+    }));
+}
+
+function replaySimDebug(simResult) {
+  if (!simResult || typeof simResult !== 'object') return null;
+  const debug = {
+    resolvedResult: simResult.resolvedResult,
+    reason: simResult.reason,
+    townHallDestroyed: simResult.townHallDestroyed,
+    townHallHpPct: simResult.townHallHpPct,
+    buildingsDestroyed: simResult.buildingsDestroyed,
+    simTimeSec: simResult._simTimeSec,
+    troopsSpawned: simResult._troopsSpawned,
+    troopsAlive: simResult._troopsAlive,
+    guardsAlive: simResult._guardsAlive,
+    casualties: simResult.casualties || {},
+    cannonShotsAccepted: simResult._cannonShotsAccepted,
+    cannonEventsIgnored: simResult._cannonEventsIgnored,
+    rallyEventsAccepted: simResult._rallyEventsAccepted,
+    rallyEventsIgnored: simResult._rallyEventsIgnored,
+    traceEvents: simResult._traceEvents,
+    traceDropped: simResult._traceDropped,
+    buildingHPs: simResult._buildingHPs || [],
+    troopEndState: simResult._troopEndState || [],
+    aliveTroopDetails: simResult._aliveTroopDetails || [],
+    aliveGuardDetails: simResult._aliveGuardDetails || [],
+    traceImportant: compactSimTrace(simResult._trace || []),
+    trace: simResult._trace || [],
+  };
+  const text = JSON.stringify(debug);
+  const max = Number(process.env.CLASH_SIM_DEBUG_MAX_BYTES || 2_000_000);
+  if (Number.isFinite(max) && max > 0 && text.length > max) {
+    return JSON.stringify({
+      ...debug,
+      trace: [],
+      truncated: true,
+      originalBytes: text.length,
+      maxBytes: max,
+    });
+  }
+  return text;
+}
+
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
   const duration = replayDurationSec(replayData, simResult);
   stmts.insertReplay.run(
     attackerId, defenderId, claimedResult, verifiedResult, reason || '',
     JSON.stringify(replayData), JSON.stringify(buildingsSnapshot),
     loot?.gold || 0, loot?.wood || 0, loot?.ore || 0,
-    simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0, duration
+    simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0,
+    replaySimDebug(simResult), duration
   );
 }
 

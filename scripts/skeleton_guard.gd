@@ -46,6 +46,7 @@ var _idle_duration: float = 0.0
 var _attack_timer: float = 0.0
 var _target_troop: Node3D = null
 var _hit_this_swing: bool = false
+var _is_dead: bool = false
 
 var _sep_counter: int = 0
 var _last_separation: Vector3 = Vector3.ZERO
@@ -57,30 +58,40 @@ var _hp_fill: MeshInstance3D
 var _last_hp_ratio: float = -1.0
 var _last_hp_band: int = -1
 
-## Cached group lookups — refreshed once per frame globally
+## Cached group lookups — refreshed once per combat tick globally
 static var _cached_guards: Array = []
 static var _guards_cache_frame: int = -1
 static var _cached_buildings_pos: Array = []  # [Vector3] — positions only
 static var _buildings_pos_cache_frame: int = -1
 
 static func _get_guards_cached() -> Array:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = BaseTroop.combat_cache_key()
 	if frame != _guards_cache_frame:
+		_cached_guards.clear()
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
-			_cached_guards = tree.get_nodes_in_group("skeleton_guards")
+			for guard in tree.get_nodes_in_group("skeleton_guards"):
+				if is_instance_valid(guard) and guard.is_inside_tree() and guard.get("hp") != null and int(guard.get("hp")) > 0 and not bool(guard.get("_is_dead")):
+					_cached_guards.append(guard)
 		_guards_cache_frame = frame
 	return _cached_guards
 
 static func _get_buildings_cached() -> Array:
 	## Derives building positions from BaseTroop's cached data — no duplicate group query
-	var frame: int = Engine.get_process_frames()
+	var frame: int = BaseTroop.combat_cache_key()
 	if frame != _buildings_pos_cache_frame:
 		_cached_buildings_pos.clear()
 		for entry in BaseTroop._get_buildings_cached():
 			_cached_buildings_pos.append(entry.pos)
 		_buildings_pos_cache_frame = frame
 	return _cached_buildings_pos
+
+
+static func reset_runtime_cache() -> void:
+	_cached_guards.clear()
+	_guards_cache_frame = -1
+	_cached_buildings_pos.clear()
+	_buildings_pos_cache_frame = -1
 
 const HP_BAR_W = 0.12
 const HP_BAR_H = 0.012
@@ -95,8 +106,10 @@ func _ready() -> void:
 	_pick_idle_wait()
 
 
-func _process(delta: float) -> void:
-	delta = minf(delta, 0.1)
+func _physics_process(delta: float) -> void:
+	if _is_dead:
+		return
+	delta = BaseTroop.combat_delta(delta)
 	_update_hp_bar()
 	match state:
 		State.IDLE:
@@ -320,7 +333,13 @@ func _do_attack(delta: float) -> void:
 		_hit_this_swing = true
 		if is_instance_valid(_target_troop) and _flat_distance(global_position, _target_troop.global_position) <= attack_range * 1.5:
 			if _target_troop.has_method("take_damage"):
+				var target_payload: Dictionary = _troop_target_payload(_target_troop)
+				var hp_before: int = int(_target_troop.get("hp")) if _target_troop.get("hp") != null else 0
 				_target_troop.take_damage(damage)
+				target_payload["damage"] = damage
+				target_payload["hp_before"] = hp_before
+				target_payload["hp_after"] = int(_target_troop.get("hp")) if is_instance_valid(_target_troop) and _target_troop.get("hp") != null else hp_before - damage
+				_record_replay_telemetry("guard_melee_hit", target_payload)
 			if not is_instance_valid(_target_troop) or not _target_troop.is_inside_tree():
 				_target_troop = null
 				if _are_all_troops_dead():
@@ -332,11 +351,17 @@ func _do_attack(delta: float) -> void:
 ## Applies [param dmg] hit points of damage to this guard.
 ## Emits [signal died] and frees the node when HP reaches zero.
 func take_damage(dmg: int) -> void:
+	if _is_dead:
+		return
 	hp -= dmg
 	if hp <= 0:
+		_is_dead = true
 		_record_replay_telemetry("guard_death", {"damage": dmg})
 		if is_in_group("skeleton_guards"):
 			remove_from_group("skeleton_guards")
+		BaseTroop.invalidate_combat_lists()
+		reset_runtime_cache()
+		set_process(false)
 		died.emit(self)
 		queue_free()
 
@@ -346,7 +371,7 @@ func take_damage(dmg: int) -> void:
 ## Returns true if no living troops remain in the scene.
 func _are_all_troops_dead() -> bool:
 	for troop in BaseTroop._get_troops_cached():
-		if is_instance_valid(troop) and troop.is_inside_tree():
+		if BaseTroop.is_live_troop(troop):
 			return false
 	return true
 
@@ -376,7 +401,7 @@ func _find_nearest_enemy() -> Node3D:
 	var nearest: Node3D = null
 	var nearest_dist: float = detection_radius
 	for troop in BaseTroop._get_troops_cached():
-		if not is_instance_valid(troop):
+		if not BaseTroop.is_live_troop(troop):
 			continue
 		var d = _flat_distance(troop.global_position, tombstone_pos)
 		if d < nearest_dist:
@@ -407,6 +432,8 @@ func _troop_target_payload(troop: Node3D) -> Dictionary:
 		var script_res: Script = troop.get_script()
 		payload.target_type = script_res.resource_path.get_file().get_basename() if script_res else ""
 		payload.target_hp = int(troop.get("hp")) if troop.get("hp") != null else -1
+		if troop.has_meta("replay_order"):
+			payload.target_replay_order = int(troop.get_meta("replay_order"))
 		payload.target_x = snappedf(troop.global_position.x, 0.001)
 		payload.target_z = snappedf(troop.global_position.z, 0.001)
 	return payload

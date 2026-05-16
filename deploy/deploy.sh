@@ -176,20 +176,20 @@ prepare_shared_runtime() {
             cp -a "$DEPLOY_ROOT/.env" "$ENV_FILE"
             log "Copied legacy .env to $ENV_FILE"
         else
-            ADMIN_KEY="$(openssl rand -hex 16)"
-            REWARD_SECRET="$(openssl rand -hex 32)"
-            WALLET_ENC_KEY="$(openssl rand -hex 32)"
-            cat > "$ENV_FILE" << EOF
-ADMIN_KEY=$ADMIN_KEY
-REWARD_SECRET=$REWARD_SECRET
-NODE_ENV=production
-ELFA_API_KEY=
-DECIBEL_API_KEY=
-DECIBEL_API_WALLET_PRIVATE_KEY=
-DECIBEL_ALLOWED_BUILDER_ADDRS=
-DECIBEL_BUILDER_FEE_BPS=2
-CLASH_WALLET_ENCRYPTION_KEY=$WALLET_ENC_KEY
-EOF
+            generated_admin="$(openssl rand -hex 16)"
+            generated_reward="$(openssl rand -hex 32)"
+            generated_wallet_enc="$(openssl rand -hex 32)"
+            {
+                printf '%s=%s\n' ADMIN_KEY "$generated_admin"
+                printf '%s=%s\n' REWARD_SECRET "$generated_reward"
+                printf '%s\n' NODE_ENV=production
+                printf '%s\n' ELFA_API_KEY=
+                printf '%s\n' DECIBEL_API_KEY=
+                printf '%s\n' DECIBEL_API_WALLET_PRIVATE_KEY=
+                printf '%s\n' DECIBEL_ALLOWED_BUILDER_ADDRS=
+                printf '%s\n' DECIBEL_BUILDER_FEE_BPS=2
+                printf '%s=%s\n' CLASH_WALLET_ENCRYPTION_KEY "$generated_wallet_enc"
+            } > "$ENV_FILE"
             chmod 600 "$ENV_FILE"
             log "Generated new shared .env with fresh ADMIN_KEY/REWARD_SECRET/CLASH_WALLET_ENCRYPTION_KEY"
         fi

@@ -43,12 +43,13 @@ static var _rally_target_building: Dictionary = {}
 static var _rally_target_bs: Node = null
 static var _rally_target_guard: Node3D = null
 
-static func set_rally(pos: Vector3, duration_sec: float) -> void:
+static func set_rally(pos: Vector3, duration_sec: float) -> Dictionary:
 	_rally_active = true
 	_rally_pos = pos
 	_rally_expire_msec = Time.get_ticks_msec() + int(duration_sec * 1000.0)
 	_resolve_rally_target(pos)
 	_apply_rally_to_active_troops()
+	return get_rally_debug_payload(pos)
 
 static func clear_rally() -> void:
 	_rally_active = false
@@ -112,22 +113,97 @@ static func _apply_rally_to_active_troops() -> void:
 		if is_instance_valid(troop) and troop is BaseTroop and troop.state != State.INACTIVE and troop.state != State.VICTORY:
 			troop._apply_rally_target()
 
+static func get_rally_debug_payload(pos: Vector3) -> Dictionary:
+	var payload: Dictionary = {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+		"target_kind": "none",
+		"target_candidates": _rally_candidates_payload(pos),
+	}
+	if _rally_target_guard != null and is_instance_valid(_rally_target_guard):
+		payload["target_kind"] = "guard"
+		payload["target_instance"] = int(_rally_target_guard.get_instance_id())
+		payload["target_hp"] = int(_rally_target_guard.get("hp")) if _rally_target_guard.get("hp") != null else 0
+		payload["target_x"] = snappedf(_rally_target_guard.global_position.x, 0.001)
+		payload["target_z"] = snappedf(_rally_target_guard.global_position.z, 0.001)
+	elif _rally_target_building.size() > 0:
+		var node: Node3D = _rally_target_building.get("node", null)
+		payload["target_kind"] = "building"
+		payload["target_server_id"] = int(_rally_target_building.get("server_id", -1))
+		payload["target_type"] = str(_rally_target_building.get("id", ""))
+		payload["target_hp"] = int(_rally_target_building.get("hp", 0))
+		if is_instance_valid(node):
+			payload["target_x"] = snappedf(node.global_position.x, 0.001)
+			payload["target_z"] = snappedf(node.global_position.z, 0.001)
+	return payload
+
+
+static func _rally_candidates_payload(pos: Vector3, limit: int = 8) -> Array:
+	var candidates: Array = []
+	for entry in _get_buildings_cached():
+		var b: Dictionary = entry.get("b", {})
+		if int(b.get("hp", 0)) <= 0:
+			continue
+		var bpos: Vector3 = entry.get("pos", Vector3.ZERO)
+		var dx: float = pos.x - bpos.x
+		var dz: float = pos.z - bpos.z
+		candidates.append({
+			"kind": "building",
+			"server_id": int(b.get("server_id", -1)),
+			"type": str(b.get("id", "")),
+			"hp": int(b.get("hp", 0)),
+			"x": snappedf(bpos.x, 0.001),
+			"z": snappedf(bpos.z, 0.001),
+			"dist": snappedf(sqrt(dx * dx + dz * dz), 0.001),
+		})
+	for guard in _get_guards_list_cached():
+		if not is_instance_valid(guard) or not guard.is_inside_tree():
+			continue
+		if guard.get("hp") == null or int(guard.get("hp")) <= 0:
+			continue
+		var gpos: Vector3 = guard.global_position
+		var gdx: float = pos.x - gpos.x
+		var gdz: float = pos.z - gpos.z
+		candidates.append({
+			"kind": "guard",
+			"instance": int(guard.get_instance_id()),
+			"hp": int(guard.get("hp")),
+			"x": snappedf(gpos.x, 0.001),
+			"z": snappedf(gpos.z, 0.001),
+			"dist": snappedf(sqrt(gdx * gdx + gdz * gdz), 0.001),
+		})
+	candidates.sort_custom(func(a, b): return float(a.get("dist", INF)) < float(b.get("dist", INF)))
+	var result: Array = []
+	var count: int = mini(limit, candidates.size())
+	for i in range(count):
+		result.append(candidates[i])
+	return result
+
+
 ## Cached camera ref — refreshed once per frame globally
 static var _cached_camera: Camera3D = null
 static var _camera_cache_frame: int = -1
 
 ## Throttle separation — not every troop needs it every frame
 var _sep_counter: int = 0
+var _slot_eval_timer: float = 0.0
 var _last_separation: Vector3 = Vector3.ZERO
 var _hp_bar_frame: int = 0  # throttle HP bar billboard rotation
 var _last_hp_ratio: float = -1.0  # cache to skip redundant shader updates
 var _last_hp_band: int = -1  # cache to skip redundant color updates
 
 ## Target re-evaluation — staggered across troops
-var _retarget_counter: int = 0
+var _retarget_timer: float = 0.0
 ## Guard threat radius multiplier — guards within this * attack_range trigger immediate switch
 const GUARD_THREAT_MULT: float = 1.5
 const ATTACK_MAX_RANGE_MULT: float = 2.0
+const TARGET_SWITCH_MIN_ADVANTAGE: float = 0.08
+const RETARGET_INTERVAL_SEC: float = 10.0 / 60.0
+const SLOT_EVAL_INTERVAL_SEC: float = 6.0 / 60.0
+const REPLAY_COMBAT_DELTA: float = 1.0 / 60.0
+
+static var _replay_combat_cache_frame: int = -1
+static var _replay_combat_locked: bool = false
 
 ## Pre-allocated HP bar colors — avoids Color allocation every frame
 static var _HP_COLORS: Array = [
@@ -155,8 +231,13 @@ static var _building_entry_pool_idx: int = 0
 static var _cached_bs_nodes: Array = []
 static var _bs_nodes_cache_frame: int = -1
 
+static func combat_cache_key() -> int:
+	var frame: int = Engine.get_physics_frames() if Engine.is_in_physics_frame() else Engine.get_process_frames()
+	return frame * 2 + (0 if Engine.is_in_physics_frame() else 1)
+
+
 static func _get_building_systems_cached() -> Array:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = combat_cache_key()
 	if frame != _bs_nodes_cache_frame:
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
@@ -177,6 +258,75 @@ static func reset_island_bounds_cache() -> void:
 	_island_extent_x = 10.0
 	_island_extent_z = 10.0
 	_island_rot = 0.0
+
+
+static func reset_combat_runtime_cache() -> void:
+	clear_rally()
+	reset_island_bounds_cache()
+	invalidate_combat_lists()
+	_cached_bs_nodes.clear()
+	_bs_nodes_cache_frame = -1
+	_cached_camera = null
+	_camera_cache_frame = -1
+	_replay_combat_cache_frame = -1
+	_replay_combat_locked = false
+
+
+static func is_replay_combat_locked() -> bool:
+	var frame: int = combat_cache_key()
+	if frame == _replay_combat_cache_frame:
+		return _replay_combat_locked
+	_replay_combat_cache_frame = frame
+	_replay_combat_locked = false
+	for bs_node in _get_building_systems_cached():
+		if is_instance_valid(bs_node) and "_replay_active" in bs_node and bool(bs_node._replay_active):
+			_replay_combat_locked = true
+			break
+	return _replay_combat_locked
+
+
+static func combat_delta(delta: float) -> float:
+	if is_replay_combat_locked():
+		return REPLAY_COMBAT_DELTA
+	return minf(delta, 0.1)
+
+
+static func invalidate_combat_lists() -> void:
+	_cached_troops.clear()
+	_troops_cache_frame = -1
+	_cached_building_list.clear()
+	_buildings_cache_frame = -1
+	_building_entry_pool_idx = 0
+	_cached_guards_list.clear()
+	_guards_list_cache_frame = -1
+
+
+static func is_live_troop(troop: Variant) -> bool:
+	if not is_instance_valid(troop):
+		return false
+	if not troop.is_inside_tree():
+		return false
+	var hp_value: Variant = troop.get("hp")
+	if hp_value != null and int(hp_value) <= 0:
+		return false
+	var dead_value: Variant = troop.get("_is_dead")
+	if dead_value != null and bool(dead_value):
+		return false
+	return true
+
+
+static func _troop_order_key(troop: Node) -> int:
+	if is_instance_valid(troop) and troop.has_meta("replay_order"):
+		return int(troop.get_meta("replay_order"))
+	return int(troop.get_instance_id()) if is_instance_valid(troop) else 2147483647
+
+
+static func _building_order_key(b: Dictionary) -> int:
+	var sid: int = int(b.get("server_id", -1))
+	if sid >= 0:
+		return sid
+	var gp: Vector2i = b.get("grid_pos", Vector2i.ZERO)
+	return int(gp.y) * 1000 + int(gp.x)
 
 static func _ensure_island_bounds() -> void:
 	if _island_bounds_ready:
@@ -231,7 +381,7 @@ static func _building_avoid_radius(b: Dictionary, bs_node: Node, padding: float 
 
 
 static func _get_buildings_cached() -> Array:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = combat_cache_key()
 	if frame != _buildings_cache_frame:
 		_cached_building_list.clear()
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
@@ -251,6 +401,7 @@ static func _get_buildings_cached() -> Array:
 							_building_entry_pool.append(entry)
 						_building_entry_pool_idx += 1
 						_cached_building_list.append(entry)
+			_cached_building_list.sort_custom(func(a, b): return _building_order_key(a.get("b", {})) < _building_order_key(b.get("b", {})))
 		_building_entry_pool_idx = 0
 		_buildings_cache_frame = frame
 	return _cached_building_list
@@ -260,7 +411,7 @@ static var _cached_guards_list: Array = []
 static var _guards_list_cache_frame: int = -1
 
 static func _get_guards_list_cached() -> Array:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = combat_cache_key()
 	if frame != _guards_list_cache_frame:
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
@@ -270,17 +421,21 @@ static func _get_guards_list_cached() -> Array:
 
 
 static func _get_troops_cached() -> Array:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = combat_cache_key()
 	if frame != _troops_cache_frame:
+		_cached_troops.clear()
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree:
-			_cached_troops = tree.get_nodes_in_group("troops")
+			for troop in tree.get_nodes_in_group("troops"):
+				if is_live_troop(troop):
+					_cached_troops.append(troop)
+			_cached_troops.sort_custom(func(a, b): return _troop_order_key(a) < _troop_order_key(b))
 		_troops_cache_frame = frame
 	return _cached_troops
 
 
 static func _get_camera_cached() -> Camera3D:
-	var frame: int = Engine.get_process_frames()
+	var frame: int = combat_cache_key()
 	if frame != _camera_cache_frame:
 		var tree: SceneTree = Engine.get_main_loop() as SceneTree
 		if tree and tree.root:
@@ -298,7 +453,8 @@ func _ready() -> void:
 	_setup_weapons()
 	# Keep combat replay deterministic and aligned with the server simulator.
 	_sep_counter = 0
-	_retarget_counter = 0
+	_slot_eval_timer = 0.0
+	_retarget_timer = 0.0
 
 
 ## Override to set hp, damage, atk_speed, move_speed, attack_range, attack_anim, anim_files
@@ -334,16 +490,19 @@ func activate() -> void:
 
 var _spawn_scale: float = 0.1
 
-func _process(delta: float) -> void:
-	if state == State.INACTIVE or state == State.VICTORY:
+func _physics_process(delta: float) -> void:
+	if _is_dead or state == State.INACTIVE or state == State.VICTORY:
 		return
-	delta = minf(delta, 0.1)  # cap delta to prevent huge catch-up after tab switch
+	delta = combat_delta(delta)
 	# Force scale every frame — GLB animations override it otherwise
 	scale = Vector3(_spawn_scale, _spawn_scale, _spawn_scale)
 	_update_hp_bar()
-	# Periodic retargeting — pick closest target every 10 frames (staggered)
-	_retarget_counter += 1
-	if _retarget_counter % 10 == 0:
+	# Periodic retargeting uses replay time, not rendered frame count. Browser
+	# FPS can dip below 60; frame-count timers made replays drift from the
+	# server's fixed 60 Hz simulation.
+	_retarget_timer += delta
+	if _retarget_timer >= RETARGET_INTERVAL_SEC:
+		_retarget_timer = fmod(_retarget_timer, RETARGET_INTERVAL_SEC)
 		_find_next_target()
 	# Immediate guard threat check — suppressed while a rally focus is locked.
 	_check_guard_threat()
@@ -560,11 +719,12 @@ func _apply_rally_target() -> bool:
 
 	if _rally_target_guard != null:
 		if target_guard != _rally_target_guard:
+			var rally_guard_payload: Dictionary = _merge_target_switch_context(_guard_target_payload(_rally_target_guard), INF)
 			target_guard = _rally_target_guard
 			target_building = {}
 			target_bs = null
 			_orbit_angle = 0.0
-			_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
+			_record_replay_telemetry("target_switch", rally_guard_payload)
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -577,11 +737,12 @@ func _apply_rally_target() -> bool:
 
 	if _rally_target_building.size() > 0:
 		if _rally_target_building.get("node") != target_building.get("node"):
+			var rally_building_payload: Dictionary = _merge_target_switch_context(_building_target_payload(_rally_target_building), INF)
 			target_building = _rally_target_building
 			target_bs = _rally_target_bs
 			target_guard = null
 			_orbit_angle = 0.0
-			_record_replay_telemetry("target_switch", _building_target_payload(target_building))
+			_record_replay_telemetry("target_switch", rally_building_payload)
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -617,11 +778,12 @@ func _find_alternative_target() -> void:
 			second_b = b
 			second_bs = entry.bs
 	if second_b.size() > 0:
+		var alternative_payload: Dictionary = _merge_target_switch_context(_building_target_payload(second_b), second_dist_sq)
 		target_building = second_b
 		target_bs = second_bs
 		target_guard = null
 		_orbit_angle = 0.0
-		_record_replay_telemetry("target_switch", _building_target_payload(target_building))
+		_record_replay_telemetry("target_switch", alternative_payload)
 		state = State.RUNNING
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -671,25 +833,30 @@ func _find_next_target() -> void:
 			nearest_bs_ref = null
 			nearest_guard = guard
 
+	if _should_keep_current_target(search_pos, nearest_dist_sq, nearest_b, nearest_guard):
+		return
+
 	if nearest_guard:
 		# Only reset state if target actually changed
 		if nearest_guard != target_guard:
+			var nearest_guard_payload: Dictionary = _merge_target_switch_context(_guard_target_payload(nearest_guard), nearest_dist_sq)
 			target_guard = nearest_guard
 			target_building = {}
 			target_bs = null
 			_orbit_angle = 0.0
-			_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
+			_record_replay_telemetry("target_switch", nearest_guard_payload)
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
 					anim_player.play("Running_A")
 	elif nearest_b.size() > 0:
 		if nearest_b.get("node") != target_building.get("node"):
+			var nearest_building_payload: Dictionary = _merge_target_switch_context(_building_target_payload(nearest_b), nearest_dist_sq)
 			target_building = nearest_b
 			target_bs = nearest_bs_ref
 			target_guard = null
 			_orbit_angle = 0.0
-			_record_replay_telemetry("target_switch", _building_target_payload(target_building))
+			_record_replay_telemetry("target_switch", nearest_building_payload)
 			if state != State.RUNNING:
 				state = State.RUNNING
 				if anim_player.has_animation("Running_A"):
@@ -701,8 +868,41 @@ func _find_next_target() -> void:
 		_trigger_victory_all()
 
 
-## Immediate guard threat — if any guard is within GUARD_THREAT_MULT * attack_range,
-## switch to it right now (don't wait for retarget tick).
+## Target stickiness prevents tiny position differences from flipping troops
+## between two almost-equally-close targets.
+func _should_keep_current_target(search_pos: Vector3, candidate_dist_sq: float, candidate_b: Dictionary, candidate_guard: Node3D) -> bool:
+	if candidate_dist_sq == INF:
+		return false
+
+	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		var gdx_sticky: float = search_pos.x - target_guard.global_position.x
+		var gdz_sticky: float = search_pos.z - target_guard.global_position.z
+		var sticky_range: float = attack_range * maxf(GUARD_THREAT_MULT, ATTACK_MAX_RANGE_MULT)
+		if gdx_sticky * gdx_sticky + gdz_sticky * gdz_sticky <= sticky_range * sticky_range:
+			return true
+
+	if candidate_guard != null and candidate_guard == target_guard:
+		return false
+	if candidate_guard == null and candidate_b.size() > 0 and candidate_b.get("node") == target_building.get("node"):
+		return false
+
+	var current_dist_sq: float = INF
+	if target_guard != null and is_instance_valid(target_guard) and target_guard.is_inside_tree() and target_guard.hp > 0:
+		var gdx: float = search_pos.x - target_guard.global_position.x
+		var gdz: float = search_pos.z - target_guard.global_position.z
+		current_dist_sq = gdx * gdx + gdz * gdz
+	elif target_building.size() > 0 and target_building.get("hp", 0) > 0 and is_instance_valid(target_building.get("node")):
+		var bpos: Vector3 = target_building.node.global_position
+		var bdx: float = search_pos.x - bpos.x
+		var bdz: float = search_pos.z - bpos.z
+		current_dist_sq = bdx * bdx + bdz * bdz
+
+	if current_dist_sq == INF:
+		return false
+	return sqrt(candidate_dist_sq) + TARGET_SWITCH_MIN_ADVANTAGE >= sqrt(current_dist_sq)
+
+
+## Immediate guard threat check.
 func _check_guard_threat() -> void:
 	if _rally_active:
 		if _has_valid_rally_target():
@@ -726,11 +926,12 @@ func _check_guard_threat() -> void:
 			closest_d_sq = d_sq
 			closest_guard = guard
 	if closest_guard:
+		var guard_threat_payload: Dictionary = _merge_target_switch_context(_guard_target_payload(closest_guard), closest_d_sq)
 		target_guard = closest_guard
 		target_building = {}
 		target_bs = null
 		_orbit_angle = 0.0
-		_record_replay_telemetry("target_switch", _guard_target_payload(target_guard))
+		_record_replay_telemetry("target_switch", guard_threat_payload)
 		state = State.RUNNING
 		if anim_player.has_animation("Running_A"):
 			anim_player.play("Running_A")
@@ -766,6 +967,10 @@ func take_damage(dmg: int) -> void:
 		_record_replay_telemetry("troop_death", {"damage": dmg})
 		if is_in_group("troops"):
 			remove_from_group("troops")
+		invalidate_combat_lists()
+		if has_method("_clear_owned_projectiles"):
+			call("_clear_owned_projectiles")
+		set_process(false)
 		_report_death()
 		queue_free()
 
@@ -776,6 +981,9 @@ func _report_death() -> void:
 	var troop_name: String = _get_troop_name()
 	if troop_name == "":
 		return
+	for bs_node in _get_building_systems_cached():
+		if is_instance_valid(bs_node) and "_replay_active" in bs_node and bs_node._replay_active:
+			return
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge and bridge.has_method("send_to_react"):
 		bridge.send_to_react("troop_died", {"troop_name": troop_name})
@@ -804,9 +1012,15 @@ func _get_troop_name() -> String:
 
 func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 	var payload: Dictionary = data.duplicate(true)
+	payload.troop_instance = int(get_instance_id())
+	if has_meta("replay_order"):
+		payload.replay_order = int(get_meta("replay_order"))
 	payload.troop = _get_troop_name()
 	payload.level = level
 	payload.hp = hp
+	payload.state = int(state)
+	payload.attack_timer = snappedf(attack_timer, 0.001)
+	payload.orbit_angle = snappedf(_orbit_angle, 0.001)
 	payload.x = snappedf(global_position.x, 0.001)
 	payload.z = snappedf(global_position.z, 0.001)
 	for bs_node in _get_building_systems_cached():
@@ -815,13 +1029,144 @@ func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 			return
 
 
+func _target_payload_from_refs(target_ref: Dictionary = {}, guard_ref: Node3D = null) -> Dictionary:
+	var payload: Dictionary = {}
+	if guard_ref != null and is_instance_valid(guard_ref):
+		payload["target_kind"] = "guard"
+		payload["target_instance"] = int(guard_ref.get_instance_id())
+		payload["target_hp"] = int(guard_ref.get("hp")) if guard_ref.get("hp") != null else -1
+		payload["target_x"] = snappedf(guard_ref.global_position.x, 0.001)
+		payload["target_z"] = snappedf(guard_ref.global_position.z, 0.001)
+		return payload
+	if target_ref.size() > 0:
+		payload["target_kind"] = "building"
+		payload["target_type"] = str(target_ref.get("id", ""))
+		payload["target_server_id"] = int(target_ref.get("server_id", -1))
+		payload["target_hp"] = int(target_ref.get("hp", 0))
+		var node: Node3D = target_ref.get("node", null)
+		if is_instance_valid(node):
+			payload["target_x"] = snappedf(node.global_position.x, 0.001)
+			payload["target_z"] = snappedf(node.global_position.z, 0.001)
+		return payload
+	payload["target_kind"] = "none"
+	return payload
+
+
+func _current_target_telemetry_payload() -> Dictionary:
+	return _target_payload_from_refs(target_building, target_guard)
+
+
+func _previous_target_payload() -> Dictionary:
+	var prev: Dictionary = _current_target_telemetry_payload()
+	var payload: Dictionary = {}
+	for key in prev.keys():
+		payload["previous_" + str(key)] = prev[key]
+	return payload
+
+
+func _merge_target_switch_context(payload: Dictionary, dist_sq: float) -> Dictionary:
+	var previous_payload: Dictionary = _previous_target_payload()
+	for key in previous_payload.keys():
+		payload[key] = previous_payload[key]
+	if dist_sq != INF:
+		payload["target_dist"] = snappedf(sqrt(dist_sq), 0.001)
+	payload["target_candidates"] = _target_candidates_payload(5)
+	return payload
+
+
+func _target_candidates_payload(limit: int = 5) -> Array:
+	var candidates: Array = []
+	for entry in _get_buildings_cached():
+		var b: Dictionary = entry.get("b", {})
+		if int(b.get("hp", 0)) <= 0:
+			continue
+		var pos: Vector3 = entry.get("pos", Vector3.ZERO)
+		var dx: float = global_position.x - pos.x
+		var dz: float = global_position.z - pos.z
+		candidates.append({
+			"kind": "building",
+			"type": str(b.get("id", "")),
+			"server_id": int(b.get("server_id", -1)),
+			"hp": int(b.get("hp", 0)),
+			"dist": snappedf(sqrt(dx * dx + dz * dz), 0.001),
+			"x": snappedf(pos.x, 0.001),
+			"z": snappedf(pos.z, 0.001),
+		})
+	for guard in _get_guards_list_cached():
+		if not is_instance_valid(guard):
+			continue
+		var guard_hp: Variant = guard.get("hp")
+		if guard_hp != null and int(guard_hp) <= 0:
+			continue
+		var gdx: float = global_position.x - guard.global_position.x
+		var gdz: float = global_position.z - guard.global_position.z
+		candidates.append({
+			"kind": "guard",
+			"type": "guard",
+			"instance": int(guard.get_instance_id()),
+			"hp": int(guard_hp) if guard_hp != null else -1,
+			"dist": snappedf(sqrt(gdx * gdx + gdz * gdz), 0.001),
+			"x": snappedf(guard.global_position.x, 0.001),
+			"z": snappedf(guard.global_position.z, 0.001),
+		})
+	candidates.sort_custom(func(a, b): return float(a.get("dist", 0.0)) < float(b.get("dist", 0.0)))
+	if candidates.size() > limit:
+		return candidates.slice(0, limit)
+	return candidates
+
+
+func _record_projectile_payload(kind: String, payload: Dictionary, projectile_pos: Vector3, extra: Dictionary = {}) -> void:
+	payload["projectile_x"] = snappedf(projectile_pos.x, 0.001)
+	payload["projectile_y"] = snappedf(projectile_pos.y, 0.001)
+	payload["projectile_z"] = snappedf(projectile_pos.z, 0.001)
+	payload["attack_timer"] = snappedf(attack_timer, 0.001)
+	payload["damage"] = damage
+	for key in extra.keys():
+		payload[key] = extra[key]
+	_record_replay_telemetry(kind, payload)
+
+
+func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref: Node3D, projectile_pos: Vector3, extra: Dictionary = {}) -> void:
+	_record_projectile_payload(kind, _target_payload_from_refs(target_ref, guard_ref), projectile_pos, extra)
+
+
+func _record_building_destroyed_once(target_ref: Dictionary, bs_ref = null, reason: String = "") -> void:
+	if target_ref.is_empty():
+		return
+	if bool(target_ref.get("_destroy_telemetry_recorded", false)):
+		return
+	target_ref["_destroy_telemetry_recorded"] = true
+	var gp: Vector2i = target_ref.get("grid_pos", Vector2i.ZERO)
+	var payload: Dictionary = {
+		"type": str(target_ref.get("id", "")),
+		"server_id": int(target_ref.get("server_id", -1)),
+		"grid_x": int(gp.x),
+		"grid_z": int(gp.y),
+		"hp": int(target_ref.get("hp", 0)),
+	}
+	if reason != "":
+		payload["reason"] = reason
+	if bs_ref != null and is_instance_valid(bs_ref) and bs_ref.has_method("record_replay_telemetry"):
+		bs_ref.record_replay_telemetry("building_destroyed", payload)
+		return
+	for bs_node in _get_building_systems_cached():
+		if is_instance_valid(bs_node) and bs_node.has_method("record_replay_telemetry"):
+			bs_node.record_replay_telemetry("building_destroyed", payload)
+			return
+
+
 func _building_target_payload(b: Dictionary) -> Dictionary:
-	return {
+	var payload := {
 		"target_kind": "building",
 		"target_type": str(b.get("id", "")),
 		"target_server_id": int(b.get("server_id", -1)),
 		"target_hp": int(b.get("hp", 0)),
 	}
+	var node: Node3D = b.get("node", null)
+	if is_instance_valid(node):
+		payload["target_x"] = snappedf(node.global_position.x, 0.001)
+		payload["target_z"] = snappedf(node.global_position.z, 0.001)
+	return payload
 
 
 func _guard_target_payload(guard: Node3D) -> Dictionary:
@@ -882,24 +1227,37 @@ func _face_current_target() -> void:
 
 func _deal_target_damage() -> void:
 	if target_guard != null and is_instance_valid(target_guard):
+		var guard_payload: Dictionary = _target_payload_from_refs({}, target_guard)
+		var guard_hp_before: int = int(target_guard.get("hp")) if target_guard.get("hp") != null else 0
 		target_guard.take_damage(damage)
+		guard_payload["damage"] = damage
+		guard_payload["hp_before"] = guard_hp_before
+		guard_payload["hp_after"] = int(target_guard.get("hp")) if is_instance_valid(target_guard) and target_guard.get("hp") != null else guard_hp_before - damage
+		_record_replay_telemetry("troop_melee_hit", guard_payload)
 		if not is_instance_valid(target_guard) or not target_guard.is_inside_tree():
 			target_guard = null
 			_find_next_target()
 	elif target_building.size() > 0:
-		target_building["hp"] = target_building.get("hp", 0) - damage
+		var building_payload: Dictionary = _target_payload_from_refs(target_building, null)
+		var building_hp_before: int = int(target_building.get("hp", 0))
+		target_building["hp"] = building_hp_before - damage
+		building_payload["damage"] = damage
+		building_payload["hp_before"] = building_hp_before
+		building_payload["hp_after"] = int(target_building.get("hp", 0))
+		_record_replay_telemetry("troop_melee_hit", building_payload)
 		if target_building.get("hp", 0) <= 0:
 			_destroy_target()
 			_find_next_target()
 
 
 ## Calculates the world-space orbit slot position this troop should move toward.
-## Every 6th frame it re-evaluates SLOT_OFFSETS to find the angle with maximum
+## Every 6/60s it re-evaluates SLOT_OFFSETS to find the angle with maximum
 ## angular separation from all other troops attacking the same building, writing
 ## the result to `_orbit_angle`. Returns the slot position as a Vector3.
-func _compute_attack_slot(target_pos: Vector3, my_angle: float) -> Vector3:
-	_sep_counter += 1
-	if _sep_counter % 6 == 0:
+func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) -> Vector3:
+	_slot_eval_timer += delta
+	if _slot_eval_timer >= SLOT_EVAL_INTERVAL_SEC:
+		_slot_eval_timer = fmod(_slot_eval_timer, SLOT_EVAL_INTERVAL_SEC)
 		var best_angle = my_angle
 		var best_min_dist = 0.0
 		for test_offset in SLOT_OFFSETS:
@@ -910,8 +1268,14 @@ func _compute_attack_slot(target_pos: Vector3, my_angle: float) -> Vector3:
 					continue
 				if not (other is BaseTroop):
 					continue
-				# Only check troops targeting same building
-				if other.target_building.get("node") != target_building.get("node"):
+				# Only spread against troops attacking the same live target.
+				# For skeleton guards target_building is empty, so comparing only
+				# target_building grouped every guard fight together and made
+				# replay paths diverge from the server simulator.
+				if target_guard != null:
+					if other.target_guard != target_guard:
+						continue
+				elif other.target_building.get("node") != target_building.get("node"):
 					continue
 				var other_angle = atan2(other.global_position.x - target_pos.x, other.global_position.z - target_pos.z)
 				var angle_diff = absf(fmod(test_angle - other_angle + PI, TAU) - PI)
@@ -1009,7 +1373,7 @@ func _move_to_target(delta: float) -> void:
 
 	# Orbit slot around buildings (spread troops evenly)
 	var my_angle = atan2(global_position.x - target_pos.x, global_position.z - target_pos.z)
-	var slot_pos = _compute_attack_slot(target_pos, my_angle)
+	var slot_pos = _compute_attack_slot(target_pos, my_angle, delta)
 	var to_slot = slot_pos - global_position
 	to_slot.y = 0
 	var slot_dist = to_slot.length()
@@ -1090,13 +1454,14 @@ func _do_attack(delta: float) -> void:
 		rotate_y(PI)
 
 	# Light separation while attacking — but never push beyond attack range
-	var sep = _get_separation()
-	if sep.length() > 0.001:
-		var new_pos = global_position + sep * separation_force * delta * 0.3
-		var new_dist = (target_pos - new_pos).length()
-		if new_dist < attack_range * 1.2:
-			global_position = new_pos
-			global_position = _clamp_to_island(global_position)
+	if separation_force > 0.0:
+		var sep = _get_separation()
+		if sep.length() > 0.001:
+			var new_pos = global_position + sep * separation_force * delta * 0.3
+			var new_dist = (target_pos - new_pos).length()
+			if new_dist < attack_range * 1.2:
+				global_position = new_pos
+				global_position = _clamp_to_island(global_position)
 
 	attack_timer += delta
 	if attack_timer >= atk_speed:

@@ -294,7 +294,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
 }
 
 // ── Replay HUD (shown during replay mode) ────────────────────────────────
-const REPLAY_SPEEDS = [1, 2, 4];
+const REPLAY_SPEEDS = [1];
 
 const formatReplayTime = (seconds) => {
   const safe = Math.max(0, Math.ceil(Number(seconds) || 0));
@@ -378,12 +378,14 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
       )}
       <div style={topRightStyle}>
       <div style={controlRowStyle}>
-        <button style={speedBtnStyle} onClick={handleSpeed} title="Change speed"
-          onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
-          onMouseOut={e => e.currentTarget.style.filter = 'none'}
-        >
-          <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
-        </button>
+        {REPLAY_SPEEDS.length > 1 && (
+          <button style={speedBtnStyle} onClick={handleSpeed} title="Change speed"
+            onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}
+            onMouseOut={e => e.currentTarget.style.filter = 'none'}
+          >
+            <span style={hud.speedText}>{REPLAY_SPEEDS[speedIdx]}x</span>
+          </button>
+        )}
         <div style={mobile ? { ...hud.replayBadge, ...hud.replayBadgeMobile } : hud.replayBadge}>{replayLabel}</div>
         <button style={homeBtnStyle} onClick={onReturnHome} title="Return Home"
           onMouseOver={e => e.currentTarget.style.filter = 'brightness(1.2)'}

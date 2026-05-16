@@ -191,6 +191,12 @@ func _drop_rally(world_pos: Vector3) -> bool:
 	var ground_y: float = bs.grid_y + 0.005
 	var pos: Vector3 = Vector3(world_pos.x, ground_y, world_pos.z)
 	var flight_time: float = _launch_rally_grenade(ship, pos)
+	_record_rally_telemetry("rally_fire", {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+		"flight_time": snappedf(flight_time, 0.001),
+		"source": "manual",
+	})
 	bs._cannon._update_cannon_energy_ui()  # pushes shared {energy, next_cost, rally_next_cost}
 	# Replay log stays at launch time so action order remains chronological;
 	# future replay viewers can delay the marker by `flight_time`.
@@ -209,7 +215,13 @@ func replay_drop_rally(world_pos: Vector3, flight_time_override: float = -1.0) -
 		return
 	var ground_y: float = bs.grid_y + 0.005
 	var pos: Vector3 = Vector3(world_pos.x, ground_y, world_pos.z)
-	_launch_rally_grenade(ship, pos, flight_time_override)
+	var flight_time: float = _launch_rally_grenade(ship, pos, flight_time_override)
+	_record_rally_telemetry("rally_fire", {
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+		"flight_time": snappedf(flight_time, 0.001),
+		"source": "replay",
+	})
 
 
 func _get_attack_ship() -> Node3D:
@@ -218,6 +230,11 @@ func _get_attack_ship() -> Node3D:
 	if not bs._ship_attack_node or not bs._ship_attack_node.visible:
 		return null
 	return bs._ship_attack_node
+
+
+func _record_rally_telemetry(kind: String, payload: Dictionary) -> void:
+	if bs and bs.has_method("record_replay_telemetry"):
+		bs.record_replay_telemetry(kind, payload)
 
 
 func _launch_rally_grenade(ship: Node3D, target_pos: Vector3, flight_time_override: float = -1.0) -> float:
@@ -287,7 +304,10 @@ func _update_rally_grenades(delta: float) -> void:
 			var impact_pos: Vector3 = g.target_pos
 			g.node.queue_free()
 			_spawn_or_move_marker(impact_pos)
-			BaseTroop.set_rally(impact_pos, RALLY_DURATION_SEC)
+			var payload: Dictionary = BaseTroop.set_rally(impact_pos, RALLY_DURATION_SEC)
+			payload["flight_time"] = snappedf(float(g.get("flight_time", 0.0)), 0.001)
+			payload["source"] = "impact"
+			_record_rally_telemetry("rally_impact", payload)
 			_rally_grenades.remove_at(i)
 		i -= 1
 

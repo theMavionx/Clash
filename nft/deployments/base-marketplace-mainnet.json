@@ -1,0 +1,17 @@
+{
+  "chain": "base",
+  "chainId": 8453,
+  "marketplace": "0x802CFeAA28565C6974502A6ca37839327891E126",
+  "proxy": "0x802CFeAA28565C6974502A6ca37839327891E126",
+  "implementation": "0x2dbe1cacacb4f86ca421d824b435d938cc1e8232",
+  "demonKing": "0x404807F93E47AF3eaAec0E983f18DCB35E966FEC",
+  "treasury": "0xC024884ad9C5540996492Cc2DD080964941A3094",
+  "defaultRoyaltyBps": 250,
+  "acceptedPaymentTokens": {
+    "eth": "0x0000000000000000000000000000000000000000",
+    "usdc": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "cop": "0xd8Db4C337d09Da8d7ceb7d87ADFE224D17785ba3"
+  },
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "deployedAt": "2026-05-16T06:36:58.416Z"
+}

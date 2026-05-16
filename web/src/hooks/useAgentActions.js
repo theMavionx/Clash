@@ -22,6 +22,10 @@ export function useAgentActions() {
   const wsRef = useRef(null);
   const reconnectRef = useRef(null);
   const keyCheckRef = useRef(null);
+  const seenEventsRef = useRef(new Set());
+  const pendingGodotEventsRef = useRef([]);
+  const godotFlushRef = useRef(null);
+  const pendingPollRef = useRef(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
@@ -41,6 +45,74 @@ export function useAgentActions() {
         clearTimeout(timerRef.current);
         timerRef.current = null;
       }
+    };
+
+    const clearGodotFlush = () => {
+      if (godotFlushRef.current) {
+        clearInterval(godotFlushRef.current);
+        godotFlushRef.current = null;
+      }
+    };
+
+    const clearPendingPoll = () => {
+      if (pendingPollRef.current) {
+        clearInterval(pendingPollRef.current);
+        pendingPollRef.current = null;
+      }
+    };
+
+    const flushPendingGodotEvents = () => {
+      if (cancelled || !window.godotBridge) return;
+      const queued = pendingGodotEventsRef.current.splice(0);
+      queued.forEach((data) => sendToGodot('agent_action', data));
+      if (pendingGodotEventsRef.current.length === 0) clearGodotFlush();
+    };
+
+    const scheduleGodotFlush = () => {
+      if (cancelled || godotFlushRef.current) return;
+      godotFlushRef.current = setInterval(flushPendingGodotEvents, 250);
+    };
+
+    const deliverAgentAction = (data) => {
+      if (window.godotBridge) {
+        sendToGodot('agent_action', data);
+        return;
+      }
+      pendingGodotEventsRef.current.push(data);
+      scheduleGodotFlush();
+    };
+
+    const handleAgentActionMessage = (msg) => {
+      if (msg?.type !== 'agent_action' || !msg.data) return;
+      const eventId = msg.data.event_id || msg.data.payload?.battle_session_id || `${msg.data.action}:${msg.data.at || ''}`;
+      if (seenEventsRef.current.has(eventId)) return;
+      seenEventsRef.current.add(eventId);
+      if (seenEventsRef.current.size > 50) {
+        seenEventsRef.current.delete(seenEventsRef.current.values().next().value);
+      }
+      addClientBreadcrumb('agent.action', {
+        action: msg.data.action,
+        event_id: eventId,
+        key: msg.data.key?.id || null,
+      });
+      deliverAgentAction(msg.data);
+    };
+
+    const pollPendingEvents = () => {
+      if (cancelled) return;
+      fetch(`${GAME_API}/agent-events/pending`, { headers: { 'x-token': token } })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('pending agent events failed'))))
+        .then((data) => {
+          if (cancelled) return;
+          (data.events || []).forEach(handleAgentActionMessage);
+        })
+        .catch(() => {});
+    };
+
+    const startPendingPoll = () => {
+      if (cancelled || pendingPollRef.current) return;
+      pollPendingEvents();
+      pendingPollRef.current = setInterval(pollPendingEvents, 2000);
     };
 
     const closeSocket = () => {
@@ -78,12 +150,7 @@ export function useAgentActions() {
       ws.onmessage = (event) => {
         let msg = null;
         try { msg = JSON.parse(event.data); } catch { return; }
-        if (msg?.type !== 'agent_action' || !msg.data) return;
-        addClientBreadcrumb('agent.action', {
-          action: msg.data.action,
-          key: msg.data.key?.id || null,
-        });
-        sendToGodot('agent_action', msg.data);
+        handleAgentActionMessage(msg);
       };
 
       ws.onerror = () => {
@@ -117,7 +184,9 @@ export function useAgentActions() {
           const hasActiveAgent = (data.keys || []).some((key) => !key.revoked_at);
           if (hasActiveAgent) {
             connect();
+            startPendingPoll();
           } else {
+            clearPendingPoll();
             closeSocket();
             scheduleKeyCheck(checkForAgent);
           }
@@ -132,6 +201,9 @@ export function useAgentActions() {
     return () => {
       cancelled = true;
       clearTimer(keyCheckRef);
+      clearPendingPoll();
+      clearGodotFlush();
+      pendingGodotEventsRef.current = [];
       closeSocket();
     };
   }, [refreshNonce, sendToGodot, token]);

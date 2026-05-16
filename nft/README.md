@@ -10,13 +10,11 @@ Two independent 250-supply drops:
 Keep secrets in `web/.env` or root `.env`; never commit them.
 
 ```env
-# Base / MetaMask private key, 32-byte hex.
-# A 12/24-word MetaMask mnemonic also works, but a single private key is safer.
-# This is NOT the wallet address.
-NFT_BASE=0x...
-
-# Solana keypair. Existing 64-byte base58 key is supported.
-NFT_KEY=...
+# Required in .env, never in committed files:
+# - NFT_BASE: Base / MetaMask private key, 32-byte hex.
+#   A 12/24-word MetaMask mnemonic also works, but a single private key is safer.
+#   This is NOT the wallet address.
+# - NFT_KEY: Solana keypair. Existing 64-byte base58 key is supported.
 
 # Optional prices.
 NFT_BASE_PRICE_ETH=0.001

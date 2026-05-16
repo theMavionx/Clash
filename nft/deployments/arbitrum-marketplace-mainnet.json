@@ -1,0 +1,19 @@
+{
+  "chain": "arbitrum",
+  "chainId": 42161,
+  "marketplace": "0x7ef2844eb931edec8788972721526754aaa583e6",
+  "proxy": "0x7ef2844eb931edec8788972721526754aaa583e6",
+  "implementation": "0xdb5c7b057df883df99aef9e9244379665d07cad3",
+  "demonKing": "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F",
+  "treasury": "0xC024884ad9C5540996492Cc2DD080964941A3094",
+  "defaultRoyaltyBps": 250,
+  "acceptedPaymentTokens": {
+    "eth": "0x0000000000000000000000000000000000000000",
+    "usdc": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+  },
+  "implTxHash": "0x2c87a85352eb84468d7839cf81305253106a42b2ee5d1fb38126d6b8a3723753",
+  "proxyTxHash": "0xbaed894a1fa4d45712b85163126520dcf8133c85423a4403cc5227339a209636",
+  "usdcWhitelistTxHash": "0x43357cdf90d44007e3013cf4cc6e2de3140deb045662791bb5ba31e28e7a89ea",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "deployedAt": "2026-05-16T12:23:02.148Z"
+}

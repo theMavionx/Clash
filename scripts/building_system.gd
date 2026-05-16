@@ -655,11 +655,12 @@ func _process(delta: float) -> void:
 	# than wrapping every call site.
 	if _cannon == null or _battle == null or _production == null:
 		return
-	_cannon.process(delta)
-	if _rally:
-		_rally.process(delta)
-	_battle.check_defeat(delta)
-	_battle.check_skeleton_respawn(delta)
+	if not _replay_active:
+		_cannon.process(delta)
+		if _rally:
+			_rally.process(delta)
+		_battle.check_defeat(delta)
+		_battle.check_skeleton_respawn(delta)
 
 	# Resource production tick
 	if not is_viewing_enemy:
@@ -668,6 +669,19 @@ func _process(delta: float) -> void:
 			_produce_timer -= PRODUCE_TICK
 			_production._tick_production()
 		_production._update_collect_icons()
+
+
+func _physics_process(delta: float) -> void:
+	if _cannon == null or _battle == null:
+		return
+	if not _replay_active:
+		return
+	var combat_step: float = BaseTroop.combat_delta(delta)
+	_cannon.process(combat_step)
+	if _rally:
+		_rally.process(combat_step)
+	_battle.check_defeat(combat_step)
+	_battle.check_skeleton_respawn(combat_step)
 
 
 func _tick_production() -> void:
@@ -1659,6 +1673,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 
 		# Create the building node
 		var node = Node3D.new()
+		node.set_meta("building_type", building_type)
+		node.set_meta("server_id", server_id)
 		
 		# Add base shadow/outline (using precise AABB) — skip for no_outline buildings
 		if not def.get("no_outline", false):
@@ -2532,6 +2548,8 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 	current_building_id = building_id
 	var building = _create_placed_building(def)
 	current_building_id = prev_id
+	building.set_meta("building_type", building_id)
+	building.set_meta("server_id", server_id)
 
 	var sx = def.cells.x * cell_size
 	var sz = def.cells.y * cell_size
@@ -3105,11 +3123,42 @@ func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 	building_panel_cost.text = "Upgrade: " + "  ".join(parts)
 
 
-func remove_building(b: Dictionary) -> void:
+func _find_building_index_for_remove(b: Dictionary) -> int:
 	var idx: int = placed_buildings.find(b)
+	if idx >= 0:
+		return idx
+	var sid: int = int(b.get("server_id", -1))
+	if sid >= 0:
+		for i in placed_buildings.size():
+			if int(placed_buildings[i].get("server_id", -2)) == sid:
+				return i
+	var node: Node = b.get("node", null)
+	if is_instance_valid(node):
+		for i in placed_buildings.size():
+			if placed_buildings[i].get("node", null) == node:
+				return i
+	var bid: String = str(b.get("id", ""))
+	var gp: Vector2i = b.get("grid_pos", Vector2i(-9999, -9999))
+	if bid != "" and gp != Vector2i(-9999, -9999):
+		for i in placed_buildings.size():
+			if str(placed_buildings[i].get("id", "")) == bid and placed_buildings[i].get("grid_pos", Vector2i.ZERO) == gp:
+				return i
+	return -1
+
+
+func remove_building(b: Dictionary) -> void:
+	var idx: int = _find_building_index_for_remove(b)
 	if idx < 0:
+		if _replay_active:
+			record_replay_telemetry("building_destroy_missing", {
+				"type": str(b.get("id", "")),
+				"server_id": int(b.get("server_id", -1)),
+				"hp": int(b.get("hp", 0)),
+			})
 		return
-	if _replay_active:
+	b = placed_buildings[idx]
+	if _replay_active and not bool(b.get("_destroy_telemetry_recorded", false)):
+		b["_destroy_telemetry_recorded"] = true
 		record_replay_telemetry("building_destroyed", {
 			"type": str(b.get("id", "")),
 			"server_id": int(b.get("server_id", -1)),
@@ -3117,9 +3166,9 @@ func remove_building(b: Dictionary) -> void:
 			"grid_z": int(b.get("grid_pos", Vector2i.ZERO).y),
 			"hp": int(b.get("hp", 0)),
 		})
-	# Town Hall destroyed during attack → explode TH first, then chain-destroy remaining
-	# Skip during replay — replay handles its own end screen
-	if b.id == "town_hall" and is_viewing_enemy and not _replay_active:
+	# Town Hall destroyed during attack/replay -> explode TH first, then
+	# chain-destroy remaining buildings.
+	if b.id == "town_hall" and is_viewing_enemy:
 		if b.has("hp_bar") and is_instance_valid(b.hp_bar):
 			b.hp_bar.queue_free()
 		var th_icon: Control = b.get("_collect_icon")
@@ -3130,8 +3179,13 @@ func remove_building(b: Dictionary) -> void:
 		if is_instance_valid(b.node):
 			explode_building_with_swell(b.node, "town_hall")
 		placed_buildings.remove_at(idx)
+		BaseTroop.invalidate_combat_lists()
 		# Then chain-destroy remaining buildings with delay
-		_on_town_hall_destroyed()
+		if _replay_active:
+			if _battle and _battle.has_method("_on_replay_town_hall_destroyed"):
+				_battle._on_replay_town_hall_destroyed()
+		else:
+			_on_town_hall_destroyed()
 		return
 	# Tombstone → kill all its skeleton guards
 	if b.id == "tombstone":
@@ -3164,6 +3218,7 @@ func remove_building(b: Dictionary) -> void:
 	if is_instance_valid(b.node):
 		explode_building_with_swell(b.node, b.get("id", ""))
 	placed_buildings.remove_at(idx)
+	BaseTroop.invalidate_combat_lists()
 	_deselect_building()
 
 
@@ -3317,6 +3372,8 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	if not model_res:
 		return
 	var unit = model_res.instantiate()
+	unit.set_meta("building_type", b.get("id", ""))
+	unit.set_meta("server_id", int(b.get("server_id", -1)))
 	# Attach tower_archer script for combat behavior
 	if _tower_archer_script_res == null:
 		_preload_defense_resources()
@@ -3900,6 +3957,8 @@ func _reinforce_troops() -> void:
 ## Called when a troop dies in battle — removes one instance from ship_troops on server.
 func _on_troop_died(troop_name: String) -> void:
 	if not is_viewing_enemy:
+		return
+	if _replay_active:
 		return
 	var net: Node = _net
 	if net and net.has_token():
@@ -4499,8 +4558,8 @@ func _switch_to_enemy_island() -> void:
 
 
 ## Start replay playback — loads buildings snapshot and replays recorded actions.
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "") -> void:
-	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label)
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "", base_owner_name: String = "") -> void:
+	await _battle._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name)
 
 
 ## Plays back recorded actions at their original timestamps.

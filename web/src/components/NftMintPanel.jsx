@@ -9,12 +9,14 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
 import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
-import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem } from '../lib/gameShop';
+import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
-import { fetchNftMintConfig, mintBaseNft, mintSolanaNft } from '../lib/nftMint';
+import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import NftBridgePanel from './NftBridgePanel';
 
 const demonKingImg = '/api/nft/image';
 const copLogoImg = '/icons/icon-192.png';
@@ -39,6 +41,22 @@ const PAYMENT_OPTIONS = {
   solana: [
     { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$8.90', token: 'USDC' },
     { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$8.90', token: 'SOL' },
+  ],
+  // Arbitrum + Monad shops are deployed and saleActive — direct mint with
+  // USDC or the chain's native token works via the server's /nft/evm/quote
+  // endpoint. Aptos mirrors that shape with USDC/APT quotes signed by the
+  // server and submitted through the Aptos wallet adapter.
+  arbitrum: [
+    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$8.90', token: 'ETH' },
+  ],
+  monad: [
+    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$8.90', token: 'MON' },
+  ],
+  aptos: [
+    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$8.90', token: 'APT' },
   ],
 };
 
@@ -105,12 +123,38 @@ function makeNftEvmWallet(provider, address) {
   };
 }
 
+// Map the player's DEX to their actual playing chain — the NFT shop
+// reflects this so an Arbitrum trader sees "Arbitrum" not "Base".
+// Chains where mint endpoints aren't deployed (arb/monad/aptos) render
+// a "bridge from Base to mint here" path inside the payment view.
+const DEX_TO_NFT_CHAIN = {
+  avantis:  'base',
+  pacifica: 'solana',
+  phoenix:  'solana',
+  gmx:      'arbitrum',
+  monad:    'monad',
+  decibel:  'aptos',
+};
+// All five chains now have a direct NFT mint endpoint:
+//   - base    /nft/base/quote   (CoP / ETH / USDC)
+//   - solana  candy machine     (USDC / SOL)
+//   - arbitrum/monad /nft/evm/quote   (USDC / native)
+//   - aptos   /nft/aptos/quote  (USDC/APT, ed25519-signed)
+const NFT_MINT_SUPPORTED = new Set(['base', 'solana', 'arbitrum', 'monad', 'aptos']);
+
 function recommendedChain(dex) {
-  return dex === 'pacifica' || dex === 'phoenix' ? 'solana' : 'base';
+  return DEX_TO_NFT_CHAIN[dex] || 'base';
 }
 
 function defaultPaymentForChain(chain) {
-  return chain === 'solana' ? 'sol-usdc' : 'base-eth';
+  switch (chain) {
+    case 'solana':   return 'sol-usdc';
+    case 'arbitrum': return 'arb-usdc';
+    case 'monad':    return 'monad-usdc';
+    case 'aptos':    return 'aptos-usdc';
+    case 'base':
+    default:         return 'base-eth';
+  }
 }
 
 function countOrNull(value) {
@@ -150,7 +194,29 @@ function getSupplyInfo(config, chain) {
   };
 }
 
-function getTotalSupplyInfo(baseSupply, solanaSupply) {
+// Total Genesis supply across ALL chains (Base + Solana + Arbitrum + Monad
+// + Aptos). The server returns `config.global` with the authoritative
+// totals counted from each chain's contract; we prefer that over a local
+// base+solana sum so the counter stays accurate when users mint or bridge
+// onto Arb/Monad/Aptos. Falls back to base+solana sum if the server didn't
+// populate global (older server build / RPC degraded).
+function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
+  // Server-side global: authoritative — sums minted across all 5 chains.
+  if (globalSupply && Number.isFinite(globalSupply.cap)) {
+    const maxSupply = Number(globalSupply.cap) || 500;
+    const totalMinted = countOrNull(globalSupply.totalMinted);
+    const remaining = countOrNull(globalSupply.remaining)
+      ?? (totalMinted == null ? null : Math.max(0, maxSupply - totalMinted));
+    const progress = totalMinted == null || maxSupply <= 0 ? 0
+      : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
+    return {
+      title: 'Total Genesis',
+      totalMinted, maxSupply, remaining, progress,
+      loaded: totalMinted != null,
+      perChain: globalSupply.perChain || null,
+    };
+  }
+  // Legacy fallback — base + solana only.
   const maxSupply = (countOrNull(baseSupply?.maxSupply) || 0) + (countOrNull(solanaSupply?.maxSupply) || 0);
   const baseMinted = countOrNull(baseSupply?.totalMinted);
   const solanaMinted = countOrNull(solanaSupply?.totalMinted);
@@ -169,18 +235,43 @@ function getTotalSupplyInfo(baseSupply, solanaSupply) {
   };
 }
 
+// Map the player's chosen DEX (set at register time, drives the trading
+// flow) to the chain we'll route their shop purchases through. One DEX
+// per chain — players don't pick the shop chain explicitly; they pay on
+// whatever chain they're already trading on, with the wallet already
+// connected for that DEX.
+const DEX_TO_SHOP_CHAIN = {
+  avantis:  'base',
+  pacifica: 'solana',
+  phoenix:  'solana',
+  gmx:      'arbitrum',
+  monad:    'monad',
+  decibel:  'aptos',
+};
+
+function shopChainForDex(dex) {
+  return DEX_TO_SHOP_CHAIN[dex] || 'base';
+}
+
 function NftMintPanel({ onClose }) {
   const { dex } = useDex();
   const player = usePlayer();
   const tradingEvmWallet = useEvmWallet();
   const solWallet = useSolWallet();
+  const aptosWallet = useAptosWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const { isInFrame } = useFarcaster();
 
   const [activeShopTab, setActiveShopTab] = useState('nft');
-  const [step, setStep] = useState('chain');
+  // Skip the legacy chain-picker step on open — the player's chain comes
+  // from their chosen DEX (see [[shop-auto-chain]]). They can still re-pick
+  // a chain via the top-right chip which calls handleBackToChains.
+  const [step, setStep] = useState('payment');
   const [selectedChain, setSelectedChain] = useState(() => recommendedChain(dex));
   const [selectedPayment, setSelectedPayment] = useState(() => defaultPaymentForChain(recommendedChain(dex)));
+  // Top-level view inside the shop modal. 'shop' shows the NFT/Resources
+  // tabs; 'bridge' replaces the body with the cross-chain bridge UI.
+  const [view, setView] = useState('shop');
   const [evmModalOpen, setEvmModalOpen] = useState(false);
   const [nftEvmWallet, setNftEvmWallet] = useState(null);
   const [evmChainId, setEvmChainId] = useState(null);
@@ -208,14 +299,42 @@ function NftMintPanel({ onClose }) {
   const evmOnBase = evmChainId === BASE_CHAIN_ID;
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const gameProducts = gameShopConfig?.products || [];
-  const gameShopReady = !!gameShopConfig?.base?.shop && !!gameShopConfig?.base?.copReady && !!gameShopConfig?.base?.saleActive;
-  const solanaShopReady = !!gameShopConfig?.solana?.ready && !!gameShopConfig?.solana?.saleActive;
-  // Per-tab chain selector for the shop. Defaults to Base since CoP shop is
-  // primary; user can switch to Solana for USDC/SOL payments. Persisted on
-  // the component instance only — no localStorage so a wallet swap doesn't
-  // strand the user on a chain they no longer have a connected wallet for.
-  const [shopChain, setShopChain] = useState('base');
-  const [shopPayment, setShopPayment] = useState('usdc'); // 'usdc' | 'sol' (Solana only)
+  // Shop chain is derived from the player's DEX choice — no manual
+  // selector. Every DEX maps 1:1 to a chain (see DEX_TO_SHOP_CHAIN). Per-
+  // chain readiness gates the buy button when the operator hasn't funded
+  // that chain's treasury yet.
+  const shopChain = shopChainForDex(dex);
+  const shopReadiness = {
+    base:     !!gameShopConfig?.base?.shop && !!gameShopConfig?.base?.copReady && !!gameShopConfig?.base?.saleActive,
+    solana:   !!gameShopConfig?.solana?.ready   && !!gameShopConfig?.solana?.saleActive,
+    arbitrum: !!gameShopConfig?.arbitrum?.ready && !!gameShopConfig?.arbitrum?.saleActive,
+    monad:    !!gameShopConfig?.monad?.ready    && !!gameShopConfig?.monad?.saleActive,
+    aptos:    !!gameShopConfig?.aptos?.ready    && !!gameShopConfig?.aptos?.saleActive,
+  };
+  const shopChainReady = !!shopReadiness[shopChain];
+  // Multi-token chains (Solana, Aptos) expose a sub-toggle. EVM-USDC-only
+  // chains don't need one. Default to USDC on multi-token chains since
+  // most players already have it from the trading flow.
+  const [shopPayment, setShopPayment] = useState('usdc');
+  // Reset payment to usdc when the player switches to a chain that doesn't
+  // offer the previously-chosen token (e.g. they were on Solana with SOL
+  // selected, then changed DEX to Arbitrum which doesn't have SOL). The
+  // chain-allowed sets here mirror SHOP_PAYMENTS_BY_CHAIN below. Base is
+  // pinned to CoP via the deployed contract — it has no payment toggle,
+  // so any leftover shopPayment value is harmless.
+  useEffect(() => {
+    const validPayments = {
+      solana:   ['usdc', 'sol', 'skr'],
+      aptos:    ['usdc', 'apt'],
+      arbitrum: ['usdc', 'eth'],
+      monad:    ['usdc', 'mon'],
+      base:     ['usdc'], // unused, Base uses CoP via contract
+    };
+    const allowed = validPayments[shopChain] || ['usdc'];
+    if (!allowed.includes(shopPayment)) {
+      setShopPayment('usdc');
+    }
+  }, [shopChain, shopPayment]);
   const paymentOptions = useMemo(() => {
     const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
     return baseOptions.map((option) => ({
@@ -230,8 +349,8 @@ function NftMintPanel({ onClose }) {
   const baseSupplyInfo = useMemo(() => getSupplyInfo(mintConfig, 'base'), [mintConfig]);
   const solanaSupplyInfo = useMemo(() => getSupplyInfo(mintConfig, 'solana'), [mintConfig]);
   const totalSupplyInfo = useMemo(
-    () => getTotalSupplyInfo(baseSupplyInfo, solanaSupplyInfo),
-    [baseSupplyInfo, solanaSupplyInfo],
+    () => getTotalSupplyInfo(mintConfig?.global, baseSupplyInfo, solanaSupplyInfo),
+    [mintConfig?.global, baseSupplyInfo, solanaSupplyInfo],
   );
   const supplyInfo = selectedChain === 'solana' ? solanaSupplyInfo : baseSupplyInfo;
   const solanaConfigured = !!mintConfig?.solana?.candyMachine;
@@ -279,12 +398,19 @@ function NftMintPanel({ onClose }) {
     return () => { cancelled = true; };
   }, [refreshGameShopConfig]);
 
+  // Re-sync NFT chain to the player's DEX whenever it changes, but only
+  // when they're sitting on the chain picker. We don't want to clobber
+  // a manual override (e.g. user is on Avantis/Base but switched to
+  // Solana to mint cheaper) while they're mid-flow on the payment step.
+  // The exception: on initial open (step==='payment' from skip-chain),
+  // also seed the chain once so the payment options match the DEX.
+  const dexInitialised = useMemo(() => recommendedChain(dex), [dex]);
   useEffect(() => {
-    if (step !== 'chain') return;
-    const nextChain = recommendedChain(dex);
-    setSelectedChain(nextChain);
-    setSelectedPayment(defaultPaymentForChain(nextChain));
-  }, [dex, step]);
+    if (step === 'chain') {
+      setSelectedChain(dexInitialised);
+      setSelectedPayment(defaultPaymentForChain(dexInitialised));
+    }
+  }, [dexInitialised, step]);
 
   useEffect(() => {
     const provider = evmWallet?.provider;
@@ -403,6 +529,14 @@ function NftMintPanel({ onClose }) {
       setNotice('CoP mint opens after token launch.');
       return;
     }
+    // Chains without a direct mint endpoint (Arbitrum/Monad/Aptos) render
+    // a single bridge-placeholder payment option. Mint button just opens
+    // the bridge view so the player can pull an NFT in from Base/Solana.
+    if (selected.bridgeOnly) {
+      setView('bridge');
+      setNotice(null);
+      return;
+    }
     if (selected.chain === 'base' && evmAddress && evmOnBase) {
       handleBaseMint({
         selected,
@@ -431,37 +565,75 @@ function NftMintPanel({ onClose }) {
       });
       return;
     }
+    // Arbitrum / Monad — same flow as Base but the wallet has to switch
+    // chains first. handleEvmMint calls evmWallet.ensureChain internally.
+    if ((selected.chain === 'arbitrum' || selected.chain === 'monad') && evmAddress) {
+      handleEvmMint({
+        selected,
+        chain: selected.chain,
+        evmAddress,
+        evmWallet,
+        setBusy,
+        setNotice,
+        setMintStatus,
+        setMintResult,
+        refreshMintConfig,
+        dex,
+      });
+      return;
+    }
+    // Aptos — different adapter shape (signAndSubmitTransaction). USDC/APT.
+    if (selected.chain === 'aptos' && aptosWallet?.address) {
+      handleAptosMint({
+        selected,
+        aptosWallet,
+        setBusy,
+        setNotice,
+        setMintStatus,
+        setMintResult,
+        refreshMintConfig,
+        dex,
+      });
+      return;
+    }
     if (selected.chain === 'base') {
       handleBaseReady();
+    } else if (selected.chain === 'arbitrum' || selected.chain === 'monad') {
+      // No EVM wallet yet — surface the EVM connect modal.
+      setEvmModalOpen(true);
+    } else if (selected.chain === 'aptos') {
+      // Aptos wallet not connected yet — kick the standard adapter modal.
+      try { aptosWallet?.connect?.(); } catch { /* user-cancel */ }
     } else {
       handleSolanaReady();
     }
-  }, [dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
+  }, [aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
 
   const handleBuyGameProduct = useCallback(async (product) => {
     if (!sessionToken) {
       setNotice('Game account is still loading. Try again in a moment.');
       return;
     }
-    const isSolana = shopChain === 'solana';
-    if (isSolana) {
-      if (!solanaShopReady) {
-        setNotice('Solana game shop is not live yet.');
+    if (!shopChainReady) {
+      setNotice(`${shopChain.charAt(0).toUpperCase() + shopChain.slice(1)} game shop is not live yet.`);
+      return;
+    }
+
+    // Wallet-readiness gating per chain. We avoid prompting the buy flow
+    // until the right wallet is connected — every DEX comes with its own
+    // wallet adapter already (Base/Arbitrum/Monad → EvmWallet, Solana →
+    // SolWallet, Aptos → AptosWallet) so we just verify the one in scope.
+    if (shopChain === 'solana') {
+      if (!solAddress) { handleSolanaReady(); return; }
+    } else if (shopChain === 'aptos') {
+      if (!aptosWallet?.address) {
+        try { await aptosWallet.connect(); } catch { /* user-cancel */ }
         return;
       }
-      if (!solAddress) {
-        handleSolanaReady();
-        return;
-      }
-    } else {
-      if (!gameShopReady) {
-        setNotice('CoP game shop is not live yet.');
-        return;
-      }
-      if (!evmAddress || !evmOnBase) {
-        await handleBaseReady();
-        return;
-      }
+    } else if (shopChain === 'base') {
+      if (!evmAddress || !evmOnBase) { await handleBaseReady(); return; }
+    } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
+      if (!evmAddress) { await handleBaseReady(); return; }
     }
 
     setBusy(`shop:${product.id}`);
@@ -469,22 +641,46 @@ function NftMintPanel({ onClose }) {
     setShopPurchaseStatus('pending');
     setShopPurchaseResult({ product });
     try {
-      const result = isSolana
-        ? await buySolanaShopItem({
-            solWallet,
-            buyer: solAddress,
-            token: sessionToken,
-            sku: product.sku,
-            payment: shopPayment,
-            quantity: 1,
-          })
-        : await buyGameShopItem({
-            evmWallet,
-            buyer: evmAddress,
-            token: sessionToken,
-            sku: product.sku,
-            quantity: 1,
-          });
+      let result;
+      if (shopChain === 'solana') {
+        result = await buySolanaShopItem({
+          solWallet,
+          buyer: solAddress,
+          token: sessionToken,
+          sku: product.sku,
+          payment: shopPayment,
+          quantity: 1,
+        });
+      } else if (shopChain === 'base') {
+        result = await buyGameShopItem({
+          evmWallet,
+          buyer: evmAddress,
+          token: sessionToken,
+          sku: product.sku,
+          quantity: 1,
+        });
+      } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
+        result = await buyEvmShopItem({
+          evmWallet,
+          buyer: evmAddress,
+          token: sessionToken,
+          chain: shopChain,
+          sku: product.sku,
+          payment: shopPayment,
+          quantity: 1,
+        });
+      } else if (shopChain === 'aptos') {
+        result = await buyAptosShopItem({
+          aptosWallet,
+          buyer: aptosWallet?.address,
+          token: sessionToken,
+          sku: product.sku,
+          payment: shopPayment,
+          quantity: 1,
+        });
+      } else {
+        throw new Error(`Unsupported chain: ${shopChain}`);
+      }
       const grant = result.grant || {};
       if (grant.resources) {
         // Update React HUD immediately + push the new totals into Godot so
@@ -510,13 +706,18 @@ function NftMintPanel({ onClose }) {
             ore:  product.rewards.ore  || 0,
           }
         : null;
-      const txId = isSolana ? result.signature : result.hash;
+      // Each chain returns a different tx-ID field shape; normalize so the
+      // success popup + analytics see a single string.
+      const txId = result.signature || result.hash || result.txHash || '';
+      const paymentLabel = shopChain === 'base'
+        ? 'cop'
+        : (shopChain === 'solana' || shopChain === 'aptos') ? shopPayment : 'usdc';
       setShopPurchaseResult({ product, grant, tx: txId, flyRewards, chain: shopChain });
       setShopPurchaseStatus('success');
       addClientBreadcrumb('shop.purchase_success', {
         dex,
         chain: shopChain,
-        payment: isSolana ? shopPayment : 'cop',
+        payment: paymentLabel,
         sku: product.sku,
         tx: txId,
       });
@@ -530,7 +731,7 @@ function NftMintPanel({ onClose }) {
     } finally {
       setBusy(null);
     }
-  }, [dex, evmAddress, evmOnBase, evmWallet, gameShopReady, handleBaseReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopPayment, solAddress, solanaShopReady, solWallet]);
+  }, [aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopChainReady, shopPayment, solAddress, solWallet]);
 
   const handleDismissShopPurchase = useCallback(() => {
     // Fire the fly-to-bar burst when the user dismisses the success popup.
@@ -549,6 +750,7 @@ function NftMintPanel({ onClose }) {
     evmAddress,
     evmOnBase,
     solAddress,
+    aptosAddress: aptosWallet?.address || null,
     solanaConfigured,
     solanaSaleActive,
     busy,
@@ -597,14 +799,14 @@ function NftMintPanel({ onClose }) {
       >
         <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
           <div style={styles.header}>
-            {activeShopTab === 'nft' && step === 'payment' ? (
-              <button style={styles.backBtn} onClick={handleBackToChains} aria-label="Back">
+            {view === 'bridge' ? (
+              <button style={styles.backBtn} onClick={() => setView('shop')} aria-label="Back to shop">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
                   <path d="M15 18 9 12l6-6" />
                 </svg>
               </button>
             ) : <span style={styles.headerSpacer} />}
-            <span style={styles.title}>Battle Shop</span>
+            <span style={styles.title}>{view === 'bridge' ? 'Bridge NFT' : 'Battle Shop'}</span>
             <button style={styles.closeBtn} onClick={onClose} aria-label="Close">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -614,6 +816,14 @@ function NftMintPanel({ onClose }) {
           </div>
 
           <div style={styles.body}>
+            {view === 'bridge' ? (
+              <NftBridgePanel
+                styles={styles}
+                onBack={() => setView('shop')}
+                onClose={onClose}
+              />
+            ) : (
+            <>
             <div style={styles.shopTabs}>
               {SHOP_TABS.map((tab) => {
                 const active = activeShopTab === tab.id;
@@ -649,145 +859,44 @@ function NftMintPanel({ onClose }) {
                 <span style={styles.heroName}>{activeShopTab === 'nft' ? 'Demon King' : 'Game Resources'}</span>
                 <span style={styles.editionTag}>
                   {activeShopTab === 'nft'
-                    ? `Genesis supply ${formatCount(step === 'chain' ? totalSupplyInfo.maxSupply : supplyInfo.maxSupply)}`
+                    // Always show the GLOBAL cap (500 across all chains) so
+                    // the headline stays consistent whether the user is on
+                    // Base, Solana, Arbitrum, Monad or Aptos.
+                    ? `Genesis supply ${formatCount(totalSupplyInfo.maxSupply)}`
                     : 'Pay with CoP on Base'}
                 </span>
-                {activeShopTab === 'resources' ? null
-                  : step === 'payment' ? (
-                  // Connection chip вЂ” doubles as chain-switcher + wallet
-                  // disconnect. When a wallet is connected we display the
-                  // short address; otherwise the chain name as a hint.
-                  // Two interactive zones so one click doesn't ambiguously
-                  // mean both "switch chain" and "disconnect".
-                  (() => {
-                    const isSol = selectedChain === 'solana';
-                    const addr = isSol ? solAddress : evmAddress;
-                    const onDisc = addr
-                      ? (isSol ? handleDisconnectSolana : handleDisconnectEvm)
-                      : null;
-                    return (
-                      <div style={styles.chainChipGroup}>
-                        <button
-                          type="button"
-                          onClick={handleBackToChains}
-                          style={styles.chainChip}
-                          title="Switch chain"
-                        >
-                          <span style={styles.chainChipBadge}>
-                            {isSol ? 'SOL' : 'EVM'}
-                          </span>
-                          <span style={styles.chainChipName}>
-                            {addr ? shortAddress(addr) : (isSol ? 'Solana' : 'Base')}
-                          </span>
-                          <span style={styles.chainChipArrow}>{'▾'}</span>
-                        </button>
-                        {onDisc && (
-                          <button
-                            type="button"
-                            onClick={onDisc}
-                            style={styles.chainChipDisconnect}
-                            title="Disconnect / change wallet"
-                            aria-label="Disconnect wallet"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M9 7H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3" />
-                              <path d="M14 7h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4" />
-                              <line x1="9" y1="12" x2="14" y2="12" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })()
-                ) : (
-                  <span style={styles.contextChip}>{contextLine}</span>
+                {/* Bridge entry-point lives next to the hero image instead of
+                    the modal header — the header was getting squished with
+                    two icons in the top-right corner. NFT tab only; resources
+                    don't have a cross-chain bridge concept. */}
+                {activeShopTab === 'nft' && view === 'shop' && (
+                  <button
+                    type="button"
+                    onClick={() => { setView('bridge'); setNotice(null); }}
+                    style={styles.heroBridgeBtn}
+                    title="Bridge NFT between chains"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M7 7h12l-3-3" />
+                      <path d="M17 17H5l3 3" />
+                    </svg>
+                    <span>Bridge</span>
+                  </button>
                 )}
               </div>
 
-              {activeShopTab === 'resources' && (
-                <div style={styles.chainChipGroup}>
-                  <button
-                    type="button"
-                    onClick={evmAddress ? handleBaseReady : () => setEvmModalOpen(true)}
-                    style={styles.chainChip}
-                    title={evmAddress ? 'Switch to Base' : 'Connect Base wallet'}
-                  >
-                    <span style={styles.chainChipBadge}>EVM</span>
-                    <span style={styles.chainChipName}>
-                      {evmAddress ? shortAddress(evmAddress) : 'Base wallet'}
-                    </span>
-                    <span style={styles.chainChipArrow}>{'▾'}</span>
-                  </button>
-                  {evmAddress && (
-                    <button
-                      type="button"
-                      onClick={handleDisconnectEvm}
-                      style={styles.chainChipDisconnect}
-                      title="Disconnect / change wallet"
-                      aria-label="Disconnect wallet"
-                    >
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M9 7H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h3" />
-                        <path d="M14 7h4a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-4" />
-                        <line x1="9" y1="12" x2="14" y2="12" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-              )}
             </div>
 
             {activeShopTab === 'nft' ? (
               <>
-                {step === 'chain' ? (
-                  <SupplyOverview total={totalSupplyInfo} base={baseSupplyInfo} solana={solanaSupplyInfo} />
-                ) : (
-                  <SupplyProgress supply={supplyInfo} />
-                )}
+                {/* Always show the GLOBAL supply bar (X / 500 across all chains).
+                    The legacy "Choose Network" step was removed — the chain
+                    is auto-derived from the player's DEX. They can still flip
+                    chains via the chip at the top if they want to mint cheaper
+                    on a different network. */}
+                <SupplyProgress supply={totalSupplyInfo} />
 
-                {step === 'chain' ? (
-                  <>
-                    {COP_DISCOUNT && (
-                      <button type="button" onClick={handleSelectCop} style={styles.clashBanner}>
-                        <span style={styles.clashBannerLogo}>
-                          <img src={copLogoImg} alt="" style={styles.clashBannerLogoImg} />
-                        </span>
-                        <div style={styles.clashBannerCopy}>
-                          <span style={styles.clashBannerTitle}>
-                            Save {COP_DISCOUNT.percent}% - pay with $CoP on Base
-                          </span>
-                          <span style={styles.clashBannerSub}>
-                            ${COP_DISCOUNT.clashUsd.toFixed(2)} CoP vs ${COP_DISCOUNT.baselineUsd.toFixed(2)} ETH/USDC/SOL
-                            <span style={styles.clashBannerSubAccent}>
-                              {' '} - you keep ${COP_DISCOUNT.savedUsd.toFixed(2)}
-                            </span>
-                          </span>
-                        </div>
-                      </button>
-                    )}
-                    <div style={styles.sectionHeader}>
-                      <span style={styles.sectionHeaderText}>Choose network</span>
-                      <span style={styles.sectionHeaderHint}>Where to mint</span>
-                    </div>
-                    <div style={styles.chainGrid}>
-                    {CHAIN_OPTIONS.map((chain) => (
-                      <div
-                        key={chain.id}
-                        className={`nft-chain-glow nft-chain-glow-${chain.id}`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => handleSelectChain(chain.id)}
-                          style={styles.chainBtn}
-                        >
-                          <span style={styles.chainTitle}>{chain.title}</span>
-                          <span style={styles.chainSubtitle}>{chain.subtitle}</span>
-                        </button>
-                      </div>
-                    ))}
-                    </div>
-                  </>
-                ) : (
+                {NFT_MINT_SUPPORTED.has(selectedChain) ? (
                   <>
                     <div style={styles.options}>
                       {paymentOptions.map((option) => {
@@ -834,28 +943,54 @@ function NftMintPanel({ onClose }) {
                       <span>{primaryState.label}</span>
                     </button>
                   </>
+                ) : (
+                  // The player's chain (Arbitrum / Monad / Aptos) has the V3
+                  // contract but no fresh-mint endpoint — mint happens on
+                  // Base or Solana, then bridge over. Surface that path
+                  // explicitly instead of silently rerouting to Base.
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 4px' }}>
+                    <div style={{ fontSize: 13, color: '#5C3A21', lineHeight: 1.4 }}>
+                      Fresh mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
+                      Mint on Base or Solana, then use the bridge to move the NFT to your chain — the level is preserved.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setView('bridge')}
+                      style={{
+                        padding: '10px 14px', borderRadius: 12, fontSize: 14, fontWeight: 800,
+                        background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Open bridge →
+                    </button>
+                  </div>
                 )}
               </>
             ) : (
               <GameResourcesTab
                 products={gameProducts}
-                ready={shopChain === 'solana' ? solanaShopReady : gameShopReady}
+                ready={shopChainReady}
                 loading={gameShopConfig === null}
                 chain={shopChain}
-                onChainChange={setShopChain}
                 payment={shopPayment}
                 onPaymentChange={setShopPayment}
+                skrReady={!!gameShopConfig?.solana?.skrReady}
                 evmAddress={evmAddress}
                 evmOnBase={evmOnBase}
                 solAddress={solAddress}
+                aptosAddress={aptosWallet?.address || null}
                 busy={busy}
                 onConnectBase={handleBaseReady}
                 onConnectSolana={handleSolanaReady}
+                onConnectAptos={() => aptosWallet?.connect?.()}
                 onBuy={handleBuyGameProduct}
               />
             )}
 
             {notice && <div style={activeShopTab === 'nft' && primaryState.ready ? styles.noticeReady : styles.notice}>{notice}</div>}
+            </>
+            )}
           </div>
 
           {mintStatus !== 'idle' && (
@@ -892,43 +1027,84 @@ function NftMintPanel({ onClose }) {
   );
 }
 
-const SHOP_CHAIN_OPTIONS = [
-  { id: 'base',   label: 'Base',   sub: 'CoP' },
-  { id: 'solana', label: 'Solana', sub: 'USDC · SOL' },
-];
+// Per-chain payment toggles. The "stable" entry is always USDC; the
+// "native" entry is whatever fee/governance token each chain uses. SKR
+// on Solana is gated on `solana.skrReady` server-side — the option is
+// pruned at render time if the operator hasn't configured the mint.
+const SHOP_PAYMENTS_BY_CHAIN = {
+  arbitrum: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'eth',  label: 'ETH',  sub: 'Native' },
+  ],
+  monad: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'mon',  label: 'MON',  sub: 'Native' },
+  ],
+  solana: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'sol',  label: 'SOL',  sub: 'Native' },
+    { id: 'skr',  label: 'SKR',  sub: 'Seeker' },
+  ],
+  aptos: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'apt',  label: 'APT',  sub: 'Native' },
+  ],
+};
 
-const SHOP_SOLANA_PAYMENTS = [
-  { id: 'usdc', label: 'USDC', sub: 'Stable' },
-  { id: 'sol',  label: 'SOL',  sub: 'Native' },
-];
+const SHOP_CHAIN_LABEL = {
+  base:     'Base',
+  arbitrum: 'Arbitrum',
+  monad:    'Monad',
+  solana:   'Solana',
+  aptos:    'Aptos',
+};
 
 function GameResourcesTab({
   products,
   ready,
   loading,
   chain,
-  onChainChange,
   payment,
   onPaymentChange,
+  skrReady,
   evmAddress,
   evmOnBase,
   solAddress,
+  aptosAddress,
   busy,
   onConnectBase,
   onConnectSolana,
+  onConnectAptos,
   onBuy,
 }) {
   const { isMobile } = useLayout();
-  const isSolana = chain === 'solana';
-  const walletConnected = isSolana ? !!solAddress : (!!evmAddress && evmOnBase);
-  const paymentLabel = isSolana ? (payment === 'sol' ? 'SOL' : 'USDC') : 'CoP';
-  // On mobile keep the labels short — full-width "Connect Base" + "Buy with
-  // CoP" wraps onto two lines inside the green pill on a 360px viewport.
-  const connectLabel = isSolana
-    ? (solAddress ? (isMobile ? 'Solana' : 'Solana connected') : (isMobile ? 'Connect' : 'Connect Solana'))
-    : (evmAddress && !evmOnBase
+  const chainLabel = SHOP_CHAIN_LABEL[chain] || chain;
+  // Wallet-readiness is chain-specific. Each DEX brings its own wallet
+  // adapter, so we just check the right one for the chain in scope.
+  const walletConnected = chain === 'solana'   ? !!solAddress
+                       : chain === 'aptos'    ? !!aptosAddress
+                       : chain === 'base'     ? (!!evmAddress && evmOnBase)
+                       : /* arbitrum/monad */   !!evmAddress;
+  // Per-chain payment toggle. We filter SKR off when the operator hasn't
+  // configured GAME_SHOP_SOLANA_SKR_MINT (skrReady=false) so the UI never
+  // offers a payment path the server will reject with 503.
+  const paymentOptions = (SHOP_PAYMENTS_BY_CHAIN[chain] || [])
+    .filter((o) => o.id !== 'skr' || skrReady);
+  const paymentLabel = chain === 'base' ? 'CoP'
+    : (paymentOptions.length > 0 ? (paymentOptions.find((o) => o.id === payment)?.label || 'USDC') : 'USDC');
+  // Compact mobile labels — full-width "Connect Solana" / "Buy with USDC"
+  // wraps on a 360px viewport. Strip the chain name on mobile.
+  const connectLabel = !walletConnected
+    ? (isMobile ? 'Connect' : `Connect ${chainLabel}`)
+    : (chain === 'base' && evmAddress && !evmOnBase
         ? (isMobile ? 'Switch' : 'Switch Base')
-        : (isMobile ? 'Connect' : 'Connect Base'));
+        : (isMobile ? 'Connected' : `${chainLabel} connected`));
+
+  function connectForChain() {
+    if (chain === 'solana')  return onConnectSolana?.();
+    if (chain === 'aptos')   return onConnectAptos?.();
+    return onConnectBase?.(); // base + arbitrum + monad all funnel through the EVM connect
+  }
 
   // Skeleton while /api/shop/config is in flight.
   if (loading) {
@@ -954,34 +1130,13 @@ function GameResourcesTab({
         <span style={styles.sectionHeaderHint}>{paymentLabel} utility</span>
       </div>
 
-      {/* Chain selector — top-of-tab segmented control. Two-option toggle
-          keeps the choice obvious without burying it in a dropdown. */}
-      <div style={styles.shopChainRow}>
-        {SHOP_CHAIN_OPTIONS.map((option) => {
-          const active = option.id === chain;
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => onChainChange?.(option.id)}
-              style={{
-                ...styles.shopChainBtn,
-                ...(active ? styles.shopChainBtnActive : null),
-              }}
-            >
-              <span style={styles.shopChainLabel}>{option.label}</span>
-              <span style={styles.shopChainSub}>{option.sub}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Solana sub-payment toggle — only shown when Solana is selected.
-          Mirrors the NFT mint flow where the player picks USDC vs SOL after
-          choosing the chain. */}
-      {isSolana && (
+      {/* Payment-token toggle — only on chains with multiple options
+          (Solana: USDC/SOL, Aptos: USDC/APT). Base/Arbitrum/Monad are
+          single-token so we skip the toggle and just label the buy
+          button with the fixed payment token. */}
+      {paymentOptions.length > 0 && (
         <div style={styles.shopPaymentRow}>
-          {SHOP_SOLANA_PAYMENTS.map((opt) => {
+          {paymentOptions.map((opt) => {
             const active = opt.id === payment;
             return (
               <button
@@ -1008,9 +1163,7 @@ function GameResourcesTab({
             ? connectLabel
             : isBusy
               ? (isMobile ? 'Buying' : 'Buying...')
-              : isSolana
-                ? (isMobile ? 'Buy' : `Buy with ${paymentLabel}`)
-                : (isMobile ? 'Buy' : 'Buy with CoP');
+              : (isMobile ? 'Buy' : `Buy with ${paymentLabel}`);
           const cardStyle = {
             ...styles.resourceCard,
             ...(isMobile ? styles.resourceCardMobile : null),
@@ -1047,12 +1200,8 @@ function GameResourcesTab({
                 style={buyBtnStyle}
                 disabled={!ready || !!busy}
                 onClick={() => {
-                  if (!walletConnected) {
-                    if (isSolana) onConnectSolana?.();
-                    else onConnectBase?.();
-                  } else {
-                    onBuy(product);
-                  }
+                  if (!walletConnected) connectForChain();
+                  else onBuy(product);
                 }}
               >
                 {actionLabel}
@@ -1185,6 +1334,71 @@ async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNot
   }
 }
 
+// Arbitrum + Monad share /nft/evm/quote on the server and mintEvmNft on
+// the client. The flow mirrors handleBaseMint but switches the chain on
+// the connected EVM wallet first. Payment id format: `<chain>-<token>` →
+// USDC or the chain's native (eth/mon).
+async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
+  const payment = /usdc$/i.test(selected.id) ? 'usdc' : 'native';
+  setBusy('mint');
+  setMintStatus?.('pending');
+  setMintResult?.(null);
+  setNotice(null);
+  try {
+    const result = await mintEvmNft({
+      evmWallet, chain, buyer: evmAddress, payment, quantity: 1,
+    });
+    addClientBreadcrumb('nft.evm_mint_submitted', { dex, chain, payment, tx: result.hash });
+    const explorerBase = chain === 'arbitrum' ? 'https://arbiscan.io/tx/' : `https://explorer.monad.xyz/tx/`;
+    setMintResult?.({
+      chain,
+      tx: result.hash,
+      payment,
+      explorer: result.hash ? `${explorerBase}${result.hash}` : null,
+    });
+    setMintStatus?.('success');
+    void refreshMintConfig?.({ log: false });
+  } catch (err) {
+    const message = err?.shortMessage || err?.message || `${chain} mint failed`;
+    setNotice(message.slice(0, 140));
+    setMintStatus?.('idle');
+    addClientBreadcrumb('nft.evm_mint_failed', { dex, chain, payment, message }, 'warn');
+  } finally {
+    setBusy(null);
+  }
+}
+
+// Aptos — server signs a MintQuote, client calls mint_with_quote on the
+// Move module via the connected wallet (Petra/Pontem/Martian). USDC only.
+async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
+  const buyer = aptosWallet?.address;
+  if (!buyer) { setNotice('Connect Aptos wallet first.'); return; }
+  const payment = selected?.id === 'aptos-apt' ? 'apt' : 'usdc';
+  setBusy('mint');
+  setMintStatus?.('pending');
+  setMintResult?.(null);
+  setNotice(null);
+  try {
+    const result = await mintAptosNft({ aptosWallet, buyer, quantity: 1, payment });
+    addClientBreadcrumb('nft.aptos_mint_submitted', { dex, payment, tx: result.hash });
+    setMintResult?.({
+      chain: 'aptos',
+      tx: result.hash,
+      payment,
+      explorer: result.hash ? `https://explorer.aptoslabs.com/txn/${result.hash}` : null,
+    });
+    setMintStatus?.('success');
+    void refreshMintConfig?.({ log: false });
+  } catch (err) {
+    const message = err?.shortMessage || err?.message || 'Aptos mint failed';
+    setNotice(message.slice(0, 140));
+    setMintStatus?.('idle');
+    addClientBreadcrumb('nft.aptos_mint_failed', { dex, payment, message }, 'warn');
+  } finally {
+    setBusy(null);
+  }
+}
+
 async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
   const payment = selected.id === 'sol-sol' ? 'sol' : 'usdc';
   setBusy('mint');
@@ -1222,14 +1436,27 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
   }
 }
 
-function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, solanaConfigured, solanaSaleActive, busy }) {
+function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, aptosAddress, solanaConfigured, solanaSaleActive, busy }) {
   if (selected?.soon) return { label: 'CoP soon', glyph: 'C', ready: false };
   if (busy === 'mint') return { label: 'Minting...', glyph: '...', ready: false };
   if (busy === selected.chain) return { label: 'Preparing...', glyph: '...', ready: false };
+  // Bridge-only fallback (no direct mint endpoint on this chain). Used if
+  // an operator disables a chain's PAYMENT_OPTIONS in the future.
+  if (selected.bridgeOnly) {
+    return { label: 'Bridge from Base / Solana', glyph: '⇄', ready: true };
+  }
   if (selected.chain === 'base') {
     if (!evmAddress) return { label: 'Connect Base wallet', glyph: 'B', ready: false };
     if (!evmOnBase) return { label: 'Switch to Base', glyph: 'B', ready: false };
     return { label: `Mint with ${selected.token}`, glyph: 'B', ready: true };
+  }
+  if (selected.chain === 'arbitrum' || selected.chain === 'monad') {
+    if (!evmAddress) return { label: `Connect ${selected.chain === 'arbitrum' ? 'Arbitrum' : 'Monad'} wallet`, glyph: selected.chain === 'arbitrum' ? 'A' : 'M', ready: false };
+    return { label: `Mint with ${selected.token}`, glyph: selected.chain === 'arbitrum' ? 'A' : 'M', ready: true };
+  }
+  if (selected.chain === 'aptos') {
+    if (!aptosAddress) return { label: 'Connect Aptos wallet', glyph: 'A', ready: false };
+    return { label: `Mint with ${selected.token}`, glyph: 'A', ready: true };
   }
   if (!solAddress) return { label: 'Connect Solana wallet', glyph: 'S', ready: false };
   if (!solanaConfigured) return { label: 'Solana mint soon', glyph: 'S', ready: false };
@@ -1966,6 +2193,24 @@ const styles = {
     border: '3px solid #fff', color: '#fff', cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
     boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+  },
+  bridgeBtn: {
+    width: 32, height: 32, borderRadius: 12, background: '#fff6dc',
+    border: '3px solid #9f8759', color: '#5C3A21', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+    boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
+  },
+  // Bridge entry button rendered inside the hero summary row — small pill
+  // with icon + "Bridge" label. Sits right under the "Genesis supply 500"
+  // chip so it's visually grouped with the NFT preview, not the modal chrome.
+  heroBridgeBtn: {
+    alignSelf: 'flex-start',
+    display: 'inline-flex', alignItems: 'center', gap: 6,
+    marginTop: 4, padding: '5px 10px',
+    borderRadius: 999, background: '#fff6dc',
+    border: '2px solid #9f8759', color: '#5C3A21',
+    cursor: 'pointer', fontSize: 12, fontWeight: 700,
+    boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
   },
   body: {
     padding: '14px 16px',

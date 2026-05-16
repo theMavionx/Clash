@@ -84,10 +84,19 @@ var _replay_timer_last_remaining: int = -1
 var _replay_telemetry: Array = []
 var _replay_telemetry_seq: int = 0
 var _replay_telemetry_dropped: int = 0
+var _replay_loaded_buildings: Dictionary = {}
 var _replay_attacker_name: String = ""
 var _replay_label: String = ""
 var _replay_wall_start_msec: int = 0
-const REPLAY_TELEMETRY_MAX_EVENTS: int = 600
+var _replay_chain_destroying: bool = false
+var _replay_prev_max_fps: int = -1
+var _replay_prev_physics_ticks: int = -1
+var _replay_prev_max_physics_steps: int = -1
+var _replay_prev_physics_jitter_fix: float = -1.0
+var _returning_home: bool = false
+const REPLAY_TELEMETRY_MAX_EVENTS: int = 2500
+const REPLAY_SYNC_FPS: int = 60
+const REPLAY_SYNC_MAX_PHYSICS_STEPS: int = 16
 
 var _had_troops: bool = false
 var _skeleton_respawn_timer: float = 0.0
@@ -140,6 +149,8 @@ func reset() -> void:
 	_replay_attacker_name = ""
 	_replay_label = ""
 	_replay_wall_start_msec = 0
+	_restore_replay_clock()
+	_returning_home = false
 	_had_troops = false
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = false
@@ -158,6 +169,127 @@ func _replay_wall_elapsed_sec() -> float:
 	if _replay_wall_start_msec <= 0:
 		return 0.0
 	return maxf(0.0, float(Time.get_ticks_msec() - _replay_wall_start_msec) / 1000.0)
+
+
+func _replay_sim_step_from_frames(start_frame: int, fallback_step: float) -> float:
+	var frame_delta: int = maxi(0, Engine.get_process_frames() - start_frame)
+	var sim_step: float = float(frame_delta) * BaseTroop.REPLAY_COMBAT_DELTA
+	if sim_step <= 0.0:
+		return fallback_step
+	return sim_step
+
+
+func _lock_replay_clock() -> void:
+	if _replay_prev_max_fps < 0:
+		_replay_prev_max_fps = Engine.max_fps
+		_replay_prev_physics_ticks = Engine.physics_ticks_per_second
+		_replay_prev_max_physics_steps = Engine.max_physics_steps_per_frame
+		_replay_prev_physics_jitter_fix = Engine.physics_jitter_fix
+	Engine.time_scale = 1.0
+	Engine.physics_ticks_per_second = REPLAY_SYNC_FPS
+	Engine.max_physics_steps_per_frame = maxi(Engine.max_physics_steps_per_frame, REPLAY_SYNC_MAX_PHYSICS_STEPS)
+	Engine.physics_jitter_fix = 0.0
+
+
+func _restore_replay_clock() -> void:
+	Engine.time_scale = 1.0
+	if _replay_prev_max_fps < 0:
+		return
+	Engine.max_fps = _replay_prev_max_fps
+	Engine.physics_ticks_per_second = _replay_prev_physics_ticks
+	Engine.max_physics_steps_per_frame = _replay_prev_max_physics_steps
+	Engine.physics_jitter_fix = _replay_prev_physics_jitter_fix
+	_replay_prev_max_fps = -1
+	_replay_prev_physics_ticks = -1
+	_replay_prev_max_physics_steps = -1
+	_replay_prev_physics_jitter_fix = -1.0
+
+
+func _cleanup_combat_runtime_nodes() -> void:
+	if bs and bs._cannon:
+		bs._cannon._exit_ship_cannon_mode()
+		for c in bs._cannon._ship_cannonballs:
+			if is_instance_valid(c.get("node")):
+				c.node.queue_free()
+		bs._cannon._ship_cannonballs.clear()
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem") if bs else null
+	if attack_system and attack_system.has_method("cleanup_combat_nodes"):
+		attack_system.cleanup_combat_nodes()
+	else:
+		var tree: SceneTree = bs.get_tree() if bs else null
+		if tree:
+			for group_name in ["troops", "skeleton_guards", "ships", "deployed_ships"]:
+				for node in tree.get_nodes_in_group(group_name):
+					if is_instance_valid(node):
+						if node.has_method("_clear_owned_projectiles"):
+							node.call("_clear_owned_projectiles")
+						if node.has_method("set_process"):
+							node.set_process(false)
+						if node.has_method("set_physics_process"):
+							node.set_physics_process(false)
+						if node.is_in_group(group_name):
+							node.remove_from_group(group_name)
+						node.queue_free()
+	BaseTroop.reset_combat_runtime_cache()
+	SkeletonGuard.reset_runtime_cache()
+	AttackSystem.reset_runtime_cache()
+
+
+func _freeze_combat_runtime_nodes() -> void:
+	if bs and bs._cannon:
+		bs._cannon._exit_ship_cannon_mode()
+	if bs and bs._rally:
+		bs._rally._exit_rally_mode()
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem") if bs else null
+	if attack_system:
+		if attack_system.has_method("_cancel_pending_combat_spawns"):
+			attack_system.call("_cancel_pending_combat_spawns")
+		if "is_attack_mode" in attack_system:
+			attack_system.is_attack_mode = false
+		if "ship_plane" in attack_system:
+			var plane = attack_system.get("ship_plane")
+			if is_instance_valid(plane):
+				plane.visible = false
+	if not bs:
+		return
+	for group_name in ["troops", "skeleton_guards", "ships", "deployed_ships"]:
+		for node in bs.get_tree().get_nodes_in_group(group_name):
+			if not is_instance_valid(node):
+				continue
+			node.set_process(false)
+			node.set_physics_process(false)
+
+
+func _stop_attacker_combat_after_town_hall_destroyed() -> void:
+	if not is_instance_valid(bs):
+		return
+	if bs._cannon:
+		bs._cannon._exit_ship_cannon_mode()
+		for c in bs._cannon._ship_cannonballs:
+			if is_instance_valid(c.get("node")):
+				c.node.queue_free()
+		bs._cannon._ship_cannonballs.clear()
+	if bs._rally:
+		bs._rally._exit_rally_mode()
+	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
+	if attack_system:
+		if attack_system.has_method("_cancel_pending_combat_spawns"):
+			attack_system.call("_cancel_pending_combat_spawns")
+		if "is_attack_mode" in attack_system:
+			attack_system.is_attack_mode = false
+		if "ship_plane" in attack_system:
+			var plane = attack_system.get("ship_plane")
+			if is_instance_valid(plane):
+				plane.visible = false
+	for troop in bs.get_tree().get_nodes_in_group("troops"):
+		if not is_instance_valid(troop):
+			continue
+		if troop.has_method("_play_victory"):
+			troop.call("_play_victory")
+		elif "state" in troop:
+			troop.state = troop.State.VICTORY
+		if troop.has_method("_clear_owned_projectiles"):
+			troop.call("_clear_owned_projectiles")
 
 
 func _replay_info() -> Dictionary:
@@ -209,19 +341,88 @@ func _replay_telemetry_summary() -> Dictionary:
 				"server_id": int(b.get("server_id", -1)),
 				"hp": int(b.get("hp", 0)),
 			})
+	var troops_alive_detail: Array = []
+	for troop in BaseTroop._get_troops_cached():
+		if not is_instance_valid(troop):
+			continue
+		var troop_name: String = ""
+		if troop.has_method("_get_troop_name"):
+			troop_name = str(troop.call("_get_troop_name"))
+		var target_payload: Dictionary = {}
+		if troop.has_method("_current_target_telemetry_payload"):
+			target_payload = troop.call("_current_target_telemetry_payload")
+		troops_alive_detail.append({
+			"troop": troop_name,
+			"instance": int(troop.get_instance_id()),
+			"hp": int(troop.get("hp")) if troop.get("hp") != null else 0,
+			"level": int(troop.get("level")) if troop.get("level") != null else 1,
+			"state": int(troop.get("state")) if troop.get("state") != null else -1,
+			"x": snappedf(troop.global_position.x, 0.001),
+			"z": snappedf(troop.global_position.z, 0.001),
+			"target": target_payload,
+		})
 	return {
 		"counts": counts,
 		"events_recorded": _replay_telemetry.size(),
 		"events_dropped": _replay_telemetry_dropped,
 		"troops_alive": BaseTroop._get_troops_cached().size(),
+		"troops_alive_detail": troops_alive_detail,
 		"guards_alive": BaseTroop._get_guards_list_cached().size(),
 		"buildings_alive": buildings_alive,
 	}
 
 
+func _capture_replay_loaded_buildings() -> void:
+	_replay_loaded_buildings.clear()
+	for bsys in bs._building_systems:
+		for b in bsys.placed_buildings:
+			var sid: int = int(b.get("server_id", -1))
+			if sid < 0:
+				continue
+			var gp: Vector2i = b.get("grid_pos", Vector2i.ZERO)
+			_replay_loaded_buildings[str(sid)] = {
+				"type": str(b.get("id", "")),
+				"server_id": sid,
+				"grid_x": int(gp.x),
+				"grid_z": int(gp.y),
+				"hp": int(b.get("hp", 0)),
+			}
+
+
+func _reconcile_replay_destroyed_building_telemetry() -> void:
+	if _replay_loaded_buildings.is_empty():
+		return
+	var alive_ids: Dictionary = {}
+	for bsys in bs._building_systems:
+		for b in bsys.placed_buildings:
+			var sid: int = int(b.get("server_id", -1))
+			if sid >= 0 and b.get("hp", 0) > 0 and is_instance_valid(b.get("node", null)):
+				alive_ids[str(sid)] = true
+	var destroyed_ids: Dictionary = {}
+	for event in _replay_telemetry:
+		if str(event.get("kind", "")) != "building_destroyed":
+			continue
+		var sid: int = int(event.get("server_id", -1))
+		if sid >= 0:
+			destroyed_ids[str(sid)] = true
+	var added: int = 0
+	for sid_key in _replay_loaded_buildings.keys():
+		if alive_ids.has(sid_key) or destroyed_ids.has(sid_key):
+			continue
+		var payload: Dictionary = _replay_loaded_buildings[sid_key].duplicate()
+		payload["hp"] = 0
+		payload["reason"] = "reconcile_missing"
+		payload["reconciled"] = true
+		record_replay_telemetry("building_destroyed", payload)
+		added += 1
+	if added > 0:
+		record_replay_telemetry("building_destroy_reconcile", {"added": added})
+
+
 func _send_replay_telemetry() -> void:
 	if not bs or not bs._bridge:
 		return
+	_reconcile_replay_destroyed_building_telemetry()
 	var info: Dictionary = _replay_info()
 	info.attacker_name = _replay_attacker_name
 	info.replay_label = _replay_label
@@ -232,6 +433,72 @@ func _send_replay_telemetry() -> void:
 		"summary": _replay_telemetry_summary(),
 		"events": _replay_telemetry,
 	})
+
+
+func _queue_free_once(value) -> void:
+	if not (value is Object):
+		return
+	if is_instance_valid(value) and not value.is_queued_for_deletion():
+		value.queue_free()
+
+
+func _clear_node_projectile_pool(owner: Object, property_name: String) -> void:
+	if not (property_name in owner):
+		return
+	var items = owner.get(property_name)
+	if not (items is Array):
+		return
+	for item in items:
+		if item is Dictionary:
+			for node_key in ["node", "trail", "flash"]:
+				var projectile_node = item.get(node_key)
+				_queue_free_once(projectile_node)
+			item["active"] = false
+			item["target"] = null
+		elif is_instance_valid(item):
+			_queue_free_once(item)
+	items.clear()
+	owner.set(property_name, items)
+
+
+func _stop_combat_node(node: Node) -> void:
+	if not is_instance_valid(node):
+		return
+	if node.has_method("_play_victory"):
+		node.call("_play_victory")
+	if "_target" in node:
+		node.set("_target", null)
+	if "_fire_timer" in node:
+		node.set("_fire_timer", 0.0)
+	if "_target_search_timer" in node:
+		node.set("_target_search_timer", 0.0)
+	if "_is_attacking" in node:
+		node.set("_is_attacking", false)
+	_clear_node_projectile_pool(node, "_active_bullets")
+	_clear_node_projectile_pool(node, "_bullet_pool")
+	_clear_node_projectile_pool(node, "_active")
+	_clear_node_projectile_pool(node, "_active_arrows")
+	_clear_node_projectile_pool(node, "_pool")
+	node.set_process(false)
+	node.set_physics_process(false)
+	for child in node.get_children():
+		_stop_combat_node(child)
+
+
+func _stop_defensive_combat_after_town_hall_destroyed() -> void:
+	if not is_instance_valid(bs):
+		return
+	for bsys in bs._building_systems:
+		for b in bsys.placed_buildings:
+			var bid: String = str(b.get("id", ""))
+			if not (bid in ["turret", "archer_tower", "tombstone"]):
+				continue
+			var bnode: Node = b.get("node", null)
+			if is_instance_valid(bnode):
+				_stop_combat_node(bnode)
+	for guard in bs.get_tree().get_nodes_in_group("skeleton_guards"):
+		if is_instance_valid(guard):
+			_stop_combat_node(guard)
 
 
 func _record_battle_end(result: String) -> void:
@@ -662,7 +929,11 @@ func _switch_to_enemy_island_after_sail() -> void:
 ## all battle UI elements.
 func _return_home() -> void:
 	if not is_viewing_enemy:
+		_cleanup_combat_runtime_nodes()
 		return
+	if _returning_home:
+		return
+	_returning_home = true
 	# Surrender — record it so the matchmaker's 24h personal cooldown excludes
 	# this defender from the next Find Enemy. We deliberately DON'T submit a
 	# full battle_replays row (no replay payload, no trophy/loot transfer);
@@ -683,7 +954,7 @@ func _return_home() -> void:
 	_replay_duration = 0.0
 	_replay_elapsed = 0.0
 	_clear_replay_timer()
-	Engine.time_scale = 1.0
+	_restore_replay_clock()
 	bs._cannon._exit_ship_cannon_mode()
 	if bs._rally:
 		bs._rally._exit_rally_mode()
@@ -719,38 +990,22 @@ func _return_home() -> void:
 		if is_instance_valid(c.get("node")):
 			c.node.queue_free()
 	bs._cannon._ship_cannonballs.clear()
-	for troop in bs.get_tree().get_nodes_in_group("troops"):
-		if is_instance_valid(troop):
-			troop.remove_from_group("troops")
-			troop.set_process(false)
-			troop.queue_free()
-	for guard in bs.get_tree().get_nodes_in_group("skeleton_guards"):
-		if is_instance_valid(guard):
-			guard.remove_from_group("skeleton_guards")
-			guard.set_process(false)
-			guard.queue_free()
-	for ship in bs.get_tree().get_nodes_in_group("ships"):
-		if is_instance_valid(ship):
-			ship.queue_free()
-	for ship in bs.get_tree().get_nodes_in_group("deployed_ships"):
-		if is_instance_valid(ship):
-			ship.remove_from_group("deployed_ships")
-			ship.queue_free()
-	var attack_system = bs.get_node_or_null("../AttackSystem")
-	if attack_system and attack_system.has_method("exit_attack_mode"):
-		attack_system.exit_attack_mode()
+	_freeze_combat_runtime_nodes()
 	await bs.get_tree().process_frame
 	if bridge:
 		bridge.send_to_react("cloud_transition", {"visible": true})
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	_cleanup_combat_runtime_nodes()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
 	var net: Node = bs._net
 	if net and net.has_token():
 		var login_result: Dictionary = await net.login()
-		if not is_instance_valid(bs): return
+		if not is_instance_valid(bs):
+			_returning_home = false
+			return
 		# Apply full server state (resources, buildings, troop_levels) so
 		# loot earned during the attack is reflected in Godot immediately.
 		if login_result.has("id"):
@@ -783,6 +1038,7 @@ func _return_home() -> void:
 		bs._ship_attack_node.visible = false
 	if bs._ship_base_node:
 		bs._ship_base_node.visible = true
+	_returning_home = false
 
 
 ## Handles town hall destruction: sets troops to VICTORY, then destroys
@@ -790,12 +1046,15 @@ func _return_home() -> void:
 ## shows only after the last building is gone.
 const CHAIN_DESTROY_DELAY: float = 0.6  ## seconds between each building explosion (puff + crumple takes ~0.4s, so 0.6 leaves a natural beat)
 const VICTORY_ADMIRE_DELAY: float = 2.5  ## seconds to hold on the ruined island before opening the victory modal
+const REPLAY_OUTCOME_POLL_INTERVAL: float = 0.1
 
 func _on_town_hall_destroyed() -> void:
 	_battle_timer_active = false
 	_victory_declared = true
 	if not _replay_active:
 		_record_battle_end("victory")
+	_stop_defensive_combat_after_town_hall_destroyed()
+	_stop_attacker_combat_after_town_hall_destroyed()
 
 	# 1. Set all troops to VICTORY immediately (they stop fighting)
 	var deployed_troops: Dictionary = {}
@@ -952,6 +1211,91 @@ func _on_town_hall_destroyed() -> void:
 		bridge.send_to_react("battle_result", {"type": "victory", "loot": {}, "casualties": casualties_early})
 
 
+## Replay-only version of the Town Hall victory cascade. It mirrors the live
+## visual logic, but skips result submission and modal dispatch because the
+## replay was already settled on the server.
+func _on_replay_town_hall_destroyed() -> void:
+	if _replay_chain_destroying:
+		return
+	_replay_chain_destroying = true
+	_victory_declared = true
+	record_replay_telemetry("chain_destroy_start", {"reason": "town_hall_destroyed"})
+	_stop_defensive_combat_after_town_hall_destroyed()
+	_stop_attacker_combat_after_town_hall_destroyed()
+
+	for troop in bs.get_tree().get_nodes_in_group("troops"):
+		if is_instance_valid(troop) and "state" in troop:
+			if troop.has_method("_play_victory"):
+				troop._play_victory()
+			else:
+				troop.state = troop.State.VICTORY
+
+	var remaining: Array = []
+	for bsys in bs._building_systems:
+		for b in bsys.placed_buildings:
+			if b.get("id", "") == "town_hall":
+				continue
+			if not is_instance_valid(b.get("node")):
+				continue
+			if b.get("hp", 0) <= 0:
+				continue
+			remaining.append({"b": b, "bsys": bsys})
+	remaining.shuffle()
+
+	for entry in remaining:
+		if not _replay_active or not is_instance_valid(bs):
+			_replay_chain_destroying = false
+			return
+		await bs.get_tree().create_timer(CHAIN_DESTROY_DELAY).timeout
+		if not _replay_active or not is_instance_valid(bs):
+			_replay_chain_destroying = false
+			return
+		for troop in bs.get_tree().get_nodes_in_group("troops"):
+			if is_instance_valid(troop) and "state" in troop and troop.state != troop.State.VICTORY:
+				if troop.has_method("_play_victory"):
+					troop._play_victory()
+
+		var b: Dictionary = entry.b
+		var bsys: Node = entry.bsys
+		if not is_instance_valid(b.get("node")):
+			continue
+		if b.get("hp", 0) <= 0:
+			continue
+		b["hp"] = 0
+		record_replay_telemetry("building_destroyed", {
+			"type": str(b.get("id", "")),
+			"server_id": int(b.get("server_id", -1)),
+			"grid_x": int(b.get("grid_pos", Vector2i.ZERO).x),
+			"grid_z": int(b.get("grid_pos", Vector2i.ZERO).y),
+			"hp": 0,
+			"chain_destroy": true,
+		})
+		if b.id == "tombstone":
+			bsys._remove_tombstone_skeletons(b)
+		if b.id == "port":
+			var pnode: Node3D = b.get("node", null)
+			if is_instance_valid(pnode) and pnode.has_meta("ship_node"):
+				var ship: Node3D = pnode.get_meta("ship_node")
+				if is_instance_valid(ship):
+					bs._sink_ship(ship)
+		if b.has("hp_bar") and is_instance_valid(b.hp_bar):
+			b.hp_bar.queue_free()
+		var icon: Control = b.get("_collect_icon")
+		if is_instance_valid(icon):
+			icon.queue_free()
+		if is_instance_valid(b.node):
+			var bnode_ref: Node3D = b.node
+			bnode_ref.set_process(false)
+			bnode_ref.set_physics_process(false)
+			bsys.explode_building_with_swell(bnode_ref, b.get("id", ""))
+
+	for bsys in bs._building_systems:
+		bsys.placed_buildings.clear()
+		bsys.grid.fill(false)
+	record_replay_telemetry("chain_destroy_end", {"destroyed": remaining.size()})
+	_replay_chain_destroying = false
+
+
 ## Fire-and-forget wrapper around submit_battle_result. Void return lets the
 ## caller invoke without `await` (GDScript allows calling void coroutines
 ## bare). Result is stashed on the instance for the caller to pick up after
@@ -1038,20 +1382,36 @@ func _clear_replay_timer() -> void:
 		bs._bridge.send_to_react("battle_timer", {"remaining": null, "mode": "replay"})
 
 
-func _replay_wait(seconds: float) -> bool:
+func _replay_wait(seconds: float, stop_on_victory: bool = false) -> bool:
+	var target_elapsed: float = _replay_elapsed + maxf(0.0, seconds)
+	var tick: float = BaseTroop.REPLAY_COMBAT_DELTA
+	while _replay_elapsed + tick * 0.5 < target_elapsed and _replay_active and is_instance_valid(bs):
+		await bs.get_tree().physics_frame
+		_replay_elapsed = snappedf(_replay_elapsed + tick, 0.000001)
+		_send_replay_timer()
+		if stop_on_victory and _victory_declared:
+			break
+	return _replay_active and is_instance_valid(bs)
+
+
+func _replay_wall_wait(seconds: float) -> bool:
 	var left: float = maxf(0.0, seconds)
 	while left > 0.0 and _replay_active and is_instance_valid(bs):
 		var step: float = minf(0.25, left)
 		await bs.get_tree().create_timer(step).timeout
-		_replay_elapsed += step
-		_send_replay_timer()
 		left -= step
 	return _replay_active and is_instance_valid(bs)
 
 
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "") -> void:
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "", base_owner_name: String = "") -> void:
 	bs.get_tree().paused = false
+	_lock_replay_clock()
+	_cleanup_combat_runtime_nodes()
+	BaseTroop.reset_combat_runtime_cache()
+	SkeletonGuard.reset_runtime_cache()
+	AttackSystem.reset_runtime_cache()
 	_replay_active = true
+	_victory_declared = false
 	_replay_actions = replay_data
 	_replay_buildings_snapshot = buildings_snapshot
 	_replay_duration = _resolve_replay_duration(duration, _replay_actions)
@@ -1060,12 +1420,20 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	_replay_telemetry.clear()
 	_replay_telemetry_seq = 0
 	_replay_telemetry_dropped = 0
+	_replay_loaded_buildings.clear()
+	_replay_chain_destroying = false
 	_replay_attacker_name = attacker_name
 	_replay_label = replay_label
-	_replay_wall_start_msec = Time.get_ticks_msec()
-	enemy_info = {"name": attacker_name, "trophies": 0, "buildings": buildings_snapshot}
+	_replay_wall_start_msec = 0
+	var display_name_for_base: String = base_owner_name.strip_edges()
+	if display_name_for_base == "":
+		display_name_for_base = attacker_name.strip_edges()
+	if display_name_for_base == "":
+		display_name_for_base = "Unknown"
+	enemy_info = {"name": display_name_for_base, "trophies": 0, "buildings": buildings_snapshot}
 	record_replay_telemetry("replay_start", {
 		"attacker_name": attacker_name,
+		"base_owner_name": display_name_for_base,
 		"replay_label": replay_label,
 		"duration": _replay_duration,
 	})
@@ -1079,12 +1447,9 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 		bsys._battle.is_viewing_enemy = true
 	var bridge = bs._bridge
 	if bridge:
-		var display_name: String = "Replay: " + attacker_name
-		if replay_label.strip_edges() != "":
-			display_name = replay_label
 		bridge.send_to_react("enemy_mode", {
 			"active": true,
-			"name": display_name,
+			"name": display_name_for_base,
 			"trophies": 0,
 			"is_replay": true,
 			"replay_label": replay_label,
@@ -1110,9 +1475,15 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
+	BaseTroop.reset_combat_runtime_cache()
+	SkeletonGuard.reset_runtime_cache()
+	AttackSystem.reset_runtime_cache()
 	for bsys in bs._building_systems:
 		bsys._load_buildings_from_server(buildings_snapshot)
-	BaseTroop.reset_island_bounds_cache()
+	_capture_replay_loaded_buildings()
+	BaseTroop.reset_combat_runtime_cache()
+	SkeletonGuard.reset_runtime_cache()
+	AttackSystem.reset_runtime_cache()
 	if bs.build_button:
 		bs.build_button.visible = false
 	if bs.find_button:
@@ -1131,6 +1502,11 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	if attack_system and attack_system.has_method("enter_replay_mode"):
 		attack_system.enter_replay_mode(_replay_fleet_from_actions(_replay_actions))
 	Engine.time_scale = 1.0
+	BaseTroop.reset_combat_runtime_cache()
+	SkeletonGuard.reset_runtime_cache()
+	AttackSystem.reset_runtime_cache()
+	_replay_wall_start_msec = Time.get_ticks_msec()
+	record_replay_telemetry("replay_ready", {"phase": "playback_start"})
 	_send_replay_timer(true)
 	_replay_playback()
 
@@ -1150,18 +1526,36 @@ func _replay_playback() -> void:
 		return
 	var attack_system: Node = bs.get_node_or_null("../AttackSystem")
 	var prev_t: float = 0.0
+	var replay_seen_troops: bool = false
+	var replay_outcome_reason: String = ""
 	for i in actions.size():
 		if not _replay_active or not is_instance_valid(bs):
 			return
+		if _victory_declared:
+			replay_outcome_reason = "town_hall_destroyed"
+			record_replay_telemetry("replay_actions_stopped", {
+				"reason": "victory_declared",
+				"next_action": str(actions[i].get("type", "")),
+				"next_t": float(actions[i].get("t", 0.0)),
+			})
+			break
 		var action: Dictionary = actions[i]
 		var t: float = action.get("t", 0.0)
 		var delay: float = t - prev_t
 		if delay > 0:
-			var action_wait_ok: bool = await _replay_wait(delay)
+			var action_wait_ok: bool = await _replay_wait(delay, true)
 			if not action_wait_ok:
 				return
 		if not _replay_active or not is_instance_valid(bs):
 			return
+		if _victory_declared:
+			replay_outcome_reason = "town_hall_destroyed"
+			record_replay_telemetry("replay_actions_stopped", {
+				"reason": "victory_declared",
+				"next_action": str(action.get("type", "")),
+				"next_t": t,
+			})
+			break
 		prev_t = t
 		match action.get("type", ""):
 			"place_ship":
@@ -1170,8 +1564,8 @@ func _replay_playback() -> void:
 				_replay_cannon_fire(action)
 			"rally_drop":
 				_replay_rally_drop(action)
-	while _replay_active and is_instance_valid(bs):
-		var settle_wait_ok: bool = await _replay_wait(0.5)
+	while replay_outcome_reason == "" and _replay_active and is_instance_valid(bs):
+		var settle_wait_ok: bool = await _replay_wait(REPLAY_OUTCOME_POLL_INTERVAL)
 		if not settle_wait_ok:
 			return
 		if not _replay_active:
@@ -1183,21 +1577,53 @@ func _replay_playback() -> void:
 					th_alive = true
 					break
 		if not th_alive:
+			replay_outcome_reason = "town_hall_destroyed"
+			record_replay_telemetry("replay_outcome_detected", {"reason": replay_outcome_reason})
 			break
 		var troops_alive: int = BaseTroop._get_troops_cached().size()
-		if troops_alive == 0:
+		var guards_alive: int = 0
+		for guard in BaseTroop._get_guards_list_cached():
+			if is_instance_valid(guard) and guard.is_inside_tree() and guard.get("hp") != null and int(guard.get("hp")) > 0:
+				guards_alive += 1
+		if troops_alive > 0:
+			replay_seen_troops = true
+		if replay_seen_troops and troops_alive == 0:
+			replay_outcome_reason = "troops_destroyed"
+			record_replay_telemetry("replay_outcome_detected", {"reason": replay_outcome_reason})
 			break
-	if _replay_active and _replay_elapsed < _replay_duration:
+		var expected_result: String = str(_replay_info().get("expected_result", ""))
+		if expected_result == "defeat" and _replay_elapsed + 0.0001 >= BATTLE_TIME_LIMIT:
+			replay_outcome_reason = "time_expired"
+			record_replay_telemetry("replay_outcome_detected", {
+				"reason": replay_outcome_reason,
+				"expected_result": expected_result,
+				"elapsed": snappedf(_replay_elapsed, 0.01),
+				"duration": snappedf(_replay_duration, 0.01),
+				"troops_alive": troops_alive,
+				"guards_alive": guards_alive,
+			})
+			_freeze_combat_runtime_nodes()
+			break
+	if _replay_active and replay_outcome_reason == "" and _replay_elapsed < _replay_duration:
 		var finish_wait_ok: bool = await _replay_wait(_replay_duration - _replay_elapsed)
 		if not finish_wait_ok:
 			return
-	if _replay_active:
-		await _replay_wait(2.0)
-	Engine.time_scale = 1.0
+	while _replay_active and _replay_chain_destroying and is_instance_valid(bs):
+		var chain_wait_ok: bool = await _replay_wall_wait(0.1)
+		if not chain_wait_ok:
+			return
+	if _replay_active and replay_outcome_reason == "town_hall_destroyed":
+		record_replay_telemetry("replay_victory_cascade_done", {"elapsed": snappedf(_replay_elapsed, 0.01)})
+		var admire_wait_ok: bool = await _replay_wall_wait(VICTORY_ADMIRE_DELAY)
+		if not admire_wait_ok:
+			return
+		record_replay_telemetry("replay_return_ready", {"reason": replay_outcome_reason})
+	_restore_replay_clock()
 	_clear_replay_timer()
 	if _replay_active and bs._bridge:
 		record_replay_telemetry("replay_end", {"elapsed": snappedf(_replay_elapsed, 0.01)})
 		_send_replay_telemetry()
+	if _replay_active and bs._bridge:
 		bs._bridge.send_to_react("battle_result", {"type": "replay_end", "reason": "Replay finished"})
 	_replay_active = false
 
@@ -1249,11 +1675,22 @@ func _replay_building_pos(server_id: int) -> Vector3:
 func _replay_rally_drop(action: Dictionary) -> void:
 	if not bs._rally or not bs._rally.has_method("replay_drop_rally"):
 		return
-	var pos: Vector3 = _replay_building_pos(int(action.get("buildingId", action.get("building_id", -1))))
+	var building_id: int = int(action.get("buildingId", action.get("building_id", -1)))
+	var pos: Vector3 = _replay_building_pos(building_id)
+	var point_source: String = "building" if pos != Vector3.INF else "point"
 	if pos == Vector3.INF:
 		pos = Vector3(float(action.get("x", 0.0)), bs.grid_y, float(action.get("z", 0.0)))
 	else:
 		pos.y = bs.grid_y
+	record_replay_telemetry("rally_action", {
+		"building_id": building_id,
+		"point_source": point_source,
+		"x": snappedf(pos.x, 0.001),
+		"z": snappedf(pos.z, 0.001),
+		"action_x": snappedf(float(action.get("x", 0.0)), 0.001),
+		"action_z": snappedf(float(action.get("z", 0.0)), 0.001),
+		"flight_time": snappedf(float(action.get("flight_time", -1.0)), 0.001),
+	})
 	bs._rally.replay_drop_rally(pos, float(action.get("flight_time", -1.0)))
 
 

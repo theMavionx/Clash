@@ -1,0 +1,49 @@
+{
+  "chain": "base",
+  "chainId": 8453,
+  "proxy": "0x404807F93E47AF3eaAec0E983f18DCB35E966FEC",
+  "contract": "0x404807F93E47AF3eaAec0E983f18DCB35E966FEC",
+  "v2Implementation": "0x5cc846b2ba0f030a5165a456ed903a5989e19f3f",
+  "v3Implementation": "0xdd5e0c94f1b15558ac0cf940248b0930b681d1fe",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "owner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "quoteSigner": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "usdcToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "copToken": "0x0000000000000000000000000000000000000000",
+  "royaltyReceiver": "0xC024884ad9C5540996492Cc2DD080964941A3094",
+  "royaltyBps": 250,
+  "eip712Name": "DemonKingBase",
+  "eip712Version": "3",
+  "totalMintedAtUpgrade": "43",
+  "maxSupplyAtUpgrade": "250",
+  "upgradedAt": "2026-05-16T06:35:57.677Z",
+  "notes": "Deploy script reached verify phase but Base default RPC was flapping; chain state confirmed clean via base.publicnode.com.",
+  "v3ImplementationPrevious": "0xdb5c7b057df883df99aef9e9244379665d07cad3",
+  "v3SwapHistory": [
+    {
+      "fromImpl": "0xC7D0C9b1A3b7E461FF37e36Ec6C2695A6cE0570f",
+      "toImpl": "0x057E94d7c6E6fE5a5090F358aEc3151c190b5876",
+      "implTxHash": "0xa464232f9d5bc6003054b041a77f2ffb3fc048c090d916694dcbe93d47df8ddd",
+      "upgradeTxHash": "0x24fbf0becb5481634f39c19afbc60751762f532a0d8c1ec3f6e31f48a976a9ca",
+      "swappedAt": "2026-05-16T06:52:42.020Z",
+      "note": "V3.1 — N-to-N bridge: bridgeBurn now takes destinationChainId; BridgeReceipt includes destinationChainId in EIP-712 hash."
+    },
+    {
+      "fromImpl": "0xdb5c7b057df883df99aef9e9244379665d07cad3",
+      "toImpl": "0x07aC625562cE1C9B7e0CcA6dea88110B0913f28a",
+      "implTxHash": "0x7c9f0d97d860b1f51defc4b0d7e6d69d14b99f22cb773c8b0978f877fcc9619a",
+      "upgradeTxHash": "0xd53c227c1b281f087e3b14013334a5d3fbf2ff327e21f19299c47d8cf2f524d5",
+      "swappedAt": "2026-05-16T14:05:07.806Z",
+      "note": "V3.2 — burn accounting: add totalBurned + currentSupply() so bridge round-trips net to zero on global supply counter."
+    }
+  ],
+  "v3PreviousImplementation": "0xF55f7A8AF5761D4251C170A3Bb1E59067C961A28",
+  "revUpgradeTxHash": "0x15e858d167661e5188446a2309d969ff1e3e374129d80592376870a1f6dc7ae7",
+  "revUpgradeImplTxHash": "0xfc0ef6da17a88e4294d6698e06ffb523f368e0ec3a833957b8fcdedb919ba5da",
+  "revUpgradeBlockNumber": "46083444",
+  "revUpgradedAt": "2026-05-16T18:30:37.709Z",
+  "fullMeshBridge": true,
+  "bridgeFeeWei": "100000000000000",
+  "bridgeFeeTxHash": "0x4a3de2f6051f2b02294d91b7d9a36756f58f19f1899d05e1dc736ba52da15c26",
+  "bridgeFeeUpdatedAt": "2026-05-16T16:13:29.509Z"
+}

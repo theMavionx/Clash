@@ -1,0 +1,19 @@
+{
+  "chain": "monad",
+  "chainId": 143,
+  "marketplace": "0xe2ae386a1430516de573abe97be3b38587a50ac6",
+  "proxy": "0xe2ae386a1430516de573abe97be3b38587a50ac6",
+  "implementation": "0x0ec777f4ab81802183e48dfe15dfd347b8f499a6",
+  "demonKing": "0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F",
+  "treasury": "0xC024884ad9C5540996492Cc2DD080964941A3094",
+  "defaultRoyaltyBps": 250,
+  "acceptedPaymentTokens": {
+    "eth": "0x0000000000000000000000000000000000000000",
+    "usdc": "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"
+  },
+  "implTxHash": "0x8db0746c3b4ca2f6afaa3da06433e0e423290f61ffcd3867368200655f576f96",
+  "proxyTxHash": "0xef72b56168b06473610f4fd5bb1bfc8e1e434d38732a63f03b8dd4d85a955ec2",
+  "usdcWhitelistTxHash": "0x6f13ec8c0855f7e0051b8df4b0a5ed575a41631c60d43b48fc808f10315a8628",
+  "deployer": "0x1EC28Cf035443A703a943bEC2C19c3CA083b7828",
+  "deployedAt": "2026-05-16T12:23:21.182Z"
+}
