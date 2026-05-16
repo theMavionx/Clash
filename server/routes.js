@@ -193,9 +193,15 @@ function nftPublicBase(req) {
   return `${proto}://${req.get('host')}`;
 }
 
+function normalizeNftLevel(level) {
+  const n = Number(level);
+  return [1, 2, 3].includes(n) ? n : 1;
+}
+
 function nftImageUrl(req, level) {
+  const lvl = normalizeNftLevel(level);
   if (level && [1, 2, 3].includes(Number(level))) {
-    return `${nftPublicBase(req)}/api/nft/image/${Number(level)}`;
+    return `${nftPublicBase(req)}/api/nft/image/${lvl}`;
   }
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
 }
@@ -204,7 +210,7 @@ function nftTokenMetadata(req, chain, tokenId, level) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
-  const lvl = Math.max(1, Math.min(3, Number(level) || 1));
+  const lvl = normalizeNftLevel(level);
   const imageUrl = nftImageUrl(req, lvl);
   return {
     name: `${name} #${id}`,
@@ -253,7 +259,7 @@ function nftHiddenMetadata(req, chain) {
 function sendSolanaToken2022Metadata(req, res) {
   const mint = String(req.params.mint || '').trim();
   if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'bad mint' });
-  const level = Math.max(1, Math.min(3, Number(req.query.level || 1) || 1));
+  const level = normalizeNftLevel(req.query.level || 1);
   const imageUrl = nftImageUrl(req, level, mint);
   const name = `${process.env.NFT_NAME || 'Demon King'} L${level}`;
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
@@ -305,6 +311,92 @@ function readJsonIfExists(file) {
   }
 }
 
+const _aptosNftLevelCache = new Map();
+
+function nftAptosDeployment() {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json')) || {};
+}
+
+function parseAptosTokenLevel(tokenProperties) {
+  try {
+    const parsed = typeof tokenProperties === 'string' ? JSON.parse(tokenProperties) : tokenProperties;
+    const raw = parsed?.level?.value ?? parsed?.level ?? parsed?.Level;
+    return normalizeNftLevel(raw);
+  } catch {
+    return 1;
+  }
+}
+
+async function readAptosNftLevelCached(tokenId) {
+  const id = Number(tokenId);
+  const key = `aptos:${id}`;
+  const hit = _aptosNftLevelCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < 60_000) return hit.level;
+
+  let level = 1;
+  const dep = nftAptosDeployment();
+  if (dep?.collection && id >= 1 && id <= NFT_METADATA_MAX_TOKEN_ID) {
+    try {
+      const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+      const tokenName = `${process.env.NFT_NAME || 'Demon King'} #${id}`;
+      const query = `query Q($collection:String!, $tokenName:String!) {
+        current_token_datas_v2(
+          where: {collection_id:{_eq:$collection}, token_name:{_eq:$tokenName}},
+          limit: 1
+        ) {
+          token_properties
+        }
+      }`;
+      const headers = { 'content-type': 'application/json' };
+      if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
+      const r = await fetch(indexerUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ query, variables: { collection: dep.collection, tokenName } }),
+      });
+      const j = await r.json().catch(() => null);
+      const row = j?.data?.current_token_datas_v2?.[0] || null;
+      if (row) level = parseAptosTokenLevel(row.token_properties);
+    } catch {
+      level = 1;
+    }
+  }
+  _aptosNftLevelCache.set(key, { level, at: now });
+  return level;
+}
+
+async function sendAptosNftMetadata(req, res, rawTokenId) {
+  const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
+  if (!/^\d+$/.test(tokenId)) return res.status(400).json({ error: 'bad token id' });
+  const id = Number(tokenId);
+  if (id < 1 || id > NFT_METADATA_MAX_TOKEN_ID) return res.status(404).json({ error: 'token metadata not found' });
+  const level = await readAptosNftLevelCached(id);
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json(nftTokenMetadata(req, 'Aptos', id, level));
+}
+
+function sendAptosCollectionMetadata(req, res) {
+  const name = process.env.NFT_NAME || 'Demon King';
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json({
+    name,
+    symbol: process.env.NFT_SYMBOL || 'DMNK',
+    description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
+    image: nftImageUrl(req),
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Chain', value: 'Aptos' },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: nftImageUrl(req), type: 'image/jpeg' }],
+    },
+  });
+}
+
 function nftBaseShopDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-v2-mainnet.json'))
     || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-mainnet.json'))
@@ -312,7 +404,8 @@ function nftBaseShopDeployment() {
 }
 
 function nftBaseDeployment() {
-  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v2-mainnet.json'))
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v3-mainnet.json'))
+    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v2-mainnet.json'))
     || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-mainnet.json'))
     || {};
 }
@@ -584,7 +677,7 @@ const NFT_EVM_CHAIN_SPECS = {
     label: 'Base',
     rpc: () => process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || process.env.VITE_BASE_RPC_URL || 'https://mainnet.base.org',
     deploymentFile: 'base-shop-v2-mainnet.json',
-    nftDeploymentFile: 'base-v2-mainnet.json',
+    nftDeploymentFile: 'base-v3-mainnet.json',
     explorer: 'https://basescan.org',
     domainName: 'DemonKingBaseShop',
     nativeSymbol: 'ETH',
@@ -597,7 +690,7 @@ const NFT_EVM_CHAIN_SPECS = {
     label: 'Arbitrum',
     rpc: () => process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
     deploymentFile: 'arbitrum-shop-v2-mainnet.json',
-    nftDeploymentFile: 'arbitrum-mainnet.json',
+    nftDeploymentFile: 'arbitrum-v3-mainnet.json',
     explorer: 'https://arbiscan.io',
     domainName: 'DemonKingArbitrumShop',
     nativeSymbol: 'ETH',
@@ -610,7 +703,7 @@ const NFT_EVM_CHAIN_SPECS = {
     label: 'Monad',
     rpc: () => process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
     deploymentFile: 'monad-shop-v2-mainnet.json',
-    nftDeploymentFile: 'monad-mainnet.json',
+    nftDeploymentFile: 'monad-v3-mainnet.json',
     explorer: 'https://monadexplorer.com',
     domainName: 'DemonKingMonadShop',
     nativeSymbol: 'MON',
@@ -1887,6 +1980,10 @@ router.get('/nft/arbitrum/:tokenId', async (req, res) => { await sendNftMetadata
 router.get('/nft/arbitrum/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Arbitrum', req.params.tokenId); });
 router.get('/nft/monad/:tokenId', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
 router.get('/nft/monad/:tokenId.json', async (req, res) => { await sendNftMetadata(req, res, 'Monad', req.params.tokenId); });
+router.get('/nft/aptos/collection', sendAptosCollectionMetadata);
+router.get('/nft/aptos/collection.json', sendAptosCollectionMetadata);
+router.get('/nft/aptos/:tokenId', async (req, res) => { await sendAptosNftMetadata(req, res, req.params.tokenId); });
+router.get('/nft/aptos/:tokenId.json', async (req, res) => { await sendAptosNftMetadata(req, res, req.params.tokenId); });
 router.get('/nft/solana/collection', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');

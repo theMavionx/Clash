@@ -48,5 +48,8 @@
   "fullMeshBridge": true,
   "bridgeFeeWei": "6000000000000000000",
   "bridgeFeeTxHash": "0x4e648cb76ddc46ae12503d2727bf23c17feba2d8cfd3e270eb810d33bb30c0e5",
-  "bridgeFeeUpdatedAt": "2026-05-16T16:13:37.584Z"
+  "bridgeFeeUpdatedAt": "2026-05-16T16:13:37.584Z",
+  "baseTokenUri": "https://clashofperps.fun/api/nft/monad/",
+  "baseUriTxHash": "0x2d3b171a1fbbb2e32037119243ee4998eb6859cac034b2e44dae9d2d19f7220e",
+  "baseUriUpdatedAt": "2026-05-16T19:44:55.026Z"
 }

@@ -16,6 +16,7 @@
     "config:bridge-env": "node scripts/configure-bridge-env.mjs",
     "config:bridge-fee:evm": "node scripts/set-evm-bridge-fee.mjs",
     "config:bridge-fee:aptos": "node scripts/set-aptos-bridge-fee.mjs",
+    "config:evm:metadata-uri": "node scripts/set-evm-v3-metadata-uri.mjs",
     "check:v3-storage": "node scripts/check-v3-storage.mjs",
     "test:v3-fork": "hardhat test nodejs --network hardhatMainnet test/v3-fork.test.js",
     "test:v3-bridge-cap": "hardhat test nodejs test/v3-bridge-cap.test.js",

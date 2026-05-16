@@ -17,7 +17,8 @@ const CHAIN_IDS = {
   monad: 143,
 };
 
-const NFT_IMAGE_BASE_URL = 'https://cdn.clashofperps.fun/nft';
+const NFT_IMAGE_BASE_URL = String(import.meta.env?.VITE_NFT_IMAGE_BASE_URL || '/cdn/nft').replace(/\/+$/, '');
+const NFT_USE_TOKEN_IMAGE_PATHS = String(import.meta.env?.VITE_NFT_USE_TOKEN_IMAGE_PATHS || '').trim() === '1';
 const OWNED_NFT_CACHE_TTL_MS = 60_000;
 const OWNED_EVM_RPC_TIMEOUT_MS = 8_000;
 const OWNED_SOLANA_DAS_TIMEOUT_MS = 7_000;
@@ -29,6 +30,19 @@ const OWNED_EVM_SCAN_CHUNK_SIZE = 80;
 const OWNED_CACHE_PREFIX = 'nft-owned-v2:';
 
 const ownedNftMemoryCache = new Map();
+
+function normalizeNftLevel(level) {
+  const n = Number(level);
+  return [1, 2, 3].includes(n) ? n : 1;
+}
+
+export function nftLevelImageUrl(level, id = null) {
+  const lvl = normalizeNftLevel(level);
+  if (NFT_USE_TOKEN_IMAGE_PATHS && id != null && id !== '') {
+    return `${NFT_IMAGE_BASE_URL}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
+  }
+  return `${NFT_IMAGE_BASE_URL}/${lvl}/default.jpg`;
+}
 
 const EVM_OWNED_CONFIG = {
   base: {
@@ -491,15 +505,11 @@ async function createOwnedEvmClient(chain) {
   });
 }
 
-function ownedImageUrl(level, id) {
-  return `${NFT_IMAGE_BASE_URL}/${Number(level) || 1}/${String(id)}`;
-}
-
 function evmOwnedToken(chain, id, level) {
   return {
     tokenId: String(id),
-    level: Number(level) || 1,
-    imageUrl: `${ownedImageUrl(level, id)}.jpg`,
+    level: normalizeNftLevel(level),
+    imageUrl: nftLevelImageUrl(level, id),
     chain,
   };
 }
@@ -626,7 +636,7 @@ function solanaAssetLevel(asset) {
 function solanaAssetImage(asset, level) {
   return asset?.content?.links?.image
     || asset?.content?.files?.find?.((file) => file?.uri)?.uri
-    || `${NFT_IMAGE_BASE_URL}/${level}/${asset?.id || 'solana'}.jpg`;
+    || nftLevelImageUrl(level, asset?.id || 'solana');
 }
 
 function magicEdenSolanaTokenLooksRelevant(token) {
@@ -673,7 +683,7 @@ function magicEdenSolanaToken(token) {
     asset: id,
     level,
     name: token?.name || 'Demon King',
-    imageUrl: token?.image || token?.img || token?.imageUrl || `${NFT_IMAGE_BASE_URL}/${level}/${id || 'solana'}.jpg`,
+    imageUrl: token?.image || token?.img || token?.imageUrl || nftLevelImageUrl(level, id || 'solana'),
     chain: 'solana',
   };
 }
@@ -773,7 +783,7 @@ function solanaCoreAssetToken(asset) {
     asset: id,
     level,
     name: asset?.name || 'Demon King',
-    imageUrl: `${NFT_IMAGE_BASE_URL}/${level}/${id || 'solana'}.jpg`,
+    imageUrl: nftLevelImageUrl(level, id || 'solana'),
     chain: 'solana',
   };
 }
@@ -854,7 +864,7 @@ function solanaToken2022Token({ mint, tokenAccount, meta }) {
     tokenAccount,
     level,
     name: meta?.name || `Demon King L${level}`,
-    imageUrl: `${NFT_IMAGE_BASE_URL}/${level}/${mint}.jpg`,
+    imageUrl: nftLevelImageUrl(level, mint),
     chain: 'solana',
     standard: 'token2022',
   };

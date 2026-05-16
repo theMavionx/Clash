@@ -16,7 +16,9 @@
 //
 // Server-authoritative supply cap: the off-chain server enforces
 // NFT_GLOBAL_SUPPLY_CAP before signing. The contract additionally
-// enforces a per-collection ceiling in Config.max_supply.
+// enforces a per-collection ceiling in Config.max_supply for fresh mints.
+// Bridge mints are exempt because a verified source burn keeps global
+// circulating supply flat.
 
 module clash_nft::demon_king {
     use std::error;
@@ -634,7 +636,6 @@ module clash_nft::demon_king {
         assert!(level >= 1 && level <= MAX_LEVEL, error::invalid_argument(E_BAD_LEVEL));
         assert!(timestamp::now_seconds() <= deadline, error::invalid_state(E_QUOTE_EXPIRED));
         assert!(!nonce_used(&cfg.used_nonces, &source_ref), error::invalid_state(E_QUOTE_USED));
-        assert!(cfg.total_minted + 1 <= cfg.max_supply, error::invalid_state(E_SOLD_OUT));
 
         // Verify ed25519 signature over BCS-concatenated message.
         let msg = vector::empty<u8>();

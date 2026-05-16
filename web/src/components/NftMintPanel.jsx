@@ -18,7 +18,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
 
-const demonKingImg = '/api/nft/image';
+const demonKingImg = '/cdn/nft/1/default.jpg';
 const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http() });
 

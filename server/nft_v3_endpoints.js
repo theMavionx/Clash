@@ -47,6 +47,20 @@ function readJsonIfExists(p) {
   catch { return null; }
 }
 
+function normalizeNftLevel(level) {
+  const n = Number(level);
+  return [1, 2, 3].includes(n) ? n : 1;
+}
+
+function nftLevelImageUrl(level, id = null) {
+  const base = String(process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft').replace(/\/+$/, '');
+  const lvl = normalizeNftLevel(level);
+  if (process.env.NFT_USE_TOKEN_IMAGE_PATHS === '1' && id != null && id !== '') {
+    return `${base}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
+  }
+  return `${base}/${lvl}/default.jpg`;
+}
+
 function v3Deployment(chainKey) {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`));
 }
@@ -295,7 +309,7 @@ function mountNftV3Endpoints(router, ctx) {
         usdc: deployment.usdcToken,
         cop: deployment.copToken || null,
         paused,
-        imageUrl: `${process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft'}/${Number(level)}/${tokenId.toString()}.jpg`,
+        imageUrl: nftLevelImageUrl(level, tokenId.toString()),
         // Phase B: wins-related fields. Phase 1 returns nulls.
         wins: null,
         nextLevelRequiredWins: null,
@@ -403,8 +417,8 @@ function mountNftV3Endpoints(router, ctx) {
         }
         const tokens = mine.map((id, i) => ({
           tokenId: id.toString(),
-          level: levels[i] ?? 1,
-          imageUrl: `${process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft'}/${levels[i] ?? 1}/${id}.jpg`,
+          level: normalizeNftLevel(levels[i]),
+          imageUrl: nftLevelImageUrl(levels[i], id.toString()),
         }));
         const body = { chain: chainKey, owner, contract: proxy, total: tokens.length, tokens };
         _ownedNftCache.set(cacheKey, { at: Date.now(), body });
@@ -443,10 +457,11 @@ function mountNftV3Endpoints(router, ctx) {
             const parsed = typeof props === 'string' ? JSON.parse(props) : props;
             if (parsed?.level != null) level = Number(parsed.level);
           } catch { /* ignore */ }
+          level = normalizeNftLevel(level);
           return {
             tokenAddress: row.token_data_id,
             level,
-            imageUrl: `${process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft'}/${level}/${row.current_token_data?.token_name || 'aptos'}.jpg`,
+            imageUrl: nftLevelImageUrl(level, row.current_token_data?.token_name || 'aptos'),
           };
         });
         res.set('Cache-Control', 'public, max-age=10');
@@ -469,12 +484,12 @@ function mountNftV3Endpoints(router, ctx) {
           .filter((a) => String(a.owner) === ownerRaw)
           .map((a) => {
             const lvl = a.attributes?.attributeList?.find((x) => x.key === 'level');
-            const level = lvl ? Number(lvl.value) : 1;
+            const level = normalizeNftLevel(lvl ? Number(lvl.value) : 1);
             return {
               asset: a.publicKey.toString(),
               level,
               name: a.name,
-              imageUrl: `${process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft'}/${level}/${a.publicKey}.jpg`,
+              imageUrl: nftLevelImageUrl(level, a.publicKey.toString()),
             };
           });
         res.set('Cache-Control', 'public, max-age=10');

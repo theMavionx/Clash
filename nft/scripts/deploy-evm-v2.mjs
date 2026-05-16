@@ -17,7 +17,7 @@ import {
   parseGwei,
 } from 'viem';
 import { arbitrum, base } from 'viem/chains';
-import { baseContractUri, baseTokenUri, loadEnv, NFT_DIR, parseEthAccount } from './lib-env.mjs';
+import { baseContractUri, evmTokenUri, loadEnv, NFT_DIR, parseEthAccount } from './lib-env.mjs';
 
 // Monad isn't in viem/chains yet (newer launch). Hand-define so the
 // deployment doesn't depend on the lib version. Update RPC if the
@@ -96,12 +96,11 @@ const initialMaxSupply = BigInt(env[`NFT_${chainKey.toUpperCase()}_MAX_SUPPLY`] 
 const initialMaxPerTx = BigInt(env[`NFT_${chainKey.toUpperCase()}_MAX_PER_TX`] || env.NFT_BASE_MAX_PER_TX || 10);
 const initialPriceWei = BigInt(env[`NFT_${chainKey.toUpperCase()}_PRICE_WEI`] || env.NFT_PRICE_WEI || '0');
 
-// We reuse the same Base metadata for now — every chain points at the
-// same `/api/nft/base/<id>` URI. If you want per-chain art later, swap
-// the base/contract URI for a chain-specific endpoint here.
+// Token metadata is chain-specific so the server reads the level from the
+// matching V3 contract before choosing L1/L2/L3 art.
 const initArgs = [
   account.address,
-  baseTokenUri(env),
+  evmTokenUri(env, chainKey),
   baseContractUri(env),
   initialMaxSupply,
   initialMaxPerTx,

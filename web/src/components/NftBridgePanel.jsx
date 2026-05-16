@@ -26,7 +26,7 @@ import { createPublicClient, createWalletClient, custom, http, encodeFunctionDat
 import { base, arbitrum } from 'viem/chains';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
-import { bridgeInit, bridgeRelay, fetchOwnedNfts } from '../lib/nftV3Client';
+import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl } from '../lib/solanaRpc';
 
@@ -733,12 +733,20 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         ? (sourceIdInput.startsWith('0x') ? shortAddr(sourceIdInput, 6, 4) : `#${sourceIdInput}`)
         : '—';
     const level = nft?.level ?? 1;
+    const fallbackImage = nftLevelImageUrl(level);
     return (
       <div style={localStyles.nftCardLarge}>
         <div style={localStyles.nftCardLargeImgWrap}>
           {nft?.imageUrl
             ? <img src={nft.imageUrl} alt="" style={localStyles.nftCardLargeImg}
-                onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                onError={(e) => {
+                  if (!e.currentTarget.dataset.fallbackApplied) {
+                    e.currentTarget.dataset.fallbackApplied = '1';
+                    e.currentTarget.src = fallbackImage;
+                    return;
+                  }
+                  e.currentTarget.style.display = 'none';
+                }} />
             : <span style={{ fontSize: 64, lineHeight: 1 }}>🐲</span>}
         </div>
         <div style={localStyles.nftCardLargeMeta}>
@@ -825,13 +833,21 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
                     const id = t.tokenId || t.tokenAddress || t.asset;
                     const selected = sourceIdInput === id;
                     const idShort = t.tokenId ? `#${t.tokenId}` : shortAddr(t.tokenAddress || t.asset, 6, 4);
+                    const fallbackImage = nftLevelImageUrl(t.level ?? 1);
                     return (
                       <button key={id} type="button" onClick={() => selectNft(t)}
                         style={{ ...localStyles.nftCard, ...(selected ? localStyles.nftCardActive : null) }}
                         title={id}>
                         {t.imageUrl && (
                           <img src={t.imageUrl} alt={idShort} style={localStyles.nftImg}
-                            onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
+                            onError={(e) => {
+                              if (!e.currentTarget.dataset.fallbackApplied) {
+                                e.currentTarget.dataset.fallbackApplied = '1';
+                                e.currentTarget.src = fallbackImage;
+                                return;
+                              }
+                              e.currentTarget.style.visibility = 'hidden';
+                            }} />
                         )}
                         <div style={localStyles.nftMeta}>
                           <span style={localStyles.nftId}>{idShort}</span>
