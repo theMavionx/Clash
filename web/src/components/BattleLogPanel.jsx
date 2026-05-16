@@ -74,6 +74,12 @@ function BattleLogPanel({ onClose }) {
         base_owner_name: battle.defender_name || battle.opponent_name,
         duration: battle.duration || 0,
         replay_label: replayLabel,
+        replay_result: {
+          type: battle.result === 'victory' ? 'victory' : 'defeat',
+          loot: battle.loot || null,
+          opponent_name: battle.opponent_name || battle.defender_name || battle.attacker_name || '',
+          duration: battle.duration || 0,
+        },
       });
     }, 100);
   }, [sendToGodot, onClose]);

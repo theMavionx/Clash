@@ -764,7 +764,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
   }
 
   return (
-    <div style={localStyles.root}>
+    <div className="shop-scroll" style={localStyles.root}>
       {/* ─── Step 1: pick the NFT ──────────────────────────────── */}
       {wizardStep === 1 && (
         <>
@@ -961,31 +961,12 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
             </div>
           </div>
 
-          {notice && <div style={localStyles.notice}>{notice}</div>}
-          {status !== 'idle' && (
-            <div style={{ ...localStyles.notice, ...(status === 'error' ? null : localStyles.noticeOk) }}>
-              {statusLabel}
-            </div>
-          )}
-          {result && (
-            <div style={localStyles.successBox}>
-              <div><b>{CHAIN_BY_ID[result.sourceChain]?.label}</b> → <b>{CHAIN_BY_ID[result.destChain]?.label}</b></div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.85 }}>
-                Burn: {shortAddr(result.burnTxHash, 8, 6)}<br />
-                {result.destResult?.hash && <>Dest tx: {shortAddr(result.destResult.hash, 8, 6)}<br /></>}
-                {result.destResult?.asset && <>New asset: {shortAddr(result.destResult.asset, 8, 6)}<br /></>}
-                Level preserved: L{result.level || '?'}
-              </div>
-            </div>
-          )}
-          {pendingRelay && status === 'error' && (
-            <div style={localStyles.successBox}>
-              <div><b>Burn saved</b></div>
-              <div style={{ fontSize: 11, marginTop: 4, opacity: 0.85 }}>
-                Burn: {shortAddr(pendingRelay.burnTxHash, 8, 6)}<br />
-                Retry will only mint on destination, not burn again.
-              </div>
-            </div>
+          {/* Validation/idle notices stay inline so they're seen alongside
+              the confirm cards. Bridge progress + success/error states are
+              now hoisted into BridgeStatusModal below, so the user doesn't
+              have to scroll past tall NFT cards to see status. */}
+          {notice && status === 'idle' && (
+            <div style={localStyles.notice}>{notice}</div>
           )}
         </>
       )}
@@ -1042,12 +1023,204 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
           </>
         )}
       </div>
+
+      {/* Progress modal — opens the moment a bridge tx is signed and
+          stays through success/error. Lives at the bottom of the panel
+          tree so its fixed-position overlay covers everything inside the
+          shop modal without being clipped by the wizard's scroll
+          container. */}
+      {status !== 'idle' && (
+        <BridgeStatusModal
+          status={status}
+          notice={notice}
+          result={result}
+          pendingRelay={pendingRelay}
+          busy={busy}
+          sourceChain={sourceChain}
+          destChain={destChain}
+          onRetry={retryPendingRelay}
+          onAnother={resetWizard}
+          onBackToShop={onBack}
+          onClose={resetWizard}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Bridge progress modal ─────────────────────────────────────────────
+// Renders on top of the wizard once a bridge tx is signed. Shows a clean
+// three-step indicator (burn / verify+relay / mint) plus success/error
+// state with tx hashes. Replaces the inline status blocks that used to
+// pile up under the confirm cards and force the user to scroll.
+function BridgeStatusModal({
+  status, notice, result, pendingRelay, busy,
+  sourceChain, destChain,
+  onRetry, onAnother, onBackToShop, onClose,
+}) {
+  const isFinished = status === 'success' || status === 'error';
+  const isWorking  = !isFinished;
+  // Map each pipeline step to its current visual state. The "confirming"
+  // status covers both server verification AND server-side relay (one
+  // network step from the user's point of view), so we collapse steps
+  // 2 and 3 into a single row while the relay is in flight.
+  const stepState = (idx) => {
+    if (status === 'success') return 'done';
+    if (status === 'error') {
+      // Best-effort mapping: if pendingRelay exists, burn succeeded.
+      if (pendingRelay && idx === 1) return 'done';
+      if (pendingRelay && idx === 2) return 'error';
+      if (idx === 1) return 'error';
+      return 'pending';
+    }
+    if (status === 'burning')    return idx === 1 ? 'active' : 'pending';
+    if (status === 'confirming') return idx === 1 ? 'done' : idx === 2 ? 'active' : 'pending';
+    if (status === 'dest-tx')    return idx <= 2 ? 'done' : 'active';
+    return 'pending';
+  };
+
+  const steps = [
+    { idx: 1, label: 'Burn on source',         hint: `${CHAIN_BY_ID[sourceChain]?.label}` },
+    { idx: 2, label: 'Server verify & relay',  hint: 'no extra signature needed' },
+    { idx: 3, label: 'Mint on destination',    hint: `${CHAIN_BY_ID[destChain]?.label}` },
+  ];
+
+  const title = status === 'success' ? 'Bridge complete'
+              : status === 'error'   ? 'Bridge failed'
+              : 'Bridging your NFT…';
+
+  return (
+    <div
+      style={modalStyles.overlay}
+      onClick={isWorking ? undefined : onClose}
+      role="dialog" aria-modal="true"
+    >
+      <div style={modalStyles.panel} onClick={(e) => e.stopPropagation()}>
+        <div style={modalStyles.header}>
+          <span style={modalStyles.title}>{title}</span>
+          {isFinished && (
+            <button type="button" onClick={onClose} style={modalStyles.closeBtn} aria-label="Close">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div style={modalStyles.body}>
+          {/* Step indicator list — sticky to top so it's visible
+              regardless of result/error text length below. */}
+          <ol style={modalStyles.stepList}>
+            {steps.map((step) => {
+              const st = stepState(step.idx);
+              return (
+                <li key={step.idx} style={modalStyles.stepItem}>
+                  <span style={{ ...modalStyles.stepBubble, ...modalStyles[`stepBubble_${st}`] }}>
+                    {st === 'done'    ? '✓'
+                    : st === 'error'  ? '!'
+                    : st === 'active' ? <span style={modalStyles.spinner} />
+                    : step.idx}
+                  </span>
+                  <span style={modalStyles.stepText}>
+                    <span style={{ ...modalStyles.stepLabel, ...modalStyles[`stepLabel_${st}`] }}>
+                      {step.label}
+                    </span>
+                    <span style={modalStyles.stepHint}>{step.hint}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+
+          {status === 'error' && notice && (
+            <div style={modalStyles.errorBox}>{notice}</div>
+          )}
+
+          {status === 'success' && result && (
+            <div style={modalStyles.resultBox}>
+              <div style={modalStyles.resultHeadline}>
+                <b>{CHAIN_BY_ID[result.sourceChain]?.label}</b>
+                <span style={{ opacity: 0.5, margin: '0 6px' }}>→</span>
+                <b>{CHAIN_BY_ID[result.destChain]?.label}</b>
+              </div>
+              <div style={modalStyles.resultMeta}>
+                <span>Burn</span><span style={modalStyles.resultMono}>{shortAddr(result.burnTxHash, 8, 6)}</span>
+                {result.destResult?.hash && (<>
+                  <span>Dest tx</span><span style={modalStyles.resultMono}>{shortAddr(result.destResult.hash, 8, 6)}</span>
+                </>)}
+                {result.destResult?.asset && (<>
+                  <span>New asset</span><span style={modalStyles.resultMono}>{shortAddr(result.destResult.asset, 8, 6)}</span>
+                </>)}
+                <span>Level</span><span><b>L{result.level || '?'}</b> · preserved</span>
+              </div>
+            </div>
+          )}
+
+          {pendingRelay && status === 'error' && (
+            <div style={modalStyles.pendingBox}>
+              <div style={{ fontWeight: 900, marginBottom: 2 }}>Burn saved</div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                Burn: {shortAddr(pendingRelay.burnTxHash, 8, 6)}<br />
+                Retry mints on the destination — burn won't happen twice.
+              </div>
+            </div>
+          )}
+
+          {isWorking && (
+            <div style={modalStyles.workingHint}>
+              Keep this window open until all three steps finish.
+            </div>
+          )}
+        </div>
+
+        <div style={modalStyles.footer}>
+          {status === 'success' && (
+            <>
+              <button type="button" onClick={onAnother} style={modalStyles.secondaryBtn}>
+                Bridge another
+              </button>
+              <button type="button" onClick={onBackToShop} style={modalStyles.primaryBtn}>
+                Done
+              </button>
+            </>
+          )}
+          {status === 'error' && (
+            <>
+              <button type="button" onClick={onClose} style={modalStyles.secondaryBtn}>
+                Close
+              </button>
+              {pendingRelay ? (
+                <button type="button" onClick={onRetry} disabled={busy} style={modalStyles.primaryBtn}>
+                  Retry mint →
+                </button>
+              ) : (
+                <button type="button" onClick={onAnother} style={modalStyles.primaryBtn}>
+                  Try again
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
 const localStyles = {
-  root: { display: 'flex', flexDirection: 'column', gap: 10 },
+  // Root is flex:1 + overflow-y:auto so the wizard scrolls inside the
+  // fixed-height shop modal body. Step 3 in particular has tall NFT
+  // cards + status — without this the bottom action buttons can sit
+  // below the panel edge with no way to scroll there.
+  root: {
+    flex: 1, minHeight: 0,
+    display: 'flex', flexDirection: 'column', gap: 10,
+    overflowY: 'auto',
+    // Parchment scrollbar to match the rest of the shop UI.
+    scrollbarWidth: 'thin',
+    scrollbarColor: '#bba882 #fdf8e7',
+    margin: '0 -16px', padding: '0 16px',
+  },
   intro: { fontSize: 13, color: '#5C3A21', margin: '4px 0 8px', lineHeight: 1.4 },
   row: { display: 'flex', flexDirection: 'column', gap: 6 },
   label: { fontSize: 12, fontWeight: 700, color: '#5C3A21', letterSpacing: 0.2 },
@@ -1211,4 +1384,136 @@ const localStyles = {
   },
   confirmLabel: { fontWeight: 700, marginRight: 6, color: '#7a5a30' },
   confirmValue: { fontFamily: 'monospace', wordBreak: 'break-all' },
+};
+
+// ── Bridge progress modal styles ─────────────────────────────────────
+// Sized to fit comfortably inside the 500px shop modal; the overlay
+// covers the whole viewport (position: fixed) so it sits above the shop
+// modal's own backdrop. Parchment palette mirrors the rest of the shop
+// chrome so it doesn't read as a system dialog.
+const modalStyles = {
+  overlay: {
+    position: 'fixed', inset: 0,
+    background: 'rgba(20, 12, 4, 0.55)',
+    backdropFilter: 'blur(2px)',
+    WebkitBackdropFilter: 'blur(2px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 300, pointerEvents: 'all', padding: 16,
+  },
+  panel: {
+    width: 380, maxWidth: '100%', maxHeight: '88vh',
+    background: '#fdf8e7',
+    border: '5px solid #d4c8b0', borderRadius: 18,
+    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    display: 'flex', flexDirection: 'column',
+    fontFamily: 'inherit', overflow: 'hidden',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 14px',
+    background: '#d4c8b0', borderBottom: '3px solid #bba882',
+  },
+  title: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
+  closeBtn: {
+    width: 26, height: 26, borderRadius: '50%',
+    background: '#E53935', border: '2px solid #fff', color: '#fff',
+    cursor: 'pointer', padding: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  body: {
+    padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
+    overflowY: 'auto',
+    scrollbarWidth: 'thin', scrollbarColor: '#bba882 #fdf8e7',
+  },
+
+  stepList: {
+    listStyle: 'none', margin: 0, padding: 0,
+    display: 'flex', flexDirection: 'column', gap: 10,
+  },
+  stepItem: {
+    display: 'flex', alignItems: 'center', gap: 10,
+  },
+  stepBubble: {
+    width: 28, height: 28, borderRadius: '50%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, fontWeight: 900, flexShrink: 0,
+    background: '#e8dfc8', color: '#9f8759', border: '2px solid #d4c8b0',
+    transition: 'background 0.2s, border-color 0.2s',
+  },
+  stepBubble_pending: {},
+  stepBubble_active: {
+    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
+  },
+  stepBubble_done: {
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    borderColor: '#1f6d34', color: '#fff',
+  },
+  stepBubble_error: {
+    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+  },
+  stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
+  stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },
+  stepLabel_active: { color: '#5C3A21' },
+  stepLabel_done:   { color: '#5C3A21' },
+  stepLabel_error:  { color: '#b71c1c' },
+  stepLabel_pending: {},
+  stepHint: { fontSize: 11, color: '#9f8759', fontWeight: 700 },
+
+  // Tiny CSS spinner used in the "active" bubble. Rotation is driven by
+  // the global `nft-mint-ring-spin` keyframes injected by NftMintPanel —
+  // the bridge panel is always rendered as a child of NftMintPanel so
+  // those keyframes are in scope.
+  spinner: {
+    width: 12, height: 12, borderRadius: '50%',
+    border: '2px solid rgba(92,58,33,0.25)',
+    borderTopColor: '#5C3A21',
+    animation: 'nft-mint-ring-spin 0.9s linear infinite',
+  },
+
+  resultBox: {
+    padding: '10px 12px', borderRadius: 10,
+    background: 'linear-gradient(180deg, #f1fbe5 0%, #d9efc0 100%)',
+    border: '2px solid #7db85a', color: '#1f3e0a',
+    display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  resultHeadline: { fontSize: 14 },
+  resultMeta: {
+    display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 10, rowGap: 3,
+    fontSize: 12,
+  },
+  resultMono: { fontFamily: 'monospace', wordBreak: 'break-all' },
+
+  pendingBox: {
+    padding: '8px 10px', borderRadius: 10,
+    background: '#fff1cc', border: '2px solid #d9a928', color: '#5C3A21',
+  },
+
+  errorBox: {
+    padding: '8px 10px', borderRadius: 10,
+    background: '#fdecea', border: '2px solid #E53935', color: '#7a1f1c',
+    fontSize: 12, fontWeight: 700,
+  },
+
+  workingHint: {
+    fontSize: 11, color: '#7a5a30', fontStyle: 'italic', textAlign: 'center',
+  },
+
+  footer: {
+    display: 'flex', gap: 8, justifyContent: 'flex-end',
+    padding: '10px 14px',
+    borderTop: '3px solid #d4c8b0', background: '#f5ecd2',
+  },
+  primaryBtn: {
+    padding: '9px 16px', borderRadius: 10, fontSize: 13, fontWeight: 900,
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    border: '2px solid #1f6d34', color: '#fff',
+    cursor: 'pointer',
+    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+  },
+  secondaryBtn: {
+    padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,
+    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
+    cursor: 'pointer',
+  },
 };

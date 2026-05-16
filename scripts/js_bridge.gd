@@ -303,7 +303,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 				var base_owner_name: String = String(data.get("base_owner_name", data.get("defender_name", data.get("opponent_name", ""))))
 				var duration: float = float(data.get("duration", 0.0))
 				var replay_label: String = String(data.get("replay_label", ""))
-				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name)
+				var replay_result: Dictionary = {}
+				if data.get("replay_result", {}) is Dictionary:
+					replay_result = data.get("replay_result", {})
+				bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name, replay_result)
 		"agent_action":
 			_handle_agent_action(data)
 
@@ -326,6 +329,37 @@ func _agent_attack_session_id_from_payload(payload: Dictionary) -> String:
 		if replay_action is Dictionary and String(replay_action.get("type", "")) == "battle_start":
 			return String(replay_action.get("battle_session_id", ""))
 	return String(payload.get("battle_session_id", ""))
+
+
+func _agent_attack_result_payload(payload: Dictionary, duration: float, base_owner_name: String) -> Dictionary:
+	var result_type: String = String(payload.get("result", "defeat")).to_lower()
+	if result_type != "victory" and result_type != "defeat":
+		result_type = "defeat"
+	var battle_payload: Dictionary = {}
+	if payload.get("battle", {}) is Dictionary:
+		battle_payload = payload.get("battle", {})
+	var verification_payload: Dictionary = {}
+	if payload.get("verification", {}) is Dictionary:
+		verification_payload = payload.get("verification", {})
+	var casualties: Dictionary = {}
+	if verification_payload.get("casualties", {}) is Dictionary:
+		casualties = verification_payload.get("casualties", {})
+	var result: Dictionary = {
+		"type": result_type,
+		"ai_online_battle": true,
+		"opponent_name": base_owner_name,
+		"duration": duration,
+		"casualties": casualties,
+	}
+	if result_type == "victory":
+		if battle_payload.get("loot", {}) is Dictionary:
+			result.loot = battle_payload.get("loot", {})
+	elif verification_payload.has("reason"):
+		result.reason = String(verification_payload.get("reason", ""))
+	for key in ["trophies", "attackerTrophies", "defenderTrophies"]:
+		if battle_payload.has(key):
+			result[key] = battle_payload[key]
+	return result
 
 
 func _remember_agent_attack_session(session_id: String) -> void:
@@ -362,7 +396,8 @@ func _start_agent_attack_replay(payload: Dictionary) -> bool:
 		return true
 	_remember_agent_attack_session(session_id)
 	print("[agent_action] starting ai_attack_replay session=%s duration=%.2f" % [session_id, duration])
-	bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name)
+	var replay_result: Dictionary = _agent_attack_result_payload(payload, duration, base_owner_name)
+	bs._start_replay(replay_data, buildings_snapshot, attacker_name, duration, replay_label, base_owner_name, replay_result)
 	return true
 
 

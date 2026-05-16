@@ -15,10 +15,10 @@ const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Archer: archerImg, Range
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
-function ShareButton({ isVictory, isReplay, result }) {
+function ShareButton({ isVictory, isReplay, isAiOnlineBattle, result }) {
   const { isInFrame, shareCast } = useFarcaster();
   const handleShare = useCallback(() => {
-    if (isReplay) return;
+    if (isReplay || isAiOnlineBattle) return;
     const loot = result?.loot;
     const text = isVictory
       ? `I raided a village in Clash of Perps and looted ${loot?.gold || 0} gold! ⚔️`
@@ -28,9 +28,9 @@ function ShareButton({ isVictory, isReplay, result }) {
     } else {
       window.open(`https://warpcast.com/~/compose?text=${encodeURIComponent(text)}&embeds[]=${encodeURIComponent('https://clashofperps.fun')}`, '_blank');
     }
-  }, [isVictory, isReplay, result, isInFrame, shareCast]);
+  }, [isVictory, isReplay, isAiOnlineBattle, result, isInFrame, shareCast]);
 
-  if (isReplay) return null;
+  if (isReplay || isAiOnlineBattle) return null;
   return (
     <div style={{ ...styles.btnWrap, background: 'linear-gradient(180deg, #8B5CF6 0%, #6D28D9 100%)' }} onClick={handleShare}>
       <span style={styles.btnText}>Share</span>
@@ -43,9 +43,20 @@ function BattleResultOverlay({ result, onClose }) {
 
   const isVictory = result.type === 'victory';
   const isReplay = result.type === 'replay_end';
+  const isAiOnlineBattle = !!result.ai_online_battle;
   const casualties = Object.entries(result.casualties || {}).filter(([, c]) => c > 0);
   const totalCasualties = casualties.reduce((sum, [, c]) => sum + c, 0);
   const totalReinforceCost = totalCasualties * 50;
+  const hasLootObject = !!result.loot && typeof result.loot === 'object';
+  const hasLootValue = hasLootObject && ['gold', 'wood', 'ore'].some((key) => Number(result.loot?.[key] || 0) > 0);
+  const showLootPanel = isVictory && hasLootObject && (hasLootValue || isAiOnlineBattle);
+  const subtitle = isReplay
+    ? (result.reason || 'Replay finished')
+    : isAiOnlineBattle
+      ? (isVictory ? 'Battle complete. Loot and losses are below.' : 'Battle ended. Losses are below.')
+      : isVictory
+        ? 'This village is free once again!'
+        : 'All troops were lost!';
 
   return (
     <div style={styles.backdrop}>
@@ -59,12 +70,12 @@ function BattleResultOverlay({ result, onClose }) {
             {isReplay ? 'REPLAY END' : isVictory ? 'VICTORY' : 'DEFEAT'}
           </div>
           <div style={styles.subtitleText}>
-            {isReplay ? 'Replay finished' : isVictory ? 'This village is free once again!' : 'All troops were lost!'}
+            {subtitle}
           </div>
         </div>
 
         {/* Loot Panel */}
-        {isVictory && result.loot && (
+        {showLootPanel && (
           <div style={styles.panel}>
             <div style={styles.panelTitle}>You received</div>
             <div style={styles.resourceRow}>
@@ -76,7 +87,7 @@ function BattleResultOverlay({ result, onClose }) {
         )}
 
         {/* Defeat Panel */}
-        {!isVictory && !isReplay && (
+        {!isVictory && !isReplay && !isAiOnlineBattle && (
            <div style={styles.panel}>
             <div style={styles.panelTitle}>Better luck next time!</div>
             <div style={styles.subtitleText}>
@@ -109,7 +120,7 @@ function BattleResultOverlay({ result, onClose }) {
 
         {/* Buttons */}
         <div style={{ display: 'flex', gap: 12 }}>
-          <ShareButton isVictory={isVictory} isReplay={isReplay} result={result} />
+          <ShareButton isVictory={isVictory} isReplay={isReplay} isAiOnlineBattle={isAiOnlineBattle} result={result} />
           <div style={styles.btnWrap} onClick={onClose}>
             <span style={styles.btnText}>Return</span>
           </div>
@@ -120,7 +131,7 @@ function BattleResultOverlay({ result, onClose }) {
 }
 
 function LootItem({ icon, value, delay }) {
-  if (!value) return null;
+  if (value === undefined || value === null) return null;
   return (
     <div className="loot-pop" style={{...styles.lootItem, animationDelay: `${delay}s`}}>
       <img src={icon} alt="" style={styles.lootIcon} />

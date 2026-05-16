@@ -162,8 +162,9 @@ export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 
 //
 // Caller passes `aptosWallet` from AptosWalletContext (its
 // loginSignAndSubmit is what we invoke — wallet must already be connected
-// as the buyer). The server-returned `callData.functionArguments` are
-// passed through verbatim, since the Move signature is bound to them.
+// as the buyer). The server returns vector<u8> fields as hex for JSON
+// readability; convert them to byte arrays before handing them to the Aptos
+// wallet adapter so Move receives the exact bytes the server signed.
 export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc' }) {
   const response = await fetch('/api/nft/aptos/quote', {
     method: 'POST',
@@ -178,18 +179,59 @@ export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc
 export async function mintAptosNft({ aptosWallet, buyer, quantity = 1, payment = 'usdc' }) {
   if (!aptosWallet || !buyer) throw new Error('Aptos wallet is not connected');
   const quote = await fetchAptosMintQuote({ buyer, quantity, payment });
+  const functionArguments = normalizeAptosMintFunctionArguments(quote);
 
   const result = await aptosWallet.loginSignAndSubmit({
     data: {
       function: quote.callData.functionId,
       typeArguments: quote.callData.typeArguments || [],
-      functionArguments: quote.callData.functionArguments,
+      functionArguments,
     },
   });
   // Different wallets return slightly different shapes — Petra: { hash },
   // Pontem/Martian: { txnHash }. Normalize for the caller.
   const txHash = result?.hash || result?.txnHash || result;
   return { hash: txHash, quote };
+}
+
+function normalizeAptosMintFunctionArguments(quote) {
+  const args = [...(quote?.callData?.functionArguments || [])];
+  if (args.length === 6) {
+    args[2] = aptosHexVectorArg(args[2], 'nonce');
+    args[4] = aptosHexVectorArg(args[4], 'account_hash');
+    args[5] = aptosHexVectorArg(args[5], 'signature', 64);
+    return args;
+  }
+  if (args.length === 7) {
+    args[3] = aptosHexVectorArg(args[3], 'nonce');
+    args[5] = aptosHexVectorArg(args[5], 'account_hash');
+    args[6] = aptosHexVectorArg(args[6], 'signature', 64);
+    return args;
+  }
+  return args;
+}
+
+function aptosHexVectorArg(value, label, expectedLength = null) {
+  if (Array.isArray(value)) {
+    if (expectedLength != null && value.length !== expectedLength) {
+      throw new Error(`Bad Aptos ${label}: expected ${expectedLength} bytes, got ${value.length}`);
+    }
+    return value;
+  }
+  if (value instanceof Uint8Array) return Array.from(value);
+  const hex = String(value || '').replace(/^0x/i, '');
+  if (hex.length === 0) return [];
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+    throw new Error(`Bad Aptos ${label}: expected hex bytes`);
+  }
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.slice(i, i + 2), 16));
+  }
+  if (expectedLength != null && bytes.length !== expectedLength) {
+    throw new Error(`Bad Aptos ${label}: expected ${expectedLength} bytes, got ${bytes.length}`);
+  }
+  return bytes;
 }
 
 export async function mintSolanaNft({ solWallet, config, payment }) {

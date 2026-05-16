@@ -87,6 +87,7 @@ var _replay_telemetry_dropped: int = 0
 var _replay_loaded_buildings: Dictionary = {}
 var _replay_attacker_name: String = ""
 var _replay_label: String = ""
+var _replay_result_payload: Dictionary = {}
 var _replay_wall_start_msec: int = 0
 var _replay_chain_destroying: bool = false
 var _replay_prev_max_fps: int = -1
@@ -148,6 +149,7 @@ func reset() -> void:
 	_replay_telemetry_dropped = 0
 	_replay_attacker_name = ""
 	_replay_label = ""
+	_replay_result_payload.clear()
 	_replay_wall_start_msec = 0
 	_restore_replay_clock()
 	_returning_home = false
@@ -308,6 +310,26 @@ func _replay_info() -> Dictionary:
 			info.expected_result = str(action.get("result", ""))
 			info.expected_duration = float(action.get("t", _replay_duration))
 	return info
+
+
+func _replay_result_for_overlay() -> Dictionary:
+	var payload: Dictionary = {}
+	if not _replay_result_payload.is_empty():
+		payload = _replay_result_payload.duplicate(true)
+	else:
+		var info: Dictionary = _replay_info()
+		var expected_result: String = str(info.get("expected_result", "")).to_lower()
+		if expected_result == "victory" or expected_result == "defeat":
+			payload = {"type": expected_result}
+		else:
+			payload = {"type": "replay_end", "reason": "Replay finished"}
+	if not payload.has("duration"):
+		payload.duration = snappedf(_replay_elapsed, 0.01)
+	if not payload.has("opponent_name"):
+		payload.opponent_name = str(enemy_info.get("name", ""))
+	if not payload.has("casualties"):
+		payload.casualties = {}
+	return payload
 
 
 func record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
@@ -1407,7 +1429,7 @@ func _replay_wall_wait(seconds: float) -> bool:
 	return _replay_active and is_instance_valid(bs)
 
 
-func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "", base_owner_name: String = "") -> void:
+func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name: String, duration: float = 0.0, replay_label: String = "", base_owner_name: String = "", replay_result: Dictionary = {}) -> void:
 	bs.get_tree().paused = false
 	_lock_replay_clock()
 	_cleanup_combat_runtime_nodes()
@@ -1428,6 +1450,7 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	_replay_chain_destroying = false
 	_replay_attacker_name = attacker_name
 	_replay_label = replay_label
+	_replay_result_payload = replay_result.duplicate(true)
 	_replay_wall_start_msec = 0
 	var display_name_for_base: String = base_owner_name.strip_edges()
 	if display_name_for_base == "":
@@ -1630,7 +1653,7 @@ func _replay_playback() -> void:
 		record_replay_telemetry("replay_end", {"elapsed": snappedf(_replay_elapsed, 0.01)})
 		_send_replay_telemetry()
 	if _replay_active and bs._bridge:
-		bs._bridge.send_to_react("battle_result", {"type": "replay_end", "reason": "Replay finished"})
+		bs._bridge.send_to_react("battle_result", _replay_result_for_overlay())
 	_replay_active = false
 
 

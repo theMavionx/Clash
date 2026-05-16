@@ -416,7 +416,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
   const tx = new Transaction({
     feePayer: buyerPk,
-    recentBlockhash: blockhash,
+    blockhash,
     lastValidBlockHeight,
   });
   tx.add(...instructions);
