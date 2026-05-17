@@ -278,6 +278,52 @@ function isMobileWalletAdapter(solWallet) {
   return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
 }
 
+function solanaMobileAppIdentity() {
+  const origin = typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'https://clashofperps.fun';
+  return {
+    name: 'Clash of Perps',
+    uri: origin,
+    icon: `${origin}/icons/icon-512.png`,
+  };
+}
+
+function base64AddressToBase58(address, PublicKey) {
+  if (!address) return null;
+  try {
+    const decode = typeof atob === 'function'
+      ? (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
+      : (value) => Uint8Array.from(Buffer.from(value, 'base64'));
+    return new PublicKey(decode(address)).toBase58();
+  } catch {
+    return null;
+  }
+}
+
+async function sendSolanaMobileProtocolTransaction({ transaction, options, expectedAddress, PublicKey }) {
+  const { transact } = await import('@solana-mobile/mobile-wallet-adapter-protocol-web3js');
+  return transact(async (wallet) => {
+    const authorization = await wallet.authorize({
+      chain: 'solana:mainnet',
+      identity: solanaMobileAppIdentity(),
+      features: ['solana:signAndSendTransactions'],
+    });
+    const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address, PublicKey);
+    if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
+      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but the connected shop wallet is ${expectedAddress}`);
+    }
+    const [signature] = await wallet.signAndSendTransactions({
+      auth_token: authorization.auth_token,
+      transactions: [transaction],
+      commitment: options?.preflightCommitment || 'confirmed',
+      skipPreflight: !!options?.skipPreflight,
+      maxRetries: options?.maxRetries,
+    });
+    return signature;
+  });
+}
+
 async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, task }) {
   const endpoints = uniqueStrings([
     primaryConnection?.rpcEndpoint,
@@ -606,7 +652,16 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       ownerPk: buyerPk,
       connection,
       sendTransaction: canSendSolanaTx
-        ? (tx, conn, opts) => solWallet.sendTransaction(tx, conn, opts)
+        ? (tx, conn, opts) => (
+            mobileWalletAdapter
+              ? sendSolanaMobileProtocolTransaction({
+                  transaction: tx,
+                  options: opts,
+                  expectedAddress: address,
+                  PublicKey,
+                })
+              : solWallet.sendTransaction(tx, conn, opts)
+          )
         : null,
       // Prefer adapter sendTransaction for browser/mobile wallets: it signs
       // and submits through the wallet in one path, avoiding the Seeker/Phantom
@@ -623,6 +678,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       // transactions serialize unsigned cleanly and let MWA add the user's
       // signature inside signAndSendTransaction.
       forceVersionedTransaction: mobileWalletAdapter,
+      walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
       label: `shop.${payment}.${walletAdapterName(solWallet) || 'wallet'}`,
     });
   } catch (err) {

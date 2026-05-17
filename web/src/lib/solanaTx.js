@@ -129,6 +129,7 @@ function transactionProgramSummary(tx) {
 function transactionSummary(tx) {
   const programs = transactionProgramSummary(tx);
   return {
+    tx_version: tx?.version === 0 || tx?.message?.version === 0 ? 'v0' : 'legacy',
     tx_instruction_count: programs.length,
     tx_instruction_programs: programs.slice(0, 12).map(shortAddress),
     tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
@@ -797,6 +798,7 @@ export async function sendSolanaTransactionWithRetry({
   skipPreflight = false,
   preferPrivySignAndSend = false,
   forceVersionedTransaction = false,
+  walletPathOverride = null,
   label = 'transaction',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
@@ -848,9 +850,9 @@ export async function sendSolanaTransactionWithRetry({
         throw staleError;
       }
       const preferPrivySendPath = !!(privyActive && preferPrivySignAndSend && privySendTx && privyWalletObj);
-      const walletPath = privyActive
+      const walletPath = walletPathOverride || (privyActive
         ? (preferPrivySendPath ? 'privy_sign_and_send' : (privySignTx ? 'privy_sign_raw' : 'privy_sign_and_send'))
-        : (signTransaction ? 'adapter_sign_raw' : 'adapter_send_transaction');
+        : (signTransaction ? 'adapter_sign_raw' : 'adapter_send_transaction'));
       logTx(label, 'attempt_start', {
         attempt,
         max_attempts: maxAttempts,
