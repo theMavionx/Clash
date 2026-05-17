@@ -312,13 +312,15 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   // Dynamic imports keep solana deps out of the Base-only path bundle. They
   // ship lazily when the user first touches the Solana tab.
   const [
-    { Connection, PublicKey, Transaction, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
+    { Connection, PublicKey, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
     splToken,
     { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl },
+    { sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
     import('@solana/spl-token'),
     import('./solanaRpc'),
+    import('./solanaTx'),
   ]);
 
   const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment });
@@ -366,9 +368,8 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   // either the user gets credited AND the funds move, or neither happens.
   const instructions = [];
 
-  // Bump priority fee a touch so confirmations don't drag during congested
-  // periods. 50_000 micro-lamports per CU ≈ ~$0.00005 extra on a 200k-CU tx.
-  instructions.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
+  // Keep a stable CU limit for token-account creation. Priority fee and
+  // blockhash refresh/retry are handled by sendSolanaTransactionWithRetry.
   instructions.push(ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }));
 
   if (payment === 'sol') {
@@ -413,30 +414,15 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     data: Buffer.from(quote.memo, 'utf8'),
   }));
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-  const tx = new Transaction({
-    feePayer: buyerPk,
-    blockhash,
-    lastValidBlockHeight,
-  });
-  tx.add(...instructions);
-
-  const signed = await solWallet.signTransaction(tx);
-  const signature = await connection.sendRawTransaction(signed.serialize(), {
+  const signature = await sendSolanaTransactionWithRetry({
+    instructions,
+    ownerPk: buyerPk,
+    connection,
+    signTransaction: (tx) => solWallet.signTransaction(tx),
+    priorityFeeMicroLamports: 50_000,
     skipPreflight: false,
-    preflightCommitment: 'confirmed',
+    label: `shop.${payment}`,
   });
-
-  // Wait for confirmation. We use the blockheight strategy (preferred over
-  // signatureStatus polling because it bounds the wait by chain progress
-  // rather than wall clock).
-  const confirm = await connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    'confirmed',
-  );
-  if (confirm.value?.err) {
-    throw new Error(`Solana tx failed: ${JSON.stringify(confirm.value.err)}`);
-  }
 
   const grant = await redeemSolanaShopPurchase({
     token,

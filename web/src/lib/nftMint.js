@@ -255,6 +255,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     { mintV1, mplCandyMachine },
     { fromWeb3JsTransaction, toWeb3JsTransaction },
     bs58Module,
+    { sendSignedSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
     import('@metaplex-foundation/umi-bundle-defaults'),
@@ -263,6 +264,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     import('@metaplex-foundation/mpl-core-candy-machine'),
     import('@metaplex-foundation/umi-web3js-adapters'),
     import('bs58'),
+    import('./solanaTx'),
   ]);
   const bs58 = bs58Module.default || bs58Module;
   const rpcSelection = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => null);
@@ -283,11 +285,6 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     toWeb3JsTransaction,
     fromWeb3JsTransaction,
   });
-  const umi = createUmi(rpcUrl)
-    .use(mplCore())
-    .use(mplCandyMachine())
-    .use(signerIdentity(walletSigner, true));
-  const asset = generateSigner(umi);
 
   const mintArgs = group === 'sol'
     ? { solPayment: some({ destination: publicKey(groupConfig.destination || config.treasury) }) }
@@ -299,69 +296,53 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
       };
 
   let signature;
+  let assetAddress;
   let result;
   try {
-    signature = await mintV1(umi, {
-      candyMachine: publicKey(config.candyMachine),
-      candyGuard: publicKey(config.candyGuard),
-      asset,
-      collection: publicKey(config.collection),
-      owner: publicKey(address),
-      group: some(group),
-      mintArgs,
-    }).send(umi, { skipPreflight: false });
-    result = await confirmSolanaSignatureHttp({
-      Connection,
-      rpcUrl,
-      signature: typeof signature === 'string' ? signature : bs58.encode(signature),
+    const sendConnection = new Connection(rpcUrl, 'confirmed');
+    const sent = await sendSignedSolanaTransactionWithRetry({
+      connection: sendConnection,
+      label: `nft.mint.${group}`,
+      skipPreflight: false,
+      buildSignedTransaction: async ({ connection: attemptConnection, blockhash, lastValidBlockHeight }) => {
+        const attemptUmi = createUmi(attemptConnection?.rpcEndpoint || rpcUrl)
+          .use(mplCore())
+          .use(mplCandyMachine())
+          .use(signerIdentity(walletSigner, true));
+        const asset = generateSigner(attemptUmi);
+        const builder = mintV1(attemptUmi, {
+          candyMachine: publicKey(config.candyMachine),
+          candyGuard: publicKey(config.candyGuard),
+          asset,
+          collection: publicKey(config.collection),
+          owner: publicKey(address),
+          group: some(group),
+          mintArgs,
+        }).setBlockhash({ blockhash, lastValidBlockHeight });
+        const signed = await builder.buildAndSign(attemptUmi);
+        const signatureBytes = signed.signatures?.[0];
+        if (!signatureBytes) throw new Error('Wallet did not return a signed mint transaction signature');
+        return {
+          signature: bs58.encode(signatureBytes),
+          rawTransaction: attemptUmi.transactions.serialize(signed),
+          asset: asset.publicKey.toString(),
+        };
+      },
     });
+    signature = sent.signature;
+    assetAddress = sent.buildResult?.asset;
+    result = sent;
   } catch (err) {
     throw explainSolanaMintError(err, { group, groupConfig, config });
   }
-  const tx = typeof signature === 'string' ? signature : bs58.encode(signature);
+  const tx = String(signature);
   return {
     tx,
     signature: tx,
-    asset: asset.publicKey.toString(),
+    asset: assetAddress,
     result,
     group,
   };
-}
-
-async function confirmSolanaSignatureHttp({ Connection, rpcUrl, signature }) {
-  const connection = new Connection(rpcUrl, 'confirmed');
-  const startedAt = Date.now();
-  const timeoutMs = 45_000;
-  let lastStatus = null;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await connection.getSignatureStatuses([signature], { searchTransactionHistory: false });
-    const status = response?.value?.[0] || null;
-    lastStatus = status;
-    if (status?.err) {
-      const error = new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
-      error.transactionStatus = status;
-      throw error;
-    }
-    if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
-      return {
-        context: response.context,
-        value: status,
-        confirmationStatus: status.confirmationStatus,
-      };
-    }
-    await sleep(900);
-  }
-
-  return {
-    value: lastStatus,
-    confirmationStatus: lastStatus?.confirmationStatus || 'sent',
-    timeout: true,
-  };
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function assertSolanaMintBalances({ Connection, Web3PublicKey, address, group, groupConfig, config, rpcUrl }) {
@@ -440,6 +421,13 @@ function explainSolanaMintError(err, { group, groupConfig, config }) {
     const decimals = Number.isInteger(Number(groupConfig?.decimals)) ? Number(groupConfig.decimals) : (group === 'skr' ? 6 : 6);
     const price = requiredToken > 0n ? `${formatTokenAmount(requiredToken, decimals)} ${tokenLabel}` : `the ${tokenLabel} mint price`;
     return friendlySolanaError(`Not enough ${tokenLabel}: mint costs ${price}.`, `not_enough_${group}`, err);
+  }
+  if (/block height exceeded|signature .* has expired|blockhash.*expired|blockhash not found/i.test(text)) {
+    return friendlySolanaError(
+      'Solana blockhash expired before the network accepted the transaction. Fresh-blockhash retries ran out; approve the wallet popup promptly and try again.',
+      'solana_blockhash_expired',
+      err,
+    );
   }
   return err;
 }

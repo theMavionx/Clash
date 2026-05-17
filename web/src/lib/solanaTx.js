@@ -560,6 +560,125 @@ export function isBlockhashExpiredError(error) {
   );
 }
 
+export async function sendSignedSolanaTransactionWithRetry({
+  buildSignedTransaction,
+  connection,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  skipPreflight = false,
+  label = 'transaction',
+}) {
+  if (typeof buildSignedTransaction !== 'function') {
+    throw new Error('buildSignedTransaction callback is required');
+  }
+  const candidates = buildConnectionCandidates(connection);
+  let lastError = null;
+  let forceFullRpcProbe = false;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let attemptConnection = connection;
+
+    try {
+      const selected = await selectFreshTransactionConnection(candidates, {
+        label,
+        attempt,
+        forceFullProbe: forceFullRpcProbe,
+      });
+      attemptConnection = selected.connection;
+
+      const {
+        blockhash,
+        currentBlockHeight,
+        lastValidBlockHeight,
+        remainingBlocks,
+        remainingClusterBlocks,
+        lagBlocks,
+        clusterBlockHeight,
+      } = selected;
+
+      if (Number.isFinite(remainingClusterBlocks) && remainingClusterBlocks < SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS) {
+        const staleError = new Error('Solana RPC returned an expired latest blockhash; switch RPC and retry');
+        staleError.name = 'SolanaRpcStaleBlockhashError';
+        staleError.currentBlockHeight = clusterBlockHeight ?? currentBlockHeight;
+        staleError.lastValidBlockHeight = lastValidBlockHeight;
+        staleError.blockhash = blockhash;
+        throw staleError;
+      }
+
+      logTx(label, 'attempt_start', {
+        attempt,
+        max_attempts: maxAttempts,
+        rpc_host: rpcHost(attemptConnection),
+        rpc_source: selected.source,
+        rpc_probe_mode: selected.probeMode || null,
+        blockhash: String(blockhash).slice(0, 8),
+        current_block_height: currentBlockHeight,
+        cluster_block_height: clusterBlockHeight,
+        rpc_lag_blocks: lagBlocks,
+        last_valid_block_height: lastValidBlockHeight,
+        remaining_blocks: remainingBlocks,
+        remaining_cluster_blocks: remainingClusterBlocks,
+        skip_preflight: !!skipPreflight,
+        pre_signed: true,
+      });
+
+      const built = await buildSignedTransaction({
+        attempt,
+        connection: attemptConnection,
+        blockhash,
+        currentBlockHeight,
+        lastValidBlockHeight,
+        selected,
+      });
+      const signature = built?.signature;
+      const rawTransaction = built?.rawTransaction
+        ? new Uint8Array(built.rawTransaction)
+        : null;
+      if (!isValidTransactionSignature(signature)) {
+        throw new Error('Signed Solana transaction did not include a valid signature');
+      }
+      if (!rawTransaction?.length) {
+        throw new Error('Signed Solana transaction did not include raw bytes');
+      }
+
+      const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
+      try {
+        await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
+      } catch (sendError) {
+        throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
+      }
+      logTx(label, 'raw_sent', {
+        attempt,
+        rpc_host: rpcHost(attemptConnection),
+        signature_short: shortSig(signature),
+      });
+
+      await waitForSignature({
+        connection: attemptConnection,
+        signature,
+        lastValidBlockHeight,
+        rawTransaction,
+        label,
+        attempt,
+      });
+      logTx(label, 'confirmed', { attempt, signature_short: shortSig(signature) });
+      return { signature, rawTransaction, buildResult: built };
+    } catch (error) {
+      lastError = error;
+      const errorDetails = await describeSolanaError(error, attemptConnection);
+      const blockhashExpired = isBlockhashExpiredError(error);
+      if (blockhashExpired) forceFullRpcProbe = true;
+      logTx(label, 'attempt_error', {
+        attempt,
+        ...errorDetails,
+      }, blockhashExpired ? 'warn' : 'error');
+      if (!blockhashExpired || attempt >= maxAttempts) throw error;
+      await sleep(500 * attempt);
+    }
+  }
+
+  throw lastError || new Error('Solana transaction failed');
+}
+
 export async function sendSolanaTransactionWithRetry({
   instructions,
   ownerPk,
