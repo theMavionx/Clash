@@ -6,9 +6,10 @@ const heliusApiKey = (
   || import.meta.env.VITE_SOLANA_HELIUS_API_KEY
   || ''
 ).trim();
-const allowProxyFallback = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || ''));
+const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || '1'));
 const preferProxyRpc = allowProxyFallback
   && /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || ''));
+const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
 const defaultDirectBrowserRpc = ['https://solana-rpc', 'publicnode.com'].join('.');
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
@@ -75,7 +76,7 @@ const DIRECT_SOLANA_RPC_URLS = [
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
   heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}` : '',
   defaultDirectBrowserRpc,
-  officialDirectBrowserRpc,
+  ...(includeOfficialDirectRpc ? [officialDirectBrowserRpc] : []),
 ];
 
 const PROXY_SOLANA_RPC_URLS = [
