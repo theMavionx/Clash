@@ -54,6 +54,11 @@ function isStandardAbstractionMode(mode) {
   return !text || text === 'disabled' || text === 'standard';
 }
 
+function isBuilderSupportedAbstractionMode(mode) {
+  const text = String(mode || '').trim();
+  return isStandardAbstractionMode(text) || text === 'unifiedAccount' || text === 'portfolioMargin';
+}
+
 function oneTapPreferenceKey(wallet) {
   return `hyperliquid_one_tap_enabled:${String(wallet || '').toLowerCase()}`;
 }
@@ -233,15 +238,16 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
   );
   const builderAbstractionMode = builderSnapshot?.abstractionMode || 'disabled';
   const builderStandardMode = isStandardAbstractionMode(builderAbstractionMode);
+  const builderSupportedMode = isBuilderSupportedAbstractionMode(builderAbstractionMode);
   const builderUnifiedAccount = !!builderSnapshot?.isUnifiedAccount;
   const builderEligibleValue = builderUnifiedAccount ? builderAccountValue : builderPerpAccountValue;
   const builderValueLabel = builderUnifiedAccount ? 'Builder account value' : 'Builder perps account value';
   const builderValueEligible = builderEligibleValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
-  const eligible = builderStandardMode && builderValueEligible;
+  const eligible = builderSupportedMode && builderValueEligible;
   const eligibilityReason = eligible
     ? null
-    : !builderStandardMode
-    ? `Builder account must be in Standard mode. Current mode: ${builderAbstractionMode}.`
+    : !builderSupportedMode
+    ? `Builder account mode is not supported yet. Current mode: ${builderAbstractionMode}.`
     : `${builderValueLabel} is $${builderEligibleValue.toFixed(2)}; needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
   const status = {
     configured: true,
@@ -257,6 +263,7 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
     builderSpotUsdc,
     builderAbstractionMode,
     builderStandardMode,
+    builderSupportedMode,
     builderEligibilityReason: eligibilityReason,
     builderUnifiedAccount,
   };
@@ -910,6 +917,7 @@ export function useHyperliquid() {
       eligible: before.eligible,
       canUse: before.canUse,
       abstractionMode: before.builderAbstractionMode,
+      supportedMode: before.builderSupportedMode,
       unifiedAccount: before.builderUnifiedAccount,
       builderAccountValue: before.builderAccountValue,
       builderPerpAccountValue: before.builderPerpAccountValue,
