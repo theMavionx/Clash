@@ -37,6 +37,7 @@ addons/godot_mcp/
 # Codex local workspace artifacts (agent configs, generated skills, logs)
 .agents/
 .codex/
+.client-logs*.json
 
 # Godot Web Export
 web/public/godot/

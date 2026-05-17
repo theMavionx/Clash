@@ -25,6 +25,8 @@ const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
 const PHOENIX_TX_METADATA_TTL_MS = 12_000;
 const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
+const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
+const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
@@ -567,6 +569,7 @@ export function usePhoenix() {
   const refreshTraderStateInFlightRef = useRef(null);
   const refreshTraderStateCachedAtRef = useRef(0);
   const refreshTraderStateLastResultRef = useRef(undefined);
+  const refreshTraderStateRetryMsRef = useRef(PHOENIX_TRADER_STATE_DEDUP_MS);
   const txClientRef = useRef(null);
   const txClientEndpointRef = useRef(null);
   const txClientReadyAtRef = useRef(0);
@@ -879,7 +882,11 @@ export function usePhoenix() {
     if (
       !force
       && refreshTraderStateLastResultRef.current !== undefined
-      && now - refreshTraderStateCachedAtRef.current < PHOENIX_TRADER_STATE_DEDUP_MS
+      && now - refreshTraderStateCachedAtRef.current < (
+        refreshTraderStateLastResultRef.current === null
+          ? refreshTraderStateRetryMsRef.current
+          : PHOENIX_TRADER_STATE_DEDUP_MS
+      )
     ) {
       return refreshTraderStateLastResultRef.current;
     }
@@ -967,8 +974,11 @@ export function usePhoenix() {
       setDataReady(true);
       refreshTraderStateLastResultRef.current = state;
       refreshTraderStateCachedAtRef.current = Date.now();
+      refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
       return state;
-    } catch {
+    } catch (e) {
+      const msg = String(e?.message || e || '');
+      const looksUnregistered = /404|not found|no trader|not registered|does not exist/i.test(msg);
       traderRegisteredRef.current = false;
       setTraderRegistered(false);
       subaccountsRef.current = [];
@@ -991,6 +1001,9 @@ export function usePhoenix() {
       setDataReady(true);
       refreshTraderStateLastResultRef.current = null;
       refreshTraderStateCachedAtRef.current = Date.now();
+      refreshTraderStateRetryMsRef.current = looksUnregistered
+        ? PHOENIX_UNREGISTERED_RETRY_MS
+        : PHOENIX_TRADER_STATE_ERROR_RETRY_MS;
       return null;
       }
     })();

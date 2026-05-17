@@ -127,7 +127,12 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   if (!isSolanaWallet(cleanWallet)) {
     return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_solana_wallet' };
   }
-  const marketMap = await getMarketMap();
+  let marketMap = {};
+  try {
+    marketMap = await getMarketMap();
+  } catch (e) {
+    console.warn('[phoenix-rewards-worker] market metadata unavailable; importing fills with raw symbols:', e.message);
+  }
   let inserted = 0;
   let skipped = 0;
 

@@ -27,7 +27,7 @@ const OWNED_SOLANA_TOKEN2022_TIMEOUT_MS = 9_000;
 const OWNED_SOLANA_CORE_TIMEOUT_MS = 14_000;
 const OWNED_SERVER_FALLBACK_TIMEOUT_MS = 12_000;
 const OWNED_EVM_SCAN_CHUNK_SIZE = 80;
-const OWNED_CACHE_PREFIX = 'nft-owned-v2:';
+const OWNED_CACHE_PREFIX = 'nft-owned-v3:';
 
 const ownedNftMemoryCache = new Map();
 
@@ -943,9 +943,11 @@ async function fetchOwnedToken2022SolanaNfts(address, signal) {
 
 async function fetchOwnedNftsBrowserSolana({ address, signal }) {
   let lastError = null;
+  let emptyBrowserResult = null;
   try {
     const token2022Result = await fetchOwnedToken2022SolanaNfts(address, signal);
-    if (token2022Result) return token2022Result;
+    if (token2022Result?.tokens?.length) return token2022Result;
+    if (token2022Result) emptyBrowserResult = token2022Result;
   } catch (err) {
     if (isAbortError(err)) throw err;
     lastError = err;
@@ -953,7 +955,9 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
   const urls = solanaDasUrls();
   for (const url of urls) {
     try {
-      return await fetchOwnedNftsFromSolanaDasEndpoint(url, address, signal);
+      const dasResult = await fetchOwnedNftsFromSolanaDasEndpoint(url, address, signal);
+      if (dasResult?.tokens?.length) return dasResult;
+      if (dasResult && !emptyBrowserResult) emptyBrowserResult = dasResult;
     } catch (err) {
       if (isAbortError(err)) throw err;
       lastError = err;
@@ -962,7 +966,8 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
   if (envFlag('VITE_SOLANA_ENABLE_MAGIC_EDEN_INDEXER', false)) {
     try {
       const magicEdenResult = await fetchOwnedNftsFromMagicEden(address, signal);
-      if (magicEdenResult) return magicEdenResult;
+      if (magicEdenResult?.tokens?.length) return magicEdenResult;
+      if (magicEdenResult && !emptyBrowserResult) emptyBrowserResult = magicEdenResult;
     } catch (err) {
       if (isAbortError(err)) throw err;
       lastError = err;
@@ -985,7 +990,7 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
         .filter(solanaCoreAssetLooksRelevant)
         .map(solanaCoreAssetToken)
         .filter((token) => token.asset);
-      return {
+      const coreResult = {
         chain: 'solana',
         owner: address,
         collection: SOLANA_NFT_COLLECTION,
@@ -993,11 +998,14 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
         tokens,
         source: 'browser-solana-core',
       };
+      if (coreResult.tokens.length) return coreResult;
+      if (!emptyBrowserResult) emptyBrowserResult = coreResult;
     } catch (err) {
       if (isAbortError(err)) throw err;
       lastError = err;
     }
   }
+  if (lastError && !emptyBrowserResult) throw lastError;
   return null;
 }
 
@@ -1025,7 +1033,7 @@ export async function fetchOwnedNfts({ chain, address, signal } = {}) {
     } else if (chainKey === 'solana') {
       direct = await fetchOwnedNftsBrowserSolana({ address, signal });
     }
-    if (direct) {
+    if (direct && (chainKey !== 'solana' || (direct.tokens || []).length > 0)) {
       writeOwnedCache(key, direct);
       return direct;
     }
