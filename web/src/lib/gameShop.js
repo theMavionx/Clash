@@ -1,5 +1,6 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
 import { ensureErc20Allowance } from './nftMint';
+import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 
 // 40% allowance headroom: enough cushion for CoP/USD price drift between the
 // pre-flight quote and the actual purchase quote (typical drift on a small
@@ -278,6 +279,31 @@ function isMobileWalletAdapter(solWallet) {
   return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
 }
 
+function shortShopAddress(address) {
+  const text = String(address || '');
+  return text.length > 14 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
+}
+
+function solanaShopLog(type, data = {}, level = 'info') {
+  addClientBreadcrumb(`shop.solana.${type}`, data, level);
+  try {
+    const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+    console[method](`[shop-solana] ${type}`, data);
+  } catch {}
+}
+
+function solanaShopErrorData(error, extra = {}) {
+  return {
+    name: error?.name || null,
+    message: error?.message || String(error || ''),
+    short_message: error?.shortMessage || null,
+    code: error?.code || error?.cause?.code || null,
+    cause: error?.cause?.message || null,
+    stack: error?.stack || null,
+    ...extra,
+  };
+}
+
 function solanaMobileAppIdentity() {
   const origin = typeof window !== 'undefined' && window.location?.origin
     ? window.location.origin
@@ -303,16 +329,46 @@ function base64AddressToBase58(address, PublicKey) {
 
 async function sendSolanaMobileProtocolTransaction({ transaction, options, expectedAddress, PublicKey }) {
   const { transact } = await import('@solana-mobile/mobile-wallet-adapter-protocol-web3js');
+  solanaShopLog('mwa_protocol_open', {
+    expected_wallet: shortShopAddress(expectedAddress),
+    tx_version: transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy',
+    skip_preflight: !!options?.skipPreflight,
+    max_retries: options?.maxRetries ?? null,
+  });
   return transact(async (wallet) => {
+    const capabilities = await wallet.getCapabilities().catch((err) => {
+      solanaShopLog('mwa_capabilities_failed', solanaShopErrorData(err), 'warn');
+      return null;
+    });
+    solanaShopLog('mwa_capabilities', {
+      supports_sign_and_send: capabilities?.supports_sign_and_send_transactions ?? null,
+      max_transactions_per_request: capabilities?.max_transactions_per_request ?? null,
+      supported_transaction_versions: capabilities?.supported_transaction_versions || null,
+      features: Array.isArray(capabilities?.features) ? capabilities.features.slice(0, 12) : null,
+    });
+
     const authorization = await wallet.authorize({
       chain: 'solana:mainnet',
       identity: solanaMobileAppIdentity(),
       features: ['solana:signAndSendTransactions'],
     });
     const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address, PublicKey);
+    solanaShopLog('mwa_authorized', {
+      expected_wallet: shortShopAddress(expectedAddress),
+      authorized_wallet: shortShopAddress(authorizedAddress),
+      account_count: Array.isArray(authorization?.accounts) ? authorization.accounts.length : null,
+      has_auth_token: !!authorization?.auth_token,
+      wallet_uri_base: authorization?.wallet_uri_base || null,
+    });
     if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
       throw new Error(`Mobile wallet authorized ${authorizedAddress}, but the connected shop wallet is ${expectedAddress}`);
     }
+    solanaShopLog('mwa_sign_and_send_start', {
+      tx_version: transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy',
+      commitment: options?.preflightCommitment || 'confirmed',
+      skip_preflight: !!options?.skipPreflight,
+      max_retries: options?.maxRetries ?? null,
+    });
     const [signature] = await wallet.signAndSendTransactions({
       auth_token: authorization.auth_token,
       transactions: [transaction],
@@ -320,6 +376,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
       skipPreflight: !!options?.skipPreflight,
       maxRetries: options?.maxRetries,
     });
+    solanaShopLog('mwa_sign_and_send_ok', { sig: shortShopAddress(signature) });
     return signature;
   });
 }
@@ -493,6 +550,22 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function';
   const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
   if (!canSendSolanaTx && !canSignSolanaTx) throw new Error('This Solana wallet cannot sign transactions');
+  const adapterName = walletAdapterName(solWallet) || 'wallet';
+  const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
+  const shopTrace = {
+    wallet: shortShopAddress(address),
+    adapter: adapterName,
+    mobileWalletAdapter,
+    sku,
+    payment,
+    quantity,
+  };
+  solanaShopLog('start', {
+    ...shopTrace,
+    can_send_transaction: canSendSolanaTx,
+    can_sign_transaction: canSignSolanaTx,
+    wallet_source: solWallet?.source || null,
+  });
 
   // Dynamic imports keep solana deps out of the Base-only path bundle. They
   // ship lazily when the user first touches the Solana tab.
@@ -510,6 +583,16 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
 
   const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment });
   if (!quote?.treasury) throw new Error('Solana treasury not configured');
+  solanaShopLog('quote_ok', {
+    ...shopTrace,
+    treasury: shortShopAddress(quote.treasury),
+    mint: shortShopAddress(quote.mint),
+    amount: quote.amount,
+    amount_formatted: quote.amountFormatted,
+    decimals: quote.decimals,
+    price_source: quote.priceSource,
+    deadline: quote.deadline,
+  });
 
   // Shop payments are user-facing and short-lived, so prefer our same-origin
   // RPC proxy first. Public browser RPCs are useful fallbacks, but on Seeker
@@ -525,6 +608,12 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   const rpcSelection = await selectFreshSolanaRpcUrl(shopPrimaryRpcUrls, { timeoutMs: 2500 }).catch(() => null);
   const rpcUrl = rpcSelection?.selected?.url || shopRpcUrls[0] || DEFAULT_SOLANA_RPC_URL;
   let connection = new Connection(rpcUrl, 'confirmed');
+  solanaShopLog('rpc_selected', {
+    ...shopTrace,
+    rpc_host: (() => { try { return new URL(rpcUrl, window.location.origin).host; } catch { return String(rpcUrl); } })(),
+    rpc_source: rpcSelection?.selected?.source || null,
+    fallback_count: shopRpcUrls.length,
+  });
 
   const buyerPk = new PublicKey(address);
   const treasuryPk = new PublicKey(quote.treasury);
@@ -543,6 +632,12 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     });
     connection = balanceResult.connection;
     const lamports = balanceResult.lamports;
+    solanaShopLog('sol_balance_checked', {
+      ...shopTrace,
+      lamports: lamports.toString(),
+      required_lamports: amount.toString(),
+      rpc_host: connection?.rpcEndpoint ? (() => { try { return new URL(connection.rpcEndpoint, window.location.origin).host; } catch { return connection.rpcEndpoint; } })() : null,
+    });
     // Reserve ~0.001 SOL for fees; tx fee is ~0.000005 but ATA-creation can
     // push it higher. Keeping a buffer avoids "would leave 0 SOL" reverts.
     const reserve = 1_000_000n;
@@ -563,6 +658,16 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     const tokenAccounts = tokenRead.accounts;
     const buyerBalance = tokenAccounts.reduce((sum, row) => sum + row.amount, 0n);
     const tokenDecimals = tokenAccounts.find((row) => Number.isInteger(row.decimals))?.decimals ?? quote.decimals;
+    solanaShopLog('token_accounts_checked', {
+      ...shopTrace,
+      mint: shortShopAddress(quote.mint),
+      account_count: tokenAccounts.length,
+      non_empty_accounts: tokenAccounts.filter((row) => row.amount > 0n).length,
+      token_balance: buyerBalance.toString(),
+      required_amount: amount.toString(),
+      decimals: tokenDecimals,
+      programs: [...new Set(tokenAccounts.map((row) => row.programId?.toString?.()).filter(Boolean))].map(shortShopAddress),
+    });
     if (buyerBalance < amount) {
       throw new InsufficientSolanaBalanceError(payment, amount, buyerBalance, tokenDecimals);
     }
@@ -577,6 +682,11 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     if (feeBalance?.lamports != null && feeBalance.lamports < feeFloorLamports) {
       throw new InsufficientSolanaBalanceError('sol', feeFloorLamports, feeBalance.lamports, 9);
     }
+    solanaShopLog('fee_balance_checked', {
+      ...shopTrace,
+      lamports: feeBalance?.lamports?.toString?.() ?? null,
+      required_floor_lamports: feeFloorLamports.toString(),
+    });
     quote._tokenAccounts = tokenAccounts;
     quote._tokenDecimals = tokenDecimals;
   }
@@ -603,6 +713,11 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       splToken,
       mintPk,
       tokenAccounts,
+    });
+    solanaShopLog('token_program_resolved', {
+      ...shopTrace,
+      mint: shortShopAddress(quote.mint),
+      token_program: shortShopAddress(tokenProgramId?.toString?.()),
     });
     const tokenDecimals = Number.isInteger(quote._tokenDecimals) ? quote._tokenDecimals : quote.decimals;
     const treasuryAta = await splToken.getAssociatedTokenAddress(mintPk, treasuryPk, false, tokenProgramId);
@@ -643,10 +758,15 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     programId: memoProgramPk,
     data: Buffer.from(quote.memo, 'utf8'),
   }));
+  solanaShopLog('instructions_ready', {
+    ...shopTrace,
+    instruction_count: instructions.length,
+    programs: instructions.map((ix) => shortShopAddress(ix?.programId?.toString?.())).filter(Boolean),
+    force_v0: mobileWalletAdapter,
+  });
 
   let signature;
   try {
-    const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
     signature = await sendSolanaTransactionWithRetry({
       instructions,
       ownerPk: buyerPk,
@@ -679,9 +799,24 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       // signature inside signAndSendTransaction.
       forceVersionedTransaction: mobileWalletAdapter,
       walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
-      label: `shop.${payment}.${walletAdapterName(solWallet) || 'wallet'}`,
+      label: `shop.${payment}.${adapterName}`,
     });
   } catch (err) {
+    const payload = solanaShopErrorData(err, {
+      ...shopTrace,
+      quote_amount: quote?.amount || null,
+      quote_mint: shortShopAddress(quote?.mint),
+      quote_treasury: shortShopAddress(quote?.treasury),
+      instruction_count: instructions.length,
+      force_v0: mobileWalletAdapter,
+    });
+    solanaShopLog('failed', payload, 'error');
+    reportClientEvent('shop.solana.failed', payload, {
+      level: 'error',
+      source: 'shop.solana',
+      message: `Solana shop ${payment} failed: ${payload.message}`,
+      stack: err?.stack,
+    });
     if (isBlockhashExpiredError(err)) {
       const friendly = new Error('Solana confirmed the payment too slowly for this RPC. The app now checks fallback RPCs, but this attempt expired before it could be redeemed. Try once more after refreshing.');
       friendly.shortMessage = friendly.message;
@@ -691,12 +826,19 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     }
     throw err;
   }
+  solanaShopLog('tx_submitted', { ...shopTrace, sig: shortShopAddress(signature) });
 
   const grant = await redeemSolanaShopPurchaseWithRetry({
     token,
     txSignature: signature,
     buyer: address,
     serverSignature: quote.signature,
+  });
+  solanaShopLog('redeemed', {
+    ...shopTrace,
+    sig: shortShopAddress(signature),
+    grant_resources: grant?.resources || null,
+    shield_until: grant?.shield_until || null,
   });
   return { signature, quote, grant };
 }

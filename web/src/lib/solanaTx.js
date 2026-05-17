@@ -860,6 +860,7 @@ export async function sendSolanaTransactionWithRetry({
         rpc_source: selected.source,
         rpc_probe_mode: selected.probeMode || null,
         blockhash: String(blockhash).slice(0, 8),
+        force_versioned_transaction: !!forceVersionedTransaction,
         current_block_height: currentBlockHeight,
         cluster_block_height: clusterBlockHeight,
         rpc_lag_blocks: lagBlocks,
@@ -957,8 +958,26 @@ export async function sendSolanaTransactionWithRetry({
       if (blockhashExpired) forceFullRpcProbe = true;
       logTx(label, 'attempt_error', {
         attempt,
+        final_attempt: attempt >= maxAttempts,
+        wallet_path_override: walletPathOverride || null,
+        force_versioned_transaction: !!forceVersionedTransaction,
         ...errorDetails,
       }, blockhashExpired ? 'warn' : 'error');
+      if (attempt >= maxAttempts) {
+        reportClientEvent('solana_tx.final_error', {
+          label,
+          attempt,
+          max_attempts: maxAttempts,
+          wallet_path_override: walletPathOverride || null,
+          force_versioned_transaction: !!forceVersionedTransaction,
+          ...errorDetails,
+        }, {
+          level: 'error',
+          source: 'solana.tx',
+          message: `Solana tx failed after ${attempt} attempt(s): ${errorDetails.message || error?.message || String(error)}`,
+          stack: error?.stack,
+        });
+      }
       if (!blockhashExpired || attempt >= maxAttempts) throw error;
       await sleep(500 * attempt);
     }
