@@ -233,13 +233,16 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
   );
   const builderAbstractionMode = builderSnapshot?.abstractionMode || 'disabled';
   const builderStandardMode = isStandardAbstractionMode(builderAbstractionMode);
-  const builderPerpEligible = builderPerpAccountValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
-  const eligible = builderStandardMode && builderPerpEligible;
+  const builderUnifiedAccount = !!builderSnapshot?.isUnifiedAccount;
+  const builderEligibleValue = builderUnifiedAccount ? builderAccountValue : builderPerpAccountValue;
+  const builderValueLabel = builderUnifiedAccount ? 'Builder account value' : 'Builder perps account value';
+  const builderValueEligible = builderEligibleValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
+  const eligible = builderStandardMode && builderValueEligible;
   const eligibilityReason = eligible
     ? null
     : !builderStandardMode
     ? `Builder account must be in Standard mode. Current mode: ${builderAbstractionMode}.`
-    : `Builder perps account value is $${builderPerpAccountValue.toFixed(2)}; needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
+    : `${builderValueLabel} is $${builderEligibleValue.toFixed(2)}; needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
   const status = {
     configured: true,
     builder: builder.b,
@@ -250,11 +253,12 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
     canUse: eligible && approved >= builder.f,
     builderAccountValue,
     builderPerpAccountValue,
+    builderEligibleValue,
     builderSpotUsdc,
     builderAbstractionMode,
     builderStandardMode,
     builderEligibilityReason: eligibilityReason,
-    builderUnifiedAccount: !!builderSnapshot?.isUnifiedAccount,
+    builderUnifiedAccount,
   };
   builderStatusCache.set(key, { status, at: Date.now() });
   return status;
@@ -533,7 +537,8 @@ export function useHyperliquid() {
       setBuilderApproval(status);
       return status;
     }
-    const status = await readBuilderStatus(walletAddr, builder, opts);
+    const refresh = opts?.refresh === true || opts?.force === true;
+    const status = await readBuilderStatus(walletAddr, builder, { refresh });
     setBuilderApproval(status);
     return status;
   }, [walletAddr]);
@@ -898,10 +903,22 @@ export function useHyperliquid() {
     if (!walletAddr) throw new Error('Connect your EVM wallet first');
     const before = await readBuilderStatus(walletAddr, builder, { refresh: opts?.force === true });
     setBuilderApproval(before);
+    console.info('[useHyperliquid] builder fee status', {
+      builder: builder.b,
+      approved: before.approved,
+      required: builder.f,
+      eligible: before.eligible,
+      canUse: before.canUse,
+      abstractionMode: before.builderAbstractionMode,
+      unifiedAccount: before.builderUnifiedAccount,
+      builderAccountValue: before.builderAccountValue,
+      builderPerpAccountValue: before.builderPerpAccountValue,
+      builderEligibleValue: before.builderEligibleValue,
+    });
     if (!before.eligible) {
-      const builderValue = Number(before.builderPerpAccountValue ?? 0);
+      const builderValue = Number(before.builderEligibleValue ?? before.builderPerpAccountValue ?? 0);
       const reason = before.builderEligibilityReason
-        || `Builder perps account value is $${builderValue.toFixed(2)}, needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
+        || `Builder account value is $${builderValue.toFixed(2)}, needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
       console.warn(
         `[useHyperliquid] builder fee disabled: ${reason}`,
       );
@@ -928,10 +945,22 @@ export function useHyperliquid() {
         builder: builder.b,
         maxFeeRate: hyperliquidBuilderMaxFeeRate(builder),
       });
+      console.info('[useHyperliquid] builder fee approval submitted', {
+        builder: builder.b,
+        responseType: result?.response?.type || result?.status || typeof result,
+      });
       const responseError = exchangeResponseError(result);
       if (responseError) throw new Error(responseError);
       const verified = await waitForBuilderApproval(walletAddr, builder);
       if (verified.status) setBuilderApproval(verified.status);
+      console.info('[useHyperliquid] builder fee approval verify', {
+        builder: builder.b,
+        ok: verified.ok,
+        approved: verified.status?.approved,
+        required: builder.f,
+        eligible: verified.status?.eligible,
+        canUse: verified.status?.canUse,
+      });
       if (!verified.ok) {
         const approved = Number(verified.status?.approved || 0);
         const reason = verified.status?.builderEligibilityReason
@@ -943,6 +972,10 @@ export function useHyperliquid() {
       }
       return { success: true, approved: verified.status.approved, raw: result, useBuilder: true, builder };
     } catch (e) {
+      console.error('[useHyperliquid] builder fee approval failed', {
+        builder: builder.b,
+        message: hyperliquidErrorMessage(e, e?.message || 'Builder fee approval failed'),
+      });
       setBuilderApproval(prev => (
         prev?.builder && String(prev.builder).toLowerCase() === String(builder.b).toLowerCase()
           ? { ...prev, approving: false, userCanApprove: true }

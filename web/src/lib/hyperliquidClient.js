@@ -7,6 +7,7 @@ export const HYPERLIQUID_BUILDER_ADDRESS = String(import.meta.env.VITE_HYPERLIQU
 export const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(import.meta.env.VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 100);
 export const HYPERLIQUID_REFERRAL_CODE = String(import.meta.env.VITE_HYPERLIQUID_REFERRAL_CODE || 'CLASHOFPERPS').trim();
 export const HYPERLIQUID_ARBITRUM_CHAIN_ID = 42161;
+export const HYPERLIQUID_SIGNATURE_CHAIN_ID_HEX = `0x${HYPERLIQUID_ARBITRUM_CHAIN_ID.toString(16)}`;
 export const HYPERLIQUID_BRIDGE2_ADDRESS = '0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7';
 export const HYPERLIQUID_ARBITRUM_USDC_ADDRESS = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 export const HYPERLIQUID_USDC_DECIMALS = 6;
@@ -198,7 +199,7 @@ async function readWalletChainId(provider, walletClient) {
     const id = normalizeRpcChainId(await walletClient.getChainId());
     if (id) return id;
   }
-  return 1;
+  return HYPERLIQUID_ARBITRUM_CHAIN_ID;
 }
 
 function deepestErrorMessage(error) {
@@ -237,6 +238,14 @@ export function createHyperliquidWalletAdapter({ address, provider, walletClient
           });
         } catch (e) {
           providerErrors.push(deepestErrorMessage(e) || 'eth_signTypedData_v4 string payload failed');
+          try {
+            return await provider.request({
+              method: 'eth_signTypedData_v4',
+              params: [accountLower, payload],
+            });
+          } catch (objectPayloadError) {
+            providerErrors.push(deepestErrorMessage(objectPayloadError) || 'eth_signTypedData_v4 object payload failed');
+          }
         }
       }
       if (walletClient?.signTypedData) {
@@ -258,7 +267,11 @@ export function createHyperliquidWalletAdapter({ address, provider, walletClient
 }
 
 export function createHyperliquidExchangeClient(wallet) {
-  return new ExchangeClient({ transport: hyperliquidTransport(), wallet });
+  return new ExchangeClient({
+    transport: hyperliquidTransport(),
+    wallet,
+    signatureChainId: HYPERLIQUID_SIGNATURE_CHAIN_ID_HEX,
+  });
 }
 
 export function hyperliquidBuilderParams() {
