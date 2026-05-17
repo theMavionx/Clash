@@ -119,7 +119,8 @@ export function useAuthFlow() {
   const { dex, setDex } = useDex();
   const { isInFrame, user: fcUser, loading: fcLoading } = useFarcaster();
   // Solana Mobile (Saga / Seeker) detection — used to lock the user into
-  // the Pacifica-only flow and auto-trigger MWA wallet connection. `ready`
+  // the Solana DEX flow and auto-trigger MWA wallet connection when Privy
+  // is not available. `ready`
   // gates the auto-pick effect so we don't briefly render the DEX picker.
   const { isSolanaMobile, ready: smReady } = useSolanaMobile();
   // Direct handle on the Solana wallet adapter so we can fire the MWA
@@ -188,7 +189,10 @@ export function useAuthFlow() {
   }, [smReady, isSolanaMobile, dex, setDex]);
 
   // Saga/Seeker auto-connect: once the page settles, programmatically select
-  // + connect the Mobile Wallet Adapter. The OS
+  // + connect the Mobile Wallet Adapter. When Privy is enabled, skip the
+  // automatic prompt so the login screen can show the email option first.
+  // The manual Solana wallet button still opens MWA for users who want it.
+  // The OS
   // shows the Seed Vault confirmation; one tap and the user's pubkey is
   // available. Without this the user would still have to open the wallet
   // modal and click MWA themselves. Idempotent — only runs while
@@ -200,6 +204,7 @@ export function useAuthFlow() {
     if (!solWallet || solWallet.connected || solWallet.connecting) return;
     if (!solWallet.select || !solWallet.connect) return;
     seekerAutoConnectTriedRef.current = true;
+    if (privyEnabled) return;
     addClientBreadcrumb('wallet.connect_start', { source: 'seeker_mwa', dex });
     // The adapter name is "Mobile Wallet Adapter". Stable across SDK
     // versions and matches what `SolanaMobileWalletAdapter` registers as.
@@ -218,7 +223,7 @@ export function useAuthFlow() {
       }, 'warn');
       console.warn('[useAuthFlow] Seeker auto-connect failed:', e?.message || e);
     });
-  }, [smReady, isSolanaMobile, solWallet, dex]);
+  }, [smReady, isSolanaMobile, solWallet, dex, privyEnabled]);
 
   // Session-invalidated reset. Godot sends `show_register` in two cases:
   //   (a) brand-new user — nothing to clean, all flags are already clear
@@ -621,7 +626,7 @@ export function useAuthFlow() {
 
   // Actions exposed to the UI. All auth decisions flow through here.
   const pickDex = useCallback((newDex) => {
-    if (!isDexAvailableInContext(newDex, { isInFrame })) return;
+    if (!isDexAvailableInContext(newDex, { isInFrame, isSolanaMobile })) return;
     const isLoggedIn = typeof window !== 'undefined' && !!window._playerToken;
     const switching = isLoggedIn && dexPicked && newDex !== dex;
     addClientBreadcrumb('dex.pick', { from: dex, to: newDex, switching });
@@ -651,7 +656,7 @@ export function useAuthFlow() {
       }
       sendToGodot('logout');
     }
-  }, [dex, dexPicked, isInFrame, setDex, sendToGodot, aptosWallet]);
+  }, [dex, dexPicked, isInFrame, isSolanaMobile, setDex, sendToGodot, aptosWallet]);
 
   const unpickDex = useCallback(() => {
     writeDexPicked(false);
@@ -718,6 +723,7 @@ export function useAuthFlow() {
     state,
     dex,
     isInFrame,
+    isSolanaMobile,
     fcUser,
     candidate,
     suggestedName,

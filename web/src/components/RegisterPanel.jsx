@@ -23,8 +23,8 @@ function Spinner({ label }) {
   );
 }
 
-function DexPicker({ onPick, isInFrame }) {
-  const dexOptions = getAvailableDexConfigs({ isInFrame });
+function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
+  const dexOptions = getAvailableDexConfigs({ isInFrame, isSolanaMobile });
   return (
     <div style={S.bodyStack}>
       <h3 style={S.sectionTitle}>CHOOSE YOUR DEX</h3>
@@ -228,14 +228,12 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
       </p>
       {privyEnabled && (
         <button style={S.primaryBtn} onClick={onPrivyLogin}>
-          <EmailIcon /> {privyAuthed ? 'LOGOUT' : 'SIGN IN WITH EMAIL'}
+          <EmailIcon /> {privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}
         </button>
       )}
-      {(!privyEnabled || !privyAuthed) && (
-        <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenEvmModal}>
-          <WalletIcon /> CONNECT WALLET
-        </button>
-      )}
+      <button style={privyEnabled ? S.secondaryBtn : S.primaryBtn} onClick={onOpenEvmModal}>
+        <WalletIcon /> CONNECT WALLET
+      </button>
     </div>
   );
 }
@@ -299,7 +297,7 @@ function EmailIcon() {
 
 function RegisterPanel() {
   const {
-    state, dex, isInFrame, fcUser, candidate, suggestedName, seekerHandle,
+    state, dex, isInFrame, isSolanaMobile, fcUser, candidate, suggestedName, seekerHandle,
     privyEnabled, privyAuthed, actions,
   } = useAuthFlow();
 
@@ -323,7 +321,7 @@ function RegisterPanel() {
       case 'booting':
         return <Spinner label="Loading…" />;
       case 'pick_dex':
-        return <DexPicker onPick={actions.pickDex} isInFrame={isInFrame} />;
+        return <DexPicker onPick={actions.pickDex} isInFrame={isInFrame} isSolanaMobile={isSolanaMobile} />;
       case 'auto_connecting':
         return (
           <Spinner

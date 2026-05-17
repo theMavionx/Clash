@@ -1013,6 +1013,17 @@ function FuturesPanel() {
     try { privyLogin({ loginMethods: ['email'] }); }
     catch { privyLogin(); }
   }, [privyEnabled, privyLogin]);
+  const renderPrivyEmailButton = useCallback((color, dark) => {
+    if (!privyEnabled) return null;
+    return (
+      <button
+        style={{...cartoonBtn(color, dark), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+        onClick={loginWithPrivyEmail}
+      >
+        <span>{privyAuthed ? 'CONTINUE WITH EMAIL' : 'SIGN IN WITH EMAIL'}</span>
+      </button>
+    );
+  }, [privyEnabled, privyAuthed, loginWithPrivyEmail]);
   const restoringPrivySolana = isSolanaDex && privyEnabled && privyAuthed && !walletAddr;
   const checkingSolanaWallet = isSolanaDex && !hasWallet && !inFrame && (
     (privyEnabled && !privyReady) ||
@@ -2177,8 +2188,9 @@ function FuturesPanel() {
                   Avantis is non-custodial — your own wallet signs each trade.<br />
                   Nothing held on our side.
                 </div>
+                {renderPrivyEmailButton('#0EA5E9', '#0284C7')}
                 <button
-                  style={{...cartoonBtn('#0EA5E9', '#0284C7'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#0EA5E9', privyEnabled ? '#6B573E' : '#0284C7'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2221,8 +2233,9 @@ function FuturesPanel() {
                   GMX is non-custodial — your own wallet signs each trade.<br />
                   Read-only preview while we finish trade integration.
                 </div>
+                {renderPrivyEmailButton('#4F46E5', '#3730A3')}
                 <button
-                  style={{...cartoonBtn('#4F46E5', '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#4F46E5', privyEnabled ? '#6B573E' : '#3730A3'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2261,8 +2274,9 @@ function FuturesPanel() {
                 }}>
                   Perpl trades on Monad. You need MON for gas and AUSD for collateral.
                 </div>
+                {renderPrivyEmailButton('#6F5CFF', '#4530E0')}
                 <button
-                  style={{...cartoonBtn('#6F5CFF', '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#6F5CFF', privyEnabled ? '#6B573E' : '#4530E0'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -2302,8 +2316,9 @@ function FuturesPanel() {
                 }}>
                   Hyperliquid trades are signed by your wallet. Deposit USDC to Hyperliquid first, then trade here.
                 </div>
+                {renderPrivyEmailButton('#22C55E', '#047857')}
                 <button
-                  style={{...cartoonBtn('#22C55E', '#047857'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#22C55E', privyEnabled ? '#6B573E' : '#047857'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
                   onClick={() => setEvmModalOpen(true)}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

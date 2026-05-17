@@ -625,6 +625,50 @@ async function waitForLateLanding({ connection, statusConnections = null, signat
   return false;
 }
 
+async function sendRawTransactionWithFallback({
+  rawTransaction,
+  signature,
+  primaryConnection,
+  statusConnections = null,
+  sendOptions,
+  label,
+  attempt,
+}) {
+  const connections = statusConnectionList(primaryConnection, statusConnections);
+  let lastSendError = null;
+  for (const candidate of connections) {
+    try {
+      await candidate.sendRawTransaction(rawTransaction, sendOptions);
+      logTx(label, 'raw_sent', {
+        attempt,
+        rpc_host: rpcHost(candidate),
+        signature_short: shortSig(signature),
+        fallback_broadcast: candidate !== primaryConnection,
+      });
+      return { sent: true, landed: false, connection: candidate };
+    } catch (sendError) {
+      lastSendError = sendError;
+      const state = await readSignatureStateAny(connections, signature);
+      if (state.ok) {
+        logTx(label, 'confirmed_after_send_error', {
+          attempt,
+          source: state.source,
+          signature_short: shortSig(signature),
+          failed_rpc_host: rpcHost(candidate),
+        }, 'warn');
+        return { sent: false, landed: true, connection: candidate };
+      }
+      logTx(label, 'raw_send_error', {
+        attempt,
+        rpc_host: rpcHost(candidate),
+        signature_short: shortSig(signature),
+        message: sendError?.message || String(sendError || 'sendRawTransaction failed'),
+      }, 'warn');
+    }
+  }
+  throw await attachSimulationLogs(lastSendError, primaryConnection, rawTransaction);
+}
+
 export function isBlockhashExpiredError(error) {
   const name = String(error?.name || '');
   const logs = [
@@ -735,28 +779,19 @@ export async function sendSignedSolanaTransactionWithRetry({
       }
 
       const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
-      try {
-        await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
-      } catch (sendError) {
-        const state = await readSignatureStateAny(statusConnectionList(attemptConnection, statusConnections), signature);
-        if (state.ok) {
-          logTx(label, 'confirmed_after_send_error', {
-            attempt,
-            source: state.source,
-            signature_short: shortSig(signature),
-          }, 'warn');
-          return { signature, rawTransaction, buildResult: built };
-        }
-        throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
-      }
-      logTx(label, 'raw_sent', {
+      const broadcast = await sendRawTransactionWithFallback({
+        rawTransaction,
+        signature,
+        primaryConnection: attemptConnection,
+        statusConnections,
+        sendOptions,
+        label,
         attempt,
-        rpc_host: rpcHost(attemptConnection),
-        signature_short: shortSig(signature),
       });
+      if (broadcast.landed) return { signature, rawTransaction, buildResult: built };
 
       await waitForSignature({
-        connection: attemptConnection,
+        connection: broadcast.connection || attemptConnection,
         statusConnections,
         signature,
         lastValidBlockHeight,
@@ -923,21 +958,17 @@ export async function sendSolanaTransactionWithRetry({
 
       logTx(label, 'signed', { attempt, signature_short: shortSig(sig) });
       if (rawTransaction) {
-        try {
-          await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
-        } catch (sendError) {
-          const state = await readSignatureStateAny(statusConnectionList(attemptConnection, statusConnections), sig);
-          if (state.ok) {
-            logTx(label, 'confirmed_after_send_error', {
-              attempt,
-              source: state.source,
-              signature_short: shortSig(sig),
-            }, 'warn');
-            return sig;
-          }
-          throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
-        }
-        logTx(label, 'raw_sent', { attempt, rpc_host: rpcHost(attemptConnection), signature_short: shortSig(sig) });
+        const broadcast = await sendRawTransactionWithFallback({
+          rawTransaction,
+          signature: sig,
+          primaryConnection: attemptConnection,
+          statusConnections,
+          sendOptions,
+          label,
+          attempt,
+        });
+        if (broadcast.landed) return sig;
+        attemptConnection = broadcast.connection || attemptConnection;
       }
       await waitForSignature({
         connection: attemptConnection,

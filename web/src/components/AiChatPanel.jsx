@@ -1,22 +1,133 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+
+const CHAT_HISTORY_LIMIT = 40;
+const CONTEXT_MESSAGE_LIMIT = 4;
+const INITIAL_MESSAGES = [
+  { role: 'assistant', text: 'Ready when you are.' },
+];
+
+function getChatStorageKey(player, token) {
+  const id = player?.id || player?.player_id || player?.name || token || 'local';
+  return `clash_ai_chat:${String(id).slice(0, 96)}`;
+}
+
+function normalizeMessages(value) {
+  if (!Array.isArray(value)) return INITIAL_MESSAGES;
+  const rows = value
+    .map((item) => ({
+      role: item?.role === 'user' ? 'user' : 'assistant',
+      text: typeof item?.text === 'string' ? item.text.slice(0, 4000) : '',
+    }))
+    .filter((item) => item.text.trim())
+    .slice(-CHAT_HISTORY_LIMIT);
+  return rows.length ? rows : INITIAL_MESSAGES;
+}
+
+function loadChatMessages(storageKey) {
+  if (typeof window === 'undefined') return INITIAL_MESSAGES;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    return raw ? normalizeMessages(JSON.parse(raw)) : INITIAL_MESSAGES;
+  } catch {
+    return INITIAL_MESSAGES;
+  }
+}
+
+function saveChatMessages(storageKey, rows) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(normalizeMessages(rows)));
+  } catch {
+    // Storage can be unavailable in private mode; chat should still work.
+  }
+}
+
+function buildContextHistory(rows) {
+  return normalizeMessages(rows)
+    .filter((item) => item.role === 'user' || item.role === 'assistant')
+    .slice(-CONTEXT_MESSAGE_LIMIT)
+    .map((item) => ({
+      role: item.role,
+      text: item.text.slice(0, 1000),
+    }));
+}
 
 function AiChatPanel({ onClose }) {
   const { isMobile } = useLayout();
   const player = usePlayer();
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
-  const [messages, setMessages] = useState([
-    { role: 'assistant', text: 'Ready when you are.' },
-  ]);
+  const storageKey = useMemo(() => getChatStorageKey(player, token), [player, token]);
+  const skipNextPersist = useRef(true);
+  const [messages, setMessages] = useState(() => loadChatMessages(storageKey));
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   const listRef = useRef(null);
 
+  // ── Mobile bottom-sheet gesture ──────────────────────────────────────
+  // Drag the header (or the small drag handle) down to dismiss. Threshold
+  // is ~120px — once exceeded on touchend we trigger onClose. While
+  // dragging we kill the transform transition so the sheet tracks the
+  // finger 1:1; on release the transition snaps the sheet back to rest.
+  const dragStartY = useRef(null);
+  const [dragY, setDragY] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  // Mount animation: sheet slides up from below on first render. Toggled
+  // off after a tick so the transition runs once.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    if (!isMobile) { setMounted(true); return; }
+    const id = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(id);
+  }, [isMobile]);
+
+  const onDragStart = useCallback((e) => {
+    if (!isMobile) return;
+    const y = e.touches?.[0]?.clientY ?? e.clientY;
+    if (y == null) return;
+    dragStartY.current = y;
+    setDragging(true);
+  }, [isMobile]);
+  const onDragMove = useCallback((e) => {
+    if (!isMobile || dragStartY.current == null) return;
+    const y = e.touches?.[0]?.clientY ?? e.clientY;
+    if (y == null) return;
+    const dy = y - dragStartY.current;
+    setDragY(Math.max(0, dy));
+  }, [isMobile]);
+  const onDragEnd = useCallback(() => {
+    if (!isMobile) return;
+    setDragging(false);
+    dragStartY.current = null;
+    if (dragY > 120) {
+      // Slide out, then unmount. Math: panel height ~60vh; translating
+      // by window height guarantees it's off-screen before parent drops it.
+      const h = typeof window !== 'undefined' ? window.innerHeight : 800;
+      setDragY(h);
+      setTimeout(() => onClose?.(), 220);
+    } else {
+      setDragY(0);
+    }
+  }, [isMobile, dragY, onClose]);
+
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, status]);
+
+  useEffect(() => {
+    skipNextPersist.current = true;
+    setMessages(loadChatMessages(storageKey));
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (skipNextPersist.current) {
+      skipNextPersist.current = false;
+      return;
+    }
+    saveChatMessages(storageKey, messages);
+  }, [storageKey, messages]);
 
   useEffect(() => {
     if (!token) return;
@@ -43,18 +154,18 @@ function AiChatPanel({ onClose }) {
     setError('');
     setStatus('sending');
     setMessages((rows) => [...rows, { role: 'user', text }]);
+    const history = buildContextHistory(messages);
     try {
       const r = await fetch('/api/ai-chat/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, history }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || 'AI request failed');
       setMessages((rows) => [...rows, {
         role: 'assistant',
         text: data?.message || 'Done.',
-        meta: data?.fallback ? `Fallback model: ${data.model || 'active'}` : data?.model || '',
       }]);
     } catch (err) {
       const msg = err?.message || 'AI request failed';
@@ -63,7 +174,7 @@ function AiChatPanel({ onClose }) {
     } finally {
       setStatus('idle');
     }
-  }, [input, status, token]);
+  }, [input, messages, status, token]);
 
   const onKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -75,19 +186,62 @@ function AiChatPanel({ onClose }) {
   // On desktop the chat is a sidebar — it must not dim the game or steal
   // clicks from buildings underneath. Make the backdrop transparent and
   // non-interactive; only the panel itself catches pointer events. On
-  // mobile keep the dim full-screen overlay because the chat fills the
-  // screen and there's nothing useful to interact with behind it.
+  // mobile it becomes a bottom-sheet — half-height, anchored to the
+  // bottom, with a drag-down-to-dismiss gesture and a tap-outside-to-
+  // close backdrop.
   const backdropStyle = isMobile
-    ? styles.backdrop
+    ? { ...styles.backdrop, ...styles.backdropMobile }
     : { ...styles.backdrop, background: 'transparent', pointerEvents: 'none' };
+
+  // Mobile sheet transform: when mounted=false we start translated all
+  // the way down (off-screen) so the open animation slides up. While
+  // dragging we mirror finger movement; on release the transition
+  // animates back to 0 (or further down + unmount on dismiss).
+  const sheetTransform = !mounted
+    ? 'translateY(100%)'
+    : `translateY(${dragY}px)`;
   const panelStyle = isMobile
-    ? styles.panel
+    ? {
+        ...styles.panel,
+        ...styles.panelMobile,
+        transform: sheetTransform,
+        transition: dragging ? 'none' : 'transform 220ms cubic-bezier(0.32, 0.72, 0, 1)',
+        willChange: 'transform',
+      }
     : { ...styles.panel, pointerEvents: 'auto' };
 
+  // Tap on the dimmed backdrop dismisses the sheet on mobile. Desktop
+  // backdrop is non-interactive, so this is mobile-only behavior.
+  const handleBackdropClick = isMobile ? (e) => {
+    // Only close when the click actually lands on the backdrop itself,
+    // not on the panel that's bubbling up.
+    if (e.target === e.currentTarget) onClose?.();
+  } : undefined;
+
   return (
-    <div style={backdropStyle}>
+    <div style={backdropStyle} onClick={handleBackdropClick}>
       <section style={panelStyle}>
-        <header style={styles.header}>
+        {isMobile && (
+          <div
+            style={styles.dragHandleArea}
+            onTouchStart={onDragStart}
+            onTouchMove={onDragMove}
+            onTouchEnd={onDragEnd}
+            onTouchCancel={onDragEnd}
+          >
+            <div style={styles.dragHandle} />
+          </div>
+        )}
+        <header
+          style={styles.header}
+          // Mobile: dragging the header (not just the small handle pill)
+          // also dismisses the sheet — wider hit target for the
+          // swipe-down gesture. Desktop ignores touch events anyway.
+          onTouchStart={isMobile ? onDragStart : undefined}
+          onTouchMove={isMobile ? onDragMove : undefined}
+          onTouchEnd={isMobile ? onDragEnd : undefined}
+          onTouchCancel={isMobile ? onDragEnd : undefined}
+        >
           <div>
             <div style={styles.title}>AI Agent</div>
             <div style={styles.sub}>
@@ -168,6 +322,50 @@ const styles = {
     flexDirection: 'column',
     overflow: 'hidden',
     fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  // ── Mobile bottom-sheet overrides ─────────────────────────────────
+  // backdrop anchors content to the BOTTOM so the sheet rises from the
+  // bottom edge. Padding 0 so the sheet hugs the screen edges; rounded
+  // top corners + flat bottom gives the bottom-sheet feel.
+  backdropMobile: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    padding: 0,
+    background: 'rgba(20, 12, 4, 0.45)',
+  },
+  panelMobile: {
+    width: '100%',
+    // Half-height sheet — 60vh felt right in QA: tall enough for a
+    // realistic conversation, short enough that the player can still see
+    // resources / map at the top. Accounts for iOS safe-area at the
+    // bottom via env() so the composer doesn't sit under the home bar.
+    height: '60vh',
+    maxWidth: '100%',
+    borderRadius: '22px 22px 0 0',
+    borderBottom: 'none',
+    borderLeft: 'none',
+    borderRight: 'none',
+    paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+  },
+  // Tappable drag area at the very top of the mobile sheet — contains
+  // the visible pill handle. Bigger than the pill so a fat finger can
+  // start the drag reliably. `touch-action: none` so the browser
+  // doesn't fight the gesture with native scroll.
+  dragHandleArea: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '8px 0 4px',
+    cursor: 'grab',
+    touchAction: 'none',
+    background: '#d4c8b0',
+    flex: '0 0 auto',
+  },
+  dragHandle: {
+    width: 44, height: 5,
+    borderRadius: 3,
+    background: '#9f8759',
+    boxShadow: 'inset 0 1px 0 rgba(0,0,0,0.15)',
   },
   header: {
     display: 'flex',

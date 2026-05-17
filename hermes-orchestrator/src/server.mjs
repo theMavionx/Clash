@@ -4,6 +4,17 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import clashPrompt from './clash_agent_prompt.cjs';
+import clashSettings from './clash_agent_settings.cjs';
+
+const {
+  CLASH_PROMPT_VERSION,
+  TOOL_INCLUDE,
+  CLASH_AGENT_PLAYBOOK,
+  buildRuntimeInstructions,
+} = clashPrompt;
+
+const { resolveModelChain } = clashSettings;
 
 const ROOT = path.resolve(process.env.CLASH_HERMES_ROOT || '/srv/clash-hermes');
 const PLAYERS_DIR = path.resolve(process.env.CLASH_HERMES_PLAYERS_DIR || path.join(ROOT, 'players'));
@@ -15,28 +26,20 @@ const PORT = Number(process.env.CLASH_HERMES_ORCHESTRATOR_PORT || 8600);
 const TOKEN = process.env.HERMES_ORCHESTRATOR_TOKEN || '';
 const HERMES_BIN = process.env.HERMES_BIN || 'hermes';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
-const PRIMARY_MODEL = process.env.CLASH_HERMES_PRIMARY_MODEL || 'openai/gpt-oss-20b:free';
-const FALLBACK_MODEL = process.env.CLASH_HERMES_FALLBACK_MODEL || 'google/gemma-4-31b-it:free';
+const MODEL_CHAIN = resolveModelChain(process.env);
+const PRIMARY_MODEL = MODEL_CHAIN[0];
+const FALLBACK_MODELS = MODEL_CHAIN.slice(1);
+const FALLBACK_MODEL = FALLBACK_MODELS[0] || '';
 const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 2);
 const MCP_URL = process.env.CLASH_MCP_URL || 'https://mcp.clashofperps.fun/mcp';
 const HERMES_READY_TIMEOUT_MS = Number(process.env.CLASH_HERMES_READY_TIMEOUT_MS || 45_000);
 const HERMES_IDLE_SHUTDOWN_MS = Number(process.env.CLASH_HERMES_IDLE_SHUTDOWN_MS || 15 * 60_000);
 const HERMES_TOOL_TIMEOUT = Number(process.env.CLASH_HERMES_TOOL_TIMEOUT || 120);
+const HERMES_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_CHAT_TIMEOUT_MS || 25_000);
+const MODEL_CONTEXT_LENGTH = Number(process.env.CLASH_HERMES_MODEL_CONTEXT_LENGTH || 65_536);
 const MAX_INPUT_CHARS = Number(process.env.CLASH_HERMES_MAX_INPUT_CHARS || 8000);
-const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_CHARS || 6000);
+const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_CHARS || 24000);
 const START_PORT = Number(process.env.CLASH_HERMES_PLAYER_PORT_START || 8700);
-const TOOL_INCLUDE = [
-  'get_base_state',
-  'collect_resources',
-  'build_structure',
-  'upgrade_building',
-  'find_attack_target',
-  'execute_ai_attack_plan',
-  'load_troops_to_ship',
-  'upgrade_troop',
-  'get_attack_slots',
-];
-
 const state = { players: {}, nextPort: START_PORT };
 const processes = new Map();
 
@@ -53,7 +56,9 @@ function publicPlayerState(playerId) {
     name: row.name || null,
     port: row.port,
     model: row.model || PRIMARY_MODEL,
-    fallback_model: FALLBACK_MODEL,
+    fallback_model: FALLBACK_MODEL || null,
+    fallback_models: FALLBACK_MODELS,
+    model_chain: MODEL_CHAIN,
     running: !!proc && !proc.killed,
     pid: proc?.pid || null,
     created_at: row.created_at || null,
@@ -126,10 +131,30 @@ function writePlayerConfig(playerId, row) {
   return [
     '# Managed by clash-hermes-orchestrator. Do not edit by hand.',
     'provider: openrouter',
-    `model: ${yamlString(row.model || PRIMARY_MODEL)}`,
+    'model:',
+    `  default: ${yamlString(row.model || PRIMARY_MODEL)}`,
+    `  context_length: ${MODEL_CONTEXT_LENGTH}`,
+    'auxiliary:',
+    '  compression:',
+    `    context_length: ${MODEL_CONTEXT_LENGTH}`,
+    '# Hermes v0.14 still honors top-level toolsets for profiles. The',
+    '# platform_toolsets block below covers API/gateway entrypoints too.',
     'toolsets:',
     '  - mcp-clash',
+    'platform_toolsets:',
+    '  api_server:',
+    '    - mcp-clash',
+    '  gateway:',
+    '    - mcp-clash',
+    '  cli:',
+    '    - mcp-clash',
+    'skills:',
+    '  creation_nudge_interval: 0',
+    '  external_dirs:',
+    `    - ${yamlString(path.join(playerHome(playerId), 'skills'))}`,
     'agent:',
+    '  max_turns: 30',
+    '  gateway_timeout: 240',
     '  disabled_toolsets:',
     '    - terminal',
     '    - file',
@@ -173,8 +198,19 @@ function writePlayerEnv(row) {
 async function writePlayerFiles(playerId, row) {
   const home = playerHome(playerId);
   await fsp.mkdir(home, { recursive: true });
+  const versionFile = path.join(home, '.clash_prompt_version');
+  let previousPromptVersion = '';
+  try { previousPromptVersion = (await fsp.readFile(versionFile, 'utf8')).trim(); } catch {}
+  if (previousPromptVersion !== CLASH_PROMPT_VERSION) {
+    await fsp.rm(path.join(home, 'sessions'), { recursive: true, force: true });
+  }
   await fsp.writeFile(path.join(home, 'config.yaml'), writePlayerConfig(playerId, row), { mode: 0o600 });
   await fsp.writeFile(path.join(home, '.env'), writePlayerEnv(row), { mode: 0o600 });
+  await fsp.writeFile(path.join(home, 'SOUL.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
+  await fsp.writeFile(path.join(home, 'HERMES.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
+  await fsp.mkdir(path.join(home, 'skills', 'clash-of-perps-ai-agent'), { recursive: true });
+  await fsp.writeFile(path.join(home, 'skills', 'clash-of-perps-ai-agent', 'SKILL.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
+  await fsp.writeFile(versionFile, CLASH_PROMPT_VERSION, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'sessions'), { recursive: true });
   await fsp.mkdir(path.join(home, 'memory'), { recursive: true });
 }
@@ -301,10 +337,35 @@ function stopPlayer(playerId) {
   const child = processes.get(safeId);
   if (!child) return false;
   processes.delete(safeId);
-  child.kill('SIGTERM');
+  if (child.exitCode == null) child.kill('SIGTERM');
   setTimeout(() => {
-    if (child.exitCode == null && !child.killed) child.kill('SIGKILL');
+    if (child.exitCode == null) child.kill('SIGKILL');
   }, 5000).unref?.();
+  return true;
+}
+
+async function stopPlayerAndWait(playerId, timeoutMs = 7000) {
+  const safeId = safePlayerId(playerId);
+  const child = processes.get(safeId);
+  if (!child) return false;
+  processes.delete(safeId);
+  if (child.exitCode != null) return true;
+  child.kill('SIGTERM');
+  await new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    child.once('exit', finish);
+    const timer = setTimeout(() => {
+      if (child.exitCode == null) child.kill('SIGKILL');
+      setTimeout(finish, 500).unref?.();
+    }, timeoutMs);
+    timer.unref?.();
+  });
   return true;
 }
 
@@ -312,12 +373,24 @@ async function restartWithModel(playerId, model) {
   const safeId = safePlayerId(playerId);
   const row = state.players[safeId];
   if (!row) throw new Error('player is not provisioned');
-  stopPlayer(safeId);
+  await stopPlayerAndWait(safeId);
   row.model = model;
   row.updated_at = nowIso();
   await writePlayerFiles(safeId, row);
   await saveState();
   await ensurePlayerRunning(safeId);
+}
+
+async function ensureModelRunning(playerId, model) {
+  const safeId = safePlayerId(playerId);
+  const row = state.players[safeId];
+  if (!row) throw new Error('player is not provisioned');
+  if (row.model !== model) {
+    await restartWithModel(safeId, model);
+    return state.players[safeId];
+  }
+  await ensurePlayerRunning(safeId);
+  return state.players[safeId];
 }
 
 function extractOutputText(response) {
@@ -330,6 +403,36 @@ function extractOutputText(response) {
     }
   }
   return chunks.join('\n').trim();
+}
+
+function hermesTextFailure(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  if (/api call failed/i.test(raw) && /http\s*(429|5\d\d)|provider returned error|rate.?limit/i.test(raw)) {
+    return { message: raw.slice(0, 300), no_retry: /http\s*429|rate.?limit/i.test(raw) };
+  }
+  if (/http\s*429/i.test(raw) || /rate.?limit/i.test(raw)) {
+    return { message: raw.slice(0, 300), no_retry: true };
+  }
+  if (/\bmcp_clash_|execute_ai_attack_plan|get_base_state|collect_resources|place_building|upgrade_building/i.test(raw)) {
+    return { message: 'Model leaked internal MCP tool names instead of a player-facing answer', no_retry: true };
+  }
+  if (/[\u0600-\u06FF\u0530-\u058F\u0590-\u05FF]/.test(raw)) {
+    return { message: 'Model produced mixed-script garbled text', no_retry: true };
+  }
+  return null;
+}
+
+function assertUsableHermesResponse(response) {
+  const outputText = extractOutputText(response);
+  const failure = hermesTextFailure(outputText);
+  if (failure) {
+    const err = new Error(failure.message || String(failure));
+    err.provider_failure = true;
+    err.no_retry = !!failure.no_retry;
+    throw err;
+  }
+  return outputText;
 }
 
 async function callHermesResponses(row, payload) {
@@ -348,17 +451,16 @@ async function callHermesResponses(row, payload) {
       store: payload.store !== false,
       metadata: payload.metadata || undefined,
     }),
-  }, Number(process.env.CLASH_HERMES_CHAT_TIMEOUT_MS || 180_000));
+  }, HERMES_CHAT_TIMEOUT_MS);
 }
 
 async function chatWithPlayer(playerId, body) {
   const safeId = safePlayerId(playerId);
-  const row = state.players[safeId];
-  if (!row) throw new Error('player is not provisioned');
-  await ensurePlayerRunning(safeId);
+  if (!state.players[safeId]) throw new Error('player is not provisioned');
   const input = clampText(body?.input || body?.message, MAX_INPUT_CHARS).trim();
   if (!input) throw new Error('message required');
-  const instructions = clampText(body?.instructions || '', MAX_INSTRUCTIONS_CHARS);
+  const requestInstructions = clampText(body?.instructions || '', MAX_INSTRUCTIONS_CHARS);
+  const instructions = buildRuntimeInstructions(requestInstructions);
   const payload = {
     input,
     instructions,
@@ -369,33 +471,55 @@ async function chatWithPlayer(playerId, body) {
   };
 
   let lastError = null;
-  for (let attempt = 1; attempt <= Math.max(1, FALLBACK_AFTER_RETRIES); attempt += 1) {
-    try {
-      const response = await callHermesResponses(row, payload);
-      row.last_chat_at = nowIso();
-      row.last_error = null;
-      await saveState();
-      return { ok: true, model: row.model || PRIMARY_MODEL, output_text: extractOutputText(response), response };
-    } catch (err) {
-      lastError = err;
-      row.last_error = err.message;
-      await saveState();
-    }
-  }
+  const attemptedModels = [];
+  const attemptsPerModel = Math.max(1, FALLBACK_AFTER_RETRIES);
 
-  if (FALLBACK_MODEL && FALLBACK_MODEL !== row.model) {
-    await restartWithModel(safeId, FALLBACK_MODEL);
+  for (let modelIndex = 0; modelIndex < MODEL_CHAIN.length; modelIndex += 1) {
+    const model = MODEL_CHAIN[modelIndex];
+    attemptedModels.push(model);
+    let activeRow = null;
     try {
-      const fallbackRow = state.players[safeId];
-      const response = await callHermesResponses(fallbackRow, payload);
-      fallbackRow.last_chat_at = nowIso();
-      fallbackRow.last_error = null;
-      await saveState();
-      return { ok: true, model: fallbackRow.model, fallback: true, output_text: extractOutputText(response), response };
+      activeRow = await ensureModelRunning(safeId, model);
     } catch (err) {
       lastError = err;
-      state.players[safeId].last_error = err.message;
-      await saveState();
+      const latest = state.players[safeId];
+      if (latest) {
+        latest.last_error = `[${model}] ${err.message}`;
+        await saveState();
+      }
+      continue;
+    }
+    for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
+      try {
+        const response = await callHermesResponses(activeRow, payload);
+        const outputText = assertUsableHermesResponse(response);
+        activeRow.last_chat_at = nowIso();
+        activeRow.last_error = null;
+        await saveState();
+        return {
+          ok: true,
+          model: activeRow.model || model,
+          fallback: modelIndex > 0,
+          fallback_index: modelIndex,
+          attempted_models: attemptedModels,
+          output_text: outputText,
+          response,
+        };
+      } catch (err) {
+        lastError = err;
+        activeRow.last_error = `[${model}] ${err.message}`;
+        await saveState();
+        console.warn(JSON.stringify({
+          event: 'hermes_chat_attempt_failed',
+          player_id: safeId,
+          model,
+          attempt,
+          model_index: modelIndex,
+          error: err.message,
+          no_retry: !!err.no_retry,
+        }));
+        if (err.no_retry) break;
+      }
     }
   }
 
@@ -438,7 +562,11 @@ app.get('/health', (_req, res) => {
     port: PORT,
     hermes_bin: HERMES_BIN,
     primary_model: PRIMARY_MODEL,
-    fallback_model: FALLBACK_MODEL,
+    fallback_model: FALLBACK_MODEL || null,
+    fallback_models: FALLBACK_MODELS,
+    model_chain: MODEL_CHAIN,
+    chat_timeout_ms: HERMES_CHAT_TIMEOUT_MS,
+    model_context_length: MODEL_CONTEXT_LENGTH,
     players: Object.keys(state.players).length,
     running: processes.size,
   });

@@ -1,10 +1,13 @@
 const crypto = require('crypto');
+const { CLASH_RUNTIME_INSTRUCTIONS } = require('../hermes-orchestrator/src/clash_agent_prompt.cjs');
+const { resolveModelChain } = require('../hermes-orchestrator/src/clash_agent_settings.cjs');
 
 const DEFAULT_URL = 'http://127.0.0.1:8600';
 const ORCHESTRATOR_URL = String(process.env.CLASH_HERMES_ORCHESTRATOR_URL || DEFAULT_URL).replace(/\/+$/, '');
 const ORCHESTRATOR_TOKEN = process.env.CLASH_HERMES_ORCHESTRATOR_TOKEN || process.env.HERMES_ORCHESTRATOR_TOKEN || '';
-const PRIMARY_MODEL = process.env.CLASH_HERMES_PRIMARY_MODEL || 'openai/gpt-oss-20b:free';
-const FALLBACK_MODEL = process.env.CLASH_HERMES_FALLBACK_MODEL || 'google/gemma-4-31b-it:free';
+const MODEL_CHAIN = resolveModelChain(process.env);
+const PRIMARY_MODEL = MODEL_CHAIN[0];
+const FALLBACK_MODEL = MODEL_CHAIN[1] || '';
 const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 190_000);
 
 function configured() {
@@ -27,6 +30,35 @@ function sanitizePlayer(player) {
     level: player?.level || null,
     trophies: player?.trophies || null,
   };
+}
+
+function normalizeHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .map((item) => {
+      const role = item?.role === 'assistant' ? 'assistant' : item?.role === 'user' ? 'user' : '';
+      const text = typeof item?.text === 'string' ? item.text.trim().slice(0, 1000) : '';
+      return role && text ? { role, text } : null;
+    })
+    .filter(Boolean)
+    .slice(-4);
+}
+
+function buildChatInput(message, history) {
+  const current = String(message || '').trim().slice(0, 8000);
+  const safeHistory = normalizeHistory(history);
+  if (!safeHistory.length) return current;
+
+  const historyText = safeHistory
+    .map((item) => `${item.role === 'user' ? 'User' : 'Agent'}: ${item.text}`)
+    .join('\n');
+  const currentBlock = `# Current Player Message\n${current}`;
+  let input = `# Recent Chat Context\n${historyText}\n\n${currentBlock}`;
+  if (input.length <= 8000) return input;
+
+  const budget = Math.max(0, 8000 - currentBlock.length - 32);
+  input = `# Recent Chat Context\n${historyText.slice(-budget)}\n\n${currentBlock}`;
+  return input.slice(0, 8000);
 }
 
 async function request(path, options = {}) {
@@ -74,31 +106,27 @@ async function provision(player, mcpKey) {
       mcp_key: mcpKey,
       model: PRIMARY_MODEL,
       fallback_model: FALLBACK_MODEL,
+      model_chain: MODEL_CHAIN,
     },
   });
 }
 
 async function chat(player, mcpKey, message, options = {}) {
   const safePlayer = sanitizePlayer(player);
+  const history = normalizeHistory(options.history);
   await provision(safePlayer, mcpKey);
-  const instructions = [
-    'You are the in-game AI assistant for Clash of Perps.',
-    'Use the Clash MCP tools for game actions instead of inventing results.',
-    'Only act on the authenticated player account attached to your MCP key.',
-    'Keep replies short and game-like. When you perform an action, report the concrete outcome.',
-    'For attacks, prefer nearby landing slots, use cannon shots on defensive towers first, and use rally markers only when tactically useful.',
-  ].join('\n');
   return request(`/players/${encodeURIComponent(safePlayer.id)}/chat`, {
     method: 'POST',
     body: {
-      input: String(message || '').slice(0, 8000),
-      instructions,
+      input: buildChatInput(message, history),
+      instructions: CLASH_RUNTIME_INSTRUCTIONS,
       previous_response_id: options.previous_response_id || null,
       idempotency_key: options.idempotency_key || crypto.randomUUID(),
       metadata: {
         player_id: safePlayer.id,
         player_name: safePlayer.name,
         source: 'clash-web-chat',
+        history_count: history.length,
         ...(options.metadata || {}),
       },
     },

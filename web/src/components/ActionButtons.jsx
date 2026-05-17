@@ -499,7 +499,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const [showNftMint, setShowNftMint] = useState(false);
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
-  const { isMobile: mobile, isLandscape } = useLayout();
+  const { isMobile: mobile, isLandscape, actionScale } = useLayout();
   const townHallLevel = buildingDefs?.th_level || 1;
   const attackCost = useMemo(() => attackCostForTownHall(townHallLevel), [townHallLevel]);
   const canAffordAttack = (resources.gold || 0) >= attackCost;
@@ -612,8 +612,12 @@ function ActionButtons({ onOpenBattleLog }) {
     );
   }
 
-  const btnSize = mobile ? 110 : 140;
-  const btnSmall = mobile ? 88 : 110;
+  // Action bar sizing — base values target a comfortable ~400px-wide
+  // phone. Narrower devices receive an actionScale (<1) from useLayout
+  // so the SHOP / ATTACK / TRADE / AI cluster keeps fitting on 360 and
+  // even 320 px screens without the buttons clipping each other.
+  const btnSize = Math.round((mobile ? 110 : 140) * actionScale);
+  const btnSmall = Math.round((mobile ? 88 : 110) * actionScale);
   const replayBtnSize = mobile ? Math.round(btnSmall / 1.5) : btnSmall;
   const battleLogButton = (
     <CustomBtn onClick={onOpenBattleLog} width={replayBtnSize} height={replayBtnSize}>

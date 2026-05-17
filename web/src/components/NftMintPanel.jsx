@@ -771,8 +771,14 @@ function NftMintPanel({ onClose }) {
 
     setBusy(`shop:${product.id}`);
     setNotice(null);
+    const pendingPaymentLabel = getShopPaymentLabel(shopChain, shopPayment);
     setShopPurchaseStatus('pending');
-    setShopPurchaseResult({ product });
+    setShopPurchaseResult({
+      product,
+      chain: shopChain,
+      payment: shopPayment,
+      paymentLabel: pendingPaymentLabel,
+    });
     try {
       let result;
       if (shopChain === 'solana') {
@@ -852,13 +858,22 @@ function NftMintPanel({ onClose }) {
       // Each chain returns a different tx-ID field shape; normalize so the
       // success popup + analytics see a single string.
       const txId = result.signature || result.hash || result.txHash || '';
-      const paymentLabel = ['base', 'solana', 'aptos', 'arbitrum', 'monad'].includes(shopChain) ? shopPayment : 'usdc';
-      setShopPurchaseResult({ product, grant, tx: txId, flyRewards, chain: shopChain });
+      const paymentLabel = getShopPaymentLabel(shopChain, shopPayment);
+      setShopPurchaseResult({
+        product,
+        grant,
+        tx: txId,
+        flyRewards,
+        chain: shopChain,
+        payment: shopPayment,
+        paymentLabel,
+        explorer: getShopPurchaseExplorer(shopChain, txId),
+      });
       setShopPurchaseStatus('success');
       addClientBreadcrumb('shop.purchase_success', {
         dex,
         chain: shopChain,
-        payment: paymentLabel,
+        payment: shopPayment,
         sku: product.sku,
         tx: txId,
       });
@@ -1289,6 +1304,25 @@ const SHOP_CHAIN_LABEL = {
   solana:   'Solana',
   aptos:    'Aptos',
 };
+
+function getShopPaymentOption(chain, payment) {
+  const id = String(payment || '').toLowerCase();
+  return (SHOP_PAYMENTS_BY_CHAIN[chain] || []).find((option) => option.id === id) || null;
+}
+
+function getShopPaymentLabel(chain, payment) {
+  return getShopPaymentOption(chain, payment)?.label || String(payment || 'USDC').toUpperCase();
+}
+
+function getShopPurchaseExplorer(chain, tx) {
+  if (!tx) return null;
+  if (chain === 'base') return `https://basescan.org/tx/${tx}`;
+  if (chain === 'arbitrum') return `https://arbiscan.io/tx/${tx}`;
+  if (chain === 'monad') return `https://explorer.monad.xyz/tx/${tx}`;
+  if (chain === 'solana') return `https://solscan.io/tx/${tx}`;
+  if (chain === 'aptos') return `https://explorer.aptoslabs.com/txn/${tx}`;
+  return null;
+}
 
 function GameResourcesTab({
   products,
@@ -1906,6 +1940,9 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
   const grant = result?.grant;
   const customIcon = product ? RESOURCE_PRODUCT_ICONS[product.id] : null;
   const isShield = product?.kind === 'shield';
+  const chain = result?.chain || 'base';
+  const chainLabel = SHOP_CHAIN_LABEL[chain] || chain;
+  const paymentLabel = result?.paymentLabel || getShopPaymentLabel(chain, result?.payment);
 
   let successHeadline = 'Purchase Complete';
   let successDetail = null;
@@ -1998,7 +2035,7 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
                 Confirm in wallet, then waiting for tx<span className="nft-mint-dots" />
               </span>
               <span style={overlayStyles.hint}>
-                Keep this window open — paying with $CoP on Base.
+                Keep this window open — paying with {paymentLabel} on {chainLabel}.
               </span>
             </>
           ) : (
@@ -2011,14 +2048,14 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
                 <span style={overlayStyles.txChip}>tx · {shortAddress(result.tx)}</span>
               )}
               <div style={overlayStyles.actionRow}>
-                {result?.tx && (
+                {result?.explorer && (
                   <a
-                    href={`https://basescan.org/tx/${result.tx}`}
+                    href={result.explorer}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={overlayStyles.linkBtn}
                   >
-                    View on BaseScan
+                    View on explorer
                   </a>
                 )}
                 <button type="button" style={overlayStyles.doneBtn} onClick={onDismiss}>

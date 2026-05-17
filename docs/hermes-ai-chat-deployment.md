@@ -11,6 +11,32 @@ Clash backend -> Hermes orchestrator -> per-player Hermes -> OpenRouter + Clash 
 The browser only talks to the Clash backend. It never receives OpenRouter,
 Hermes, or MCP keys.
 
+## Prompt And Settings Source Of Truth
+
+The in-game AI prompt is managed in:
+
+```text
+hermes-orchestrator/src/clash_agent_prompt.cjs
+```
+
+Both the Clash backend and the Hermes orchestrator import this file. Keep all
+identity, tool-use rules, battle tactics, response format, and safety rules
+there so production and local tests stay aligned.
+
+When the prompt changes, increment `CLASH_PROMPT_VERSION`. The orchestrator
+clears old per-player Hermes sessions on the next provision so stale generic
+assistant behavior does not leak into the game chat.
+
+Each player runtime gets:
+
+```text
+/srv/clash-hermes/players/<player_id>/
+  config.yaml  # MCP allowlist, toolsets, model, timeouts
+  SOUL.md      # Clash playbook
+  HERMES.md    # Clash playbook
+  skills/clash-of-perps-ai-agent/SKILL.md
+```
+
 ## Local Environment
 
 The Clash backend reads:
@@ -18,9 +44,12 @@ The Clash backend reads:
 ```env
 CLASH_HERMES_ORCHESTRATOR_URL=http://127.0.0.1:8600
 CLASH_HERMES_ORCHESTRATOR_TOKEN=horg_...
-CLASH_HERMES_PRIMARY_MODEL=openai/gpt-oss-20b:free
-CLASH_HERMES_FALLBACK_MODEL=google/gemma-4-31b-it:free
+CLASH_HERMES_MODEL_CHAIN=nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,openrouter/owl-alpha
+CLASH_HERMES_PRIMARY_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
+CLASH_HERMES_FALLBACK_MODEL=liquid/lfm-2.5-1.2b-instruct:free
 CLASH_HERMES_FALLBACK_AFTER_RETRIES=2
+CLASH_HERMES_CHAT_TIMEOUT_MS=25000
+CLASH_HERMES_MODEL_CONTEXT_LENGTH=65536
 ```
 
 The root `.env` file is ignored by git. Do not commit filled secrets.

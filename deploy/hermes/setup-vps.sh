@@ -20,8 +20,10 @@ ORCH_DIR="$ROOT/orchestrator/current"
 SERVICE_NAME="${CLASH_HERMES_SERVICE_NAME:-clash-hermes-orchestrator}"
 HOST="${CLASH_HERMES_ORCHESTRATOR_HOST:-127.0.0.1}"
 PORT="${CLASH_HERMES_ORCHESTRATOR_PORT:-8600}"
-PRIMARY_MODEL="${CLASH_HERMES_PRIMARY_MODEL:-openai/gpt-oss-20b:free}"
-FALLBACK_MODEL="${CLASH_HERMES_FALLBACK_MODEL:-google/gemma-4-31b-it:free}"
+DEFAULT_MODEL_CHAIN="nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,openrouter/owl-alpha"
+MODEL_CHAIN="${CLASH_HERMES_MODEL_CHAIN:-$DEFAULT_MODEL_CHAIN}"
+PRIMARY_MODEL="${CLASH_HERMES_PRIMARY_MODEL:-${MODEL_CHAIN%%,*}}"
+FALLBACK_MODEL="${CLASH_HERMES_FALLBACK_MODEL:-$(echo "$MODEL_CHAIN" | cut -d, -f2)}"
 MCP_URL="${CLASH_MCP_URL:-https://mcp.clashofperps.fun/mcp}"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
@@ -127,9 +129,12 @@ ensure_env() {
   set_env_value HERMES_ORCHESTRATOR_TOKEN "$token"
   set_env_value OPENROUTER_API_KEY "$openrouter"
   set_env_value CLASH_HERMES_PROVIDER openrouter
+  set_env_value CLASH_HERMES_MODEL_CHAIN "$MODEL_CHAIN"
   set_env_value CLASH_HERMES_PRIMARY_MODEL "$PRIMARY_MODEL"
   set_env_value CLASH_HERMES_FALLBACK_MODEL "$FALLBACK_MODEL"
   set_env_value CLASH_HERMES_FALLBACK_AFTER_RETRIES "${CLASH_HERMES_FALLBACK_AFTER_RETRIES:-2}"
+  set_env_value CLASH_HERMES_CHAT_TIMEOUT_MS "${CLASH_HERMES_CHAT_TIMEOUT_MS:-25000}"
+  set_env_value CLASH_HERMES_MODEL_CONTEXT_LENGTH "${CLASH_HERMES_MODEL_CONTEXT_LENGTH:-65536}"
   set_env_value CLASH_MCP_URL "$MCP_URL"
   set_env_value CLASH_HERMES_IDLE_SHUTDOWN_MS "${CLASH_HERMES_IDLE_SHUTDOWN_MS:-900000}"
   set_env_value CLASH_HERMES_PLAYER_PORT_START "${CLASH_HERMES_PLAYER_PORT_START:-8700}"
@@ -176,7 +181,8 @@ LimitNOFILE=65535
 WantedBy=multi-user.target
 SERVICE
   systemctl daemon-reload
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME" >/dev/null
+  systemctl restart "$SERVICE_NAME"
 }
 
 configure_firewall() {

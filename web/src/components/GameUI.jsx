@@ -33,7 +33,7 @@ export default function GameUI() {
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
   const { selectedBuilding } = useSelectedBuilding();
-  const { isMobile } = useLayout();
+  const { isMobile, actionScale } = useLayout();
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -131,26 +131,44 @@ export default function GameUI() {
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
-      {!enemyMode?.active && (
-        <button
-          style={{
-            ...styles.aiChatButton,
-            // Anchor to the bottom-right action group: TRADE button is the
-            // rightmost ~140px (110 on mobile) inside ActionButtons.wrapRight,
-            // so we offset by its width + the wrapRight gap (12 / 8) to land
-            // just to the left of TRADE, bottoms aligned ("on the same level").
-            bottom: isMobile ? 8 : 12,
-            right: isMobile ? (8 + 110 + 8) : (12 + 140 + 12),
-            top: 'auto',
-            left: 'auto',
-          }}
-          onClick={() => setShowAiChat(true)}
-          title="Open AI agent chat"
-          aria-label="Open AI agent chat"
-        >
-          AI
-        </button>
-      )}
+      {!enemyMode?.active && (() => {
+        // Mirror ActionButtons sizing so we land cleanly between the
+        // SHOP / TRADE columns regardless of which phone the player has.
+        // btnSize/btnSmall here match ActionButtons.jsx exactly.
+        const baseAnchor = isMobile ? 8 : 12;
+        const baseGap = isMobile ? 8 : 12;
+        const tradeSize = Math.round((isMobile ? 110 : 140) * actionScale);
+        const sideSize = Math.round((isMobile ? 88 : 110) * actionScale);
+        const aiSize = Math.round(54 * actionScale);
+        // Vertical center of the side buttons (SHOP / Tournament etc):
+        //   sideBottom + sideSize/2
+        // Match AI center to it: aiBottom + aiSize/2 = sideBottom + sideSize/2
+        const aiBottom = baseAnchor + Math.round((sideSize - aiSize) / 2);
+        const aiRight = baseAnchor + tradeSize + baseGap;
+        return (
+          <button
+            style={{
+              ...styles.aiChatButton,
+              width: aiSize,
+              height: aiSize,
+              bottom: aiBottom,
+              right: aiRight,
+              top: 'auto',
+              left: 'auto',
+            }}
+            onClick={() => setShowAiChat(true)}
+            title="Open AI agent chat"
+            aria-label="Open AI agent chat"
+          >
+            <img
+              src="/icons/ai-agent.jpg"
+              alt=""
+              style={styles.aiChatButtonImg}
+              draggable={false}
+            />
+          </button>
+        );
+      })()}
       <ActionButtons onOpenBattleLog={() => setShowBattleLog(true)} />
       <ErrorToast message={error} />
       <FpsTracker />
@@ -220,24 +238,35 @@ const styles = {
     zIndex: 5,
   },
   // AI chat trigger — anchored to the bottom-right action group via
-  // inline `bottom`/`right` overrides in the render. Parchment palette
-  // (gold-on-brown) so it visually pairs with TRADE / NFT / TOURNAMENT
-  // rather than the old blue chat-bubble look.
+  // inline `bottom`/`right` overrides in the render. Brown frame with a
+  // custom AI-agent portrait inside, sized to pair with the 54px
+  // TOURNAMENT / NFT side buttons.
   aiChatButton: {
     position: 'fixed',
-    width: 54, height: 54,
+    // Size is set inline so it tracks isMobile / matches btnSmall in
+    // ActionButtons. No hard width/height here.
     pointerEvents: 'auto',
     zIndex: 20,
     borderRadius: 14,
     border: '3px solid #5C3A21',
-    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
+    background: '#fff6dc',
     boxShadow: '0 6px 14px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.5)',
-    color: '#3a1f00',
-    fontSize: 18,
-    fontWeight: 950,
-    letterSpacing: 0.5,
-    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    padding: 0,
+    overflow: 'hidden',
     cursor: 'pointer',
     fontFamily: 'inherit',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiChatButtonImg: {
+    width: '100%', height: '100%',
+    objectFit: 'cover',
+    display: 'block',
+    // Inner radius matches the button after the 3px border subtraction
+    // so the image hugs the frame cleanly without a visible seam.
+    borderRadius: 11,
+    userSelect: 'none',
+    pointerEvents: 'none',
   },
 };

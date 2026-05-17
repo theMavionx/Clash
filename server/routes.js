@@ -3997,11 +3997,24 @@ router.get('/ai-chat/status', auth, async (req, res) => {
   }
 });
 
+function normalizeAiChatHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .map((item) => {
+      const role = item?.role === 'assistant' ? 'assistant' : item?.role === 'user' ? 'user' : '';
+      const text = typeof item?.text === 'string' ? item.text.trim().slice(0, 1000) : '';
+      return role && text ? { role, text } : null;
+    })
+    .filter(Boolean)
+    .slice(-4);
+}
+
 router.post('/ai-chat/message', auth, async (req, res) => {
   const startedAt = Date.now();
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message) return res.status(400).json({ ok: false, error: 'message required' });
   if (message.length > 8000) return res.status(400).json({ ok: false, error: 'message too long' });
+  const history = normalizeAiChatHistory(req.body?.history);
 
   let model = null;
   try {
@@ -4011,6 +4024,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       previous_response_id: req.body?.previous_response_id,
       idempotency_key: req.body?.idempotency_key,
       metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {},
+      history,
     });
     model = result.model || null;
     db.markHermesAgentState(req.player.id, {
@@ -4024,15 +4038,18 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       status: 'ok',
       durationMs: Date.now() - startedAt,
       model,
-      input: { message },
-      output: { output_text: result.output_text, fallback: !!result.fallback },
+      input: { message, history },
+      output: {
+        output_text: result.output_text,
+        model: result.model || null,
+        fallback: !!result.fallback,
+        fallback_index: result.fallback_index ?? null,
+        attempted_models: result.attempted_models || null,
+      },
     });
     res.json({
       ok: true,
       message: result.output_text || '',
-      model: result.model || null,
-      fallback: !!result.fallback,
-      response: result.response || null,
     });
   } catch (err) {
     db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
@@ -4042,10 +4059,10 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       durationMs: Date.now() - startedAt,
       model,
       error: err.message,
-      input: { message },
+      input: { message, history },
       output: err.body || null,
     });
-    res.status(err.status || 500).json({ ok: false, error: err.message, body: err.body || null });
+    res.status(err.status || 500).json({ ok: false, error: err.message });
   }
 });
 
@@ -5466,6 +5483,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         ? "AND verified_source = 'server'"
         : dex === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
+          : dex === 'hyperliquid'
+            ? "AND verified_source = 'hyperliquid_api'"
           : "AND verified_source = 'worker'";
       newTrades = fdb.prepare(`
         SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
@@ -5889,6 +5908,8 @@ router.get('/trading/stats', auth, async (req, res) => {
           ? "AND verified_source IN ('worker', 'server')"
           : dex === 'monad'
             ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
+            : dex === 'hyperliquid'
+              ? "AND verified_source = 'hyperliquid_api'"
             : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
