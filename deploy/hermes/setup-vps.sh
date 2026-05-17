@@ -49,7 +49,12 @@ install_system_dependencies() {
   log "Installing system dependencies..."
   dedupe_apt_sources
   apt-get update -qq
-  apt-get install -y -qq ca-certificates curl git jq nginx ufw ripgrep ffmpeg python3 python3-venv openssl rsync nodejs npm docker.io
+  apt-get install -y -qq ca-certificates curl git jq nginx ufw ripgrep ffmpeg python3 python3-venv openssl rsync docker.io
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    apt-get install -y -qq nodejs npm
+  else
+    log "Node.js already installed: $(node --version), npm $(npm --version)"
+  fi
   if apt-cache show docker-compose-plugin >/dev/null 2>&1; then
     apt-get install -y -qq docker-compose-plugin
   else
