@@ -364,11 +364,21 @@ export async function applyReferralCode(walletClient, publicClient = null) {
 export async function ensureBaseChain(provider) {
   const current = await provider.request({ method: 'eth_chainId' });
   if (String(current).toLowerCase() === BASE_CHAIN_ID_HEX) return;
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const verify = async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const next = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+      if (String(next || '').toLowerCase() === BASE_CHAIN_ID_HEX) return;
+      if (i < 4) await delay(120);
+    }
+    throw new Error('Wallet is not on Base. Switch to Base and retry.');
+  };
   try {
     await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: BASE_CHAIN_ID_HEX }],
     });
+    await verify();
   } catch (err) {
     if (err?.code === 4902 || /unrecognized|not been added/i.test(err?.message || '')) {
       await provider.request({
@@ -381,6 +391,11 @@ export async function ensureBaseChain(provider) {
           blockExplorerUrls: ['https://basescan.org'],
         }],
       });
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      }).catch(() => {});
+      await verify();
       return;
     }
     throw err;

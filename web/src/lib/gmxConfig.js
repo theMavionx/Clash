@@ -21,11 +21,21 @@ export async function ensureArbitrumChain(provider) {
   if (!provider) throw new Error('No EVM wallet connected');
   const current = await provider.request({ method: 'eth_chainId' });
   if (String(current).toLowerCase() === ARBITRUM_CHAIN_ID_HEX) return;
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const verify = async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const next = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+      if (String(next || '').toLowerCase() === ARBITRUM_CHAIN_ID_HEX) return;
+      if (i < 4) await delay(120);
+    }
+    throw new Error('Wallet is not on Arbitrum. Switch to Arbitrum and retry.');
+  };
   try {
     await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: ARBITRUM_CHAIN_ID_HEX }],
     });
+    await verify();
   } catch (err) {
     // 4902 = chain not added; fall through to wallet_addEthereumChain.
     if (err?.code === 4902 || /unrecognized|not been added/i.test(err?.message || '')) {
@@ -39,6 +49,11 @@ export async function ensureArbitrumChain(provider) {
           blockExplorerUrls: ['https://arbiscan.io'],
         }],
       });
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: ARBITRUM_CHAIN_ID_HEX }],
+      }).catch(() => {});
+      await verify();
       return;
     }
     throw err;

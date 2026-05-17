@@ -83,6 +83,43 @@ const PUBLIC_CLIENT_BY_ID = {
   [MONAD_CHAIN_ID]: monadPublicClient,
 };
 
+const CHAIN_LABEL_BY_ID = {
+  [BASE_CHAIN_ID]: 'Base',
+  [ARBITRUM_CHAIN_ID]: 'Arbitrum',
+  [MONAD_CHAIN_ID]: 'Monad',
+};
+
+function normalizeProviderChainId(value) {
+  if (value == null) return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'bigint') return Number(value);
+  const text = String(value).trim();
+  if (!text) return null;
+  if (/^0x/i.test(text)) return Number.parseInt(text, 16);
+  const num = Number(text);
+  return Number.isFinite(num) ? num : null;
+}
+
+async function readProviderChainId(provider) {
+  if (!provider?.request) return null;
+  return normalizeProviderChainId(await provider.request({ method: 'eth_chainId' }));
+}
+
+async function waitForProviderChainId(provider, targetId) {
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  let currentId = null;
+  for (let i = 0; i < 5; i += 1) {
+    currentId = await readProviderChainId(provider).catch(() => null);
+    if (currentId === targetId) return currentId;
+    if (i < 4) await delay(120);
+  }
+  return currentId;
+}
+
+function chainLabel(chainId) {
+  return CHAIN_LABEL_BY_ID[Number(chainId)] || `chain ${chainId || 'unknown'}`;
+}
+
 const EvmWalletContext = createContext({
   address: null,
   walletClient: null,
@@ -353,6 +390,29 @@ export function EvmWalletProvider({ children }) {
       await ensureMonadChain(provider);
     } else {
       await ensureBaseChain(provider);
+    }
+
+    let currentId = await waitForProviderChainId(provider, id);
+    if (currentId !== id && provider?.request) {
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: `0x${id.toString(16)}` }],
+        });
+        currentId = await waitForProviderChainId(provider, id);
+      } catch {
+        currentId = await waitForProviderChainId(provider, id);
+      }
+    }
+
+    if (currentId !== id) {
+      const err = new Error(
+        `Wallet is still on ${chainLabel(currentId)}. Switch to ${chainLabel(id)} and retry.`,
+      );
+      err.code = 'WRONG_EVM_CHAIN';
+      err.currentChainId = currentId;
+      err.targetChainId = id;
+      throw err;
     }
   }, [provider]);
 

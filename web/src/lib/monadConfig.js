@@ -70,11 +70,21 @@ export async function ensureMonadChain(provider) {
   if (!provider) throw new Error('No EVM wallet connected');
   const current = await provider.request({ method: 'eth_chainId' });
   if (String(current).toLowerCase() === MONAD_CHAIN_ID_HEX) return;
+  const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const verify = async () => {
+    for (let i = 0; i < 5; i += 1) {
+      const next = await provider.request({ method: 'eth_chainId' }).catch(() => null);
+      if (String(next || '').toLowerCase() === MONAD_CHAIN_ID_HEX) return;
+      if (i < 4) await delay(120);
+    }
+    throw new Error('Wallet is not on Monad. Switch to Monad and retry.');
+  };
   try {
     await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: MONAD_CHAIN_ID_HEX }],
     });
+    await verify();
   } catch (err) {
     if (err?.code === 4902 || /unrecognized|not been added/i.test(err?.message || '')) {
       await provider.request({
@@ -87,6 +97,11 @@ export async function ensureMonadChain(provider) {
           blockExplorerUrls: ['https://monadscan.com'],
         }],
       });
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: MONAD_CHAIN_ID_HEX }],
+      }).catch(() => {});
+      await verify();
       return;
     }
     throw err;

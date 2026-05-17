@@ -299,18 +299,23 @@ function findGmxMarketSymbol(tickerList, base) {
 // error bar isn't a wall of "execution reverted: 0x...".
 function decodeWriteError(e, fallback = 'GMX order failed') {
   if (!e) return fallback;
+  if (e.code === 'WRONG_EVM_CHAIN') return e.message || 'Switch wallet to Arbitrum and retry';
   const chain = [e, e.cause, e.cause?.cause, e.cause?.cause?.cause].filter(Boolean);
   for (const err of chain) {
     if (err?.data?.errorName) return String(err.data.errorName);
     const reason = err.reason || err.shortMessage;
     if (reason) {
+      if (/returned no data|address is not a contract/i.test(reason)) return 'Wallet is not on Arbitrum. Switch to Arbitrum and retry';
       if (/insufficient funds/i.test(reason)) return 'Insufficient ETH on Arbitrum for gas + execution fee';
       if (/user rejected|denied/i.test(reason)) return 'Signature cancelled';
       if (/insufficient allowance|allowance/i.test(reason)) return 'USDC allowance not set — approve USDC and retry';
       return String(reason).slice(0, 200);
     }
   }
-  return String(e.message || fallback).slice(0, 240);
+  const raw = String(e.message || fallback);
+  if (/returned no data|address is not a contract/i.test(raw)) return 'Wallet is not on Arbitrum. Switch to Arbitrum and retry';
+  if (/insufficient funds/i.test(raw)) return 'Insufficient ETH on Arbitrum for gas + execution fee';
+  return raw.slice(0, 240);
 }
 
 export function useGmx() {
@@ -358,6 +363,12 @@ export function useGmx() {
 
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const ensureGmxChain = useCallback(async () => {
+    if (typeof ensureChain !== 'function') {
+      throw new Error('No EVM chain switcher available');
+    }
+    await ensureChain(ARBITRUM_CHAIN_ID);
+  }, [ensureChain]);
 
   // Wallet-mismatch guard: same gate Avantis uses. The player's registered
   // EVM wallet (from server) must match the currently connected wallet,
@@ -711,6 +722,7 @@ export function useGmx() {
    */
   const ensureUsdcAllowance = useCallback(async (requiredAmount) => {
     if (!walletAddr) throw new Error('Wallet not connected');
+    await ensureGmxChain();
     const wc = getWalletClient(ARBITRUM_CHAIN_ID);
     const pc = getPublicClient(ARBITRUM_CHAIN_ID);
     if (!wc || !pc) throw new Error('Failed to build Arbitrum clients');
@@ -736,7 +748,7 @@ export function useGmx() {
     if (receipt.status !== 'success') throw new Error('USDC approve tx reverted');
     console.log(`[useGmx] USDC approve confirmed in block ${receipt.blockNumber}`);
     return true;
-  }, [walletAddr, getWalletClient, getPublicClient]);
+  }, [walletAddr, ensureGmxChain, getWalletClient, getPublicClient]);
 
   /**
    * Bind the GMX affiliate code "clashofperps" to the connected wallet on
@@ -835,6 +847,7 @@ export function useGmx() {
     if (prepared.payloadType !== 'transaction' || !prepared.payload?.to) {
       throw new Error('GMX prepareOrder did not return a transaction payload');
     }
+    await ensureGmxChain();
     const wc = getWalletClient(ARBITRUM_CHAIN_ID);
     if (!wc) throw new Error('Failed to build Arbitrum wallet client');
     return wc.sendTransaction({
@@ -843,7 +856,7 @@ export function useGmx() {
       value: BigInt(prepared.payload.value ?? 0),
       account: walletAddr,
     });
-  }, [walletAddr, getWalletClient]);
+  }, [walletAddr, ensureGmxChain, getWalletClient]);
 
   /**
    * Open a market position on GMX V2 (Arbitrum).
@@ -867,7 +880,7 @@ export function useGmx() {
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect your Arbitrum wallet first');
-      await ensureChain(ARBITRUM_CHAIN_ID);
+      await ensureGmxChain();
 
       const collateral = parseFloat(collateralUsdc);
       const lev = Math.max(1, Math.floor(Number(leverage) || 1));
@@ -948,7 +961,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
+  }, [walletAddr, ensureGmxChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
 
   /**
    * Limit order = increase order with `orderType: 'limit'` and a trigger
@@ -961,7 +974,7 @@ export function useGmx() {
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect your Arbitrum wallet first');
-      await ensureChain(ARBITRUM_CHAIN_ID);
+      await ensureGmxChain();
 
       const collateral = parseFloat(collateralUsdc);
       const lev = Math.max(1, Math.floor(Number(leverage) || 1));
@@ -1010,7 +1023,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchOrders]);
+  }, [walletAddr, ensureGmxChain, ensureSdk, ensureUsdcAllowance, ensureReferralCodeBound, sendPreparedClassicTx, fetchOrders]);
 
   /**
    * Cancel a pending order via V2 prepareCancelOrder + classic send.
@@ -1020,7 +1033,7 @@ export function useGmx() {
     try {
       if (!walletAddr) throw new Error('Connect your Arbitrum wallet first');
       if (!orderId) throw new Error('Missing order id');
-      await ensureChain(ARBITRUM_CHAIN_ID);
+      await ensureGmxChain();
 
       const apiSdk = await ensureSdk();
       const prepared = await apiSdk.prepareCancelOrder({
@@ -1037,7 +1050,7 @@ export function useGmx() {
       setError(msg);
       return { error: msg };
     }
-  }, [walletAddr, ensureChain, ensureSdk, sendPreparedClassicTx, fetchOrders]);
+  }, [walletAddr, ensureGmxChain, ensureSdk, sendPreparedClassicTx, fetchOrders]);
 
   // GMX V2 doesn't have an account-level "set leverage" call — leverage is
   // per-order (sizeDeltaUsd / collateralAmount). Surface a no-op success so
@@ -1073,7 +1086,7 @@ export function useGmx() {
     setError(null);
     try {
       if (!walletAddr) throw new Error('Connect your Arbitrum wallet first');
-      await ensureChain(ARBITRUM_CHAIN_ID);
+      await ensureGmxChain();
 
       const apiSdk = await ensureSdk();
       const isLong = side === 'bid' || side === 'long';
@@ -1172,7 +1185,7 @@ export function useGmx() {
       tradeInFlightRef.current = false;
       setLoading(false);
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
+  }, [walletAddr, ensureGmxChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchAccount, fetchPositions, fetchOrders, syncGmxRewards]);
 
   /**
    * Submit Take-Profit and/or Stop-Loss orders against an open position.
@@ -1188,7 +1201,7 @@ export function useGmx() {
     try {
       if (!walletAddr) throw new Error('Connect your Arbitrum wallet first');
       if (!takeProfit && !stopLoss) return { success: true };
-      await ensureChain(ARBITRUM_CHAIN_ID);
+      await ensureGmxChain();
 
       const apiSdk = await ensureSdk();
       // FuturesPanel passes the CLOSE side here, NOT the position direction —
@@ -1243,7 +1256,7 @@ export function useGmx() {
       setError(msg);
       return { error: msg };
     }
-  }, [walletAddr, ensureChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchOrders]);
+  }, [walletAddr, ensureGmxChain, ensureSdk, ensureTokenSymbolMap, findV2Position, sendPreparedClassicTx, fetchOrders]);
 
   // GMX is non-custodial — there's no "deposit to GMX" or "withdraw from
   // GMX" call: USDC stays in the user's wallet until an order locks it as
