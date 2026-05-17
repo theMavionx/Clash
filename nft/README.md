@@ -72,7 +72,7 @@ Target pricing:
 - Base CoP: `$5.00` per NFT. Set `NFT_BASE_CLASH_TOKEN` after CoP launches.
   `NFT_COP_USD_PRICE` can override the DexScreener price if needed.
 - Base ETH/USDC shop quotes: `$8.90` per NFT if enabled.
-- Solana SOL/USDC Candy Machine groups: `$8.90` per NFT.
+- Solana SOL/USDC/SKR Candy Machine groups: `$8.90` per NFT.
 
 `quote:base-shop` computes native ETH from live ETH/USD, fixed USDC units, or
 CoP units from `NFT_COP_USD_PRICE` or DexScreener, then signs the EIP-712 quote. Keep the
@@ -83,10 +83,12 @@ The Solana Candy Machine also starts closed by default via a far-future
 open` only when the mint UI is ready. To deploy it open immediately, set
 `NFT_SOLANA_SALE_ACTIVE=1` before `npm run deploy:solana`.
 
-`set-payments:solana` computes `$8.90` in SOL from live SOL/USD and configures
-USDC as exactly `8.900000` USDC. If a previously deployed Candy Guard account is
-too small to add payment groups, deploy a fresh Candy Machine with the groups
-from the start before opening the public sale.
+`set-payments:solana` computes `$8.90` in SOL from live SOL/USD, configures
+USDC as exactly `8.900000` USDC, and adds an SKR token-payment group when
+`NFT_SOLANA_SKR_MINT` or `GAME_SHOP_SOLANA_SKR_MINT` is set. SKR decimals are
+read from the mint account, with a 6-decimal fallback. If a previously deployed
+Candy Guard account is too small to add payment groups, deploy a fresh Candy
+Machine with the groups from the start before opening the public sale.
 
 Solana deploy now defaults to Metaplex Core Candy Machine `hiddenSettings`.
 That keeps one stable metadata URI on-chain:

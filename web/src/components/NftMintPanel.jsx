@@ -1,9 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { useSignTransaction as usePrivySolanaSignTransaction } from '@privy-io/react-auth/solana';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
 import { base } from 'viem/chains';
 import EvmWalletModal from './EvmWalletModal';
+import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useFarcaster } from '../hooks/useFarcaster';
@@ -22,6 +25,22 @@ import NftMarketplacePanel from './NftMarketplacePanel';
 const demonKingImg = '/cdn/nft/1/default.jpg';
 const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http() });
+const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+
+// Token → asset URL. CoP uses the game's app icon (it's our token); the
+// rest map to brand SVG/PNG files already shipped in /public/tokens.
+// Unknown tokens fall back to a generic coin glyph in the renderer.
+const TOKEN_LOGO_SRC = {
+  CoP:  '/icons/icon-192.png',
+  ETH:  '/tokens/ETH.svg',
+  USDC: '/tokens/USDC.svg',
+  SOL:  '/tokens/SOL.svg',
+  ARB:  '/tokens/ARB.svg',
+  MON:  '/tokens/MON.svg',
+  APT:  '/tokens/APT.png',
+  SKR:  '/tokens/SKR.png',
+};
+function tokenLogo(token) { return TOKEN_LOGO_SRC[token] || null; }
 
 const SHOP_TABS = [
   { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
@@ -31,7 +50,7 @@ const SHOP_TABS = [
 
 const CHAIN_OPTIONS = [
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC / CoP', badge: 'EVM' },
-  { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC', badge: 'SOL' },
+  { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
 ];
 
 const PAYMENT_OPTIONS = {
@@ -43,6 +62,7 @@ const PAYMENT_OPTIONS = {
   solana: [
     { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$8.90', token: 'USDC' },
     { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$8.90', token: 'SOL' },
+    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$8.90', token: 'SKR', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
   // USDC or the chain's native token works via the server's /nft/evm/quote
@@ -129,6 +149,34 @@ function makeNftEvmWallet(provider, address) {
 // reflects this so an Arbitrum trader sees "Arbitrum" not "Base".
 // Chains where mint endpoints aren't deployed (arb/monad/aptos) render
 // a "bridge from Base to mint here" path inside the payment view.
+function makePrivySolanaWallet(privyWallet, signTransaction) {
+  if (!privyWallet?.address || !signTransaction) return null;
+  const publicKey = new PublicKey(privyWallet.address);
+  const signOne = async (tx) => {
+    const serialized = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+    const result = await signTransaction({
+      transaction: new Uint8Array(serialized),
+      wallet: privyWallet,
+    });
+    const raw = new Uint8Array(result?.signedTransaction || result);
+    try {
+      return Transaction.from(raw);
+    } catch {
+      return VersionedTransaction.deserialize(raw);
+    }
+  };
+  return {
+    publicKey,
+    walletClientType: privyWallet.walletClientType || 'privy',
+    source: 'privy',
+    signTransaction: signOne,
+    signAllTransactions: async (txs) => Promise.all(txs.map(signOne)),
+    signMessage: async () => {
+      throw new Error('Privy Solana wallet cannot sign messages in the shop flow');
+    },
+  };
+}
+
 const DEX_TO_NFT_CHAIN = {
   avantis:  'base',
   pacifica: 'solana',
@@ -139,7 +187,7 @@ const DEX_TO_NFT_CHAIN = {
 };
 // All five chains now have a direct NFT mint endpoint:
 //   - base    /nft/base/quote   (CoP / ETH / USDC)
-//   - solana  candy machine     (USDC / SOL)
+//   - solana  candy machine     (USDC / SOL / SKR)
 //   - arbitrum/monad /nft/evm/quote   (USDC / native)
 //   - aptos   /nft/aptos/quote  (USDC/APT, ed25519-signed)
 const NFT_MINT_SUPPORTED = new Set(['base', 'solana', 'arbitrum', 'monad', 'aptos']);
@@ -259,7 +307,14 @@ function NftMintPanel({ onClose }) {
   const { dex } = useDex();
   const player = usePlayer();
   const tradingEvmWallet = useEvmWallet();
-  const solWallet = useSolWallet();
+  const adapterSolWallet = useSolWallet();
+  const optionalPrivy = useOptionalPrivy();
+  let privySolanaSignTransaction = null;
+  if (PRIVY_ENABLED) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const { signTransaction } = usePrivySolanaSignTransaction();
+    privySolanaSignTransaction = signTransaction;
+  }
   const aptosWallet = useAptosWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
   const { isInFrame } = useFarcaster();
@@ -297,7 +352,21 @@ function NftMintPanel({ onClose }) {
   );
   const evmWallet = localEvmWallet || tradingEvmWallet;
   const usingLocalEvmWallet = !!localEvmWallet;
+  const privySolanaWalletObj = optionalPrivy.authenticated
+    ? (optionalPrivy.solanaWallets || []).find(w => w?.walletClientType === 'privy')
+      || (optionalPrivy.solanaWallets || [])[0]
+    : null;
+  const privySolWallet = useMemo(
+    () => makePrivySolanaWallet(privySolanaWalletObj, privySolanaSignTransaction),
+    [privySolanaWalletObj, privySolanaSignTransaction],
+  );
+  const solWallet = adapterSolWallet?.publicKey ? adapterSolWallet : (privySolWallet || adapterSolWallet);
+  const usingPrivySolWallet = !adapterSolWallet?.publicKey && !!privySolWallet;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
+  const preparingPrivySolWallet = !!optionalPrivy.enabled
+    && !!optionalPrivy.authenticated
+    && !adapterSolWallet?.publicKey
+    && !privySolanaWalletObj?.address;
   const evmAddress = evmWallet?.address || null;
   const evmOnBase = evmChainId === BASE_CHAIN_ID;
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
@@ -308,7 +377,7 @@ function NftMintPanel({ onClose }) {
   // that chain's treasury yet.
   const shopChain = shopChainForDex(dex);
   const shopReadiness = {
-    base:     !!gameShopConfig?.base?.shop && !!gameShopConfig?.base?.copReady && !!gameShopConfig?.base?.saleActive,
+    base:     !!gameShopConfig?.base?.ready    && !!gameShopConfig?.base?.saleActive,
     solana:   !!gameShopConfig?.solana?.ready   && !!gameShopConfig?.solana?.saleActive,
     arbitrum: !!gameShopConfig?.arbitrum?.ready && !!gameShopConfig?.arbitrum?.saleActive,
     monad:    !!gameShopConfig?.monad?.ready    && !!gameShopConfig?.monad?.saleActive,
@@ -319,19 +388,16 @@ function NftMintPanel({ onClose }) {
   // chains don't need one. Default to USDC on multi-token chains since
   // most players already have it from the trading flow.
   const [shopPayment, setShopPayment] = useState('usdc');
-  // Reset payment to usdc when the player switches to a chain that doesn't
-  // offer the previously-chosen token (e.g. they were on Solana with SOL
-  // selected, then changed DEX to Arbitrum which doesn't have SOL). The
-  // chain-allowed sets here mirror SHOP_PAYMENTS_BY_CHAIN below. Base is
-  // pinned to CoP via the deployed contract — it has no payment toggle,
-  // so any leftover shopPayment value is harmless.
+  // Reset payment to USDC when the player switches to a chain that doesn't
+  // offer the previously-chosen token. The chain-allowed sets here mirror
+  // SHOP_PAYMENTS_BY_CHAIN below.
   useEffect(() => {
     const validPayments = {
       solana:   ['usdc', 'sol', 'skr'],
       aptos:    ['usdc', 'apt'],
       arbitrum: ['usdc', 'eth'],
       monad:    ['usdc', 'mon'],
-      base:     ['usdc'], // unused, Base uses CoP via contract
+      base:     ['usdc', 'eth', 'cop'],
     };
     const allowed = validPayments[shopChain] || ['usdc'];
     if (!allowed.includes(shopPayment)) {
@@ -340,11 +406,14 @@ function NftMintPanel({ onClose }) {
   }, [shopChain, shopPayment]);
   const paymentOptions = useMemo(() => {
     const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
+    const solanaGroups = mintConfig?.solana?.paymentGroups || mintConfig?.solana?.groups || {};
     return baseOptions.map((option) => ({
       ...option,
-      soon: option.requiresClash ? !mintConfig?.base?.clashReady : !!option.soon,
+      soon: option.requiresClash ? !mintConfig?.base?.clashReady
+        : option.requiresSkr ? !solanaGroups?.skr
+          : !!option.soon,
     }));
-  }, [mintConfig?.base?.clashReady, selectedChain]);
+  }, [mintConfig?.base?.clashReady, mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
   const selected = useMemo(
     () => paymentOptions.find((option) => option.id === selectedPayment) || paymentOptions[0],
     [paymentOptions, selectedPayment],
@@ -513,19 +582,29 @@ function NftMintPanel({ onClose }) {
   const handleSolanaReady = useCallback(() => {
     if (solAddress) {
       setNotice('Solana wallet ready.');
-      addClientBreadcrumb('nft.payment_wallet_ready', { chain: 'solana', dex });
+      addClientBreadcrumb('nft.payment_wallet_ready', {
+        chain: 'solana',
+        dex,
+        source: usingPrivySolWallet ? 'privy' : 'adapter',
+      });
+      return;
+    }
+
+    if (preparingPrivySolWallet) {
+      setNotice('Privy Solana wallet is being prepared. Try again in a moment.');
+      addClientBreadcrumb('nft.privy_solana_preparing', { dex });
       return;
     }
 
     addClientBreadcrumb('nft.connect_solana_start', { dex });
     openSolanaWallet({
-      wallets: solWallet.wallets,
-      select: solWallet.select,
-      connect: solWallet.connect,
+      wallets: adapterSolWallet.wallets,
+      select: adapterSolWallet.select,
+      connect: adapterSolWallet.connect,
       openWalletModal: setSolanaModalVisible,
       inFrame: isInFrame,
     });
-  }, [dex, isInFrame, setSolanaModalVisible, solAddress, solWallet]);
+  }, [adapterSolWallet, dex, isInFrame, preparingPrivySolWallet, setSolanaModalVisible, solAddress, usingPrivySolWallet]);
 
   const handlePrimary = useCallback(() => {
     if (selected.soon) {
@@ -655,13 +734,23 @@ function NftMintPanel({ onClose }) {
           quantity: 1,
         });
       } else if (shopChain === 'base') {
-        result = await buyGameShopItem({
-          evmWallet,
-          buyer: evmAddress,
-          token: sessionToken,
-          sku: product.sku,
-          quantity: 1,
-        });
+        result = shopPayment === 'cop'
+          ? await buyGameShopItem({
+              evmWallet,
+              buyer: evmAddress,
+              token: sessionToken,
+              sku: product.sku,
+              quantity: 1,
+            })
+          : await buyEvmShopItem({
+              evmWallet,
+              buyer: evmAddress,
+              token: sessionToken,
+              chain: shopChain,
+              sku: product.sku,
+              payment: shopPayment,
+              quantity: 1,
+            });
       } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
         result = await buyEvmShopItem({
           evmWallet,
@@ -712,9 +801,7 @@ function NftMintPanel({ onClose }) {
       // Each chain returns a different tx-ID field shape; normalize so the
       // success popup + analytics see a single string.
       const txId = result.signature || result.hash || result.txHash || '';
-      const paymentLabel = shopChain === 'base'
-        ? 'cop'
-        : (shopChain === 'solana' || shopChain === 'aptos') ? shopPayment : 'usdc';
+      const paymentLabel = ['base', 'solana', 'aptos', 'arbitrum', 'monad'].includes(shopChain) ? shopPayment : 'usdc';
       setShopPurchaseResult({ product, grant, tx: txId, flyRewards, chain: shopChain });
       setShopPurchaseStatus('success');
       addClientBreadcrumb('shop.purchase_success', {
@@ -754,6 +841,7 @@ function NftMintPanel({ onClose }) {
     evmOnBase,
     solAddress,
     aptosAddress: aptosWallet?.address || null,
+    preparingPrivySolWallet,
     solanaConfigured,
     solanaSaleActive,
     busy,
@@ -782,8 +870,13 @@ function NftMintPanel({ onClose }) {
   }, [dex, usingLocalEvmWallet]);
 
   const handleDisconnectSolana = useCallback(async () => {
+    if (usingPrivySolWallet) {
+      setNotice('Privy Solana wallet is managed by your email session. Log out from Profile to disconnect it.');
+      addClientBreadcrumb('nft.disconnect_solana_privy_hint', { dex });
+      return;
+    }
     try {
-      await solWallet?.disconnect?.();
+      await adapterSolWallet?.disconnect?.();
       setNotice('Solana wallet disconnected.');
       addClientBreadcrumb('nft.disconnect_solana', { dex });
     } catch (err) {
@@ -791,7 +884,7 @@ function NftMintPanel({ onClose }) {
       setNotice(message.slice(0, 120));
       addClientBreadcrumb('nft.disconnect_solana_failed', { dex, message }, 'warn');
     }
-  }, [dex, solWallet]);
+  }, [adapterSolWallet, dex, usingPrivySolWallet]);
 
   return (
     <>
@@ -872,7 +965,7 @@ function NftMintPanel({ onClose }) {
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Game Resources</span>
-                      <span style={styles.editionTag}>Pay with CoP on Base</span>
+                      <span style={styles.editionTag}>Base: USDC, ETH, CoP -20%</span>
                     </div>
                   </div>
                   <GameResourcesTab
@@ -886,6 +979,7 @@ function NftMintPanel({ onClose }) {
                     evmAddress={evmAddress}
                     evmOnBase={evmOnBase}
                     solAddress={solAddress}
+                    preparingSolanaWallet={preparingPrivySolWallet}
                     aptosAddress={aptosWallet?.address || null}
                     busy={busy}
                     onConnectBase={handleBaseReady}
@@ -948,7 +1042,11 @@ function NftMintPanel({ onClose }) {
                                 ...(option.soon ? styles.optionBtnDisabled : null),
                               }}
                             >
-                              <span style={styles.optionBadge}>{option.token}</span>
+                              <span style={styles.optionBadge}>
+                                {tokenLogo(option.token)
+                                  ? <img src={tokenLogo(option.token)} alt={option.token} style={styles.optionBadgeImg} />
+                                  : <span>{option.token}</span>}
+                              </span>
                               <span style={styles.optionMain}>
                                 {option.method}
                                 {option.requiresClash && COP_DISCOUNT && (
@@ -974,7 +1072,11 @@ function NftMintPanel({ onClose }) {
                         onClick={handlePrimary}
                         disabled={!!busy || selected.soon}
                       >
-                        <span style={styles.mintBtnGlyph}>{primaryState.glyph}</span>
+                        <span style={styles.mintBtnGlyph}>
+                          {tokenLogo(selected.token)
+                            ? <img src={tokenLogo(selected.token)} alt={selected.token} style={styles.mintBtnGlyphImg} />
+                            : primaryState.glyph}
+                        </span>
                         <span>{primaryState.label}</span>
                       </button>
                     </>
@@ -1084,6 +1186,11 @@ function NftMintPanel({ onClose }) {
 // on Solana is gated on `solana.skrReady` server-side — the option is
 // pruned at render time if the operator hasn't configured the mint.
 const SHOP_PAYMENTS_BY_CHAIN = {
+  base: [
+    { id: 'usdc', label: 'USDC', sub: 'Stable' },
+    { id: 'eth',  label: 'ETH',  sub: 'Native' },
+    { id: 'cop',  label: 'CoP',  sub: '20% off' },
+  ],
   arbitrum: [
     { id: 'usdc', label: 'USDC', sub: 'Stable' },
     { id: 'eth',  label: 'ETH',  sub: 'Native' },
@@ -1122,6 +1229,7 @@ function GameResourcesTab({
   evmAddress,
   evmOnBase,
   solAddress,
+  preparingSolanaWallet,
   aptosAddress,
   busy,
   onConnectBase,
@@ -1137,16 +1245,20 @@ function GameResourcesTab({
                        : chain === 'aptos'    ? !!aptosAddress
                        : chain === 'base'     ? (!!evmAddress && evmOnBase)
                        : /* arbitrum/monad */   !!evmAddress;
+  const walletPreparing = chain === 'solana' && !!preparingSolanaWallet;
   // Per-chain payment toggle. We filter SKR off when the operator hasn't
   // configured GAME_SHOP_SOLANA_SKR_MINT (skrReady=false) so the UI never
   // offers a payment path the server will reject with 503.
   const paymentOptions = (SHOP_PAYMENTS_BY_CHAIN[chain] || [])
     .filter((o) => o.id !== 'skr' || skrReady);
-  const paymentLabel = chain === 'base' ? 'CoP'
-    : (paymentOptions.length > 0 ? (paymentOptions.find((o) => o.id === payment)?.label || 'USDC') : 'USDC');
+  const paymentLabel = paymentOptions.length > 0
+    ? (paymentOptions.find((o) => o.id === payment)?.label || 'USDC')
+    : 'USDC';
   // Compact mobile labels — full-width "Connect Solana" / "Buy with USDC"
   // wraps on a 360px viewport. Strip the chain name on mobile.
-  const connectLabel = !walletConnected
+  const connectLabel = walletPreparing
+    ? (isMobile ? 'Preparing' : 'Preparing wallet...')
+    : !walletConnected
     ? (isMobile ? 'Connect' : `Connect ${chainLabel}`)
     : (chain === 'base' && evmAddress && !evmOnBase
         ? (isMobile ? 'Switch' : 'Switch Base')
@@ -1182,10 +1294,7 @@ function GameResourcesTab({
         <span style={styles.sectionHeaderHint}>{paymentLabel} utility</span>
       </div>
 
-      {/* Payment-token toggle — only on chains with multiple options
-          (Solana: USDC/SOL, Aptos: USDC/APT). Base/Arbitrum/Monad are
-          single-token so we skip the toggle and just label the buy
-          button with the fixed payment token. */}
+      {/* Payment-token toggle for each chain's configured resource payments. */}
       {paymentOptions.length > 0 && (
         <div style={styles.shopPaymentRow}>
           {paymentOptions.map((opt) => {
@@ -1211,7 +1320,13 @@ function GameResourcesTab({
       <div style={styles.resourceGrid}>
         {products.map((product) => {
           const isBusy = busy === `shop:${product.id}`;
-          const actionLabel = !walletConnected
+          const discounted = chain === 'base' && payment === 'cop';
+          const priceUsd = discounted
+            ? (Number(product.priceUsd || 0) * 0.8).toFixed(2)
+            : product.priceUsd;
+          const actionLabel = walletPreparing
+            ? (isMobile ? 'Preparing' : 'Preparing wallet...')
+            : !walletConnected
             ? connectLabel
             : isBusy
               ? (isMobile ? 'Buying' : 'Buying...')
@@ -1228,7 +1343,7 @@ function GameResourcesTab({
             ...styles.resourceBuyBtn,
             ...(isMobile ? styles.resourceBuyBtnMobile : null),
             ...((ready && walletConnected) ? styles.resourceBuyBtnReady : null),
-            ...(!ready ? styles.resourceBuyBtnDisabled : null),
+            ...((!ready || walletPreparing) ? styles.resourceBuyBtnDisabled : null),
           };
           const infoStyle = isMobile
             ? { ...styles.resourceInfo, ...styles.resourceInfoMobile }
@@ -1242,7 +1357,10 @@ function GameResourcesTab({
                 <span style={styles.resourceTitle}>{product.title}</span>
                 <span style={styles.resourceSubtitle}>{product.subtitle}</span>
                 <div style={styles.resourceMetaRow}>
-                  <span style={styles.resourcePrice}>${product.priceUsd}</span>
+                  <span style={styles.resourcePrice}>
+                    ${priceUsd}
+                    {discounted && <span style={styles.resourceMeta}> 20% off</span>}
+                  </span>
                   {product.durationHours && <span style={styles.resourceMeta}>{product.durationHours}h</span>}
                   {product.rewards && <span style={styles.resourceMeta}>{formatRewards(product.rewards)}</span>}
                 </div>
@@ -1250,7 +1368,7 @@ function GameResourcesTab({
               <button
                 type="button"
                 style={buyBtnStyle}
-                disabled={!ready || !!busy}
+                disabled={!ready || !!busy || walletPreparing}
                 onClick={() => {
                   if (!walletConnected) connectForChain();
                   else onBuy(product);
@@ -1452,7 +1570,9 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
 }
 
 async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
-  const payment = selected.id === 'sol-sol' ? 'sol' : 'usdc';
+  const payment = String(selected?.token || '').toLowerCase() === 'skr'
+    ? 'skr'
+    : selected.id === 'sol-sol' ? 'sol' : 'usdc';
   setBusy('mint');
   setMintStatus?.('pending');
   setMintResult?.(null);
@@ -1488,7 +1608,7 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
   }
 }
 
-function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, aptosAddress, solanaConfigured, solanaSaleActive, busy }) {
+function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, aptosAddress, preparingPrivySolWallet, solanaConfigured, solanaSaleActive, busy }) {
   if (selected?.soon) return { label: 'CoP soon', glyph: 'C', ready: false };
   if (busy === 'mint') return { label: 'Minting...', glyph: '...', ready: false };
   if (busy === selected.chain) return { label: 'Preparing...', glyph: '...', ready: false };
@@ -1510,6 +1630,7 @@ function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, aptosAdd
     if (!aptosAddress) return { label: 'Connect Aptos wallet', glyph: 'A', ready: false };
     return { label: `Mint with ${selected.token}`, glyph: 'A', ready: true };
   }
+  if (!solAddress && preparingPrivySolWallet) return { label: 'Preparing Privy wallet...', glyph: 'S', ready: false };
   if (!solAddress) return { label: 'Connect Solana wallet', glyph: 'S', ready: false };
   if (!solanaConfigured) return { label: 'Solana mint soon', glyph: 'S', ready: false };
   if (!solanaSaleActive) return { label: 'Solana sale closed', glyph: 'S', ready: false };
@@ -2619,8 +2740,9 @@ const styles = {
   resourceCardMobile: {
     gridTemplateColumns: '72px minmax(0, 1fr)',
     gridTemplateAreas: '"icon info" "btn btn"',
-    rowGap: 10,
-    columnGap: 10,
+    // `gap: 10` is inherited from resourceCard — don't redeclare it as
+    // rowGap/columnGap here, that mixes shorthand + longhand and trips
+    // React's "Removing rowGap when gap is set" warning on re-render.
     padding: 12,
   },
   resourceIconWrap: {
@@ -3098,15 +3220,26 @@ const styles = {
   },
   optionBadge: {
     gridRow: '1 / span 2',
-    minWidth: 54,
-    padding: '5px 6px',
-    borderRadius: 8,
-    background: '#5C3A21',
-    color: '#fff7df',
+    width: 40, height: 40,
+    minWidth: 40,
+    padding: 0,
+    borderRadius: '50%',
+    background: 'transparent',
+    color: '#5C3A21',
     fontSize: 10,
     fontWeight: 900,
     textAlign: 'center',
     textTransform: 'uppercase',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  optionBadgeImg: {
+    width: '100%', height: '100%',
+    borderRadius: '50%',
+    objectFit: 'cover',
+    display: 'block',
   },
   // Small green chip pinned next to the CoP option label to mark the
   // discount inline. Matches the green PnL/savings tone used elsewhere
@@ -3172,15 +3305,23 @@ const styles = {
     opacity: 0.7,
   },
   mintBtnGlyph: {
-    minWidth: 24,
-    height: 24,
-    borderRadius: 12,
-    background: 'rgba(255,255,255,0.45)',
+    width: 26, height: 26,
+    minWidth: 26,
+    borderRadius: '50%',
+    background: 'transparent',
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
     fontSize: 13,
     fontWeight: 900,
+    overflow: 'hidden',
+    padding: 0,
+  },
+  mintBtnGlyphImg: {
+    width: '100%', height: '100%',
+    borderRadius: '50%',
+    objectFit: 'cover',
+    display: 'block',
   },
   notice: {
     borderRadius: 10,

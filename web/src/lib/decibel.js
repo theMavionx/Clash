@@ -25,8 +25,14 @@
 // on-chain and reverts with "invalid address" if you pass a short code.
 export const BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
 
-// 2 basis points = 0.02%. Per builder agreement / user request.
-export const BUILDER_FEE_BPS = 2;
+// 10 basis points = 0.1%. Per builder agreement / user request. Must
+// match DECIBEL_BUILDER_FEE_BPS on the server (server-futures/routes.js
+// and server/earnings.js) — otherwise the server rejects orders for
+// having the wrong builderFee. Bumping this also invalidates existing
+// users' on-chain approval caps (set to old value); useDecibel detects
+// that and re-triggers approve_max_builder_fee_for_subaccount on the
+// next trade.
+export const BUILDER_FEE_BPS = 10;
 
 // Referral code (consumer-side, the 6-char alphanumeric thing on
 // app.decibel.trade). Decibel's perp_engine aborts with

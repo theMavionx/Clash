@@ -17,14 +17,16 @@ export function buildSolanaGuardConfig(deployment, umiFns) {
     });
   }
 
-  if (deployment.paymentGroups?.usdc) {
+  for (const label of ['usdc', 'skr']) {
+    const group = deployment.paymentGroups?.[label];
+    if (!group) continue;
     groups.push({
-      label: 'usdc',
+      label,
       guards: {
         tokenPayment: some({
-          amount: BigInt(deployment.paymentGroups.usdc.amount),
-          mint: publicKey(deployment.paymentGroups.usdc.mint),
-          destinationAta: publicKey(deployment.paymentGroups.usdc.destinationAta),
+          amount: BigInt(group.amount),
+          mint: publicKey(group.mint),
+          destinationAta: publicKey(group.destinationAta),
         }),
         startDate: startDateGuard,
       },

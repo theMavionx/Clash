@@ -694,6 +694,12 @@ function mountNftV3Endpoints(router, ctx) {
   const findBridgeRefByBurnStmt = bridgeDb?.prepare(`
     SELECT * FROM used_bridge_refs WHERE burn_tx_hash = ? AND dest_chain = ?
   `);
+  const insertBridgeLogStmt = bridgeDb?.prepare(`
+    INSERT INTO bridge_logs
+      (request_id, phase, status, source_chain, dest_chain, source_ref, burn_tx_hash,
+       dest_address, dest_tx_or_asset, level, error, data, ip)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
 
   function recordUsedBridgeRef(row) {
     if (!insertUsedBridgeRefStmt) return;
@@ -862,6 +868,121 @@ function mountNftV3Endpoints(router, ctx) {
       source: fee.source,
     };
   }
+
+  function bridgeLogRequestId(req) {
+    const fromHeader = req.headers?.['x-request-id'] || req.headers?.['x-correlation-id'];
+    if (Array.isArray(fromHeader) && fromHeader[0]) return String(fromHeader[0]).slice(0, 128);
+    if (fromHeader) return String(fromHeader).slice(0, 128);
+    return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
+  }
+
+  function bridgeLogPhase(req) {
+    const url = String(req.originalUrl || req.url || '');
+    if (url.includes('/bridge/init')) return 'init';
+    if (url.includes('/bridge/confirm')) return 'confirm';
+    if (url.includes('/bridge/relay')) return 'relay';
+    return 'bridge';
+  }
+
+  function bridgeLogText(value, max = 700) {
+    if (value === null || value === undefined) return null;
+    const s = String(value);
+    return s.length > max ? `${s.slice(0, max)}...` : s;
+  }
+
+  function bridgeLogData(payload, httpStatus) {
+    const body = jsonable(payload || {});
+    const out = {
+      httpStatus,
+      mode: body.mode || null,
+      destinationChainId: body.destinationChainId || body.destChainId || null,
+      bridgeFee: body.bridgeFee || null,
+      destContract: body.destContract || null,
+      destModule: body.destModule || null,
+      gasUsed: body.gasUsed || null,
+      assetAddress: body.assetAddress || null,
+      tokenAccount: body.tokenAccount || null,
+      standard: body.standard || null,
+      txSig: body.txSig || null,
+      destTxHash: body.destTxHash || null,
+      note: body.note || null,
+      error: body.error || null,
+    };
+    try {
+      const text = JSON.stringify(out);
+      return text.length > 4000 ? `${text.slice(0, 4000)}...` : text;
+    } catch {
+      return JSON.stringify({ httpStatus });
+    }
+  }
+
+  function bridgeLogDestTxOrAsset(payload) {
+    const body = payload || {};
+    if (body.destTxHash) return String(body.destTxHash);
+    if (body.assetAddress && body.txSig) return `${body.assetAddress}@${body.txSig}`;
+    if (body.txSig) return String(body.txSig);
+    if (body.priorDestTxOrAsset) return String(body.priorDestTxOrAsset);
+    return null;
+  }
+
+  function recordBridgeLog(row) {
+    if (!insertBridgeLogStmt) return;
+    try {
+      const level = Number(row.level);
+      insertBridgeLogStmt.run(
+        row.request_id,
+        row.phase,
+        row.status,
+        row.source_chain || null,
+        row.dest_chain || null,
+        row.source_ref || null,
+        row.burn_tx_hash || null,
+        row.dest_address || null,
+        row.dest_tx_or_asset || null,
+        Number.isFinite(level) ? level : null,
+        bridgeLogText(row.error, 700),
+        row.data || null,
+        row.ip || null,
+      );
+    } catch (err) {
+      console.warn('[bridge-log] sqlite write failed:', err?.message || err);
+    }
+  }
+
+  router.use('/bridge', (req, res, next) => {
+    const requestId = bridgeLogRequestId(req);
+    res.set('X-Bridge-Request-Id', requestId);
+
+    let logged = false;
+    const logResponse = (payload) => {
+      if (logged) return;
+      logged = true;
+      const body = jsonable(payload || {});
+      recordBridgeLog({
+        request_id: requestId,
+        phase: bridgeLogPhase(req),
+        status: res.statusCode >= 400 ? 'error' : 'ok',
+        source_chain: body.sourceChain || req.body?.sourceChain || null,
+        dest_chain: body.destChain || req.body?.destChain || null,
+        source_ref: body.sourceRef || req.body?.sourceRef || null,
+        burn_tx_hash: req.body?.burnTxHash || null,
+        dest_address: body.destAddress || body.recipient || req.body?.destAddress || null,
+        dest_tx_or_asset: bridgeLogDestTxOrAsset(body),
+        level: body.level || body.burned?.level || req.body?.level || null,
+        error: res.statusCode >= 400 ? (body.error || `HTTP ${res.statusCode}`) : null,
+        data: bridgeLogData(body, res.statusCode),
+        ip: req.ip || req.connection?.remoteAddress || null,
+      });
+    };
+
+    const originalJson = res.json.bind(res);
+    res.json = (payload) => {
+      logResponse(payload);
+      return originalJson(payload);
+    };
+    res.on('finish', () => logResponse(null));
+    next();
+  });
 
   // POST /bridge/init — returns instructions for the burn tx.
   router.post('/bridge/init', async (req, res) => {

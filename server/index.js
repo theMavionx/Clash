@@ -408,6 +408,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
     <div class="tab" onclick="switchTab('shop')">Shop</div>
+    <div class="tab" onclick="switchTab('nft')">NFT / Bridge</div>
   </div>
 
   <div class="panel active" id="tab-players">
@@ -608,6 +609,50 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>Time</th><th>Player</th><th>Product</th><th>Price</th><th>Payer (Base)</th><th>Tx</th>
     </tr></thead><tbody id="shopRecentBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-nft">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap">
+      <h2 style="color:#f59e0b;font-size:20px">NFT / Bridge Analytics</h2>
+      <button class="btn" onclick="loadNftAnalytics()">Refresh</button>
+    </div>
+    <div class="stats" id="nftSummary"></div>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">NFT Supply by Chain</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>NFTs</th><th>RPC</th><th>Raw live count</th>
+    </tr></thead><tbody id="nftSupplyBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Bridge Routes</h2>
+    <table><thead><tr>
+      <th>Route</th><th>Total</th><th>Today</th><th>Pending</th><th>Latest</th>
+    </tr></thead><tbody id="bridgeRoutesBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Payment Tokens</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>Token</th><th>Payments</th><th>Today</th><th>Buyers</th><th>Revenue</th><th>Latest</th>
+    </tr></thead><tbody id="paymentTokensBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Payments by Chain</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>Payments</th><th>Today</th><th>Buyers</th><th>Revenue</th><th>Latest</th>
+    </tr></thead><tbody id="paymentChainsBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Marketplace Payment Tokens</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>Token</th><th>Sales</th><th>Latest</th>
+    </tr></thead><tbody id="marketplaceTokensBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Bridge Health Logs</h2>
+    <div class="stats" id="bridgeLogStats"></div>
+    <table><thead><tr>
+      <th>Time</th><th>Status</th><th>Phase</th><th>Route</th><th>Level</th><th>Error / Result</th>
+    </tr></thead><tbody id="bridgeLogsBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Bridge Ledger</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Route</th><th>Level</th><th>Source ref</th><th>Burn tx</th><th>Destination</th>
+    </tr></thead><tbody id="bridgeLedgerBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-elfa">
@@ -1857,6 +1902,163 @@ async function loadShop() {
   }
 }
 
+async function loadNftAnalytics() {
+  try {
+    const data = await api('/admin/nft-analytics');
+    const fmtUsd = (v) => '$' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtTime = (t) => t ? new Date(String(t).replace(' ', 'T') + 'Z').toLocaleString() : '-';
+    const short = (v, a = 10, b = 6) => {
+      const s = String(v || '');
+      return s.length > a + b + 3 ? s.slice(0, a) + '...' + s.slice(-b) : s;
+    };
+    const chainLabel = (chain) => ({
+      base: 'Base',
+      arbitrum: 'Arbitrum',
+      monad: 'Monad',
+      aptos: 'Aptos',
+      solana: 'Solana',
+    }[chain] || chain || '-');
+    const tokenLabel = (token) => {
+      const raw = String(token || 'native');
+      const lower = raw.toLowerCase();
+      if (!raw || raw === 'native' || /^0x0{40}$/.test(lower)) return 'native';
+      if (lower === '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913') return 'USDC';
+      return short(raw, 8, 6);
+    };
+    const explorerUrl = (chain, hash) => {
+      const h = String(hash || '');
+      if (!h) return null;
+      if (chain === 'base') return 'https://basescan.org/tx/' + h;
+      if (chain === 'arbitrum') return 'https://arbiscan.io/tx/' + h;
+      if (chain === 'aptos') return 'https://explorer.aptoslabs.com/txn/' + h + '?network=mainnet';
+      if (chain === 'solana') return 'https://solscan.io/tx/' + h;
+      return null;
+    };
+    const txLink = (chain, hash) => {
+      if (!hash) return '-';
+      const url = explorerUrl(chain, hash);
+      const label = '<code class="mono">' + esc(short(hash)) + '</code>';
+      return url ? '<a href="' + esc(url) + '" target="_blank" style="color:#fbbf24">' + label + '</a>' : label;
+    };
+    const destLink = (chain, value) => {
+      if (!value) return '<span style="color:#f59e0b">pending</span>';
+      const s = String(value);
+      if (s.includes('@')) {
+        const parts = s.split('@');
+        return '<code class="mono">' + esc(short(parts[0], 8, 6)) + '</code><br>' + txLink(chain, parts[1]);
+      }
+      return txLink(chain, s);
+    };
+
+    const supply = data.supply || {};
+    const bridge = data.bridges?.summary || {};
+    const logs = data.bridge_logs?.summary || {};
+    document.getElementById('nftSummary').innerHTML =
+      '<div class="stat"><div class="v">' + (supply.total || 0) + '/' + (supply.cap || 0) + '</div><div class="l">NFT supply</div></div>' +
+      '<div class="stat"><div class="v">' + (supply.remaining || 0) + '</div><div class="l">Remaining</div></div>' +
+      '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#38bdf8">' + (bridge.total || 0) + '</div><div class="l">Total bridges</div></div>' +
+      '<div class="stat"><div class="v">' + (bridge.today || 0) + '</div><div class="l">Bridges today</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (bridge.pending || 0) + '</div><div class="l">Pending dest mint</div></div>' +
+      '<div class="stat" style="border-color:' + ((logs.errors_24h || 0) ? '#ef4444' : '#22c55e') + '"><div class="v" style="color:' + ((logs.errors_24h || 0) ? '#f87171' : '#4ade80') + '">' + (logs.errors_24h || 0) + '</div><div class="l">Bridge errors 24h</div></div>';
+
+    const supplyRows = supply.per_chain || [];
+    document.getElementById('nftSupplyBody').innerHTML = supplyRows.length === 0
+      ? '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:24px">No supply data</td></tr>'
+      : supplyRows.map((row) => '<tr>' +
+          '<td style="font-weight:700">' + esc(chainLabel(row.chain)) + '</td>' +
+          '<td style="color:#fbbf24;font-weight:800">' + (row.count || 0) + '</td>' +
+          '<td>' + (row.live ? '<span class="badge" style="background:#064e3b;color:#86efac">live</span>' : '<span class="badge" style="background:#713f12;color:#fde68a">fallback</span>') + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + (row.raw == null ? '-' : esc(row.raw)) + '</td>' +
+        '</tr>').join('');
+
+    const routeRows = data.bridges?.by_route || [];
+    document.getElementById('bridgeRoutesBody').innerHTML = routeRows.length === 0
+      ? '<tr><td colspan="5" style="color:#6b7280;text-align:center;padding:24px">No bridges yet</td></tr>'
+      : routeRows.map((row) => '<tr>' +
+          '<td><span class="badge badge-shield">' + esc(chainLabel(row.source_chain)) + '</span> -> <span class="badge badge-shield">' + esc(chainLabel(row.dest_chain)) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.total || 0) + '</td>' +
+          '<td>' + (row.today || 0) + '</td>' +
+          '<td style="color:' + ((row.pending || 0) ? '#fbbf24' : '#9ca3af') + '">' + (row.pending || 0) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.latest_at)) + '</td>' +
+        '</tr>').join('');
+
+    const paymentRows = data.payments?.utility_by_token || [];
+    document.getElementById('paymentTokensBody').innerHTML = paymentRows.length === 0
+      ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:24px">No shop/resource payments yet</td></tr>'
+      : paymentRows.map((row) => '<tr>' +
+          '<td>' + esc(chainLabel(row.chain)) + '</td>' +
+          '<td><code class="mono">' + esc(tokenLabel(row.token)) + '</code></td>' +
+          '<td style="font-weight:800">' + (row.payments || 0) + '</td>' +
+          '<td>' + (row.today || 0) + '</td>' +
+          '<td>' + (row.unique_buyers || 0) + '</td>' +
+          '<td style="color:#4ade80;font-weight:700">' + fmtUsd(row.revenue_usd) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.latest_at)) + '</td>' +
+        '</tr>').join('');
+
+    const paymentChainRows = data.payments?.utility_by_chain || [];
+    document.getElementById('paymentChainsBody').innerHTML = paymentChainRows.length === 0
+      ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No chain payment totals yet</td></tr>'
+      : paymentChainRows.map((row) => '<tr>' +
+          '<td style="font-weight:700">' + esc(chainLabel(row.chain)) + '</td>' +
+          '<td style="font-weight:800">' + (row.payments || 0) + '</td>' +
+          '<td>' + (row.today || 0) + '</td>' +
+          '<td>' + (row.unique_buyers || 0) + '</td>' +
+          '<td style="color:#4ade80;font-weight:700">' + fmtUsd(row.revenue_usd) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.latest_at)) + '</td>' +
+        '</tr>').join('');
+
+    const marketRows = data.payments?.marketplace_by_token || [];
+    document.getElementById('marketplaceTokensBody').innerHTML = marketRows.length === 0
+      ? '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:24px">No marketplace sales indexed yet</td></tr>'
+      : marketRows.map((row) => '<tr>' +
+          '<td>' + esc(chainLabel(row.chain)) + '</td>' +
+          '<td><code class="mono">' + esc(tokenLabel(row.token)) + '</code></td>' +
+          '<td style="font-weight:800">' + (row.sales || 0) + '</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.latest_at)) + '</td>' +
+        '</tr>').join('');
+
+    document.getElementById('bridgeLogStats').innerHTML =
+      '<div class="stat"><div class="v">' + (logs.total || 0) + '</div><div class="l">Log rows</div></div>' +
+      '<div class="stat"><div class="v">' + (logs.today || 0) + '</div><div class="l">Logs today</div></div>' +
+      '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#f87171">' + (logs.errors_total || 0) + '</div><div class="l">Total errors</div></div>' +
+      '<div class="stat"><div class="v" style="font-size:14px;color:#9ca3af">' + esc(fmtTime(logs.latest_at)) + '</div><div class="l">Latest bridge log</div></div>';
+
+    const logRows = data.bridge_logs?.recent || [];
+    document.getElementById('bridgeLogsBody').innerHTML = logRows.length === 0
+      ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No bridge logs yet</td></tr>'
+      : logRows.map((row) => {
+          let result = row.error || row.dest_tx_or_asset || row.source_ref || '';
+          try {
+            const parsed = row.data ? JSON.parse(row.data) : {};
+            result = row.error || parsed.error || parsed.note || parsed.destTxHash || parsed.txSig || parsed.assetAddress || result;
+          } catch {}
+          return '<tr class="' + (row.status === 'error' ? 'log-row-error' : 'log-row-info') + '">' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + '</td>' +
+            '<td>' + (row.status === 'error' ? '<span class="badge" style="background:#7f1d1d;color:#fecaca">error</span>' : '<span class="badge" style="background:#064e3b;color:#86efac">ok</span>') + '</td>' +
+            '<td>' + esc(row.phase || '-') + '</td>' +
+            '<td>' + esc(chainLabel(row.source_chain)) + ' -> ' + esc(chainLabel(row.dest_chain)) + '</td>' +
+            '<td>' + (row.level || '-') + '</td>' +
+            '<td class="log-msg">' + esc(result || '-') + '</td>' +
+          '</tr>';
+        }).join('');
+
+    const ledgerRows = data.bridges?.recent || [];
+    document.getElementById('bridgeLedgerBody').innerHTML = ledgerRows.length === 0
+      ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No bridge ledger rows yet</td></tr>'
+      : ledgerRows.map((row) => '<tr>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + '</td>' +
+          '<td>' + esc(chainLabel(row.source_chain)) + ' -> ' + esc(chainLabel(row.dest_chain)) + '</td>' +
+          '<td>' + (row.level || '-') + '</td>' +
+          '<td><code class="mono">' + esc(short(row.source_ref, 10, 8)) + '</code></td>' +
+          '<td>' + txLink(row.source_chain, row.burn_tx_hash) + '</td>' +
+          '<td>' + destLink(row.dest_chain, row.dest_tx_or_asset) + '</td>' +
+        '</tr>').join('');
+  } catch (e) {
+    console.error(e);
+    document.getElementById('nftSummary').innerHTML = '<div style="color:#ef4444">Failed to load: ' + esc(e?.message || String(e)) + '</div>';
+  }
+}
+
 // Load logs/stats when switching to those tabs
 const origSwitch = switchTab;
 switchTab = function(name) {
@@ -1869,6 +2071,7 @@ switchTab = function(name) {
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
   if (name === 'shop') loadShop();
+  if (name === 'nft') loadNftAnalytics();
 };
 
 // Auto-login if key saved

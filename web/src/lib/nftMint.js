@@ -243,7 +243,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
   }
   if (!config.saleActive) throw new Error('Solana sale is closed');
 
-  const group = payment === 'sol' ? 'sol' : 'usdc';
+  const group = payment === 'sol' ? 'sol' : payment === 'skr' ? 'skr' : 'usdc';
   const groupConfig = config.paymentGroups?.[group] || config.groups?.[group] || null;
   if (!groupConfig) throw new Error(`Solana ${group.toUpperCase()} payment is not configured`);
 
@@ -386,31 +386,36 @@ async function assertSolanaMintBalances({ Connection, Web3PublicKey, address, gr
     return;
   }
 
-  const requiredUsdc = BigInt(groupConfig.amount || 0);
-  if (requiredUsdc > 0n && groupConfig.mint) {
+  const requiredToken = BigInt(groupConfig.amount || 0);
+  const tokenLabel = String(groupConfig.symbol || group || 'token').toUpperCase();
+  let tokenDecimals = Number(groupConfig.decimals ?? (group === 'skr' ? 6 : 6));
+  if (!Number.isInteger(tokenDecimals) || tokenDecimals < 0 || tokenDecimals > 18) tokenDecimals = 6;
+  if (requiredToken > 0n && groupConfig.mint) {
     try {
       const accounts = await connection.getParsedTokenAccountsByOwner(owner, {
         mint: new Web3PublicKey(groupConfig.mint),
       });
-      const usdcBalance = accounts.value.reduce((sum, item) => {
-        const raw = item?.account?.data?.parsed?.info?.tokenAmount?.amount || '0';
+      const tokenBalance = accounts.value.reduce((sum, item) => {
+        const amount = item?.account?.data?.parsed?.info?.tokenAmount;
+        if (Number.isInteger(amount?.decimals)) tokenDecimals = amount.decimals;
+        const raw = amount?.amount || '0';
         try { return sum + BigInt(raw); } catch { return sum; }
       }, 0n);
-      if (usdcBalance < requiredUsdc) {
+      if (tokenBalance < requiredToken) {
         throw friendlySolanaError(
-          `Not enough USDC: mint costs ${formatTokenAmount(requiredUsdc, 6)} USDC, wallet has ${formatTokenAmount(usdcBalance, 6)} USDC.`,
-          'not_enough_usdc',
+          `Not enough ${tokenLabel}: mint costs ${formatTokenAmount(requiredToken, tokenDecimals)} ${tokenLabel}, wallet has ${formatTokenAmount(tokenBalance, tokenDecimals)} ${tokenLabel}.`,
+          `not_enough_${group}`,
         );
       }
     } catch (err) {
-      if (err?.code === 'not_enough_usdc') throw err;
+      if (String(err?.code || '').startsWith('not_enough_')) throw err;
     }
   }
 
   const feeFloorLamports = 3_000_000n;
   if (solLamports != null && solLamports < feeFloorLamports) {
     throw friendlySolanaError(
-      `Need a little SOL for Solana fees/rent even with USDC. Add at least ${formatSol(feeFloorLamports)} SOL.`,
+      `Need a little SOL for Solana fees/rent even with ${tokenLabel}. Add at least ${formatSol(feeFloorLamports)} SOL.`,
       'not_enough_sol_fees',
     );
   }
@@ -430,9 +435,11 @@ function explainSolanaMintError(err, { group, groupConfig, config }) {
     return friendlySolanaError(message, 'not_enough_sol', err);
   }
   if (/0x1784|NotEnoughTokens/i.test(text)) {
-    const requiredUsdc = BigInt(groupConfig?.amount || 0);
-    const price = requiredUsdc > 0n ? `${formatTokenAmount(requiredUsdc, 6)} USDC` : 'the USDC mint price';
-    return friendlySolanaError(`Not enough USDC: mint costs ${price}.`, 'not_enough_usdc', err);
+    const requiredToken = BigInt(groupConfig?.amount || 0);
+    const tokenLabel = String(groupConfig?.symbol || group || 'token').toUpperCase();
+    const decimals = Number.isInteger(Number(groupConfig?.decimals)) ? Number(groupConfig.decimals) : (group === 'skr' ? 6 : 6);
+    const price = requiredToken > 0n ? `${formatTokenAmount(requiredToken, decimals)} ${tokenLabel}` : `the ${tokenLabel} mint price`;
+    return friendlySolanaError(`Not enough ${tokenLabel}: mint costs ${price}.`, `not_enough_${group}`, err);
   }
   return err;
 }

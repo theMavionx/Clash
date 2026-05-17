@@ -509,9 +509,9 @@ async function fetchNftUsdPrice(asset) {
   // token). Resolve via DexScreener using the SKR mint configured on the
   // Solana shop. Cached for 60s to avoid hammering on every quote.
   if (asset === 'skr') {
-    const mint = process.env.GAME_SHOP_SOLANA_SKR_MINT;
+    const mint = process.env.GAME_SHOP_SOLANA_SKR_MINT || process.env.NFT_SOLANA_SKR_MINT || SOLANA_SKR_MINT_DEFAULT;
     if (!mint) {
-      throw new Error('SKR price unavailable: GAME_SHOP_SOLANA_SKR_MINT not set');
+      throw new Error('SKR price unavailable: GAME_SHOP_SOLANA_SKR_MINT / NFT_SOLANA_SKR_MINT not set');
     }
     return fetchSplTokenUsdPrice(mint);
   }
@@ -784,12 +784,25 @@ const SOLANA_USDC_MINT_DEFAULT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOLANA_MEMO_PROGRAM_ID = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 
 // =====================================================================
-// Multi-chain EVM shop (Arbitrum, Monad). Base is deliberately separate
-// because it has a deployed ClashGameShopV1 contract with quote signing;
-// these other chains use the lighter "USDC transfer + server-signed memo
-// + tx-receipt verification" model — no on-chain contract needed.
+// Multi-chain EVM shop (Base, Arbitrum, Monad). CoP on Base still uses the
+// deployed ClashGameShopV1 quote-signing contract; USDC/native payments use
+// the lighter "token/native transfer + server memo + receipt verification"
+// model.
 // =====================================================================
 const GAME_SHOP_EVM_CHAINS = {
+  base: {
+    chainId: 8453,
+    label: 'Base',
+    rpcUrl: () => process.env.GAME_SHOP_BASE_RPC_URL || process.env.BASE_RPC_URL || process.env.NFT_BASE_RPC_URL || 'https://mainnet.base.org',
+    treasuryEnv: 'GAME_SHOP_BASE_TREASURY',
+    explorer: 'https://basescan.org',
+    nativeSymbol: 'ETH',
+    nativeDecimals: 18,
+    payments: {
+      usdc: { kind: 'erc20', token: BASE_USDC_TOKEN, decimals: 6, label: 'USDC', stable: true },
+      eth:  { kind: 'native', decimals: 18, label: 'ETH', oracleAsset: 'eth' },
+    },
+  },
   arbitrum: {
     chainId: 42161,
     label: 'Arbitrum',
@@ -821,7 +834,15 @@ const GAME_SHOP_EVM_CHAINS = {
 function evmPaymentSpec(chainKey, paymentKey) {
   const chain = GAME_SHOP_EVM_CHAINS[chainKey];
   if (!chain) return null;
-  return chain.payments?.[paymentKey] || null;
+  const spec = chain.payments?.[paymentKey] || null;
+  if (!spec) return null;
+  if (spec.kind === 'erc20') {
+    return {
+      ...spec,
+      token: process.env[`GAME_SHOP_${chainKey.toUpperCase()}_${paymentKey.toUpperCase()}_TOKEN`] || spec.token,
+    };
+  }
+  return spec;
 }
 
 function defaultEvmPayment(chainKey) {
@@ -852,7 +873,9 @@ function gameShopEvmConfig(chainKey) {
     label: p.label,
     decimals: p.decimals,
     stable: !!p.stable,
-    token: p.kind === 'erc20' ? p.token : null,
+    token: p.kind === 'erc20'
+      ? (process.env[`GAME_SHOP_${chainKey.toUpperCase()}_${id.toUpperCase()}_TOKEN`] || p.token)
+      : null,
   }));
   // Back-compat fields — older client code reads usdcMint/usdcDecimals.
   // Surface them only when USDC is actually one of the payments.
@@ -862,7 +885,9 @@ function gameShopEvmConfig(chainKey) {
     chainId: spec.chainId,
     label: spec.label,
     treasury,
-    usdcMint: usdcSpec?.token || null,
+    usdcMint: usdcSpec
+      ? (process.env[`GAME_SHOP_${chainKey.toUpperCase()}_USDC_TOKEN`] || usdcSpec.token)
+      : null,
     usdcDecimals: usdcSpec?.decimals || null,
     nativeSymbol: spec.nativeSymbol,
     nativeDecimals: spec.nativeDecimals,
@@ -956,8 +981,15 @@ function gameShopSolanaConfig() {
   // Mobile hadn't published a long-lived mint at code-write time; the
   // operator wires this in via env when ready. If unset, the SKR
   // payment option silently disappears from the UI (`ready === false`).
-  const skrMint = process.env.GAME_SHOP_SOLANA_SKR_MINT || null;
-  const skrDecimals = Number(process.env.GAME_SHOP_SOLANA_SKR_DECIMALS || 9);
+  const skrMint = process.env.GAME_SHOP_SOLANA_SKR_MINT
+    || process.env.NFT_SOLANA_SKR_MINT
+    || nftDeployment.skrMint
+    || nftDeployment.paymentGroups?.skr?.mint
+    || SOLANA_SKR_MINT_DEFAULT
+    || null;
+  // SKR uses 6 decimals. The quote path still reads the mint account on-chain
+  // so a future replacement mint cannot silently misprice payments.
+  const skrDecimals = Number(process.env.GAME_SHOP_SOLANA_SKR_DECIMALS || process.env.NFT_SOLANA_SKR_DECIMALS || SOLANA_SKR_DECIMALS_DEFAULT);
   const saleActive = process.env.GAME_SHOP_SOLANA_SALE_ACTIVE
     ? process.env.GAME_SHOP_SOLANA_SALE_ACTIVE !== '0'
     : !!treasury; // any wallet that's configured = open
@@ -1162,6 +1194,50 @@ function getSolanaConnection() {
     || 'https://solana-rpc.publicnode.com';
   _solanaConnectionCache = new Connection(rpcUrl, 'confirmed');
   return _solanaConnectionCache;
+}
+
+const SOLANA_SKR_MINT_DEFAULT = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
+const SOLANA_SKR_DECIMALS_DEFAULT = 6;
+const _solanaMintDecimalsCache = new Map();
+async function resolveSolanaMintDecimals(mint, fallback = SOLANA_SKR_DECIMALS_DEFAULT) {
+  const fallbackDecimals = Number.isFinite(Number(fallback)) ? Number(fallback) : SOLANA_SKR_DECIMALS_DEFAULT;
+  if (!mint || !SOLANA_WALLET_RE.test(String(mint))) return fallbackDecimals;
+
+  const cached = _solanaMintDecimalsCache.get(mint);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.decimals;
+
+  let decimals = fallbackDecimals;
+  try {
+    const { PublicKey } = require('@solana/web3.js');
+    const { getMint, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+    const connection = getSolanaConnection();
+    const mintPk = new PublicKey(mint);
+    const programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].filter(Boolean);
+    let mintInfo = null;
+    for (const programId of programs) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        mintInfo = await getMint(connection, mintPk, 'confirmed', programId);
+        break;
+      } catch {
+        // Try the next token program. SKR can be either SPL Token or Token-2022
+        // depending on the deployed mint, so the mint account is the source of truth.
+      }
+    }
+    if (Number.isFinite(Number(mintInfo?.decimals))) {
+      decimals = Number(mintInfo.decimals);
+    }
+  } catch (err) {
+    console.warn('[shop] failed to read Solana mint decimals; using fallback', {
+      mint,
+      fallbackDecimals,
+      message: err?.message || String(err),
+    });
+  }
+
+  _solanaMintDecimalsCache.set(mint, { decimals, expiresAt: now + 10 * 60 * 1000 });
+  return decimals;
 }
 
 async function createBasePublicClient() {
@@ -2016,21 +2092,46 @@ router.get('/nft/solana/token2022/:mint.json', sendSolanaToken2022Metadata);
 router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 
-// ---------- Game shop: CoP payments on Base, utility granted server-side ----------
-router.get('/shop/config', (req, res) => {
+// ---------- Game shop: utility resources granted server-side ----------
+router.get('/shop/config', async (req, res) => {
   const config = gameShopConfig();
   const solana = gameShopSolanaConfig();
+  const solanaSkrDecimals = solana.skrReady
+    ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
+    : solana.skrDecimals;
+  const baseEvm = gameShopEvmConfig('base');
   const arbitrum = gameShopEvmConfig('arbitrum');
   const monad = gameShopEvmConfig('monad');
   const aptos = gameShopAptosConfig();
+  const copDiscountBps = Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
+  const basePayments = [
+    ...(baseEvm?.payments || []),
+    {
+      id: 'cop',
+      kind: 'erc20',
+      label: 'CoP',
+      decimals: Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18),
+      stable: false,
+      token: config.copToken,
+      discountBps: copDiscountBps,
+    },
+  ];
   res.set('Cache-Control', 'no-store');
   res.json({
     base: {
       chainId: config.chainId,
       shop: config.shop,
+      treasury: baseEvm?.treasury || config.deployment?.treasury || null,
       copToken: config.copToken,
       copReady: config.copReady,
+      usdcMint: baseEvm?.usdcMint || BASE_USDC_TOKEN,
+      usdcDecimals: baseEvm?.usdcDecimals || 6,
+      nativeSymbol: baseEvm?.nativeSymbol || 'ETH',
+      nativeDecimals: baseEvm?.nativeDecimals || 18,
+      payments: basePayments,
+      copDiscountBps,
       saleActive: config.saleActive,
+      ready: !!((config.shop && config.copReady) || baseEvm?.ready),
     },
     solana: {
       chain: solana.chain,
@@ -2038,7 +2139,7 @@ router.get('/shop/config', (req, res) => {
       treasury: solana.treasury,
       usdcMint: solana.usdcMint,
       skrMint: solana.skrMint,
-      skrDecimals: solana.skrDecimals,
+      skrDecimals: solanaSkrDecimals,
       skrReady: solana.skrReady,
       memoProgram: solana.memoProgram,
       saleActive: solana.saleActive,
@@ -2103,7 +2204,9 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10));
     const paymentToken = getAddress(config.copToken);
     const decimals = Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18);
-    const usdPriceE6 = BigInt(product.usdPriceE6);
+    const discountBps = BigInt(Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000))));
+    const fullUsdPriceE6 = BigInt(product.usdPriceE6);
+    const usdPriceE6 = (fullUsdPriceE6 * (10_000n - discountBps)) / 10_000n;
     const clashUsd = await fetchClashUsdPrice({ clashToken: paymentToken });
     const unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
     // 600s default: gives the buy flow comfortable headroom for two wallet
@@ -2151,6 +2254,8 @@ router.post('/shop/base/quote', auth, async (req, res) => {
       shop: getAddress(config.shop),
       payment: 'cop',
       priceSource: `CoP/USD ${clashUsd.price} (${clashUsd.source})`,
+      discountBps: discountBps.toString(),
+      fullUsdPriceE6: fullUsdPriceE6.toString(),
       decimals,
       product: gameShopProductsForClient().find((item) => item.id === product.id),
       quantity: quantity.toString(),
@@ -2474,7 +2579,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
                         : payment === 'skr'  ? solana.skrMint
                         : null;  // null for native SOL
     const expectedDecimals = payment === 'usdc' ? 6
-                            : payment === 'skr'  ? solana.skrDecimals
+                            : payment === 'skr'  ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
                             : 9;
 
     if (!txTransfersToTreasury({
@@ -2588,11 +2693,12 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     } else {
       // SKR (Solana Mobile Seeker). Oracle price comes from env override
       // because no major price API has a canonical SKR/USD feed yet —
-      // operator sets NFT_SKR_USD when ready to accept this token. The
-      // mint + decimals come from gameShopSolanaConfig.
+      // operator sets NFT_SKR_USD when ready to accept this token. Decimals
+      // are read from the mint account so 661 SKR cannot become 0.661 SKR.
       const skrUsd = await fetchNftUsdPrice('skr');
-      amount = usdToNativeUnits(usdAmount, skrUsd, solana.skrDecimals);
-      decimals = solana.skrDecimals;
+      const skrDecimals = await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals);
+      amount = usdToNativeUnits(usdAmount, skrUsd, skrDecimals);
+      decimals = skrDecimals;
       priceSource = `SKR/USD ${skrUsd}`;
       mint = solana.skrMint;
     }
@@ -2699,7 +2805,7 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
 
     const chainKey = String(req.body?.chain || '').toLowerCase();
     const config = gameShopEvmConfig(chainKey);
-    if (!config) return res.status(400).json({ error: 'Unsupported chain. Use arbitrum or monad.' });
+    if (!config) return res.status(400).json({ error: 'Unsupported chain. Use base, arbitrum or monad.' });
     if (!config.ready) return res.status(503).json({ error: `${config.label} shop treasury is not configured` });
     if (!config.saleActive && process.env.GAME_SHOP_REQUIRE_ACTIVE_QUOTE === '1') {
       return res.status(423).json({ error: `${config.label} shop sale is not active` });
@@ -6120,6 +6226,181 @@ router.get('/admin/nft-supply', adminAuth, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'nft supply read failed' });
+  }
+});
+
+router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
+  try {
+    _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
+    const supply = await readGlobalNftSupply();
+    const chainOrder = ['base', 'arbitrum', 'monad', 'aptos', 'solana'];
+    const perChainSupply = chainOrder.map((chain) => ({
+      chain,
+      count: Number(supply.perChain?.[chain]) || 0,
+      live: supply.perChainRaw?.[chain] != null,
+      raw: supply.perChainRaw?.[chain] ?? null,
+    }));
+
+    const bridgeSummary = db.db.prepare(`
+      SELECT COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS h24,
+             COALESCE(SUM(CASE WHEN dest_tx_or_asset IS NULL THEN 1 ELSE 0 END), 0) AS pending,
+             MAX(created_at) AS latest_at
+      FROM used_bridge_refs
+    `).get() || {};
+
+    const bridgeRoutes = db.db.prepare(`
+      SELECT source_chain,
+             dest_chain,
+             COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             COALESCE(SUM(CASE WHEN dest_tx_or_asset IS NULL THEN 1 ELSE 0 END), 0) AS pending,
+             MAX(created_at) AS latest_at
+      FROM used_bridge_refs
+      GROUP BY source_chain, dest_chain
+      ORDER BY total DESC, latest_at DESC
+    `).all();
+
+    const bridgeBySource = db.db.prepare(`
+      SELECT source_chain AS chain,
+             COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             COALESCE(SUM(CASE WHEN dest_tx_or_asset IS NULL THEN 1 ELSE 0 END), 0) AS pending,
+             MAX(created_at) AS latest_at
+      FROM used_bridge_refs
+      GROUP BY source_chain
+      ORDER BY total DESC
+    `).all();
+
+    const bridgeByDest = db.db.prepare(`
+      SELECT dest_chain AS chain,
+             COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             COALESCE(SUM(CASE WHEN dest_tx_or_asset IS NULL THEN 1 ELSE 0 END), 0) AS pending,
+             MAX(created_at) AS latest_at
+      FROM used_bridge_refs
+      GROUP BY dest_chain
+      ORDER BY total DESC
+    `).all();
+
+    const recentBridges = db.db.prepare(`
+      SELECT source_ref, dest_chain, source_chain, burn_tx_hash, dest_address,
+             dest_tx_or_asset, level, created_at
+      FROM used_bridge_refs
+      ORDER BY created_at DESC
+      LIMIT 200
+    `).all();
+
+    const logSummary = db.db.prepare(`
+      SELECT COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS h24,
+             COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS errors_total,
+             COALESCE(SUM(CASE WHEN status = 'error' AND created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS errors_24h,
+             MAX(created_at) AS latest_at
+      FROM bridge_logs
+    `).get() || {};
+
+    const logsByPhase = db.db.prepare(`
+      SELECT phase, status, COUNT(*) AS count, MAX(created_at) AS latest_at
+      FROM bridge_logs
+      GROUP BY phase, status
+      ORDER BY latest_at DESC
+    `).all();
+
+    const recentLogs = db.db.prepare(`
+      SELECT id, request_id, phase, status, source_chain, dest_chain, source_ref,
+             burn_tx_hash, dest_address, dest_tx_or_asset, level, error, data, ip, created_at
+      FROM bridge_logs
+      ORDER BY id DESC
+      LIMIT 200
+    `).all();
+
+    const paymentByToken = db.db.prepare(`
+      SELECT chain,
+             COALESCE(NULLIF(token, ''), 'native') AS token,
+             COUNT(*) AS payments,
+             COUNT(DISTINCT player_id) AS unique_buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             MAX(created_at) AS latest_at
+      FROM utility_purchases
+      GROUP BY chain, COALESCE(NULLIF(token, ''), 'native')
+      ORDER BY payments DESC, latest_at DESC
+    `).all().map((row) => ({
+      ...row,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+
+    const paymentByChain = db.db.prepare(`
+      SELECT chain,
+             COUNT(*) AS payments,
+             COUNT(DISTINCT player_id) AS unique_buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             COALESCE(SUM(CASE WHEN created_at >= date('now') THEN 1 ELSE 0 END), 0) AS today,
+             MAX(created_at) AS latest_at
+      FROM utility_purchases
+      GROUP BY chain
+      ORDER BY payments DESC
+    `).all().map((row) => ({
+      ...row,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+
+    const marketplacePaymentByToken = db.db.prepare(`
+      SELECT chain,
+             COALESCE(NULLIF(payment_token, ''), 'native') AS token,
+             COUNT(*) AS sales,
+             MAX(indexed_at) AS latest_at
+      FROM marketplace_listings
+      WHERE sold_tx IS NOT NULL
+      GROUP BY chain, COALESCE(NULLIF(payment_token, ''), 'native')
+      ORDER BY sales DESC, latest_at DESC
+    `).all();
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      fetched_at: new Date().toISOString(),
+      supply: {
+        cap: NFT_GLOBAL_SUPPLY_CAP,
+        total: supply.total,
+        remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - supply.total),
+        per_chain: perChainSupply,
+      },
+      bridges: {
+        summary: {
+          total: bridgeSummary.total || 0,
+          today: bridgeSummary.today || 0,
+          h24: bridgeSummary.h24 || 0,
+          pending: bridgeSummary.pending || 0,
+          latest_at: bridgeSummary.latest_at || null,
+        },
+        by_route: bridgeRoutes,
+        by_source: bridgeBySource,
+        by_destination: bridgeByDest,
+        recent: recentBridges,
+      },
+      bridge_logs: {
+        summary: {
+          total: logSummary.total || 0,
+          today: logSummary.today || 0,
+          h24: logSummary.h24 || 0,
+          errors_total: logSummary.errors_total || 0,
+          errors_24h: logSummary.errors_24h || 0,
+          latest_at: logSummary.latest_at || null,
+        },
+        by_phase: logsByPhase,
+        recent: recentLogs,
+      },
+      payments: {
+        utility_by_token: paymentByToken,
+        utility_by_chain: paymentByChain,
+        marketplace_by_token: marketplacePaymentByToken,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'nft analytics failed' });
   }
 });
 

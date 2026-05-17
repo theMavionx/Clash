@@ -162,8 +162,31 @@ try {
       PRIMARY KEY (source_ref, dest_chain)
     );
     CREATE INDEX IF NOT EXISTS idx_used_bridge_refs_burn ON used_bridge_refs(burn_tx_hash);
+
+    CREATE TABLE IF NOT EXISTS bridge_logs (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id       TEXT NOT NULL,
+      phase            TEXT NOT NULL,
+      status           TEXT NOT NULL,
+      source_chain     TEXT,
+      dest_chain       TEXT,
+      source_ref       TEXT,
+      burn_tx_hash     TEXT,
+      dest_address     TEXT,
+      dest_tx_or_asset TEXT,
+      level            INTEGER,
+      error            TEXT,
+      data             TEXT,
+      ip               TEXT,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_bridge_logs_recent ON bridge_logs(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_logs_phase_status ON bridge_logs(phase, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_logs_pair ON bridge_logs(source_chain, dest_chain, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_logs_ref ON bridge_logs(source_ref, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_logs_burn ON bridge_logs(burn_tx_hash, created_at DESC);
   `);
-} catch (e) { console.warn('[db] used_bridge_refs migration:', e.message); }
+} catch (e) { console.warn('[db] bridge ledger migration:', e.message); }
 
 try {
   db.exec(`

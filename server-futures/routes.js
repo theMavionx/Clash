@@ -13,7 +13,10 @@ const router = express.Router();
 
 const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
 const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
-const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 2;
+// 10 bps = 0.1%. Must match web/src/lib/decibel.js BUILDER_FEE_BPS — the
+// signed order's builderFee field is validated against this exact value
+// (see assertBuilderFeeAllowed below). Env override allowed for staging.
+const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 10;
 const DECIBEL_BUILDER_FEE_BPS_RAW = Number(process.env.DECIBEL_BUILDER_FEE_BPS || DEFAULT_DECIBEL_BUILDER_FEE_BPS);
 const DECIBEL_BUILDER_FEE_BPS = Number.isFinite(DECIBEL_BUILDER_FEE_BPS_RAW) && DECIBEL_BUILDER_FEE_BPS_RAW > 0
   ? DECIBEL_BUILDER_FEE_BPS_RAW

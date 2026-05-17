@@ -4,11 +4,41 @@ import { DEFAULT_SOLANA_RPC_URL } from './solanaRpc';
 export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 
+const DEFAULT_PHOENIX_FLIGHT_BUILDER_AUTHORITY = 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9';
+export const PHOENIX_FLIGHT_BUILDER_AUTHORITY =
+  import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY
+  || DEFAULT_PHOENIX_FLIGHT_BUILDER_AUTHORITY;
+export const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT =
+  import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
+  || 'Czk948LDdK9iTWbRB8MEoV4ngX2EAxxHdXx8mfgZxuTA';
+export const PHOENIX_FLIGHT_BUILDER_PDA_INDEX =
+  Number(import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_PDA_INDEX || 0);
+export const PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX =
+  Number(import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX || 0);
+
 const DEFAULT_RPC_URL = DEFAULT_SOLANA_RPC_URL;
 const EXCHANGE_METADATA_RPC_TTL_MS = 15_000;
 const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 
 const clients = new Map();
+
+export function isPhoenixFlightEnabled() {
+  return import.meta.env.VITE_PHOENIX_FLIGHT_ENABLED !== '0'
+    && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
+}
+
+function phoenixFlightConfig() {
+  if (!isPhoenixFlightEnabled()) return undefined;
+  return {
+    builderAuthority: PHOENIX_FLIGHT_BUILDER_AUTHORITY,
+    builderPdaIndex: Number.isFinite(PHOENIX_FLIGHT_BUILDER_PDA_INDEX)
+      ? PHOENIX_FLIGHT_BUILDER_PDA_INDEX
+      : 0,
+    builderSubaccountIndex: Number.isFinite(PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX)
+      ? PHOENIX_FLIGHT_BUILDER_SUBACCOUNT_INDEX
+      : 0,
+  };
+}
 
 function createClient(rpcUrl) {
   const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
@@ -16,6 +46,7 @@ function createClient(rpcUrl) {
     apiUrl: PHOENIX_API_URL,
     rpcUrl: resolvedRpc,
     ws: false,
+    flight: phoenixFlightConfig(),
     pdaCache: { maxEntries: 1024 },
     exchangeMetadata: {
       // The public API snapshot can lag on-chain state by many slots. Order
