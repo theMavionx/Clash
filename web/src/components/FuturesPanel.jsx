@@ -2415,7 +2415,8 @@ function FuturesPanel() {
     const isChecking = setupVerified === null && !isRunning;
     const stepHint = activationStep ? (HYPERLIQUID_STEP_HINTS[activationStep.label] || '') : '';
     const builderConfigured = account?.builder_fee_configured === true;
-    const builderApproved = !builderConfigured || account?.builder_fee_approved === true;
+    const builderEligible = account?.builder_fee_eligible !== false;
+    const builderApproved = !builderConfigured || account?.builder_fee_approved === true || !builderEligible;
     const builderCanApprove = account?.builder_fee_user_can_approve === true;
     const builderValue = Number(account?.builder_account_value ?? 0);
     const builderPerpValue = Number(account?.builder_perp_account_value ?? builderValue);
@@ -2428,7 +2429,9 @@ function FuturesPanel() {
         '1',
         'Approve builder fee',
         builderApproved
-          ? 'Done'
+          ? account?.builder_fee_approved === true || !builderConfigured
+            ? 'Done'
+            : `Skipped: ${builderEligibilityReason || 'builder wallet must be Standard mode with $100+ perps value'}`
           : builderCanApprove
           ? 'Needs wallet signature'
           : builderEligibilityReason

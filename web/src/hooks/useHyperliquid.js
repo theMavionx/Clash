@@ -56,7 +56,7 @@ function isStandardAbstractionMode(mode) {
 
 function isBuilderSupportedAbstractionMode(mode) {
   const text = String(mode || '').trim();
-  return isStandardAbstractionMode(text) || text === 'unifiedAccount' || text === 'portfolioMargin';
+  return isStandardAbstractionMode(text);
 }
 
 function oneTapPreferenceKey(wallet) {
@@ -206,6 +206,20 @@ function exchangeResponseError(result) {
   return null;
 }
 
+function compactErrorDetails(error) {
+  if (!error) return null;
+  const details = {
+    name: error?.name || null,
+    message: error?.message || String(error),
+    shortMessage: error?.shortMessage || null,
+    details: error?.details || null,
+    response: error?.response || null,
+    data: error?.data || null,
+    causeMessage: error?.cause?.message || error?.cause?.shortMessage || null,
+  };
+  return Object.fromEntries(Object.entries(details).filter(([, value]) => value != null && value !== ''));
+}
+
 async function readUserAbstractionMode(info, walletAddr, { refresh = false } = {}) {
   const key = String(walletAddr || '').toLowerCase();
   const cached = abstractionModeCache.get(key);
@@ -240,14 +254,14 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
   const builderStandardMode = isStandardAbstractionMode(builderAbstractionMode);
   const builderSupportedMode = isBuilderSupportedAbstractionMode(builderAbstractionMode);
   const builderUnifiedAccount = !!builderSnapshot?.isUnifiedAccount;
-  const builderEligibleValue = builderUnifiedAccount ? builderAccountValue : builderPerpAccountValue;
-  const builderValueLabel = builderUnifiedAccount ? 'Builder account value' : 'Builder perps account value';
+  const builderEligibleValue = builderPerpAccountValue;
+  const builderValueLabel = 'Builder perps account value';
   const builderValueEligible = builderEligibleValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
   const eligible = builderSupportedMode && builderValueEligible;
   const eligibilityReason = eligible
     ? null
     : !builderSupportedMode
-    ? `Builder account mode is not supported yet. Current mode: ${builderAbstractionMode}.`
+    ? `Builder account must be in Standard mode to accrue builder fees. Current mode: ${builderAbstractionMode}.`
     : `${builderValueLabel} is $${builderEligibleValue.toFixed(2)}; needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
   const status = {
     configured: true,
@@ -649,7 +663,7 @@ export function useHyperliquid() {
       });
       const oneTapReady = oneTapPreferenceEnabled();
       const builderReady = builderStatus
-        ? (!builderStatus.configured || builderStatus.canUse === true)
+        ? (!builderStatus.configured || builderStatus.canUse === true || builderStatus.eligible === false)
         : false;
       const agentReady = agentStatus?.approved === true;
       if (oneTapReady !== oneTapEnabled) setOneTapEnabledState(oneTapReady);
@@ -854,7 +868,7 @@ export function useHyperliquid() {
     ]);
     const oneTapReady = oneTapPreferenceEnabled();
     const builderReady = builderStatus
-      ? (!builderStatus.configured || builderStatus.canUse === true)
+      ? (!builderStatus.configured || builderStatus.canUse === true || builderStatus.eligible === false)
       : false;
     const agentReady = agentStatus?.approved === true;
     const ready = builderReady && agentReady && oneTapReady;
@@ -983,6 +997,7 @@ export function useHyperliquid() {
       console.error('[useHyperliquid] builder fee approval failed', {
         builder: builder.b,
         message: hyperliquidErrorMessage(e, e?.message || 'Builder fee approval failed'),
+        raw: compactErrorDetails(e),
       });
       setBuilderApproval(prev => (
         prev?.builder && String(prev.builder).toLowerCase() === String(builder.b).toLowerCase()
@@ -1119,7 +1134,7 @@ export function useHyperliquid() {
 
       const funding = await ensurePerpUsdc(collateral);
       if (funding?.error) throw new Error(funding.error);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: false });
       const client = await tradingExchange();
       await client.updateLeverage({ asset: market._hyperliquid.index, isCross: true, leverage: lev });
 
@@ -1172,7 +1187,7 @@ export function useHyperliquid() {
       if (!(collateral > 0)) throw new Error('Invalid collateral');
       const funding = await ensurePerpUsdc(collateral);
       if (funding?.error) throw new Error(funding.error);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: false });
       const client = await tradingExchange();
       await client.updateLeverage({ asset: market._hyperliquid.index, isCross: true, leverage: lev });
       const size = formatHyperliquidSize((collateral * lev) / limit, market);
@@ -1250,7 +1265,7 @@ export function useHyperliquid() {
       const isClosingLong = side === 'bid' || side === 'long';
       const closeBuy = !isClosingLong;
       const price = mark * (closeBuy ? 1.005 : 0.995);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: false });
       const client = await tradingExchange();
       const result = await client.order({
         orders: [{
@@ -1290,7 +1305,7 @@ export function useHyperliquid() {
       const current = positions.find(p => p.symbol === hyperliquidSymbol(symbol));
       const size = formatHyperliquidSize(num(amount, num(current?.amount)), market);
       if (!(num(size) > 0)) throw new Error('TP/SL size is below the market lot size');
-      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: false });
       const ordersToPlace = [];
       if (takeProfit) {
         ordersToPlace.push({
@@ -1514,7 +1529,9 @@ export function useHyperliquid() {
       const preflight = await verifyTradingSetup({ refresh: true });
 
       const builder = hyperliquidBuilderParams();
-      const needsBuilder = !!builder && preflight.builderStatus?.canUse !== true;
+      const needsBuilder = !!builder
+        && preflight.builderStatus?.eligible !== false
+        && preflight.builderStatus?.canUse !== true;
       const needsOneTap = preflight.agentStatus?.approved !== true || preflight.oneTapReady !== true;
       const steps = [
         ...(needsBuilder ? ['Approve builder fee'] : []),
@@ -1525,7 +1542,12 @@ export function useHyperliquid() {
 
       if (needsBuilder) {
         tick(++stepIndex, steps.length, 'Approve builder fee');
-        await ensureBuilderApproved({ force: true, requireEligible: true });
+        await ensureBuilderApproved({ force: true, requireEligible: false });
+      } else if (builder && preflight.builderStatus?.eligible === false) {
+        console.warn(
+          '[useHyperliquid] builder fee setup skipped:',
+          preflight.builderStatus?.builderEligibilityReason || 'Builder wallet is not eligible',
+        );
       }
 
       if (needsOneTap) {

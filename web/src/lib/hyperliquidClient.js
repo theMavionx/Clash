@@ -415,6 +415,9 @@ export function hyperliquidErrorMessage(error, fallback = 'Hyperliquid request f
     return 'Switch your EVM wallet to Arbitrum, enable One tap trading, then retry.';
   }
   if (/insufficient margin|margin/i.test(text)) return 'Insufficient Hyperliquid margin. Deposit USDC or reduce size.';
+  if (/Builder fee approval was signed|maxBuilderFee|Builder account must be in Standard mode|Current mode:/i.test(text)) {
+    return text.slice(0, 260);
+  }
   if (/builder/i.test(text) && /100|perps account|account value|eligible|must have/i.test(text)) {
     return text.replace(/perps account value/ig, 'builder account value').slice(0, 260);
   }
