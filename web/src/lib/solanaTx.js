@@ -1,4 +1,4 @@
-import { ComputeBudgetProgram, Connection, Transaction } from '@solana/web3.js';
+import { ComputeBudgetProgram, Connection, Transaction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import bs58 from 'bs58';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
@@ -114,7 +114,13 @@ function normalizeRpcEndpoint(endpoint) {
 
 function transactionProgramSummary(tx) {
   try {
-    return (tx?.instructions || []).map(ix => String(ix?.programId || '')).filter(Boolean);
+    if (tx?.instructions) {
+      return (tx.instructions || []).map(ix => String(ix?.programId || '')).filter(Boolean);
+    }
+    const keys = tx?.message?.staticAccountKeys || [];
+    return (tx?.message?.compiledInstructions || [])
+      .map(ix => keys[ix?.programIdIndex]?.toString?.() || '')
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -143,6 +149,33 @@ function extractPrivySignature(result) {
   if (value instanceof Uint8Array) return bs58.encode(value);
   if (Array.isArray(value)) return bs58.encode(Uint8Array.from(value));
   throw new Error('Privy did not return a Solana transaction signature');
+}
+
+function firstTransactionSignature(tx) {
+  const signature = tx?.signature;
+  if (signature instanceof Uint8Array) return signature;
+  const first = tx?.signatures?.[0];
+  if (first instanceof Uint8Array) return first;
+  if (first?.signature instanceof Uint8Array) return first.signature;
+  return null;
+}
+
+function transactionFeePayer(tx) {
+  return tx?.feePayer?.toString?.()
+    || tx?.message?.staticAccountKeys?.[0]?.toString?.()
+    || null;
+}
+
+function transactionBlockhash(tx) {
+  return tx?.recentBlockhash || tx?.message?.recentBlockhash || '';
+}
+
+function decodeTransactionBytes(rawTransaction) {
+  try {
+    return Transaction.from(rawTransaction);
+  } catch {
+    return VersionedTransaction.deserialize(rawTransaction);
+  }
 }
 
 function connectionCandidate(connection, index, source = 'primary') {
@@ -763,6 +796,7 @@ export async function sendSolanaTransactionWithRetry({
   priorityFeeMicroLamports = DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS,
   skipPreflight = false,
   preferPrivySignAndSend = false,
+  forceVersionedTransaction = false,
   label = 'transaction',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
@@ -782,11 +816,11 @@ export async function sendSolanaTransactionWithRetry({
       });
       attemptConnection = selected.connection;
 
-      const tx = new Transaction();
+      const txInstructions = [];
       if (priorityFeeMicroLamports > 0) {
-        tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }));
+        txInstructions.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }));
       }
-      for (const ix of list) tx.add(ix);
+      txInstructions.push(...list);
 
       const {
         blockhash,
@@ -797,8 +831,13 @@ export async function sendSolanaTransactionWithRetry({
         lagBlocks,
         clusterBlockHeight,
       } = selected;
-      tx.recentBlockhash = blockhash;
-      tx.feePayer = ownerPk;
+      const tx = forceVersionedTransaction
+        ? new VersionedTransaction(new TransactionMessage({
+            payerKey: ownerPk,
+            recentBlockhash: blockhash,
+            instructions: txInstructions,
+          }).compileToV0Message())
+        : new Transaction({ feePayer: ownerPk, recentBlockhash: blockhash }).add(...txInstructions);
 
       if (Number.isFinite(remainingClusterBlocks) && remainingClusterBlocks < SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS) {
         const staleError = new Error('Solana RPC returned an expired latest blockhash; switch RPC and retry');
@@ -839,7 +878,7 @@ export async function sendSolanaTransactionWithRetry({
       if (!privyActive && signTransaction) {
         const signed = await signTransaction(tx);
         rawTransaction = signed.serialize();
-        const signatureBytes = signed.signature || signed.signatures?.[0]?.signature;
+        const signatureBytes = firstTransactionSignature(signed);
         if (!signatureBytes) throw new Error('Wallet did not return a signed transaction signature');
         sig = bs58.encode(signatureBytes);
       } else if (preferPrivySendPath) {
@@ -856,14 +895,14 @@ export async function sendSolanaTransactionWithRetry({
           wallet: privyWalletObj,
         });
         rawTransaction = new Uint8Array(result?.signedTransaction || result);
-        const decoded = Transaction.from(rawTransaction);
-        sig = bs58.encode(decoded.signature);
+        const decoded = decodeTransactionBytes(rawTransaction);
+        sig = bs58.encode(firstTransactionSignature(decoded));
         logTx(label, 'wallet_signed_tx', {
           attempt,
           wallet_path: 'privy_sign_raw',
           signature_short: shortSig(sig),
-          signed_fee_payer: shortAddress(decoded.feePayer),
-          signed_blockhash: String(decoded.recentBlockhash || '').slice(0, 8),
+          signed_fee_payer: shortAddress(transactionFeePayer(decoded)),
+          signed_blockhash: String(transactionBlockhash(decoded)).slice(0, 8),
           ...transactionSummary(decoded),
         }, transactionProgramSummary(decoded).includes(LIGHTHOUSE_PROGRAM_ID) ? 'warn' : 'info');
       } else if (sendTransaction && !privyActive) {

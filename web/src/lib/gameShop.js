@@ -274,6 +274,10 @@ function walletAdapterName(solWallet) {
   );
 }
 
+function isMobileWalletAdapter(solWallet) {
+  return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
+}
+
 async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, task }) {
   const endpoints = uniqueStrings([
     primaryConnection?.rpcEndpoint,
@@ -596,6 +600,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
 
   let signature;
   try {
+    const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
     signature = await sendSolanaTransactionWithRetry({
       instructions,
       ownerPk: buyerPk,
@@ -613,6 +618,11 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       maxAttempts: 4,
       priorityFeeMicroLamports: 250_000,
       skipPreflight: false,
+      // The Solana Mobile Wallet Adapter serializes legacy Transaction with
+      // requireAllSignatures=true before Seed Vault signs it. Versioned v0
+      // transactions serialize unsigned cleanly and let MWA add the user's
+      // signature inside signAndSendTransaction.
+      forceVersionedTransaction: mobileWalletAdapter,
       label: `shop.${payment}.${walletAdapterName(solWallet) || 'wallet'}`,
     });
   } catch (err) {

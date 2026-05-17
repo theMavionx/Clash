@@ -45,8 +45,14 @@ const BUILDER_APPROVAL_TIMEOUT_MS = 18_000;
 const BUILDER_APPROVAL_POLL_MS = 1_500;
 const AGENT_APPROVAL_TIMEOUT_MS = 24_000;
 const AGENT_APPROVAL_POLL_MS = 1_500;
+const SETUP_VERIFY_RETRY_MS = 1_000;
 const abstractionModeCache = new Map();
 const builderStatusCache = new Map();
+
+function isStandardAbstractionMode(mode) {
+  const text = String(mode || '').trim();
+  return !text || text === 'disabled' || text === 'standard';
+}
 
 function oneTapPreferenceKey(wallet) {
   return `hyperliquid_one_tap_enabled:${String(wallet || '').toLowerCase()}`;
@@ -185,6 +191,16 @@ function parseBuilderApproval(value) {
   return 0;
 }
 
+function exchangeResponseError(result) {
+  if (!result) return null;
+  if (typeof result === 'string') return /error|rejected|invalid|not approved/i.test(result) ? result : null;
+  if (result.error) return String(result.error);
+  if (result.status === 'err') return String(result.response || result.message || 'Hyperliquid exchange request failed');
+  if (result.response?.type === 'error') return String(result.response?.data || result.response?.message || 'Hyperliquid exchange request failed');
+  if (result.response?.data?.error) return String(result.response.data.error);
+  return null;
+}
+
 async function readUserAbstractionMode(info, walletAddr, { refresh = false } = {}) {
   const key = String(walletAddr || '').toLowerCase();
   const cached = abstractionModeCache.get(key);
@@ -215,7 +231,15 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
     builderPerpAccountValue,
     builderSpotUsdc,
   );
-  const eligible = builderAccountValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
+  const builderAbstractionMode = builderSnapshot?.abstractionMode || 'disabled';
+  const builderStandardMode = isStandardAbstractionMode(builderAbstractionMode);
+  const builderPerpEligible = builderPerpAccountValue + DEPOSIT_CREDIT_TOLERANCE_USD >= BUILDER_MIN_ACCOUNT_VALUE_USDC;
+  const eligible = builderStandardMode && builderPerpEligible;
+  const eligibilityReason = eligible
+    ? null
+    : !builderStandardMode
+    ? `Builder account must be in Standard mode. Current mode: ${builderAbstractionMode}.`
+    : `Builder perps account value is $${builderPerpAccountValue.toFixed(2)}; needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
   const status = {
     configured: true,
     builder: builder.b,
@@ -227,7 +251,9 @@ async function readBuilderStatus(walletAddr, builder, { refresh = false } = {}) 
     builderAccountValue,
     builderPerpAccountValue,
     builderSpotUsdc,
-    builderAbstractionMode: builderSnapshot?.abstractionMode || 'unknown',
+    builderAbstractionMode,
+    builderStandardMode,
+    builderEligibilityReason: eligibilityReason,
     builderUnifiedAccount: !!builderSnapshot?.isUnifiedAccount,
   };
   builderStatusCache.set(key, { status, at: Date.now() });
@@ -307,7 +333,7 @@ async function waitForHyperliquidBalance(walletAddr, predicate, timeoutMs = DEPO
 export function useHyperliquid() {
   const { dex } = useDex();
   const isActiveDex = dex === 'hyperliquid';
-  const { address, provider, isReady, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
+  const { address, provider, getWalletClient, getPublicClient, ensureChain } = useEvmWallet();
   const player = usePlayer();
   const walletAddr = address || null;
 
@@ -325,12 +351,15 @@ export function useHyperliquid() {
   const [builderApproval, setBuilderApproval] = useState(null);
   const [agentApproval, setAgentApproval] = useState(null);
   const [oneTapEnabled, setOneTapEnabledState] = useState(false);
+  const [setupVerified, setSetupVerified] = useState(null);
+  const [activationStep, setActivationStep] = useState(null);
 
   const marketsRef = useRef([]);
   const depositStatusRef = useRef(null);
   const claimGoldRef = useRef(null);
   const importFillsRef = useRef(null);
   const tradeInFlightRef = useRef(false);
+  const activationInFlightRef = useRef(false);
 
   const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
   const registeredEvmWallet = isHyperliquidAddress(registeredWallet) ? registeredWallet.toLowerCase() : null;
@@ -351,6 +380,15 @@ export function useHyperliquid() {
     try {
       localStorage.setItem(oneTapPreferenceKey(walletAddr), next ? '1' : '0');
     } catch { /* storage disabled */ }
+  }, [walletAddr]);
+
+  const oneTapPreferenceEnabled = useCallback(() => {
+    if (!walletAddr) return false;
+    try {
+      return localStorage.getItem(oneTapPreferenceKey(walletAddr)) === '1';
+    } catch {
+      return false;
+    }
   }, [walletAddr]);
 
   const marketBySymbol = useCallback(() => {
@@ -583,6 +621,9 @@ export function useHyperliquid() {
         builder_spot_usdc: String(builderStatus?.builderSpotUsdc ?? 0),
         builder_perp_account_value: String(builderStatus?.builderPerpAccountValue ?? 0),
         builder_abstraction_mode: builderStatus?.builderAbstractionMode ?? null,
+        builder_standard_mode: builderStatus?.builderStandardMode ?? false,
+        builder_fee_eligible: builderStatus?.eligible ?? false,
+        builder_eligibility_reason: builderStatus?.builderEligibilityReason ?? null,
         builder_is_unified_account: builderStatus?.builderUnifiedAccount ?? false,
         one_tap_trading_approved: agentStatus?.approved ?? false,
         one_tap_agent_address: agentStatus?.address ?? null,
@@ -594,6 +635,13 @@ export function useHyperliquid() {
         _raw: state,
         _spotRaw: snapshot.spotState,
       });
+      const oneTapReady = oneTapPreferenceEnabled();
+      const builderReady = builderStatus
+        ? (!builderStatus.configured || builderStatus.canUse === true)
+        : false;
+      const agentReady = agentStatus?.approved === true;
+      if (oneTapReady !== oneTapEnabled) setOneTapEnabledState(oneTapReady);
+      setSetupVerified(builderReady && agentReady && oneTapReady);
       const pendingDeposit = depositStatusRef.current;
       if (pendingDeposit?.status === 'depositing') {
         if (Date.now() - Number(pendingDeposit.startedAt || 0) > DEPOSIT_STATUS_MAX_AGE_MS) {
@@ -631,8 +679,9 @@ export function useHyperliquid() {
     } catch (e) {
       console.warn('[useHyperliquid] fetchAccount:', e?.message || e);
       setError(hyperliquidErrorMessage(e));
+      setSetupVerified(false);
     }
-  }, [walletAddr, ensureMarkets, marketBySymbol, readArbitrumUsdcBalance, refreshBuilderApproval, refreshAgentApproval, setDepositStatus]);
+  }, [walletAddr, ensureMarkets, marketBySymbol, readArbitrumUsdcBalance, refreshBuilderApproval, refreshAgentApproval, setDepositStatus, oneTapPreferenceEnabled, oneTapEnabled]);
 
   const fetchOrders = useCallback(fetchAccount, [fetchAccount]);
 
@@ -642,8 +691,11 @@ export function useHyperliquid() {
       setBuilderApproval(null);
       setAgentApproval(null);
       setOneTapEnabledState(false);
+      setSetupVerified(false);
+      setActivationStep(null);
       return;
     }
+    setSetupVerified(null);
     try {
       setOneTapEnabledState(localStorage.getItem(oneTapPreferenceKey(walletAddr)) === '1');
     } catch {
@@ -777,6 +829,40 @@ export function useHyperliquid() {
     return () => { clearTimeout(kickoff); clearInterval(iv); };
   }, [walletAddr, isActiveDex]);
 
+  const verifyTradingSetup = useCallback(async ({ refresh = false } = {}) => {
+    if (!walletAddr) {
+      setSetupVerified(false);
+      return { ready: false, builderStatus: null, agentStatus: null, oneTapReady: false };
+    }
+
+    setSetupVerified(null);
+    const [builderStatus, agentStatus] = await Promise.all([
+      refreshBuilderApproval({ force: refresh }).catch(() => null),
+      refreshAgentApproval().catch(() => null),
+    ]);
+    const oneTapReady = oneTapPreferenceEnabled();
+    const builderReady = builderStatus
+      ? (!builderStatus.configured || builderStatus.canUse === true)
+      : false;
+    const agentReady = agentStatus?.approved === true;
+    const ready = builderReady && agentReady && oneTapReady;
+
+    setOneTapEnabledState(oneTapReady);
+    setSetupVerified(ready);
+    return { ready, builderStatus, agentStatus, oneTapReady };
+  }, [walletAddr, refreshBuilderApproval, refreshAgentApproval, oneTapPreferenceEnabled]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) return undefined;
+    let cancelled = false;
+    const run = async () => {
+      await sleep(SETUP_VERIFY_RETRY_MS);
+      if (!cancelled) await verifyTradingSetup({ refresh: true }).catch(() => setSetupVerified(false));
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [isActiveDex, walletAddr, verifyTradingSetup]);
+
   const ensureReferralSet = useCallback(async () => {
     const code = String(HYPERLIQUID_REFERRAL_CODE || '').trim();
     if (!code || !walletAddr) return { success: true, skipped: true };
@@ -813,10 +899,15 @@ export function useHyperliquid() {
     const before = await readBuilderStatus(walletAddr, builder, { refresh: opts?.force === true });
     setBuilderApproval(before);
     if (!before.eligible) {
-      const builderValue = Number(before.builderAccountValue ?? before.builderPerpAccountValue ?? 0);
+      const builderValue = Number(before.builderPerpAccountValue ?? 0);
+      const reason = before.builderEligibilityReason
+        || `Builder perps account value is $${builderValue.toFixed(2)}, needs at least $${BUILDER_MIN_ACCOUNT_VALUE_USDC}.`;
       console.warn(
-        `[useHyperliquid] builder fee disabled: builder account value is ${builderValue.toFixed(2)} USDC, needs ${BUILDER_MIN_ACCOUNT_VALUE_USDC} USDC.`,
+        `[useHyperliquid] builder fee disabled: ${reason}`,
       );
+      if (opts?.requireEligible === true) {
+        throw new Error(`Hyperliquid builder wallet is not eligible yet. ${reason}`);
+      }
       return {
         success: true,
         skipped: true,
@@ -837,11 +928,18 @@ export function useHyperliquid() {
         builder: builder.b,
         maxFeeRate: hyperliquidBuilderMaxFeeRate(builder),
       });
-      if (result?.error) throw new Error(String(result.error));
+      const responseError = exchangeResponseError(result);
+      if (responseError) throw new Error(responseError);
       const verified = await waitForBuilderApproval(walletAddr, builder);
       if (verified.status) setBuilderApproval(verified.status);
       if (!verified.ok) {
-        throw new Error('Builder fee approval was signed but Hyperliquid has not confirmed it yet. Wait a few seconds and retry.');
+        const approved = Number(verified.status?.approved || 0);
+        const reason = verified.status?.builderEligibilityReason
+          ? `${verified.status.builderEligibilityReason} `
+          : '';
+        throw new Error(
+          `${reason}Builder fee approval was signed, but maxBuilderFee is still ${approved}; required ${builder.f}.`,
+        );
       }
       return { success: true, approved: verified.status.approved, raw: result, useBuilder: true, builder };
     } catch (e) {
@@ -980,7 +1078,7 @@ export function useHyperliquid() {
 
       const funding = await ensurePerpUsdc(collateral);
       if (funding?.error) throw new Error(funding.error);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
       const client = await tradingExchange();
       await client.updateLeverage({ asset: market._hyperliquid.index, isCross: true, leverage: lev });
 
@@ -1033,7 +1131,7 @@ export function useHyperliquid() {
       if (!(collateral > 0)) throw new Error('Invalid collateral');
       const funding = await ensurePerpUsdc(collateral);
       if (funding?.error) throw new Error(funding.error);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
       const client = await tradingExchange();
       await client.updateLeverage({ asset: market._hyperliquid.index, isCross: true, leverage: lev });
       const size = formatHyperliquidSize((collateral * lev) / limit, market);
@@ -1111,7 +1209,7 @@ export function useHyperliquid() {
       const isClosingLong = side === 'bid' || side === 'long';
       const closeBuy = !isClosingLong;
       const price = mark * (closeBuy ? 1.005 : 0.995);
-      const builderApprovalResult = await ensureBuilderApproved({ force: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
       const client = await tradingExchange();
       const result = await client.order({
         orders: [{
@@ -1151,7 +1249,7 @@ export function useHyperliquid() {
       const current = positions.find(p => p.symbol === hyperliquidSymbol(symbol));
       const size = formatHyperliquidSize(num(amount, num(current?.amount)), market);
       if (!(num(size) > 0)) throw new Error('TP/SL size is below the market lot size');
-      const builderApprovalResult = await ensureBuilderApproved({ force: true });
+      const builderApprovalResult = await ensureBuilderApproved({ force: true, requireEligible: true });
       const ordersToPlace = [];
       if (takeProfit) {
         ordersToPlace.push({
@@ -1359,21 +1457,74 @@ export function useHyperliquid() {
     }
   }, [walletAddr, account?.available_to_withdraw, ensureChain, exchange, fetchAccount, openOfficialApp]);
   const activate = useCallback(async () => {
-    try {
-      await ensureReferralSet();
-      await ensureAgentApproved();
-      setOneTapEnabled(true);
-      return await ensureBuilderApproved({ force: true });
-    } catch (e) {
-      const msg = hyperliquidErrorMessage(e, 'Hyperliquid one tap setup failed');
-      setError(msg);
-      return { error: msg };
+    if (activationInFlightRef.current) {
+      return { error: 'Hyperliquid setup is already running' };
     }
-  }, [ensureReferralSet, ensureAgentApproved, setOneTapEnabled, ensureBuilderApproved]);
+    activationInFlightRef.current = true;
+    setLoading(true);
+    setError(null);
+    setSetupVerified(false);
 
-  const needsHyperliquidActivation = (oneTapEnabled && agentApproval?.approved === false)
-    || builderApproval?.userCanApprove === true;
-  const shouldOfferOneTap = !oneTapEnabled || agentApproval?.approved === false || builderApproval?.userCanApprove === true;
+    const tick = (index, total, label) => setActivationStep({ index, total, label });
+
+    try {
+      if (!walletAddr) throw new Error('Connect your EVM wallet first');
+      tick(0, 0, 'Checking Hyperliquid setup');
+      const preflight = await verifyTradingSetup({ refresh: true });
+
+      const builder = hyperliquidBuilderParams();
+      const needsBuilder = !!builder && preflight.builderStatus?.canUse !== true;
+      const needsOneTap = preflight.agentStatus?.approved !== true || preflight.oneTapReady !== true;
+      const steps = [
+        ...(needsBuilder ? ['Approve builder fee'] : []),
+        ...(needsOneTap ? ['Enable one tap trading'] : []),
+        ...(HYPERLIQUID_REFERRAL_CODE ? ['Apply referral code'] : []),
+      ];
+      let stepIndex = 0;
+
+      if (needsBuilder) {
+        tick(++stepIndex, steps.length, 'Approve builder fee');
+        await ensureBuilderApproved({ force: true, requireEligible: true });
+      }
+
+      if (needsOneTap) {
+        tick(++stepIndex, steps.length, 'Enable one tap trading');
+        await ensureAgentApproved();
+        setOneTapEnabled(true);
+      }
+
+      if (HYPERLIQUID_REFERRAL_CODE) {
+        tick(++stepIndex, steps.length, 'Apply referral code');
+        const referral = await ensureReferralSet();
+        if (referral?.error) {
+          console.warn('[useHyperliquid] referral setup skipped:', referral.error);
+        }
+      }
+
+      tick(0, 0, 'Finalising...');
+      await fetchAccount();
+      const verified = await verifyTradingSetup({ refresh: true });
+      if (!verified.ready) {
+        throw new Error('Hyperliquid setup is not verified yet. Wait a few seconds and retry.');
+      }
+      setError(null);
+      setActivationStep(null);
+      return { success: true };
+    } catch (e) {
+      const msg = hyperliquidErrorMessage(e, 'Hyperliquid setup failed');
+      setError(msg);
+      setSetupVerified(false);
+      return { error: msg };
+    } finally {
+      activationInFlightRef.current = false;
+      setActivationStep(null);
+      setLoading(false);
+    }
+  }, [walletAddr, verifyTradingSetup, ensureBuilderApproved, ensureAgentApproved, setOneTapEnabled, ensureReferralSet, fetchAccount]);
+
+  const needsHyperliquidActivation = setupVerified !== true;
+  const shouldOfferOneTap = needsHyperliquidActivation;
+  const isReady = setupVerified === true;
 
   return {
     connected: !!walletAddr,
@@ -1408,11 +1559,13 @@ export function useHyperliquid() {
     claimGold,
     isSelfCustody: true,
     isReady,
+    setupVerified,
     walletMismatch,
     registeredEvmWallet,
     oneTapTrading: { ...(agentApproval || {}), enabled: oneTapEnabled },
     setOneTapTradingEnabled: setOneTapEnabled,
     hasReferrer: shouldOfferOneTap ? false : needsHyperliquidActivation ? false : true,
     linkOurReferrer: activate,
+    activationStep,
   };
 }

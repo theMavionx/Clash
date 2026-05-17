@@ -301,6 +301,19 @@ const ACTIVATION_STEP_HINTS = {
     'Checking your account on-chain to figure out which signatures are still needed.',
 };
 
+const HYPERLIQUID_STEP_HINTS = {
+  'Checking Hyperliquid setup':
+    'Reading Hyperliquid account state, builder fee approval, and one tap trading permission.',
+  'Approve builder fee':
+    'Your wallet signs the Hyperliquid builder fee approval. This routes the configured trade fee to Clash and must happen before trading unlocks.',
+  'Enable one tap trading':
+    'Your wallet approves a local Hyperliquid agent. After this, orders use the agent and avoid repeated wallet network/signature popups.',
+  'Apply referral code':
+    'If this wallet has no Hyperliquid referrer yet, we attach the Clash referral code. Existing referrals are left unchanged.',
+  'Finalising...':
+    'Refreshing Hyperliquid state to confirm the approvals are visible before the trade panel opens.',
+};
+
 // Decibel deposit gate. Shown after the user has activated trading but
 // before they've moved any USDC onto the subaccount. The whole panel
 // turns into a deposit prompt — there's nothing else to do here, since
@@ -2392,6 +2405,257 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== HYPERLIQUID SETUP GATE ====================
+  if (dex === 'hyperliquid' && hasWallet && setupVerified !== true) {
+    const isRunning = !!activationStep;
+    const isChecking = setupVerified === null && !isRunning;
+    const stepHint = activationStep ? (HYPERLIQUID_STEP_HINTS[activationStep.label] || '') : '';
+    const builderConfigured = account?.builder_fee_configured === true;
+    const builderApproved = !builderConfigured || account?.builder_fee_approved === true;
+    const builderCanApprove = account?.builder_fee_user_can_approve === true;
+    const builderValue = Number(account?.builder_account_value ?? 0);
+    const builderPerpValue = Number(account?.builder_perp_account_value ?? builderValue);
+    const builderMode = String(account?.builder_abstraction_mode || 'unknown');
+    const builderEligibilityReason = account?.builder_eligibility_reason || '';
+    const oneTapApproved = oneTapTrading?.approved === true;
+    const oneTapOn = oneTapTrading?.enabled === true;
+    const steps = [
+      [
+        '1',
+        'Approve builder fee',
+        builderApproved
+          ? 'Done'
+          : builderCanApprove
+          ? 'Needs wallet signature'
+          : builderEligibilityReason
+          ? builderEligibilityReason
+          : builderConfigured
+          ? `Builder must be Standard mode with $100+ perps value. Current: ${builderMode}, $${builderPerpValue.toFixed(2)}`
+          : 'Not configured',
+      ],
+      [
+        '2',
+        'Enable one tap trading',
+        oneTapApproved && oneTapOn ? 'Done' : 'Needs wallet signature',
+      ],
+      [
+        '3',
+        'Apply referral code',
+        'Best-effort if the wallet has no referrer yet',
+      ],
+    ];
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.55}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Setting Up Hyperliquid...' : 'Hyperliquid Setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+          }}>
+            <div style={{
+              margin: 'auto',
+              width: '100%',
+              maxWidth: 420,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 'clamp(10px, 2vh, 18px)',
+              padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
+              flexShrink: 0,
+            }}>
+              <div style={{
+                width: 'clamp(64px, 12vh, 92px)',
+                height: 'clamp(64px, 12vh, 92px)',
+                borderRadius: '50%',
+                background: 'linear-gradient(180deg, #22C55E 0%, #047857 100%)',
+                border: '4px solid #059669',
+                boxShadow: '0 6px 0 #047857, 0 10px 22px rgba(0,0,0,0.28)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                {isChecking || isRunning ? (
+                  <div style={{
+                    width: '58%',
+                    height: '58%',
+                    border: '5px solid rgba(255,255,255,0.35)',
+                    borderTopColor: '#fff',
+                    borderRadius: '50%',
+                    animation: 'act-spin 0.9s linear infinite',
+                  }} />
+                ) : (
+                  <img src={DEX_CONFIG.hyperliquid.logo} alt="" style={{width: 50, height: 50, objectFit: 'contain'}} />
+                )}
+              </div>
+
+              <div style={{
+                fontSize: 'clamp(11px, 1.6vh, 13px)',
+                fontWeight: 800,
+                letterSpacing: '0.12em',
+                color: '#059669',
+              }}>
+                {isRunning && activationStep?.total > 0
+                  ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
+                  : isChecking
+                  ? 'CHECKING'
+                  : 'ACTION REQUIRED'}
+              </div>
+
+              <div style={{
+                color: '#5C3A21',
+                fontSize: 'clamp(17px, 2.6vh, 22px)',
+                fontWeight: 900,
+                textAlign: 'center',
+                letterSpacing: '0.4px',
+                lineHeight: 1.25,
+              }}>
+                {isRunning
+                  ? activationStep.label
+                  : isChecking
+                  ? 'Checking your Hyperliquid setup'
+                  : 'Enable trading permissions'}
+              </div>
+
+              <div style={{
+                color: '#8a7252',
+                fontSize: 'clamp(11px, 1.6vh, 13px)',
+                fontWeight: 600,
+                textAlign: 'center',
+                maxWidth: 365,
+                lineHeight: 1.5,
+              }}>
+                {isRunning
+                  ? (stepHint || 'Approve the wallet request to continue.')
+                  : isChecking
+                  ? 'We are checking builder fee approval and one tap trading before opening the panel.'
+                  : 'Hyperliquid opens only after builder fee routing and one tap trading are verified.'}
+              </div>
+
+              <div style={{
+                width: '100%',
+                maxWidth: 380,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                background: '#fffbef',
+                border: '2px solid #d4c8b0',
+                borderRadius: 12,
+                padding: '14px 16px',
+              }}>
+                {steps.map(([n, title, hint]) => {
+                  const done = hint === 'Done';
+                  return (
+                    <div key={n} style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
+                      <div style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: '50%',
+                        background: done ? '#16A34A' : '#059669',
+                        color: '#fff',
+                        fontSize: 12,
+                        fontWeight: 900,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        marginTop: 1,
+                      }}>{done ? 'OK' : n}</div>
+                      <div style={{flex: 1, minWidth: 0}}>
+                        <div style={{fontSize: 12.5, fontWeight: 800, color: '#5C3A21', lineHeight: 1.3}}>{title}</div>
+                        <div style={{
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          color: done ? '#166534' : '#8a7252',
+                          lineHeight: 1.4,
+                          marginTop: 1,
+                          overflowWrap: 'anywhere',
+                        }}>{hint}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {isRunning ? (
+                <div style={{
+                  fontSize: 14,
+                  fontWeight: 800,
+                  color: '#5C3A21',
+                  background: 'linear-gradient(180deg, #dcfce7, #bbf7d0)',
+                  border: '2px solid rgba(22,163,74,0.35)',
+                  padding: '12px 18px',
+                  borderRadius: 12,
+                  textAlign: 'center',
+                  maxWidth: 380,
+                  width: '100%',
+                  animation: 'act-pulse 2.4s ease-in-out infinite',
+                }}>
+                  Approve the wallet request, then keep this page open.
+                </div>
+              ) : (
+                <button
+                  style={{
+                    ...cartoonBtn('#22C55E', '#047857'),
+                    padding: 'clamp(12px, 2.2vh, 18px) 36px',
+                    fontSize: 'clamp(14px, 2vh, 17px)',
+                    fontWeight: 900,
+                    letterSpacing: '0.6px',
+                    width: '100%',
+                    maxWidth: 380,
+                    opacity: isChecking || loading ? 0.7 : 1,
+                  }}
+                  disabled={isChecking || loading}
+                  onClick={async () => {
+                    if (!activate) return;
+                    const res = await activate();
+                    if (res?.error) setLocalAlert(res.error);
+                  }}
+                >
+                  {isChecking || loading ? 'PLEASE WAIT...' : 'SET UP HYPERLIQUID'}
+                </button>
+              )}
+
+              {(error || localAlert) && (
+                <div style={{
+                  color: '#B71C1C',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textAlign: 'center',
+                  maxWidth: 380,
+                  padding: '8px 12px',
+                  background: '#FFEBEE',
+                  borderRadius: 8,
+                  border: '1px solid #FFCDD2',
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
+                }}>{humanizeTradeError(error || localAlert)}</div>
+              )}
+            </div>
+          </div>
+        </div>
       </>
     );
   }
