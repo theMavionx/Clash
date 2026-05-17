@@ -223,8 +223,8 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
   }, [sourceChain, evmAddress, solAddress, aptAddress]);
 
   // Fetch the player's NFTs on the source chain whenever the chain or
-  // connected wallet changes. Solana uses browser RPC/DAS first; the server
-  // is not used for that readonly picker path.
+  // connected wallet changes. Solana tries browser RPC first, then falls
+  // back to the server because mobile browsers can block public indexers/RPCs.
   useEffect(() => {
     setOwnedNfts(null);
     setOwnedError(null);

@@ -207,6 +207,30 @@ try {
   `);
 } catch (e) { console.warn('[db] ai_agent_keys migration:', e.message); }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mcp_events (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id     TEXT REFERENCES players(id) ON DELETE SET NULL,
+      ai_key_id     TEXT,
+      ai_key_prefix TEXT,
+      tool          TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'ok',
+      duration_ms   INTEGER,
+      error         TEXT,
+      input_json    TEXT,
+      metadata_json TEXT,
+      ip            TEXT,
+      ua            TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_events_recent ON mcp_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_mcp_events_tool_recent ON mcp_events(tool, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_mcp_events_status_recent ON mcp_events(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_mcp_events_player_recent ON mcp_events(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] mcp_events migration:', e.message); }
+
 // Browser console/error ingestion. Public endpoint writes bounded rows here so
 // production client failures survive PM2 log rotation and can be queried from
 // the admin panel. Payloads are capped in routes.js before insertion.
@@ -573,6 +597,11 @@ const stmts = {
     SELECT COUNT(*) AS count
     FROM ai_agent_keys
     WHERE player_id = ? AND revoked_at IS NULL
+  `),
+  insertMcpEvent: db.prepare(`
+    INSERT INTO mcp_events
+      (player_id, ai_key_id, ai_key_prefix, tool, status, duration_ms, error, input_json, metadata_json, ip, ua)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   // Find enemy candidates (not self, no shield, has a town hall, not in a
@@ -1137,6 +1166,45 @@ function authenticateAiAgentKey(rawKey) {
       level: row.auth_player_level,
     },
   };
+}
+
+function boundedJson(value, maxBytes = 8000) {
+  if (value == null) return null;
+  let text = '';
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  if (!text) return null;
+  const max = Number(maxBytes);
+  if (Number.isFinite(max) && max > 0 && text.length > max) {
+    return text.slice(0, max) + '...';
+  }
+  return text;
+}
+
+function logMcpEvent(event = {}) {
+  try {
+    const status = String(event.status || 'ok').slice(0, 40);
+    const tool = String(event.tool || 'unknown').slice(0, 80);
+    const duration = Number(event.durationMs ?? event.duration_ms);
+    stmts.insertMcpEvent.run(
+      event.playerId || event.player_id || null,
+      event.aiKeyId || event.ai_key_id || null,
+      event.aiKeyPrefix || event.ai_key_prefix || null,
+      tool,
+      status,
+      Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : null,
+      boundedJson(event.error, 2000),
+      boundedJson(event.input ?? event.input_json, 8000),
+      boundedJson(event.metadata ?? event.metadata_json, 8000),
+      event.ip || null,
+      event.ua || event.userAgent || null
+    );
+  } catch (err) {
+    console.warn('[db] failed to log MCP event:', err?.message || err);
+  }
 }
 
 function getGridSpec(gridIndex = 0) {
@@ -2047,6 +2115,7 @@ module.exports = {
   listAiAgentKeys,
   revokeAiAgentKey,
   authenticateAiAgentKey,
+  logMcpEvent,
   getResources,
   addResources,
   canAfford,

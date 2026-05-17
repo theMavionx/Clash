@@ -61,6 +61,106 @@ function nftLevelImageUrl(level, id = null) {
   return `${base}/${lvl}/default.jpg`;
 }
 
+function timeoutPromise(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function solanaOwnedRpcUrls() {
+  return [
+    process.env.NFT_SOLANA_RPC_URL,
+    process.env.SOLANA_RPC_URL,
+    'https://solana-rpc.publicnode.com',
+    'https://api.mainnet-beta.solana.com',
+  ].filter((url, index, all) => url && all.indexOf(url) === index);
+}
+
+async function listOwnedSolanaToken2022Nfts(ownerRaw) {
+  const { Connection, PublicKey } = require('@solana/web3.js');
+  const {
+    TOKEN_2022_PROGRAM_ID,
+    getTokenMetadata,
+  } = require('@solana/spl-token');
+  const {
+    solanaToken2022CollectionId,
+    token2022LooksLikeDemonKing,
+    levelFromToken2022Metadata,
+  } = require('./solana_token2022_nft');
+
+  const ownerPk = new PublicKey(ownerRaw);
+  let lastErr = null;
+  for (const rpc of solanaOwnedRpcUrls()) {
+    try {
+      const conn = new Connection(rpc, 'confirmed');
+      const rows = await timeoutPromise(
+        conn.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed'),
+        8_000,
+        'Solana Token-2022 owner scan',
+      );
+      const candidates = (rows.value || []).map((row) => {
+        const parsed = row?.account?.data?.parsed?.info || {};
+        const amount = parsed?.tokenAmount || {};
+        return {
+          mint: String(parsed.mint || ''),
+          tokenAccount: row.pubkey?.toBase58?.() || String(row.pubkey || ''),
+          amount: String(amount.amount || '0'),
+          decimals: Number(amount.decimals),
+        };
+      }).filter((row) => (
+        /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(row.mint)
+        && row.tokenAccount
+        && row.amount === '1'
+        && row.decimals === 0
+      )).slice(0, 60);
+
+      const settled = await timeoutPromise(Promise.allSettled(candidates.map(async (candidate) => {
+        const mintPk = new PublicKey(candidate.mint);
+        const meta = await getTokenMetadata(conn, mintPk, 'confirmed', TOKEN_2022_PROGRAM_ID).catch(() => null);
+        if (!token2022LooksLikeDemonKing(meta)) return null;
+        const level = normalizeNftLevel(levelFromToken2022Metadata(meta));
+        return {
+          asset: candidate.mint,
+          mint: candidate.mint,
+          tokenAccount: candidate.tokenAccount,
+          level,
+          name: meta?.name || `Demon King L${level}`,
+          imageUrl: nftLevelImageUrl(level, candidate.mint),
+          chain: 'solana',
+          standard: 'token2022',
+        };
+      })), 10_000, 'Solana Token-2022 metadata scan');
+
+      const tokens = settled
+        .filter((row) => row.status === 'fulfilled' && row.value)
+        .map((row) => row.value);
+      return {
+        chain: 'solana',
+        owner: ownerRaw,
+        collection: solanaToken2022CollectionId(),
+        total: tokens.length,
+        tokens,
+        source: 'server-solana-token2022',
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return {
+    chain: 'solana',
+    owner: ownerRaw,
+    collection: 'demon-king-token2022-v1',
+    total: 0,
+    tokens: [],
+    source: 'server-solana-token2022',
+  };
+}
+
 function v3Deployment(chainKey) {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`));
 }
@@ -329,7 +429,7 @@ function mountNftV3Endpoints(router, ctx) {
   //     parallelise with Promise.all + filter for the requested owner.
   //   - Aptos: query the indexer/REST API for tokens by owner under our
   //     collection. Falls back gracefully if the indexer is unavailable.
-  //   - Solana: fetchAssetsByCollection + filter by owner.
+  //   - Solana: Token-2022 owner scan first, then legacy Core collection scan.
   router.get('/nft/owned/:chain/:address', async (req, res) => {
     try {
       const ip = req.ip || 'unknown';
@@ -474,12 +574,43 @@ function mountNftV3Endpoints(router, ctx) {
         const dep = deploymentOf('solana');
         if (!dep?.collection) return res.status(503).json({ error: 'Solana not deployed' });
         if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(ownerRaw)) return res.status(400).json({ error: 'Solana address malformed' });
+
+        const cacheKey = `solana:${ownerRaw}`;
+        const cached = _ownedNftCache.get(cacheKey);
+        if (cached && Date.now() - cached.at < 30_000) {
+          res.set('Cache-Control', 'public, max-age=10');
+          return res.json(cached.body);
+        }
+
+        let token2022Body = null;
+        let token2022Error = null;
+        try {
+          token2022Body = await listOwnedSolanaToken2022Nfts(ownerRaw);
+          if (token2022Body.tokens.length) {
+            _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
+            res.set('Cache-Control', 'public, max-age=10');
+            return res.json(token2022Body);
+          }
+        } catch (err) {
+          token2022Error = err;
+        }
+
         const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
         const { mplCore, fetchAssetsByCollection } = await import('@metaplex-foundation/mpl-core');
         const { publicKey } = await import('@metaplex-foundation/umi');
         const rpc = process.env.NFT_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
         const umi = createUmi(rpc).use(mplCore());
-        const assets = await fetchAssetsByCollection(umi, publicKey(dep.collection));
+        let assets = [];
+        try {
+          assets = await fetchAssetsByCollection(umi, publicKey(dep.collection));
+        } catch (err) {
+          if (token2022Body) {
+            _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
+            res.set('Cache-Control', 'public, max-age=10');
+            return res.json(token2022Body);
+          }
+          throw token2022Error || err;
+        }
         const tokens = assets
           .filter((a) => String(a.owner) === ownerRaw)
           .map((a) => {
@@ -492,8 +623,15 @@ function mountNftV3Endpoints(router, ctx) {
               imageUrl: nftLevelImageUrl(level, a.publicKey.toString()),
             };
           });
+        if (!tokens.length && token2022Body) {
+          _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
+          res.set('Cache-Control', 'public, max-age=10');
+          return res.json(token2022Body);
+        }
+        const body = { chain: 'solana', owner: ownerRaw, collection: dep.collection, total: tokens.length, tokens, source: 'server-solana-core' };
+        _ownedNftCache.set(cacheKey, { at: Date.now(), body });
         res.set('Cache-Control', 'public, max-age=10');
-        return res.json({ chain: 'solana', owner: ownerRaw, collection: dep.collection, total: tokens.length, tokens });
+        return res.json(body);
       }
 
       return res.status(400).json({ error: `Unsupported chain ${chainKey}` });

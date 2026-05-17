@@ -925,15 +925,18 @@ async function fetchOwnedToken2022SolanaNftsFromRpc(url, address, signal) {
 
 async function fetchOwnedToken2022SolanaNfts(address, signal) {
   let lastError = null;
+  let firstResult = null;
   for (const url of SOLANA_RPC_URLS.map(normalizeRpcUrl)) {
     try {
       const result = await fetchOwnedToken2022SolanaNftsFromRpc(url, address, signal);
+      if (!firstResult) firstResult = result;
       if (result.tokens.length) return result;
     } catch (err) {
       if (isAbortError(err)) throw err;
       lastError = err;
     }
   }
+  if (firstResult) return firstResult;
   if (lastError) throw lastError;
   return null;
 }
@@ -956,12 +959,14 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
       lastError = err;
     }
   }
-  try {
-    const magicEdenResult = await fetchOwnedNftsFromMagicEden(address, signal);
-    if (magicEdenResult) return magicEdenResult;
-  } catch (err) {
-    if (isAbortError(err)) throw err;
-    lastError = err;
+  if (envFlag('VITE_SOLANA_ENABLE_MAGIC_EDEN_INDEXER', false)) {
+    try {
+      const magicEdenResult = await fetchOwnedNftsFromMagicEden(address, signal);
+      if (magicEdenResult) return magicEdenResult;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      lastError = err;
+    }
   }
   for (const url of solanaCoreRpcUrls()) {
     try {
@@ -993,13 +998,7 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
       lastError = err;
     }
   }
-  const hint = 'Solana browser NFT auto-load needs a DAS-capable endpoint. Set VITE_HELIUS_API_KEY, VITE_SOLANA_HELIUS_API_KEY, VITE_SOLANA_ALCHEMY_API_KEY, or VITE_SOLANA_DAS_RPC_URL; otherwise paste the asset id manually.';
-  if (!lastError) throw new Error(hint);
-  const msg = String(lastError?.message || lastError || '');
-  if (/Expected the value to satisfy a union/i.test(msg)) {
-    throw new Error(`${hint} The plain Core GPA fallback is disabled by default because public Solana RPCs are too slow/unstable for wallet NFT indexing.`);
-  }
-  throw new Error(`${hint} Last browser indexer error: ${msg}`);
+  return null;
 }
 
 async function fetchOwnedNftsFromServer({ chain, address, signal }) {
@@ -1033,13 +1032,6 @@ export async function fetchOwnedNfts({ chain, address, signal } = {}) {
   } catch (err) {
     if (isAbortError(err)) throw err;
     browserError = err;
-  }
-
-  if (chainKey === 'solana' && browserError) {
-    throw Object.assign(
-      new Error(browserError?.message || 'Solana browser NFT load failed. Paste the asset id manually.'),
-      { cause: browserError },
-    );
   }
 
   try {

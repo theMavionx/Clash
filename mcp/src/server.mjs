@@ -130,6 +130,13 @@ function rateLimit(req, res, next) {
   res.set('RateLimit-Reset', String(Math.ceil(bucket.resetAt / 1000)));
   if (bucket.count > RATE_LIMIT_MAX) {
     res.set('Retry-After', String(Math.ceil((bucket.resetAt - now) / 1000)));
+    game.logMcpEvent({
+      tool: 'mcp_http',
+      status: 'rate_limited',
+      error: 'MCP rate limit exceeded',
+      metadata: { resetAt: bucket.resetAt, count: bucket.count, limit: RATE_LIMIT_MAX },
+      ...requestLogMeta(req),
+    });
     return res.status(429).json({ error: 'MCP rate limit exceeded' });
   }
   return next();
@@ -147,6 +154,61 @@ function toolError(message, extra = {}) {
   return { ...jsonResult({ error: message, ...extra, ok: false }), isError: true };
 }
 
+function requestLogMeta(req) {
+  return {
+    ip: req?.ip || req?.socket?.remoteAddress || '',
+    ua: req?.get?.('user-agent') || '',
+  };
+}
+
+function toolResultErrorMessage(result) {
+  if (!result?.isError) return '';
+  const text = String(result?.content?.[0]?.text || '');
+  if (!text) return 'Tool returned an error';
+  try {
+    const parsed = JSON.parse(text);
+    return String(parsed.error || parsed.message || text);
+  } catch {
+    return text.slice(0, 500);
+  }
+}
+
+function instrumentMcpTools(server, session, reqMeta = {}) {
+  const rawRegisterTool = server.registerTool.bind(server);
+  const keyInfo = session?.key || {};
+  const playerInfo = session?.player || {};
+  server.registerTool = (name, config, handler) => rawRegisterTool(name, config, async (args, extra) => {
+    const startedAt = Date.now();
+    let status = 'ok';
+    let error = '';
+    try {
+      const result = await handler(args, extra);
+      if (result?.isError) {
+        status = 'error';
+        error = toolResultErrorMessage(result);
+      }
+      return result;
+    } catch (err) {
+      status = 'exception';
+      error = err?.message || String(err);
+      throw err;
+    } finally {
+      game.logMcpEvent({
+        playerId: playerInfo.id || null,
+        aiKeyId: keyInfo.id || null,
+        aiKeyPrefix: keyInfo.key_prefix || null,
+        tool: name,
+        status,
+        durationMs: Date.now() - startedAt,
+        error,
+        input: args || {},
+        ip: reqMeta.ip || '',
+        ua: reqMeta.ua || '',
+      });
+    }
+  });
+}
+
 function extractAgentKey(req) {
   const auth = String(req.headers.authorization || '');
   const bearer = auth.match(/^Bearer\s+(.+)$/i);
@@ -160,6 +222,13 @@ function agentAuth(req, res, next) {
   if (!session) {
     const metadataUrl = `${publicUrlForReq(req)}/.well-known/oauth-protected-resource`;
     res.set('WWW-Authenticate', `Bearer realm="clash-ai-mcp", resource_metadata="${metadataUrl}"`);
+    game.logMcpEvent({
+      tool: 'mcp_auth',
+      status: 'auth_error',
+      error: 'Invalid or missing AI agent key',
+      metadata: { resource_metadata: metadataUrl },
+      ...requestLogMeta(req),
+    });
     return res.status(401).json({
       error: 'Invalid or missing AI agent key',
       resource_metadata: metadataUrl,
@@ -951,7 +1020,8 @@ function reinforceShips(playerId) {
   })();
 }
 
-function registerTools(server, session, agentKey) {
+function registerTools(server, session, agentKey, reqMeta = {}) {
+  instrumentMcpTools(server, session, reqMeta);
   const playerId = session.player.id;
 
   server.registerResource(
