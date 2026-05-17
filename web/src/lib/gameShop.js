@@ -311,7 +311,7 @@ function solanaMobileAppIdentity() {
   return {
     name: 'Clash of Perps',
     uri: origin,
-    icon: `${origin}/icons/icon-512.png`,
+    icon: '/icons/icon-512.png',
   };
 }
 
