@@ -1,0 +1,165 @@
+// Hyperliquid rewards indexer.
+//
+// Read-only poller: fetches verified fills from Hyperliquid's public Info API
+// for every registered Hyperliquid EVM wallet and writes rewardable rows into
+// futures trade_history. Browser reports are not trusted for rewards.
+
+const Database = require('better-sqlite3');
+const path = require('path');
+const db = require('./db');
+const hyperliquid = require('./hyperliquid');
+
+const POLL_MS = Number(process.env.HYPERLIQUID_REWARDS_POLL_MS || 2 * 60 * 1000);
+const LOOKBACK_MS = Number(process.env.HYPERLIQUID_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
+const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
+  || path.join(__dirname, '..', 'server', 'clash.db');
+
+function fillTimeMs(fill) {
+  const n = Number(fill?.time ?? fill?.timestamp ?? 0);
+  if (Number.isFinite(n) && n > 0) return n > 1e12 ? n : n * 1000;
+  const parsed = Date.parse(fill?.time || fill?.created_at || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function tradeKey(wallet, fill) {
+  const base = [
+    fill?.tid,
+    fill?.hash,
+    fill?.oid,
+    fill?.cloid,
+    fillTimeMs(fill),
+    fill?.coin,
+    fill?.px,
+    fill?.sz,
+  ].filter(v => v !== undefined && v !== null && v !== '').join(':');
+  return `hyperliquid:${String(wallet).toLowerCase()}:${base}`;
+}
+
+function sideFromFill(fill) {
+  const dir = String(fill?.dir || '');
+  const isClose = /close/i.test(dir);
+  const isLong = /long/i.test(dir) || fill?.side === 'B';
+  if (isClose) return isLong ? 'close_long' : 'close_short';
+  return isLong ? 'long' : 'short';
+}
+
+function normalizeFill(wallet, fill) {
+  const symbol = String(fill?.coin || '').toUpperCase();
+  const amount = Math.abs(Number(fill?.sz || 0));
+  const price = Number(fill?.px || 0);
+  const notional = amount * price;
+  if (!symbol || !Number.isFinite(notional) || notional < 10 || notional > 10_000_000) return null;
+  const crossed = fill?.crossed === true || fill?.crossed === 'true';
+  return {
+    symbol,
+    side: sideFromFill(fill),
+    orderType: /close/i.test(String(fill?.dir || '')) ? 'close' : (crossed ? 'market' : 'limit'),
+    amount: String(amount),
+    price: String(price),
+    orderId: fill?.oid ?? fill?.hash ?? null,
+    clientOrderId: tradeKey(wallet, fill),
+    status: 'filled',
+    dex: 'hyperliquid',
+    notional_usd: notional,
+    verifiedSource: 'hyperliquid_api',
+    pnl: fill?.closedPnl != null ? String(fill.closedPnl) : null,
+  };
+}
+
+async function importFillsForPlayer(playerId, wallet, opts = {}) {
+  const cleanWallet = String(wallet || '').trim().toLowerCase();
+  if (!hyperliquid.isEvmAddress(cleanWallet)) {
+    return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_evm_wallet' };
+  }
+  const lookbackMs = Number(opts.lookbackMs ?? (Number(opts.lookbackSeconds || 0) > 0 ? Number(opts.lookbackSeconds) * 1000 : LOOKBACK_MS));
+  const startTime = lookbackMs > 0 ? Date.now() - lookbackMs : undefined;
+  let fills = [];
+  const attempts = Math.max(1, Math.min(6, Number(opts.attempts || 1)));
+  const delayMs = Math.max(250, Math.min(5000, Number(opts.delayMs || 1500)));
+  for (let i = 0; i < attempts; i += 1) {
+    fills = await hyperliquid.getUserFills(cleanWallet, { startTime });
+    if (Array.isArray(fills) && fills.length) break;
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  if (!Array.isArray(fills)) fills = Array.isArray(fills?.data) ? fills.data : [];
+
+  let imported = 0;
+  let skipped = 0;
+  for (const fill of fills) {
+    const ts = fillTimeMs(fill);
+    if (startTime && (!ts || ts < startTime)) {
+      skipped++;
+      continue;
+    }
+    const trade = normalizeFill(cleanWallet, fill);
+    if (!trade) {
+      skipped++;
+      continue;
+    }
+    try {
+      const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
+      if (before) {
+        skipped++;
+        continue;
+      }
+      const r = db.addTrade(playerId, trade);
+      if (r?.id) imported++;
+      else skipped++;
+    } catch (e) {
+      skipped++;
+      if (!/UNIQUE|constraint/i.test(e.message || '')) {
+        console.warn('[hyperliquid-rewards-worker] addTrade failed:', e.message);
+      }
+    }
+  }
+  return { ok: true, imported, skipped, total: fills.length };
+}
+
+async function pollOnce(mainDb) {
+  const rows = mainDb.prepare(
+    `SELECT id, wallet FROM players WHERE dex='hyperliquid' AND wallet IS NOT NULL AND wallet != ''`
+  ).all();
+  if (!rows.length) return 0;
+  let inserted = 0;
+  for (const row of rows) {
+    const wallet = String(row.wallet || '').trim();
+    if (!hyperliquid.isEvmAddress(wallet)) continue;
+    try {
+      const result = await importFillsForPlayer(row.id, wallet);
+      inserted += result.imported || 0;
+    } catch (e) {
+      console.warn(`[hyperliquid-rewards-worker] fill fetch failed for ${wallet.slice(0, 10)}:`, e.message);
+    }
+  }
+  return inserted;
+}
+
+function start() {
+  let mainDb;
+  try {
+    mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
+    try { mainDb.pragma('journal_mode = WAL'); } catch {}
+  } catch (e) {
+    console.error('[hyperliquid-rewards-worker] Cannot open main DB:', e.message, '- worker disabled.');
+    return;
+  }
+  const tick = async () => {
+    try {
+      const n = await pollOnce(mainDb);
+      if (n > 0) console.log(`[hyperliquid-rewards-worker] Recorded ${n} Hyperliquid trade row(s)`);
+    } catch (e) {
+      console.error('[hyperliquid-rewards-worker] tick failed:', e?.message || e);
+    }
+  };
+  tick();
+  const iv = setInterval(tick, POLL_MS);
+  iv.unref?.();
+  console.log(`[hyperliquid-rewards-worker] started (polling every ${POLL_MS / 1000}s)`);
+}
+
+module.exports = {
+  start,
+  pollOnce,
+  importFillsForPlayer,
+  isEvmAddress: hyperliquid.isEvmAddress,
+};

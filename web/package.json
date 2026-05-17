@@ -28,6 +28,7 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.5.1",
     "@metaplex-foundation/umi-signer-wallet-adapters": "^1.5.1",
     "@metaplex-foundation/umi-web3js-adapters": "^1.5.1",
+    "@nktkas/hyperliquid": "^0.32.2",
     "@onsol/tldparser": "^1.2.1",
     "@privy-io/react-auth": "^3.21.2",
     "@solana-mobile/wallet-adapter-mobile": "^2.2.8",

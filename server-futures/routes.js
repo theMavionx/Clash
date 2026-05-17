@@ -8,6 +8,8 @@ const decibel = require('./decibel');
 const gmx = require('./gmx');
 const gmxRewards = require('./gmx-rewards-worker');
 const phoenixRewards = require('./phoenix-rewards-worker');
+const hyperliquid = require('./hyperliquid');
+const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 
 const router = express.Router();
 
@@ -206,7 +208,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -226,7 +228,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -256,7 +258,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -289,6 +291,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await gmx.getAccountByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'hyperliquid') {
+      const address = String(req.query.address || '').trim();
+      if (!hyperliquid.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await hyperliquid.getAccountByAddress(address);
       return res.json(info);
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
@@ -549,6 +559,7 @@ router.get('/markets', async (req, res) => {
   try {
     const info = dex === 'avantis' ? await avantis.getMarketInfo()
       : dex === 'gmx' ? await gmx.getMarketInfo()
+      : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -561,6 +572,7 @@ router.get('/prices', async (req, res) => {
   try {
     const prices = dex === 'avantis' ? await avantis.getPrices()
       : dex === 'gmx' ? await gmx.getPrices()
+      : dex === 'hyperliquid' ? await hyperliquid.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -624,6 +636,14 @@ router.get('/positions', async (req, res) => {
       const positions = await gmx.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'hyperliquid') {
+      const address = String(req.query.address || '').trim();
+      if (!hyperliquid.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await hyperliquid.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -657,6 +677,14 @@ router.get('/orders', async (req, res) => {
       const orders = await gmx.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'hyperliquid') {
+      const address = String(req.query.address || '').trim();
+      if (!hyperliquid.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await hyperliquid.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -669,12 +697,14 @@ router.get('/orders', async (req, res) => {
   }
 });
 
-// Reject Avantis writes on the server — they're now signed client-side.
-// Middleware at the top of each write handler makes the error consistent.
+// Reject self-custody writes on legacy Pacifica server endpoints. These
+// venues sign in the browser or use their dedicated route groups.
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+
 function avantisMigratedGuard(req, res, next) {
-  if (req.dex === 'avantis') {
+  if (CLIENT_SIGNED_DEXES.has(req.dex)) {
     return res.status(410).json({
-      error: 'Avantis is now non-custodial. Update your client — trades are signed in the user wallet.',
+      error: `${req.dex} is self-custody. Update your client - trades are signed in the user wallet.`,
       migrated: true,
     });
   }
@@ -777,7 +807,7 @@ router.post('/orders/cancel', auth, avantisMigratedGuard, async (req, res) => {
 });
 
 // Cancel all orders (Pacifica only; Avantis doesn't support cancel-all natively)
-router.post('/orders/cancel-all', auth, async (req, res) => {
+router.post('/orders/cancel-all', auth, avantisMigratedGuard, async (req, res) => {
   try {
     const wallet = db.getWallet(req.playerId, req.dex);
     if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -808,7 +838,7 @@ router.post('/positions/close', auth, avantisMigratedGuard, (req, res) => {
 
 // ==================== LEVERAGE ====================
 
-router.post('/leverage', auth, async (req, res) => {
+router.post('/leverage', auth, avantisMigratedGuard, async (req, res) => {
   if (req.dex === 'avantis') {
     return res.status(400).json({ error: 'Avantis does not support changing leverage on open positions. Set leverage when opening the trade.' });
   }
@@ -1151,6 +1181,35 @@ router.post('/gmx/import-fills', auth, async (req, res) => {
   }
 });
 
+router.post('/hyperliquid/import-fills', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'hyperliquid') {
+      return res.status(409).json({
+        error: `Account is registered for '${req.dex}'. Switch DEX to hyperliquid before importing Hyperliquid fills.`,
+      });
+    }
+    const wallet = normalizeEvmAddress(req.body?.wallet || req.playerWallet);
+    const playerWallet = normalizeEvmAddress(req.playerWallet);
+    if (!wallet) return res.status(400).json({ error: 'wallet required (0x...)' });
+    if (playerWallet && wallet !== playerWallet) {
+      return res.status(409).json({ error: 'wallet does not match player account' });
+    }
+
+    const result = await hyperliquidRewards.importFillsForPlayer(req.playerId, wallet, {
+      lookbackSeconds: req.body?.lookback_seconds,
+      attempts: req.body?.attempts,
+      delayMs: req.body?.delay_ms,
+    });
+    if (result.imported > 0) {
+      console.log(`[hyperliquid] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${wallet.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[hyperliquid] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Hyperliquid fills', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -1232,7 +1291,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);
@@ -1264,7 +1323,7 @@ router.get('/balance', auth, async (req, res) => {
 });
 
 // Deposit USDC from custodial wallet into Pacifica vault (Pacifica only)
-router.post('/deposit/pacifica', auth, async (req, res) => {
+router.post('/deposit/pacifica', auth, avantisMigratedGuard, async (req, res) => {
   if (req.dex === 'avantis') {
     return res.status(400).json({ error: 'Avantis does not use a vault deposit. Fund your wallet with USDC on Base directly.' });
   }
@@ -1352,7 +1411,7 @@ async function activateAccount(secretKey) {
 }
 
 // Manual activation endpoint (Pacifica only)
-router.post('/activate', auth, async (req, res) => {
+router.post('/activate', auth, avantisMigratedGuard, async (req, res) => {
   if (req.dex === 'avantis') {
     return res.json({ success: true, message: 'No activation needed for Avantis.' });
   }

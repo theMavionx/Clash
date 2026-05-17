@@ -338,13 +338,13 @@ export function useAuthFlow() {
   //   and external-connected) → Privy Solana.
   const candidate = useMemo(() => {
     if (!dexPicked) return null;
-    // Avantis (Base) and GMX (Arbitrum) both source from the same EVM wallet
+    // Avantis (Base), GMX (Arbitrum), Monad and Hyperliquid all source from the same EVM wallet
     // context. The wallet address is the same on every EVM chain — the chain
     // switch happens at tx time via ensureChain(). Privy embedded EVM works
     // for both because the wallet itself is chain-agnostic; only the
     // walletClient transport gets re-bound per-DEX (see EvmWalletContext
     // .getWalletClient(chainId) — Avantis uses Base, GMX uses Arbitrum).
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') return evmContext || privyEvm || null;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid') return evmContext || privyEvm || null;
     if (dex === 'decibel') return aptosCandidate || null;
     if (dex === 'pacifica' || dex === 'phoenix') {
       const farcasterSol = solAdapter?.source === 'farcaster' ? solAdapter : null;
@@ -587,7 +587,7 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: nameToUse, wallet: candidate.wallet, dex };
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid') {
       // Chain is dex-driven, NOT taken from candidate.chain — the Privy
       // resolver hard-codes 'base' regardless of which DEX is active, so
       // trusting candidate.chain would mis-tag GMX/Perpl registrations as
@@ -596,6 +596,7 @@ export function useAuthFlow() {
       // this tag.
       payload.chain = dex === 'gmx' ? 'arbitrum'
         : dex === 'monad' ? 'monad'
+        : dex === 'hyperliquid' ? 'arbitrum'
         : 'base';
       payload.walletSource = candidate.source;
     }
@@ -671,9 +672,10 @@ export function useAuthFlow() {
     lastRegisteredRef.current = candidateKey;
     setRegistering(true);
     const payload = { name: name.trim(), wallet: candidate.wallet, dex };
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid') {
       payload.chain = dex === 'gmx' ? 'arbitrum'
         : dex === 'monad' ? 'monad'
+        : dex === 'hyperliquid' ? 'arbitrum'
         : 'base';
       payload.walletSource = candidate.source;
     }

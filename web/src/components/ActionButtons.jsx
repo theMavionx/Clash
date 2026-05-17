@@ -125,8 +125,8 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
           {battleTimer != null && (
             <div style={{
               ...hud.timerPill,
-              color: battleTimer <= 30 ? '#ff4444' : '#7df4ff',
-              borderColor: battleTimer <= 30 ? 'rgba(255,68,68,0.55)' : 'rgba(40,130,195,0.55)',
+              color: battleTimer <= 30 ? '#E53935' : '#5C3A21',
+              borderColor: battleTimer <= 30 ? '#7f0000' : '#9f8759',
             }}>
               {Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}
             </div>
@@ -162,7 +162,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
                 ...hud.card,
                 width: sz, height: sz,
                 opacity: isPlaced ? 0.5 : 1,
-                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(25,85,130,0.45)' : 'rgba(35,120,185,0.55)',
+                borderColor: isSelected ? '#FFD700' : isPlaced ? 'rgba(159,135,89,0.4)' : '#9f8759',
                 boxShadow: isSelected ? '0 0 12px rgba(255,215,0,0.6), inset 0 0 8px rgba(255,215,0,0.15)' : 'none',
                 cursor: isPlaced ? 'default' : 'pointer',
                 flexDirection: 'column', gap: 0, padding: 2, position: 'relative',
@@ -173,11 +173,11 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               }}
             >
               <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />
-              <div style={{ fontSize: 7, fontWeight: 800, color: 'rgba(160,220,255,0.8)', textTransform: 'uppercase' }}>
+              <div style={{ fontSize: 7, fontWeight: 800, color: '#8b6b3f', textTransform: 'uppercase' }}>
                 {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
               </div>
               {/* Troop count badge */}
-              <div style={{ position: 'absolute', top: -4, right: -4, background: '#1a3050', color: '#7df4ff', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid rgba(40,140,200,0.5)' }}>
+              <div style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
                 x{troops.length}
               </div>
             </button>
@@ -189,7 +189,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
       {expandedShip !== null && (
         <div style={hud.shipModal} onClick={() => setExpandedShip(null)}>
           <div style={hud.shipModalPanel} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: '#FFD700', textAlign: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: '#5C3A21', textAlign: 'center', marginBottom: 10, letterSpacing: 0.3 }}>
               Fleet — {ships.length} Ships
             </div>
             {ships.map((ship, si) => {
@@ -197,19 +197,19 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               const groups = {};
               for (const t of troops) groups[t.toLowerCase()] = (groups[t.toLowerCase()] || 0) + 1;
               return (
-                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.08)' }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? 'rgba(160,220,255,0.5)' : '#7df4ff', marginBottom: 4 }}>
+                <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: '#fff6dc', borderRadius: 10, border: '2px solid #d4c8b0' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? '#9f8759' : '#5C3A21', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                     Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'DEPLOYED' : `${troops.length} troops`}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                     {Object.entries(groups).map(([key, count]) => {
                       const info = TROOP_IMG_MAP[key] || {};
                       return (
-                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 6, padding: '2px 6px' }}>
+                        <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 3, background: '#fffaf0', border: '1px solid #d4c8b0', borderRadius: 6, padding: '2px 6px' }}>
                           <div style={{ width: 22, height: 22, borderRadius: 3, overflow: 'hidden' }}>
                             {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
                           </div>
-                          <span style={{ fontSize: 10, fontWeight: 800, color: '#fff' }}>{info.label || key} x{count}</span>
+                          <span style={{ fontSize: 10, fontWeight: 800, color: '#5C3A21' }}>{info.label || key} x{count}</span>
                         </div>
                       );
                     })}
@@ -217,7 +217,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
                 </div>
               );
             })}
-            <button style={{ marginTop: 6, padding: '8px 20px', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 8, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }} onClick={() => setExpandedShip(null)}>Close</button>
+            <button style={{ marginTop: 6, padding: '8px 20px', background: '#fff6dc', border: '2px solid #9f8759', borderRadius: 10, color: '#5C3A21', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit' }} onClick={() => setExpandedShip(null)}>Close</button>
           </div>
         </div>
       )}
@@ -430,28 +430,49 @@ const CrossedSwordsIcon = ({ size = 50 }) => (
   </svg>
 );
 
-// ── NFT mint icon (gem on a stand) — visually distinct from the other
-// HUD glyphs so the cartoon UI still reads cleanly when it sits next to
-// tournament/trade/defense. Keep the line weights matching the existing
-// SVG icons in this file (~2-2.5px strokes, hand-drawn outlines).
+// ── NFT shop icon — cartoon storefront with striped awning + windows
+// showing the valuables on offer (coin + gem). Sits in the action bar
+// next to the tournament/battle-log buttons; line weights and palette
+// match the rest of the HUD (~2-2.5px strokes, brown #5C3A21 outlines,
+// cream/red/gold accents).
 const NftMintIcon = ({ size = 50 }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{ filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.4))' }}>
-    {/* Stand base */}
-    <ellipse cx="32" cy="54" rx="20" ry="5" fill="#5C3A21" stroke="#3d1f00" strokeWidth="2" />
-    <ellipse cx="32" cy="52" rx="20" ry="5" fill="#8b5a2b" stroke="#3d1f00" strokeWidth="2" />
-    {/* Gem body — diamond cut */}
-    <path d="M32 8 L48 24 L32 50 L16 24 Z" fill="#d72b9c" stroke="#5a0d4a" strokeWidth="2.5" strokeLinejoin="round" />
-    {/* Top facets */}
-    <path d="M32 8 L24 24 L40 24 Z" fill="#ff5fc3" stroke="#5a0d4a" strokeWidth="1.8" strokeLinejoin="round" />
-    <path d="M16 24 L24 24 L32 8" stroke="#5a0d4a" strokeWidth="1.8" />
-    <path d="M48 24 L40 24 L32 8" stroke="#5a0d4a" strokeWidth="1.8" />
-    {/* Bottom facets */}
-    <path d="M24 24 L32 50 L40 24" stroke="#5a0d4a" strokeWidth="1.8" />
-    {/* Highlight */}
-    <path d="M28 12 L24 22" stroke="rgba(255,255,255,0.55)" strokeWidth="2" strokeLinecap="round" />
-    {/* Sparkles */}
-    <path d="M52 14 L54 18 L58 16 L54 14 Z" fill="#fff5a8" stroke="#5C3A21" strokeWidth="1" />
-    <circle cx="10" cy="18" r="2" fill="#fff5a8" stroke="#5C3A21" strokeWidth="1" />
+    {/* Ground shadow */}
+    <ellipse cx="32" cy="60" rx="26" ry="2.5" fill="rgba(0,0,0,0.25)" />
+
+    {/* Roof banner — small gold pennant on a pole */}
+    <line x1="32" y1="12" x2="32" y2="4" stroke="#5C3A21" strokeWidth="1.6" strokeLinecap="round" />
+    <path d="M32 4 L41 6.5 L32 9 Z" fill="#FFD700" stroke="#3d1f00" strokeWidth="1.2" strokeLinejoin="round" />
+
+    {/* Building body */}
+    <rect x="6" y="20" width="52" height="38" fill="#e6c894" stroke="#5C3A21" strokeWidth="2.5" />
+    {/* Wooden floorboards hint */}
+    <line x1="6" y1="52" x2="58" y2="52" stroke="#5C3A21" strokeWidth="1.2" opacity="0.5" />
+
+    {/* Striped awning — red + cream alternating */}
+    <path d="M3 20 L61 20 L55 11 L9 11 Z" fill="#d72b1c" stroke="#5a0d05" strokeWidth="2" strokeLinejoin="round" />
+    <path d="M16 20 L19 11" stroke="#fff2c2" strokeWidth="3" />
+    <path d="M27 20 L29 11" stroke="#fff2c2" strokeWidth="3" />
+    <path d="M37 20 L36 11" stroke="#fff2c2" strokeWidth="3" />
+    <path d="M48 20 L46 11" stroke="#fff2c2" strokeWidth="3" />
+    {/* Awning scalloped bottom edge */}
+    <path d="M3 20 Q 9 24 15 20 T 27 20 T 39 20 T 51 20 T 61 20"
+          fill="none" stroke="#5a0d05" strokeWidth="1.5" strokeLinejoin="round" />
+
+    {/* Arched door, centered */}
+    <path d="M26 58 L26 41 Q26 35 32 35 Q38 35 38 41 L38 58 Z"
+          fill="#8b5a2b" stroke="#3d1f00" strokeWidth="2" strokeLinejoin="round" />
+    <circle cx="35" cy="47" r="1.3" fill="#FFD700" stroke="#3d1f00" strokeWidth="0.6" />
+
+    {/* Left window — coin on display */}
+    <rect x="9" y="27" width="13" height="10" fill="#a8d0e8" stroke="#3d1f00" strokeWidth="1.5" />
+    <line x1="15.5" y1="27" x2="15.5" y2="37" stroke="#3d1f00" strokeWidth="1" opacity="0.6" />
+    <circle cx="15.5" cy="32" r="3" fill="#FFD700" stroke="#3d1f00" strokeWidth="1" />
+
+    {/* Right window — gem on display (echoes the NFT theme) */}
+    <rect x="42" y="27" width="13" height="10" fill="#a8d0e8" stroke="#3d1f00" strokeWidth="1.5" />
+    <line x1="48.5" y1="27" x2="48.5" y2="37" stroke="#3d1f00" strokeWidth="1" opacity="0.6" />
+    <path d="M48.5 28 L52 32 L48.5 36 L45 32 Z" fill="#d72b9c" stroke="#5a0d4a" strokeWidth="1" strokeLinejoin="round" />
   </svg>
 );
 
@@ -834,31 +855,37 @@ const hud = {
   },
   timerPill: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
-    border: '2px solid rgba(40,130,195,0.55)',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '2px solid #9f8759',
     borderRadius: 10,
     fontSize: 20, fontWeight: 900,
     letterSpacing: 0,
-    textShadow: '0 0 8px rgba(60,220,255,0.5)',
+    color: '#5C3A21',
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.5)',
+    fontVariantNumeric: 'tabular-nums',
   },
   homeBtn: {
     width: 56, height: 56,
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
-    border: '2px solid rgba(40,130,195,0.55)',
+    background: 'linear-gradient(180deg, #E53935 0%, #b71c1c 100%)',
+    border: '3px solid #7f0000',
     borderRadius: 14,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0,
     transition: 'filter 0.15s',
     outline: 'none',
+    color: '#fff',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.25)',
   },
   replayBadge: {
     padding: '8px 16px',
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
-    border: '2px solid rgba(40,130,195,0.55)',
+    background: 'linear-gradient(180deg, #ffd76a 0%, #c2851b 100%)',
+    border: '2px solid #5C3A21',
     borderRadius: 10,
-    color: '#7df4ff', fontSize: 14, fontWeight: 900,
+    color: '#3a1f00', fontSize: 14, fontWeight: 900,
     letterSpacing: '1px',
-    textShadow: '0 0 8px rgba(60,220,255,0.5)',
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   replayBadgeMobile: {
     padding: '7px 9px',
@@ -879,11 +906,11 @@ const hud = {
     pointerEvents: 'none',
     minWidth: 128,
     padding: '8px 16px 10px',
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.86), rgba(8,30,58,0.94))',
-    border: '2px solid rgba(125,244,255,0.45)',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '3px solid #9f8759',
     borderRadius: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)',
-    color: '#f7fbff',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.55)',
+    color: '#5C3A21',
     textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -898,19 +925,21 @@ const hud = {
     zIndex: 101,
   },
   replayCountdownLabel: {
-    color: 'rgba(190,235,255,0.84)',
+    color: '#8b6b3f',
     fontSize: 10,
     fontWeight: 900,
-    letterSpacing: 0,
+    letterSpacing: 0.5,
     lineHeight: 1.1,
     marginBottom: 4,
+    textTransform: 'uppercase',
   },
   replayCountdownTime: {
-    color: '#ffffff',
+    color: '#5C3A21',
     fontSize: 30,
     fontWeight: 900,
     lineHeight: 1,
-    textShadow: '0 2px 0 rgba(0,0,0,0.55), 0 0 10px rgba(125,244,255,0.42)',
+    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
+    fontVariantNumeric: 'tabular-nums',
   },
   liveBattleWrap: {
     position: 'fixed',
@@ -921,11 +950,11 @@ const hud = {
     pointerEvents: 'none',
     minWidth: 156,
     padding: '8px 18px 10px',
-    background: 'linear-gradient(180deg, rgba(11,75,70,0.92), rgba(7,38,58,0.96))',
-    border: '2px solid rgba(88,255,218,0.48)',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '3px solid #c2851b',
     borderRadius: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.14)',
-    color: '#f7fbff',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.55)',
+    color: '#5C3A21',
     textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
@@ -940,30 +969,31 @@ const hud = {
     zIndex: 101,
   },
   liveBattleKicker: {
-    color: '#8effe7',
+    color: '#1B5E20',
     fontSize: 10,
     fontWeight: 950,
-    letterSpacing: 0,
+    letterSpacing: 0.5,
     lineHeight: 1.1,
     marginBottom: 3,
-    textShadow: '0 0 8px rgba(88,255,218,0.55)',
+    textTransform: 'uppercase',
   },
   liveBattleTitle: {
-    color: '#ffffff',
+    color: '#5C3A21',
     fontSize: 20,
     fontWeight: 950,
     lineHeight: 1,
-    textShadow: '0 2px 0 rgba(0,0,0,0.55), 0 0 10px rgba(88,255,218,0.42)',
+    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
   },
   speedBtn: {
     width: 56, height: 56,
-    background: 'linear-gradient(180deg, rgba(15,55,95,0.9), rgba(8,30,58,0.95))',
-    border: '2px solid rgba(40,130,195,0.55)',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '2px solid #9f8759',
     borderRadius: 14,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     cursor: 'pointer', flexShrink: 0,
     transition: 'filter 0.15s',
     outline: 'none',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   replayControlMobile: {
     width: 48,
@@ -971,12 +1001,12 @@ const hud = {
     borderRadius: 12,
   },
   speedText: {
-    color: '#7df4ff', fontSize: 18, fontWeight: 900,
-    textShadow: '0 0 8px rgba(60,220,255,0.5)',
+    color: '#5C3A21', fontSize: 18, fontWeight: 900,
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
   sep: {
     width: 2, height: 68,
-    background: 'linear-gradient(180deg, transparent, rgba(40,140,200,0.4), transparent)',
+    background: 'linear-gradient(180deg, transparent, #9f8759, transparent)',
     borderRadius: 1, flexShrink: 0,
   },
   troopRow: {
@@ -985,10 +1015,10 @@ const hud = {
   card: {
     position: 'relative',
     width: 74, height: 88,
-    background: 'linear-gradient(180deg, rgba(12,45,80,0.94), rgba(6,24,48,0.97))',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
     borderWidth: 2,
     borderStyle: 'solid',
-    borderColor: 'rgba(35,120,185,0.55)',
+    borderColor: '#9f8759',
     borderRadius: 14,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'flex-start',
@@ -996,6 +1026,7 @@ const hud = {
     overflow: 'hidden',
     transition: 'opacity 0.25s, border-color 0.2s, box-shadow 0.2s',
     outline: 'none',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.45)',
   },
   cardImgWrap: {
     width: 64, height: 62,
@@ -1005,30 +1036,31 @@ const hud = {
   },
   countBadge: {
     position: 'absolute', bottom: 19, right: 3,
-    background: 'rgba(0,10,25,0.82)',
-    border: '1px solid rgba(40,140,200,0.3)',
+    background: '#5C3A21',
+    border: '1px solid #3d1f00',
     borderRadius: 6, padding: '1px 5px',
   },
   countText: {
-    color: '#7df4ff', fontSize: 12, fontWeight: 900,
-    textShadow: '-0.5px -0.5px 0 #003050, 0.5px -0.5px 0 #003050, -0.5px 0.5px 0 #003050, 0.5px 0.5px 0 #003050', lineHeight: 1.2,
+    color: '#fff7df', fontSize: 12, fontWeight: 900,
+    lineHeight: 1.2,
   },
   selArrow: {
     position: 'absolute', bottom: 19, left: 4,
-    color: '#7df4ff', fontSize: 9, lineHeight: 1,
-    textShadow: '0 0 6px rgba(60,220,255,0.9)',
+    color: '#c2851b', fontSize: 9, lineHeight: 1,
+    textShadow: '0 0 6px rgba(194,133,27,0.7)',
   },
   shipModal: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+    position: 'fixed', inset: 0, background: 'rgba(20,12,4,0.6)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     zIndex: 200, pointerEvents: 'all',
   },
   shipModalPanel: {
-    background: 'linear-gradient(180deg, #1a2a3e 0%, #0d1926 100%)',
-    border: '2px solid rgba(40,140,200,0.4)', borderRadius: 16,
+    background: '#fdf8e7',
+    border: '6px solid #d4c8b0', borderRadius: 18,
     padding: '16px 20px', maxWidth: 320, width: 'calc(100% - 32px)',
     display: 'flex', flexDirection: 'column', alignItems: 'center',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.6)',
+    boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+    color: '#5C3A21',
   },
   cardLabel: {
     fontSize: 9, fontWeight: 700,
@@ -1039,16 +1071,17 @@ const hud = {
   cannonBtn: {
     width: 82, height: 82,
     position: 'relative',
-    background: 'linear-gradient(180deg, rgba(12,45,80,0.94), rgba(6,24,48,0.97))',
-    borderWidth: 2,
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    borderWidth: 3,
     borderStyle: 'solid',
-    borderColor: 'rgba(35,120,185,0.55)',
+    borderColor: '#9f8759',
     borderRadius: 18,
     display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: 4,
     cursor: 'pointer', flexShrink: 0,
     transition: 'border-color 0.2s, box-shadow 0.2s, filter 0.2s',
     outline: 'none',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   cannonActive: {
     borderColor: 'rgba(255,155,0,0.88)',
@@ -1069,9 +1102,9 @@ const hud = {
     cursor: 'default',
   },
   cannonLabel: {
-    color: '#7df4ff', fontSize: 10, fontWeight: 900,
-    textShadow: '-0.5px -0.5px 0 #003050, 0.5px -0.5px 0 #003050, -0.5px 0.5px 0 #003050, 0.5px 0.5px 0 #003050',
+    color: '#5C3A21', fontSize: 10, fontWeight: 900,
     textTransform: 'uppercase', letterSpacing: '0.5px', lineHeight: 1,
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
   cannonCostBadge: {
     position: 'absolute',
@@ -1080,10 +1113,10 @@ const hud = {
     display: 'flex',
     alignItems: 'center',
     gap: 2,
-    color: '#fff',
+    color: '#3a1f00',
     fontSize: 14,
     fontWeight: 900,
-    textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
   },
   cannonCostIcon: {
     background: '#d64817',
@@ -1098,12 +1131,12 @@ const hud = {
     display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8,
   },
   energyPill: {
-    background: 'linear-gradient(180deg, #3a3a3a 0%, #1e1e1e 100%)',
-    border: '2px solid #111',
-    borderRadius: 8,
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
+    border: '2px solid #9f8759',
+    borderRadius: 10,
     padding: '6px 12px',
     display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8,
-    boxShadow: '0 4px 8px rgba(0,0,0,0.6)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   energyIcon: {
     fontSize: 16, lineHeight: 1,
@@ -1115,8 +1148,8 @@ const hud = {
     color: '#fff',
   },
   energyValue: {
-    fontSize: 22, fontWeight: 900, color: '#fff',
-    textShadow: '0 2px 4px rgba(0,0,0,0.8)',
+    fontSize: 22, fontWeight: 900, color: '#5C3A21',
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
 };
 

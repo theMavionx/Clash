@@ -9,6 +9,7 @@ import { useDecibel } from '../hooks/useDecibel';
 import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
+import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -910,6 +911,11 @@ function FuturesPanel() {
   const { setVisible: openWalletModal } = useWalletModal();
   const { isInFrame: inFrame } = useFarcaster();
   const { dex } = useDex();
+  const evmConnectChain = dex === 'gmx' || dex === 'hyperliquid'
+    ? 'arbitrum'
+    : dex === 'monad'
+    ? 'monad'
+    : 'base';
   const { enabled: privyEnabled, ready: privyReady, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
   // entry — we use that to gate the trading UI behind the selection screen.
@@ -934,6 +940,7 @@ function FuturesPanel() {
   const gmxHook = useGmx();
   const monadHook = useMonad();
   const phoenixHook = usePhoenix();
+  const hyperliquidHook = useHyperliquid();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -948,15 +955,17 @@ function FuturesPanel() {
     ? monadHook
     : dex === 'phoenix'
     ? phoenixHook
+    : dex === 'hyperliquid'
+    ? hyperliquidHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
     connected: tradingConnected,
-    loading, error, clearError, goldEarned, clearGoldEarned,
+    loading, error, clearError, goldEarned, clearGoldEarned, depositStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
-    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode,
+    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp,
     // Avantis-only — undefined on the Pacifica branch.
-    hasReferrer, linkOurReferrer, connectPerpl, walletMismatch, registeredEvmWallet,
+    hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
     pacAgent, bindAgent, bindingAgent, bindAgentError,
     // Decibel-only — drives the blocking activation modal + gate screen.
@@ -1049,8 +1058,8 @@ function FuturesPanel() {
   // key meant: dismiss on wallet A → banner never reappears when user
   // switches to wallet B (unlinked). Each wallet gets its own dismissal.
   const referralDismissKey = useMemo(
-    () => walletAddr ? `clash_avantis_ref_dismissed:${String(walletAddr).toLowerCase()}` : null,
-    [walletAddr]
+    () => walletAddr ? `clash_${dex}_ref_dismissed:${String(walletAddr).toLowerCase()}` : null,
+    [dex, walletAddr]
   );
   const [referralDismissed, setReferralDismissed] = useState(false);
   // Load dismissal state for the CURRENT wallet. Resets when wallet changes
@@ -1081,7 +1090,7 @@ function FuturesPanel() {
   // can stay false after a partial activation. Keep the banner for
   // Avantis only.
   const showReferralBanner =
-    dex === 'avantis'
+    (dex === 'avantis' || dex === 'hyperliquid')
     && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
@@ -1096,7 +1105,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -1127,6 +1136,26 @@ function FuturesPanel() {
     setSuccessMsg(null);
     if (error && clearError) clearError();
   }, [clearError, error]);
+  const handleToggleOneTapTrading = useCallback(async () => {
+    if (dex !== 'hyperliquid') return;
+    if (oneTapTrading?.enabled) {
+      if (typeof setOneTapTradingEnabled === 'function') setOneTapTradingEnabled(false);
+      setLocalAlert('One tap trading disabled. Opening a Hyperliquid order will ask to enable it again.');
+      return;
+    }
+    if (!linkOurReferrer || referralLinking) {
+      if (typeof setOneTapTradingEnabled === 'function') setOneTapTradingEnabled(true);
+      return;
+    }
+    setReferralLinking(true);
+    try {
+      const result = await linkOurReferrer();
+      if (result?.error) setLocalAlert(result.error);
+      else setLocalAlert('One tap trading enabled.');
+    } finally {
+      setReferralLinking(false);
+    }
+  }, [dex, oneTapTrading?.enabled, setOneTapTradingEnabled, linkOurReferrer, referralLinking]);
   // Pending-tx state for LONG/SHORT buttons so the user sees "Signing…" then
   // "Confirming…" instead of bare ellipsis.
   const [tradePhase, setTradePhase] = useState(null); // 'signing' | 'confirming' | null
@@ -1278,7 +1307,12 @@ function FuturesPanel() {
   // unified margin) and use `account_equity` for the displayed value.
   //   Decibel  → `usdc_cross_withdrawable_balance` (free margin, REST)
   //   Avantis  → `usdcAvailable` / `usdc` (wallet USDC, no unified margin)
-  const pacBalance = Math.max(0, parseFloat(
+  const hlSpotAvailable = dex === 'hyperliquid'
+    ? Math.max(0, Number(account?.spot_usdc_available ?? account?.spot_usdc_balance ?? 0))
+    : 0;
+  const hlUnifiedAccount = dex === 'hyperliquid'
+    && (account?.abstraction_mode === 'unifiedAccount' || account?.abstraction_mode === 'portfolioMargin' || account?.is_unified_account === true);
+  const pacBalanceBase = Math.max(0, parseFloat(
     account?.available_to_spend            // Pacifica unified margin (preferred)
       ?? account?.usdc_cross_withdrawable_balance // Decibel
       ?? account?.usdcAvailable                   // Avantis variant
@@ -1286,11 +1320,12 @@ function FuturesPanel() {
       ?? account?.balance                         // last-resort
       ?? 0
   ));
+  const pacBalance = dex === 'hyperliquid' ? pacBalanceBase + (hlUnifiedAccount ? 0 : hlSpotAvailable) : pacBalanceBase;
   // Mark-to-market portfolio value. Used for the displayed "balance" number
   // and the no-funds deposit CTA gate so a losing trade doesn't make the UI
   // claim the account has $0 (and pop the deposit prompt) when the position
   // still has equity.
-  const pacAccountValue = Math.max(0, parseFloat(
+  const pacAccountValueBase = Math.max(0, parseFloat(
     account?.account_equity                // Pacifica unified
       ?? account?.perp_equity_balance      // Decibel
       ?? account?.usdc                     // GMX (acts as equity for cross-margin spec)
@@ -1298,6 +1333,7 @@ function FuturesPanel() {
       ?? account?.balance                  // last-resort
       ?? 0
   ));
+  const pacAccountValue = dex === 'hyperliquid' ? pacAccountValueBase + (hlUnifiedAccount ? 0 : hlSpotAvailable) : pacAccountValueBase;
   const currentMarket = useMemo(() => markets.find(m => m.symbol === symbol), [markets, symbol]);
   const fr = currentMarket ? parseFloat(currentMarket.funding_rate || 0) : 0;
   // Avantis doesn't have a signed funding rate — the number here is the
@@ -1443,7 +1479,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -1481,7 +1517,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -1652,7 +1688,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -1665,10 +1701,12 @@ function FuturesPanel() {
                 ? 'Perpl uses isolated margin per position in this integration'
                 : dex === 'phoenix'
                 ? 'Phoenix new orders use cross margin; existing isolated subaccounts are shown on positions'
+                : dex === 'hyperliquid'
+                ? 'Hyperliquid uses cross margin in your Hyperliquid account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {(dex === 'decibel' || dex === 'phoenix') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -1987,7 +2025,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -2012,7 +2050,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -2029,6 +2067,7 @@ function FuturesPanel() {
           open={evmModalOpen}
           onClose={() => setEvmModalOpen(false)}
           onConnected={handleEvmConnected}
+          targetChain={evmConnectChain}
         />
       </>
     );
@@ -2228,6 +2267,47 @@ function FuturesPanel() {
                   <span>PERPL · MONAD MAINNET</span>
                 </div>
               </>
+            ) : dex === 'hyperliquid' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #22C55E 0%, #047857 100%)',
+                  border: '4px solid #059669',
+                  boxShadow: '0 5px 0 #047857, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.hyperliquid.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your EVM wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Hyperliquid trades are signed by your wallet. Deposit USDC to Hyperliquid first, then trade here.
+                </div>
+                <button
+                  style={{...cartoonBtn('#22C55E', '#047857'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#047857', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>HYPERLIQUID</span>
+                </div>
+              </>
             ) : dex === 'phoenix' ? (
               <>
                 <div style={{
@@ -2310,6 +2390,7 @@ function FuturesPanel() {
           open={evmModalOpen}
           onClose={() => setEvmModalOpen(false)}
           onConnected={handleEvmConnected}
+          targetChain={evmConnectChain}
         />
       </>
     );
@@ -3358,6 +3439,14 @@ function FuturesPanel() {
       available = parseFloat(account?.available_to_withdraw || 0);
       marginUsed = parseFloat(account?.total_margin_used || 0);
     }
+    const hyperliquidSpot = dex === 'hyperliquid'
+      ? Math.max(0, Number(account?.spot_usdc_balance ?? 0))
+      : 0;
+    const hyperliquidSpotFree = dex === 'hyperliquid'
+      ? Math.max(0, Number(account?.spot_usdc_available ?? account?.spot_usdc_balance ?? 0))
+      : 0;
+    const hyperliquidUnified = dex === 'hyperliquid'
+      && (account?.abstraction_mode === 'unifiedAccount' || account?.abstraction_mode === 'portfolioMargin' || account?.is_unified_account === true);
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -3404,12 +3493,23 @@ function FuturesPanel() {
         {/* Wallet USDC */}
         <div style={S.fullCard}>
           <div style={S.row}>
-            <span style={S.label}>Wallet USDC</span>
+            <span style={S.label}>{dex === 'hyperliquid' ? 'Arbitrum Wallet USDC' : 'Wallet USDC'}</span>
             <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
               ${walletUsdc !== null ? walletUsdc.toFixed(2) : '—'}
             </span>
           </div>
         </div>
+
+        {dex === 'hyperliquid' && hyperliquidSpot > 0.000001 && (
+          <div style={S.fullCard}>
+            <div style={S.row}>
+              <span style={S.label}>{hyperliquidUnified ? 'Hyperliquid USDC' : 'Legacy Spot USDC'}</span>
+              <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
+                ${hyperliquidSpot.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Pacifica unified-margin balances. "Equity" is the portfolio's
             mark-to-market value (always >= 0 unless margin call). "Free
@@ -3417,11 +3517,11 @@ function FuturesPanel() {
             equity once margin gets locked in open positions. */}
         <div style={{display: 'flex', gap: 8}}>
           <div style={S.balCard}>
-            <span style={S.balCardLabel}>Equity</span>
+            <span style={S.balCardLabel}>{dex === 'hyperliquid' ? 'Account Value' : 'Equity'}</span>
             <span style={S.balCardValue}>${equity.toFixed(2)}</span>
           </div>
           <div style={S.balCard}>
-            <span style={S.balCardLabel}>Free Margin</span>
+            <span style={S.balCardLabel}>{dex === 'hyperliquid' ? 'Available' : 'Free Margin'}</span>
             <span style={S.balCardValue}>${pacBalance.toFixed(2)}</span>
           </div>
         </div>
@@ -3440,21 +3540,32 @@ function FuturesPanel() {
             read-only info card that explains funds live in the user's own
             wallet. Per-DEX accent colour + chain copy keeps the brand
             consistent (Avantis blue / Base, GMX purple / Arbitrum). */}
-        {(dex === 'avantis' || dex === 'gmx') ? (() => {
+        {(dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') ? (() => {
           const isGmx = dex === 'gmx';
-          const accentLight = isGmx ? '#4F46E5' : '#0EA5E9';
-          const accentDark = isGmx ? '#3730A3' : '#0369A1';
-          const accentBg = isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
-          const accentBorder = isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
-          const accentBtnBorder = isGmx ? '#4338CA' : '#0284C7';
-          const chainName = isGmx ? 'Arbitrum' : 'Base';
+          const isHyperliquid = dex === 'hyperliquid';
+          const accentLight = isHyperliquid ? '#16A34A' : isGmx ? '#4F46E5' : '#0EA5E9';
+          const accentDark = isHyperliquid ? '#166534' : isGmx ? '#3730A3' : '#0369A1';
+          const accentBg = isHyperliquid ? 'rgba(22,163,74,0.08)' : isGmx ? 'rgba(79,70,229,0.08)' : 'rgba(14,165,233,0.08)';
+          const accentBorder = isHyperliquid ? 'rgba(22,163,74,0.35)' : isGmx ? 'rgba(79,70,229,0.35)' : 'rgba(14,165,233,0.35)';
+          const accentBtnBorder = isHyperliquid ? '#15803D' : isGmx ? '#4338CA' : '#0284C7';
+          const chainName = isHyperliquid ? 'Arbitrum' : isGmx ? 'Arbitrum' : 'Base';
+          const isDepositing = isHyperliquid && depositStatus?.status === 'depositing';
+          const isMovingToPerp = isHyperliquid && depositStatus?.status === 'moving_to_perp';
+          const isFundingBusy = isDepositing || isMovingToPerp;
+          const pendingDepositAmount = Number(depositStatus?.amount);
+          const pendingDepositLabel = Number.isFinite(pendingDepositAmount)
+            ? pendingDepositAmount.toFixed(2)
+            : String(depositStatus?.amount || '');
           return (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: accentLight}}>Self-custody wallet</span>
-              {walletUsdc !== null && <span style={S.detail}>USDC: ${walletUsdc.toFixed(2)}</span>}
+              <span style={{...S.label, color: accentLight}}>{isHyperliquid ? 'Hyperliquid funding' : 'Self-custody wallet'}</span>
+              {isFundingBusy
+                ? <span style={{...S.detail, color: '#15803D'}}>{isMovingToPerp ? 'Moving to trading' : 'Depositing'}{pendingDepositLabel ? ` ${pendingDepositLabel} USDC` : ''}...</span>
+                : walletUsdc !== null && <span style={S.detail}>{isHyperliquid ? 'Arbitrum ' : ''}USDC: ${walletUsdc.toFixed(2)}</span>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+              {!isHyperliquid && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 6,
                 background: accentBg,
@@ -3476,8 +3587,105 @@ function FuturesPanel() {
                   >COPY</button>
                 )}
               </div>
+              )}
+              {isHyperliquid && (
+                <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+                  <input
+                    type="number"
+                    placeholder="Min 5 USDC"
+                    value={depositAmt}
+                    onChange={e => setDepositAmt(e.target.value)}
+                    style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}}
+                  />
+                  <button
+                    style={{
+                      ...S.depositBtn,
+                      flex: isFundingBusy ? '0 0 118px' : 1.4,
+                      whiteSpace: 'nowrap',
+                      padding: '8px 4px',
+                      fontSize: isFundingBusy ? 11 : undefined,
+                    }}
+                    onClick={async () => {
+                      const v = parseFloat(depositAmt);
+                      if (!Number.isFinite(v) || v < 5) {
+                        setLocalAlert('Min deposit 5 USDC');
+                        return;
+                      }
+                      if (walletUsdc !== null && v > walletUsdc) {
+                        setLocalAlert(`Wallet has ${walletUsdc.toFixed(2)} USDC on Arbitrum`);
+                        return;
+                      }
+                      const r = await depositToPacifica(depositAmt);
+                      if (!r?.error) {
+                        setDepositAmt('');
+                        setLocalAlert(r?.info || 'Deposit sent. Hyperliquid credits it shortly.');
+                      }
+                    }}
+                    disabled={loading || isFundingBusy}
+                  >
+                    {isMovingToPerp ? 'Moving...' : isDepositing ? 'Depositing...' : loading ? '...' : 'Deposit'}
+                  </button>
+                </div>
+              )}
+              {isHyperliquid && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  background: oneTapTrading?.enabled ? 'rgba(22,163,74,0.10)' : 'rgba(92,58,33,0.06)',
+                  border: `1px solid ${oneTapTrading?.enabled ? 'rgba(22,163,74,0.35)' : 'rgba(92,58,33,0.18)'}`,
+                  borderRadius: 8,
+                  padding: '7px 9px',
+                }}>
+                  <span style={{fontSize: 11, fontWeight: 900, color: oneTapTrading?.enabled ? '#166534' : '#5C3A21'}}>
+                    One tap trading
+                    {oneTapTrading?.enabled && oneTapTrading?.approved === false ? ' pending' : ''}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleToggleOneTapTrading}
+                    disabled={referralLinking}
+                    style={{
+                      ...S.btnSmall,
+                      minWidth: 72,
+                      padding: '5px 10px',
+                      background: oneTapTrading?.enabled ? '#16A34A' : '#fff6dc',
+                      color: oneTapTrading?.enabled ? '#fff' : '#5C3A21',
+                      border: `2px solid ${oneTapTrading?.enabled ? '#15803D' : '#b58b2a'}`,
+                      opacity: referralLinking ? 0.7 : 1,
+                    }}
+                  >
+                    {referralLinking ? '...' : oneTapTrading?.enabled ? 'ON' : 'ENABLE'}
+                  </button>
+                </div>
+              )}
+              {isHyperliquid && !hyperliquidUnified && hyperliquidSpotFree > 0.000001 && (
+                <button
+                  style={{
+                    ...S.btnSmall,
+                    width: '100%',
+                    background: '#16A34A',
+                    color: '#fff',
+                    border: '2px solid #15803D',
+                    opacity: isFundingBusy ? 0.65 : 1,
+                  }}
+                  onClick={async () => {
+                    const amountText = hyperliquidSpotFree.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
+                    const r = await moveSpotToPerp?.(amountText);
+                    if (!r?.error) setLocalAlert(r?.info || 'Moved USDC to trading balance.');
+                  }}
+                  disabled={loading || isFundingBusy || !moveSpotToPerp}
+                >
+                  Move legacy ${hyperliquidSpotFree.toFixed(2)} to Trading
+                </button>
+              )}
               <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700, lineHeight: 1.35}}>
-                Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.
+                {isHyperliquid
+                  ? hyperliquidUnified
+                    ? <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Unified account is active, so credited USDC is already available for trading. Minimum is <b>5 USDC</b>.</>
+                    : <>{isFundingBusy ? 'Waiting for Hyperliquid to finish funding. ' : ''}Sends native <b>USDC on {chainName}</b> to Hyperliquid Bridge2. Legacy accounts may need one extra move from Spot into the trading balance. Minimum is <b>5 USDC</b>.</>
+                  : <>Funds stay in YOUR wallet. Each trade prompts a signature. Make sure you have <b>USDC</b> + a small <b>ETH</b> gas float on <b>{chainName}</b>.</>}
               </span>
             </div>
           </div>
@@ -3525,7 +3733,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && (dex === 'decibel' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
@@ -3550,6 +3758,17 @@ function FuturesPanel() {
                 {loading ? '...' : (available <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
+            <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
+              {dex === 'hyperliquid'
+                ? 'Requests a Hyperliquid withdrawal to your connected Arbitrum address. Arrival usually takes a few minutes.'
+                : dex === 'decibel'
+                ? 'Withdraws from your Decibel trading subaccount back to your Aptos wallet.'
+                : dex === 'monad'
+                ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
+                : dex === 'phoenix'
+                ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
+                : 'Withdraws USDC from Pacifica back to your wallet.'}
+            </span>
           </div>
         )}
 
@@ -3723,10 +3942,14 @@ function FuturesPanel() {
               <span style={{display: 'block'}}>
                 {dex === 'decibel'
                   ? 'Activate trading on Decibel'
+                  : dex === 'hyperliquid'
+                  ? (oneTapTrading?.approved ? 'One tap trading is ready' : 'Enable Hyperliquid one tap trading')
                   : 'Unlock 5% off every Avantis trade'}
               </span>
               <span style={{fontSize: 10, fontWeight: 700, color: '#8a6914'}}>
-                {dex === 'decibel'
+                {dex === 'hyperliquid'
+                  ? 'Optional: one Arbitrum signature approves a local agent so future orders do not hit wallet chainId errors.'
+                  : dex === 'decibel'
                   ? 'One Petra signature — sets up an api wallet so trades sign silently.'
                   : 'One signature — links your wallet to our referral code.'}
               </span>
@@ -3745,7 +3968,7 @@ function FuturesPanel() {
                 whiteSpace: 'nowrap',
               }}
             >
-              {referralLinking ? 'SIGNING…' : (dex === 'decibel' ? 'ACTIVATE' : 'UNLOCK')}
+              {referralLinking ? 'SIGNING...' : (dex === 'decibel' ? 'ACTIVATE' : dex === 'hyperliquid' ? 'ENABLE' : 'UNLOCK')}
             </button>
             <button
               data-nodrag
@@ -3826,6 +4049,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.phoenix.colorDark }}>
                 Phoenix
+              </span>
+            </>
+          ) : dex === 'hyperliquid' ? (
+            <>
+              <img
+                src={DEX_CONFIG.hyperliquid.logo}
+                alt="Hyperliquid"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hyperliquid.colorDark }}>
+                Hyperliquid
               </span>
             </>
           ) : (

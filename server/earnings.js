@@ -345,6 +345,47 @@ async function fetchPerplEarnings() {
   };
 }
 
+const HYPERLIQUID_BUILDER_ADDRESS = (process.env.HYPERLIQUID_BUILDER_ADDRESS || '').trim();
+const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 100) || 100;
+
+async function fetchHyperliquidEarnings() {
+  const Db = loadSqlite();
+  let volume = 0;
+  let trades = 0;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    const fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    try {
+      const r = fdb.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
+        FROM trade_history
+        WHERE dex = 'hyperliquid' AND status = 'filled'
+          AND verified_source = 'hyperliquid_api'
+      `).get();
+      volume = Number(r?.vol) || 0;
+      trades = Number(r?.n) || 0;
+    } finally {
+      fdb.close();
+    }
+  }
+
+  const feeBps = Math.max(0, Math.min(100, HYPERLIQUID_BUILDER_FEE_TENTH_BPS)) / 10;
+  const earned = volume * (feeBps / 10000);
+  return {
+    earned_usd: earned,
+    address: HYPERLIQUID_BUILDER_ADDRESS || null,
+    currency: 'USDC (Hyperliquid)',
+    volume_usd: volume,
+    trades,
+    rebate_pct: feeBps / 100,
+    fee_per_side_pct: feeBps / 100,
+    note: HYPERLIQUID_BUILDER_ADDRESS
+      ? `Modelled: volume x ${feeBps}bps builder fee from verified Hyperliquid fills.`
+      : 'Builder address not configured yet. Volume is indexed, but builder fee attribution is off until HYPERLIQUID_BUILDER_ADDRESS is set.',
+    source_detail: 'volume_x_builder_fee',
+  };
+}
+
 const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
@@ -354,12 +395,13 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, mon] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, mon, hl] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
     fetchGmxEarnings(),
     fetchPerplEarnings(),
+    fetchHyperliquidEarnings(),
   ]);
   const wrap = (label, r) => r.status === 'fulfilled'
     ? { ok: true, ...r.value }
@@ -371,9 +413,10 @@ async function fetchAllEarnings({ force = false } = {}) {
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_volume_x_builder_fee' },
+    hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_volume_x_builder_fee' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','monad'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','monad','hyperliquid'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

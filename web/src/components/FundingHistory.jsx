@@ -161,6 +161,10 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
           if (!cancelled) setPayments(rows.map(normalizePhoenixFunding).filter(p => p.symbol));
           return;
         }
+        if (dex === 'hyperliquid') {
+          if (!cancelled) setPayments([]);
+          return;
+        }
 
         const r = await fetch(`${PACIFICA_API}/funding/history?account=${addr}`, {
           signal: controller.signal,
@@ -217,7 +221,7 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}funding payments</div>;
   }
 

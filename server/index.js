@@ -542,6 +542,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="gmx">GMX</option>
               <option value="monad">Perpl</option>
               <option value="phoenix">Phoenix</option>
+              <option value="hyperliquid">Hyperliquid</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
@@ -828,6 +829,7 @@ function renderPlayers() {
   const gmxCount   = players.filter(p => p.dex === 'gmx').length;
   const monCount   = players.filter(p => p.dex === 'monad').length;
   const phxCount   = players.filter(p => p.dex === 'phoenix').length;
+  const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -845,6 +847,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#4f46e5"><div class="v" style="color:#a5b4fc;font-size:22px">' + gmxCount + '</div><div class="l">GMX</div></div>' +
     '<div class="stat" style="border-color:#8b5cf6"><div class="v" style="color:#c4b5fd;font-size:22px">' + monCount + '</div><div class="l">Perpl</div></div>' +
     '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + phxCount + '</div><div class="l">Phoenix</div></div>' +
+    '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -858,6 +861,7 @@ function renderPlayers() {
     if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
     if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
     if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
+    if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -1069,7 +1073,9 @@ function clientDexBadge(dex) {
     : d === 'avantis' ? '#38bdf8'
     : d === 'decibel' ? '#facc15'
     : d === 'gmx' ? '#a5b4fc'
+    : d === 'monad' ? '#c4b5fd'
     : d === 'phoenix' ? '#fb923c'
+    : d === 'hyperliquid' ? '#86efac'
     : '#9ca3af';
   return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
 }
@@ -1314,6 +1320,7 @@ async function loadStats() {
     const gmxCount = (byDex.find(x => x.dex === 'gmx')      || {}).n || 0;
     const monCount = (byDex.find(x => x.dex === 'monad')    || {}).n || 0;
     const phxCount = (byDex.find(x => x.dex === 'phoenix')  || {}).n || 0;
+    const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -1321,6 +1328,7 @@ async function loadStats() {
     const gmxRew = rewardsMap.gmx      || {};
     const monRew = rewardsMap.monad    || {};
     const phxRew = rewardsMap.phoenix  || {};
+    const hplRew = rewardsMap.hyperliquid || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -1328,6 +1336,7 @@ async function loadStats() {
       dexCard('gmx',      'GMX · Arbitrum',    '#4f46e5', gmxCount, gmxRew.total_gold || 0, gmxRew.total_volume || 0, activityLines('gmx')) +
       dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
       dexCard('monad',    'Perpl / Monad',     '#8b5cf6', monCount, monRew.total_gold || 0, monRew.total_volume || 0, activityLines('monad')) +
+      dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
@@ -1383,6 +1392,7 @@ async function loadStats() {
       topTraderTable('decibel', 'Decibel · Aptos', '#facc15') +
       topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5') +
       topTraderTable('monad',   'Perpl / Monad',   '#8b5cf6') +
+      topTraderTable('hyperliquid', 'Hyperliquid', '#16a34a') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316');
 
     function dexBadge(d) {
@@ -1392,6 +1402,7 @@ async function loadStats() {
       if (d === 'gmx')      return '<span class="badge" style="background:#312e81;color:#c7d2fe">GMX</span>';
       if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
       if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
+      if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -1876,6 +1887,7 @@ async function loadEarnings(force) {
       ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
       ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
+      ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =

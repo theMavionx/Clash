@@ -65,6 +65,7 @@ function DexPicker({ onPick, isInFrame }) {
                 {cfg.chain} · {
                   cfg.id === 'avantis' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
+                  cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -206,16 +207,18 @@ function ConnectPacifica({ onOpenWalletModal, onPrivyLogin, privyEnabled, privyA
 }
 
 function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthed, dex = 'avantis' }) {
-  // Avantis (Base), GMX (Arbitrum), and Perpl (Monad) all flow through the
+  // Avantis (Base), GMX (Arbitrum), Perpl (Monad), and Hyperliquid all flow through the
   // same EVM modal + Privy email path. Privy's embedded wallet is chain-
   // agnostic at the address level — the same 0xABC… works on every EVM
   // chain; we just ensureChain(targetId) before each tx. So one panel,
-  // three labels.
+  // venue labels.
   const venue = dex === 'gmx' ? 'GMX'
     : dex === 'monad' ? 'PERPL'
+    : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
+    : dex === 'hyperliquid' ? 'EVM'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -330,6 +333,7 @@ function RegisterPanel() {
                   dex === 'decibel' ? 'Decibel' :
                   dex === 'gmx' ? 'GMX' :
                   dex === 'monad' ? 'Perpl' :
+                  dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -349,7 +353,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -395,6 +399,7 @@ function RegisterPanel() {
     if (dex === 'decibel') return 'DECIBEL LOGIN';
     if (dex === 'gmx') return 'GMX LOGIN';
     if (dex === 'monad') return 'PERPL LOGIN';
+    if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
@@ -413,6 +418,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

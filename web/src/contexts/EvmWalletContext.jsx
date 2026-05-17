@@ -15,6 +15,7 @@ import { base, arbitrum } from 'viem/chains';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
+import { HYPEREVM_CHAIN_ID, HYPEREVM_RPC_URLS, ensureHyperEvmChain, hyperEvmChain } from '../lib/hyperevmConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
@@ -68,6 +69,13 @@ const monadPublicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
+const hyperEvmPublicClient = createPublicClient({
+  chain: hyperEvmChain,
+  transport: fallback(
+    HYPEREVM_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
@@ -75,18 +83,21 @@ const CHAIN_BY_ID = {
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
+  [HYPEREVM_CHAIN_ID]: hyperEvmChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
   [BASE_CHAIN_ID]: publicClient,
   [ARBITRUM_CHAIN_ID]: arbitrumPublicClient,
   [MONAD_CHAIN_ID]: monadPublicClient,
+  [HYPEREVM_CHAIN_ID]: hyperEvmPublicClient,
 };
 
 const CHAIN_LABEL_BY_ID = {
   [BASE_CHAIN_ID]: 'Base',
   [ARBITRUM_CHAIN_ID]: 'Arbitrum',
   [MONAD_CHAIN_ID]: 'Monad',
+  [HYPEREVM_CHAIN_ID]: 'HyperEVM',
 };
 
 function normalizeProviderChainId(value) {
@@ -388,6 +399,8 @@ export function EvmWalletProvider({ children }) {
       await ensureArbitrumChain(provider);
     } else if (id === MONAD_CHAIN_ID) {
       await ensureMonadChain(provider);
+    } else if (id === HYPEREVM_CHAIN_ID) {
+      await ensureHyperEvmChain(provider);
     } else {
       await ensureBaseChain(provider);
     }

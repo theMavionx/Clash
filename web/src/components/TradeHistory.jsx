@@ -4,6 +4,7 @@ import { fetchPerplFills } from '../lib/perplClient';
 import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
+const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
 const READ_TIMEOUT_MS = 8000;
 
 function timeMs(value) {
@@ -129,6 +130,31 @@ function normalizePhoenixTrade(fill, markets) {
   };
 }
 
+function normalizeHyperliquidTrade(fill) {
+  const symbol = String(fill?.coin || fill?.symbol || '').toUpperCase();
+  if (!symbol) return null;
+  const dir = String(fill?.dir || '');
+  const isClose = /close/i.test(dir);
+  const isLong = /long/i.test(dir) || fill?.side === 'B';
+  const side = isClose
+    ? (isLong ? 'close_long' : 'close_short')
+    : (isLong ? 'open_long' : 'open_short');
+  const id = fill?.tid || fill?.hash || fill?.oid || `${symbol}:${fill?.time}:${fill?.px}:${fill?.sz}`;
+  return {
+    ...fill,
+    _dex: 'hyperliquid',
+    id,
+    symbol,
+    side,
+    action: dir || side,
+    amount: fill?.sz,
+    price: fill?.px,
+    fee: Math.abs(Number(fill?.fee || 0)),
+    created_at: fill?.time,
+    realized_pnl_amount: fill?.closedPnl,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -195,6 +221,19 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(t => normalizePhoenixTrade(t, markets)).filter(Boolean));
           return;
         }
+        if (dex === 'hyperliquid') {
+          const r = await fetch(`${HYPERLIQUID_API}/info`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'userFills', user: addr }),
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`Hyperliquid history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+          if (!cancelled) setTrades(rows.map(normalizeHyperliquidTrade).filter(Boolean));
+          return;
+        }
 
         const r = await fetch(`${PACIFICA_API}/trades/history?account=${addr}`, {
           signal: controller.signal,
@@ -252,12 +291,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'phoenix';
+  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid';
 
   return (
     <table style={S.table}>

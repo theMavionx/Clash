@@ -223,6 +223,11 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_MCP_RATE_WINDOW_MS" "60000"
     ensure_env_default "CLASH_MCP_RATE_LIMIT" "180"
     ensure_env_default "CLASH_MCP_AI_ATTACK_COOLDOWN_MS" "60000"
+    ensure_env_default "CLASH_HERMES_ORCHESTRATOR_URL" "http://127.0.0.1:8600"
+    ensure_env_default "CLASH_HERMES_ORCHESTRATOR_TOKEN" ""
+    ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "openai/gpt-oss-20b:free"
+    ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "google/gemma-4-31b-it:free"
+    ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "2"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "10"

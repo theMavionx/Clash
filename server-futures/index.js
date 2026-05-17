@@ -151,7 +151,7 @@ app.use((err, req, res, _next) => {
 
 app.listen(PORT, '127.0.0.1', () => {
   console.log(`Futures server running on http://127.0.0.1:${PORT}`);
-  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana)');
+  console.log('Network: Pacifica Mainnet + Avantis (Base) + Decibel (Aptos) + GMX (Arbitrum) + Perpl (Monad) + Phoenix (Solana) + Hyperliquid');
   console.log('Builder code: clashofperps');
   // Start gold-rewards indexers. Avantis still needs polling. Decibel orders
   // are submitted by this server signer, so the Decibel order route records
@@ -191,5 +191,10 @@ app.listen(PORT, '127.0.0.1', () => {
     require('./phoenix-rewards-worker').start();
   } catch (e) {
     console.error('[worker] phoenix-rewards-worker failed to start:', e.message);
+  }
+  try {
+    require('./hyperliquid-rewards-worker').start();
+  } catch (e) {
+    console.error('[worker] hyperliquid-rewards-worker failed to start:', e.message);
   }
 });

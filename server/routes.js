@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
+const hermesClient = require('./hermes_client');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
@@ -1199,15 +1200,56 @@ function getSolanaSignerKeypair() {
 }
 
 let _solanaConnectionCache = null;
+let _solanaConnectionListCache = null;
+function splitSolanaRpcUrls(raw) {
+  return String(raw || '')
+    .split(/[,\s]+/)
+    .map((url) => url.trim())
+    .filter(Boolean);
+}
+
+function solanaRpcUrls() {
+  return Array.from(new Set([
+    ...splitSolanaRpcUrls(process.env.NFT_SOLANA_RPC_URL),
+    ...splitSolanaRpcUrls(process.env.SOLANA_RPC_URL),
+    ...splitSolanaRpcUrls(process.env.VITE_SOLANA_RPC_URL),
+    'https://solana-rpc.publicnode.com',
+    'https://api.mainnet-beta.solana.com',
+  ].filter((url) => /^https?:\/\//i.test(String(url || '')))));
+}
+
 function getSolanaConnection() {
   if (_solanaConnectionCache) return _solanaConnectionCache;
   const { Connection } = require('@solana/web3.js');
-  const rpcUrl = process.env.NFT_SOLANA_RPC_URL
-    || process.env.SOLANA_RPC_URL
-    || process.env.VITE_SOLANA_RPC_URL
-    || 'https://solana-rpc.publicnode.com';
+  const rpcUrl = solanaRpcUrls()[0] || 'https://solana-rpc.publicnode.com';
   _solanaConnectionCache = new Connection(rpcUrl, 'confirmed');
   return _solanaConnectionCache;
+}
+
+function getSolanaConnections() {
+  if (_solanaConnectionListCache) return _solanaConnectionListCache;
+  const { Connection } = require('@solana/web3.js');
+  _solanaConnectionListCache = solanaRpcUrls().map((rpcUrl) => new Connection(rpcUrl, 'confirmed'));
+  return _solanaConnectionListCache;
+}
+
+async function getParsedTransactionWithSolanaFallback(signature, options) {
+  let lastError = null;
+  for (const connection of getSolanaConnections()) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const parsed = await connection.getParsedTransaction(signature, options);
+      if (parsed) return parsed;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  if (lastError) {
+    const err = new Error(`Solana RPC could not read tx: ${lastError.message || lastError}`);
+    err.status = 503;
+    throw err;
+  }
+  return null;
 }
 
 const SOLANA_SKR_MINT_DEFAULT = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
@@ -2619,7 +2661,8 @@ function txTransfersToTreasury({ parsedTx, expectedMint, expectedTreasury, expec
       // We accept either `transferChecked` (preferred — includes mint) or
       // legacy `transfer` (mint not in instruction; we cross-reference
       // via post-token-balances below as a safety net).
-      if (program === 'spl-token' && (type === 'transferChecked' || type === 'transferCheckedWithFee' || type === 'transfer')) {
+      const isSplTokenProgram = program === 'spl-token' || program === 'spl-token-2022';
+      if (isSplTokenProgram && (type === 'transferChecked' || type === 'transferCheckedWithFee' || type === 'transfer')) {
         const amount = BigInt(info.tokenAmount?.amount ?? info.amount ?? 0);
         const mint = info.mint ? String(info.mint) : null;
         if (type === 'transferChecked' || type === 'transferCheckedWithFee') {
@@ -2661,8 +2704,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     const solana = gameShopSolanaConfig();
     if (!solana.ready) return res.status(503).json({ error: 'Solana game shop is not configured' });
 
-    const connection = getSolanaConnection();
-    const parsedTx = await connection.getParsedTransaction(signature, {
+    const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
       commitment: 'confirmed',
       maxSupportedTransactionVersion: 0,
     });
@@ -3775,13 +3817,13 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -3801,7 +3843,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad" or "phoenix"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix" or "hyperliquid"' });
   }
   if (dex !== req.player.dex) {
     logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
@@ -3929,6 +3971,100 @@ router.delete('/players/ai-keys/:id', auth, (req, res) => {
   if (result.error) return res.status(404).json(result);
   logAuth('AI agent key revoked', { player_id: req.player.id, key_id: req.params.id });
   res.json(result);
+});
+
+router.get('/ai-chat/status', auth, async (req, res) => {
+  try {
+    const agent = db.getOrCreateHermesAgent(req.player.id);
+    if (agent.error) return res.status(400).json(agent);
+    if (!hermesClient.configured()) {
+      const state = db.markHermesAgentState(req.player.id, {
+        status: 'unconfigured',
+        error: 'Hermes orchestrator is not configured',
+      });
+      return res.status(503).json({ ok: false, error: 'Hermes orchestrator is not configured', agent: state });
+    }
+    const status = await hermesClient.getStatus(req.player.id);
+    const state = db.markHermesAgentState(req.player.id, {
+      status: status?.player?.running ? 'running' : 'ready',
+      orchestrator: status?.player || status,
+      provisioned: true,
+    });
+    res.json({ ok: true, agent: state, hermes: status });
+  } catch (err) {
+    const state = db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
+    res.status(err.status || 500).json({ ok: false, error: err.message, agent: state });
+  }
+});
+
+router.post('/ai-chat/message', auth, async (req, res) => {
+  const startedAt = Date.now();
+  const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  if (!message) return res.status(400).json({ ok: false, error: 'message required' });
+  if (message.length > 8000) return res.status(400).json({ ok: false, error: 'message too long' });
+
+  let model = null;
+  try {
+    const agent = db.getOrCreateHermesAgent(req.player.id);
+    if (agent.error) return res.status(400).json(agent);
+    const result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+      previous_response_id: req.body?.previous_response_id,
+      idempotency_key: req.body?.idempotency_key,
+      metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {},
+    });
+    model = result.model || null;
+    db.markHermesAgentState(req.player.id, {
+      status: 'running',
+      orchestrator: result,
+      provisioned: true,
+      chatted: true,
+    });
+    db.logHermesChatEvent({
+      playerId: req.player.id,
+      status: 'ok',
+      durationMs: Date.now() - startedAt,
+      model,
+      input: { message },
+      output: { output_text: result.output_text, fallback: !!result.fallback },
+    });
+    res.json({
+      ok: true,
+      message: result.output_text || '',
+      model: result.model || null,
+      fallback: !!result.fallback,
+      response: result.response || null,
+    });
+  } catch (err) {
+    db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
+    db.logHermesChatEvent({
+      playerId: req.player.id,
+      status: 'error',
+      durationMs: Date.now() - startedAt,
+      model,
+      error: err.message,
+      input: { message },
+      output: err.body || null,
+    });
+    res.status(err.status || 500).json({ ok: false, error: err.message, body: err.body || null });
+  }
+});
+
+router.post('/ai-chat/reset', auth, async (req, res) => {
+  try {
+    const result = await hermesClient.reset(req.player.id, {
+      delete_memory: !!req.body?.delete_memory,
+      restart: req.body?.restart !== false,
+    });
+    const state = db.markHermesAgentState(req.player.id, {
+      status: 'ready',
+      orchestrator: result,
+      provisioned: true,
+    });
+    res.json({ ok: true, agent: state, hermes: result });
+  } catch (err) {
+    const state = db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
+    res.status(err.status || 500).json({ ok: false, error: err.message, agent: state });
+  }
 });
 
 router.post('/agent-events/emit', agentAuth, (req, res) => {
@@ -5295,7 +5431,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -5396,7 +5532,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -5745,7 +5881,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
@@ -5795,7 +5931,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -6624,7 +6760,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -6846,7 +6982,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   try {
@@ -6854,6 +6990,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     if (fdb) {
       const sourceWhereForDex = (dex) => dex === 'monad'
         ? "verified_source IN ('perpl_api', 'perpl_ws')"
+        : dex === 'hyperliquid'
+          ? "verified_source = 'hyperliquid_api'"
         : dex === 'decibel'
           ? "verified_source IN ('worker', 'server')"
           : "verified_source = 'worker'";
@@ -7634,7 +7772,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
-  if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
+  if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
   const sortCol = normalizeTournamentSort(sort_by);
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
@@ -7700,7 +7838,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
   } = req.body || {};
-  const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix'];
+  const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'];
   if (dex !== undefined && !validDexes.includes(dex)) return res.status(400).json({ error: 'invalid dex' });
   const STATUSES = ['active', 'ended', 'draft'];
   let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt;

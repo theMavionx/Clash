@@ -1,0 +1,13 @@
+{
+  "name": "clash-hermes-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check": "node --check src/server.mjs"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

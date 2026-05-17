@@ -15,9 +15,10 @@ const DEX_PICKED_KEY = 'clash_dex_picked';
 const SHOW_AFTER_MS = 6500;
 
 const DEX_WALLET = {
-  avantis: { kind: 'evm', chain: 'Base', label: 'Avantis', cta: 'Reconnect Base wallet' },
-  gmx: { kind: 'evm', chain: 'Arbitrum', label: 'GMX', cta: 'Reconnect Arbitrum wallet' },
-  monad: { kind: 'evm', chain: 'Monad', label: 'Perpl', cta: 'Reconnect Monad wallet' },
+  avantis: { kind: 'evm', chain: 'Base', label: 'Avantis', cta: 'Reconnect Base wallet', targetChain: 'base' },
+  gmx: { kind: 'evm', chain: 'Arbitrum', label: 'GMX', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
+  monad: { kind: 'evm', chain: 'Monad', label: 'Perpl', cta: 'Reconnect Monad wallet', targetChain: 'monad' },
+  hyperliquid: { kind: 'evm', chain: 'Arbitrum', label: 'Hyperliquid', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
   decibel: { kind: 'aptos', chain: 'Aptos', label: 'Decibel', cta: 'Reconnect Petra wallet' },
   pacifica: { kind: 'solana', chain: 'Solana', label: 'Pacifica', cta: 'Reconnect Solana wallet' },
   phoenix: { kind: 'solana', chain: 'Solana', label: 'Phoenix', cta: 'Reconnect Solana wallet' },
@@ -143,6 +144,7 @@ export default function WalletSessionRecovery() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
+        targetChain={meta.targetChain || 'base'}
         onConnected={({ address, provider, rdns }) => {
           setEvmModalOpen(false);
           if (provider && address) evmWallet.setExternalProvider(provider, address, rdns, 'external');
@@ -174,6 +176,7 @@ export default function WalletSessionRecovery() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
+        targetChain={meta.targetChain || 'base'}
         onConnected={({ address, provider, rdns }) => {
           setEvmModalOpen(false);
           if (provider && address) evmWallet.setExternalProvider(provider, address, rdns, 'external');

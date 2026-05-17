@@ -5,7 +5,56 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
 // the rest of the game UI.
 
-const BASE_CHAIN_ID_HEX = '0x2105'; // 8453
+const NETWORKS = {
+  base: {
+    chainId: '0x2105',
+    label: 'Base',
+    cta: 'Base (EVM) network',
+    addParams: {
+      chainId: '0x2105',
+      chainName: 'Base',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://mainnet.base.org'],
+      blockExplorerUrls: ['https://basescan.org'],
+    },
+  },
+  arbitrum: {
+    chainId: '0xa4b1',
+    label: 'Arbitrum',
+    cta: 'Arbitrum network',
+    addParams: {
+      chainId: '0xa4b1',
+      chainName: 'Arbitrum One',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+      blockExplorerUrls: ['https://arbiscan.io'],
+    },
+  },
+  monad: {
+    chainId: '0x8f',
+    label: 'Monad',
+    cta: 'Monad network',
+    addParams: {
+      chainId: '0x8f',
+      chainName: 'Monad',
+      nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
+      rpcUrls: ['https://rpc.monad.xyz'],
+      blockExplorerUrls: ['https://monadscan.com'],
+    },
+  },
+  hyperevm: {
+    chainId: '0x3e7',
+    label: 'HyperEVM',
+    cta: 'HyperEVM network',
+    addParams: {
+      chainId: '0x3e7',
+      chainName: 'HyperEVM',
+      nativeCurrency: { name: 'HYPE', symbol: 'HYPE', decimals: 18 },
+      rpcUrls: ['https://rpc.hyperliquid.xyz/evm'],
+      blockExplorerUrls: ['https://hyperevmscan.io'],
+    },
+  },
+};
 
 // EIP-6963 provider discovery. Modern wallets (MetaMask, Rabby, Coinbase,
 // Phantom EVM, Trust, OKX) announce themselves via the `eip6963:announceProvider`
@@ -58,26 +107,21 @@ function useInjectedProviders() {
   return providers;
 }
 
-async function ensureBaseChain(provider) {
+async function ensureTargetChain(provider, targetChain = 'base') {
+  const cfg = NETWORKS[targetChain] || NETWORKS.base;
   try {
     const current = await provider.request({ method: 'eth_chainId' });
-    if (String(current).toLowerCase() === BASE_CHAIN_ID_HEX) return;
+    if (String(current).toLowerCase() === cfg.chainId) return;
     await provider.request({
       method: 'wallet_switchEthereumChain',
-      params: [{ chainId: BASE_CHAIN_ID_HEX }],
+      params: [{ chainId: cfg.chainId }],
     });
   } catch (err) {
     // Chain not added — try adding it (error 4902).
     if (err?.code === 4902 || /unrecognized|not been added/i.test(err?.message || '')) {
       await provider.request({
         method: 'wallet_addEthereumChain',
-        params: [{
-          chainId: BASE_CHAIN_ID_HEX,
-          chainName: 'Base',
-          nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-          rpcUrls: ['https://mainnet.base.org'],
-          blockExplorerUrls: ['https://basescan.org'],
-        }],
+        params: [cfg.addParams],
       });
       return;
     }
@@ -85,13 +129,14 @@ async function ensureBaseChain(provider) {
   }
 }
 
-// Custom EVM wallet-connect modal (Base). Shows all injected wallets detected
+// Custom EVM wallet-connect modal. Shows all injected wallets detected
 // via EIP-6963 + legacy `window.ethereum` fallback. On select: requests
-// accounts, switches to Base chain, fires onConnected({ address, provider }).
-export default function EvmWalletModal({ open, onClose, onConnected }) {
+// accounts, switches to target chain, fires onConnected({ address, provider }).
+export default function EvmWalletModal({ open, onClose, onConnected, targetChain = 'base' }) {
   const providers = useInjectedProviders();
   const [connecting, setConnecting] = useState(null); // rdns of connecting provider
   const [error, setError] = useState(null);
+  const target = NETWORKS[targetChain] || NETWORKS.base;
 
   useEffect(() => { if (!open) { setError(null); setConnecting(null); } }, [open]);
 
@@ -104,14 +149,16 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
       addClientBreadcrumb('wallet.connect_start', {
         source: 'evm_injected',
         adapter: detail.info?.name || detail.info?.rdns || null,
+        target_chain: target.label,
       });
       const accounts = await detail.provider.request({ method: 'eth_requestAccounts' });
       const addr = accounts && accounts[0];
       if (!addr) throw new Error('No account returned');
-      await ensureBaseChain(detail.provider);
+      await ensureTargetChain(detail.provider, targetChain);
       addClientBreadcrumb('wallet.connect_success', {
         source: 'evm_injected',
         adapter: detail.info?.name || detail.info?.rdns || null,
+        target_chain: target.label,
       });
       onConnected({
         address: addr,
@@ -142,6 +189,9 @@ export default function EvmWalletModal({ open, onClose, onConnected }) {
         </div>
         <div style={M.body}>
           <div style={M.subtitle}>
+            {target.cta} required for {target.label} trading
+          </div>
+          <div style={{...M.subtitle, display: 'none'}}>
             Base (EVM) network · required for Avantis perps
           </div>
 

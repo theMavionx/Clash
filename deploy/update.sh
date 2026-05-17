@@ -6,6 +6,10 @@
 # MCP-only one-click update:
 #   sudo bash /opt/clash/deploy/update-mcp.sh
 #
+# Dedicated Hermes one-click updates live on their own hosts:
+#   sudo bash /opt/clash/deploy/update-hermes.sh
+#   sudo bash /opt/clash/deploy/update-hermes-tunnel.sh
+#
 # Production is intentionally anchored at /opt/clash:
 #   /opt/clash/.git      canonical checkout
 #   /opt/clash/current   live symlink

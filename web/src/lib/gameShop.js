@@ -252,6 +252,102 @@ function normalizeShopQuote(quote) {
   };
 }
 
+function uniqueStrings(values) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const raw = String(value || '').trim();
+    if (!raw || seen.has(raw)) continue;
+    seen.add(raw);
+    out.push(raw);
+  }
+  return out;
+}
+
+function walletAdapterName(solWallet) {
+  return String(
+    solWallet?.wallet?.adapter?.name
+    || solWallet?.adapter?.name
+    || solWallet?.wallet?.name
+    || solWallet?.walletClientType
+    || '',
+  );
+}
+
+async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, task }) {
+  const endpoints = uniqueStrings([
+    primaryConnection?.rpcEndpoint,
+    ...(rpcUrls || []),
+  ]);
+  let lastError = null;
+  for (const endpoint of endpoints) {
+    const connection = endpoint === primaryConnection?.rpcEndpoint
+      ? primaryConnection
+      : new Connection(endpoint, 'confirmed');
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return { connection, value: await task(connection) };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('All Solana RPC endpoints failed');
+}
+
+async function readSolBalanceWithFallback({ Connection, primaryConnection, rpcUrls, ownerPk }) {
+  const result = await withSolanaRpcFallback({
+    Connection,
+    primaryConnection,
+    rpcUrls,
+    task: (conn) => conn.getBalance(ownerPk, 'confirmed'),
+  });
+  return { connection: result.connection, lamports: BigInt(result.value || 0) };
+}
+
+function parseTokenAccountRows(rows, PublicKey) {
+  return (rows || []).map((item) => {
+    const info = item?.account?.data?.parsed?.info || {};
+    const tokenAmount = info.tokenAmount || {};
+    let amount = 0n;
+    try { amount = BigInt(tokenAmount.amount || 0); } catch { amount = 0n; }
+    return {
+      pubkey: item.pubkey,
+      amount,
+      decimals: Number.isInteger(tokenAmount.decimals) ? tokenAmount.decimals : null,
+      programId: new PublicKey(item.account.owner?.toBase58?.() || item.account.owner),
+    };
+  }).filter((row) => row?.pubkey);
+}
+
+async function readTokenAccountsWithFallback({ Connection, PublicKey, primaryConnection, rpcUrls, ownerPk, mintPk }) {
+  const result = await withSolanaRpcFallback({
+    Connection,
+    primaryConnection,
+    rpcUrls,
+    task: (conn) => conn.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, 'confirmed'),
+  });
+  return {
+    connection: result.connection,
+    accounts: parseTokenAccountRows(result.value?.value || [], PublicKey),
+  };
+}
+
+async function resolveTokenProgramId({ connection, splToken, mintPk, tokenAccounts }) {
+  const fromAccount = tokenAccounts.find((row) => row?.programId)?.programId;
+  if (fromAccount) return fromAccount;
+  const programs = [splToken.TOKEN_PROGRAM_ID, splToken.TOKEN_2022_PROGRAM_ID].filter(Boolean);
+  for (const programId of programs) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await splToken.getMint(connection, mintPk, 'confirmed', programId);
+      return programId;
+    } catch {
+      // Try the next token program. Some Solana tokens are Token-2022.
+    }
+  }
+  return splToken.TOKEN_PROGRAM_ID;
+}
+
 // =====================================================================
 // Solana shop — pays via SPL USDC transfer or native SOL transfer + memo.
 // No deployed program: the server's redeem endpoint verifies the on-chain
@@ -282,8 +378,45 @@ export async function redeemSolanaShopPurchase({ token, txSignature, buyer, serv
     body: JSON.stringify({ txSignature, buyer, signature: serverSignature }),
   });
   const json = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(json?.error || `Solana redeem failed (${response.status})`);
+  if (!response.ok) {
+    const err = new Error(json?.error || `Solana redeem failed (${response.status})`);
+    err.status = response.status;
+    throw err;
+  }
   return json;
+}
+
+function isRetriableSolanaRedeemError(err) {
+  const status = Number(err?.status);
+  const message = String(err?.message || '').toLowerCase();
+  return (
+    status === 0
+    || status === 408
+    || status === 409
+    || status === 425
+    || status === 429
+    || status >= 500
+    || message.includes('not found or not confirmed')
+    || message.includes('failed to fetch')
+    || message.includes('timeout')
+    || message.includes('network')
+  );
+}
+
+async function redeemSolanaShopPurchaseWithRetry(args) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await redeemSolanaShopPurchase(args);
+    } catch (err) {
+      lastError = err;
+      if (!isRetriableSolanaRedeemError(err) || attempt >= 4) break;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+    }
+  }
+  throw lastError || new Error('Solana redeem failed');
 }
 
 class InsufficientSolanaBalanceError extends Error {
@@ -307,14 +440,16 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   if (!token) throw new Error('Game session is not ready');
   const address = solWallet?.publicKey?.toBase58?.() || buyer;
   if (!address) throw new Error('Solana wallet is not connected');
-  if (!solWallet?.signTransaction) throw new Error('This Solana wallet cannot sign transactions');
+  const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function';
+  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
+  if (!canSendSolanaTx && !canSignSolanaTx) throw new Error('This Solana wallet cannot sign transactions');
 
   // Dynamic imports keep solana deps out of the Base-only path bundle. They
   // ship lazily when the user first touches the Solana tab.
   const [
     { Connection, PublicKey, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
     splToken,
-    { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl },
+    { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_LEORPC_URL, SOLANA_RPC_URLS, selectFreshSolanaRpcUrl },
     { isBlockhashExpiredError, sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
@@ -326,9 +461,20 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment });
   if (!quote?.treasury) throw new Error('Solana treasury not configured');
 
-  const rpcSelection = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => null);
-  const rpcUrl = rpcSelection?.selected?.url || DEFAULT_SOLANA_RPC_URL;
-  const connection = new Connection(rpcUrl, 'confirmed');
+  // Shop payments are user-facing and short-lived, so prefer our same-origin
+  // RPC proxy first. Public browser RPCs are useful fallbacks, but on Seeker
+  // / mobile browsers they often fail with CORS/403/closed connections.
+  const shopPrimaryRpcUrls = uniqueStrings([
+    SAME_ORIGIN_SOLANA_RPC_URL,
+    SAME_ORIGIN_SOLANA_LEORPC_URL,
+  ]);
+  const shopRpcUrls = uniqueStrings([
+    ...shopPrimaryRpcUrls,
+    ...SOLANA_RPC_URLS,
+  ]);
+  const rpcSelection = await selectFreshSolanaRpcUrl(shopPrimaryRpcUrls, { timeoutMs: 2500 }).catch(() => null);
+  const rpcUrl = rpcSelection?.selected?.url || shopRpcUrls[0] || DEFAULT_SOLANA_RPC_URL;
+  let connection = new Connection(rpcUrl, 'confirmed');
 
   const buyerPk = new PublicKey(address);
   const treasuryPk = new PublicKey(quote.treasury);
@@ -339,7 +485,14 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   // Phantom modal pops. Without this the wallet shows a generic "tx will
   // fail" preview and the user has to guess why.
   if (payment === 'sol') {
-    const lamports = BigInt(await connection.getBalance(buyerPk));
+    const balanceResult = await readSolBalanceWithFallback({
+      Connection,
+      primaryConnection: connection,
+      rpcUrls: shopRpcUrls,
+      ownerPk: buyerPk,
+    });
+    connection = balanceResult.connection;
+    const lamports = balanceResult.lamports;
     // Reserve ~0.001 SOL for fees; tx fee is ~0.000005 but ATA-creation can
     // push it higher. Keeping a buffer avoids "would leave 0 SOL" reverts.
     const reserve = 1_000_000n;
@@ -348,20 +501,34 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     }
   } else {
     const mintPk = new PublicKey(quote.mint);
-    const buyerAta = await splToken.getAssociatedTokenAddress(mintPk, buyerPk, false);
-    let buyerBalance = 0n;
-    try {
-      const acct = await splToken.getAccount(connection, buyerAta);
-      buyerBalance = BigInt(acct.amount);
-    } catch {
-      buyerBalance = 0n;
-    }
+    const tokenRead = await readTokenAccountsWithFallback({
+      Connection,
+      PublicKey,
+      primaryConnection: connection,
+      rpcUrls: shopRpcUrls,
+      ownerPk: buyerPk,
+      mintPk,
+    });
+    connection = tokenRead.connection;
+    const tokenAccounts = tokenRead.accounts;
+    const buyerBalance = tokenAccounts.reduce((sum, row) => sum + row.amount, 0n);
+    const tokenDecimals = tokenAccounts.find((row) => Number.isInteger(row.decimals))?.decimals ?? quote.decimals;
     if (buyerBalance < amount) {
-      // payment is 'usdc' or 'skr' in the SPL branch; decimals comes
-      // from the quote so SKR's 6 decimals (or whatever a future token
-      // uses) render correctly without hardcoding.
-      throw new InsufficientSolanaBalanceError(payment, amount, buyerBalance, quote.decimals);
+      throw new InsufficientSolanaBalanceError(payment, amount, buyerBalance, tokenDecimals);
     }
+    const feeBalance = await readSolBalanceWithFallback({
+      Connection,
+      primaryConnection: connection,
+      rpcUrls: shopRpcUrls,
+      ownerPk: buyerPk,
+    }).catch(() => null);
+    if (feeBalance?.connection) connection = feeBalance.connection;
+    const feeFloorLamports = 1_000_000n;
+    if (feeBalance?.lamports != null && feeBalance.lamports < feeFloorLamports) {
+      throw new InsufficientSolanaBalanceError('sol', feeFloorLamports, feeBalance.lamports, 9);
+    }
+    quote._tokenAccounts = tokenAccounts;
+    quote._tokenDecimals = tokenDecimals;
   }
 
   // Build the transfer + memo tx. Single tx, both instructions atomic —
@@ -380,28 +547,41 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     }));
   } else {
     const mintPk = new PublicKey(quote.mint);
-    const buyerAta = await splToken.getAssociatedTokenAddress(mintPk, buyerPk, false);
-    const treasuryAta = await splToken.getAssociatedTokenAddress(mintPk, treasuryPk, false);
-    // Create treasury's ATA if it doesn't exist yet. The buyer pays the
-    // ~0.002 SOL rent — once created it's persistent so subsequent buyers
-    // pay nothing. ATA-creation is a no-op when the account already exists.
-    const treasuryAtaInfo = await connection.getAccountInfo(treasuryAta);
-    if (!treasuryAtaInfo) {
-      instructions.push(splToken.createAssociatedTokenAccountInstruction(
-        buyerPk,        // payer
-        treasuryAta,    // ata
-        treasuryPk,     // owner
-        mintPk,
-      ));
-    }
-    instructions.push(splToken.createTransferCheckedInstruction(
-      buyerAta,
+    const tokenAccounts = quote._tokenAccounts || [];
+    const tokenProgramId = await resolveTokenProgramId({
+      connection,
+      splToken,
       mintPk,
-      treasuryAta,
-      buyerPk,
-      amount,
-      quote.decimals,
+      tokenAccounts,
+    });
+    const tokenDecimals = Number.isInteger(quote._tokenDecimals) ? quote._tokenDecimals : quote.decimals;
+    const treasuryAta = await splToken.getAssociatedTokenAddress(mintPk, treasuryPk, false, tokenProgramId);
+    instructions.push(splToken.createAssociatedTokenAccountIdempotentInstruction(
+      buyerPk,        // payer
+      treasuryAta,    // ata
+      treasuryPk,     // owner
+      mintPk,
+      tokenProgramId,
     ));
+    let remaining = amount;
+    for (const source of tokenAccounts.filter((row) => row.amount > 0n)) {
+      if (remaining <= 0n) break;
+      const piece = source.amount >= remaining ? remaining : source.amount;
+      instructions.push(splToken.createTransferCheckedInstruction(
+        source.pubkey,
+        mintPk,
+        treasuryAta,
+        buyerPk,
+        piece,
+        tokenDecimals,
+        [],
+        source.programId || tokenProgramId,
+      ));
+      remaining -= piece;
+    }
+    if (remaining > 0n) {
+      throw new InsufficientSolanaBalanceError(payment, amount, amount - remaining, tokenDecimals);
+    }
   }
 
   // Memo instruction — server reads this back from the on-chain tx and
@@ -420,11 +600,20 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
       instructions,
       ownerPk: buyerPk,
       connection,
-      signTransaction: (tx) => solWallet.signTransaction(tx),
+      sendTransaction: canSendSolanaTx
+        ? (tx, conn, opts) => solWallet.sendTransaction(tx, conn, opts)
+        : null,
+      // Prefer adapter sendTransaction for browser/mobile wallets: it signs
+      // and submits through the wallet in one path, avoiding the Seeker/Phantom
+      // "Missing signature for public key" failure seen when signTransaction
+      // returns an unsigned legacy tx.
+      signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
+        ? null
+        : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
       maxAttempts: 4,
       priorityFeeMicroLamports: 250_000,
       skipPreflight: false,
-      label: `shop.${payment}`,
+      label: `shop.${payment}.${walletAdapterName(solWallet) || 'wallet'}`,
     });
   } catch (err) {
     if (isBlockhashExpiredError(err)) {
@@ -437,7 +626,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     throw err;
   }
 
-  const grant = await redeemSolanaShopPurchase({
+  const grant = await redeemSolanaShopPurchaseWithRetry({
     token,
     txSignature: signature,
     buyer: address,

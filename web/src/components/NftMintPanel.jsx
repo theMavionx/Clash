@@ -4,7 +4,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 import { useSignTransaction as usePrivySolanaSignTransaction } from '@privy-io/react-auth/solana';
 import { createPublicClient, createWalletClient, custom, http } from 'viem';
-import { base } from 'viem/chains';
+import { arbitrum, base } from 'viem/chains';
 import EvmWalletModal from './EvmWalletModal';
 import { useOptionalPrivy } from './PrivyAuthProvider';
 import { useDex } from '../contexts/DexContext';
@@ -14,6 +14,8 @@ import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
+import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
@@ -25,7 +27,25 @@ import NftMarketplacePanel from './NftMarketplacePanel';
 const demonKingImg = '/cdn/nft/1/default.jpg';
 const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http() });
+const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
+const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+
+const EVM_CHAIN_ID_BY_NFT_CHAIN = {
+  base: BASE_CHAIN_ID,
+  arbitrum: ARBITRUM_CHAIN_ID,
+  monad: MONAD_CHAIN_ID,
+};
+const EVM_VIEM_CHAIN_BY_ID = {
+  [BASE_CHAIN_ID]: base,
+  [ARBITRUM_CHAIN_ID]: arbitrum,
+  [MONAD_CHAIN_ID]: monadChain,
+};
+const EVM_PUBLIC_CLIENT_BY_ID = {
+  [BASE_CHAIN_ID]: nftBasePublicClient,
+  [ARBITRUM_CHAIN_ID]: nftArbitrumPublicClient,
+  [MONAD_CHAIN_ID]: nftMonadPublicClient,
+};
 
 // Token → asset URL. CoP uses the game's app icon (it's our token); the
 // rest map to brand SVG/PNG files already shipped in /public/tokens.
@@ -113,6 +133,7 @@ const DEX_LABELS = {
   pacifica: 'Pacifica / Solana',
   phoenix: 'Phoenix / Solana',
   monad: 'Perpl / Monad',
+  hyperliquid: 'Hyperliquid / Arbitrum',
 };
 
 function shortAddress(address) {
@@ -135,11 +156,18 @@ function makeNftEvmWallet(provider, address) {
     provider,
     source: 'nft',
     isReady: true,
-    ensureChain: async () => ensureBaseChain(provider),
-    getPublicClient: () => nftBasePublicClient,
-    getWalletClient: () => createWalletClient({
+    ensureChain: async (targetChainId = BASE_CHAIN_ID) => {
+      const id = Number(targetChainId) || BASE_CHAIN_ID;
+      if (id === ARBITRUM_CHAIN_ID) return ensureArbitrumChain(provider);
+      if (id === MONAD_CHAIN_ID) return ensureMonadChain(provider);
+      return ensureBaseChain(provider);
+    },
+    getPublicClient: (targetChainId = BASE_CHAIN_ID) => (
+      EVM_PUBLIC_CLIENT_BY_ID[Number(targetChainId)] || nftBasePublicClient
+    ),
+    getWalletClient: (targetChainId = BASE_CHAIN_ID) => createWalletClient({
       account: address,
-      chain: base,
+      chain: EVM_VIEM_CHAIN_BY_ID[Number(targetChainId)] || base,
       transport: custom(provider),
     }),
   };
@@ -184,6 +212,7 @@ const DEX_TO_NFT_CHAIN = {
   gmx:      'arbitrum',
   monad:    'monad',
   decibel:  'aptos',
+  hyperliquid: 'arbitrum',
 };
 // All five chains now have a direct NFT mint endpoint:
 //   - base    /nft/base/quote   (CoP / ETH / USDC)
@@ -297,10 +326,20 @@ const DEX_TO_SHOP_CHAIN = {
   gmx:      'arbitrum',
   monad:    'monad',
   decibel:  'aptos',
+  hyperliquid: 'arbitrum',
 };
 
 function shopChainForDex(dex) {
   return DEX_TO_SHOP_CHAIN[dex] || 'base';
+}
+
+const DEX_TO_MARKETPLACE_CHAIN = {
+  gmx: 'arbitrum',
+  hyperliquid: 'arbitrum',
+};
+
+function marketplaceChainForDex(dex) {
+  return DEX_TO_MARKETPLACE_CHAIN[dex] || 'base';
 }
 
 function NftMintPanel({ onClose }) {
@@ -376,6 +415,11 @@ function NftMintPanel({ onClose }) {
   // chain readiness gates the buy button when the operator hasn't funded
   // that chain's treasury yet.
   const shopChain = shopChainForDex(dex);
+  const shopEvmChainId = EVM_CHAIN_ID_BY_NFT_CHAIN[shopChain] || null;
+  const evmOnShopChain = !!shopEvmChainId && evmChainId === shopEvmChainId;
+  const marketplaceChain = marketplaceChainForDex(dex);
+  const marketplaceEvmChainId = EVM_CHAIN_ID_BY_NFT_CHAIN[marketplaceChain] || BASE_CHAIN_ID;
+  const evmOnMarketplaceChain = evmChainId === marketplaceEvmChainId;
   const shopReadiness = {
     base:     !!gameShopConfig?.base?.ready    && !!gameShopConfig?.base?.saleActive,
     solana:   !!gameShopConfig?.solana?.ready   && !!gameShopConfig?.solana?.saleActive,
@@ -557,27 +601,34 @@ function NftMintPanel({ onClose }) {
     setNotice(null);
   }, []);
 
-  const handleBaseReady = useCallback(async () => {
+  const handleEvmReady = useCallback(async (targetChain = 'base') => {
     if (!evmAddress) {
       setEvmModalOpen(true);
       return;
     }
 
-    setBusy('base');
+    const chainKey = EVM_CHAIN_ID_BY_NFT_CHAIN[targetChain] ? targetChain : 'base';
+    const chainId = EVM_CHAIN_ID_BY_NFT_CHAIN[chainKey];
+    const label = SHOP_CHAIN_LABEL[chainKey] || 'Base';
+    setBusy(chainKey);
     setNotice(null);
     try {
-      await evmWallet.ensureChain(BASE_CHAIN_ID);
-      setEvmChainId(BASE_CHAIN_ID);
-      setNotice('Base wallet ready.');
-      addClientBreadcrumb('nft.payment_wallet_ready', { chain: 'base', dex });
+      await evmWallet.ensureChain(chainId);
+      setEvmChainId(chainId);
+      setNotice(`${label} wallet ready.`);
+      addClientBreadcrumb('nft.payment_wallet_ready', { chain: chainKey, dex });
     } catch (err) {
-      const message = err?.message || 'Base switch cancelled';
+      const message = err?.message || `${label} switch cancelled`;
       setNotice(message.slice(0, 120));
-      addClientBreadcrumb('nft.base_switch_failed', { dex, message }, 'warn');
+      addClientBreadcrumb('nft.evm_switch_failed', { dex, chain: chainKey, message }, 'warn');
     } finally {
       setBusy(null);
     }
   }, [dex, evmAddress, evmWallet]);
+
+  const handleBaseReady = useCallback(() => handleEvmReady('base'), [handleEvmReady]);
+  const handleShopChainReady = useCallback(() => handleEvmReady(shopChain), [handleEvmReady, shopChain]);
+  const handleMarketplaceReady = useCallback(() => handleEvmReady(marketplaceChain), [handleEvmReady, marketplaceChain]);
 
   const handleSolanaReady = useCallback(() => {
     if (solAddress) {
@@ -713,9 +764,9 @@ function NftMintPanel({ onClose }) {
         return;
       }
     } else if (shopChain === 'base') {
-      if (!evmAddress || !evmOnBase) { await handleBaseReady(); return; }
+      if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
     } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
-      if (!evmAddress) { await handleBaseReady(); return; }
+      if (!evmAddress || !evmOnShopChain) { await handleShopChainReady(); return; }
     }
 
     setBusy(`shop:${product.id}`);
@@ -821,7 +872,7 @@ function NftMintPanel({ onClose }) {
     } finally {
       setBusy(null);
     }
-  }, [aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopChainReady, shopPayment, solAddress, solWallet]);
+  }, [aptosWallet, dex, evmAddress, evmOnShopChain, evmWallet, handleShopChainReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopChainReady, shopPayment, solAddress, solWallet]);
 
   const handleDismissShopPurchase = useCallback(() => {
     // Fire the fly-to-bar burst when the user dismisses the success popup.
@@ -846,6 +897,17 @@ function NftMintPanel({ onClose }) {
     solanaSaleActive,
     busy,
   });
+
+  const evmModalTargetChain = activeShopTab === 'marketplace'
+    ? marketplaceChain
+    : activeShopTab === 'resources'
+      ? shopChain
+      : selectedChain;
+  const evmModalTargetEvmChain = EVM_CHAIN_ID_BY_NFT_CHAIN[evmModalTargetChain]
+    ? evmModalTargetChain
+    : 'base';
+  const evmModalTargetChainId = EVM_CHAIN_ID_BY_NFT_CHAIN[evmModalTargetEvmChain] || BASE_CHAIN_ID;
+  const evmModalTargetLabel = SHOP_CHAIN_LABEL[evmModalTargetEvmChain] || 'Base';
 
   const contextLine = getContextLine(dex);
 
@@ -965,7 +1027,7 @@ function NftMintPanel({ onClose }) {
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Game Resources</span>
-                      <span style={styles.editionTag}>Base: USDC, ETH, CoP -20%</span>
+                      <span style={styles.editionTag}>{SHOP_CHAIN_LABEL[shopChain] || 'Base'}: {shopChain === 'base' ? 'USDC, ETH, CoP -20%' : 'USDC / native'}</span>
                     </div>
                   </div>
                   <GameResourcesTab
@@ -977,12 +1039,12 @@ function NftMintPanel({ onClose }) {
                     onPaymentChange={setShopPayment}
                     skrReady={!!gameShopConfig?.solana?.skrReady}
                     evmAddress={evmAddress}
-                    evmOnBase={evmOnBase}
+                    evmOnChain={evmOnShopChain}
                     solAddress={solAddress}
                     preparingSolanaWallet={preparingPrivySolWallet}
                     aptosAddress={aptosWallet?.address || null}
                     busy={busy}
-                    onConnectBase={handleBaseReady}
+                    onConnectBase={handleShopChainReady}
                     onConnectSolana={handleSolanaReady}
                     onConnectAptos={() => aptosWallet?.connect?.()}
                     onBuy={handleBuyGameProduct}
@@ -1113,17 +1175,26 @@ function NftMintPanel({ onClose }) {
                   aria-hidden={activeShopTab !== 'marketplace'}
                   inert={activeShopTab !== 'marketplace' ? '' : undefined}
                 >
-                  <div style={{ ...styles.topRow, ...styles.topRowResources }}>
+                  <div style={styles.topRow}>
+                    <div style={styles.heroFrame}>
+                      <div style={styles.heroGlow} />
+                      <img
+                        src="/icons/marketplace.svg"
+                        alt="Marketplace"
+                        style={styles.marketHeroImg}
+                      />
+                    </div>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Marketplace</span>
-                      <span style={styles.editionTag}>Player-to-player trading on Base</span>
+                      <span style={styles.editionTag}>Player-to-player trading on {SHOP_CHAIN_LABEL[marketplaceChain] || 'Base'}</span>
                     </div>
                   </div>
                   <NftMarketplacePanel
+                    chain={marketplaceChain}
                     evmAddress={evmAddress}
                     evmWallet={evmWallet}
-                    evmOnBase={evmOnBase}
-                    onConnectBase={handleBaseReady}
+                    evmOnBase={evmOnMarketplaceChain}
+                    onConnectBase={handleMarketplaceReady}
                     onOpenEvmModal={() => setEvmModalOpen(true)}
                   />
 
@@ -1151,7 +1222,7 @@ function NftMintPanel({ onClose }) {
             <MintProgressOverlay
               status={mintStatus}
               result={mintResult}
-              chainLabel={selectedChain === 'solana' ? 'Solana' : 'Base'}
+              chainLabel={SHOP_CHAIN_LABEL[selectedChain] || 'Base'}
               onDismiss={handleDismissSuccess}
             />
           )}
@@ -1169,12 +1240,13 @@ function NftMintPanel({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
+        targetChain={evmModalTargetEvmChain}
         onConnected={({ provider, address, rdns }) => {
           setNftEvmWallet({ provider, address, rdns });
-          setEvmChainId(BASE_CHAIN_ID);
+          setEvmChainId(evmModalTargetChainId);
           setEvmModalOpen(false);
-          setNotice('Base wallet connected.');
-          addClientBreadcrumb('nft.connect_base_success', { dex, scope: 'nft' });
+          setNotice(`${evmModalTargetLabel} wallet connected.`);
+          addClientBreadcrumb('nft.connect_evm_success', { dex, scope: 'nft', chain: evmModalTargetEvmChain });
         }}
       />
     </>
@@ -1227,7 +1299,7 @@ function GameResourcesTab({
   onPaymentChange,
   skrReady,
   evmAddress,
-  evmOnBase,
+  evmOnChain,
   solAddress,
   preparingSolanaWallet,
   aptosAddress,
@@ -1243,8 +1315,7 @@ function GameResourcesTab({
   // adapter, so we just check the right one for the chain in scope.
   const walletConnected = chain === 'solana'   ? !!solAddress
                        : chain === 'aptos'    ? !!aptosAddress
-                       : chain === 'base'     ? (!!evmAddress && evmOnBase)
-                       : /* arbitrum/monad */   !!evmAddress;
+                       : /* evm */              (!!evmAddress && evmOnChain);
   const walletPreparing = chain === 'solana' && !!preparingSolanaWallet;
   // Per-chain payment toggle. We filter SKR off when the operator hasn't
   // configured GAME_SHOP_SOLANA_SKR_MINT (skrReady=false) so the UI never
@@ -1254,15 +1325,16 @@ function GameResourcesTab({
   const paymentLabel = paymentOptions.length > 0
     ? (paymentOptions.find((o) => o.id === payment)?.label || 'USDC')
     : 'USDC';
+  const needsEvmSwitch = chain !== 'solana' && chain !== 'aptos' && !!evmAddress && !evmOnChain;
   // Compact mobile labels — full-width "Connect Solana" / "Buy with USDC"
   // wraps on a 360px viewport. Strip the chain name on mobile.
   const connectLabel = walletPreparing
     ? (isMobile ? 'Preparing' : 'Preparing wallet...')
-    : !walletConnected
-    ? (isMobile ? 'Connect' : `Connect ${chainLabel}`)
-    : (chain === 'base' && evmAddress && !evmOnBase
-        ? (isMobile ? 'Switch' : 'Switch Base')
-        : (isMobile ? 'Connected' : `${chainLabel} connected`));
+    : needsEvmSwitch
+      ? (isMobile ? 'Switch' : `Switch ${chainLabel}`)
+      : !walletConnected
+        ? (isMobile ? 'Connect' : `Connect ${chainLabel}`)
+        : (isMobile ? 'Connected' : `${chainLabel} connected`);
 
   function connectForChain() {
     if (chain === 'solana')  return onConnectSolana?.();
@@ -2567,6 +2639,16 @@ const styles = {
     width: '100%', height: '100%',
     objectFit: 'contain',
     filter: 'drop-shadow(0 8px 14px rgba(0,0,0,0.55))',
+  },
+  // Marketplace hero — same frame as the Demon King hero, but the icon
+  // is a monochrome game-icons.net "shop" SVG painted in the parchment
+  // brown so it reads as part of the panel rather than a stock image.
+  // Inset padding keeps the line-art from kissing the frame border.
+  marketHeroImg: {
+    position: 'relative',
+    width: '76%', height: '76%',
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 4px 8px rgba(92,58,33,0.35))',
   },
   summary: {
     minWidth: 0,

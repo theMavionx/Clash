@@ -231,6 +231,42 @@ try {
   `);
 } catch (e) { console.warn('[db] mcp_events migration:', e.message); }
 
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hermes_agents (
+      player_id          TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      ai_key_id          TEXT NOT NULL,
+      mcp_key            TEXT NOT NULL,
+      orchestrator_state TEXT,
+      status             TEXT NOT NULL DEFAULT 'new',
+      last_error         TEXT,
+      created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at         TEXT NOT NULL DEFAULT (datetime('now')),
+      last_provisioned_at TEXT,
+      last_chat_at       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_hermes_agents_status ON hermes_agents(status, updated_at DESC);
+  `);
+} catch (e) { console.warn('[db] hermes_agents migration:', e.message); }
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hermes_chat_events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id   TEXT REFERENCES players(id) ON DELETE SET NULL,
+      status      TEXT NOT NULL DEFAULT 'ok',
+      duration_ms INTEGER,
+      model       TEXT,
+      error       TEXT,
+      input_json  TEXT,
+      output_json TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_recent ON hermes_chat_events(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_player ON hermes_chat_events(player_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] hermes_chat_events migration:', e.message); }
+
 // Browser console/error ingestion. Public endpoint writes bounded rows here so
 // production client failures survive PM2 log rotation and can be queried from
 // the admin panel. Payloads are capped in routes.js before insertion.
@@ -294,7 +330,7 @@ try {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid')),
       start_at     TEXT NOT NULL,                        -- ISO datetime
       end_at       TEXT,                                  -- nullable (open-ended)
       gold_boost   REAL NOT NULL DEFAULT 1.0,
@@ -313,7 +349,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'"));
+      && (!schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -322,7 +358,7 @@ try {
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid')),
             start_at     TEXT NOT NULL,
             end_at       TEXT,
             gold_boost   REAL NOT NULL DEFAULT 1.0,
@@ -341,7 +377,7 @@ try {
           )
           SELECT
             id, name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid') THEN dex ELSE 'pacifica' END,
             start_at, end_at, gold_boost, trophy_boost,
             COALESCE(freeze_trophies, 1),
             CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
@@ -602,6 +638,31 @@ const stmts = {
     INSERT INTO mcp_events
       (player_id, ai_key_id, ai_key_prefix, tool, status, duration_ms, error, input_json, metadata_json, ip, ua)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `),
+  getHermesAgent: db.prepare(`
+    SELECT *
+    FROM hermes_agents
+    WHERE player_id = ?
+  `),
+  upsertHermesAgent: db.prepare(`
+    INSERT INTO hermes_agents (player_id, ai_key_id, mcp_key, status, updated_at)
+    VALUES (?, ?, ?, 'new', datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      ai_key_id = excluded.ai_key_id,
+      mcp_key = excluded.mcp_key,
+      updated_at = datetime('now')
+  `),
+  updateHermesAgentState: db.prepare(`
+    UPDATE hermes_agents
+    SET orchestrator_state = ?, status = ?, last_error = ?, updated_at = datetime('now'),
+        last_provisioned_at = CASE WHEN ? THEN datetime('now') ELSE last_provisioned_at END,
+        last_chat_at = CASE WHEN ? THEN datetime('now') ELSE last_chat_at END
+    WHERE player_id = ?
+  `),
+  insertHermesChatEvent: db.prepare(`
+    INSERT INTO hermes_chat_events
+      (player_id, status, duration_ms, model, error, input_json, output_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
 
   // Find enemy candidates (not self, no shield, has a town hall, not in a
@@ -1166,6 +1227,71 @@ function authenticateAiAgentKey(rawKey) {
       level: row.auth_player_level,
     },
   };
+}
+
+function publicHermesAgentRow(row) {
+  if (!row) return null;
+  let orchestratorState = null;
+  try { orchestratorState = row.orchestrator_state ? JSON.parse(row.orchestrator_state) : null; } catch {}
+  return {
+    player_id: row.player_id,
+    ai_key_id: row.ai_key_id,
+    status: row.status,
+    last_error: row.last_error || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_provisioned_at: row.last_provisioned_at || null,
+    last_chat_at: row.last_chat_at || null,
+    orchestrator: orchestratorState,
+  };
+}
+
+function getOrCreateHermesAgent(playerId) {
+  const player = stmts.getPlayerById.get(playerId);
+  if (!player) return { error: 'Player not found' };
+
+  const existing = stmts.getHermesAgent.get(playerId);
+  if (existing?.mcp_key && authenticateAiAgentKey(existing.mcp_key)) {
+    return { ...publicHermesAgentRow(existing), mcp_key: existing.mcp_key };
+  }
+
+  const created = createAiAgentKey(playerId, 'Hermes AI Chat');
+  if (created.error) return created;
+  stmts.upsertHermesAgent.run(playerId, created.id, created.key);
+  const row = stmts.getHermesAgent.get(playerId);
+  return { ...publicHermesAgentRow(row), mcp_key: created.key };
+}
+
+function markHermesAgentState(playerId, state = {}) {
+  const status = String(state.status || (state.error ? 'error' : 'ready')).slice(0, 40);
+  const error = state.error ? String(state.error).slice(0, 2000) : null;
+  const payload = boundedJson(state.orchestrator ?? state, 20000);
+  const provisioned = state.provisioned ? 1 : 0;
+  const chatted = state.chatted ? 1 : 0;
+  try {
+    stmts.updateHermesAgentState.run(payload, status, error, provisioned, chatted, playerId);
+  } catch (err) {
+    console.warn('[db] failed to mark Hermes agent state:', err?.message || err);
+  }
+  const row = stmts.getHermesAgent.get(playerId);
+  return publicHermesAgentRow(row);
+}
+
+function logHermesChatEvent(event = {}) {
+  try {
+    const duration = Number(event.durationMs ?? event.duration_ms);
+    stmts.insertHermesChatEvent.run(
+      event.playerId || event.player_id || null,
+      String(event.status || 'ok').slice(0, 40),
+      Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : null,
+      event.model ? String(event.model).slice(0, 120) : null,
+      boundedJson(event.error, 2000),
+      boundedJson(event.input ?? event.input_json, 8000),
+      boundedJson(event.output ?? event.output_json, 20000)
+    );
+  } catch (err) {
+    console.warn('[db] failed to log Hermes chat event:', err?.message || err);
+  }
 }
 
 function boundedJson(value, maxBytes = 8000) {
@@ -2115,6 +2241,9 @@ module.exports = {
   listAiAgentKeys,
   revokeAiAgentKey,
   authenticateAiAgentKey,
+  getOrCreateHermesAgent,
+  markHermesAgentState,
+  logHermesChatEvent,
   logMcpEvent,
   getResources,
   addResources,

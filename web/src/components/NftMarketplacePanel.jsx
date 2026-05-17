@@ -16,30 +16,25 @@
 // the DemonKingMarketplace proxy on Base. Read data is pulled from
 // /api/marketplace/listings (server indexer).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  MARKETPLACE_BASE,
-  BASE_CHAIN_ID,
   buyMarketplaceListing,
   cancelMarketplaceListing,
   fetchMarketplaceListings,
-  fetchOwnedBaseNfts,
+  fetchOwnedMarketplaceNfts,
   fetchTokenLevels,
   formatPriceWei,
   isEthPayment,
   listNftOnMarketplace,
+  marketplaceChainLabel,
+  marketplacePaymentOptions,
+  normalizeMarketplaceChain,
   nftImageUrl,
   parsePriceToWei,
   paymentAddressFromId,
   paymentTokenMeta,
 } from '../lib/marketplace';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-
-const PAYMENT_PICKER = [
-  { id: 'eth',  label: 'ETH',  sub: 'Native'  },
-  { id: 'usdc', label: 'USDC', sub: 'Stable'  },
-  { id: 'cop',  label: 'CoP',  sub: 'Game'    },
-];
 
 const LISTINGS_PAGE_SIZE = 50;
 
@@ -60,6 +55,7 @@ function timeUntil(expiresAt) {
 }
 
 export default function NftMarketplacePanel({
+  chain = 'base',
   evmAddress,
   evmWallet,
   evmOnBase,
@@ -98,10 +94,21 @@ export default function NftMarketplacePanel({
   const [lastTxHash, setLastTxHash] = useState(null);
   const [buyTarget, setBuyTarget] = useState(null); // listing object
 
+  const chainKey = normalizeMarketplaceChain(chain);
+  const chainLabel = marketplaceChainLabel(chainKey);
+  const chainWalletLabel = evmAddress
+    ? (evmOnBase ? `${chainLabel} - ${shortAddr(evmAddress)}` : `Switch to ${chainLabel} (${shortAddr(evmAddress)})`)
+    : `Connect ${chainLabel} wallet`;
+  const paymentOptions = useMemo(() => marketplacePaymentOptions(chainKey), [chainKey]);
+  const txExplorerBase = chainKey === 'arbitrum' ? 'https://arbiscan.io/tx/' : 'https://basescan.org/tx/';
+
+  useEffect(() => {
+    if (!paymentOptions.some((p) => p.id === payId)) {
+      setPayId(paymentOptions[0]?.id || 'usdc');
+    }
+  }, [payId, paymentOptions]);
+
   const baseReady = !!evmAddress && !!evmOnBase;
-  const baseLabel = evmAddress
-    ? (evmOnBase ? `Base · ${shortAddr(evmAddress)}` : `Switch to Base (${shortAddr(evmAddress)})`)
-    : 'Connect Base wallet';
 
   // ── Fetch listings whenever page / view changes ────────────────────
   const loadListings = useCallback(async (opts = {}) => {
@@ -111,7 +118,7 @@ export default function NftMarketplacePanel({
     try {
       const offset = page * LISTINGS_PAGE_SIZE;
       const json = await fetchMarketplaceListings({
-        chain: 'base', activeOnly: true, limit: LISTINGS_PAGE_SIZE, offset,
+        chain: chainKey, activeOnly: true, limit: LISTINGS_PAGE_SIZE, offset,
       });
       const rows = Array.isArray(json?.listings) ? json.listings : [];
       setListings(rows);
@@ -120,7 +127,7 @@ export default function NftMarketplacePanel({
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds);
+          const lv = await fetchTokenLevels(tokenIds, chainKey);
           setLevelByTokenId((prev) => ({ ...prev, ...lv }));
         } catch { /* image will fall back to L1 */ }
       }
@@ -129,7 +136,7 @@ export default function NftMarketplacePanel({
     } finally {
       setBrowseLoading(false);
     }
-  }, [page]);
+  }, [chainKey, page]);
 
   useEffect(() => { loadListings(); }, [loadListings]);
 
@@ -140,14 +147,14 @@ export default function NftMarketplacePanel({
     setMineError(null);
     try {
       const json = await fetchMarketplaceListings({
-        chain: 'base', seller: evmAddress, activeOnly: true, limit: 100,
+        chain: chainKey, seller: evmAddress, activeOnly: true, limit: 100,
       });
       const rows = Array.isArray(json?.listings) ? json.listings : [];
       setMine(rows);
       const tokenIds = rows.map((r) => r.tokenId).filter(Boolean);
       if (tokenIds.length) {
         try {
-          const lv = await fetchTokenLevels(tokenIds);
+          const lv = await fetchTokenLevels(tokenIds, chainKey);
           setLevelByTokenId((prev) => ({ ...prev, ...lv }));
         } catch {}
       }
@@ -156,7 +163,7 @@ export default function NftMarketplacePanel({
     } finally {
       setMineLoading(false);
     }
-  }, [evmAddress]);
+  }, [chainKey, evmAddress]);
 
   useEffect(() => { if (view === 'mine') loadMine(); }, [view, loadMine]);
 
@@ -166,7 +173,7 @@ export default function NftMarketplacePanel({
     setOwnedLoading(true);
     setOwnedError(null);
     try {
-      const tokens = await fetchOwnedBaseNfts({ ownerAddress: evmAddress });
+      const tokens = await fetchOwnedMarketplaceNfts({ ownerAddress: evmAddress, chain: chainKey });
       setOwnedNfts(tokens);
       if (tokens.length === 1 && !pickTokenId) setPickTokenId(tokens[0].tokenId);
     } catch (err) {
@@ -174,7 +181,7 @@ export default function NftMarketplacePanel({
     } finally {
       setOwnedLoading(false);
     }
-  }, [evmAddress, pickTokenId]);
+  }, [chainKey, evmAddress, pickTokenId]);
 
   useEffect(() => { if (view === 'list-new') loadOwned(); }, [view, loadOwned]);
 
@@ -182,16 +189,16 @@ export default function NftMarketplacePanel({
   const ensureBaseGate = useCallback(() => {
     if (!evmAddress) {
       onOpenEvmModal?.();
-      setNotice('Connect a Base wallet to continue.');
+      setNotice(`Connect a ${chainLabel} wallet to continue.`);
       return false;
     }
     if (!evmOnBase) {
       onConnectBase?.();
-      setNotice('Switching wallet to Base…');
+      setNotice(`Switching wallet to ${chainLabel}...`);
       return false;
     }
     return true;
-  }, [evmAddress, evmOnBase, onConnectBase, onOpenEvmModal]);
+  }, [chainLabel, evmAddress, evmOnBase, onConnectBase, onOpenEvmModal]);
 
   const handleBuy = useCallback(async () => {
     if (!buyTarget) return;
@@ -205,28 +212,31 @@ export default function NftMarketplacePanel({
         tokenId: buyTarget.tokenId,
         paymentToken: buyTarget.paymentToken,
         priceWei: buyTarget.priceWei,
+        chain: chainKey,
       });
       setLastTxHash(hash);
       setNotice('✓ Purchase confirmed. NFT will appear in your wallet shortly.');
-      addClientBreadcrumb('marketplace.buy.success', { tokenId: buyTarget.tokenId, hash });
+      addClientBreadcrumb('marketplace.buy.success', { chain: chainKey, tokenId: buyTarget.tokenId, hash });
       setBuyTarget(null);
       // Indexer needs a couple of blocks; small delay before refresh.
       setTimeout(() => loadListings({ silent: true }), 4000);
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
       setNotice(msg.slice(0, 200));
-      addClientBreadcrumb('marketplace.buy.failed', { tokenId: buyTarget?.tokenId, message: msg }, 'warn');
+      addClientBreadcrumb('marketplace.buy.failed', { chain: chainKey, tokenId: buyTarget?.tokenId, message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [buyTarget, ensureBaseGate, evmAddress, evmWallet, loadListings]);
+  }, [buyTarget, chainKey, ensureBaseGate, evmAddress, evmWallet, loadListings]);
 
   const handleList = useCallback(async () => {
     if (!ensureBaseGate()) return;
     if (!pickTokenId) { setNotice('Pick an NFT to list.'); return; }
     let priceWei;
+    const paymentToken = paymentAddressFromId(payId, chainKey);
+    if (!paymentToken) { setNotice('Pick a valid payment token.'); return; }
     try {
-      priceWei = parsePriceToWei(priceInput, paymentAddressFromId(payId));
+      priceWei = parsePriceToWei(priceInput, paymentToken);
     } catch (err) {
       setNotice(err?.message || 'Invalid price');
       return;
@@ -241,24 +251,25 @@ export default function NftMarketplacePanel({
         evmWallet,
         ownerAddress: evmAddress,
         tokenId: pickTokenId,
-        paymentToken: paymentAddressFromId(payId),
+        paymentToken,
         priceWei,
         expiresAt,
+        chain: chainKey,
       });
       setLastTxHash(hash);
       setNotice('✓ Listed. Indexer will pick it up in a few seconds.');
-      addClientBreadcrumb('marketplace.list.success', { tokenId: pickTokenId, hash });
+      addClientBreadcrumb('marketplace.list.success', { chain: chainKey, tokenId: pickTokenId, hash });
       setView('mine');
       setPriceInput('');
       setTimeout(() => { loadMine(); loadListings({ silent: true }); }, 4000);
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
       setNotice(msg.slice(0, 200));
-      addClientBreadcrumb('marketplace.list.failed', { tokenId: pickTokenId, message: msg }, 'warn');
+      addClientBreadcrumb('marketplace.list.failed', { chain: chainKey, tokenId: pickTokenId, message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [ensureBaseGate, pickTokenId, priceInput, payId, expiryDays, evmWallet, evmAddress, loadMine, loadListings]);
+  }, [chainKey, ensureBaseGate, pickTokenId, priceInput, payId, expiryDays, evmWallet, evmAddress, loadMine, loadListings]);
 
   const handleCancel = useCallback(async (tokenId) => {
     if (!ensureBaseGate()) return;
@@ -266,20 +277,20 @@ export default function NftMarketplacePanel({
     setNotice(null);
     try {
       const { hash } = await cancelMarketplaceListing({
-        evmWallet, ownerAddress: evmAddress, tokenId,
+        evmWallet, ownerAddress: evmAddress, tokenId, chain: chainKey,
       });
       setLastTxHash(hash);
       setNotice('✓ Listing cancelled.');
-      addClientBreadcrumb('marketplace.cancel.success', { tokenId, hash });
+      addClientBreadcrumb('marketplace.cancel.success', { chain: chainKey, tokenId, hash });
       setTimeout(() => { loadMine(); loadListings({ silent: true }); }, 4000);
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
       setNotice(msg.slice(0, 200));
-      addClientBreadcrumb('marketplace.cancel.failed', { tokenId, message: msg }, 'warn');
+      addClientBreadcrumb('marketplace.cancel.failed', { chain: chainKey, tokenId, message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [ensureBaseGate, evmWallet, evmAddress, loadMine, loadListings]);
+  }, [chainKey, ensureBaseGate, evmWallet, evmAddress, loadMine, loadListings]);
 
   // ── Render ─────────────────────────────────────────────────────────
   return (
@@ -290,11 +301,11 @@ export default function NftMarketplacePanel({
       {!baseReady && (
         <div style={s.connectBanner}>
           <div style={s.connectBannerText}>
-            <span style={s.connectBannerTitle}>Marketplace runs on Base</span>
+            <span style={s.connectBannerTitle}>Marketplace runs on {chainLabel}</span>
             <span style={s.connectBannerSub}>
               {evmAddress
-                ? `Your wallet is connected to a different network. Switch to Base to trade.`
-                : `Buying and selling needs a Base wallet. Browsing works without one.`}
+                ? `Your wallet is connected to a different network. Switch to ${chainLabel} to trade.`
+                : `Buying and selling needs a ${chainLabel} wallet. Browsing works without one.`}
             </span>
           </div>
           <button
@@ -302,7 +313,7 @@ export default function NftMarketplacePanel({
             onClick={evmAddress ? onConnectBase : onOpenEvmModal}
             style={s.connectBannerBtn}
           >
-            {baseLabel}
+            {chainWalletLabel}
           </button>
         </div>
       )}
@@ -341,6 +352,7 @@ export default function NftMarketplacePanel({
           error={mineError}
           levelByTokenId={levelByTokenId}
           baseReady={baseReady}
+          chainLabel={chainLabel}
           busy={busy}
           onCancel={handleCancel}
         />
@@ -359,6 +371,8 @@ export default function NftMarketplacePanel({
           expiryDays={expiryDays}
           setExpiryDays={setExpiryDays}
           baseReady={baseReady}
+          chainLabel={chainLabel}
+          paymentOptions={paymentOptions}
           busy={busy}
           onSubmit={handleList}
           onCancel={() => setView('browse')}
@@ -375,7 +389,7 @@ export default function NftMarketplacePanel({
           onCancel={() => { if (busy !== 'buy') setBuyTarget(null); }}
           onConfirm={handleBuy}
           onConnectBase={evmAddress ? onConnectBase : onOpenEvmModal}
-          baseLabel={baseLabel}
+          baseLabel={chainWalletLabel}
         />
       )}
 
@@ -384,7 +398,7 @@ export default function NftMarketplacePanel({
           {notice}
           {lastTxHash && notice.startsWith('✓') && (
             <a
-              href={`https://basescan.org/tx/${lastTxHash}`}
+              href={`${txExplorerBase}${lastTxHash}`}
               target="_blank" rel="noreferrer"
               style={s.noticeLink}
             >view tx ↗</a>
@@ -475,11 +489,11 @@ function ListingCard({ listing, level, onBuy, isOwn }) {
   );
 }
 
-function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, busy, onCancel }) {
+function MyListingsView({ listings, loading, error, levelByTokenId, baseReady, chainLabel, busy, onCancel }) {
   if (!baseReady) {
     return (
       <div style={s.emptyState}>
-        <span>Connect your Base wallet to see your listings.</span>
+        <span>Connect your {chainLabel} wallet to see your listings.</span>
       </div>
     );
   }
@@ -535,7 +549,7 @@ function ListNewView({
   payId, setPayId,
   priceInput, setPriceInput,
   expiryDays, setExpiryDays,
-  baseReady, busy, onSubmit, onCancel,
+  baseReady, chainLabel, paymentOptions, busy, onSubmit, onCancel,
 }) {
   const scrollRef = useRef(null);
   const scroll = (dir) => scrollRef.current?.scrollBy({ left: dir * 220, behavior: 'smooth' });
@@ -543,7 +557,7 @@ function ListNewView({
   if (!baseReady) {
     return (
       <div style={s.emptyState}>
-        <span>Connect your Base wallet to list an NFT.</span>
+        <span>Connect your {chainLabel} wallet to list an NFT.</span>
       </div>
     );
   }
@@ -554,7 +568,7 @@ function ListNewView({
         <span style={s.formLabel}>1. Pick an NFT</span>
         {loading ? <div style={s.gridMeta}>Loading your NFTs…</div>
           : error ? <div style={s.notice}>Error: {error}</div>
-          : owned.length === 0 ? <div style={s.emptyStateInline}>You don't own any Demon King NFTs on Base.</div>
+          : owned.length === 0 ? <div style={s.emptyStateInline}>You don't own any Demon King NFTs on {chainLabel}.</div>
           : (
             <div style={s.nftCarouselRow}>
               {owned.length > 4 && <button type="button" onClick={() => scroll(-1)} style={s.scrollBtn}>‹</button>}
@@ -591,7 +605,7 @@ function ListNewView({
       <div style={s.formRow}>
         <span style={s.formLabel}>2. Payment token</span>
         <div style={s.payPicker}>
-          {PAYMENT_PICKER.map((p) => (
+          {paymentOptions.map((p) => (
             <button
               key={p.id}
               type="button"
@@ -611,7 +625,7 @@ function ListNewView({
           type="text"
           value={priceInput}
           onChange={(e) => setPriceInput(e.target.value)}
-          placeholder={`e.g. 50 ${PAYMENT_PICKER.find((p) => p.id === payId)?.label}`}
+          placeholder={`e.g. 50 ${paymentOptions.find((p) => p.id === payId)?.label || 'USDC'}`}
           style={s.input}
         />
       </div>

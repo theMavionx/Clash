@@ -278,10 +278,11 @@ async function fetchWalletTrades(player, opts = {}) {
   // returned [] because their wallet is EVM not base58. Net effect: zero
   // quest progress for every GMX trade despite the worker indexing them
   // correctly. Adding 'gmx' wires the verifier into the same path.
-  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix') {
+  if (dexFilter === 'avantis' || dexFilter === 'decibel' || dexFilter === 'gmx' || dexFilter === 'monad' || dexFilter === 'phoenix' || dexFilter === 'hyperliquid') {
     if (dexFilter === 'avantis' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'gmx'     && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'monad'   && !isEvmWallet(wallet)) return [];
+    if (dexFilter === 'hyperliquid' && !isEvmWallet(wallet)) return [];
     if (dexFilter === 'decibel' && !isAptosWallet(wallet)) return [];
     if (dexFilter === 'phoenix' && !isSolanaWallet(wallet)) return [];
     const fdb = futuresDbReadonly();
@@ -298,6 +299,8 @@ async function fetchWalletTrades(player, opts = {}) {
         ? "AND verified_source = 'server'"
         : dexFilter === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
+          : dexFilter === 'hyperliquid'
+            ? "AND verified_source = 'hyperliquid_api'"
           : "AND verified_source = 'worker'";
       const rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, created_at

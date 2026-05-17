@@ -114,6 +114,21 @@ export const DEX_CONFIG = {
     chainShort: 'SOL',
     description: 'Phoenix perps on Solana',
   },
+  hyperliquid: {
+    id: 'hyperliquid',
+    label: 'HYPERLIQUID',
+    shortLabel: 'HL',
+    emoji: 'HL',
+    logo: '/hyperliquid.svg',
+    logoIsWordmark: false,
+    color: '#22C55E',
+    colorDark: '#047857',
+    colorLight: 'rgba(34,197,94,0.15)',
+    borderColor: '#059669',
+    chain: 'Hyperliquid',
+    chainShort: 'HL',
+    description: 'Perps on Hyperliquid',
+  },
 };
 
 export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
@@ -198,7 +213,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -234,7 +249,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

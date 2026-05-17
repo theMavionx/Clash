@@ -16,9 +16,10 @@
 // link + refresh listings once the indexer has caught up.
 
 import { createPublicClient, getAddress, http } from 'viem';
-import { base } from 'viem/chains';
+import { arbitrum, base } from 'viem/chains';
 
 export const BASE_CHAIN_ID = 8453;
+export const ARBITRUM_CHAIN_ID = 42161;
 
 // Mirrors nft/deployments/base-marketplace-mainnet.json. Hardcoded here
 // because the file lives outside the web bundle; if the deployment ever
@@ -37,6 +38,40 @@ export const MARKETPLACE_BASE = {
   },
 };
 
+export const MARKETPLACE_ARBITRUM = {
+  chainId: ARBITRUM_CHAIN_ID,
+  marketplace: '0x7ef2844eb931edec8788972721526754aaa583e6',
+  demonKing:   '0x5Cc846B2bA0f030A5165a456eD903A5989E19F3F',
+  treasury:    '0xC024884ad9C5540996492Cc2DD080964941A3094',
+  defaultRoyaltyBps: 250,
+  paymentTokens: {
+    eth:  '0x0000000000000000000000000000000000000000',
+    usdc: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  },
+};
+
+const MARKETPLACE_BY_CHAIN = {
+  base: MARKETPLACE_BASE,
+  arbitrum: MARKETPLACE_ARBITRUM,
+};
+
+const VIEM_CHAIN_BY_MARKETPLACE_CHAIN = {
+  base,
+  arbitrum,
+};
+
+export function normalizeMarketplaceChain(chain = 'base') {
+  return MARKETPLACE_BY_CHAIN[String(chain || '').toLowerCase()] ? String(chain).toLowerCase() : 'base';
+}
+
+export function marketplaceConfig(chain = 'base') {
+  return MARKETPLACE_BY_CHAIN[normalizeMarketplaceChain(chain)] || MARKETPLACE_BASE;
+}
+
+export function marketplaceChainLabel(chain = 'base') {
+  return normalizeMarketplaceChain(chain) === 'arbitrum' ? 'Arbitrum' : 'Base';
+}
+
 const NFT_IMAGE_BASE_URL = String(import.meta.env?.VITE_NFT_IMAGE_BASE_URL || '/cdn/nft').replace(/\/+$/, '');
 const NFT_USE_TOKEN_IMAGE_PATHS = String(import.meta.env?.VITE_NFT_USE_TOKEN_IMAGE_PATHS || '').trim() === '1';
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
@@ -49,6 +84,7 @@ const TOKEN_META_BY_ADDRESS = (() => {
   m.set(ZERO_ADDRESS.toLowerCase(),                                  { symbol: 'ETH',  decimals: 18 });
   m.set(MARKETPLACE_BASE.paymentTokens.usdc.toLowerCase(),           { symbol: 'USDC', decimals: 6  });
   m.set(MARKETPLACE_BASE.paymentTokens.cop.toLowerCase(),            { symbol: 'CoP',  decimals: 18 });
+  m.set(MARKETPLACE_ARBITRUM.paymentTokens.usdc.toLowerCase(),       { symbol: 'USDC', decimals: 6  });
   return m;
 })();
 
@@ -68,11 +104,21 @@ export function paymentSymbolFromId(id) {
   return id?.toUpperCase?.() || '';
 }
 
-export function paymentAddressFromId(id) {
-  if (id === 'eth')  return MARKETPLACE_BASE.paymentTokens.eth;
-  if (id === 'usdc') return MARKETPLACE_BASE.paymentTokens.usdc;
-  if (id === 'cop')  return MARKETPLACE_BASE.paymentTokens.cop;
+export function paymentAddressFromId(id, chain = 'base') {
+  const cfg = marketplaceConfig(chain);
+  if (id === 'eth')  return cfg.paymentTokens.eth;
+  if (id === 'usdc') return cfg.paymentTokens.usdc;
+  if (id === 'cop')  return cfg.paymentTokens.cop || null;
   return null;
+}
+
+export function marketplacePaymentOptions(chain = 'base') {
+  const cfg = marketplaceConfig(chain);
+  return [
+    cfg.paymentTokens.eth ? { id: 'eth', label: 'ETH', sub: 'Native' } : null,
+    cfg.paymentTokens.usdc ? { id: 'usdc', label: 'USDC', sub: 'Stable' } : null,
+    cfg.paymentTokens.cop ? { id: 'cop', label: 'CoP', sub: 'Game' } : null,
+  ].filter(Boolean);
 }
 
 export function nftImageUrl(level, tokenId) {
@@ -178,21 +224,27 @@ export async function fetchMarketplaceListings({ chain = 'base', seller, activeO
   return json;
 }
 
-let cachedReadClient = null;
-function readClient() {
-  if (cachedReadClient) return cachedReadClient;
-  cachedReadClient = createPublicClient({ chain: base, transport: http() });
-  return cachedReadClient;
+const cachedReadClients = new Map();
+function readClient(chain = 'base') {
+  const chainKey = normalizeMarketplaceChain(chain);
+  if (cachedReadClients.has(chainKey)) return cachedReadClients.get(chainKey);
+  const client = createPublicClient({
+    chain: VIEM_CHAIN_BY_MARKETPLACE_CHAIN[chainKey] || base,
+    transport: http(),
+  });
+  cachedReadClients.set(chainKey, client);
+  return client;
 }
 
 // Multicall tokenLevel for a batch of token ids. Used to enrich indexer
 // rows with their current level (the indexer doesn't track upgrades).
-export async function fetchTokenLevels(tokenIds) {
+export async function fetchTokenLevels(tokenIds, chain = 'base') {
   const ids = (tokenIds || []).map((id) => String(id)).filter(Boolean);
   if (!ids.length) return {};
-  const client = readClient();
+  const cfg = marketplaceConfig(chain);
+  const client = readClient(chain);
   const calls = ids.map((id) => ({
-    address: getAddress(MARKETPLACE_BASE.demonKing),
+    address: getAddress(cfg.demonKing),
     abi: ERC721_ABI, functionName: 'tokenLevel', args: [BigInt(id)],
   }));
   const rows = await client.multicall({ contracts: calls, allowFailure: true });
@@ -205,44 +257,47 @@ export async function fetchTokenLevels(tokenIds) {
 
 // ───────────────── Approval helpers ───────────────────────────────────
 
-export async function isMarketplaceApprovedForAll({ evmWallet, ownerAddress }) {
+export async function isMarketplaceApprovedForAll({ evmWallet, ownerAddress, chain = 'base' }) {
   if (!evmWallet?.getPublicClient || !ownerAddress) return false;
-  const client = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
+  const cfg = marketplaceConfig(chain);
+  const client = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
   return client.readContract({
-    address: getAddress(MARKETPLACE_BASE.demonKing),
+    address: getAddress(cfg.demonKing),
     abi: ERC721_ABI, functionName: 'isApprovedForAll',
-    args: [getAddress(ownerAddress), getAddress(MARKETPLACE_BASE.marketplace)],
+    args: [getAddress(ownerAddress), getAddress(cfg.marketplace)],
   });
 }
 
-export async function setMarketplaceApprovalForAll({ evmWallet, ownerAddress }) {
-  await evmWallet.ensureChain(BASE_CHAIN_ID);
-  const walletClient = evmWallet.getWalletClient(BASE_CHAIN_ID);
-  const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
+export async function setMarketplaceApprovalForAll({ evmWallet, ownerAddress, chain = 'base' }) {
+  const cfg = marketplaceConfig(chain);
+  await evmWallet.ensureChain(cfg.chainId);
+  const walletClient = evmWallet.getWalletClient(cfg.chainId);
+  const publicClient = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
   const hash = await walletClient.writeContract({
     account: getAddress(ownerAddress),
-    address: getAddress(MARKETPLACE_BASE.demonKing),
+    address: getAddress(cfg.demonKing),
     abi: ERC721_ABI, functionName: 'setApprovalForAll',
-    args: [getAddress(MARKETPLACE_BASE.marketplace), true],
+    args: [getAddress(cfg.marketplace), true],
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
   return { hash, receipt };
 }
 
-async function ensureErc20Allowance({ evmWallet, ownerAddress, tokenAddress, amount }) {
-  const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
+async function ensureErc20Allowance({ evmWallet, ownerAddress, tokenAddress, amount, chain = 'base' }) {
+  const cfg = marketplaceConfig(chain);
+  const publicClient = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
   const allowance = await publicClient.readContract({
     address: getAddress(tokenAddress),
     abi: ERC20_ABI, functionName: 'allowance',
-    args: [getAddress(ownerAddress), getAddress(MARKETPLACE_BASE.marketplace)],
+    args: [getAddress(ownerAddress), getAddress(cfg.marketplace)],
   });
   if (allowance >= amount) return null;
-  const walletClient = evmWallet.getWalletClient(BASE_CHAIN_ID);
+  const walletClient = evmWallet.getWalletClient(cfg.chainId);
   const hash = await walletClient.writeContract({
     account: getAddress(ownerAddress),
     address: getAddress(tokenAddress),
     abi: ERC20_ABI, functionName: 'approve',
-    args: [getAddress(MARKETPLACE_BASE.marketplace), amount],
+    args: [getAddress(cfg.marketplace), amount],
   });
   await publicClient.waitForTransactionReceipt({ hash, confirmations: 1 });
   return hash;
@@ -251,20 +306,21 @@ async function ensureErc20Allowance({ evmWallet, ownerAddress, tokenAddress, amo
 // ───────────────── Write flows ────────────────────────────────────────
 
 export async function listNftOnMarketplace({
-  evmWallet, ownerAddress, tokenId, paymentToken, priceWei, expiresAt = 0,
+  evmWallet, ownerAddress, tokenId, paymentToken, priceWei, expiresAt = 0, chain = 'base',
 }) {
-  await evmWallet.ensureChain(BASE_CHAIN_ID);
+  const cfg = marketplaceConfig(chain);
+  await evmWallet.ensureChain(cfg.chainId);
   // setApprovalForAll first if needed — the contract's `list` reverts
   // with "Marketplace not approved" otherwise.
-  const approved = await isMarketplaceApprovedForAll({ evmWallet, ownerAddress });
+  const approved = await isMarketplaceApprovedForAll({ evmWallet, ownerAddress, chain });
   if (!approved) {
-    await setMarketplaceApprovalForAll({ evmWallet, ownerAddress });
+    await setMarketplaceApprovalForAll({ evmWallet, ownerAddress, chain });
   }
-  const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
-  const walletClient = evmWallet.getWalletClient(BASE_CHAIN_ID);
+  const publicClient = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
+  const walletClient = evmWallet.getWalletClient(cfg.chainId);
   const hash = await walletClient.writeContract({
     account: getAddress(ownerAddress),
-    address: getAddress(MARKETPLACE_BASE.marketplace),
+    address: getAddress(cfg.marketplace),
     abi: MARKETPLACE_ABI, functionName: 'list',
     args: [
       BigInt(tokenId),
@@ -277,13 +333,14 @@ export async function listNftOnMarketplace({
   return { hash, receipt };
 }
 
-export async function cancelMarketplaceListing({ evmWallet, ownerAddress, tokenId }) {
-  await evmWallet.ensureChain(BASE_CHAIN_ID);
-  const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
-  const walletClient = evmWallet.getWalletClient(BASE_CHAIN_ID);
+export async function cancelMarketplaceListing({ evmWallet, ownerAddress, tokenId, chain = 'base' }) {
+  const cfg = marketplaceConfig(chain);
+  await evmWallet.ensureChain(cfg.chainId);
+  const publicClient = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
+  const walletClient = evmWallet.getWalletClient(cfg.chainId);
   const hash = await walletClient.writeContract({
     account: getAddress(ownerAddress),
-    address: getAddress(MARKETPLACE_BASE.marketplace),
+    address: getAddress(cfg.marketplace),
     abi: MARKETPLACE_ABI, functionName: 'cancel',
     args: [BigInt(tokenId)],
   });
@@ -292,20 +349,21 @@ export async function cancelMarketplaceListing({ evmWallet, ownerAddress, tokenI
 }
 
 export async function buyMarketplaceListing({
-  evmWallet, buyerAddress, tokenId, paymentToken, priceWei,
+  evmWallet, buyerAddress, tokenId, paymentToken, priceWei, chain = 'base',
 }) {
-  await evmWallet.ensureChain(BASE_CHAIN_ID);
-  const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID) || readClient();
-  const walletClient = evmWallet.getWalletClient(BASE_CHAIN_ID);
+  const cfg = marketplaceConfig(chain);
+  await evmWallet.ensureChain(cfg.chainId);
+  const publicClient = evmWallet.getPublicClient(cfg.chainId) || readClient(chain);
+  const walletClient = evmWallet.getWalletClient(cfg.chainId);
   const isEth = isEthPayment(paymentToken);
   if (!isEth) {
     await ensureErc20Allowance({
-      evmWallet, ownerAddress: buyerAddress, tokenAddress: paymentToken, amount: BigInt(priceWei),
+      evmWallet, ownerAddress: buyerAddress, tokenAddress: paymentToken, amount: BigInt(priceWei), chain,
     });
   }
   const hash = await walletClient.writeContract({
     account: getAddress(buyerAddress),
-    address: getAddress(MARKETPLACE_BASE.marketplace),
+    address: getAddress(cfg.marketplace),
     abi: MARKETPLACE_ABI,
     functionName: isEth ? 'buyWithEth' : 'buyWithToken',
     args: [BigInt(tokenId)],
@@ -317,12 +375,17 @@ export async function buyMarketplaceListing({
 
 // ───────────────── Owner check (Base only) ────────────────────────────
 
-export async function fetchOwnedBaseNfts({ ownerAddress, signal } = {}) {
+export async function fetchOwnedMarketplaceNfts({ ownerAddress, chain = 'base', signal } = {}) {
   if (!ownerAddress) return [];
-  const r = await fetch(`/api/nft/owned/base/${encodeURIComponent(ownerAddress)}`, {
+  const chainKey = normalizeMarketplaceChain(chain);
+  const r = await fetch(`/api/nft/owned/${chainKey}/${encodeURIComponent(ownerAddress)}`, {
     signal, cache: 'no-store',
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j?.error || `owned (${r.status})`);
   return Array.isArray(j?.tokens) ? j.tokens : [];
+}
+
+export async function fetchOwnedBaseNfts({ ownerAddress, signal } = {}) {
+  return fetchOwnedMarketplaceNfts({ ownerAddress, chain: 'base', signal });
 }
