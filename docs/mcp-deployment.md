@@ -29,14 +29,31 @@ rebuild the frontend or require a new Godot export.
 
 ## Agent Skill Location
 
-`mcp/SKILLS.md` is the canonical agent playbook. It is exposed three ways:
+`mcp/SKILLS.md` is the canonical agent playbook. It is written in the
+Bankr-compatible `SKILL.md` format: YAML frontmatter first, then the agent
+instructions. It is exposed three ways:
 
 - HTTP: `GET /skills.md`
 - MCP resource: `clash://agent/skill`
 - MCP prompt: `clash_agent_onboarding`
 
-`mcp/AGENT_SKILL.md` remains as a backwards-compatible alias for older local
-workflows.
+`mcp/SKILL.md` is a copy with the exact filename Bankr expects for catalog
+submission. `mcp/AGENT_SKILL.md` remains as a backwards-compatible alias for
+older local workflows.
+
+Bankr skill submission shape:
+
+```text
+clash-of-perps-ai-agent/
+└── SKILL.md
+```
+
+The repo includes that ready-to-copy submission folder at
+`clash-of-perps-ai-agent/SKILL.md`. It intentionally has no `references/` or
+`scripts/` folder because Bankr marks them optional and this skill stays below
+the single-file size limit. The public hosted document at
+`https://mcp.clashofperps.fun/skills.md` should also validate as a standalone
+Bankr skill.
 
 ## Auth
 

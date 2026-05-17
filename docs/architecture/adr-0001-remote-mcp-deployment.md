@@ -44,14 +44,19 @@ AI client
   -> server/db.js + server/combat_session.js
 ```
 
-The canonical agent playbook lives at `mcp/SKILLS.md`. The MCP server exposes it
-as:
+The canonical agent playbook lives at `mcp/SKILLS.md`. It uses the
+Bankr-compatible `SKILL.md` format with YAML frontmatter so the hosted
+`/skills.md` document can also be submitted to or installed by skill catalogs.
+The MCP server exposes it as:
 
 - HTTP `GET /skills.md`
 - MCP resource `clash://agent/skill`
 - MCP prompt `clash_agent_onboarding`
 
-`mcp/AGENT_SKILL.md` remains for backwards compatibility.
+`mcp/SKILL.md` is the exact-filename catalog copy used by the MCP package.
+`clash-of-perps-ai-agent/SKILL.md` is the ready-to-copy Bankr provider
+directory for PR submission. `mcp/AGENT_SKILL.md` remains for backwards
+compatibility.
 
 Deployment is automated with:
 
@@ -154,10 +159,13 @@ Deployment is automated with:
 ## Validation Criteria
 - `node --check mcp/src/server.mjs` passes.
 - `https://mcp.clashofperps.fun/health` returns `ok: true`.
-- `https://mcp.clashofperps.fun/skills.md` returns the current playbook.
+- `https://mcp.clashofperps.fun/skills.md` returns the current playbook and
+  starts with Bankr-compatible YAML frontmatter.
 - Unauthenticated `/mcp` returns `401` with `WWW-Authenticate`.
 - Authenticated MCP `initialize` succeeds with a `cop_ai_...` key.
 
 ## Related Decisions
 - `docs/mcp-deployment.md`
 - `mcp/SKILLS.md`
+- `mcp/SKILL.md`
+- `clash-of-perps-ai-agent/SKILL.md`

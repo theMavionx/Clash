@@ -20,6 +20,9 @@ echo "health ok"
 skills_code="$(curl -fsS -o /tmp/clash-mcp-skills.md -w '%{http_code}' "$BASE_URL/skills.md")"
 [ "$skills_code" = "200" ] || { cat /tmp/clash-mcp-skills.md >&2 || true; echo "skills failed: $skills_code" >&2; exit 1; }
 grep -q "Clash of Perps AI Agent Skill" /tmp/clash-mcp-skills.md
+head -n 1 /tmp/clash-mcp-skills.md | grep -qx -- "---"
+grep -q "^name: clash-of-perps-ai-agent$" /tmp/clash-mcp-skills.md
+grep -q "^description: " /tmp/clash-mcp-skills.md
 echo "skills ok"
 
 unauth_code="$(curl -sS -o /tmp/clash-mcp-unauth.json -w '%{http_code}' "$BASE_URL/mcp")"

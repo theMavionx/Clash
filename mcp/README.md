@@ -45,8 +45,12 @@ Production shape:
 - MCP resource: `clash://agent/skill`
 - MCP prompt: `clash_agent_onboarding`
 
-`SKILLS.md` is the canonical human-readable playbook for agents. `AGENT_SKILL.md`
-is kept as a backwards-compatible alias for older local workflows.
+`SKILLS.md` is the canonical Bankr-compatible skill/playbook for agents. It
+starts with YAML frontmatter and is served at `/skills.md`.
+
+`SKILL.md` is the exact filename Bankr expects for catalog submission.
+`AGENT_SKILL.md` is kept as a backwards-compatible alias for older local
+workflows.
 
 Environment:
 

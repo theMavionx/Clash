@@ -18,6 +18,7 @@ const __dirname = path.dirname(__filename);
 const SKILL_PATHS = [
   process.env.CLASH_MCP_SKILLS_PATH,
   path.resolve(__dirname, '..', 'SKILLS.md'),
+  path.resolve(__dirname, '..', 'SKILL.md'),
   path.resolve(__dirname, '..', 'AGENT_SKILL.md'),
 ].filter(Boolean);
 const PORT = Number(process.env.CLASH_MCP_PORT || 4100);
