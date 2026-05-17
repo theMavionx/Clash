@@ -162,6 +162,20 @@ const BASE_NFT_SUPPLY_ABI = [
     outputs: [{ type: 'uint256' }],
   },
   {
+    name: 'owner',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+  },
+  {
+    name: 'ownerOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ type: 'uint256' }],
+    outputs: [{ type: 'address' }],
+  },
+  {
     name: 'maxSupply',
     type: 'function',
     stateMutability: 'view',
@@ -1281,9 +1295,125 @@ let _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
 // `currentSupply()` view (totalMinted - totalBurned, so a bridge_burn
 // decrements the local count); falls back to plain `totalMinted()` on
 // older implementations.
-async function readEvmCurrentSupplyOrTotalMinted({ address, publicClient }) {
+function parseEvmAddressList(value) {
+  return String(value || '')
+    .split(/[,\s]+/)
+    .map((item) => item.trim())
+    .filter((item) => /^0x[0-9a-fA-F]{40}$/.test(item));
+}
+
+function shouldScanEvmOwnersForSupply(chainKey) {
+  const normalized = String(chainKey || '').toUpperCase();
+  if (process.env[`NFT_${normalized}_SUPPLY_OWNER_SCAN`] != null) {
+    return process.env[`NFT_${normalized}_SUPPLY_OWNER_SCAN`] !== '0';
+  }
+  if (process.env.NFT_EVM_SUPPLY_OWNER_SCAN != null) {
+    return process.env.NFT_EVM_SUPPLY_OWNER_SCAN !== '0';
+  }
+  // Arbitrum had bridge burns before totalBurned existed, so currentSupply()
+  // over-counts there. ownerOf scan is the canonical live set.
+  return String(chainKey || '').toLowerCase() === 'arbitrum';
+}
+
+async function evmExcludedSupplyOwners({ chainKey, deployment, contractOwner }) {
+  const { getAddress } = await import('viem');
+  const normalized = String(chainKey || '').toUpperCase();
+  const raw = [
+    process.env.NFT_EVM_SUPPLY_EXCLUDED_OWNERS,
+    process.env[`NFT_${normalized}_SUPPLY_EXCLUDED_OWNERS`],
+  ].filter(Boolean).join(',');
+  const set = new Set(parseEvmAddressList(raw).map((addr) => getAddress(addr).toLowerCase()));
+
+  if (String(chainKey || '').toLowerCase() === 'arbitrum'
+      && process.env.NFT_ARBITRUM_COUNT_OPERATOR_SUPPLY !== '1') {
+    for (const addr of [deployment?.owner, deployment?.deployer, contractOwner]) {
+      if (/^0x[0-9a-fA-F]{40}$/.test(String(addr || ''))) {
+        set.add(getAddress(addr).toLowerCase());
+      }
+    }
+  }
+  return set;
+}
+
+async function readEvmLiveOwnerSupply({ address, publicClient, chainKey, deployment, totalMinted }) {
+  const maxScan = Math.max(0, Number(process.env.NFT_EVM_LIVE_OWNER_SCAN_MAX || 750));
+  const total = Number(totalMinted);
+  if (!Number.isSafeInteger(total) || total < 0 || total > maxScan) return null;
+  if (total === 0) return 0;
+
   const { getAddress } = await import('viem');
   const checksumAddr = getAddress(address);
+  let contractOwner = null;
+  try {
+    contractOwner = await publicClient.readContract({
+      address: checksumAddr,
+      abi: BASE_NFT_SUPPLY_ABI,
+      functionName: 'owner',
+    });
+  } catch {
+    // Non-ownable legacy deployments simply have no default owner exclusion.
+  }
+
+  const excludedOwners = await evmExcludedSupplyOwners({ chainKey, deployment, contractOwner });
+  const ids = Array.from({ length: total }, (_, index) => BigInt(index + 1));
+  const results = await publicClient.multicall({
+    contracts: ids.map((id) => ({
+      address: checksumAddr,
+      abi: BASE_NFT_SUPPLY_ABI,
+      functionName: 'ownerOf',
+      args: [id],
+    })),
+    allowFailure: true,
+  });
+
+  let live = 0;
+  let excluded = 0;
+  let missing = 0;
+  for (const result of results) {
+    if (result?.status !== 'success' || !result.result) {
+      missing += 1;
+      continue;
+    }
+    const owner = getAddress(result.result).toLowerCase();
+    if (excludedOwners.has(owner)) {
+      excluded += 1;
+      continue;
+    }
+    live += 1;
+  }
+  if (missing > 0 || excluded > 0) {
+    console.warn(`[NFT] ${chainKey} supply owner scan: live=${live}, missing=${missing}, excluded=${excluded}, totalMinted=${total}`);
+  }
+  return live;
+}
+
+async function readEvmCurrentSupplyOrTotalMinted({ address, publicClient, chainKey = 'base', deployment = {} }) {
+  const { getAddress } = await import('viem');
+  const checksumAddr = getAddress(address);
+  let totalMinted = null;
+  try {
+    totalMinted = await publicClient.readContract({
+      address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'totalMinted',
+    });
+  } catch {
+    totalMinted = null;
+  }
+
+  if (totalMinted != null && shouldScanEvmOwnersForSupply(chainKey)) {
+    try {
+      const scanned = await readEvmLiveOwnerSupply({
+        address: checksumAddr,
+        publicClient,
+        chainKey,
+        deployment,
+        totalMinted,
+      });
+      if (scanned != null) return scanned;
+    } catch (err) {
+      console.warn(`[NFT] ${chainKey} supply owner scan failed`, err?.message || err);
+    }
+  }
+
   try {
     const cs = await publicClient.readContract({
       address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'currentSupply',
@@ -1292,10 +1422,12 @@ async function readEvmCurrentSupplyOrTotalMinted({ address, publicClient }) {
   } catch {
     // Pre-V3.2 (no currentSupply selector) → use totalMinted.
     try {
-      const tm = await publicClient.readContract({
-        address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'totalMinted',
-      });
-      return Number(tm);
+      if (totalMinted == null) {
+        totalMinted = await publicClient.readContract({
+          address: checksumAddr, abi: BASE_NFT_SUPPLY_ABI, functionName: 'totalMinted',
+        });
+      }
+      return Number(totalMinted);
     } catch { return null; }
   }
 }
@@ -1304,9 +1436,10 @@ async function readBaseNftMintedCount(config) {
   try {
     if (!config?.nft) return null;
     const { createPublicClient, http } = await import('viem');
+    const { base } = await import('viem/chains');
     const rpcUrl = process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org';
-    const publicClient = createPublicClient({ transport: http(rpcUrl) });
-    const n = await readEvmCurrentSupplyOrTotalMinted({ address: config.nft, publicClient });
+    const publicClient = createPublicClient({ chain: base, transport: http(rpcUrl) });
+    const n = await readEvmCurrentSupplyOrTotalMinted({ address: config.nft, publicClient, chainKey: 'base' });
     if (n != null) return n;
     // Last-ditch: original readBaseNftSupply path (returns {totalMinted,...}).
     const r = await readBaseNftSupply(config);
@@ -1367,10 +1500,18 @@ async function readEvmGenericNftMintedCount(chainKey) {
   if (!contractAddr) return null;
   try {
     const { createPublicClient, http } = await import('viem');
+    const viemChains = await import('viem/chains');
+    const monadChain = { id: 143, name: 'Monad', nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } } };
+    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain }[chainKey];
     const rpcUrl = GAME_SHOP_EVM_CHAINS[chainKey]?.rpcUrl?.()
       || `https://${chainKey}.gateway.tenderly.co`; // last-ditch fallback
-    const publicClient = createPublicClient({ transport: http(rpcUrl) });
-    return await readEvmCurrentSupplyOrTotalMinted({ address: contractAddr, publicClient });
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    return await readEvmCurrentSupplyOrTotalMinted({
+      address: contractAddr,
+      publicClient,
+      chainKey,
+      deployment,
+    });
   } catch { return null; }
 }
 
