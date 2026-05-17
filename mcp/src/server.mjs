@@ -1593,12 +1593,12 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
   );
 }
 
-function createServer(session, agentKey) {
+function createServer(session, agentKey, reqMeta = {}) {
   const server = new McpServer({
     name: 'clash-of-perps-ai',
     version: '0.1.0',
   });
-  registerTools(server, session, agentKey);
+  registerTools(server, session, agentKey, reqMeta);
   return server;
 }
 
@@ -1637,7 +1637,7 @@ app.get('/.well-known/oauth-protected-resource', (req, res) => {
 });
 
 app.all('/mcp', rateLimit, agentAuth, async (req, res) => {
-  const mcpServer = createServer(req.agentSession, req.agentKey);
+  const mcpServer = createServer(req.agentSession, req.agentKey, requestLogMeta(req));
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
 
   res.on('close', () => {
@@ -1650,6 +1650,15 @@ app.all('/mcp', rateLimit, agentAuth, async (req, res) => {
     await transport.handleRequest(req, res, req.body);
   } catch (error) {
     console.error('[mcp] request failed:', error);
+    game.logMcpEvent({
+      playerId: req.agentSession?.player?.id || null,
+      aiKeyId: req.agentSession?.key?.id || null,
+      aiKeyPrefix: req.agentSession?.key?.key_prefix || null,
+      tool: 'mcp_http',
+      status: 'http_error',
+      error: error?.message || String(error),
+      ...requestLogMeta(req),
+    });
     if (!res.headersSent) {
       res.status(500).json({ error: 'MCP request failed' });
     }

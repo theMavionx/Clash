@@ -6925,6 +6925,58 @@ router.get('/admin/stats', adminAuth, (req, res) => {
     GROUP BY dex
   `).all();
 
+  const mcpSummaryFor = (whereSql) => db.db.prepare(`
+    SELECT COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) AS ok,
+           COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS errors,
+           COUNT(DISTINCT player_id) AS unique_players,
+           COALESCE(SUM(CASE WHEN tool = 'execute_ai_attack_plan' AND status = 'ok' THEN 1 ELSE 0 END), 0) AS ai_battles,
+           ROUND(COALESCE(AVG(duration_ms), 0), 1) AS avg_duration_ms,
+           COALESCE(MAX(duration_ms), 0) AS max_duration_ms,
+           MAX(created_at) AS latest_at
+    FROM mcp_events
+    ${whereSql}
+  `).get() || {};
+
+  const mcpPopularTools = db.db.prepare(`
+    SELECT tool,
+           COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS day,
+           COALESCE(SUM(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END), 0) AS week,
+           COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS errors,
+           ROUND(COALESCE(AVG(duration_ms), 0), 1) AS avg_duration_ms,
+           COALESCE(MAX(duration_ms), 0) AS max_duration_ms,
+           MAX(created_at) AS latest_at
+    FROM mcp_events
+    GROUP BY tool
+    ORDER BY week DESC, total DESC, latest_at DESC
+    LIMIT 20
+  `).all();
+
+  const mcpPopularErrors = db.db.prepare(`
+    SELECT tool,
+           status,
+           COALESCE(NULLIF(error, ''), status) AS error,
+           COUNT(*) AS total,
+           COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS day,
+           COALESCE(SUM(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END), 0) AS week,
+           MAX(created_at) AS latest_at
+    FROM mcp_events
+    WHERE status != 'ok'
+    GROUP BY tool, status, COALESCE(NULLIF(error, ''), status)
+    ORDER BY week DESC, total DESC, latest_at DESC
+    LIMIT 20
+  `).all();
+
+  const mcpRecent = db.db.prepare(`
+    SELECT e.id, e.tool, e.status, e.duration_ms, e.error, e.ai_key_prefix,
+           e.created_at, p.name AS player_name
+    FROM mcp_events e
+    LEFT JOIN players p ON p.id = e.player_id
+    ORDER BY e.id DESC
+    LIMIT 100
+  `).all();
+
   res.json({
     players: playerCount, buildings: buildingCount, replays: replayCount,
     accepted, rejected, shielded, recentBattles,
@@ -6949,6 +7001,16 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       avantis_top: dexTop.avantis || [],
     },
     ui_modes: byUiMode,
+    mcp: {
+      summary: {
+        day: mcpSummaryFor("WHERE created_at > datetime('now', '-24 hours')"),
+        week: mcpSummaryFor("WHERE created_at > datetime('now', '-7 days')"),
+        all: mcpSummaryFor(''),
+      },
+      popular_tools: mcpPopularTools,
+      popular_errors: mcpPopularErrors,
+      recent: mcpRecent,
+    },
     uptime: Math.floor(process.uptime()),
     memory: Math.round(process.memoryUsage().rss / 1024 / 1024),
   });

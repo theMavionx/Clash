@@ -471,6 +471,27 @@ app.get('/api/admin/panel', (req, res) => {
   <div class="panel" id="tab-stats">
     <div class="stats" id="serverStats"></div>
 
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">MCP Agent Usage</h2>
+    <div class="stats" id="mcpStats"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Popular MCP requests</h3>
+        <table><thead><tr>
+          <th>Tool</th><th>24h</th><th>7d</th><th>All</th><th>Errors</th><th>Avg</th><th>Latest</th>
+        </tr></thead><tbody id="mcpToolsBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">MCP errors</h3>
+        <table><thead><tr>
+          <th>Tool</th><th>Status</th><th>Error</th><th>24h</th><th>7d</th><th>All</th>
+        </tr></thead><tbody id="mcpErrorsBody"></tbody></table>
+      </div>
+    </div>
+    <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Recent MCP events</h3>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Tool</th><th>Status</th><th>Latency</th><th>Error</th>
+    </tr></thead><tbody id="mcpRecentBody"></tbody></table>
+
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">DEX Breakdown</h2>
     <div id="dexStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
 
@@ -797,6 +818,7 @@ async function loadAll() {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function fmtAdminTime(t) { return t ? new Date(String(t).replace(' ', 'T') + 'Z').toLocaleString() : '-'; }
 
 function renderPlayers() {
   const shielded   = players.filter(p => p.shield_active).length;
@@ -1172,6 +1194,71 @@ async function loadStats() {
       '<div class="stat"><div class="v" style="color:#8a9aaa">' + Math.round(s.economy.totalOre/1000) + 'K</div><div class="l">Total Ore</div></div>' +
       '<div class="stat"><div class="v">' + Math.floor(s.uptime/60) + 'm</div><div class="l">Uptime</div></div>' +
       '<div class="stat"><div class="v">' + s.memory + 'MB</div><div class="l">Memory</div></div>';
+
+    const mcp = s.mcp || {};
+    const mcpSummary = mcp.summary || {};
+    const day = mcpSummary.day || {};
+    const week = mcpSummary.week || {};
+    const all = mcpSummary.all || {};
+    function mcpWindowCard(label, row, color) {
+      const total = row.total || 0;
+      const errors = row.errors || 0;
+      const errColor = errors > 0 ? '#f87171' : '#4ade80';
+      return '<div class="stat" style="border-color:' + color + '">' +
+        '<div class="v" style="color:' + color + '">' + total + '</div>' +
+        '<div class="l">' + label + ' calls</div>' +
+        '<div style="font-size:11px;color:#9ca3af;margin-top:8px;line-height:1.5">' +
+          'players: <strong style="color:#e5e7eb">' + (row.unique_players || 0) + '</strong> | ' +
+          'battles: <strong style="color:#e5e7eb">' + (row.ai_battles || 0) + '</strong><br>' +
+          'errors: <strong style="color:' + errColor + '">' + errors + '</strong> | ' +
+          'avg: <strong style="color:#e5e7eb">' + Math.round(row.avg_duration_ms || 0) + 'ms</strong>' +
+        '</div>' +
+      '</div>';
+    }
+    document.getElementById('mcpStats').innerHTML =
+      mcpWindowCard('24h', day, '#38bdf8') +
+      mcpWindowCard('7d', week, '#a78bfa') +
+      mcpWindowCard('All', all, '#f59e0b') +
+      '<div class="stat"><div class="v" style="font-size:14px;color:#9ca3af">' + esc(fmtAdminTime(all.latest_at)) + '</div><div class="l">Latest MCP event</div></div>';
+
+    const mcpTools = mcp.popular_tools || [];
+    document.getElementById('mcpToolsBody').innerHTML = mcpTools.length
+      ? mcpTools.map(row => '<tr>' +
+          '<td class="mono" style="font-size:12px;color:#e5e7eb">' + esc(row.tool || '-') + '</td>' +
+          '<td>' + (row.day || 0) + '</td>' +
+          '<td>' + (row.week || 0) + '</td>' +
+          '<td style="font-weight:800">' + (row.total || 0) + '</td>' +
+          '<td style="color:' + ((row.errors || 0) ? '#f87171' : '#4ade80') + '">' + (row.errors || 0) + '</td>' +
+          '<td>' + Math.round(row.avg_duration_ms || 0) + 'ms</td>' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.latest_at)) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:24px">No MCP calls yet</td></tr>';
+
+    const mcpErrors = mcp.popular_errors || [];
+    document.getElementById('mcpErrorsBody').innerHTML = mcpErrors.length
+      ? mcpErrors.map(row => '<tr class="log-row-error">' +
+          '<td class="mono" style="font-size:12px">' + esc(row.tool || '-') + '</td>' +
+          '<td><span class="badge" style="background:#7f1d1d;color:#fecaca">' + esc(row.status || 'error') + '</span></td>' +
+          '<td class="log-msg">' + esc(row.error || '-') + '</td>' +
+          '<td>' + (row.day || 0) + '</td>' +
+          '<td>' + (row.week || 0) + '</td>' +
+          '<td style="font-weight:800">' + (row.total || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No MCP errors</td></tr>';
+
+    const mcpRecent = mcp.recent || [];
+    document.getElementById('mcpRecentBody').innerHTML = mcpRecent.length
+      ? mcpRecent.map(row => '<tr class="' + (row.status === 'ok' ? 'log-row-info' : 'log-row-error') + '">' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtAdminTime(row.created_at)) + '</td>' +
+          '<td>' + esc(row.player_name || row.ai_key_prefix || 'unknown') + '</td>' +
+          '<td class="mono" style="font-size:12px">' + esc(row.tool || '-') + '</td>' +
+          '<td>' + (row.status === 'ok'
+            ? '<span class="badge" style="background:#064e3b;color:#86efac">ok</span>'
+            : '<span class="badge" style="background:#7f1d1d;color:#fecaca">' + esc(row.status || 'error') + '</span>') + '</td>' +
+          '<td>' + (row.duration_ms == null ? '-' : Math.round(row.duration_ms) + 'ms') + '</td>' +
+          '<td class="log-msg">' + esc(row.error || '-') + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:24px">No MCP events yet</td></tr>';
 
     // DEX adoption + rewards breakdown
     function fmtUSD(n) {
