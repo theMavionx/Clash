@@ -315,7 +315,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     { Connection, PublicKey, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
     splToken,
     { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl },
-    { sendSolanaTransactionWithRetry },
+    { isBlockhashExpiredError, sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
     import('@solana/spl-token'),
@@ -414,15 +414,28 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     data: Buffer.from(quote.memo, 'utf8'),
   }));
 
-  const signature = await sendSolanaTransactionWithRetry({
-    instructions,
-    ownerPk: buyerPk,
-    connection,
-    signTransaction: (tx) => solWallet.signTransaction(tx),
-    priorityFeeMicroLamports: 50_000,
-    skipPreflight: false,
-    label: `shop.${payment}`,
-  });
+  let signature;
+  try {
+    signature = await sendSolanaTransactionWithRetry({
+      instructions,
+      ownerPk: buyerPk,
+      connection,
+      signTransaction: (tx) => solWallet.signTransaction(tx),
+      maxAttempts: 4,
+      priorityFeeMicroLamports: 250_000,
+      skipPreflight: false,
+      label: `shop.${payment}`,
+    });
+  } catch (err) {
+    if (isBlockhashExpiredError(err)) {
+      const friendly = new Error('Solana confirmed the payment too slowly for this RPC. The app now checks fallback RPCs, but this attempt expired before it could be redeemed. Try once more after refreshing.');
+      friendly.shortMessage = friendly.message;
+      friendly.code = 'solana_blockhash_expired';
+      friendly.cause = err;
+      throw friendly;
+    }
+    throw err;
+  }
 
   const grant = await redeemSolanaShopPurchase({
     token,

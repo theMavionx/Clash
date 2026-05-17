@@ -16,7 +16,7 @@ const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 
 const SEND_OPTIONS = {
   preflightCommitment: 'confirmed',
-  maxRetries: 5,
+  maxRetries: 20,
 };
 
 function sleep(ms) {
@@ -490,12 +490,71 @@ async function readSignatureState(connection, signature) {
   return { found: !!status, ok: false, source: 'none', status };
 }
 
-async function waitForLateLanding({ connection, signature, label, attempt, graceMs = 12_000 }) {
+function statusConnectionList(primaryConnection, statusConnections = null) {
+  const list = [];
+  const seen = new Set();
+  const add = (connection) => {
+    const endpoint = normalizeRpcEndpoint(connection?.rpcEndpoint);
+    if (!connection || !endpoint || seen.has(endpoint)) return;
+    seen.add(endpoint);
+    list.push(connection);
+  };
+  add(primaryConnection);
+  for (const connection of statusConnections || []) add(connection);
+  return list.slice(0, 5);
+}
+
+async function readSignatureStateAny(connections, signature) {
+  const list = Array.isArray(connections) ? connections.filter(Boolean) : [connections].filter(Boolean);
+  const states = await Promise.all(list.map(async (connection) => {
+    const host = rpcHost(connection);
+    try {
+      const state = await withTimeout(
+        readSignatureState(connection, signature),
+        SOLANA_RPC_PROBE_TIMEOUT_MS + 1_500,
+        'Solana signature status timeout',
+      );
+      return {
+        ...state,
+        rpcHost: host,
+      };
+    } catch (error) {
+      return {
+        found: false,
+        ok: false,
+        source: 'rpc_error',
+        status: null,
+        rpcHost: host,
+        rpcError: error?.message || String(error || 'status check failed'),
+      };
+    }
+  }));
+
+  const ok = states.find(state => state.ok);
+  if (ok) return { ...ok, source: `${ok.source}:${ok.rpcHost}` };
+
+  const failed = states.find(state => state.found && state.error);
+  if (failed) return { ...failed, source: `${failed.source}:${failed.rpcHost}` };
+
+  const pending = states.find(state => state.found);
+  if (pending) return { ...pending, source: `${pending.source}:${pending.rpcHost}` };
+
+  return {
+    found: false,
+    ok: false,
+    source: 'none',
+    status: null,
+    rpcHosts: states.map(state => state.rpcHost).filter(Boolean),
+  };
+}
+
+async function waitForLateLanding({ connection, statusConnections = null, signature, label, attempt, graceMs = 12_000 }) {
+  const connections = statusConnectionList(connection, statusConnections);
   const started = Date.now();
   let checks = 0;
   while (Date.now() - started < graceMs) {
     checks += 1;
-    const state = await readSignatureState(connection, signature);
+    const state = await readSignatureStateAny(connections, signature);
     if (state.ok) {
       logTx(label, 'landed_after_expiry', {
         attempt,
@@ -571,6 +630,7 @@ export async function sendSignedSolanaTransactionWithRetry({
     throw new Error('buildSignedTransaction callback is required');
   }
   const candidates = buildConnectionCandidates(connection);
+  const statusConnections = candidates.map(candidate => candidate.connection);
   let lastError = null;
   let forceFullRpcProbe = false;
 
@@ -644,6 +704,15 @@ export async function sendSignedSolanaTransactionWithRetry({
       try {
         await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
       } catch (sendError) {
+        const state = await readSignatureStateAny(statusConnectionList(attemptConnection, statusConnections), signature);
+        if (state.ok) {
+          logTx(label, 'confirmed_after_send_error', {
+            attempt,
+            source: state.source,
+            signature_short: shortSig(signature),
+          }, 'warn');
+          return { signature, rawTransaction, buildResult: built };
+        }
         throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
       }
       logTx(label, 'raw_sent', {
@@ -654,6 +723,7 @@ export async function sendSignedSolanaTransactionWithRetry({
 
       await waitForSignature({
         connection: attemptConnection,
+        statusConnections,
         signature,
         lastValidBlockHeight,
         rawTransaction,
@@ -697,6 +767,7 @@ export async function sendSolanaTransactionWithRetry({
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
   const candidates = buildConnectionCandidates(connection);
+  const statusConnections = candidates.map(candidate => candidate.connection);
   let lastError = null;
   let forceFullRpcProbe = false;
 
@@ -813,12 +884,22 @@ export async function sendSolanaTransactionWithRetry({
         try {
           await attemptConnection.sendRawTransaction(rawTransaction, sendOptions);
         } catch (sendError) {
+          const state = await readSignatureStateAny(statusConnectionList(attemptConnection, statusConnections), sig);
+          if (state.ok) {
+            logTx(label, 'confirmed_after_send_error', {
+              attempt,
+              source: state.source,
+              signature_short: shortSig(sig),
+            }, 'warn');
+            return sig;
+          }
           throw await attachSimulationLogs(sendError, attemptConnection, rawTransaction);
         }
         logTx(label, 'raw_sent', { attempt, rpc_host: rpcHost(attemptConnection), signature_short: shortSig(sig) });
       }
       await waitForSignature({
         connection: attemptConnection,
+        statusConnections,
         signature: sig,
         lastValidBlockHeight,
         rawTransaction,
@@ -847,6 +928,7 @@ export async function sendSolanaTransactionWithRetry({
 
 async function waitForSignature({
   connection,
+  statusConnections = null,
   signature,
   lastValidBlockHeight,
   rawTransaction = null,
@@ -855,9 +937,10 @@ async function waitForSignature({
 }) {
   let lastBroadcastAt = 0;
   let polls = 0;
+  const connections = statusConnectionList(connection, statusConnections);
   while (true) {
     polls += 1;
-    const state = await readSignatureState(connection, signature);
+    const state = await readSignatureStateAny(connections, signature);
     const status = state.status;
 
     if (state.found && state.error) {
@@ -877,7 +960,7 @@ async function waitForSignature({
 
     const currentBlockHeight = await getCurrentBlockHeight(connection).catch(() => null);
     if (Number.isFinite(currentBlockHeight) && currentBlockHeight > lastValidBlockHeight) {
-      if (await waitForLateLanding({ connection, signature, label, attempt })) return true;
+      if (await waitForLateLanding({ connection, statusConnections: connections, signature, label, attempt })) return true;
       const error = new Error(`Signature ${signature} has expired: block height exceeded.`);
       error.name = 'TransactionExpiredBlockheightExceededError';
       throw error;

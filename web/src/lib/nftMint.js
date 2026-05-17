@@ -248,12 +248,12 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
   if (!groupConfig) throw new Error(`Solana ${group.toUpperCase()} payment is not configured`);
 
   const [
-    { Connection, PublicKey: Web3PublicKey },
+    { ComputeBudgetProgram, Connection, PublicKey: Web3PublicKey },
     { createUmi },
     { generateSigner, publicKey, signerIdentity, some },
     { mplCore },
     { mintV1, mplCandyMachine },
-    { fromWeb3JsTransaction, toWeb3JsTransaction },
+    { fromWeb3JsInstruction, fromWeb3JsTransaction, toWeb3JsTransaction },
     bs58Module,
     { sendSignedSolanaTransactionWithRetry },
   ] = await Promise.all([
@@ -303,6 +303,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     const sent = await sendSignedSolanaTransactionWithRetry({
       connection: sendConnection,
       label: `nft.mint.${group}`,
+      maxAttempts: 4,
       skipPreflight: false,
       buildSignedTransaction: async ({ connection: attemptConnection, blockhash, lastValidBlockHeight }) => {
         const attemptUmi = createUmi(attemptConnection?.rpcEndpoint || rpcUrl)
@@ -318,7 +319,20 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
           owner: publicKey(address),
           group: some(group),
           mintArgs,
-        }).setBlockhash({ blockhash, lastValidBlockHeight });
+        })
+          .prepend([
+            {
+              instruction: fromWeb3JsInstruction(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 500_000 })),
+              signers: [],
+              bytesCreatedOnChain: 0,
+            },
+            {
+              instruction: fromWeb3JsInstruction(ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 })),
+              signers: [],
+              bytesCreatedOnChain: 0,
+            },
+          ])
+          .setBlockhash({ blockhash, lastValidBlockHeight });
         const signed = await builder.buildAndSign(attemptUmi);
         const signatureBytes = signed.signatures?.[0];
         if (!signatureBytes) throw new Error('Wallet did not return a signed mint transaction signature');
