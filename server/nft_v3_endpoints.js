@@ -80,6 +80,130 @@ function solanaOwnedRpcUrls() {
   ].filter((url, index, all) => url && all.indexOf(url) === index);
 }
 
+const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+
+function publicKeyText(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
+  if (typeof value.toBase58 === 'function') return value.toBase58();
+  return '';
+}
+
+function solanaCoreAssetId(asset) {
+  return publicKeyText(asset?.publicKey || asset?.address || asset?.id);
+}
+
+function solanaCoreAssetCollection(asset) {
+  const ua = asset?.updateAuthority;
+  if (ua?.type === 'Collection') return publicKeyText(ua.address);
+  if (ua?.__kind === 'Collection') return publicKeyText(ua.fields?.[0]);
+  for (const candidate of [asset?.collection?.publicKey, asset?.collection?.address, asset?.collection, asset?.collectionAddress]) {
+    const text = publicKeyText(candidate);
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) return text;
+  }
+  return '';
+}
+
+function solanaCoreAssetLevel(asset) {
+  const attrs = [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+  ].filter(Array.isArray).flat();
+  const levelAttr = attrs.find((row) => String(row?.key || row?.trait_type || '').toLowerCase() === 'level');
+  const level = Number(levelAttr?.value);
+  return normalizeNftLevel(level || 1);
+}
+
+function solanaCoreAssetToken(asset) {
+  const assetId = solanaCoreAssetId(asset);
+  const level = solanaCoreAssetLevel(asset);
+  return {
+    asset: assetId,
+    level,
+    name: asset?.name || `Demon King L${level}`,
+    imageUrl: nftLevelImageUrl(level, assetId),
+    chain: 'solana',
+    standard: 'mpl-core',
+  };
+}
+
+function solanaCoreAssetLooksRelevant(asset, collection) {
+  if (solanaCoreAssetCollection(asset) === collection) return true;
+  const name = String(asset?.name || '').toLowerCase();
+  const uri = String(asset?.uri || '').toLowerCase();
+  return name.includes('demon king') && uri.includes('/api/nft/solana/');
+}
+
+async function listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, collection) {
+  const [{ Connection, PublicKey }, { createUmi }, { mplCore, fetchAsset }, { publicKey }] = await Promise.all([
+    import('@solana/web3.js'),
+    import('@metaplex-foundation/umi-bundle-defaults'),
+    import('@metaplex-foundation/mpl-core'),
+    import('@metaplex-foundation/umi'),
+  ]);
+  const ownerPk = new PublicKey(ownerRaw);
+  let lastErr = null;
+  for (const rpc of solanaOwnedRpcUrls()) {
+    try {
+      const conn = new Connection(rpc, 'confirmed');
+      const signatures = await timeoutPromise(
+        conn.getSignaturesForAddress(ownerPk, { limit: 15 }, 'confirmed'),
+        6_000,
+        'Solana recent signature scan',
+      );
+      const parsedRows = await timeoutPromise(Promise.allSettled(signatures.map((row) => (
+        conn.getParsedTransaction(row.signature, {
+          commitment: 'confirmed',
+          maxSupportedTransactionVersion: 0,
+        })
+      ))), 10_000, 'Solana recent mint tx scan');
+
+      const candidateAssets = new Set();
+      for (const row of parsedRows) {
+        const tx = row.status === 'fulfilled' ? row.value : null;
+        if (!tx || tx.meta?.err) continue;
+        const logs = tx.meta?.logMessages || [];
+        if (!logs.some((line) => /Instruction: MintV1|Instruction: MintAsset/i.test(String(line)))) continue;
+        const topIxs = tx.transaction?.message?.instructions || [];
+        const innerIxs = (tx.meta?.innerInstructions || [])
+          .flatMap((set) => (set.instructions || []));
+        for (const ix of topIxs.concat(innerIxs)) {
+          const info = ix?.parsed?.info || {};
+          if (ix?.parsed?.type !== 'createAccount') continue;
+          if (String(info.owner || '') !== MPL_CORE_PROGRAM_ID) continue;
+          const asset = String(info.newAccount || '');
+          if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(asset)) candidateAssets.add(asset);
+        }
+      }
+      if (!candidateAssets.size) return null;
+
+      const umi = createUmi(rpc).use(mplCore());
+      const settled = await timeoutPromise(Promise.allSettled([...candidateAssets].map(async (assetId) => {
+        const asset = await fetchAsset(umi, publicKey(assetId));
+        if (publicKeyText(asset?.owner) !== ownerRaw) return null;
+        if (!solanaCoreAssetLooksRelevant(asset, collection)) return null;
+        return solanaCoreAssetToken(asset);
+      })), 8_000, 'Solana recent Core asset fetch');
+      const tokens = settled
+        .filter((row) => row.status === 'fulfilled' && row.value)
+        .map((row) => row.value);
+      return {
+        chain: 'solana',
+        owner: ownerRaw,
+        collection,
+        total: tokens.length,
+        tokens,
+        source: 'server-solana-recent-core',
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return null;
+}
+
 async function listOwnedSolanaToken2022Nfts(ownerRaw) {
   const { Connection, PublicKey } = require('@solana/web3.js');
   const {
@@ -595,15 +719,34 @@ function mountNftV3Endpoints(router, ctx) {
           token2022Error = err;
         }
 
+        let recentCoreBody = null;
+        try {
+          recentCoreBody = await listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, dep.collection);
+          if (recentCoreBody?.tokens?.length) {
+            _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
+            res.set('Cache-Control', 'public, max-age=10');
+            return res.json(recentCoreBody);
+          }
+        } catch {}
+
         const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-        const { mplCore, fetchAssetsByCollection } = await import('@metaplex-foundation/mpl-core');
+        const { mplCore, fetchAssetsByOwner } = await import('@metaplex-foundation/mpl-core');
         const { publicKey } = await import('@metaplex-foundation/umi');
         const rpc = process.env.NFT_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
         const umi = createUmi(rpc).use(mplCore());
         let assets = [];
         try {
-          assets = await fetchAssetsByCollection(umi, publicKey(dep.collection));
+          assets = await timeoutPromise(
+            fetchAssetsByOwner(umi, publicKey(ownerRaw), { skipDerivePlugins: true }),
+            12_000,
+            'Solana Core owner scan',
+          );
         } catch (err) {
+          if (recentCoreBody) {
+            _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
+            res.set('Cache-Control', 'public, max-age=10');
+            return res.json(recentCoreBody);
+          }
           if (token2022Body) {
             _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
             res.set('Cache-Control', 'public, max-age=10');
@@ -612,17 +755,14 @@ function mountNftV3Endpoints(router, ctx) {
           throw token2022Error || err;
         }
         const tokens = assets
-          .filter((a) => String(a.owner) === ownerRaw)
-          .map((a) => {
-            const lvl = a.attributes?.attributeList?.find((x) => x.key === 'level');
-            const level = normalizeNftLevel(lvl ? Number(lvl.value) : 1);
-            return {
-              asset: a.publicKey.toString(),
-              level,
-              name: a.name,
-              imageUrl: nftLevelImageUrl(level, a.publicKey.toString()),
-            };
-          });
+          .filter((a) => publicKeyText(a.owner) === ownerRaw)
+          .filter((a) => solanaCoreAssetLooksRelevant(a, dep.collection))
+          .map(solanaCoreAssetToken);
+        if (!tokens.length && recentCoreBody) {
+          _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
+          res.set('Cache-Control', 'public, max-age=10');
+          return res.json(recentCoreBody);
+        }
         if (!tokens.length && token2022Body) {
           _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
           res.set('Cache-Control', 'public, max-age=10');
