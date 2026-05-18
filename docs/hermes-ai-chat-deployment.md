@@ -44,11 +44,11 @@ The Clash backend reads:
 ```env
 CLASH_HERMES_ORCHESTRATOR_URL=http://127.0.0.1:8600
 CLASH_HERMES_ORCHESTRATOR_TOKEN=horg_...
-CLASH_HERMES_MODEL_CHAIN=nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,openrouter/owl-alpha
-CLASH_HERMES_PRIMARY_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
-CLASH_HERMES_FALLBACK_MODEL=liquid/lfm-2.5-1.2b-instruct:free
+CLASH_HERMES_MODEL_CHAIN=google/gemma-4-26b-a4b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,liquid/lfm-2.5-1.2b-instruct:free,openrouter/owl-alpha
+CLASH_HERMES_PRIMARY_MODEL=google/gemma-4-26b-a4b-it:free
+CLASH_HERMES_FALLBACK_MODEL=nvidia/nemotron-nano-12b-v2-vl:free
 CLASH_HERMES_FALLBACK_AFTER_RETRIES=1
-CLASH_HERMES_CHAT_TIMEOUT_MS=25000
+CLASH_HERMES_CHAT_TIMEOUT_MS=20000
 CLASH_HERMES_MODEL_CONTEXT_LENGTH=65536
 ```
 

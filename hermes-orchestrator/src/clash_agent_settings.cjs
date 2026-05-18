@@ -1,9 +1,10 @@
 const DEFAULT_MODEL_CHAIN = [
+  'google/gemma-4-26b-a4b-it:free',
   'nvidia/nemotron-nano-12b-v2-vl:free',
-  'liquid/lfm-2.5-1.2b-instruct:free',
   'minimax/minimax-m2.5:free',
   'openai/gpt-oss-120b:free',
   'openai/gpt-oss-20b:free',
+  'liquid/lfm-2.5-1.2b-instruct:free',
   'openrouter/owl-alpha',
 ];
 
