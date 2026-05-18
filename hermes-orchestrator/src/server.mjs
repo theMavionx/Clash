@@ -546,6 +546,13 @@ function isActionIntent(intent) {
   return !!intent?.action_required;
 }
 
+function orderedModelsForIntent(intent) {
+  if (isActionIntent(intent)) return MODEL_CHAIN;
+  const gemma = MODEL_CHAIN.find((model) => /gemma/i.test(model));
+  if (!gemma) return MODEL_CHAIN;
+  return [gemma, ...MODEL_CHAIN.filter((model) => model !== gemma)];
+}
+
 function intentProgressMessage(intent, fallback) {
   switch (intent?.kind) {
     case 'battle':
@@ -651,6 +658,7 @@ async function chatWithPlayer(playerId, body) {
   let lastError = null;
   const attemptedModels = [];
   const actionRequest = isActionIntent(intent);
+  const requestModelChain = orderedModelsForIntent(intent);
   const primaryAttempts = Math.max(1, actionRequest ? ACTION_PRIMARY_MODEL_RETRIES : PRIMARY_MODEL_RETRIES);
   const fallbackAttempts = Math.max(1, actionRequest ? ACTION_FALLBACK_MODEL_RETRIES : FALLBACK_AFTER_RETRIES);
   const requestTimeoutMs = actionRequest ? HERMES_ACTION_CHAT_TIMEOUT_MS : HERMES_CHAT_TIMEOUT_MS;
@@ -659,12 +667,12 @@ async function chatWithPlayer(playerId, body) {
     message: actionRequest ? intentProgressMessage(intent, 'Preparing the game agent') : 'Preparing the game agent',
     attempt: 0,
     model_index: 0,
-    total_models: MODEL_CHAIN.length,
+    total_models: requestModelChain.length,
     intent: intent.kind,
   });
 
-  for (let modelIndex = 0; modelIndex < MODEL_CHAIN.length; modelIndex += 1) {
-    const model = MODEL_CHAIN[modelIndex];
+  for (let modelIndex = 0; modelIndex < requestModelChain.length; modelIndex += 1) {
+    const model = requestModelChain[modelIndex];
     attemptedModels.push(model);
     let activeRow = null;
     try {
@@ -673,7 +681,7 @@ async function chatWithPlayer(playerId, body) {
         message: modelIndex === 0 ? 'Starting the primary agent route' : 'Switching to a backup route',
         attempt: 0,
         model_index: modelIndex,
-        total_models: MODEL_CHAIN.length,
+        total_models: requestModelChain.length,
         intent: intent.kind,
       });
       activeRow = await ensureModelRunning(safeId, model);
@@ -689,7 +697,7 @@ async function chatWithPlayer(playerId, body) {
         message: 'That route did not start cleanly, trying another one',
         attempt: 0,
         model_index: modelIndex,
-        total_models: MODEL_CHAIN.length,
+        total_models: requestModelChain.length,
         intent: intent.kind,
       });
       continue;
@@ -705,7 +713,7 @@ async function chatWithPlayer(playerId, body) {
           attempt,
           max_attempts: attemptsForModel,
           model_index: modelIndex,
-          total_models: MODEL_CHAIN.length,
+          total_models: requestModelChain.length,
           intent: intent.kind,
         });
         const response = await callHermesResponses(activeRow, payload, requestTimeoutMs);
@@ -715,7 +723,7 @@ async function chatWithPlayer(playerId, body) {
           attempt,
           max_attempts: attemptsForModel,
           model_index: modelIndex,
-          total_models: MODEL_CHAIN.length,
+          total_models: requestModelChain.length,
           intent: intent.kind,
         });
         const outputText = assertUsableHermesResponse(response);
@@ -728,7 +736,7 @@ async function chatWithPlayer(playerId, body) {
           attempt,
           max_attempts: attemptsForModel,
           model_index: modelIndex,
-          total_models: MODEL_CHAIN.length,
+          total_models: requestModelChain.length,
           intent: intent.kind,
         };
         await appendRecentMemory(safeId, input, outputText).catch(() => {});
@@ -752,7 +760,7 @@ async function chatWithPlayer(playerId, body) {
           attempt,
           max_attempts: attemptsForModel,
           model_index: modelIndex,
-          total_models: MODEL_CHAIN.length,
+          total_models: requestModelChain.length,
           intent: intent.kind,
         });
         console.warn(JSON.stringify({
@@ -776,8 +784,8 @@ async function chatWithPlayer(playerId, body) {
     phase: 'failed',
     message: 'All routes failed for this request',
     attempt: fallbackAttempts,
-    model_index: MODEL_CHAIN.length - 1,
-    total_models: MODEL_CHAIN.length,
+    model_index: requestModelChain.length - 1,
+    total_models: requestModelChain.length,
     intent: intent.kind,
   });
   throw lastError || new Error('Hermes chat failed');
