@@ -173,6 +173,9 @@ install_system_dependencies() {
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
     mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
+    local hermes_model_chain="nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,openrouter/owl-alpha"
+    local hermes_primary_model="nvidia/nemotron-nano-12b-v2-vl:free"
+    local hermes_fallback_model="liquid/lfm-2.5-1.2b-instruct:free"
 
     if [ ! -f "$ENV_FILE" ]; then
         if [ -f "$DEPLOY_ROOT/.env" ]; then
@@ -225,9 +228,10 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_MCP_AI_ATTACK_COOLDOWN_MS" "60000"
     ensure_env_default "CLASH_HERMES_ORCHESTRATOR_URL" "http://127.0.0.1:8600"
     ensure_env_default "CLASH_HERMES_ORCHESTRATOR_TOKEN" ""
-    ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "openai/gpt-oss-20b:free"
-    ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "google/gemma-4-31b-it:free"
-    ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "2"
+    ensure_env_default "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
+    ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
+    ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "10"
@@ -235,6 +239,10 @@ prepare_shared_runtime() {
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
     set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"
     set_env_value "CLASH_GAME_API_URL" "http://127.0.0.1:4000/api"
+    set_env_value "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
+    set_env_value "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
+    set_env_value "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
         if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then
