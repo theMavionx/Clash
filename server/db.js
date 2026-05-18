@@ -519,6 +519,11 @@ try {
     )
   `);
 } catch {}
+// Keep this immediately after the table exists. The early "safe migrations"
+// block can run before battle_sessions is created on a fresh DB, so this second
+// idempotent pass is what makes clean installs safe before prepared statements
+// reference surrendered_at.
+try { db.exec(`ALTER TABLE battle_sessions ADD COLUMN surrendered_at TEXT`); } catch {}
 
 // Paid utility purchases. Kept separate from `players.wallet`: a player can
 // be logged in through Aptos/Solana/etc. and still pay from a one-off Base

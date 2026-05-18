@@ -37,9 +37,9 @@ const ACTION_FALLBACK_MODEL_RETRIES = Number(process.env.CLASH_HERMES_ACTION_FAL
 const MCP_URL = process.env.CLASH_MCP_URL || 'https://mcp.clashofperps.fun/mcp';
 const HERMES_READY_TIMEOUT_MS = Number(process.env.CLASH_HERMES_READY_TIMEOUT_MS || 45_000);
 const HERMES_IDLE_SHUTDOWN_MS = Number(process.env.CLASH_HERMES_IDLE_SHUTDOWN_MS || 15 * 60_000);
-const HERMES_TOOL_TIMEOUT = Number(process.env.CLASH_HERMES_TOOL_TIMEOUT || 120);
+const HERMES_TOOL_TIMEOUT = Number(process.env.CLASH_HERMES_TOOL_TIMEOUT || 30);
 const HERMES_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_CHAT_TIMEOUT_MS || 20_000);
-const HERMES_ACTION_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS || 75_000);
+const HERMES_ACTION_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS || 45_000);
 const MODEL_CONTEXT_LENGTH = Number(process.env.CLASH_HERMES_MODEL_CONTEXT_LENGTH || 65_536);
 const MAX_INPUT_CHARS = Number(process.env.CLASH_HERMES_MAX_INPUT_CHARS || 8000);
 const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_CHARS || 24000);
@@ -195,11 +195,31 @@ function writePlayerConfig(playerId, row) {
     '# Managed by clash-hermes-orchestrator. Do not edit by hand.',
     'provider: openrouter',
     'provider_routing:',
-    '  sort: latency',
+    '  sort: throughput',
     'model:',
     `  default: ${yamlString(row.model || PRIMARY_MODEL)}`,
     `  context_length: ${MODEL_CONTEXT_LENGTH}`,
+    '  max_tokens: 500',
+    ...(FALLBACK_MODEL ? [
+      'fallback_model:',
+      '  provider: openrouter',
+      `  model: ${yamlString(FALLBACK_MODEL)}`,
+      '  timeout: 30',
+    ] : []),
     'auxiliary:',
+    '  mcp:',
+    '    provider: main',
+    '    timeout: 15',
+    '  session_search:',
+    '    provider: main',
+    '    timeout: 10',
+    '    max_concurrency: 1',
+    '  skills_hub:',
+    '    provider: main',
+    '    timeout: 10',
+    '  flush_memories:',
+    '    provider: main',
+    '    timeout: 10',
     '  compression:',
     `    context_length: ${MODEL_CONTEXT_LENGTH}`,
     '# Hermes v0.14 still honors top-level toolsets for profiles. The',
@@ -218,8 +238,12 @@ function writePlayerConfig(playerId, row) {
     '  external_dirs:',
     `    - ${yamlString(path.join(playerHome(playerId), 'skills'))}`,
     'agent:',
-    '  max_turns: 30',
-    '  gateway_timeout: 240',
+    '  max_turns: 10',
+    '  gateway_timeout: 90',
+    '  restart_drain_timeout: 30',
+    '  api_max_retries: 1',
+    '  reasoning_effort: minimal',
+    '  tool_use_enforcement: true',
     '  disabled_toolsets:',
     '    - terminal',
     '    - file',
@@ -227,6 +251,12 @@ function writePlayerConfig(playerId, row) {
     '    - web',
     '    - code_execution',
     '    - cronjob',
+    '    - skills',
+    '    - skills_hub',
+    '    - memory',
+    '    - session_search',
+    '    - todo',
+    '    - moa',
     'display:',
     '  background_process_notifications: result',
     'security:',
@@ -660,6 +690,8 @@ async function chatWithPlayer(playerId, body) {
     store: body?.store !== false,
   };
 
+  const overallStartedAt = Date.now();
+  const attemptRecords = [];
   let lastError = null;
   const attemptedModels = [];
   const actionRequest = isActionIntent(intent);
@@ -680,7 +712,9 @@ async function chatWithPlayer(playerId, body) {
     const model = requestModelChain[modelIndex];
     attemptedModels.push(model);
     let activeRow = null;
+    let ensureMs = 0;
     try {
+      const ensureStartedAt = Date.now();
       await setPlayerProgress(safeId, {
         phase: modelIndex === 0 ? 'starting_model' : 'fallback_model',
         message: modelIndex === 0 ? 'Starting the primary agent route' : 'Switching to a backup route',
@@ -690,6 +724,7 @@ async function chatWithPlayer(playerId, body) {
         intent: intent.kind,
       });
       activeRow = await ensureModelRunning(safeId, model);
+      ensureMs = Date.now() - ensureStartedAt;
     } catch (err) {
       lastError = err;
       const latest = state.players[safeId];
@@ -709,6 +744,7 @@ async function chatWithPlayer(playerId, body) {
     }
     const attemptsForModel = modelIndex === 0 ? primaryAttempts : fallbackAttempts;
     for (let attempt = 1; attempt <= attemptsForModel; attempt += 1) {
+      const attemptStartedAt = Date.now();
       try {
         await setPlayerProgress(safeId, {
           phase: modelIndex === 0 ? 'thinking' : 'fallback_thinking',
@@ -722,6 +758,7 @@ async function chatWithPlayer(playerId, body) {
           intent: intent.kind,
         });
         const response = await callHermesResponses(activeRow, payload, requestTimeoutMs);
+        const callMs = Date.now() - attemptStartedAt;
         await setPlayerProgress(safeId, {
           phase: 'checking_answer',
           message: 'Checking the answer before sending it',
@@ -732,6 +769,27 @@ async function chatWithPlayer(playerId, body) {
           intent: intent.kind,
         });
         const outputText = assertUsableHermesResponse(response);
+        const totalMs = Date.now() - overallStartedAt;
+        attemptRecords.push({
+          model,
+          attempt,
+          model_index: modelIndex,
+          status: 'ok',
+          ensure_ms: ensureMs,
+          call_ms: callMs,
+          total_ms: totalMs,
+        });
+        console.log(JSON.stringify({
+          event: 'hermes_chat_attempt_ok',
+          player_id: safeId,
+          model,
+          attempt,
+          model_index: modelIndex,
+          ensure_ms: ensureMs,
+          call_ms: callMs,
+          total_ms: totalMs,
+          intent: intent.kind,
+        }));
         activeRow.last_chat_at = nowIso();
         activeRow.last_error = null;
         activeRow.last_progress = {
@@ -752,11 +810,29 @@ async function chatWithPlayer(playerId, body) {
           fallback: modelIndex > 0,
           fallback_index: modelIndex,
           attempted_models: attemptedModels,
+          attempts: attemptRecords,
+          timings: {
+            total_ms: totalMs,
+            model_ensure_ms: ensureMs,
+            model_call_ms: callMs,
+          },
           output_text: outputText,
           response,
         };
       } catch (err) {
         lastError = err;
+        const failedMs = Date.now() - attemptStartedAt;
+        attemptRecords.push({
+          model,
+          attempt,
+          model_index: modelIndex,
+          status: 'error',
+          ensure_ms: ensureMs,
+          call_ms: failedMs,
+          total_ms: Date.now() - overallStartedAt,
+          error: err.message,
+          no_retry: !!err.no_retry,
+        });
         activeRow.last_error = `[${model}] ${err.message}`;
         await saveState();
         await setPlayerProgress(safeId, {

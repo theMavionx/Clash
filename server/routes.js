@@ -4023,7 +4023,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
   try {
     const agent = db.getOrCreateHermesAgent(req.player.id);
     if (agent.error) return res.status(400).json(agent);
-    const result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+    const result = hermesClient.tryStaticReply(message) || await hermesClient.chat(req.player, agent.mcp_key, message, {
       previous_response_id: req.body?.previous_response_id,
       idempotency_key: req.body?.idempotency_key,
       metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {},
@@ -4048,6 +4048,8 @@ router.post('/ai-chat/message', auth, async (req, res) => {
         fallback: !!result.fallback,
         fallback_index: result.fallback_index ?? null,
         attempted_models: result.attempted_models || null,
+        attempts: result.attempts || null,
+        timings: result.timings || null,
       },
     });
     res.json({

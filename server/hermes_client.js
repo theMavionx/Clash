@@ -55,7 +55,7 @@ function normalizeIntentText(text) {
 function classifyGameIntent(message) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
-  if (/(атак|атакуй|напад|напади|raid|battle|enemy|ворог|враг|бій|бой)/i.test(text)) {
+  if (/(атак|атакуй|напад|напади|raid|battle|enemy|ворог|враг|бій|бой|进攻|攻击|打仗|敵|敌|đánh|attack)/i.test(text)) {
     return {
       kind: 'battle',
       action_required: true,
@@ -63,7 +63,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> confirm loaded ships -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
     };
   }
-  if (/(збери|собери|collect).*(ресурс|реси|resources)|(?:ресурс|реси|resources).*(збери|собери|collect)/i.test(text)) {
+  if (/(збери|собери|collect|收集|thu thập).*(ресурс|реси|resources|资源|tài nguyên)|(?:ресурс|реси|resources|资源|tài nguyên).*(збери|собери|collect|收集|thu thập)/i.test(text)) {
     return {
       kind: 'collect_resources',
       action_required: true,
@@ -71,7 +71,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> collect_resources({}) -> summarize collected resources',
     };
   }
-  if (/(build|place|set up|setup|розстав|побуд|постав).*(base|баз)|(?:base|баз).*(build|place|set up|setup|розстав|побуд|постав)/i.test(text)) {
+  if (/(build|place|set up|setup|розстав|побуд|постав|建造|布置|xây).*(base|баз|基地|căn cứ)|(?:base|баз|基地|căn cứ).*(build|place|set up|setup|розстав|побуд|постав|建造|布置|xây)/i.test(text)) {
     return {
       kind: 'auto_build_base',
       action_required: true,
@@ -79,7 +79,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers',
     };
   }
-  if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building)/i.test(text)) {
+  if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building|建造|建筑|商店|港口|塔|xây)/i.test(text)) {
     return {
       kind: 'build',
       action_required: true,
@@ -87,7 +87,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> if broad base setup use auto_build_base; otherwise get_building_catalog if needed -> find_build_slots -> place_building -> summarize result',
     };
   }
-  if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень)/i.test(text)) {
+  if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень|升级|nâng cấp)/i.test(text)) {
     return {
       kind: 'upgrade',
       action_required: true,
@@ -95,7 +95,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> identify exact id/type -> upgrade_building or upgrade_troop -> summarize result',
     };
   }
-  if (/(кораб|ship|troop|військ|войск|load|reinforce|віднов|восстанов)/i.test(text)) {
+  if (/(кораб|ship|troop|військ|войск|load|reinforce|віднов|восстанов|船|部队|增援|tàu|quân)/i.test(text)) {
     return {
       kind: 'fleet',
       action_required: true,
@@ -103,7 +103,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> choose valid port/ship/troop ids -> use the relevant ship/troop MCP tool -> summarize result',
     };
   }
-  if (/(скіли|skills|що ти вмієш|что ты умеешь|можеш|умеешь)/i.test(text)) {
+  if (/(скіли|skills|що ти вмієш|что ты умеешь|можеш|умеешь|技能|你会|能力)/i.test(text)) {
     return {
       kind: 'skills',
       action_required: false,
@@ -129,6 +129,33 @@ function buildIntentInstructions(intent) {
     );
   }
   return lines.join('\n');
+}
+
+function tryStaticReply(message) {
+  const intent = classifyGameIntent(message);
+  if (intent.kind === 'skills') {
+    return {
+      ok: true,
+      model: 'static-router',
+      fallback: false,
+      fallback_index: 0,
+      attempted_models: [],
+      output_text: 'Я можу переглядати твою базу, збирати ресурси, будувати й апгрейдити будівлі, керувати кораблями та військами, відновлювати втрати після бою і запускати AI-атаки.',
+      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
+    };
+  }
+  if (/^(how to play|help|guide|tutorial)$/i.test(normalizeIntentText(message))) {
+    return {
+      ok: true,
+      model: 'static-router',
+      fallback: false,
+      fallback_index: 0,
+      attempted_models: [],
+      output_text: 'Build your economy, collect resources, upgrade Town Hall, load troops into ships, then launch AI battles. I can do those actions for you when you ask.',
+      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
+    };
+  }
+  return null;
 }
 
 function buildChatInput(message, history) {
@@ -250,4 +277,5 @@ module.exports = {
   provision,
   chat,
   reset,
+  tryStaticReply,
 };
