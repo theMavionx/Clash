@@ -157,8 +157,8 @@ export default function GameUI() {
               left: 'auto',
             }}
             onClick={() => setShowAiChat(true)}
-            title="Open AI agent chat"
-            aria-label="Open AI agent chat"
+            title="Open ClashHermes chat"
+            aria-label="Open ClashHermes chat"
           >
             <img
               src="/icons/ai-agent.png"

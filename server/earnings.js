@@ -323,6 +323,80 @@ const PHOENIX_FLIGHT_BUILDER_FEE_BPS = Number(
   || process.env.VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS
   || 10,
 ) || 10;
+const PHOENIX_API = (process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade').replace(/\/+$/, '');
+
+function phoenixTokenAmountToNumber(value, decimals = 6) {
+  if (value == null) return 0;
+  if (typeof value === 'object' && value.ui != null) {
+    const ui = Number(value.ui);
+    return Number.isFinite(ui) ? ui : 0;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return n / (10 ** decimals);
+}
+
+function parsePhoenixEvents(payload) {
+  return Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.data) ? payload.data
+    : Array.isArray(payload?.value) ? payload.value
+    : [];
+}
+
+async function fetchPhoenixTraderState(authority) {
+  const payload = await fetchJson(
+    `${PHOENIX_API}/trader/${encodeURIComponent(authority)}/state?traderPdaIndex=0`,
+    {},
+    10_000,
+  );
+  const traders = Array.isArray(payload?.traders) ? payload.traders : [];
+  return traders.find(t => String(t?.traderKey || '') === PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT)
+    || traders.find(t => Number(t?.traderSubaccountIndex || 0) === 0)
+    || traders[0]
+    || null;
+}
+
+async function fetchPhoenixCollateralTransfers(authority) {
+  let totalTransfers = 0;
+  let transferEvents = 0;
+  let depositTotal = 0;
+  let depositEvents = 0;
+  let pages = 0;
+  let cursor = null;
+  const seenCursors = new Set();
+
+  while (pages < 20) {
+    const qs = new URLSearchParams({ limit: '100', traderPdaIndex: '0' });
+    if (cursor) qs.set('nextCursor', cursor);
+    const payload = await fetchJson(
+      `${PHOENIX_API}/trader/${encodeURIComponent(authority)}/collateral-history?${qs.toString()}`,
+      {},
+      10_000,
+    );
+    pages++;
+    const rows = parsePhoenixEvents(payload);
+    for (const ev of rows) {
+      if (Number(ev?.traderSubaccountIndex ?? 0) !== 0) continue;
+      const amount = phoenixTokenAmountToNumber(ev?.amount, 6);
+      const type = String(ev?.eventType || ev?.type || '').toLowerCase();
+      if (type === 'transfer' && amount > 0) {
+        totalTransfers += amount;
+        transferEvents++;
+      } else if (type === 'deposit' && amount > 0) {
+        depositTotal += amount;
+        depositEvents++;
+      }
+    }
+    if (!payload?.hasMore) break;
+    const next = payload?.nextCursor || payload?.prevCursor || null;
+    if (!next || seenCursors.has(next)) break;
+    seenCursors.add(next);
+    cursor = next;
+  }
+
+  return { totalTransfers, transferEvents, depositTotal, depositEvents, pages };
+}
 
 async function fetchPhoenixEarnings() {
   const Db = loadSqlite();
@@ -346,19 +420,35 @@ async function fetchPhoenixEarnings() {
   }
 
   const feeBps = Math.max(0, PHOENIX_FLIGHT_BUILDER_FEE_BPS);
-  const earned = volume * (feeBps / 10000);
+  const estimated = volume * (feeBps / 10000);
+  const [state, history] = await Promise.all([
+    fetchPhoenixTraderState(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
+    fetchPhoenixCollateralTransfers(PHOENIX_FLIGHT_BUILDER_AUTHORITY),
+  ]);
+  const collateral = phoenixTokenAmountToNumber(state?.collateralBalance, 6);
+  const withdrawable = phoenixTokenAmountToNumber(state?.effectiveCollateralForWithdrawals, 6);
+  const portfolio = phoenixTokenAmountToNumber(state?.portfolioValue, 6);
+  const openPositions = Array.isArray(state?.positions) ? state.positions.length : 0;
   return {
-    earned_usd: earned,
+    earned_usd: history.totalTransfers,
     address: PHOENIX_FLIGHT_BUILDER_AUTHORITY || null,
     subaccount: PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT || null,
     currency: 'USDC (Phoenix)',
     volume_usd: volume,
     trades,
+    estimated_fee_usd: estimated,
+    collateral_usd: collateral,
+    withdrawable_usd: withdrawable,
+    portfolio_value_usd: portfolio,
+    transfer_events: history.transferEvents,
+    deposit_usd: history.depositTotal,
+    deposit_events: history.depositEvents,
+    open_positions: openPositions,
     builder_fee_pct: feeBps / 100,
     fee_per_side_pct: feeBps / 100,
-    model: 'single_builder_fee',
-    note: `Modelled: verified Phoenix fills volume x ${feeBps}bps Flight builder fee. Phoenix Flight currently collects on liquidity-removing fills only; resting maker portions may not accrue builder fees.`,
-    source_detail: 'phoenix_volume_x_flight_fee',
+    model: 'onchain_collateral_transfers',
+    note: `Actual Phoenix Flight fee collector transfer events from builder collateral history: ${history.transferEvents} transfer(s). Local ${feeBps}bps volume estimate is $${estimated.toFixed(4)} only for comparison. Builder trader also has $${collateral.toFixed(4)} collateral, $${withdrawable.toFixed(4)} withdrawable, ${openPositions} open position(s); deposits are excluded from earnings.`,
+    source_detail: 'phoenix_flight_collateral_transfers',
   };
 }
 
@@ -385,23 +475,39 @@ async function fetchPerplEarnings() {
     }
   }
 
-  const earned = volume * (PERPL_BUILDER_FEE_BPS / 10000);
+  const estimated = volume * (PERPL_BUILDER_FEE_BPS / 10000);
   return {
-    earned_usd: earned,
+    earned_usd: 0,
     address: null,
     currency: 'AUSD (Monad)',
     volume_usd: volume,
     trades,
+    estimated_fee_usd: estimated,
     builder_fee_pct: PERPL_BUILDER_FEE_BPS / 100,
     fee_per_side_pct: PERPL_BUILDER_FEE_BPS / 100,
-    model: 'single_builder_fee',
-    note: `Modelled: volume x ${PERPL_BUILDER_FEE_BPS}bps builder fee from verified Perpl fills.`,
-    source_detail: 'volume_x_builder_fee',
+    model: 'perpl_builder_fee_not_configured',
+    note: `Perpl fills are indexed for game rewards, but we do not currently pass a builder/referrer fee on Perpl orders and no exact fee-income source is configured. Local ${PERPL_BUILDER_FEE_BPS}bps volume estimate is $${estimated.toFixed(4)} only a hypothetical, not earned commission.`,
+    source_detail: 'perpl_builder_fee_not_configured',
   };
 }
 
 const HYPERLIQUID_BUILDER_ADDRESS = (process.env.HYPERLIQUID_BUILDER_ADDRESS || '').trim();
 const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 100) || 100;
+const HYPERLIQUID_API = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
+
+async function hyperliquidInfo(body) {
+  return fetchJson(`${HYPERLIQUID_API}/info`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 10_000);
+}
+
+function hyperliquidReferralState(payload) {
+  const tokenRows = Array.isArray(payload?.tokenToState) ? payload.tokenToState : [];
+  const usdcRow = tokenRows.find(row => Array.isArray(row) && Number(row[0]) === 0);
+  return usdcRow?.[1] || payload || {};
+}
 
 async function fetchHyperliquidEarnings() {
   const Db = loadSqlite();
@@ -425,20 +531,48 @@ async function fetchHyperliquidEarnings() {
   }
 
   const feeBps = Math.max(0, Math.min(100, HYPERLIQUID_BUILDER_FEE_TENTH_BPS)) / 10;
-  const earned = volume * (feeBps / 10000);
+  const estimated = volume * (feeBps / 10000);
+  if (!HYPERLIQUID_BUILDER_ADDRESS) {
+    return {
+      earned_usd: 0,
+      address: null,
+      currency: 'USDC (Hyperliquid)',
+      volume_usd: volume,
+      trades,
+      estimated_fee_usd: estimated,
+      builder_fee_pct: feeBps / 100,
+      fee_per_side_pct: feeBps / 100,
+      model: 'hyperliquid_referral_builder_rewards',
+      note: 'Builder address not configured yet. Volume is indexed, but builder fee attribution is off until HYPERLIQUID_BUILDER_ADDRESS is set.',
+      source_detail: 'hyperliquid_referral_builder_rewards',
+    };
+  }
+
+  const referral = await hyperliquidInfo({
+    type: 'referral',
+    user: HYPERLIQUID_BUILDER_ADDRESS.toLowerCase(),
+  });
+  const tokenState = hyperliquidReferralState(referral);
+  const builderRewards = Number(tokenState?.builderRewards ?? referral?.builderRewards ?? 0) || 0;
+  const claimedRewards = Number(tokenState?.claimedRewards ?? referral?.claimedRewards ?? 0) || 0;
+  const unclaimedRewards = Number(tokenState?.unclaimedRewards ?? referral?.unclaimedRewards ?? 0) || 0;
+  const cumulativeVolume = Number(tokenState?.cumVlm ?? referral?.cumVlm ?? 0) || 0;
   return {
-    earned_usd: earned,
-    address: HYPERLIQUID_BUILDER_ADDRESS || null,
+    earned_usd: builderRewards || claimedRewards + unclaimedRewards,
+    address: HYPERLIQUID_BUILDER_ADDRESS,
     currency: 'USDC (Hyperliquid)',
     volume_usd: volume,
     trades,
+    hyperliquid_cum_volume_usd: cumulativeVolume,
+    estimated_fee_usd: estimated,
+    claimed_rewards_usd: claimedRewards,
+    unclaimed_rewards_usd: unclaimedRewards,
+    builder_rewards_usd: builderRewards,
     builder_fee_pct: feeBps / 100,
     fee_per_side_pct: feeBps / 100,
-    model: 'single_builder_fee',
-    note: HYPERLIQUID_BUILDER_ADDRESS
-      ? `Modelled: volume x ${feeBps}bps builder fee from verified Hyperliquid fills.`
-      : 'Builder address not configured yet. Volume is indexed, but builder fee attribution is off until HYPERLIQUID_BUILDER_ADDRESS is set.',
-    source_detail: 'volume_x_builder_fee',
+    model: 'hyperliquid_referral_builder_rewards',
+    note: `Exact Hyperliquid referral builderRewards from info/referral. Unclaimed $${unclaimedRewards.toFixed(4)}, claimed $${claimedRewards.toFixed(4)}. Local ${feeBps}bps fill-volume estimate is $${estimated.toFixed(4)} only for comparison.`,
+    source_detail: 'hyperliquid_referral_builder_rewards',
   };
 }
 
@@ -469,9 +603,9 @@ async function fetchAllEarnings({ force = false } = {}) {
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
-    phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_volume_x_flight_fee' },
-    monad:    { ...wrap('monad',    mon), source: 'perpl_volume_x_builder_fee' },
-    hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_volume_x_builder_fee' },
+    phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
+    monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
+    hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
     last_updated: new Date(now).toISOString(),
   };
   out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid'].reduce(

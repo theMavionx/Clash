@@ -173,8 +173,8 @@ install_system_dependencies() {
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
     mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
-    local hermes_model_chain="openai/gpt-oss-120b:free,google/gemma-4-26b-a4b-it:nitro"
-    local hermes_primary_model="openai/gpt-oss-120b:free"
+    local hermes_model_chain="qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro"
+    local hermes_primary_model="qwen/qwen3-30b-a3b-instruct-2507:nitro"
     local hermes_fallback_model="google/gemma-4-26b-a4b-it:nitro"
 
     if [ ! -f "$ENV_FILE" ]; then

@@ -10,6 +10,7 @@ import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
+import { useRisex } from '../hooks/useRisex';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -41,6 +42,7 @@ function ProfileModal({ onClose }) {
   const monadHook = useMonad();
   const phoenixHook = usePhoenix();
   const hyperliquidHook = useHyperliquid();
+  const risexHook = useRisex();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
@@ -53,6 +55,8 @@ function ProfileModal({ onClose }) {
     ? phoenixHook
     : dex === 'hyperliquid'
     ? hyperliquidHook
+    : dex === 'risex'
+    ? risexHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -81,7 +85,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -90,7 +94,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -480,6 +484,16 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#22C55E', '#047857'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT HYPERLIQUID WALLET</button>
+          ) : dex === 'decibel' ? (
+            <button
+              style={{...cartoonBtn('#DAA520', '#B8860B'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => aptosConnect?.()}
+            >CONNECT PETRA WALLET</button>
+          ) : dex === 'risex' ? (
+            <button
+              style={{...cartoonBtn('#04DF83', '#047857'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT RISE WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -496,7 +510,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -677,7 +691,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>

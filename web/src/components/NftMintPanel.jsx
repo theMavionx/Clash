@@ -409,7 +409,9 @@ function NftMintPanel({ onClose }) {
   const evmAddress = evmWallet?.address || null;
   const evmOnBase = evmChainId === BASE_CHAIN_ID;
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
-  const gameProducts = gameShopConfig?.products || [];
+  const gameProducts = (gameShopConfig?.products || []).filter((product) => (
+    product.kind !== 'ai_messages' && product.kind !== 'ai_subscription'
+  ));
   // Shop chain is derived from the player's DEX choice — no manual
   // selector. Every DEX maps 1:1 to a chain (see DEX_TO_SHOP_CHAIN). Per-
   // chain readiness gates the buy button when the operator hasn't funded
@@ -451,13 +453,19 @@ function NftMintPanel({ onClose }) {
   const paymentOptions = useMemo(() => {
     const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
     const solanaGroups = mintConfig?.solana?.paymentGroups || mintConfig?.solana?.groups || {};
+    // While the mint config is still syncing (mintConfig === null) we
+    // can't yet know whether CoP/SKR rails are wired up — treating them
+    // as "SOON" during this loading window flashes a misleading badge.
+    // Only mark them unavailable once we actually have a config back
+    // and its readiness flag is false.
+    const configLoaded = !!mintConfig;
     return baseOptions.map((option) => ({
       ...option,
-      soon: option.requiresClash ? !mintConfig?.base?.clashReady
-        : option.requiresSkr ? !solanaGroups?.skr
+      soon: option.requiresClash ? (configLoaded && !mintConfig?.base?.clashReady)
+        : option.requiresSkr ? (configLoaded && !solanaGroups?.skr)
           : !!option.soon,
     }));
-  }, [mintConfig?.base?.clashReady, mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
+  }, [mintConfig, mintConfig?.base?.clashReady, mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
   const selected = useMemo(
     () => paymentOptions.find((option) => option.id === selectedPayment) || paymentOptions[0],
     [paymentOptions, selectedPayment],

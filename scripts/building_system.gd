@@ -244,7 +244,16 @@ func _get_th_level() -> int:
 				return b.get("level", 1)
 	return 1
 
+func _has_town_hall() -> bool:
+	for bs in _building_systems:
+		for b in bs.placed_buildings:
+			if b.get("id", "") == "town_hall":
+				return true
+	return false
+
 func _is_building_unlocked(building_id: String) -> bool:
+	if building_id != "town_hall" and not _has_town_hall():
+		return false
 	if not TH_UNLOCK.has(building_id):
 		return true
 	return _get_th_level() >= TH_UNLOCK[building_id]
@@ -1929,6 +1938,13 @@ func _toggle_shop() -> void:
 
 
 func _start_placement(building_id: String) -> void:
+	if building_id != "town_hall" and not _has_town_hall():
+		_show_error("Build Town Hall first!")
+		return
+	if not _is_building_unlocked(building_id):
+		var unlock_at: int = int(TH_UNLOCK.get(building_id, 1))
+		_show_error("%s unlocks at Town Hall level %d" % [building_defs.get(building_id, {}).get("name", building_id), unlock_at])
+		return
 	is_shop_open = false
 	if shop_panel:
 		shop_panel.visible = false
@@ -2495,6 +2511,10 @@ func _try_place_building() -> bool:
 	if not ghost or not ghost.visible:
 		return false
 	var def = building_defs[current_building_id]
+
+	if current_building_id != "town_hall" and not _has_town_hall():
+		_show_error("Build Town Hall first!")
+		return false
 
 	if not _can_place(current_grid_pos, def.cells):
 		return false

@@ -16,6 +16,27 @@ const {
 
 const { resolveModelChain } = clashSettings;
 
+function loadEnvFile(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!match) continue;
+    if (process.env[match[1]] !== undefined) continue;
+    let value = match[2];
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    process.env[match[1]] = value;
+  }
+}
+
+const CWD = process.cwd();
+loadEnvFile(path.join(CWD, '.env'));
+loadEnvFile(path.join(CWD, '..', '.env'));
+loadEnvFile(path.join(CWD, '..', '..', '.env'));
+loadEnvFile(path.join(CWD, 'server', '.env'));
+loadEnvFile(path.join(CWD, 'web', '.env'));
+
 const ROOT = path.resolve(process.env.CLASH_HERMES_ROOT || '/srv/clash-hermes');
 const PLAYERS_DIR = path.resolve(process.env.CLASH_HERMES_PLAYERS_DIR || path.join(ROOT, 'players'));
 const STATE_DIR = path.resolve(process.env.CLASH_HERMES_STATE_DIR || path.join(ROOT, 'state'));
@@ -23,7 +44,7 @@ const STATE_FILE = path.resolve(process.env.CLASH_HERMES_STATE_FILE || path.join
 const LOG_DIR = path.resolve(process.env.CLASH_HERMES_LOG_DIR || path.join(ROOT, 'logs'));
 const HOST = process.env.CLASH_HERMES_ORCHESTRATOR_HOST || '127.0.0.1';
 const PORT = Number(process.env.CLASH_HERMES_ORCHESTRATOR_PORT || 8600);
-const TOKEN = process.env.HERMES_ORCHESTRATOR_TOKEN || '';
+const TOKEN = process.env.HERMES_ORCHESTRATOR_TOKEN || process.env.CLASH_HERMES_ORCHESTRATOR_TOKEN || '';
 const HERMES_BIN = process.env.HERMES_BIN || 'hermes';
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
 const MODEL_CHAIN = resolveModelChain(process.env);
@@ -155,6 +176,7 @@ const GLOBAL_GAME_MEMORY = [
   '',
   'Common action mapping:',
   '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
+  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, report the shield remaining hours from the tool result.',
   '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
   '- "build my base", "set up base", or "arrange everything" means use auto_build_base with balanced focus. Do not ask the player for grids or a building list.',
   '- "build from shop" for one specific building means use get_building_catalog, find_build_slots, then place_building.',
@@ -164,9 +186,11 @@ const GLOBAL_GAME_MEMORY = [
   '- Keep landing slots coherent. Use nearby slots for small fleets and a connected front for larger fleets.',
   '- Cannon shots target defensive towers first: turret and archer_tower. Do not waste cannon shots on Town Hall.',
   '- Rally marker is optional. Use it only if it helps focus troops on a nearby useful objective.',
+  '- Named/targeted attacks cost 2x the normal gold attack cost for the attacker Town Hall level.',
   '- Respect the one MCP battle per minute cooldown. Do not spam retries during cooldown.',
   '',
   'Construction rules:',
+  '- Town Hall is mandatory and must be placed first on a new base. If it is missing, build town_hall before anything else.',
   '- grid_index 0 is the main island for normal buildings.',
   '- grid_index 1 is only for ports.',
   '- grid_index 2 is attack/deployment space and is never used for base construction.',
@@ -578,10 +602,7 @@ function isActionIntent(intent) {
 }
 
 function orderedModelsForIntent(intent) {
-  if (isActionIntent(intent)) return MODEL_CHAIN;
-  const gemma = MODEL_CHAIN.find((model) => /gemma/i.test(model));
-  if (!gemma) return MODEL_CHAIN;
-  return [gemma, ...MODEL_CHAIN.filter((model) => model !== gemma)];
+  return MODEL_CHAIN;
 }
 
 function intentProgressMessage(intent, fallback) {
@@ -638,6 +659,28 @@ function assertUsableHermesResponse(response) {
   return outputText;
 }
 
+function previewForLog(value, max = 700) {
+  return String(value ?? '')
+    .replace(/cop_ai_[A-Za-z0-9_-]+/g, 'cop_ai_***')
+    .replace(/sk-or-v1-[A-Za-z0-9_-]+/g, 'sk-or-v1-***')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1***')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function logHermesAudit(event, payload = {}) {
+  try {
+    console.log(JSON.stringify({
+      event,
+      at: nowIso(),
+      ...payload,
+    }));
+  } catch {
+    console.log(`[hermes] ${event}`);
+  }
+}
+
 async function callHermesResponses(row, payload, timeoutMs = HERMES_CHAT_TIMEOUT_MS) {
   return fetchJson(`${playerBaseUrl(row)}/v1/responses`, {
     method: 'POST',
@@ -662,6 +705,7 @@ async function chatWithPlayer(playerId, body) {
   if (!state.players[safeId]) throw new Error('player is not provisioned');
   const input = clampText(body?.input || body?.message, MAX_INPUT_CHARS).trim();
   if (!input) throw new Error('message required');
+  const traceId = body?.metadata?.trace_id || body?.trace_id || body?.idempotency_key || crypto.randomUUID();
   const requestInstructions = clampText(body?.instructions || '', MAX_INSTRUCTIONS_CHARS);
   const intent = metadataIntent(body);
   const baseInstructions = buildRuntimeInstructions(requestInstructions);
@@ -701,6 +745,18 @@ async function chatWithPlayer(playerId, body) {
   const primaryAttempts = Math.max(1, actionRequest ? ACTION_PRIMARY_MODEL_RETRIES : PRIMARY_MODEL_RETRIES);
   const fallbackAttempts = Math.max(1, actionRequest ? ACTION_FALLBACK_MODEL_RETRIES : FALLBACK_AFTER_RETRIES);
   const requestTimeoutMs = actionRequest ? HERMES_ACTION_CHAT_TIMEOUT_MS : HERMES_CHAT_TIMEOUT_MS;
+  logHermesAudit('hermes_chat_started', {
+    trace_id: traceId,
+    player_id: safeId,
+    intent: intent.kind,
+    action_request: actionRequest,
+    input_chars: input.length,
+    input_preview: previewForLog(input, 900),
+    model_chain: requestModelChain,
+    primary_attempts: primaryAttempts,
+    fallback_attempts: fallbackAttempts,
+    timeout_ms: requestTimeoutMs,
+  });
   await setPlayerProgress(safeId, {
     phase: 'preparing',
     message: actionRequest ? intentProgressMessage(intent, 'Preparing the game agent') : 'Preparing the game agent',
@@ -783,6 +839,7 @@ async function chatWithPlayer(playerId, body) {
         });
         console.log(JSON.stringify({
           event: 'hermes_chat_attempt_ok',
+          trace_id: traceId,
           player_id: safeId,
           model,
           attempt,
@@ -791,6 +848,7 @@ async function chatWithPlayer(playerId, body) {
           call_ms: callMs,
           total_ms: totalMs,
           intent: intent.kind,
+          output_preview: previewForLog(outputText, 900),
         }));
         activeRow.last_chat_at = nowIso();
         activeRow.last_error = null;
@@ -806,6 +864,18 @@ async function chatWithPlayer(playerId, body) {
         };
         await appendRecentMemory(safeId, input, outputText).catch(() => {});
         await saveState();
+        logHermesAudit('hermes_chat_completed', {
+          trace_id: traceId,
+          player_id: safeId,
+          intent: intent.kind,
+          duration_ms: totalMs,
+          model: activeRow.model || model,
+          fallback: modelIndex > 0,
+          attempted_models: attemptedModels,
+          attempts: attemptRecords,
+          output_chars: outputText.length,
+          output_preview: previewForLog(outputText, 1200),
+        });
         return {
           ok: true,
           model: activeRow.model || model,
@@ -848,6 +918,7 @@ async function chatWithPlayer(playerId, body) {
         });
         console.warn(JSON.stringify({
           event: 'hermes_chat_attempt_failed',
+          trace_id: traceId,
           player_id: safeId,
           model,
           attempt,
@@ -870,6 +941,15 @@ async function chatWithPlayer(playerId, body) {
     model_index: requestModelChain.length - 1,
     total_models: requestModelChain.length,
     intent: intent.kind,
+  });
+  logHermesAudit('hermes_chat_failed', {
+    trace_id: traceId,
+    player_id: safeId,
+    intent: intent.kind,
+    duration_ms: Date.now() - overallStartedAt,
+    attempted_models: attemptedModels,
+    attempts: attemptRecords,
+    error: lastError?.message || 'Hermes chat failed',
   });
   throw lastError || new Error('Hermes chat failed');
 }

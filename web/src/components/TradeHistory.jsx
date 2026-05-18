@@ -155,6 +155,42 @@ function normalizeHyperliquidTrade(fill) {
   };
 }
 
+function normalizeRisexTrade(fill, markets) {
+  const marketId = Number(fill?.market_id ?? fill?.marketId ?? fill?.market);
+  const m = (markets || []).find(x => Number(x.market_id ?? x.pair_index) === marketId)
+    || (markets || []).find(x => String(x.symbol || '').toUpperCase() === String(fill?.symbol || '').toUpperCase());
+  const symbol = String(fill?.symbol || fill?.market_symbol || m?.symbol || '').toUpperCase().replace(/-PERP$/u, '');
+  if (!symbol) return null;
+  const stepSize = Number(m?._risex?.stepSize || m?.lot_size || 1);
+  const stepPrice = Number(m?._risex?.stepPrice || m?.tick_size || 1);
+  const amount = fill?.size_steps != null
+    ? Math.abs(Number(fill.size_steps || 0) * stepSize)
+    : Math.abs(Number(fill?.size ?? fill?.quantity ?? fill?.base_size ?? 0));
+  const price = fill?.price_ticks != null
+    ? Number(fill.price_ticks || 0) * stepPrice
+    : Number(fill?.price ?? fill?.fill_price ?? fill?.execution_price ?? 0);
+  const sideRaw = String(fill?.side || '').toLowerCase();
+  const isAsk = sideRaw === 'ask' || sideRaw === 'sell' || sideRaw === 'short' || sideRaw === '1';
+  const isClose = fill?.reduce_only === true || fill?.reduceOnly === true || /close/i.test(String(fill?.direction || fill?.type || ''));
+  const side = isClose
+    ? (isAsk ? 'close_long' : 'close_short')
+    : (isAsk ? 'open_short' : 'open_long');
+  const ts = fill?.timestamp ?? fill?.time ?? fill?.created_at ?? fill?.createdAt;
+  return {
+    ...fill,
+    _dex: 'risex',
+    id: fill?.fill_id || fill?.trade_id || fill?.order_id || `${symbol}:${ts}:${price}:${amount}`,
+    symbol,
+    side,
+    action: side,
+    amount,
+    price,
+    fee: Math.abs(Number(fill?.fee ?? fill?.fee_amount ?? 0)),
+    created_at: ts,
+    realized_pnl_amount: fill?.realized_pnl ?? fill?.realizedPnl ?? fill?.closed_pnl,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -234,6 +270,21 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(normalizeHyperliquidTrade).filter(Boolean));
           return;
         }
+        if (dex === 'risex') {
+          const token = typeof window !== 'undefined' ? window._playerToken : null;
+          const r = await fetch(`/api/futures/risex/trade-history?dex=risex&account=${encodeURIComponent(addr)}&limit=100`, {
+            headers: {
+              ...(token ? { 'x-token': token } : {}),
+              'x-dex': 'risex',
+            },
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`RISEx history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
+          if (!cancelled) setTrades(rows.map(t => normalizeRisexTrade(t, markets)).filter(Boolean));
+          return;
+        }
 
         const r = await fetch(`${PACIFICA_API}/trades/history?account=${addr}`, {
           signal: controller.signal,
@@ -291,12 +342,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid';
+  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex';
 
   return (
     <table style={S.table}>

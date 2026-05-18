@@ -63,6 +63,8 @@ Treat the `cop_ai_...` key as a secret. Do not print it back to the user, commit
 - `remove_building({ building_id })`: remove one owned building.
 - `upgrade_troop({ troop_type })`: upgrade `knight`, `mage`, `barbarian`, `archer`, or `ranger`.
 
+Town Hall is mandatory and must be placed first on a new base. If `get_base_state` shows no `town_hall`, call `auto_build_base` or place `town_hall` before any mine, sawmill, barn, port, or defense.
+
 ## Ships And Troops
 
 - `buy_ship({ port_id })`: buy a ship at an owned port.
@@ -78,6 +80,8 @@ After every battle, inspect casualties and call `reinforce_ships` when the playe
 Use `execute_ai_attack_plan` for battles. It finds an enemy, validates the complete replay server-side, settles victory or defeat, stores the battle log, removes casualties, and broadcasts `AI ONLINE BATTLE` to any currently open browser.
 
 The MCP server allows one AI battle per player per minute. If the tool returns a cooldown error, wait for the cooldown instead of retrying repeatedly.
+For a named enemy request such as "attack egor4042007", pass `target_player_name` to `execute_ai_attack_plan`. The MCP server resolves the player by name, checks shields and attackability, then either starts the battle or returns a blocker. If the target is shielded, report the returned shield remaining hours to the player.
+Named/targeted attacks cost 2x the normal gold attack cost for the attacker's current Town Hall level. The tool returns both `normal_attack_cost_gold` and final `attack_cost_gold` when relevant.
 
 Default smart attack:
 
@@ -91,6 +95,7 @@ Manual attack shape:
 
 ```json
 {
+  "target_player_name": "egor4042007",
   "auto_tactics": true,
   "ships": [
     { "ship_index": 0, "slot": 1, "t": 0.2 },

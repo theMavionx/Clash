@@ -368,17 +368,16 @@ function ReplayHUD({ onReturnHome, battleTimer, replayDuration = 0, replayLabel 
   const replayCountdownStyle = mobile ? { ...hud.replayCountdownWrap, ...hud.replayCountdownMobile } : hud.replayCountdownWrap;
   const replayCountdownLabelStyle = mobile ? { ...hud.replayCountdownLabel, fontSize: 8, marginBottom: 2 } : hud.replayCountdownLabel;
   const replayCountdownTimeStyle = mobile ? { ...hud.replayCountdownTime, fontSize: 24 } : hud.replayCountdownTime;
-  const liveBattleStyle = mobile ? { ...hud.liveBattleWrap, ...hud.liveBattleMobile } : hud.liveBattleWrap;
   const badgeLabel = isLiveAgentBattle ? 'AI ONLINE' : replayLabel;
 
   return (
     <>
-      {isLiveAgentBattle ? (
-        <div style={liveBattleStyle} aria-live="polite">
-          <div style={hud.liveBattleKicker}>AI ONLINE</div>
-          <div style={hud.liveBattleTitle}>LIVE BATTLE</div>
-        </div>
-      ) : remaining != null && (
+      {/* Center banner is reserved for the replay countdown only. The
+          AI-ONLINE state used to render a second big "LIVE BATTLE"
+          banner here — that duplicated the same "AI ONLINE" label
+          already shown in the small right-side badge next to the
+          surrender flag, so we drop it. */}
+      {!isLiveAgentBattle && remaining != null && (
         <div style={replayCountdownStyle} aria-live="polite">
           <div style={replayCountdownLabelStyle}>REPLAY ENDS IN</div>
           <div style={replayCountdownTimeStyle}>{formatReplayTime(remaining)}</div>
@@ -511,9 +510,11 @@ function ActionButtons({ onOpenBattleLog }) {
     const thMaxCounts = buildingDefs?.th_max_counts || {};
     const thUnlock = buildingDefs?.th_unlock || {};
     const thLevel = buildingDefs?.th_level || 1;
+    const hasTownHall = (placed.town_hall || 0) > 0;
     let count = 0;
     for (const [id, def] of Object.entries(defs)) {
       if (id === 'flag') continue;
+      if (!hasTownHall && id !== 'town_hall') continue;
       // Check TH unlock
       const unlockAt = thUnlock[id];
       if (unlockAt && thLevel < unlockAt) continue;
@@ -944,49 +945,6 @@ const hud = {
     lineHeight: 1,
     textShadow: '0 1px 0 rgba(255,255,255,0.55)',
     fontVariantNumeric: 'tabular-nums',
-  },
-  liveBattleWrap: {
-    position: 'fixed',
-    top: 20,
-    left: '50%',
-    transform: 'translateX(-50%)',
-    zIndex: 11,
-    pointerEvents: 'none',
-    minWidth: 156,
-    padding: '8px 18px 10px',
-    background: 'linear-gradient(180deg, #fff6dc 0%, #ead9b2 100%)',
-    border: '3px solid #c2851b',
-    borderRadius: 12,
-    boxShadow: '0 8px 24px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.55)',
-    color: '#5C3A21',
-    textAlign: 'center',
-    fontFamily: '"Inter","Segoe UI",sans-serif',
-  },
-  liveBattleMobile: {
-    top: 'calc(env(safe-area-inset-top, 0px) + 66px)',
-    right: 10,
-    left: 'auto',
-    transform: 'none',
-    minWidth: 112,
-    padding: '6px 10px 8px',
-    borderRadius: 10,
-    zIndex: 101,
-  },
-  liveBattleKicker: {
-    color: '#1B5E20',
-    fontSize: 10,
-    fontWeight: 950,
-    letterSpacing: 0.5,
-    lineHeight: 1.1,
-    marginBottom: 3,
-    textTransform: 'uppercase',
-  },
-  liveBattleTitle: {
-    color: '#5C3A21',
-    fontSize: 20,
-    fontWeight: 950,
-    lineHeight: 1,
-    textShadow: '0 1px 0 rgba(255,255,255,0.55)',
   },
   speedBtn: {
     width: 56, height: 56,

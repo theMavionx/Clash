@@ -19,6 +19,7 @@ const DEX_WALLET = {
   gmx: { kind: 'evm', chain: 'Arbitrum', label: 'GMX', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
   monad: { kind: 'evm', chain: 'Monad', label: 'Perpl', cta: 'Reconnect Monad wallet', targetChain: 'monad' },
   hyperliquid: { kind: 'evm', chain: 'Arbitrum', label: 'Hyperliquid', cta: 'Reconnect Arbitrum wallet', targetChain: 'arbitrum' },
+  risex: { kind: 'evm', chain: 'RISE', label: 'RISEx', cta: 'Reconnect RISE wallet', targetChain: 'rise' },
   decibel: { kind: 'aptos', chain: 'Aptos', label: 'Decibel', cta: 'Reconnect Petra wallet' },
   pacifica: { kind: 'solana', chain: 'Solana', label: 'Pacifica', cta: 'Reconnect Solana wallet' },
   phoenix: { kind: 'solana', chain: 'Solana', label: 'Phoenix', cta: 'Reconnect Solana wallet' },
@@ -79,6 +80,10 @@ export default function WalletSessionRecovery() {
 
   const handleReconnect = useCallback(async () => {
     addClientBreadcrumb('wallet.recovery_reconnect_click', { dex, kind: meta.kind });
+    if (dex === 'decibel') {
+      await aptosWallet.connect?.();
+      return;
+    }
     if (meta.kind === 'evm') {
       const restored = await evmWallet.reconnectStoredProvider?.();
       if (!restored && !evmWallet.address) setEvmModalOpen(true);

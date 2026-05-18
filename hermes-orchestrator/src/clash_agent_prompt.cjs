@@ -1,4 +1,4 @@
-const CLASH_PROMPT_VERSION = 'clash-game-agent-v7-fast';
+const CLASH_PROMPT_VERSION = 'clash-game-agent-v8-targeted-attack';
 
 const TOOL_INCLUDE = [
   'get_base_state',
@@ -43,6 +43,7 @@ const CLASH_AGENT_PLAYBOOK = [
   '',
   '## Intent Mapping',
   'attack/find enemy/raid/атакуй/напади -> get_base_state -> if total loaded troops < 3, reinforce/load troops first -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize rewards, destroyed buildings, losses, and cooldown/blocker.',
+  'targeted attack, e.g. "attack egor4042007" -> get_base_state -> ensure/reinforce at least 3 loaded troops -> execute_ai_attack_plan({ target_player_name: "egor4042007", auto_tactics: true }) -> if shielded, report the shield remaining hours from the tool result.',
   'collect resources/збери ресурси -> get_base_state -> collect_resources({}) -> summarize collected resources and totals.',
   'build my base/setup base/розстав все/побудуй базу -> get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers.',
   'build/place one building -> get_base_state -> find_build_slots -> place_building -> summarize.',
@@ -52,11 +53,14 @@ const CLASH_AGENT_PLAYBOOK = [
   '',
   '## Game Rules',
   'grid_index 0: normal island buildings. grid_index 1: ports only. grid_index 2: attack/deployment space, never construction.',
+  'Town Hall is mandatory and must be placed first on a new base. If it is missing, build town_hall before any mine, sawmill, barn, port, or defense.',
   'Use barn, never barracks.',
   'Cannon shots target defensive towers first: turret and archer_tower. Do not waste cannon shots on Town Hall.',
   'Use nearby landing slots for small fleets; spread larger fleets only enough to avoid crowding.',
   'Use rally marker only when it improves troop focus on a nearby useful objective.',
   'Before an AI battle, keep at least 3 loaded troops across ships. Never intentionally attack with one troop; load or reinforce first, or report the blocker.',
+  'If the player names a specific enemy, pass that exact name as target_player_name to execute_ai_attack_plan. Do not use random matchmaking for named targets.',
+  'Named/targeted attacks cost 2x the normal gold attack cost for the attacker Town Hall level. If blocked by gold, report the final required gold.',
   'Respect the one MCP battle per minute cooldown. Do not spam retries.',
   '',
   '## Final Answer Shape',

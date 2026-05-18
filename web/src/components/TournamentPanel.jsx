@@ -12,6 +12,15 @@ import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (Number(n) || 0).toLocaleString().replace(/,/g, ' ');
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
+const DEX_LABELS = {
+  pacifica: 'Pacifica',
+  avantis: 'Avantis',
+  decibel: 'Decibel',
+  gmx: 'GMX',
+  monad: 'Perpl',
+  phoenix: 'Phoenix',
+  hyperliquid: 'Hyperliquid',
+};
 
 function fmtUsd(n) {
   const v = Number(n) || 0;
@@ -21,6 +30,12 @@ function fmtUsd(n) {
 
 function fmtPrize(amount, currency = 'USD') {
   return `${fmtUsd(amount)} ${currency || 'USD'}`;
+}
+
+function fmtTeamMetric(metric, value) {
+  if (metric === 'volume_usd' || metric === 'pnl_usd') return fmtUsd(value);
+  if (metric === 'points') return `${Number(value || 0).toFixed(1)} pts`;
+  return fmt(value);
 }
 
 function fmtDate(s) {
@@ -64,6 +79,15 @@ function sortLabel(tOrSort) {
     return parts.length ? parts.join(' / ') : 'Custom points';
   }
   return 'PnL';
+}
+
+function dexLabel(t, fallbackDex) {
+  if (t?.dex_label) return t.dex_label;
+  if (t?.dex_scope === 'all') return 'All DEXes';
+  const list = Array.isArray(t?.eligible_dexes) ? t.eligible_dexes : [];
+  if (list.length > 1) return list.map(d => DEX_LABELS[d] || String(d).toUpperCase()).join(', ');
+  const dex = list[0] || t?.dex || fallbackDex || '';
+  return DEX_LABELS[dex] || String(dex).toUpperCase();
 }
 
 function featuredMetric(sortKey, row) {
@@ -252,7 +276,7 @@ function TournamentPanel({ onClose }) {
                     <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
                       <div style={S.histName}>{h.name}</div>
                       <div style={S.histSub}>
-                        Ended {ended}
+                        {dexLabel(h, dex)} | Ended {ended}
                         {Number(h.gold_boost) !== 1 && <> · ×{h.gold_boost}G</>}
                         {Number(h.trophy_boost) !== 1 && <> · ×{h.trophy_boost}T</>}
                         {placed ? <> · sort: {sortLabel(h)}</> : <> · did not join</>}
@@ -277,7 +301,11 @@ function TournamentPanel({ onClose }) {
                 <div style={S.tName}>{t.name}</div>
                 {t.description && <div style={S.tDesc}>{t.description}</div>}
                 <div style={S.tagRow}>
+                  <span style={S.dexTag}>{dexLabel(t, dex)}</span>
+                  {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
+                  {t.mode === 'dex_vs_dex' && <span style={S.tag}>Winner: {t.team_score_label || 'Volume'}</span>}
+                  {t.mode === 'dex_vs_dex' && <span style={S.tag}>Player payout: {t.team_member_reward_label || 'Volume'}</span>}
                   {isHistory
                     ? <span style={S.endedTag}>ENDED</span>
                     : <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
@@ -392,6 +420,21 @@ function TournamentPanel({ onClose }) {
               )}
 
               <div style={S.lbHeader}>Leaderboard</div>
+              {t.mode === 'dex_vs_dex' && board?.teams?.teams?.length > 0 && (
+                <div style={S.teamBoard}>
+                  {board.teams.teams.map((team) => (
+                    <div key={team.dex} style={team.winner ? S.teamWinner : S.teamCard}>
+                      <div style={S.teamName}>#{team.rank} {team.label}</div>
+                      <div style={S.teamMeta}>
+                        {fmtTeamMetric(board.teams.score_by, team.score)} | {team.players} players
+                      </div>
+                      {Number(team.prize_pool_usd || 0) > 0 && (
+                        <div style={S.teamPrize}>{fmtPrize(team.prize_pool_usd, t.prize_currency)} pool</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={S.lbList}>
                 {!board && <div style={S.empty}>Loading…</div>}
                 {board && board.leaderboard.length === 0 && (
@@ -426,6 +469,7 @@ function TournamentPanel({ onClose }) {
                           {r.name || (r.wallet || '').slice(0, 6) + '…'}{isMe ? ' (you)' : ''}
                         </span>
                         <span style={S.subRow}>
+                          {r.team_label && <>{r.team_label} | </>}
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
                           {prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount, r.prize_currency || t.prize_currency)} prize</strong></>}
                         </span>
@@ -534,6 +578,16 @@ const S = {
   tName: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 4 },
   tDesc: { fontSize: 12, color: '#7c5a3a', lineHeight: 1.4, marginBottom: 8 },
   tagRow: { display: 'flex', flexWrap: 'wrap', gap: 5 },
+  dexTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#e0f2fe', border: '2px solid #38bdf8', color: '#075985',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  teamTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#fee2e2', border: '2px solid #ef4444', color: '#991b1b',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
   tag: {
     fontSize: 10, fontWeight: 800, padding: '3px 7px', borderRadius: 6,
     background: '#fdf8e7', border: '2px solid #d4c8b0', color: '#7c5a3a',
@@ -560,6 +614,16 @@ const S = {
     background: '#dcfce7', border: '2px solid #16a34a', color: '#15803d',
     textTransform: 'uppercase', letterSpacing: 0.4,
   },
+  teamBoard: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 6 },
+  teamCard: {
+    background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 10, padding: 8,
+  },
+  teamWinner: {
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 10, padding: 8,
+  },
+  teamName: { fontSize: 11, fontWeight: 900, color: '#5C3A21' },
+  teamMeta: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 2 },
+  teamPrize: { fontSize: 10, fontWeight: 900, color: '#15803d', marginTop: 3 },
 
   rewardBox: {
     background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,

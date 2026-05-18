@@ -10,6 +10,7 @@ const gmxRewards = require('./gmx-rewards-worker');
 const phoenixRewards = require('./phoenix-rewards-worker');
 const hyperliquid = require('./hyperliquid');
 const hyperliquidRewards = require('./hyperliquid-rewards-worker');
+const risex = require('./risex');
 
 const router = express.Router();
 
@@ -208,7 +209,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -228,7 +229,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -258,7 +259,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -299,6 +300,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await hyperliquid.getAccountByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'risex') {
+      const address = String(req.query.address || '').trim();
+      if (!risex.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await risex.getAccountByAddress(address);
       return res.json(info);
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
@@ -560,6 +569,7 @@ router.get('/markets', async (req, res) => {
     const info = dex === 'avantis' ? await avantis.getMarketInfo()
       : dex === 'gmx' ? await gmx.getMarketInfo()
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
+      : dex === 'risex' ? await risex.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -573,6 +583,7 @@ router.get('/prices', async (req, res) => {
     const prices = dex === 'avantis' ? await avantis.getPrices()
       : dex === 'gmx' ? await gmx.getPrices()
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
+      : dex === 'risex' ? await risex.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -644,6 +655,14 @@ router.get('/positions', async (req, res) => {
       const positions = await hyperliquid.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'risex') {
+      const address = String(req.query.address || '').trim();
+      if (!risex.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await risex.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -685,6 +704,14 @@ router.get('/orders', async (req, res) => {
       const orders = await hyperliquid.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'risex') {
+      const address = String(req.query.address || '').trim();
+      if (!risex.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await risex.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -699,7 +726,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -1210,6 +1237,309 @@ router.post('/hyperliquid/import-fills', auth, async (req, res) => {
   }
 });
 
+function requireRisexOwner(req, res) {
+  if (req.dex !== 'risex') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to risex before calling RISEx endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'risex',
+    });
+    return null;
+  }
+  const account = risex.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
+  const playerWallet = risex.normalizeAddress(req.playerWallet);
+  if (!account) {
+    res.status(400).json({ error: 'account required (0x...)' });
+    return null;
+  }
+  if (playerWallet && account !== playerWallet) {
+    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
+    return null;
+  }
+  return { account };
+}
+
+router.get('/risex/system-config', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'risex') return res.status(409).json({ error: `Account is registered for '${req.dex}'. Switch DEX to risex.` });
+    res.json(await risex.getSystemConfig());
+  } catch (e) {
+    console.warn('[risex] system-config failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx system config', detail: e.message });
+  }
+});
+
+router.get('/risex/eip712-domain', auth, async (req, res) => {
+  try {
+    if (req.dex !== 'risex') return res.status(409).json({ error: `Account is registered for '${req.dex}'. Switch DEX to risex.` });
+    res.json(await risex.getEip712Domain());
+  } catch (e) {
+    console.warn('[risex] eip712-domain failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx EIP-712 domain', detail: e.message });
+  }
+});
+
+router.get('/risex/nonce-state', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getNonceState(verified.account));
+  } catch (e) {
+    console.warn('[risex] nonce-state failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx nonce state', detail: e.message });
+  }
+});
+
+router.get('/risex/signers', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getSigners(verified.account));
+  } catch (e) {
+    console.warn('[risex] signers failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx signers', detail: e.message });
+  }
+});
+
+router.get('/risex/session-key-status', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const signer = risex.normalizeAddress(req.query?.signer || req.body?.signer);
+    if (!signer) return res.status(400).json({ error: 'signer required (0x...)' });
+    res.json(await risex.getSessionKeyStatus(verified.account, signer));
+  } catch (e) {
+    console.warn('[risex] session-key-status failed:', e.message);
+    res.status(502).json({ error: 'Failed to verify RISEx signer', detail: e.message });
+  }
+});
+
+router.get('/risex/invite-status', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getInviteStatus(verified.account));
+  } catch (e) {
+    console.warn('[risex] invite-status failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx invite status', detail: e.message });
+  }
+});
+
+router.post('/risex/invite/redeem', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const code = String(req.body?.code || '').trim().toUpperCase();
+    const signature = String(req.body?.signature || '').trim();
+    if (!code) return res.status(400).json({ error: 'RISEx invite code required' });
+    if (!signature) return res.status(400).json({ error: 'RISEx invite signature required' });
+    const result = await risex.redeemInvite({
+      code,
+      address: verified.account,
+      signature,
+    });
+    try { await risex.acceptTerms(verified.account); } catch (termsError) {
+      console.warn('[risex] accept terms after invite failed:', termsError.message);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[risex] invite redeem failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to redeem RISEx invite code' });
+  }
+});
+
+router.post('/risex/terms/accept', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.acceptTerms(verified.account));
+  } catch (e) {
+    console.warn('[risex] terms accept failed:', e.message);
+    res.status(502).json({ error: 'Failed to accept RISEx terms', detail: e.message });
+  }
+});
+
+router.post('/risex/register-signer', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const signer = risex.normalizeAddress(req.body?.signer);
+    if (!signer) return res.status(400).json({ error: 'signer required (0x...)' });
+    const invite = await risex.getInviteStatus(verified.account).catch(() => null);
+    if (invite && invite.has_access === false) {
+      return res.status(403).json({ error: 'RISEx invite code required before signer registration', code: 'RISEX_INVITE_REQUIRED', invite });
+    }
+    try { await risex.acceptTerms(verified.account); } catch (termsError) {
+      console.warn('[risex] accept terms before signer registration failed:', termsError.message);
+    }
+    const result = await risex.registerSigner({ ...req.body, account: verified.account, signer });
+    res.json(result);
+  } catch (e) {
+    console.warn('[risex] register-signer failed:', e.message);
+    res.status(502).json({ error: 'Failed to register RISEx signer', detail: e.message });
+  }
+});
+
+router.post('/risex/orders/place', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const { account: _account, ...payload } = req.body || {};
+    const result = await risex.placeOrder(payload);
+    res.json(result);
+  } catch (e) {
+    console.warn('[risex] place order failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to place RISEx order' });
+  }
+});
+
+router.post('/risex/orders/cancel', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const { account: _account, resting_order_id: _restingOrderId, ...payload } = req.body || {};
+    const result = await risex.cancelOrder(payload);
+    res.json(result);
+  } catch (e) {
+    console.warn('[risex] cancel order failed:', e.message);
+    res.status(400).json({ error: e.message || 'Failed to cancel RISEx order' });
+  }
+});
+
+router.post('/risex/deposit', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.status(410).json({
+      error: 'RISEx /v1/account/deposit is a test-token faucet flow and is not used in production. Use /risex/bridge/address, transfer USDC to that address, then call /risex/bridge/process.',
+      code: 'RISEX_BRIDGE_REQUIRED',
+    });
+  } catch (e) {
+    console.warn('[risex] deprecated deposit route failed:', e.message);
+    res.status(502).json({ error: 'Failed to handle RISEx deposit request', detail: e.message });
+  }
+});
+
+router.post('/risex/bridge/address', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const invite = await risex.getInviteStatus(verified.account).catch(() => null);
+    if (invite && invite.has_access === false) {
+      return res.status(403).json({ error: 'RISEx invite code required before deposit', code: 'RISEX_INVITE_REQUIRED', invite });
+    }
+    try { await risex.acceptTerms(verified.account); } catch (termsError) {
+      console.warn('[risex] accept terms before bridge address failed:', termsError.message);
+    }
+    const sourceChainId = req.body?.source_chain_id || req.body?.sourceChainId || req.query?.source_chain_id || req.query?.sourceChainId;
+    res.json(await risex.getBridgeDepositAddress({
+      account: verified.account,
+      sourceChainId,
+    }));
+  } catch (e) {
+    console.warn('[risex] bridge address failed:', e.message);
+    res.status(502).json({ error: 'Failed to create RISEx bridge deposit address', detail: e.message });
+  }
+});
+
+router.post('/risex/bridge/process', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const invite = await risex.getInviteStatus(verified.account).catch(() => null);
+    if (invite && invite.has_access === false) {
+      return res.status(403).json({ error: 'RISEx invite code required before deposit', code: 'RISEX_INVITE_REQUIRED', invite });
+    }
+    try { await risex.acceptTerms(verified.account); } catch (termsError) {
+      console.warn('[risex] accept terms before bridge process failed:', termsError.message);
+    }
+    const sourceChainId = req.body?.source_chain_id || req.body?.sourceChainId || req.query?.source_chain_id || req.query?.sourceChainId;
+    const txHash = req.body?.tx_hash || req.body?.txHash || req.body?.userTransferTxHash;
+    res.json(await risex.processBridgeDeposit({
+      account: verified.account,
+      sourceChainId,
+      txHash,
+    }));
+  } catch (e) {
+    console.warn('[risex] bridge process failed:', e.message);
+    res.status(502).json({ error: 'Failed to process RISEx bridge deposit', detail: e.message });
+  }
+});
+
+router.get('/risex/bridge/status', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getBridgeStatus(req.query?.jobId || req.query?.job_id));
+  } catch (e) {
+    console.warn('[risex] bridge status failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx bridge status', detail: e.message });
+  }
+});
+
+router.get('/risex/bridge/history', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getBridgeHistory(verified.account, {
+      limit: req.query?.limit,
+      offset: req.query?.offset,
+    }));
+  } catch (e) {
+    console.warn('[risex] bridge history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx bridge history', detail: e.message });
+  }
+});
+
+router.get('/risex/transfer-history', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    res.json(await risex.getTransferHistory(verified.account, {
+      type: req.query?.type,
+      limit: req.query?.limit,
+      page: req.query?.page,
+    }));
+  } catch (e) {
+    console.warn('[risex] transfer-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx transfer history', detail: e.message });
+  }
+});
+
+router.post('/risex/import-fills', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const result = await risex.importFillsForPlayer(req.playerId, verified.account, {
+      attempts: req.body?.attempts,
+      delayMs: req.body?.delay_ms,
+      limit: req.body?.limit,
+    });
+    if (result.imported > 0) {
+      console.log(`[risex] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[risex] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import RISEx fills', detail: e.message });
+  }
+});
+
+router.get('/risex/trade-history', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const rows = await risex.getAccountTradeHistory(verified.account, {
+      marketId: req.query?.market_id,
+      limit: req.query?.limit,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[risex] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load RISEx trade history', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -1291,7 +1621,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

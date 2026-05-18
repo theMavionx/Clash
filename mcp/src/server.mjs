@@ -292,13 +292,13 @@ function prioritizeAgentBuildSlots(type, gridIndex, slots, limit) {
 function autoBuildPriority(focus = 'balanced') {
   const normalized = String(focus || 'balanced').toLowerCase();
   if (normalized === 'economy') {
-    return ['mine', 'sawmill', 'storage', 'barn', 'port', 'mine', 'sawmill', 'archer_tower', 'tombstone', 'turret'];
+    return ['town_hall', 'mine', 'sawmill', 'storage', 'barn', 'port', 'mine', 'sawmill', 'archer_tower', 'tombstone', 'turret'];
   }
   if (normalized === 'defense') {
-    return ['mine', 'sawmill', 'archer_tower', 'barn', 'port', 'tombstone', 'turret', 'storage', 'archer_tower', 'turret'];
+    return ['town_hall', 'mine', 'sawmill', 'archer_tower', 'barn', 'port', 'tombstone', 'turret', 'storage', 'archer_tower', 'turret'];
   }
   return [
-    'mine', 'sawmill', 'barn', 'port', 'archer_tower',
+    'town_hall', 'mine', 'sawmill', 'barn', 'port', 'archer_tower',
     'storage', 'mine', 'sawmill', 'tombstone', 'archer_tower',
     'port', 'turret', 'mine', 'sawmill', 'storage', 'barn',
     'archer_tower', 'tombstone', 'turret', 'port',
@@ -1288,6 +1288,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         rally_marker_cost: 'marker number: 1, 2, 3...',
         auto_tactics: 'By default execute_ai_attack_plan analyzes the enemy base, chooses focused-or-split landing slots, fires cannon shots at high-threat defenses, and drops one rally marker on a nearby non-defense priority target when useful. Pass auto_tactics:false for a fully manual plan.',
         request_shape: {
+          target_player_name: 'optional exact player name for targeted attacks, e.g. egor4042007',
           auto_tactics: true,
           ships: [{ ship_index: 0, slot: 0, t: 0.2 }],
           cannon_shots: [{ target_type: 'strongest_defense', t: 4.0 }, { target_type: 'weakest_defense', t: 5.1 }],
@@ -1303,6 +1304,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       title: 'Execute AI Attack Plan',
       description: 'Find an enemy, validate one full AI attack plan, settle victory/defeat, store replay, and broadcast a live AI online battle to open browsers. Limited to one MCP battle per player per minute.',
       inputSchema: {
+        target_player_name: z.string().min(1).max(80).optional(),
         ships: z.array(z.object({
           ship_index: z.number().int().min(0).max(4).optional(),
           slot: z.number().int().min(0).max(4),
@@ -1326,7 +1328,13 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         }).optional(),
       },
     },
-    async ({ ships = [], auto_tactics = true, cannon_shots = [], rally_marker = null }) => {
+    async ({ target_player_name = '', ships = [], auto_tactics = true, cannon_shots = [], rally_marker = null }) => {
+      const targetName = String(target_player_name || '').trim();
+      if (targetName && typeof game.inspectEnemyByName === 'function') {
+        const targetPreview = game.inspectEnemyByName(playerId, targetName);
+        if (targetPreview.error) return toolError(targetPreview.error, targetPreview);
+      }
+
       const fleetPrep = autoPrepareFleetForAttack(playerId);
       let fleet = fleetPrep.fleet;
       if (fleet.length === 0) return toolError('No loaded ships. Buy ships and load troops first.');
@@ -1350,7 +1358,9 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         return toolError(message, extra);
       };
 
-      const enemy = game.findEnemy(playerId);
+      const enemy = targetName
+        ? game.findEnemyByName(playerId, targetName)
+        : game.findEnemy(playerId);
       if (enemy.error) return abortAiAttack(enemy.error, enemy);
 
       const defenderBuildings = game.getPlayerBuildings(enemy.id);

@@ -129,6 +129,24 @@ export const DEX_CONFIG = {
     chainShort: 'HL',
     description: 'Perps on Hyperliquid',
   },
+  risex: {
+    id: 'risex',
+    label: 'RISEx',
+    shortLabel: 'RSX',
+    emoji: 'RX',
+    logo: '/risex.svg',
+    logoIsWordmark: false,
+    // Brand mint #04DF83 from the official RISEx icon; dark tone is the
+    // same hue shifted down so it stays readable on light parchment
+    // backgrounds in the "Powered by RISEx" footer.
+    color: '#04DF83',
+    colorDark: '#047857',
+    colorLight: 'rgba(4,223,131,0.15)',
+    borderColor: '#04DF83',
+    chain: 'RISE',
+    chainShort: 'RISE',
+    description: 'Perps on RISE',
+  },
 };
 
 export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
@@ -213,7 +231,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -249,7 +267,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }

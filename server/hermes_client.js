@@ -9,6 +9,20 @@ const MODEL_CHAIN = resolveModelChain(process.env);
 const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODEL = MODEL_CHAIN[1] || '';
 const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 300_000);
+const DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
+
+function logHermesClient(event, payload = {}) {
+  if (!DETAILED_LOGS) return;
+  try {
+    console.log(JSON.stringify({
+      event: `hermes_client_${event}`,
+      at: new Date().toISOString(),
+      ...payload,
+    }));
+  } catch {
+    console.log(`[hermes-client] ${event}`);
+  }
+}
 
 function configured() {
   return !!(ORCHESTRATOR_URL && ORCHESTRATOR_TOKEN);
@@ -75,15 +89,37 @@ function isPassiveChat(text) {
   return false;
 }
 
+function extractAttackTargetName(message) {
+  const raw = String(message || '').normalize('NFKC').trim();
+  if (!raw) return '';
+  const patterns = [
+    /\b(?:attack|raid|hit|battle)\s+(?:(?:player|user)\s+)?([\p{L}\p{N}_.-]{2,60})\b/iu,
+    /(?:атаку|атака\s+на|атакуй|атакувати|атаковать|напади\s+на|напасть\s+на|нападай\s+на|ударь\s+по|ударь|атакуй\s+гравця|атакуй\s+игрока)\s+([\p{L}\p{N}_.-]{2,60})/iu,
+  ];
+  const generic = new Set(['enemy', 'someone', 'somebody', 'base', 'player', 'user', 'когось', 'ворога', 'врага', 'базу', 'гравця', 'игрока']);
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const candidate = String(match?.[1] || '').replace(/[.,!?;:]+$/g, '').trim();
+    if (candidate && !generic.has(candidate.toLowerCase())) return candidate;
+  }
+  return '';
+}
+
 function classifyGameIntent(message) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
   if (/(атак|атакуй|напад|напади|raid|battle|enemy|ворог|враг|бій|бой|进攻|攻击|打仗|敵|敌|đánh|attack)/i.test(text)) {
+    const targetPlayerName = extractAttackTargetName(message);
     return {
-      kind: 'battle',
+      kind: targetPlayerName ? 'targeted_battle' : 'battle',
       action_required: true,
-      goal: 'Start an AI online battle only through MCP tools.',
-      required_loop: 'get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
+      goal: targetPlayerName
+        ? `Start an AI online battle against ${targetPlayerName} only through MCP tools.`
+        : 'Start an AI online battle only through MCP tools.',
+      target_player_name: targetPlayerName || undefined,
+      required_loop: targetPlayerName
+        ? `get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ target_player_name: "${targetPlayerName}", auto_tactics: true }) -> if shielded, report remaining shield hours; otherwise summarize result and losses`
+        : 'get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
     };
   }
   if (/(збери|собери|collect|收集|thu thap).*(ресурс|реси|resources|资源|tai nguyen)|(?:ресурс|реси|resources|资源|tai nguyen).*(збери|собери|collect|收集|thu thap)/i.test(text)) {
@@ -217,22 +253,51 @@ function buildInstructionsForMessage(message) {
 
 async function request(path, options = {}) {
   assertConfigured();
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${ORCHESTRATOR_URL}${path}`, {
-      method: options.method || 'GET',
-      headers: {
-        Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
-      },
-      body: options.body == null ? undefined : JSON.stringify(options.body),
-      signal: controller.signal,
-    });
+    const url = `${ORCHESTRATOR_URL}${path}`;
+    const method = options.method || 'GET';
+    let res;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+        body: options.body == null ? undefined : JSON.stringify(options.body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      const cause = err?.cause || {};
+      const detail = cause?.code
+        ? `${cause.code}${cause.address ? ` ${cause.address}` : ''}${cause.port ? `:${cause.port}` : ''}`
+        : err?.name || 'network error';
+      const wrapped = new Error(`Hermes orchestrator fetch failed (${url}): ${detail}`);
+      wrapped.status = 502;
+      wrapped.cause = err;
+      logHermesClient('request_error', {
+        method,
+        path,
+        duration_ms: Date.now() - startedAt,
+        error: wrapped.message,
+      });
+      throw wrapped;
+    }
     const text = await res.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+    logHermesClient('request_done', {
+      method,
+      path,
+      status: res.status,
+      ok: res.ok,
+      duration_ms: Date.now() - startedAt,
+      response_bytes: text.length,
+    });
     if (!res.ok) {
       const err = new Error(json?.error || json?.message || `Hermes orchestrator HTTP ${res.status}`);
       err.status = res.status;

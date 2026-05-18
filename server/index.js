@@ -534,8 +534,8 @@ app.get('/api/admin/panel', (req, res) => {
         <h3 id="tn_form_title" style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Create Tournament</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <label style="font-size:11px;color:#9ca3af">Name<input id="tn_name" placeholder="e.g. Spring Cup" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
-          <label style="font-size:11px;color:#9ca3af">DEX
-            <select id="tn_dex" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+          <label style="font-size:11px;color:#9ca3af">Primary DEX
+            <select id="tn_dex" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="pacifica">Pacifica</option>
               <option value="avantis">Avantis</option>
               <option value="decibel">Decibel</option>
@@ -543,8 +543,76 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="monad">Perpl</option>
               <option value="phoenix">Phoenix</option>
               <option value="hyperliquid">Hyperliquid</option>
+              <option value="risex">RISEx</option>
             </select>
           </label>
+          <label style="font-size:11px;color:#9ca3af">DEX scope
+            <select id="tn_dex_scope" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="single">Only primary DEX</option>
+              <option value="all">All DEXes</option>
+              <option value="custom">Selected DEXes</option>
+            </select>
+          </label>
+          <div id="tn_dexes_box" style="display:none;grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Eligible DEXes</div>
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px">
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="pacifica" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Pacifica</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="avantis" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Avantis</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="decibel" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Decibel</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="gmx" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">GMX</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="monad" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Perpl</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="phoenix" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Phoenix</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hyperliquid" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hyperliquid</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="risex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">RISEx</label>
+            </div>
+            <div id="tn_dex_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Pick at least one DEX.</div>
+          </div>
+          <label style="font-size:11px;color:#9ca3af">Tournament mode
+            <select id="tn_mode" onchange="updateTournamentModeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="individual">Individual players</option>
+              <option value="dex_vs_dex">DEX vs DEX teams</option>
+            </select>
+          </label>
+          <div id="tn_team_box" style="display:none;grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">DEX vs DEX settings</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px">
+              <label style="font-size:11px;color:#9ca3af">Winning side metric
+                <select id="tn_team_score_by" onchange="updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+                  <option value="volume_usd">Team volume</option>
+                  <option value="pnl_usd">Team positive PnL</option>
+                  <option value="points">Team custom points</option>
+                  <option value="trades_count">Team trades</option>
+                  <option value="trophies">Team trophies</option>
+                  <option value="gold">Team gold</option>
+                </select>
+              </label>
+              <label style="font-size:11px;color:#9ca3af">Prize split
+                <select id="tn_team_prize_mode" onchange="updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+                  <option value="winner_takes_all">Winner takes all</option>
+                  <option value="custom_split">Custom DEX split</option>
+                </select>
+              </label>
+              <label style="font-size:11px;color:#9ca3af">Players split team pool by
+                <select id="tn_team_member_reward_by" onchange="updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+                  <option value="volume_usd">Player volume</option>
+                  <option value="pnl_usd">Player positive PnL</option>
+                  <option value="points">Player custom points</option>
+                  <option value="trades_count">Player trades</option>
+                  <option value="trophies">Player trophies</option>
+                  <option value="gold">Player gold</option>
+                </select>
+              </label>
+              <label style="font-size:11px;color:#9ca3af">Attack matching
+                <select id="tn_attack_match_policy" onchange="updateTournamentTeamUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+                  <option value="all">Normal matchmaking</option>
+                  <option value="enemy_or_non_participant">Block same-team attacks</option>
+                  <option value="enemy_only">Enemy teams only</option>
+                </select>
+              </label>
+            </div>
+            <div id="tn_team_splits_rows" style="display:none;margin-top:8px"></div>
+            <div id="tn_team_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Select at least two DEXes for a team tournament.</div>
+          </div>
           <label style="font-size:11px;color:#9ca3af;grid-column:1/-1">Description<input id="tn_desc" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Start (UTC, optional)<input id="tn_start" placeholder="2026-05-04 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">End (UTC, optional)<input id="tn_end" placeholder="2026-05-11 12:00:00" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
@@ -555,6 +623,7 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af">Registration closes<input id="tn_reg_close" placeholder="defaults to start" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Gold boost (×)<input id="tn_gold" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Trophy boost (×)<input id="tn_trophy" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Shield after raid (hours)<input id="tn_shield_hours" type="number" step="0.25" min="0" max="720" placeholder="blank = default, 0 = none" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
             <input id="tn_freeze_trophies" type="checkbox" checked style="width:auto;margin:0"> Freeze main trophies
           </label>
@@ -610,12 +679,12 @@ app.get('/api/admin/panel', (req, res) => {
         <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Live Leaderboard</h3>
         <div id="tn_lb_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament below to view its leaderboard.</div>
         <table style="font-size:12px"><thead><tr>
-          <th>#</th><th>Player</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
+          <th>#</th><th>Player</th><th>Team</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
         </tr></thead><tbody id="tn_lb_body"></tbody></table>
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -633,7 +702,9 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>GMX</strong> — Modelled as <code>volume × fee_per_side × tier_rebate</code>. Volume from local futures.db, tier rate read on-chain from <code>tiers(referrerTiers(affiliate))</code> on GMX ReferralStorage; fee_per_side default 0.05% (env <code>GMX_AVG_FEE_BPS</code>).<br>
       • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
       • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).<br>
-      • <strong>Phoenix</strong> — Modelled as <code style="color:#fbbf24">verified Phoenix volume × Flight builder fee</code>. Default Flight fee is 10bps / 0.1% (<code>PHOENIX_FLIGHT_BUILDER_FEE_BPS</code>). Phoenix currently collects Flight fees only on liquidity-removing fills.
+      • <strong>Phoenix</strong> — reads actual Flight fee-collector <code style="color:#fbbf24">collateral-history transfer</code> events from Phoenix REST / on-chain indexed state. Local volume × bps is shown only as an estimate for comparison; deposits are excluded.<br>
+      • <strong>Perpl</strong> — currently shown as $0 commission. We index verified Perpl fills for game rewards, but no builder/referrer fee is passed in our order flow and no exact fee-income source is configured; local volume × bps is only a hypothetical estimate.<br>
+      • <strong>Hyperliquid</strong> — reads exact <code style="color:#fbbf24">builderRewards</code> from Hyperliquid <code>/info</code> referral state for our builder wallet. Local volume × bps is shown only as an estimate.
     </div>
   </div>
 
@@ -643,6 +714,24 @@ app.get('/api/admin/panel', (req, res) => {
       <button class="btn" onclick="loadShop()">Refresh</button>
     </div>
     <div class="stats" id="shopSummary"></div>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Chat Billing</h2>
+    <div class="stats" id="aiChatBillingSummary"></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:#111827;border:1px solid #273244;border-radius:10px;padding:12px;margin:10px 0 18px">
+      <label style="font-size:13px;color:#cbd5e1">Free messages per player / day</label>
+      <input id="aiFreeMessagesPerDay" type="number" min="0" max="1000" step="1" style="width:110px">
+      <button class="btn" onclick="saveAiChatSettings()">Save AI settings</button>
+      <span id="aiChatSettingsStatus" style="font-size:12px;color:#94a3b8"></span>
+    </div>
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Agent Model Stats</h2>
+    <table><thead><tr>
+      <th>Model</th><th>Requests</th><th>Errors</th><th>Avg</th><th>Last</th>
+    </tr></thead><tbody id="aiChatModelBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent AI Agent Logs</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Intent</th><th>Status</th><th>Duration</th><th>Model</th><th>Request / Response</th>
+    </tr></thead><tbody id="aiChatRecentBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">By Product</h2>
     <table><thead><tr>
@@ -807,6 +896,18 @@ async function api(path) {
   const r = await fetch('/api' + path, { headers: { 'x-admin-key': KEY } });
   if (r.status === 403) { logout(); throw new Error('Forbidden'); }
   return r.json();
+}
+
+async function apiPost(path, body) {
+  const r = await fetch('/api' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-admin-key': KEY },
+    body: JSON.stringify(body || {}),
+  });
+  if (r.status === 403) { logout(); throw new Error('Forbidden'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || 'Request failed');
+  return data;
 }
 
 async function doLogin() {
@@ -1664,6 +1765,174 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
+const TOURNAMENT_DEX_LABELS_ADMIN = {
+  pacifica: 'Pacifica',
+  avantis: 'Avantis',
+  decibel: 'Decibel',
+  gmx: 'GMX',
+  monad: 'Perpl',
+  phoenix: 'Phoenix',
+  hyperliquid: 'Hyperliquid',
+  risex: 'RISEx',
+};
+const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
+  volume_usd: 'Volume',
+  pnl_usd: 'Positive PnL',
+  points: 'Custom points',
+  trades_count: 'Trades',
+  trophies: 'Trophies',
+  gold: 'Gold',
+};
+
+function tournamentDexLabel(dex) {
+  return TOURNAMENT_DEX_LABELS_ADMIN[dex] || dex || '';
+}
+
+function tournamentTeamMetricLabel(metric) {
+  return TOURNAMENT_TEAM_METRIC_LABELS_ADMIN[metric] || metric || 'Volume';
+}
+
+function tournamentAttackPolicyLabel(policy) {
+  if (policy === 'enemy_or_non_participant') return 'Block same-team attacks';
+  if (policy === 'enemy_only') return 'Enemy teams only';
+  return 'Normal matchmaking';
+}
+
+function selectedTournamentDexes() {
+  const scope = document.getElementById('tn_dex_scope')?.value || 'single';
+  if (scope === 'all') return TOURNAMENT_DEXES_ADMIN.slice();
+  if (scope === 'custom') {
+    return Array.from(document.querySelectorAll('[data-tn-dex-check]:checked'))
+      .map(el => el.value)
+      .filter(d => TOURNAMENT_DEXES_ADMIN.includes(d));
+  }
+  const dex = document.getElementById('tn_dex')?.value || 'pacifica';
+  return TOURNAMENT_DEXES_ADMIN.includes(dex) ? [dex] : ['pacifica'];
+}
+
+function setTournamentDexSelection(dexes) {
+  const set = new Set((Array.isArray(dexes) ? dexes : []).filter(d => TOURNAMENT_DEXES_ADMIN.includes(d)));
+  document.querySelectorAll('[data-tn-dex-check]').forEach((el) => { el.checked = set.has(el.value); });
+}
+
+function tournamentDexScopeLabel(t) {
+  const list = Array.isArray(t?.eligible_dexes) && t.eligible_dexes.length
+    ? t.eligible_dexes
+    : (t?.dex ? [t.dex] : []);
+  if (t?.dex_scope === 'all' || list.length === TOURNAMENT_DEXES_ADMIN.length) return 'All DEXes';
+  if (list.length > 1) return list.map(tournamentDexLabel).join(', ');
+  return tournamentDexLabel(list[0] || t?.dex || 'pacifica');
+}
+
+function updateTournamentDexScopeUi() {
+  const scope = document.getElementById('tn_dex_scope')?.value || 'single';
+  const primary = document.getElementById('tn_dex');
+  const box = document.getElementById('tn_dexes_box');
+  const hint = document.getElementById('tn_dex_hint');
+  if (primary) primary.disabled = scope === 'all';
+  if (box) box.style.display = scope === 'custom' ? 'block' : 'none';
+  if (scope === 'custom' && selectedTournamentDexes().length === 0 && primary) {
+    setTournamentDexSelection([primary.value || 'pacifica']);
+  }
+  if (hint) {
+    const list = selectedTournamentDexes();
+    hint.style.color = list.length ? '#9ca3af' : '#fca5a5';
+    hint.textContent = scope === 'all'
+      ? 'Every DEX can join this tournament.'
+      : scope === 'custom'
+        ? (list.length ? list.map(tournamentDexLabel).join(', ') + ' can join.' : 'Pick at least one DEX.')
+        : tournamentDexLabel(primary?.value || 'pacifica') + ' players can join.';
+  }
+}
+
+function readTournamentTeamSplits() {
+  const mode = document.getElementById('tn_team_prize_mode')?.value || 'winner_takes_all';
+  if (mode !== 'custom_split') return [];
+  return Array.from(document.querySelectorAll('[data-team-split-dex]')).map((el) => ({
+    dex: el.getAttribute('data-team-split-dex'),
+    share_pct: Math.max(0, Math.min(100, Number(el.value) || 0)),
+  })).filter(row => TOURNAMENT_DEXES_ADMIN.includes(row.dex));
+}
+
+function renderTournamentTeamSplits(seedSplits) {
+  const box = document.getElementById('tn_team_splits_rows');
+  if (!box) return;
+  const mode = document.getElementById('tn_mode')?.value || 'individual';
+  const prizeMode = document.getElementById('tn_team_prize_mode')?.value || 'winner_takes_all';
+  const dexes = selectedTournamentDexes();
+  if (mode !== 'dex_vs_dex' || prizeMode !== 'custom_split') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'grid';
+  box.style.gridTemplateColumns = 'repeat(auto-fit,minmax(140px,1fr))';
+  box.style.gap = '8px';
+  const current = new Map(readTournamentTeamSplits().map(row => [row.dex, row.share_pct]));
+  const seeded = new Map((Array.isArray(seedSplits) ? seedSplits : []).map(row => [row.dex, Number(row.share_pct ?? row.share ?? 0) || 0]));
+  const fallback = dexes.length ? Number((100 / dexes.length).toFixed(2)) : 0;
+  box.innerHTML = dexes.map((dex) => {
+    const value = current.has(dex) ? current.get(dex) : (seeded.has(dex) ? seeded.get(dex) : fallback);
+    return '<label style="font-size:11px;color:#9ca3af">' + esc(tournamentDexLabel(dex)) + ' share %'
+      + '<input data-team-split-dex="' + esc(dex) + '" type="number" min="0" max="100" step="0.01" value="' + value + '" oninput="updateTournamentTeamHint()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">'
+      + '</label>';
+  }).join('');
+  updateTournamentTeamHint();
+}
+
+function updateTournamentTeamHint() {
+  const hint = document.getElementById('tn_team_hint');
+  if (!hint) return;
+  const mode = document.getElementById('tn_mode')?.value || 'individual';
+  const dexes = selectedTournamentDexes();
+  const prizeMode = document.getElementById('tn_team_prize_mode')?.value || 'winner_takes_all';
+  if (mode !== 'dex_vs_dex') {
+    hint.style.color = '#9ca3af';
+    hint.textContent = 'Individual tournament mode.';
+    return;
+  }
+  if (dexes.length < 2) {
+    hint.style.color = '#fca5a5';
+    hint.textContent = 'DEX vs DEX needs at least two selected DEXes.';
+    return;
+  }
+  if (prizeMode === 'custom_split') {
+    const total = readTournamentTeamSplits().reduce((s, row) => s + Number(row.share_pct || 0), 0);
+    hint.style.color = Math.abs(total - 100) < 0.01 ? '#9ca3af' : '#fca5a5';
+    hint.textContent = 'Custom DEX shares total: ' + total.toFixed(2).replace(/\\.00$/, '') + '%. Must be 100%.';
+    return;
+  }
+  hint.style.color = '#9ca3af';
+  const attackPolicy = document.getElementById('tn_attack_match_policy')?.value || 'all';
+  hint.textContent = 'Winning side is ranked by ' + tournamentTeamMetricLabel(document.getElementById('tn_team_score_by')?.value || 'volume_usd')
+    + '. Its pool is split between players by ' + tournamentTeamMetricLabel(document.getElementById('tn_team_member_reward_by')?.value || 'volume_usd')
+    + '. Attacks: ' + tournamentAttackPolicyLabel(attackPolicy) + '.';
+}
+
+function updateTournamentTeamUi(seedSplits) {
+  const modeEl = document.getElementById('tn_mode');
+  const mode = modeEl?.value || 'individual';
+  const box = document.getElementById('tn_team_box');
+  if (box) box.style.display = mode === 'dex_vs_dex' ? 'block' : 'none';
+  if (mode === 'dex_vs_dex') {
+    const scope = document.getElementById('tn_dex_scope');
+    const primary = document.getElementById('tn_dex')?.value || 'pacifica';
+    let list = selectedTournamentDexes();
+    if (scope && scope.value === 'single') scope.value = 'custom';
+    if (list.length < 2) {
+      const second = TOURNAMENT_DEXES_ADMIN.find(d => d !== primary) || 'decibel';
+      setTournamentDexSelection([primary, second]);
+    }
+    updateTournamentDexScopeUi();
+  }
+  renderTournamentTeamSplits(seedSplits);
+  updateTournamentTeamHint();
+}
+
+function updateTournamentModeUi() {
+  updateTournamentTeamUi();
+}
 
 function isTournamentPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
@@ -1921,7 +2190,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="15" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="16" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -1938,7 +2207,7 @@ function renderTournaments() {
     return '<tr>'
       + '<td>' + t.id + '</td>'
       + '<td>' + esc(t.name) + (t.description ? '<div style="font-size:10px;color:#9ca3af">' + esc(t.description) + '</div>' : '') + '</td>'
-      + '<td>' + esc(t.dex) + '</td>'
+      + '<td>' + esc(t.dex_label || tournamentDexScopeLabel(t)) + '<div style="font-size:10px;color:#6b7280">' + esc((t.mode === 'dex_vs_dex' ? 'DEX vs DEX · ' : '') + (t.dex_scope || 'single')) + '</div></td>'
       + '<td>' + statusBadge + '</td>'
       + '<td><span style="color:' + phaseColor + '">' + esc(t.phase || '') + '</span></td>'
       + '<td style="font-size:11px">' + esc(t.start_at || '') + '</td>'
@@ -1946,6 +2215,7 @@ function renderTournaments() {
       + '<td style="font-size:11px">' + reg + '</td>'
       + '<td>' + t.gold_boost + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
+      + '<td>' + esc(t.shield_label || 'Default') + '</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
       + '<td>' + esc(t.sort_label || tournamentSortLabel(t)) + '</td>'
       + '<td style="font-size:11px">' + tournamentPrizeLabel(t) + '</td>'
@@ -1966,10 +2236,20 @@ function getTournamentFormBody() {
     volume: readTournamentWeight('tn_points_volume', 60),
     pnl: readTournamentWeight('tn_points_pnl', 20),
   };
+  const dexScope = document.getElementById('tn_dex_scope')?.value || 'single';
+  const eligibleDexes = selectedTournamentDexes();
   return {
     name: document.getElementById('tn_name').value.trim(),
     description: document.getElementById('tn_desc').value.trim(),
-    dex: document.getElementById('tn_dex').value,
+    dex: eligibleDexes[0] || document.getElementById('tn_dex').value,
+    dex_scope: dexScope,
+    eligible_dexes: eligibleDexes,
+    mode: document.getElementById('tn_mode')?.value || 'individual',
+    team_score_by: document.getElementById('tn_team_score_by')?.value || 'volume_usd',
+    team_prize_mode: document.getElementById('tn_team_prize_mode')?.value || 'winner_takes_all',
+    team_prize_splits: readTournamentTeamSplits(),
+    team_member_reward_by: document.getElementById('tn_team_member_reward_by')?.value || 'volume_usd',
+    attack_match_policy: document.getElementById('tn_attack_match_policy')?.value || 'all',
     start_at: document.getElementById('tn_start').value.trim() || undefined,
     end_at: document.getElementById('tn_end').value.trim() || undefined,
     preregistration_enabled: document.getElementById('tn_prereg').checked,
@@ -1977,6 +2257,7 @@ function getTournamentFormBody() {
     registration_closes_at: document.getElementById('tn_reg_close').value.trim() || undefined,
     gold_boost: parseFloat(document.getElementById('tn_gold').value) || 1,
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
+    shield_hours: document.getElementById('tn_shield_hours').value.trim() === '' ? null : Number(document.getElementById('tn_shield_hours').value),
     freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
     sort_by: document.getElementById('tn_sort').value,
     points_trophy_weight: pointWeights.trophies,
@@ -1997,6 +2278,13 @@ function resetTournamentForm() {
   document.getElementById('tn_name').value = '';
   document.getElementById('tn_desc').value = '';
   document.getElementById('tn_dex').value = 'pacifica';
+  document.getElementById('tn_dex_scope').value = 'single';
+  setTournamentDexSelection(['pacifica']);
+  document.getElementById('tn_mode').value = 'individual';
+  document.getElementById('tn_team_score_by').value = 'volume_usd';
+  document.getElementById('tn_team_prize_mode').value = 'winner_takes_all';
+  document.getElementById('tn_team_member_reward_by').value = 'volume_usd';
+  document.getElementById('tn_attack_match_policy').value = 'all';
   document.getElementById('tn_start').value = '';
   document.getElementById('tn_end').value = '';
   document.getElementById('tn_prereg').checked = false;
@@ -2004,6 +2292,7 @@ function resetTournamentForm() {
   document.getElementById('tn_reg_close').value = '';
   document.getElementById('tn_gold').value = '1';
   document.getElementById('tn_trophy').value = '1';
+  document.getElementById('tn_shield_hours').value = '';
   document.getElementById('tn_freeze_trophies').checked = true;
   document.getElementById('tn_sort').value = 'points';
   document.getElementById('tn_points_trophy').value = '20';
@@ -2016,6 +2305,8 @@ function resetTournamentForm() {
   document.getElementById('tn_rewards_cop').checked = false;
   renderTournamentPrizeTiers([]);
   document.getElementById('tn_status').value = 'active';
+  updateTournamentDexScopeUi();
+  updateTournamentTeamUi();
   updateTournamentPointsUi();
   updateTournamentPrizeUi();
 }
@@ -2030,6 +2321,13 @@ function editTournament(id) {
   document.getElementById('tn_name').value = t.name || '';
   document.getElementById('tn_desc').value = t.description || '';
   document.getElementById('tn_dex').value = t.dex || 'pacifica';
+  document.getElementById('tn_dex_scope').value = t.dex_scope || ((t.eligible_dexes || []).length > 1 ? 'custom' : 'single');
+  setTournamentDexSelection(t.eligible_dexes || [t.dex || 'pacifica']);
+  document.getElementById('tn_mode').value = t.mode || 'individual';
+  document.getElementById('tn_team_score_by').value = t.team_score_by || 'volume_usd';
+  document.getElementById('tn_team_prize_mode').value = t.team_prize_mode || 'winner_takes_all';
+  document.getElementById('tn_team_member_reward_by').value = t.team_member_reward_by || 'volume_usd';
+  document.getElementById('tn_attack_match_policy').value = t.attack_match_policy || 'all';
   document.getElementById('tn_start').value = t.start_at || '';
   document.getElementById('tn_end').value = t.end_at || '';
   document.getElementById('tn_prereg').checked = !!t.preregistration_enabled;
@@ -2037,6 +2335,7 @@ function editTournament(id) {
   document.getElementById('tn_reg_close').value = t.registration_closes_at || '';
   document.getElementById('tn_gold').value = t.gold_boost || 1;
   document.getElementById('tn_trophy').value = t.trophy_boost || 1;
+  document.getElementById('tn_shield_hours').value = t.shield_hours == null ? '' : t.shield_hours;
   document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;
   document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
   const weights = tournamentPointsWeights(t);
@@ -2050,6 +2349,8 @@ function editTournament(id) {
   document.getElementById('tn_rewards_cop').checked = !!t.rewards_in_cop;
   renderTournamentPrizeTiers(t.prize_tiers || []);
   document.getElementById('tn_status').value = t.status || 'active';
+  updateTournamentDexScopeUi();
+  updateTournamentTeamUi(t.team_prize_splits || []);
   updateTournamentPointsUi();
   updateTournamentPrizeUi();
   document.getElementById('tn_form_title').scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2058,6 +2359,27 @@ function editTournament(id) {
 async function saveTournament() {
   const body = getTournamentFormBody();
   if (!body.name) { alert('Name required'); return; }
+  if (!body.eligible_dexes || body.eligible_dexes.length === 0) {
+    alert('Pick at least one eligible DEX.');
+    return;
+  }
+  if (body.shield_hours !== null && (!Number.isFinite(body.shield_hours) || body.shield_hours < 0)) {
+    alert('Shield after raid must be blank, 0, or a positive number of hours.');
+    return;
+  }
+  if (body.mode === 'dex_vs_dex') {
+    if (body.eligible_dexes.length < 2) {
+      alert('DEX vs DEX needs at least two selected DEXes.');
+      return;
+    }
+    if (body.team_prize_mode === 'custom_split') {
+      const total = (body.team_prize_splits || []).reduce((s, row) => s + Number(row.share_pct || 0), 0);
+      if (Math.abs(total - 100) > 0.01) {
+        alert('DEX prize split shares must add up to 100%. Current total: ' + total.toFixed(2) + '%.');
+        return;
+      }
+    }
+  }
   if (body.sort_by === 'points') {
     const total = body.points_trophy_weight + body.points_volume_weight + body.points_pnl_weight;
     if (Math.abs(total - 100) > 0.001) {
@@ -2115,11 +2437,16 @@ async function loadTournamentLeaderboard(id) {
     if (!r.ok) { alert(j.error || 'Failed'); return; }
     const t = j.tournament;
     const prize = j.prize || {};
+    const teamMeta = j.teams && Array.isArray(j.teams.teams)
+      ? ' · teams: ' + j.teams.teams.map(team => team.label + ' #' + team.rank + ' ' + Number(team.score || 0).toFixed(1) + (team.winner ? ' winner' : '')).join(' | ')
+      : '';
     const prizeMeta = Number(prize.pool_usd || 0) > 0
       ? ' · prize: ' + fmtTournamentUsd(prize.pool_usd, prize.currency || t.prize_currency || 'USD')
       : (prize.next_tier ? ' · next prize: ' + fmtTournamentUsd(prize.next_tier.pool_usd || 0, prize.currency || t.prize_currency || 'USD') + ' @ ' + fmtTournamentUsd(prize.next_tier.volume_usd || 0, '') + ' vol' : '');
     document.getElementById('tn_lb_meta').textContent =
       '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + prizeMeta + ' · ' + (j.leaderboard.length) + ' players';
+    document.getElementById('tn_lb_meta').textContent =
+      '#' + t.id + ' ' + t.name + ' · ' + (t.dex_label || t.dex) + ' · ' + (t.mode_label || 'Individual') + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + prizeMeta + teamMeta + ' · ' + (j.leaderboard.length) + ' players';
     document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
       const score = r.score == null ? '—' : Number(r.score || 0).toFixed(1);
       const prizeAmount = Number(r.prize_amount || 0);
@@ -2127,6 +2454,7 @@ async function loadTournamentLeaderboard(id) {
       return '<tr>'
         + '<td>' + r.rank + '</td>'
         + '<td>' + esc(r.name || (r.wallet || '').slice(0, 8)) + '</td>'
+        + '<td>' + esc(r.team_label || r.dex || 'вЂ”') + (r.team_rank ? '<div style="font-size:10px;color:#9ca3af">team #' + r.team_rank + '</div>' : '') + '</td>'
         + '<td>' + score + '</td>'
         + '<td>' + (prizeAmount > 0 ? fmtTournamentUsd(prizeAmount, r.prize_currency || prize.currency || t.prize_currency || 'USD') : '—') + rewardWallet + '</td>'
         + '<td>' + r.trophies + '</td>'
@@ -2221,6 +2549,35 @@ async function loadEarnings(force) {
         : '';
       const subLine = (() => {
         if (!ok) return '';
+        if (d.model === 'onchain_collateral_transfers') {
+          const transfers = Number(d.transfer_events || 0);
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' · local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          const collateral = Number.isFinite(Number(d.collateral_usd))
+            ? ' · collateral $' + Number(d.collateral_usd).toFixed(2)
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">' + transfers + ' fee transfer(s)' + estimate + collateral + '</span>';
+        }
+        if (d.model === 'hyperliquid_referral_builder_rewards') {
+          const unclaimed = Number.isFinite(Number(d.unclaimed_rewards_usd))
+            ? ' · $' + Number(d.unclaimed_rewards_usd).toFixed(4) + ' unclaimed'
+            : '';
+          const claimed = Number.isFinite(Number(d.claimed_rewards_usd))
+            ? ' · $' + Number(d.claimed_rewards_usd).toFixed(4) + ' claimed'
+            : '';
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' · local estimate $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">exact builderRewards' + unclaimed + claimed + estimate + '</span>';
+        }
+        if (d.model === 'perpl_builder_fee_not_configured') {
+          const pct = Number(d.builder_fee_pct ?? d.fee_per_side_pct ?? 0);
+          const estimate = Number.isFinite(Number(d.estimated_fee_usd))
+            ? ' · hypothetical ' + pct + '% $' + Number(d.estimated_fee_usd).toFixed(4)
+            : '';
+          return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' indexed fills · $' + Number(d.volume_usd || 0).toFixed(0) + ' vol · no builder-fee source' + estimate + '</span>';
+        }
         if (d.volume_usd != null) {
           if (d.model === 'single_builder_fee' || d.builder_fee_pct != null) {
             return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades · $' + Number(d.volume_usd).toFixed(0) + ' vol × ' + (d.builder_fee_pct ?? d.fee_per_side_pct ?? 0) + '% builder fee</span>';
@@ -2261,7 +2618,10 @@ async function loadEarnings(force) {
 
 async function loadShop() {
   try {
-    const data = await api('/admin/shop');
+    const [data, aiBilling] = await Promise.all([
+      api('/admin/shop'),
+      api('/admin/ai-chat/billing').catch((e) => ({ error: e?.message || String(e) })),
+    ]);
     const s = data.summary || {};
     const fmtUsd = (v) => '$' + (Number(v) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fmtTime = (t) => t ? new Date(t.replace(' ', 'T') + 'Z').toLocaleString() : '—';
@@ -2280,6 +2640,60 @@ async function loadShop() {
       '<div class="stat"><div class="v">' + (s.last_24h_purchases || 0) + '</div><div class="l">24h purchases</div></div>' +
       '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.last_24h_revenue_usd) + '</div><div class="l">24h revenue</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_7d_purchases || 0) + '</div><div class="l">7d purchases</div></div>';
+
+    if (aiBilling && !aiBilling.error) {
+      const u = aiBilling.usage || {};
+      const b = aiBilling.balances || {};
+      const h = aiBilling.hermes || {};
+      document.getElementById('aiFreeMessagesPerDay').value = aiBilling.settings?.free_messages_per_day ?? 0;
+      document.getElementById('aiChatBillingSummary').innerHTML =
+        '<div class="stat"><div class="v">' + (u.today || 0) + '</div><div class="l">AI msgs today</div></div>' +
+        '<div class="stat"><div class="v">' + (u.week || 0) + '</div><div class="l">AI msgs 7d</div></div>' +
+        '<div class="stat"><div class="v">' + (u.all || 0) + '</div><div class="l">AI msgs all</div></div>' +
+        '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (b.outstanding_credits || 0) + '</div><div class="l">Outstanding credits</div></div>' +
+        '<div class="stat"><div class="v">' + (b.lifetime_players || 0) + '</div><div class="l">Lifetime passes</div></div>' +
+        '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + (h.h24_errors || 0) + '</div><div class="l">Hermes errors 24h</div></div>' +
+        '<div class="stat"><div class="v">' + (h.avg_duration_ms || 0) + 'ms</div><div class="l">Avg response</div></div>';
+      const aiModels = aiBilling.hermes_models || [];
+      document.getElementById('aiChatModelBody').innerHTML = aiModels.length === 0
+        ? '<tr><td colspan="5" style="color:#6b7280;text-align:center;padding:18px">No AI chat model logs yet</td></tr>'
+        : aiModels.map((row) => '<tr>' +
+            '<td class="mono" style="font-size:11px">' + esc(row.model || 'unknown') + '</td>' +
+            '<td>' + (row.requests || 0) + '</td>' +
+            '<td style="color:' + ((row.errors || 0) ? '#fca5a5' : '#94a3b8') + '">' + (row.errors || 0) + '</td>' +
+            '<td>' + (row.avg_duration_ms || 0) + 'ms</td>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+          '</tr>').join('');
+      const aiRecent = aiBilling.hermes_recent || [];
+      document.getElementById('aiChatRecentBody').innerHTML = aiRecent.length === 0
+        ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:18px">No AI chat logs yet</td></tr>'
+        : aiRecent.map((row) => {
+            const ok = row.status === 'ok';
+            const trace = row.trace_id ? '<div class="mono" style="font-size:10px;color:#6b7280">trace ' + esc(String(row.trace_id).slice(0, 12)) + '</div>' : '';
+            const attempts = Array.isArray(row.attempts) && row.attempts.length
+              ? '<div class="mono" style="font-size:10px;color:#94a3b8;margin-top:4px">' + esc(row.attempts.map(a => (a.model || '?') + ':' + (a.status || '?') + ':' + (a.call_ms ?? 0) + 'ms').join(' | ')) + '</div>'
+              : '';
+            const err = row.error ? '<div style="color:#fca5a5;margin-top:4px">' + esc(row.error) + '</div>' : '';
+            return '<tr>' +
+              '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + trace + '</td>' +
+              '<td style="font-weight:700">' + esc(row.player_name || row.player_id || '-') + '</td>' +
+              '<td><span class="badge">' + esc(row.intent || '-') + '</span><div style="font-size:10px;color:#64748b">' + esc(row.event_type || 'message') + '</div></td>' +
+              '<td style="color:' + (ok ? '#4ade80' : '#fca5a5') + ';font-weight:700">' + esc(row.status || '-') + '</td>' +
+              '<td>' + (row.duration_ms ?? '-') + 'ms</td>' +
+              '<td class="mono" style="font-size:10px;color:#cbd5e1">' + esc(row.model || '-') + '</td>' +
+              '<td style="max-width:520px;white-space:normal;line-height:1.35">' +
+                '<div style="color:#fbbf24">' + esc(row.request_preview || '') + '</div>' +
+                '<div style="color:#cbd5e1;margin-top:4px">' + esc(row.response_preview || '') + '</div>' +
+                attempts + err +
+              '</td>' +
+            '</tr>';
+          }).join('');
+    } else {
+      document.getElementById('aiChatBillingSummary').innerHTML =
+        '<div style="color:#ef4444">AI billing failed: ' + esc(aiBilling?.error || 'unknown') + '</div>';
+      document.getElementById('aiChatModelBody').innerHTML = '<tr><td colspan="5" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatRecentBody').innerHTML = '<tr><td colspan="7" style="color:#ef4444">Unavailable</td></tr>';
+    }
 
     const bySku = data.by_sku || [];
     document.getElementById('shopBySkuBody').innerHTML = bySku.length === 0
@@ -2321,6 +2735,24 @@ async function loadShop() {
   } catch (e) {
     console.error(e);
     document.getElementById('shopSummary').innerHTML = '<div style="color:#ef4444">Failed to load: ' + esc(e?.message || String(e)) + '</div>';
+  }
+}
+
+async function saveAiChatSettings() {
+  const el = document.getElementById('aiFreeMessagesPerDay');
+  const status = document.getElementById('aiChatSettingsStatus');
+  status.textContent = 'Saving...';
+  status.style.color = '#94a3b8';
+  try {
+    await apiPost('/admin/ai-chat/settings', {
+      free_messages_per_day: Number(el.value || 0),
+    });
+    status.style.color = '#4ade80';
+    status.textContent = 'Saved';
+    await loadShop();
+  } catch (e) {
+    status.style.color = '#fca5a5';
+    status.textContent = e?.message || 'Failed';
   }
 }
 
@@ -2489,7 +2921,7 @@ switchTab = function(name) {
   if (name === 'client') loadClientLogs();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
-  if (name === 'tournaments') { updateTournamentPointsUi(); updateTournamentPrizeUi(); loadTournaments(); }
+  if (name === 'tournaments') { updateTournamentDexScopeUi(); updateTournamentTeamUi(); updateTournamentPointsUi(); updateTournamentPrizeUi(); loadTournaments(); }
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
   if (name === 'shop') loadShop();

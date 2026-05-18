@@ -147,6 +147,7 @@ function ShopPanel({ onClose }) {
   const thLevel = buildingDefs?.th_level || 1;
   const thUnlock = buildingDefs?.th_unlock || {};
   const thMaxCounts = buildingDefs?.th_max_counts || {};
+  const hasTownHall = (placedCounts.town_hall || 0) > 0;
 
   // Build list with status: available, maxed, locked, unaffordable
   const filteredBuildings = useMemo(
@@ -156,26 +157,29 @@ function ShopPanel({ onClose }) {
         const placed = placedCounts[id] || 0;
         const maxCount = thMaxCounts[id] ?? (def.max_count > 0 ? def.max_count : 99);
         const unlockAt = thUnlock[id];
-        // Require mine + sawmill before anything else
+        const needsTownHall = id !== 'town_hall' && !hasTownHall;
+        // Require Town Hall first, then mine + sawmill before anything else.
         const hasMine = (placedCounts['mine'] || 0) > 0;
         const hasSawmill = (placedCounts['sawmill'] || 0) > 0;
-        const needsBasics = id !== 'mine' && id !== 'sawmill' && id !== 'town_hall' && (!hasMine || !hasSawmill);
-        const locked = needsBasics || (unlockAt && thLevel < unlockAt);
+        const needsBasics = !needsTownHall && id !== 'mine' && id !== 'sawmill' && id !== 'town_hall' && (!hasMine || !hasSawmill);
+        const locked = needsTownHall || needsBasics || (unlockAt && thLevel < unlockAt);
         const maxed = maxCount < 99 && placed >= maxCount;
         const cost = def.cost || {};
         const canAfford = (resources.gold || 0) >= (cost.gold || 0) &&
                           (resources.wood || 0) >= (cost.wood || 0) &&
                           (resources.ore || 0) >= (cost.ore || 0);
-        const lockReason = needsBasics ? 'Build Mine & Sawmill first' : (locked ? `Unlocks at TH ${unlockAt}` : null);
+        const lockReason = needsTownHall ? 'Build Town Hall first' : needsBasics ? 'Build Mine & Sawmill first' : (locked ? `Unlocks at TH ${unlockAt}` : null);
         return [id, def, { placed, maxCount, locked, maxed, canAfford, unlockAt, lockReason }];
       })
       .sort((a, b) => {
+        if (a[0] === 'town_hall') return -1;
+        if (b[0] === 'town_hall') return 1;
         // Available first, then maxed, then locked
         const sa = a[2].locked ? 2 : a[2].maxed ? 1 : 0;
         const sb = b[2].locked ? 2 : b[2].maxed ? 1 : 0;
         return sa - sb;
       }),
-    [buildings, activeTab, placedCounts, thLevel, thUnlock, thMaxCounts, resources]
+    [buildings, activeTab, placedCounts, thLevel, thUnlock, thMaxCounts, resources, hasTownHall]
   );
 
   const handlePlacement = useCallback((id) => {

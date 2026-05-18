@@ -251,7 +251,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
             candles = await loadPythCandles(tf, now, start);
           }
           if (cancelled) return;
-        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid') {
+        } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex') {
           // Avantis and GMX chart candles come from Pyth's
           // benchmarks endpoint. Pacifica fetches its own REST kline.
           // Prefer the Pyth symbol from market data (authoritative); fall

@@ -54,6 +54,18 @@ const NETWORKS = {
       blockExplorerUrls: ['https://hyperevmscan.io'],
     },
   },
+  rise: {
+    chainId: '0x1039',
+    label: 'RISE',
+    cta: 'RISE network',
+    addParams: {
+      chainId: '0x1039',
+      chainName: 'RISE',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://rpc.risechain.com'],
+      blockExplorerUrls: ['https://explorer.risechain.com'],
+    },
+  },
 };
 
 // EIP-6963 provider discovery. Modern wallets (MetaMask, Rabby, Coinbase,

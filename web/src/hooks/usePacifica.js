@@ -221,6 +221,8 @@ export function usePacifica() {
   const signedOpInFlightRef = useRef(new Map());
   const activatedRef = useRef(false);
   const activatingRef = useRef(null);
+  const [builderApproved, setBuilderApproved] = useState(false);
+  const [activationStep, setActivationStep] = useState(null);
   // Re-bind reentry guard for signedRequest. If Pacifica rejects a stored
   // agent key (cleared cache, server-side revoke), we forget+rebind+retry
   // exactly once per request to avoid infinite popup loops.
@@ -231,7 +233,9 @@ export function usePacifica() {
   const walletAddr = privyActive ? privyAddr : (adapterAddr || privyAddr);
 
   useEffect(() => {
-    activatedRef.current = readActivationCache(walletAddr);
+    const cached = readActivationCache(walletAddr);
+    activatedRef.current = cached;
+    setBuilderApproved(cached);
   }, [walletAddr]);
 
   const runSignedOnce = useCallback((key, fn, holdMs = 0) => {
@@ -301,9 +305,13 @@ export function usePacifica() {
   // popup — we already approved on a prior session.
   useEffect(() => {
     if (!walletAddr) return;
-    if (activatedRef.current) return;
+    if (activatedRef.current) {
+      setBuilderApproved(true);
+      return;
+    }
     if (player?.pacifica_builder_approved) {
       activatedRef.current = true;
+      setBuilderApproved(true);
       writeActivationCache(walletAddr);
     }
   }, [walletAddr, player?.pacifica_builder_approved]);
@@ -698,12 +706,17 @@ export function usePacifica() {
     // Referral-code claim is optional and currently returns "Invalid message"
     // for Privy users, costing an extra master signature before every first
     // trade. The required part for Pacifica trading is builder-code approval.
+    setActivationStep({ label: 'Approve builder code', index: 1, total: 1 });
     try {
       const res = await signedRequest('POST', '/account/builder_codes/approve', 'approve_builder_code', {
         builder_code: BUILDER_CODE, max_fee_rate: '0.001',
       });
-      const ok = !res?.error && !(res?.code >= 400);
+      const approveText = String(res?.error || '');
+      const ok = (!res?.error && !(res?.code >= 400))
+        || /already approved|builder code already/i.test(approveText);
       if (ok) {
+        activatedRef.current = true;
+        setBuilderApproved(true);
         writeActivationCache(walletAddr);
         // Mirror to server so we don't re-approve on the next session if
         // localStorage is cleared (incognito, browser cleanup, Privy iframe
@@ -720,22 +733,32 @@ export function usePacifica() {
           }
         } catch {}
       }
+      else {
+        setBuilderApproved(false);
+        clearActivationCache(walletAddr);
+        if (res?.error) setError(res.error);
+      }
       return ok;
-    } catch {}
+    } catch (e) {
+      setBuilderApproved(false);
+      clearActivationCache(walletAddr);
+      setError(e?.message || 'Pacifica builder-code approval failed');
+    } finally {
+      setActivationStep(null);
+    }
     return false;
   }, [walletAddr, signedRequest]);
 
-  // Auto-activate: open-trade endpoints need builder_code approved once by
-  // the master wallet. Cache that per wallet and skip preflight for reduce-only
-  // closes, because an existing position already implies the account can trade.
+  // Auto-activate: every signed Pacifica request that carries our builder_code
+  // must be preceded by master-wallet approval. Reduce-only closes still create
+  // orders, so they must not bypass fee-routing approval.
   // If Pacifica still replies "not approved" / "Invalid message", reactively
   // approve once and retry.
   const signedRequestWithActivation = useCallback(async (method, endpoint, type, payload) => {
     // Preflight: ensure builder_code + referral are claimed before the real
     // request. Skip for the activation requests themselves to avoid recursion.
     const isActivationCall = type === 'claim_referral_code' || type === 'approve_builder_code';
-    const isReduceOnlyClose = type === 'create_market_order' && payload?.reduce_only === true;
-    const needsBuilderActivation = payload?.builder_code === BUILDER_CODE && !isReduceOnlyClose;
+    const needsBuilderActivation = payload?.builder_code === BUILDER_CODE;
     if (!isActivationCall && needsBuilderActivation && !activatedRef.current) {
       if (!activatingRef.current) {
         console.log(`[Pacifica] preflight activate() — first signed call (${type})`);
@@ -743,6 +766,7 @@ export function usePacifica() {
           try {
             const ok = await activate();
             activatedRef.current = ok || readActivationCache(walletAddr);
+            setBuilderApproved(activatedRef.current);
           }
           finally { activatingRef.current = null; }
         })();
@@ -753,6 +777,7 @@ export function usePacifica() {
     const res = await signedRequest(method, endpoint, type, payload);
     if (!res?.error && !(res?.code >= 400) && needsBuilderActivation) {
       activatedRef.current = true;
+      setBuilderApproved(true);
       writeActivationCache(walletAddr);
     }
     // Reactive safety net — if for some reason preflight didn't cover it
@@ -766,9 +791,11 @@ export function usePacifica() {
     if (needsRetryActivation && !isActivationCall) {
       clearActivationCache(walletAddr);
       activatedRef.current = false;
+      setBuilderApproved(false);
       console.log(`[Pacifica] reactive activate() retry — ${type} returned ${res?.code} "${errStr}"`);
       const ok = await activate();
       activatedRef.current = ok || readActivationCache(walletAddr);
+      setBuilderApproved(activatedRef.current);
       return signedRequest(method, endpoint, type, payload);
     }
     return res;
@@ -1335,6 +1362,11 @@ export function usePacifica() {
     connected: !!walletAddr, walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady,
     loading, error, clearError, goldEarned, clearGoldEarned,
     depositToPacifica, withdraw, activate, claimGold,
+    hasReferrer: builderApproved,
+    linkOurReferrer: activate,
+    setupVerified: walletAddr ? builderApproved : false,
+    isReady: !!walletAddr && builderApproved,
+    activationStep,
     placeMarketOrder, placeLimitOrder, closePosition, cancelOrder,
     setTpsl, setLeverage, setMarginMode,
     fetchAccount, fetchPositions, fetchOrders,

@@ -1,5 +1,5 @@
 const DEFAULT_MODEL_CHAIN = [
-  'openai/gpt-oss-120b:free',
+  'qwen/qwen3-30b-a3b-instruct-2507:nitro',
   'google/gemma-4-26b-a4b-it:nitro',
 ];
 

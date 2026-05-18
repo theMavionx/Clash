@@ -10,6 +10,8 @@ import { useGmx } from '../hooks/useGmx';
 import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
+import { useRisex } from '../hooks/useRisex';
+import { RISEX_BRIDGE_CHAINS, RISEX_BRIDGE_URL } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -76,6 +78,12 @@ function humanizeTradeError(message) {
   }
   if (/PERPL_ACCESS_CODE_INVALID|access code.*invalid|access code.*exhausted|invalid\/exhausted|423/i.test(text)) {
     return 'That Perpl access code is invalid or already exhausted. Check the code and try again.';
+  }
+  if (/RISEX_INVITE_REQUIRED|RISEx invite code required|invite code required before|access RISEx|redeeming code/i.test(text)) {
+    return 'Enter your RISEx invite code, sign the message, then continue setup.';
+  }
+  if (/RISEX_BRIDGE_REQUIRED|RISEx .*deposit.*1000|exactly 1000|first-time deposit|faucet/i.test(text)) {
+    return 'Use the RISEx bridge deposit flow. The 1000 USDC faucet endpoint is test-token only.';
   }
   // Phoenix returns `{"error":"invalid_invite_code"}` for bad/used/expired codes.
   // Check this before the generic "not registered" branch so a wrong code
@@ -1061,6 +1069,8 @@ function FuturesPanel() {
     ? 'arbitrum'
     : dex === 'monad'
     ? 'monad'
+    : dex === 'risex'
+    ? 'rise'
     : 'base';
   const { enabled: privyEnabled, ready: privyReady, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
@@ -1087,6 +1097,7 @@ function FuturesPanel() {
   const monadHook = useMonad();
   const phoenixHook = usePhoenix();
   const hyperliquidHook = useHyperliquid();
+  const risexHook = useRisex();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1103,13 +1114,15 @@ function FuturesPanel() {
     ? phoenixHook
     : dex === 'hyperliquid'
     ? hyperliquidHook
+    : dex === 'risex'
+    ? risexHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
     connected: tradingConnected,
-    loading, error, clearError, goldEarned, clearGoldEarned, depositStatus,
+    loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
-    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp,
+    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp, switchToRise,
     // Avantis-only — undefined on the Pacifica branch.
     hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
@@ -1121,6 +1134,7 @@ function FuturesPanel() {
     // subaccount yet) from "returning user" (subaccount on-chain but
     // delegation missing — usually after rejecting the delegate step).
     activationStep, isReady, setupVerified, subaccountAddr, gasSponsored, apiWalletAddr, inviteStatus,
+    bridgeDepositSourceChainId, setBridgeDepositSourceChainId, bridgeDepositSources,
   } = trading;
   const openedSortedPositions = useOpenedSortedPositions(positions);
   // The trading hook owns the active signer. Do not treat a detected adapter
@@ -1262,7 +1276,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -1322,6 +1336,7 @@ function FuturesPanel() {
   const [perplAccessCode, setPerplAccessCode] = useState('');
   const [phoenixInviteCode, setPhoenixInviteCode] = useState('');
   const [phoenixInviteKind, setPhoenixInviteKind] = useState('access');
+  const [risexInviteCode, setRisexInviteCode] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
@@ -1636,7 +1651,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -1674,7 +1689,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -1845,7 +1860,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -1860,10 +1875,12 @@ function FuturesPanel() {
                 ? 'Phoenix new orders use cross margin; existing isolated subaccounts are shown on positions'
                 : dex === 'hyperliquid'
                 ? 'Hyperliquid uses cross margin in your Hyperliquid account'
+                : dex === 'risex'
+                ? 'RISEx uses cross margin in your RISE account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -2182,7 +2199,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -2207,7 +2224,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -2557,6 +2574,92 @@ function FuturesPanel() {
     );
   }
 
+  // ==================== PACIFICA BUILDER-CODE GATE ====================
+  if (dex === 'pacifica' && hasWallet && setupVerified !== true) {
+    const isRunning = !!activationStep;
+    const isChecking = setupVerified === null && !isRunning;
+    const stepState = isRunning ? 'active' : 'pending';
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Setting up Pacifica...' : 'Pacifica setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? 'APPROVING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>{isRunning ? 'Approve in your wallet' : 'Approve Clash builder code'}</span>
+                <span style={hlGateStyles.subtitle}>
+                  Pacifica trading opens only after builder-code routing is approved. This is required before opening, editing, or closing orders.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${stepState}`] }}>
+                    {stepState === 'active' ? <span style={hlGateStyles.spinner} /> : 1}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${stepState}`] }}>
+                      Approve builder code
+                    </span>
+                    <span style={hlGateStyles.stepHint}>One wallet signature lets every Pacifica order include Clash fee routing.</span>
+                  </span>
+                </li>
+              </ol>
+
+              {isRunning ? (
+                <div style={hlGateStyles.workingHint}>
+                  Keep this panel open and approve the wallet request.
+                </div>
+              ) : (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, ...((isChecking || loading) ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={isChecking || loading}
+                  onClick={async () => {
+                    if (!activate) return;
+                    const res = await activate();
+                    if (res === false) setLocalAlert('Pacifica builder-code approval failed. Please approve it from your wallet and retry.');
+                    else if (res?.error) setLocalAlert(res.error);
+                  }}
+                >
+                  {isChecking || loading ? 'Please wait...' : 'Approve builder code ->'}
+                </button>
+              )}
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   // ==================== HYPERLIQUID SETUP GATE ====================
   if (dex === 'hyperliquid' && hasWallet && setupVerified !== true) {
     const isRunning = !!activationStep;
@@ -2720,6 +2823,114 @@ function FuturesPanel() {
                 </button>
               )}
 
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ==================== RISEX SETUP GATE ====================
+  if (dex === 'risex' && hasWallet && setupVerified !== true) {
+    const isRunning = !!activationStep;
+    const isChecking = setupVerified === null && !isRunning;
+    const needsRisexCode = inviteStatus?.hasAccess === false;
+    const stepLabel = activationStep?.label || (isChecking ? 'Checking RISEx signer' : 'Register RISEx signer');
+    const risexSteps = needsRisexCode
+      ? [
+          { idx: 1, title: 'Redeem RISEx invite code' },
+          { idx: 2, title: 'Sign RISEx signer registration' },
+          { idx: 3, title: 'Verify signer on RISEx mainnet' },
+        ]
+      : [
+          { idx: 1, title: 'Sign RISEx signer registration' },
+          { idx: 2, title: 'Verify signer on RISEx mainnet' },
+        ];
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Setting up RISEx...' : 'RISEx setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{ ...S.body, alignItems: 'stretch', overflowY: 'auto', overflowX: 'hidden', padding: 0, background: '#fdf8e7' }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 56, height: 56, objectFit: 'contain', alignSelf: 'center'}} />
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? `STEP ${activationStep?.index || 1} OF ${activationStep?.total || 2}` : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>{stepLabel}</span>
+                <span style={hlGateStyles.subtitle}>
+                  RISEx uses a dedicated browser signer for orders. Your wallet authorizes it once with an EIP-712 signature.
+                </span>
+              </div>
+              <ol style={hlGateStyles.stepList}>
+                {risexSteps.map((s) => {
+                  const active = isRunning && Number(activationStep?.index || 1) === s.idx;
+                  const state = active ? 'active' : 'pending';
+                  return (
+                    <li key={s.idx} style={hlGateStyles.stepItem}>
+                      <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${state}`] }}>
+                        {active ? <span style={hlGateStyles.spinner} /> : s.idx}
+                      </span>
+                      <span style={hlGateStyles.stepText}>
+                        <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${state}`] }}>{s.title}</span>
+                        <span style={hlGateStyles.stepHint}>
+                          {needsRisexCode && s.idx === 1
+                            ? 'Sign a message to redeem access before trading.'
+                            : s.title.includes('Sign')
+                            ? 'Approve the wallet popup on RISE.'
+                            : 'The API checks the signer session before opening the panel.'}
+                        </span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+              {needsRisexCode && !isRunning && (
+                <div style={{display: 'flex', flexDirection: 'column', gap: 8, width: '100%', maxWidth: 360}}>
+                  <input
+                    type="text"
+                    placeholder="RISEx invite code"
+                    value={risexInviteCode}
+                    onChange={e => setRisexInviteCode(e.target.value)}
+                    autoCapitalize="characters"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    style={{...S.input, width: '100%', padding: '10px 12px', fontSize: 14}}
+                  />
+                  <div style={{fontSize: 11, color: '#B45309', fontWeight: 800, lineHeight: 1.35}}>
+                    RISEx mainnet is invite-gated. Redeemed but pending accounts need RISEx to activate access before trading.
+                  </div>
+                </div>
+              )}
+              <button
+                style={{ ...hlGateStyles.primaryBtn, ...((isChecking || loading) ? hlGateStyles.primaryBtnBusy : null) }}
+                disabled={isChecking || loading}
+                onClick={async () => {
+                  if (!activate) return;
+                  const res = await activate({ inviteCode: risexInviteCode });
+                  if (res?.error) setLocalAlert(res.error);
+                  else setRisexInviteCode('');
+                }}
+              >
+                {isChecking || loading ? 'Please wait...' : 'Set up RISEx ->'}
+              </button>
               {(error || localAlert) && (
                 <div style={hlGateStyles.errorBox}>
                   {humanizeTradeError(error || localAlert)}
@@ -3677,6 +3888,53 @@ function FuturesPanel() {
       : 0;
     const hyperliquidUnified = dex === 'hyperliquid'
       && (account?.abstraction_mode === 'unifiedAccount' || account?.abstraction_mode === 'portfolioMargin' || account?.is_unified_account === true);
+    const risexWalletState = dex === 'risex'
+      ? (walletUsdcStatus?.status || (walletUsdc == null ? 'checking' : 'ready'))
+      : null;
+    const risexWalletBusy = risexWalletState === 'checking' || risexWalletState === 'switching';
+    const risexWalletNeedsSwitch = risexWalletState === 'wrong_chain';
+    const risexWalletError = risexWalletState === 'error';
+    const risexWalletMessage = dex === 'risex'
+      ? (walletUsdcStatus?.message
+        || (risexWalletNeedsSwitch ? 'Switch your wallet to RISE to read your RISE USDC balance.' : null))
+      : null;
+    const risexShowBridgeLink = dex === 'risex'
+      && (risexWalletNeedsSwitch || risexWalletError || (walletUsdc !== null && walletUsdc <= 0.000001));
+    const risexWalletValue = (() => {
+      if (dex !== 'risex') return walletUsdc !== null ? `$${walletUsdc.toFixed(2)}` : '$--';
+      if (walletUsdc !== null && !risexWalletNeedsSwitch && !risexWalletError) return `$${walletUsdc.toFixed(2)}`;
+      if (risexWalletNeedsSwitch) return 'Switch to RISE';
+      if (risexWalletError) return 'Unavailable';
+      return risexWalletState === 'switching' ? 'Switching...' : 'Checking...';
+    })();
+    const risexWalletValueColor = risexWalletNeedsSwitch
+      ? '#B45309'
+      : risexWalletError
+      ? '#B91C1C'
+      : '#5C3A21';
+    const risexDepositSources = Array.isArray(bridgeDepositSources) && bridgeDepositSources.length
+      ? bridgeDepositSources
+      : RISEX_BRIDGE_CHAINS;
+    const risexDepositSource = risexDepositSources.find(chain => Number(chain.id) === Number(bridgeDepositSourceChainId))
+      || risexDepositSources[0];
+    const risexDepositBusy = dex === 'risex'
+      && ['preparing', 'switching', 'signing', 'confirming', 'bridging', 'depositing'].includes(String(depositStatus?.status || ''));
+    const risexDepositButtonLabel = (() => {
+      if (dex !== 'risex') return loading ? '...' : 'Deposit';
+      if (depositStatus?.status === 'preparing') return 'Preparing...';
+      if (depositStatus?.status === 'switching') return 'Switching...';
+      if (depositStatus?.status === 'signing') return 'Sign...';
+      if (depositStatus?.status === 'confirming') return 'Confirming...';
+      if (depositStatus?.status === 'bridging') return 'Bridging...';
+      if (depositStatus?.status === 'depositing') return 'Depositing...';
+      return loading ? '...' : 'Deposit';
+    })();
+    const handleSwitchToRise = async () => {
+      if (!switchToRise) return;
+      const res = await switchToRise();
+      if (res?.error) setLocalAlert(res.error);
+      else setLocalAlert('Wallet switched to RISE. Balance is refreshing.');
+    };
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -3723,11 +3981,59 @@ function FuturesPanel() {
         {/* Wallet USDC */}
         <div style={S.fullCard}>
           <div style={S.row}>
-            <span style={S.label}>{dex === 'hyperliquid' ? 'Arbitrum Wallet USDC' : 'Wallet USDC'}</span>
-            <span style={{fontSize: 18, fontWeight: 900, color: '#5C3A21'}}>
-              ${walletUsdc !== null ? walletUsdc.toFixed(2) : '—'}
-            </span>
+            <span style={S.label}>{dex === 'hyperliquid' ? 'Arbitrum Wallet USDC' : dex === 'risex' ? 'RISE Wallet USDC' : 'Wallet USDC'}</span>
+            <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+              <span style={{fontSize: 18, fontWeight: 900, color: dex === 'risex' ? risexWalletValueColor : '#5C3A21'}}>
+                {dex === 'risex' ? risexWalletValue : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`}
+              </span>
+              {dex === 'risex' && (risexWalletNeedsSwitch || risexWalletError) && (
+                <button
+                  type="button"
+                  onClick={handleSwitchToRise}
+                  disabled={risexWalletBusy || loading}
+                  style={{
+                    ...S.btnSmall,
+                    padding: '5px 9px',
+                    fontSize: 10,
+                    background: '#16A34A',
+                    color: '#fff',
+                    border: '2px solid #15803D',
+                    opacity: (risexWalletBusy || loading) ? 0.65 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {risexWalletState === 'switching' ? 'Switching...' : 'Switch'}
+                </button>
+              )}
+            </div>
           </div>
+          {dex === 'risex' && risexWalletMessage && (
+            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: risexWalletNeedsSwitch ? '#B45309' : '#B91C1C', fontWeight: 800}}>
+              {risexWalletMessage}
+            </div>
+          )}
+          {risexShowBridgeLink && (
+            <a
+              href={RISEX_BRIDGE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                ...S.btnSmall,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 8,
+                width: '100%',
+                padding: '8px 10px',
+                background: '#16A34A',
+                color: '#fff',
+                border: '2px solid #15803D',
+                textDecoration: 'none',
+              }}
+            >
+              Open RISEx bridge
+            </a>
+          )}
         </div>
 
         {dex === 'hyperliquid' && hyperliquidSpot > 0.000001 && (
@@ -3924,14 +4230,39 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : 'Deposit USDC'}</span>
-              {walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
+              {dex === 'risex'
+                ? (
+                  <span style={{...S.detail, color: '#15803D'}}>
+                    From {risexDepositSource?.name || 'Arbitrum'} to RISE
+                  </span>
+                )
+                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
+              {dex === 'risex' && (
+                <select
+                  value={risexDepositSource?.id || 42161}
+                  onChange={e => setBridgeDepositSourceChainId?.(Number(e.target.value))}
+                  disabled={loading || risexDepositBusy}
+                  style={{
+                    ...S.input,
+                    flex: 2.1,
+                    minWidth: 0,
+                    padding: '8px 8px',
+                    fontSize: 12,
+                    fontWeight: 800,
+                  }}
+                >
+                  {risexDepositSources.map(chain => (
+                    <option key={chain.id} value={chain.id}>{chain.name}</option>
+                  ))}
+                </select>
+              )}
               {/* Pacifica enforces a $10 deposit floor. Decibel/Phoenix/Perpl
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
@@ -3941,10 +4272,19 @@ function FuturesPanel() {
                   setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} USDC` : 'Enter a positive amount');
                   return;
                 }
-                const r = await depositToPacifica(depositAmt);
-                if (!r?.error) setDepositAmt('');
-              }} disabled={loading}>
-                {loading ? '...' : 'Deposit'}
+                if (dex === 'risex') {
+                  if (!risexDepositSource) {
+                    setLocalAlert('Select a source chain for the RISEx bridge deposit.');
+                    return;
+                  }
+                }
+                const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : undefined);
+                if (!r?.error) {
+                  setDepositAmt('');
+                  if (r?.info) setLocalAlert(r.info);
+                }
+              }} disabled={loading || risexDepositBusy}>
+                {risexDepositButtonLabel}
               </button>
             </div>
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>
@@ -3954,6 +4294,12 @@ function FuturesPanel() {
                 ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
                 : dex === 'phoenix'
                 ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
+                : dex === 'risex'
+                ? (
+                  <>
+                    Transfers native <b>USDC on {risexDepositSource?.name || 'Arbitrum'}</b> to the RISEx bridge deposit address, then submits the tx to RISEx. Needs source-chain gas.
+                  </>
+                )
                 : 'Sends USDC from your wallet to Pacifica. Needs ~0.005 SOL for gas.'}
             </span>
           </div>
@@ -3963,7 +4309,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
@@ -4291,6 +4637,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.hyperliquid.colorDark }}>
                 Hyperliquid
+              </span>
+            </>
+          ) : dex === 'risex' ? (
+            <>
+              <img
+                src={DEX_CONFIG.risex.logo}
+                alt="RISEx"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.risex.colorDark }}>
+                RISEx
               </span>
             </>
           ) : (

@@ -1,8 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const crypto = require('crypto');
-const { v4: uuidv4 } = require('uuid');
 const { CANONICAL_GRID_CONFIG } = require('./combat_defs');
+const uuidv4 = () => crypto.randomUUID();
 
 const DB_PATH = process.env.CLASH_MAIN_DB || path.join(__dirname, 'clash.db');
 
@@ -254,18 +254,96 @@ try {
     CREATE TABLE IF NOT EXISTS hermes_chat_events (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       player_id   TEXT REFERENCES players(id) ON DELETE SET NULL,
+      trace_id    TEXT,
+      event_type  TEXT NOT NULL DEFAULT 'message',
+      intent      TEXT,
+      player_name TEXT,
       status      TEXT NOT NULL DEFAULT 'ok',
       duration_ms INTEGER,
       model       TEXT,
       error       TEXT,
+      request_preview TEXT,
+      response_preview TEXT,
       input_json  TEXT,
       output_json TEXT,
+      quota_json  TEXT,
+      attempts_json TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_recent ON hermes_chat_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_player ON hermes_chat_events(player_id, created_at DESC);
   `);
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN trace_id TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN event_type TEXT NOT NULL DEFAULT 'message'`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN intent TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN player_name TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN request_preview TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN response_preview TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN quota_json TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN attempts_json TEXT`); } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_trace ON hermes_chat_events(trace_id)`); } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_type_recent ON hermes_chat_events(event_type, created_at DESC)`); } catch {}
+  try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_intent_recent ON hermes_chat_events(intent, created_at DESC)`); } catch {}
 } catch (e) { console.warn('[db] hermes_chat_events migration:', e.message); }
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN trace_id TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN event_type TEXT NOT NULL DEFAULT 'message'`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN intent TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN player_name TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN request_preview TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN response_preview TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN quota_json TEXT`); } catch {}
+try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN attempts_json TEXT`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_trace ON hermes_chat_events(trace_id)`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_type_recent ON hermes_chat_events(event_type, created_at DESC)`); } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_intent_recent ON hermes_chat_events(intent, created_at DESC)`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key        TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_message_credit_balances (
+      player_id  TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      credits    INTEGER NOT NULL DEFAULT 0 CHECK(credits >= 0),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_message_credit_ledger (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id     TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      delta         INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      reason        TEXT NOT NULL,
+      purchase_id   INTEGER,
+      metadata_json TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_message_credit_ledger_player ON ai_message_credit_ledger(player_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS ai_message_entitlements (
+      player_id            TEXT PRIMARY KEY REFERENCES players(id) ON DELETE CASCADE,
+      lifetime_daily_limit INTEGER NOT NULL DEFAULT 0 CHECK(lifetime_daily_limit >= 0),
+      source_purchase_id   INTEGER,
+      created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_message_daily_usage (
+      player_id         TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      day               TEXT NOT NULL,
+      free_used         INTEGER NOT NULL DEFAULT 0 CHECK(free_used >= 0),
+      subscription_used INTEGER NOT NULL DEFAULT 0 CHECK(subscription_used >= 0),
+      credit_used       INTEGER NOT NULL DEFAULT 0 CHECK(credit_used >= 0),
+      total_used        INTEGER NOT NULL DEFAULT 0 CHECK(total_used >= 0),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY(player_id, day)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_message_daily_usage_day ON ai_message_daily_usage(day);
+  `);
+} catch (e) { console.warn('[db] ai message billing migration:', e.message); }
 
 // Browser console/error ingestion. Public endpoint writes bounded rows here so
 // production client failures survive PM2 log rotation and can be queried from
@@ -330,11 +408,20 @@ try {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       name         TEXT NOT NULL,
       description  TEXT,
-      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid')),
+      dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex')),
+      dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
+      eligible_dexes TEXT NOT NULL DEFAULT '[]',
+      mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
+      team_score_by TEXT NOT NULL DEFAULT 'volume_usd',
+      team_prize_mode TEXT NOT NULL DEFAULT 'winner_takes_all',
+      team_prize_splits TEXT NOT NULL DEFAULT '[]',
+      team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd',
+      attack_match_policy TEXT NOT NULL DEFAULT 'all' CHECK(attack_match_policy IN ('all','enemy_or_non_participant','enemy_only')),
       start_at     TEXT NOT NULL,                        -- ISO datetime
       end_at       TEXT,                                  -- nullable (open-ended)
       gold_boost   REAL NOT NULL DEFAULT 1.0,
       trophy_boost REAL NOT NULL DEFAULT 1.0,
+      shield_hours REAL,
       freeze_trophies INTEGER NOT NULL DEFAULT 1,
       sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
       points_trophy_weight REAL NOT NULL DEFAULT 0,
@@ -347,7 +434,30 @@ try {
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
+    CREATE INDEX IF NOT EXISTS idx_tournaments_scope_status ON tournaments(dex_scope, status);
   `);
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN dex_scope TEXT NOT NULL DEFAULT 'single'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN eligible_dexes TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN mode TEXT NOT NULL DEFAULT 'individual'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_score_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_mode TEXT NOT NULL DEFAULT 'winner_takes_all'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_splits TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN attack_match_policy TEXT NOT NULL DEFAULT 'all'`); } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET attack_match_policy = 'all'
+      WHERE attack_match_policy NOT IN ('all','enemy_or_non_participant','enemy_only')
+    `);
+  } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET eligible_dexes = '["' || dex || '"]'
+      WHERE eligible_dexes IS NULL OR eligible_dexes = '' OR eligible_dexes = '[]'
+    `);
+  } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN preregistration_enabled INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
@@ -358,6 +468,8 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
+  try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
   try {
     db.exec(`
       UPDATE tournaments
@@ -373,7 +485,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("points_trophy_weight") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("points_trophy_weight") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -382,11 +494,20 @@ try {
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT NOT NULL,
             description  TEXT,
-            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid')),
+            dex          TEXT NOT NULL CHECK(dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex')),
+            dex_scope    TEXT NOT NULL DEFAULT 'single' CHECK(dex_scope IN ('single','custom','all')),
+            eligible_dexes TEXT NOT NULL DEFAULT '[]',
+            mode         TEXT NOT NULL DEFAULT 'individual' CHECK(mode IN ('individual','dex_vs_dex')),
+            team_score_by TEXT NOT NULL DEFAULT 'volume_usd',
+            team_prize_mode TEXT NOT NULL DEFAULT 'winner_takes_all',
+            team_prize_splits TEXT NOT NULL DEFAULT '[]',
+            team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd',
+            attack_match_policy TEXT NOT NULL DEFAULT 'all' CHECK(attack_match_policy IN ('all','enemy_or_non_participant','enemy_only')),
             start_at     TEXT NOT NULL,
             end_at       TEXT,
             gold_boost   REAL NOT NULL DEFAULT 1.0,
             trophy_boost REAL NOT NULL DEFAULT 1.0,
+            shield_hours REAL,
             freeze_trophies INTEGER NOT NULL DEFAULT 1,
             sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
             points_trophy_weight REAL NOT NULL DEFAULT 0,
@@ -402,14 +523,26 @@ try {
             registration_closes_at TEXT
           );
           INSERT INTO tournaments_new (
-            id, name, description, dex, start_at, end_at, gold_boost, trophy_boost,
-            freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
+            id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost,
+            shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             prize_currency, prize_tiers, rewards_in_cop, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
-            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex') THEN dex ELSE 'pacifica' END,
+            CASE WHEN dex_scope IN ('single','custom','all') THEN dex_scope ELSE 'single' END,
+            CASE
+              WHEN eligible_dexes IS NOT NULL AND eligible_dexes != '' AND eligible_dexes != '[]' THEN eligible_dexes
+              ELSE '["' || CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid','risex') THEN dex ELSE 'pacifica' END || '"]'
+            END,
+            CASE WHEN mode IN ('individual','dex_vs_dex') THEN mode ELSE 'individual' END,
+            COALESCE(team_score_by, 'volume_usd'),
+            CASE WHEN team_prize_mode IN ('winner_takes_all','custom_split') THEN team_prize_mode ELSE 'winner_takes_all' END,
+            COALESCE(team_prize_splits, '[]'),
+            COALESCE(team_member_reward_by, 'volume_usd'),
+            CASE WHEN attack_match_policy IN ('all','enemy_or_non_participant','enemy_only') THEN attack_match_policy ELSE 'all' END,
             start_at, end_at, gold_boost, trophy_boost,
+            CASE WHEN shield_hours IS NULL THEN NULL ELSE MAX(0, shield_hours) END,
             COALESCE(freeze_trophies, 1),
             CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
             COALESCE(points_trophy_weight, CASE WHEN sort_by = 'volume_trophies_50_50' THEN 50 ELSE 0 END),
@@ -427,6 +560,7 @@ try {
           DROP TABLE tournaments;
           ALTER TABLE tournaments_new RENAME TO tournaments;
           CREATE INDEX IF NOT EXISTS idx_tournaments_dex_status ON tournaments(dex, status);
+          CREATE INDEX IF NOT EXISTS idx_tournaments_scope_status ON tournaments(dex_scope, status);
           INSERT OR REPLACE INTO sqlite_sequence(name, seq)
             SELECT 'tournaments', COALESCE(MAX(id), 0) FROM tournaments;
         `);
@@ -436,6 +570,35 @@ try {
     db.pragma('foreign_keys = ON');
   }
 } catch (e) { console.warn('[db] tournaments migration:', e.message); }
+
+// The rebuild path above intentionally tolerates legacy DBs. If a legacy
+// rebuild failed before adding newer columns, retry the additive columns here
+// so prepared statements below can still compile on old production files.
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN dex_scope TEXT NOT NULL DEFAULT 'single'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN eligible_dexes TEXT NOT NULL DEFAULT '[]'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN mode TEXT NOT NULL DEFAULT 'individual'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_score_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_mode TEXT NOT NULL DEFAULT 'winner_takes_all'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_splits TEXT NOT NULL DEFAULT '[]'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN attack_match_policy TEXT NOT NULL DEFAULT 'all'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
+try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
+try {
+  db.exec(`
+    UPDATE tournaments
+    SET attack_match_policy = 'all'
+    WHERE attack_match_policy NOT IN ('all','enemy_or_non_participant','enemy_only')
+  `);
+} catch {}
+try {
+  db.exec(`
+    UPDATE tournaments
+    SET eligible_dexes = '["' || dex || '"]'
+    WHERE eligible_dexes IS NULL OR eligible_dexes = '' OR eligible_dexes = '[]'
+  `);
+} catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_tournaments_scope_status ON tournaments(dex_scope, status)`); } catch {}
 
 try {
   db.exec(`
@@ -449,6 +612,7 @@ try {
       trades_count     INTEGER NOT NULL DEFAULT 0,
       volume_usd       REAL NOT NULL DEFAULT 0,
       pnl_usd          REAL NOT NULL DEFAULT 0,
+      team_dex         TEXT,
       reward_wallet_evm TEXT,
       last_activity_at TEXT,
       PRIMARY KEY (tournament_id, player_id)
@@ -456,6 +620,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_tp_player_active ON tournament_participants(player_id, left_at);
     CREATE INDEX IF NOT EXISTS idx_tp_leaderboard ON tournament_participants(tournament_id, pnl_usd DESC);
   `);
+  try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN team_dex TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN reward_wallet_evm TEXT`); } catch {}
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
 
@@ -622,6 +787,17 @@ const stmts = {
   `),
   getPlayerByToken: db.prepare(`SELECT * FROM players WHERE token = ?`),
   getPlayerByName: db.prepare(`SELECT * FROM players WHERE name = ?`),
+  getPlayerByNameCasefold: db.prepare(`SELECT * FROM players WHERE lower(name) = lower(?) LIMIT 1`),
+  searchPlayersByName: db.prepare(`
+    SELECT id, name, trophies, level, shield_until
+    FROM players
+    WHERE lower(name) LIKE lower(?) ESCAPE '\\'
+    ORDER BY
+      CASE WHEN lower(name) = lower(?) THEN 0 ELSE 1 END,
+      length(name) ASC,
+      trophies DESC
+    LIMIT 6
+  `),
   // wallet-only lookup kept for back-compat with code paths that don't
   // care about DEX (e.g. legacy Farcaster placeholder migration). New
   // code MUST use getPlayerByWalletAndDex so per-DEX accounts stay
@@ -705,8 +881,9 @@ const stmts = {
   `),
   insertHermesChatEvent: db.prepare(`
     INSERT INTO hermes_chat_events
-      (player_id, status, duration_ms, model, error, input_json, output_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (player_id, trace_id, event_type, intent, player_name, status, duration_ms, model, error,
+       request_preview, response_preview, input_json, output_json, quota_json, attempts_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
 
   // Find enemy candidates (not self, no shield, has a town hall, not in a
@@ -753,7 +930,36 @@ const stmts = {
           AND bs2.surrendered_at > datetime('now', '-24 hours')
       )
     ORDER BY RANDOM()
-    LIMIT 20
+    LIMIT 100
+  `),
+  getActiveBattleReservationForDefender: db.prepare(`
+    SELECT id, attacker_id, defender_id, reserved_until
+    FROM battle_sessions
+    WHERE defender_id = ?
+      AND status = 'active'
+      AND reserved_until > datetime('now')
+    ORDER BY reserved_until DESC
+    LIMIT 1
+  `),
+  getRecentDefeatAgainstDefender: db.prepare(`
+    SELECT id, created_at
+    FROM battle_replays
+    WHERE attacker_id = ?
+      AND defender_id = ?
+      AND claimed_result = 'defeat'
+      AND created_at > datetime('now', '-24 hours')
+    ORDER BY created_at DESC
+    LIMIT 1
+  `),
+  getRecentSurrenderAgainstDefender: db.prepare(`
+    SELECT id, surrendered_at
+    FROM battle_sessions
+    WHERE attacker_id = ?
+      AND defender_id = ?
+      AND surrendered_at IS NOT NULL
+      AND surrendered_at > datetime('now', '-24 hours')
+    ORDER BY surrendered_at DESC
+    LIMIT 1
   `),
 
   // Resources
@@ -862,24 +1068,61 @@ const stmts = {
   `),
 
   // Tournaments — used by battle paths to detect whether a player is
-  // currently joined to an active tournament for their DEX. When yes,
+  // currently joined to an active tournament available to their DEX. When yes,
   // main `players.trophies` writes are skipped and the delta is routed
   // (with boost) into `tournament_participants.trophies` instead.
-  // Joins with `players.dex` to enforce per-DEX scoping; `left_at IS NULL`
+  // Joins with `players.dex` to enforce single/custom/all DEX scoping; `left_at IS NULL`
   // means the participant is still active (didn't soft-leave).
   // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.gold_boost, t.trophy_boost,
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, p.team_dex, t.gold_boost, t.trophy_boost,
            COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
-           t.start_at, t.end_at, p.joined_at
+           t.shield_hours, t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
-    JOIN tournaments t ON t.id = p.tournament_id AND t.dex = (SELECT dex FROM players WHERE id = p.player_id)
+    JOIN players pl ON pl.id = p.player_id
+    JOIN tournaments t ON t.id = p.tournament_id
     WHERE p.player_id = ?
       AND p.left_at IS NULL
       AND t.status = 'active'
+      AND (
+        COALESCE(t.dex_scope, 'single') = 'all'
+        OR t.dex = pl.dex
+        OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || pl.dex || '"') > 0
+      )
       AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     ORDER BY t.id DESC
+    LIMIT 1
+  `),
+  getActiveTournamentAttackPolicyForPlayer: db.prepare(`
+    SELECT t.id AS tournament_id, t.name, t.dex, t.dex_scope, t.eligible_dexes, t.mode,
+           COALESCE(t.attack_match_policy, 'all') AS attack_match_policy,
+           p.team_dex, pl.dex AS player_dex
+    FROM tournament_participants p
+    JOIN players pl ON pl.id = p.player_id
+    JOIN tournaments t ON t.id = p.tournament_id
+    WHERE p.player_id = ?
+      AND p.left_at IS NULL
+      AND COALESCE(t.mode, 'individual') = 'dex_vs_dex'
+      AND COALESCE(t.attack_match_policy, 'all') != 'all'
+      AND t.status = 'active'
+      AND (
+        COALESCE(t.dex_scope, 'single') = 'all'
+        OR t.dex = pl.dex
+        OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || pl.dex || '"') > 0
+      )
+      AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
+      AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
+    ORDER BY t.id DESC
+    LIMIT 1
+  `),
+  getTournamentParticipantTeam: db.prepare(`
+    SELECT tp.player_id, tp.team_dex, pl.dex AS player_dex, pl.name
+    FROM tournament_participants tp
+    JOIN players pl ON pl.id = tp.player_id
+    WHERE tp.tournament_id = ?
+      AND tp.player_id = ?
+      AND tp.left_at IS NULL
     LIMIT 1
   `),
   bumpTournamentTrophies: db.prepare(`
@@ -916,6 +1159,101 @@ const stmts = {
 function getPlayerActiveTournament(playerId) {
   if (!playerId) return null;
   return stmts.getActiveTournamentForPlayer.get(playerId) || null;
+}
+
+const TOURNAMENT_ATTACK_MATCH_POLICIES = new Set(['all', 'enemy_or_non_participant', 'enemy_only']);
+
+function normalizeTournamentAttackMatchPolicy(value) {
+  const policy = String(value || 'all').trim().toLowerCase();
+  return TOURNAMENT_ATTACK_MATCH_POLICIES.has(policy) ? policy : 'all';
+}
+
+function getTournamentAttackMatchContext(playerId) {
+  if (!playerId) return null;
+  const row = stmts.getActiveTournamentAttackPolicyForPlayer.get(playerId);
+  if (!row) return null;
+  const policy = normalizeTournamentAttackMatchPolicy(row.attack_match_policy);
+  if (policy === 'all') return null;
+  const teamDex = String(row.team_dex || row.player_dex || '').trim().toLowerCase();
+  if (!teamDex) return null;
+  return {
+    tournament_id: row.tournament_id,
+    tournament_name: row.name,
+    attack_match_policy: policy,
+    team_dex: teamDex,
+  };
+}
+
+function tournamentAttackRestrictionForTarget(ctx, targetId) {
+  if (!ctx || !targetId) return { allowed: true, reason: 'no_policy' };
+  const defender = stmts.getTournamentParticipantTeam.get(ctx.tournament_id, targetId);
+  if (defender) {
+    const defenderTeam = String(defender.team_dex || defender.player_dex || '').trim().toLowerCase();
+    if (defenderTeam && defenderTeam === ctx.team_dex) {
+      return {
+        allowed: false,
+        reason: 'same_team',
+        tournament_id: ctx.tournament_id,
+        policy: ctx.attack_match_policy,
+        attacker_team: ctx.team_dex,
+        defender_team: defenderTeam,
+      };
+    }
+    return {
+      allowed: true,
+      reason: 'enemy_team',
+      tournament_id: ctx.tournament_id,
+      policy: ctx.attack_match_policy,
+      attacker_team: ctx.team_dex,
+      defender_team: defenderTeam || null,
+    };
+  }
+  if (ctx.attack_match_policy === 'enemy_only') {
+    return {
+      allowed: false,
+      reason: 'not_tournament_participant',
+      tournament_id: ctx.tournament_id,
+      policy: ctx.attack_match_policy,
+      attacker_team: ctx.team_dex,
+      defender_team: null,
+    };
+  }
+  return {
+    allowed: true,
+    reason: 'non_participant',
+    tournament_id: ctx.tournament_id,
+    policy: ctx.attack_match_policy,
+    attacker_team: ctx.team_dex,
+    defender_team: null,
+  };
+}
+
+function tournamentAttackPolicyError(ctx, restriction, targetName = '') {
+  if (!ctx || !restriction || restriction.allowed) return null;
+  const team = String(ctx.team_dex || '').toUpperCase();
+  if (restriction.reason === 'same_team') {
+    return targetName
+      ? `${targetName} is on your ${team} tournament team. Same-team attacks are disabled for this tournament.`
+      : `No valid targets found: same-team attacks are disabled for your ${team} tournament team.`;
+  }
+  return targetName
+    ? `${targetName} is not registered on an enemy tournament team. This tournament only allows enemy-team attacks.`
+    : 'No valid targets found: this tournament only allows attacks against registered enemy-team players.';
+}
+
+function filterTournamentAttackCandidates(playerId, candidates) {
+  const ctx = getTournamentAttackMatchContext(playerId);
+  if (!ctx || !Array.isArray(candidates) || candidates.length === 0) {
+    return { candidates: candidates || [], context: ctx, blocked: [] };
+  }
+  const allowed = [];
+  const blocked = [];
+  for (const candidate of candidates) {
+    const restriction = tournamentAttackRestrictionForTarget(ctx, candidate.id);
+    if (restriction.allowed) allowed.push(candidate);
+    else blocked.push({ id: candidate.id, name: candidate.name, ...restriction });
+  }
+  return { candidates: allowed, context: ctx, blocked };
 }
 
 // Apply a trophy delta to the right destination:
@@ -1043,6 +1381,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
     if (!tradeInTournamentWindow(t, row)) continue;
     const tradeId = row?.id ?? row?.history_id ?? row?.trade_id;
     if (tradeId === undefined || tradeId === null || tradeId === '') continue;
+    const creditDex = String(opts.dex || row?.dex || t.dex || '').toLowerCase() || t.dex;
     const count = creditCount ? 1 : 0;
     const volume = creditVolume ? Math.max(0, safeUsd(row.notional_usd ?? row.volume_usd ?? row.volume)) : 0;
     const pnl = creditPnl ? safeUsd(row.pnl ?? row.pnl_usd ?? row.realized_pnl ?? row.realised_pnl) : 0;
@@ -1051,7 +1390,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
       source,
       String(tradeId),
       playerId,
-      t.dex,
+      creditDex,
       count,
       volume,
       pnl
@@ -1326,12 +1665,20 @@ function logHermesChatEvent(event = {}) {
     const duration = Number(event.durationMs ?? event.duration_ms);
     stmts.insertHermesChatEvent.run(
       event.playerId || event.player_id || null,
+      event.traceId || event.trace_id || null,
+      String(event.eventType || event.event_type || 'message').slice(0, 40),
+      event.intent ? String(event.intent).slice(0, 80) : null,
+      event.playerName || event.player_name ? String(event.playerName || event.player_name).slice(0, 120) : null,
       String(event.status || 'ok').slice(0, 40),
       Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : null,
       event.model ? String(event.model).slice(0, 120) : null,
       boundedJson(event.error, 2000),
+      event.requestPreview || event.request_preview ? String(event.requestPreview || event.request_preview).slice(0, 1200) : null,
+      event.responsePreview || event.response_preview ? String(event.responsePreview || event.response_preview).slice(0, 1600) : null,
       boundedJson(event.input ?? event.input_json, 8000),
-      boundedJson(event.output ?? event.output_json, 20000)
+      boundedJson(event.output ?? event.output_json, 20000),
+      boundedJson(event.quota ?? event.quota_json, 4000),
+      boundedJson(event.attempts ?? event.attempts_json, 12000)
     );
   } catch (err) {
     console.warn('[db] failed to log Hermes chat event:', err?.message || err);
@@ -1598,13 +1945,22 @@ function getTownHallLevel(playerId) {
   return 1;
 }
 
+function hasTownHall(playerId) {
+  return stmts.getBuildings.all(playerId).some((b) => b.type === 'town_hall');
+}
+
 function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
   const def = BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
+
+  if (type !== 'town_hall' && !hasTownHall(playerId)) {
+    return { error: 'Build Town Hall first!' };
+  }
+
   const placement = canPlaceBuildingAt(playerId, type, gridX, gridZ, gridIndex);
   if (!placement.ok) return { error: placement.error, blockers: placement.blockers };
 
-  // Require Mine and Sawmill before any other building (except town_hall)
+  // Require Mine and Sawmill before any other building after Town Hall.
   if (type !== 'town_hall' && type !== 'mine' && type !== 'sawmill') {
     const existing = stmts.getBuildings.all(playerId);
     const hasMine = existing.some(b => b.type === 'mine');
@@ -1904,6 +2260,28 @@ function normalizeBattleSessionId(sessionId) {
   return String(sessionId || '').trim();
 }
 
+function battleShieldInfo(player) {
+  if (!player?.shield_until) return null;
+  const shieldEnd = new Date(`${player.shield_until}Z`);
+  const remainingMs = shieldEnd.getTime() - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  return {
+    shield_until: player.shield_until,
+    remaining_ms: remainingMs,
+    remaining_minutes: Math.max(1, Math.ceil(remainingMs / 60_000)),
+    remaining_hours: Math.max(1, Math.ceil(remainingMs / 3_600_000)),
+  };
+}
+
+function publicBattleTarget(player) {
+  return player ? {
+    id: player.id,
+    name: player.name,
+    trophies: player.trophies,
+    level: player.level,
+  } : null;
+}
+
 function findEnemy(playerId) {
   const player = stmts.getPlayerById.get(playerId);
   if (!player) return { error: 'Player not found' };
@@ -1913,12 +2291,23 @@ function findEnemy(playerId) {
   // Find Enemy again, the newest target replaces the previous lock.
   stmts.cancelBattleSessionsForAttacker.run(playerId);
   const myStrength = getBaseStrength(playerId);
-  const candidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId);
+  const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId);
+  const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
+  const candidates = matchFilter.candidates;
   // Friendly user-facing message — same wording for "everybody is shielded"
   // and "no real bases registered yet" because from the player's POV they
   // both mean the same thing: come back later.
   const NO_TARGETS = 'Sorry — all bases are under shield right now. Wait a bit until their shields drop.';
-  if (candidates.length === 0) return { error: NO_TARGETS };
+  if (candidates.length === 0) {
+    const restrictedError = matchFilter.blocked?.length
+      ? tournamentAttackPolicyError(matchFilter.context, matchFilter.blocked[0])
+      : null;
+    return {
+      error: restrictedError || NO_TARGETS,
+      tournament_attack_policy: matchFilter.context || null,
+      blocked_targets: matchFilter.blocked?.length || 0,
+    };
+  }
 
   // Pick closest base strength
   let best = null, bestDiff = Infinity;
@@ -1970,6 +2359,165 @@ function findEnemy(playerId) {
     // valid `battle_start` action without guessing coordinates.
     grid_config: CANONICAL_GRID_CONFIG,
   };
+  })();
+}
+
+function resolveNamedBattleTarget(playerId, rawTargetName) {
+  const attacker = stmts.getPlayerById.get(playerId);
+  if (!attacker) return { error: 'Player not found' };
+  const targetName = String(rawTargetName || '').trim();
+  if (!targetName) return { error: 'Target player name required' };
+
+  let target = stmts.getPlayerByName.get(targetName) || stmts.getPlayerByNameCasefold.get(targetName);
+  if (!target) {
+    const escaped = targetName.replace(/[\\%_]/g, (m) => `\\${m}`);
+    const matches = stmts.searchPlayersByName.all(`%${escaped}%`, targetName);
+    if (matches.length === 1) {
+      target = stmts.getPlayerById.get(matches[0].id);
+    } else if (matches.length > 1) {
+      return {
+        error: `Multiple players match "${targetName}". Use the exact name.`,
+        matches: matches.map(publicBattleTarget),
+      };
+    }
+  }
+  if (!target) return { error: `Player "${targetName}" not found.` };
+  if (target.id === playerId) return { error: 'Cannot attack yourself.' };
+
+  const shield = battleShieldInfo(target);
+  if (shield) {
+    return {
+      error: `${target.name} is under shield for about ${shield.remaining_hours}h.`,
+      target: publicBattleTarget(target),
+      shield,
+    };
+  }
+
+  const activeReservation = stmts.getActiveBattleReservationForDefender.get(target.id);
+  if (activeReservation && activeReservation.attacker_id !== playerId) {
+    return {
+      error: `${target.name} is already reserved for another active battle. Try again in a few minutes.`,
+      target: publicBattleTarget(target),
+      reserved_until: activeReservation.reserved_until,
+    };
+  }
+
+  const hasTownHall = stmts.getBuildings.all(target.id).some((b) => b.type === 'town_hall');
+  if (!hasTownHall) {
+    return {
+      error: `${target.name} does not have an attackable base yet.`,
+      target: publicBattleTarget(target),
+    };
+  }
+
+  const tournamentAttackCtx = getTournamentAttackMatchContext(playerId);
+  const tournamentAttackRestriction = tournamentAttackRestrictionForTarget(tournamentAttackCtx, target.id);
+  if (!tournamentAttackRestriction.allowed) {
+    return {
+      error: tournamentAttackPolicyError(tournamentAttackCtx, tournamentAttackRestriction, target.name),
+      target: publicBattleTarget(target),
+      tournament_attack_policy: tournamentAttackCtx,
+      restriction: tournamentAttackRestriction.reason,
+    };
+  }
+
+  const recentDefeat = stmts.getRecentDefeatAgainstDefender.get(playerId, target.id);
+  if (recentDefeat) {
+    return {
+      error: `You recently lost to ${target.name}. Try another target for now.`,
+      target: publicBattleTarget(target),
+      cooldown: { reason: 'recent_defeat_24h', since: recentDefeat.created_at },
+    };
+  }
+
+  const recentSurrender = stmts.getRecentSurrenderAgainstDefender.get(playerId, target.id);
+  if (recentSurrender) {
+    return {
+      error: `You recently surrendered against ${target.name}. Try another target for now.`,
+      target: publicBattleTarget(target),
+      cooldown: { reason: 'recent_surrender_24h', since: recentSurrender.surrendered_at },
+    };
+  }
+
+  return { attacker, target, requested_name: targetName };
+}
+
+function inspectEnemyByName(playerId, rawTargetName) {
+  return db.transaction(() => {
+    stmts.expireBattleSessions.run();
+    const resolved = resolveNamedBattleTarget(playerId, rawTargetName);
+    if (resolved.error) return resolved;
+    const normalAttackCostGold = getAttackCost(playerId);
+    const targetedAttackCostGold = getTargetedAttackCost(playerId);
+    return {
+      targeted: true,
+      requested_name: resolved.requested_name,
+      target: publicBattleTarget(resolved.target),
+      normal_attack_cost_gold: normalAttackCostGold,
+      targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
+      attack_cost_gold: targetedAttackCostGold,
+      resources: getResources(playerId),
+    };
+  })();
+}
+
+function findEnemyByName(playerId, rawTargetName) {
+  return db.transaction(() => {
+    stmts.expireBattleSessions.run();
+    const resolved = resolveNamedBattleTarget(playerId, rawTargetName);
+    if (resolved.error) return resolved;
+    const target = resolved.target;
+
+    stmts.cancelBattleSessionsForAttacker.run(playerId);
+
+    // Same reservation/charge shape as random matchmaking, but against a
+    // resolved player selected by name.
+    repairAllBuildings(target.id);
+    const buildings = stmts.getBuildings.all(target.id);
+    const resources = getResources(target.id);
+    const sessionId = uuidv4();
+    const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
+    const normalAttackCostGold = getAttackCost(playerId);
+    const attackCostGold = getTargetedAttackCost(playerId);
+    if (!canAfford(playerId, attackCostGold, 0, 0)) {
+      return {
+        error: `Not enough gold to attack. Need ${attackCostGold} gold.`,
+        status: 400,
+        normal_attack_cost_gold: normalAttackCostGold,
+        targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+    const attackerResources = subtractResources(playerId, attackCostGold, 0, 0);
+    if (attackerResources?.error) {
+      return {
+        error: 'Not enough gold to attack',
+        status: 400,
+        normal_attack_cost_gold: normalAttackCostGold,
+        targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
+        attack_cost_gold: attackCostGold,
+        resources: getResources(playerId),
+      };
+    }
+    stmts.createBattleSession.run(sessionId, playerId, target.id, reservedUntil);
+    return {
+      targeted: true,
+      requested_name: resolved.requested_name,
+      id: target.id,
+      name: target.name,
+      trophies: target.trophies,
+      level: target.level,
+      buildings,
+      resources,
+      attacker_resources: attackerResources,
+      normal_attack_cost_gold: normalAttackCostGold,
+      targeted_attack_multiplier: TARGETED_ATTACK_COST_MULTIPLIER,
+      attack_cost_gold: attackCostGold,
+      battle_session_id: sessionId,
+      battle_session_expires_at: reservedUntil,
+      grid_config: CANONICAL_GRID_CONFIG,
+    };
   })();
 }
 
@@ -2098,6 +2646,7 @@ const ATTACK_COST_BY_TH = {
   2: 250,
   3: 500,
 };
+const TARGETED_ATTACK_COST_MULTIPLIER = 2;
 
 function attackCostForTownHallLevel(thLevel) {
   const lvl = Math.max(1, Math.floor(Number(thLevel) || 1));
@@ -2109,9 +2658,23 @@ function getAttackCost(playerId) {
   return attackCostForTownHallLevel(getTownHallLevel(playerId));
 }
 
+function getTargetedAttackCost(playerId) {
+  return getAttackCost(playerId) * TARGETED_ATTACK_COST_MULTIPLIER;
+}
+
 
 const SHIELD_HOURS = 6; // 6-hour shield after being raided
 const ATTACK_COOLDOWN_HOURS = 1; // can't attack same player for 1 hour
+
+function getPostRaidShieldHours(defenderId) {
+  const t = getPlayerActiveTournament(defenderId);
+  if (!t || t.shield_hours === null || t.shield_hours === undefined || t.shield_hours === '') {
+    return SHIELD_HOURS;
+  }
+  const n = Number(t.shield_hours);
+  if (!Number.isFinite(n)) return SHIELD_HOURS;
+  return Math.max(0, n);
+}
 
 function battleDefeat(attackerId, defenderId, battleSessionId = '') {
   // Trophy deltas route through applyTrophyDelta so per-player tournament
@@ -2159,8 +2722,12 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   subtractResources(defenderId, lootGold, lootWood, lootOre);
   addResources(attackerId, lootGold, lootWood, lootOre);
 
-  // Grant shield to defender (12 hours)
-  const shieldUntil = new Date(Date.now() + SHIELD_HOURS * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+  // Tournament admins can override post-raid shield length. Zero means
+  // "no shield" while still stamping last_attacked_by/at for cooldowns.
+  const shieldHours = getPostRaidShieldHours(defenderId);
+  const shieldUntil = shieldHours > 0
+    ? new Date(Date.now() + shieldHours * 3600000).toISOString().replace('T', ' ').slice(0, 19)
+    : null;
   stmts.setShield.run(shieldUntil, attackerId, defenderId);
 
   // PvP trophies — attacker gains, defender loses. Routed through
@@ -2333,6 +2900,8 @@ module.exports = {
   upgradeTroop,
   getTroopLevels,
   findEnemy,
+  inspectEnemyByName,
+  findEnemyByName,
   collectResources,
   getProductionStatus,
   recalculateTrophies,

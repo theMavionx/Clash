@@ -11,11 +11,12 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { createPublicClient, createWalletClient, http, custom, fallback } from 'viem';
-import { base, arbitrum } from 'viem/chains';
+import { base, arbitrum, mainnet } from 'viem/chains';
 import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { HYPEREVM_CHAIN_ID, HYPEREVM_RPC_URLS, ensureHyperEvmChain, hyperEvmChain } from '../lib/hyperevmConfig';
+import { RISE_CHAIN_ID, RISE_RPC_URLS, ensureRiseChain, riseChain } from '../lib/risexConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
@@ -44,6 +45,7 @@ import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 // so any code path that uses `readContract` (instead of `multicall`
 // directly) still gets auto-batched into multicall3 within the 50ms window.
 const publicClient = createPublicClient({ chain: base, transport: http() });
+const ethereumPublicClient = createPublicClient({ chain: mainnet, transport: http() });
 const arbitrumPublicClient = createPublicClient({
   chain: arbitrum,
   // Per-call HTTP timeout = 15s. Default is 10s (fine for Alchemy paid),
@@ -76,28 +78,41 @@ const hyperEvmPublicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
+const risePublicClient = createPublicClient({
+  chain: riseChain,
+  transport: fallback(
+    RISE_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
 const CHAIN_BY_ID = {
+  [mainnet.id]: mainnet,
   [BASE_CHAIN_ID]: base,
   [ARBITRUM_CHAIN_ID]: arbitrum,
   [MONAD_CHAIN_ID]: monadChain,
   [HYPEREVM_CHAIN_ID]: hyperEvmChain,
+  [RISE_CHAIN_ID]: riseChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
+  [mainnet.id]: ethereumPublicClient,
   [BASE_CHAIN_ID]: publicClient,
   [ARBITRUM_CHAIN_ID]: arbitrumPublicClient,
   [MONAD_CHAIN_ID]: monadPublicClient,
   [HYPEREVM_CHAIN_ID]: hyperEvmPublicClient,
+  [RISE_CHAIN_ID]: risePublicClient,
 };
 
 const CHAIN_LABEL_BY_ID = {
+  [mainnet.id]: 'Ethereum',
   [BASE_CHAIN_ID]: 'Base',
   [ARBITRUM_CHAIN_ID]: 'Arbitrum',
   [MONAD_CHAIN_ID]: 'Monad',
   [HYPEREVM_CHAIN_ID]: 'HyperEVM',
+  [RISE_CHAIN_ID]: 'RISE',
 };
 
 function normalizeProviderChainId(value) {
@@ -395,12 +410,19 @@ export function EvmWalletProvider({ children }) {
   const ensureChain = useCallback(async (targetChainId = BASE_CHAIN_ID) => {
     if (!provider) throw new Error('No EVM wallet connected');
     const id = Number(targetChainId);
-    if (id === ARBITRUM_CHAIN_ID) {
+    if (id === mainnet.id) {
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x1' }],
+      });
+    } else if (id === ARBITRUM_CHAIN_ID) {
       await ensureArbitrumChain(provider);
     } else if (id === MONAD_CHAIN_ID) {
       await ensureMonadChain(provider);
     } else if (id === HYPEREVM_CHAIN_ID) {
       await ensureHyperEvmChain(provider);
+    } else if (id === RISE_CHAIN_ID) {
+      await ensureRiseChain(provider);
     } else {
       await ensureBaseChain(provider);
     }

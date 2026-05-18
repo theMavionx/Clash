@@ -23,6 +23,7 @@ const router = express.Router();
 // explicitly re-enabled with BATTLE_REPLAY_STRICT=1.
 const STRICT_BATTLE_REPLAY_VERIFICATION = process.env.BATTLE_REPLAY_STRICT === '1';
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
+const AI_CHAT_DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
 
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
@@ -1053,6 +1054,29 @@ const GAME_SHOP_PRODUCTS = {
     rewards: { gold: 7500, wood: 7500, ore: 7500 },
     maxQuantity: 3,
   },
+  ai_messages_100: {
+    id: 'ai_messages_100',
+    sku: 'ai_messages_100',
+    title: 'AI Message Pack',
+    subtitle: '100 AI agent messages, or 150 when paid with CoP',
+    kind: 'ai_messages',
+    usdPriceE6: '5000000',
+    messageCredits: 100,
+    copBonusCredits: 150,
+    copDiscountBps: 0,
+    maxQuantity: 10,
+  },
+  ai_lifetime_daily_100: {
+    id: 'ai_lifetime_daily_100',
+    sku: 'ai_lifetime_daily_100',
+    title: 'AI Lifetime Pass',
+    subtitle: 'Permanent AI access with 100 messages per day',
+    kind: 'ai_subscription',
+    usdPriceE6: '30000000',
+    copUsdPriceE6: '20000000',
+    dailyLimit: 100,
+    maxQuantity: 1,
+  },
 };
 
 function gameShopProductsForClient() {
@@ -1065,10 +1089,33 @@ function gameShopProductsForClient() {
     kind: product.kind,
     usdPriceE6: product.usdPriceE6,
     priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
+    copUsdPriceE6: product.copUsdPriceE6 || null,
+    copPriceUsd: product.copUsdPriceE6 ? unitsToDecimalString(BigInt(product.copUsdPriceE6), 6) : null,
     durationHours: product.durationHours || null,
     rewards: product.rewards || null,
+    messageCredits: product.messageCredits || null,
+    copBonusCredits: product.copBonusCredits || null,
+    dailyLimit: product.dailyLimit || null,
     maxQuantity: product.maxQuantity,
   }));
+}
+
+function getGameShopCopDiscountBps(product) {
+  if (product && product.copUsdPriceE6) return null;
+  if (product && product.copDiscountBps != null) {
+    return Math.max(0, Math.min(9000, Number(product.copDiscountBps) || 0));
+  }
+  return Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000)));
+}
+
+function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}) {
+  const base = BigInt(product.usdPriceE6);
+  if (String(chain).toLowerCase() === 'base' && String(payment).toLowerCase() === 'cop') {
+    if (product.copUsdPriceE6) return BigInt(product.copUsdPriceE6);
+    const discountBps = BigInt(getGameShopCopDiscountBps(product) || 0);
+    return (base * (10_000n - discountBps)) / 10_000n;
+  }
+  return base;
 }
 
 function skuToBytes32(sku) {
@@ -1106,7 +1153,192 @@ function extendPlayerShield(playerId, durationHours) {
   return shieldUntil;
 }
 
-function applyGameShopProduct(playerId, product, quantity) {
+const AI_CHAT_FREE_MESSAGES_SETTING_KEY = 'ai_chat.free_messages_per_day';
+const AI_CHAT_DEFAULT_FREE_MESSAGES_PER_DAY = Math.max(0, Number(process.env.AI_CHAT_FREE_MESSAGES_PER_DAY || 10));
+
+function readAppSettingJson(key, fallback = null) {
+  const row = db.db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get(key);
+  if (!row) return fallback;
+  try { return JSON.parse(row.value_json); } catch { return fallback; }
+}
+
+function writeAppSettingJson(key, value) {
+  db.db.prepare(`
+    INSERT INTO app_settings (key, value_json, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = datetime('now')
+  `).run(key, JSON.stringify(value));
+  return value;
+}
+
+function getAiChatFreeMessagesPerDay() {
+  const configured = readAppSettingJson(AI_CHAT_FREE_MESSAGES_SETTING_KEY, null);
+  const raw = configured?.free_messages_per_day ?? configured;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.max(0, Math.min(1000, Math.floor(value))) : AI_CHAT_DEFAULT_FREE_MESSAGES_PER_DAY;
+}
+
+function aiChatDayKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function ensureAiMessageRows(playerId, day = aiChatDayKey()) {
+  db.db.prepare(`
+    INSERT INTO ai_message_credit_balances (player_id, credits, updated_at)
+    VALUES (?, 0, datetime('now'))
+    ON CONFLICT(player_id) DO NOTHING
+  `).run(playerId);
+  db.db.prepare(`
+    INSERT INTO ai_message_entitlements (player_id, lifetime_daily_limit, updated_at)
+    VALUES (?, 0, datetime('now'))
+    ON CONFLICT(player_id) DO NOTHING
+  `).run(playerId);
+  db.db.prepare(`
+    INSERT INTO ai_message_daily_usage (player_id, day, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(player_id, day) DO NOTHING
+  `).run(playerId, day);
+}
+
+function getAiMessageQuotaStatus(playerId) {
+  const day = aiChatDayKey();
+  ensureAiMessageRows(playerId, day);
+  const freeDailyLimit = getAiChatFreeMessagesPerDay();
+  const balance = db.db.prepare('SELECT credits FROM ai_message_credit_balances WHERE player_id = ?').get(playerId) || {};
+  const entitlement = db.db.prepare('SELECT lifetime_daily_limit FROM ai_message_entitlements WHERE player_id = ?').get(playerId) || {};
+  const usage = db.db.prepare('SELECT * FROM ai_message_daily_usage WHERE player_id = ? AND day = ?').get(playerId, day) || {};
+  const lifetimeDailyLimit = Math.max(0, Number(entitlement.lifetime_daily_limit || 0));
+  const freeAvailable = lifetimeDailyLimit > 0
+    ? 0
+    : Math.max(0, freeDailyLimit - Number(usage.free_used || 0));
+  const subscriptionAvailable = Math.max(0, lifetimeDailyLimit - Number(usage.subscription_used || 0));
+  const credits = Math.max(0, Number(balance.credits || 0));
+  return {
+    day,
+    free_daily_limit: freeDailyLimit,
+    free_used: Number(usage.free_used || 0),
+    free_available: freeAvailable,
+    lifetime_daily_limit: lifetimeDailyLimit,
+    subscription_used: Number(usage.subscription_used || 0),
+    subscription_available: subscriptionAvailable,
+    credits,
+    credit_used_today: Number(usage.credit_used || 0),
+    total_used_today: Number(usage.total_used || 0),
+    available_messages: freeAvailable + subscriptionAvailable + credits,
+  };
+}
+
+function addAiMessageCredits(playerId, credits, reason = 'grant', metadata = null) {
+  const amount = Math.max(0, Math.floor(Number(credits) || 0));
+  ensureAiMessageRows(playerId);
+  if (amount <= 0) return getAiMessageQuotaStatus(playerId);
+  db.db.prepare(`
+    UPDATE ai_message_credit_balances
+    SET credits = credits + ?, updated_at = datetime('now')
+    WHERE player_id = ?
+  `).run(amount, playerId);
+  const row = db.db.prepare('SELECT credits FROM ai_message_credit_balances WHERE player_id = ?').get(playerId);
+  db.db.prepare(`
+    INSERT INTO ai_message_credit_ledger (player_id, delta, balance_after, reason, metadata_json)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(playerId, amount, Number(row?.credits || 0), reason, metadata ? JSON.stringify(metadata) : null);
+  return getAiMessageQuotaStatus(playerId);
+}
+
+function activateAiLifetimePass(playerId, dailyLimit, metadata = null) {
+  const limit = Math.max(0, Math.floor(Number(dailyLimit) || 0));
+  ensureAiMessageRows(playerId);
+  db.db.prepare(`
+    INSERT INTO ai_message_entitlements (player_id, lifetime_daily_limit, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(player_id) DO UPDATE SET
+      lifetime_daily_limit = MAX(lifetime_daily_limit, excluded.lifetime_daily_limit),
+      updated_at = datetime('now')
+  `).run(playerId, limit);
+  db.db.prepare(`
+    INSERT INTO ai_message_credit_ledger (player_id, delta, balance_after, reason, metadata_json)
+    VALUES (?, 0, (SELECT credits FROM ai_message_credit_balances WHERE player_id = ?), 'lifetime_pass', ?)
+  `).run(playerId, playerId, metadata ? JSON.stringify(metadata) : null);
+  return getAiMessageQuotaStatus(playerId);
+}
+
+function reserveAiChatMessage(playerId) {
+  return db.db.transaction(() => {
+    const before = getAiMessageQuotaStatus(playerId);
+    const day = before.day;
+    let bucket = null;
+    if (before.lifetime_daily_limit > 0 && before.subscription_available > 0) bucket = 'subscription';
+    else if (before.lifetime_daily_limit <= 0 && before.free_available > 0) bucket = 'free';
+    else if (before.credits > 0) bucket = 'credit';
+
+    if (!bucket) return { ok: false, quota: before };
+    if (bucket === 'credit') {
+      db.db.prepare(`
+        UPDATE ai_message_credit_balances
+        SET credits = credits - 1, updated_at = datetime('now')
+        WHERE player_id = ? AND credits > 0
+      `).run(playerId);
+      db.db.prepare(`
+        UPDATE ai_message_daily_usage
+        SET credit_used = credit_used + 1, total_used = total_used + 1, updated_at = datetime('now')
+        WHERE player_id = ? AND day = ?
+      `).run(playerId, day);
+      const row = db.db.prepare('SELECT credits FROM ai_message_credit_balances WHERE player_id = ?').get(playerId);
+      db.db.prepare(`
+        INSERT INTO ai_message_credit_ledger (player_id, delta, balance_after, reason, metadata_json)
+        VALUES (?, -1, ?, 'chat_message', ?)
+      `).run(playerId, Number(row?.credits || 0), JSON.stringify({ day }));
+    } else {
+      const column = bucket === 'subscription' ? 'subscription_used' : 'free_used';
+      db.db.prepare(`
+        UPDATE ai_message_daily_usage
+        SET ${column} = ${column} + 1, total_used = total_used + 1, updated_at = datetime('now')
+        WHERE player_id = ? AND day = ?
+      `).run(playerId, day);
+    }
+    return { ok: true, reservation: { bucket, day }, quota: getAiMessageQuotaStatus(playerId) };
+  })();
+}
+
+function refundAiChatReservation(playerId, reservation) {
+  if (!reservation?.bucket || !reservation?.day) return getAiMessageQuotaStatus(playerId);
+  return db.db.transaction(() => {
+    ensureAiMessageRows(playerId, reservation.day);
+    if (reservation.bucket === 'credit') {
+      db.db.prepare(`
+        UPDATE ai_message_credit_balances
+        SET credits = credits + 1, updated_at = datetime('now')
+        WHERE player_id = ?
+      `).run(playerId);
+      db.db.prepare(`
+        UPDATE ai_message_daily_usage
+        SET credit_used = MAX(0, credit_used - 1),
+            total_used = MAX(0, total_used - 1),
+            updated_at = datetime('now')
+        WHERE player_id = ? AND day = ?
+      `).run(playerId, reservation.day);
+      const row = db.db.prepare('SELECT credits FROM ai_message_credit_balances WHERE player_id = ?').get(playerId);
+      db.db.prepare(`
+        INSERT INTO ai_message_credit_ledger (player_id, delta, balance_after, reason, metadata_json)
+        VALUES (?, 1, ?, 'chat_refund', ?)
+      `).run(playerId, Number(row?.credits || 0), JSON.stringify({ day: reservation.day }));
+    } else {
+      const column = reservation.bucket === 'subscription' ? 'subscription_used' : 'free_used';
+      db.db.prepare(`
+        UPDATE ai_message_daily_usage
+        SET ${column} = MAX(0, ${column} - 1),
+            total_used = MAX(0, total_used - 1),
+            updated_at = datetime('now')
+        WHERE player_id = ? AND day = ?
+      `).run(playerId, reservation.day);
+    }
+    return getAiMessageQuotaStatus(playerId);
+  })();
+}
+
+function applyGameShopProduct(playerId, product, quantity, context = {}) {
   if (product.kind === 'shield') {
     const shieldUntil = extendPlayerShield(playerId, (product.durationHours || 24) * quantity);
     return {
@@ -1123,6 +1355,29 @@ function applyGameShopProduct(playerId, product, quantity) {
       (rewards.ore || 0) * quantity,
     );
     return { resources };
+  }
+  if (product.kind === 'ai_messages') {
+    const paidWithCop = String(context.payment || '').toLowerCase() === 'cop';
+    const unitCredits = paidWithCop && product.copBonusCredits
+      ? product.copBonusCredits
+      : product.messageCredits;
+    const granted = Math.max(0, Number(unitCredits || 0) * quantity);
+    const quota = addAiMessageCredits(playerId, granted, 'purchase', {
+      sku: product.sku,
+      chain: context.chain || null,
+      payment: context.payment || null,
+      quantity,
+    });
+    return { ai_messages_granted: granted, ai_quota: quota };
+  }
+  if (product.kind === 'ai_subscription') {
+    const quota = activateAiLifetimePass(playerId, product.dailyLimit || 100, {
+      sku: product.sku,
+      chain: context.chain || null,
+      payment: context.payment || null,
+      quantity,
+    });
+    return { ai_subscription: { lifetime_daily_limit: product.dailyLimit || 100 }, ai_quota: quota };
   }
   return {};
 }
@@ -2387,9 +2642,10 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10));
     const paymentToken = getAddress(config.copToken);
     const decimals = Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18);
-    const discountBps = BigInt(Math.max(0, Math.min(9000, Number(process.env.GAME_SHOP_COP_DISCOUNT_BPS || 2000))));
     const fullUsdPriceE6 = BigInt(product.usdPriceE6);
-    const usdPriceE6 = (fullUsdPriceE6 * (10_000n - discountBps)) / 10_000n;
+    const productDiscountBps = getGameShopCopDiscountBps(product);
+    const discountBps = BigInt(productDiscountBps || 0);
+    const usdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
     const clashUsd = await fetchClashUsdPrice({ clashToken: paymentToken });
     const unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
     // 600s default: gives the buy flow comfortable headroom for two wallet
@@ -2437,7 +2693,7 @@ router.post('/shop/base/quote', auth, async (req, res) => {
       shop: getAddress(config.shop),
       payment: 'cop',
       priceSource: `CoP/USD ${clashUsd.price} (${clashUsd.source})`,
-      discountBps: discountBps.toString(),
+      discountBps: productDiscountBps == null ? null : discountBps.toString(),
       fullUsdPriceE6: fullUsdPriceE6.toString(),
       decimals,
       product: gameShopProductsForClient().find((item) => item.id === product.id),
@@ -2538,7 +2794,7 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
         err.status = 409;
         throw err;
       }
-      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      const applied = applyGameShopProduct(req.player.id, product, quantity, { chain: 'base', payment: 'cop' });
       db.db.prepare(`
         INSERT INTO utility_purchases
           (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
@@ -2784,7 +3040,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         err.status = 409;
         throw err;
       }
-      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      const applied = applyGameShopProduct(req.player.id, product, quantity, { chain: 'solana', payment });
       const tokenLabel = payment === 'usdc' ? expectedMint
                        : payment === 'skr'  ? expectedMint
                        : 'SOL';
@@ -3219,7 +3475,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
         err.status = 409;
         throw err;
       }
-      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      const applied = applyGameShopProduct(req.player.id, product, quantity, { chain: chainKey, payment: memoPayment });
       db.db.prepare(`
         INSERT INTO utility_purchases
           (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
@@ -3540,7 +3796,7 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
         err.status = 409;
         throw err;
       }
-      const applied = applyGameShopProduct(req.player.id, product, quantity);
+      const applied = applyGameShopProduct(req.player.id, product, quantity, { chain: 'aptos', payment });
       db.db.prepare(`
         INSERT INTO utility_purchases
           (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
@@ -3817,13 +4073,13 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -3843,7 +4099,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix" or "hyperliquid"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid" or "risex"' });
   }
   if (dex !== req.player.dex) {
     logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
@@ -3974,18 +4230,27 @@ router.delete('/players/ai-keys/:id', auth, (req, res) => {
 });
 
 router.get('/ai-chat/status', auth, async (req, res) => {
+  const startedAt = Date.now();
+  const traceId = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 80);
   try {
     const agent = db.getOrCreateHermesAgent(req.player.id);
     if (agent.error) return res.status(400).json(agent);
+    const quota = getAiMessageQuotaStatus(req.player.id);
     if (!hermesClient.configured()) {
       const state = db.markHermesAgentState(req.player.id, {
         status: 'unconfigured',
         error: 'Hermes orchestrator is not configured',
       });
-      return res.status(503).json({ ok: false, error: 'Hermes orchestrator is not configured', agent: state });
+      return res.status(503).json({ ok: false, error: 'Hermes orchestrator is not configured', agent: state, quota });
     }
     let status = await hermesClient.getStatus(req.player.id);
+    const wasRunning = !!status?.player?.running;
     if (!status?.player?.running) {
+      logAiChatServer('status_provision_start', {
+        trace_id: traceId,
+        player_id: req.player.id,
+        player_name: req.player.name,
+      });
       status = await hermesClient.provision(req.player, agent.mcp_key);
     }
     const state = db.markHermesAgentState(req.player.id, {
@@ -3993,11 +4258,33 @@ router.get('/ai-chat/status', auth, async (req, res) => {
       orchestrator: status?.player || status,
       provisioned: true,
     });
-    res.json({ ok: true, agent: state, hermes: status });
+    logAiChatServer('status_ok', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      duration_ms: Date.now() - startedAt,
+      was_running: wasRunning,
+      running: !!status?.player?.running,
+      port: status?.player?.port || null,
+      model_chain: status?.player?.model_chain || null,
+      quota: getAiMessageQuotaStatus(req.player.id),
+    });
+    res.json({ ok: true, agent: state, hermes: status, quota: getAiMessageQuotaStatus(req.player.id) });
   } catch (err) {
     const state = db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
-    res.status(err.status || 500).json({ ok: false, error: err.message, agent: state });
+    logAiChatServer('status_error', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      duration_ms: Date.now() - startedAt,
+      status_code: err.status || 500,
+      error: aiChatPreview(err.message, 700),
+    });
+    res.status(err.status || 500).json({ ok: false, error: err.message, agent: state, quota: getAiMessageQuotaStatus(req.player.id) });
   }
+});
+
+router.get('/ai-chat/quota', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, quota: getAiMessageQuotaStatus(req.player.id) });
 });
 
 function normalizeAiChatHistory(history) {
@@ -4012,62 +4299,228 @@ function normalizeAiChatHistory(history) {
     .slice(-4);
 }
 
+function maskAiLogText(value) {
+  return String(value ?? '')
+    .replace(/cop_ai_[A-Za-z0-9_-]+/g, 'cop_ai_***')
+    .replace(/sk-or-v1-[A-Za-z0-9_-]+/g, 'sk-or-v1-***')
+    .replace(/(Bearer\s+)[A-Za-z0-9._-]+/gi, '$1***')
+    .replace(/("?(?:api_key|token|mcp_key|authorization)"?\s*[:=]\s*")([^"]+)(")/gi, '$1***$3');
+}
+
+function aiChatPreview(value, max = 700) {
+  const text = maskAiLogText(value).replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function aiChatJson(value, max = 8000) {
+  if (value == null) return null;
+  let text = '';
+  try {
+    text = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    text = String(value);
+  }
+  text = maskAiLogText(text);
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function summarizeHermesResult(result = {}) {
+  return {
+    model: result.model || null,
+    fallback: !!result.fallback,
+    fallback_index: result.fallback_index ?? null,
+    attempted_models: Array.isArray(result.attempted_models) ? result.attempted_models : [],
+    timings: result.timings || null,
+    attempts: Array.isArray(result.attempts)
+      ? result.attempts.map((attempt) => ({
+          model: attempt.model || null,
+          attempt: attempt.attempt ?? null,
+          model_index: attempt.model_index ?? null,
+          status: attempt.status || null,
+          ensure_ms: attempt.ensure_ms ?? null,
+          call_ms: attempt.call_ms ?? null,
+          total_ms: attempt.total_ms ?? null,
+          error: attempt.error ? aiChatPreview(attempt.error, 300) : null,
+        }))
+      : [],
+    response_id: result.response?.id || result.response_id || null,
+  };
+}
+
+function logAiChatServer(event, data = {}) {
+  if (!AI_CHAT_DETAILED_LOGS) return;
+  const payload = {
+    event: `ai_chat_${event}`,
+    at: new Date().toISOString(),
+    ...data,
+  };
+  try {
+    console.log(maskAiLogText(JSON.stringify(payload)));
+  } catch {
+    console.log(`[ai-chat] ${event}`);
+  }
+}
+
 router.post('/ai-chat/message', auth, async (req, res) => {
   const startedAt = Date.now();
+  const traceId = String(req.body?.trace_id || req.body?.traceId || crypto.randomUUID()).slice(0, 80);
+  const idempotencyKey = String(req.body?.idempotency_key || crypto.randomUUID()).slice(0, 120);
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
   if (!message) return res.status(400).json({ ok: false, error: 'message required' });
   if (message.length > 8000) return res.status(400).json({ ok: false, error: 'message too long' });
   const history = normalizeAiChatHistory(req.body?.history);
+  const intent = hermesClient.classifyGameIntent(message);
+  const quotaBefore = getAiMessageQuotaStatus(req.player.id);
 
   let model = null;
+  let reservation = null;
   try {
+    logAiChatServer('message_received', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      player_name: req.player.name,
+      intent: intent.kind,
+      action_required: !!intent.action_required,
+      message_chars: message.length,
+      history_count: history.length,
+      quota_before: quotaBefore,
+      request_preview: aiChatPreview(message),
+    });
     const agent = db.getOrCreateHermesAgent(req.player.id);
     if (agent.error) return res.status(400).json(agent);
-    const result = hermesClient.tryStaticReply(message) || await hermesClient.chat(req.player, agent.mcp_key, message, {
+    const staticResult = hermesClient.tryStaticReply(message);
+    const reserved = staticResult ? null : reserveAiChatMessage(req.player.id);
+    if (reserved && !reserved.ok) {
+      const durationMs = Date.now() - startedAt;
+      logAiChatServer('quota_blocked', {
+        trace_id: traceId,
+        player_id: req.player.id,
+        intent: intent.kind,
+        duration_ms: durationMs,
+        quota: reserved.quota,
+      });
+      db.logHermesChatEvent({
+        traceId,
+        eventType: 'message',
+        playerId: req.player.id,
+        playerName: req.player.name,
+        intent: intent.kind,
+        status: 'quota_blocked',
+        durationMs,
+        requestPreview: aiChatPreview(message),
+        responsePreview: 'AI message limit reached',
+        quota: { before: quotaBefore, after: reserved.quota },
+        input: { trace_id: traceId, message, history },
+        output: { error: 'AI message limit reached' },
+      });
+      return res.status(402).json({
+        ok: false,
+        error: 'AI message limit reached. Open the AI shop to get more messages.',
+        quota: reserved.quota,
+        trace_id: traceId,
+      });
+    }
+    reservation = reserved?.reservation || null;
+    logAiChatServer(staticResult ? 'static_reply' : 'dispatch_hermes', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      intent: intent.kind,
+      idempotency_key: idempotencyKey,
+      reservation: reservation ? { source: reservation.source, day: reservation.day } : null,
+    });
+    const result = staticResult || await hermesClient.chat(req.player, agent.mcp_key, message, {
       previous_response_id: req.body?.previous_response_id,
-      idempotency_key: req.body?.idempotency_key,
-      metadata: req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {},
+      idempotency_key: idempotencyKey,
+      metadata: {
+        ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+        trace_id: traceId,
+      },
       history,
     });
     model = result.model || null;
+    const durationMs = Date.now() - startedAt;
+    const quotaAfter = getAiMessageQuotaStatus(req.player.id);
+    const resultSummary = summarizeHermesResult(result);
     db.markHermesAgentState(req.player.id, {
       status: 'running',
       orchestrator: result,
       provisioned: true,
       chatted: true,
     });
-    db.logHermesChatEvent({
-      playerId: req.player.id,
-      status: 'ok',
-      durationMs: Date.now() - startedAt,
+    logAiChatServer('message_ok', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      intent: intent.kind,
+      duration_ms: durationMs,
       model,
+      fallback: !!result.fallback,
+      attempted_models: resultSummary.attempted_models,
+      timings: resultSummary.timings,
+      attempts: resultSummary.attempts,
+      response_chars: String(result.output_text || '').length,
+      response_preview: aiChatPreview(result.output_text, 900),
+      quota_after: quotaAfter,
+    });
+    db.logHermesChatEvent({
+      traceId,
+      eventType: 'message',
+      playerId: req.player.id,
+      playerName: req.player.name,
+      intent: intent.kind,
+      status: 'ok',
+      durationMs,
+      model,
+      requestPreview: aiChatPreview(message),
+      responsePreview: aiChatPreview(result.output_text, 1200),
+      quota: { before: quotaBefore, after: quotaAfter, reservation },
+      attempts: resultSummary.attempts,
       input: { message, history },
       output: {
         output_text: result.output_text,
-        model: result.model || null,
-        fallback: !!result.fallback,
-        fallback_index: result.fallback_index ?? null,
-        attempted_models: result.attempted_models || null,
-        attempts: result.attempts || null,
-        timings: result.timings || null,
+        ...resultSummary,
       },
     });
     res.json({
       ok: true,
       message: result.output_text || '',
+      quota: getAiMessageQuotaStatus(req.player.id),
+      trace_id: traceId,
     });
   } catch (err) {
+    if (reservation) {
+      try { refundAiChatReservation(req.player.id, reservation); } catch {}
+    }
+    const durationMs = Date.now() - startedAt;
+    const quotaAfter = getAiMessageQuotaStatus(req.player.id);
     db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
+    logAiChatServer('message_error', {
+      trace_id: traceId,
+      player_id: req.player.id,
+      intent: intent.kind,
+      duration_ms: durationMs,
+      model,
+      status_code: err.status || 500,
+      error: aiChatPreview(err.message, 700),
+      stack: err.stack ? aiChatPreview(err.stack, 1200) : null,
+      quota_after: quotaAfter,
+    });
     db.logHermesChatEvent({
+      traceId,
+      eventType: 'message',
       playerId: req.player.id,
+      playerName: req.player.name,
+      intent: intent.kind,
       status: 'error',
-      durationMs: Date.now() - startedAt,
+      durationMs,
       model,
       error: err.message,
+      requestPreview: aiChatPreview(message),
+      responsePreview: aiChatPreview(err.message, 1200),
+      quota: { before: quotaBefore, after: quotaAfter, reservation_refunded: !!reservation },
       input: { message, history },
       output: err.body || null,
     });
-    res.status(err.status || 500).json({ ok: false, error: err.message });
+    res.status(err.status || 500).json({ ok: false, error: err.message, quota: quotaAfter, trace_id: traceId });
   }
 });
 
@@ -5453,7 +5906,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -5467,7 +5920,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -5490,6 +5943,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dex === 'hyperliquid'
             ? "AND verified_source = 'hyperliquid_api'"
+          : dex === 'risex'
+            ? "AND verified_source = 'risex_api'"
           : "AND verified_source = 'worker'";
       const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
         ? `hyperliquid:${String(wallet).toLowerCase()}:%`
@@ -5598,7 +6053,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -5952,7 +6407,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
@@ -5962,6 +6417,8 @@ router.get('/trading/stats', auth, async (req, res) => {
             ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
             : dex === 'hyperliquid'
               ? "AND verified_source = 'hyperliquid_api'"
+            : dex === 'risex'
+              ? "AND verified_source = 'risex_api'"
             : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
@@ -6004,7 +6461,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -6560,6 +7017,143 @@ router.get('/admin/shop', adminAuth, (req, res) => {
   }
 });
 
+router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
+  try {
+    const freeMessagesPerDay = getAiChatFreeMessagesPerDay();
+    const today = aiChatDayKey();
+    const usage = db.db.prepare(`
+      SELECT
+        COALESCE(SUM(total_used), 0) AS all_total,
+        COALESCE(SUM(free_used), 0) AS all_free,
+        COALESCE(SUM(subscription_used), 0) AS all_subscription,
+        COALESCE(SUM(credit_used), 0) AS all_credit,
+        COALESCE(SUM(CASE WHEN day = ? THEN total_used ELSE 0 END), 0) AS today_total,
+        COALESCE(SUM(CASE WHEN day >= date('now', '-6 days') THEN total_used ELSE 0 END), 0) AS week_total
+      FROM ai_message_daily_usage
+    `).get(today) || {};
+    const balances = db.db.prepare(`
+      SELECT
+        COALESCE(SUM(credits), 0) AS outstanding_credits,
+        COALESCE(SUM(CASE WHEN credits > 0 THEN 1 ELSE 0 END), 0) AS players_with_credits
+      FROM ai_message_credit_balances
+    `).get() || {};
+    const entitlements = db.db.prepare(`
+      SELECT COUNT(*) AS lifetime_players
+      FROM ai_message_entitlements
+      WHERE lifetime_daily_limit > 0
+    `).get() || {};
+    const purchaseSkus = ['ai_messages_100', 'ai_lifetime_daily_100'];
+    const placeholders = purchaseSkus.map(() => '?').join(',');
+    const purchases = db.db.prepare(`
+      SELECT utility AS sku,
+             COUNT(*) AS purchases,
+             COUNT(DISTINCT player_id) AS unique_buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             MAX(created_at) AS last_at
+      FROM utility_purchases
+      WHERE utility IN (${placeholders})
+      GROUP BY utility
+      ORDER BY purchases DESC
+    `).all(...purchaseSkus).map((row) => ({
+      ...row,
+      title: GAME_SHOP_PRODUCTS[row.sku]?.title || row.sku,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+    const hermes = db.db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS errors,
+        COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS h24,
+        COALESCE(SUM(CASE WHEN status = 'error' AND created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS h24_errors,
+        ROUND(AVG(duration_ms), 0) AS avg_duration_ms
+      FROM hermes_chat_events
+    `).get() || {};
+    const hermesModels = db.db.prepare(`
+      SELECT COALESCE(model, 'unknown') AS model,
+             COUNT(*) AS requests,
+             COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS errors,
+             ROUND(AVG(duration_ms), 0) AS avg_duration_ms,
+             MAX(created_at) AS last_at
+      FROM hermes_chat_events
+      WHERE event_type = 'message'
+      GROUP BY COALESCE(model, 'unknown')
+      ORDER BY requests DESC
+      LIMIT 12
+    `).all();
+    const hermesIntents = db.db.prepare(`
+      SELECT COALESCE(intent, 'unknown') AS intent,
+             COUNT(*) AS requests,
+             COALESCE(SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END), 0) AS errors,
+             ROUND(AVG(duration_ms), 0) AS avg_duration_ms
+      FROM hermes_chat_events
+      WHERE event_type = 'message'
+      GROUP BY COALESCE(intent, 'unknown')
+      ORDER BY requests DESC
+      LIMIT 12
+    `).all();
+    const hermesRecent = db.db.prepare(`
+      SELECT e.id, e.created_at, e.trace_id, e.event_type, e.intent, e.player_id,
+             COALESCE(e.player_name, p.name) AS player_name,
+             e.status, e.duration_ms, e.model, e.error,
+             e.request_preview, e.response_preview, e.quota_json, e.attempts_json
+      FROM hermes_chat_events e
+      LEFT JOIN players p ON p.id = e.player_id
+      ORDER BY e.id DESC
+      LIMIT 60
+    `).all().map((row) => ({
+      ...row,
+      quota: (() => { try { return row.quota_json ? JSON.parse(row.quota_json) : null; } catch { return null; } })(),
+      attempts: (() => { try { return row.attempts_json ? JSON.parse(row.attempts_json) : null; } catch { return null; } })(),
+      quota_json: undefined,
+      attempts_json: undefined,
+    }));
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      settings: { free_messages_per_day: freeMessagesPerDay },
+      usage: {
+        today: Number(usage.today_total || 0),
+        week: Number(usage.week_total || 0),
+        all: Number(usage.all_total || 0),
+        free: Number(usage.all_free || 0),
+        subscription: Number(usage.all_subscription || 0),
+        credits: Number(usage.all_credit || 0),
+      },
+      balances: {
+        outstanding_credits: Number(balances.outstanding_credits || 0),
+        players_with_credits: Number(balances.players_with_credits || 0),
+        lifetime_players: Number(entitlements.lifetime_players || 0),
+      },
+      purchases,
+      hermes: {
+        total: Number(hermes.total || 0),
+        errors: Number(hermes.errors || 0),
+        h24: Number(hermes.h24 || 0),
+        h24_errors: Number(hermes.h24_errors || 0),
+        avg_duration_ms: Number(hermes.avg_duration_ms || 0),
+      },
+      hermes_models: hermesModels,
+      hermes_intents: hermesIntents,
+      hermes_recent: hermesRecent,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'ai chat billing failed' });
+  }
+});
+
+router.post('/admin/ai-chat/settings', adminAuth, (req, res) => {
+  try {
+    const raw = Number(req.body?.free_messages_per_day);
+    if (!Number.isFinite(raw) || raw < 0 || raw > 1000) {
+      return res.status(400).json({ error: 'free_messages_per_day must be 0..1000' });
+    }
+    const value = Math.floor(raw);
+    writeAppSettingJson(AI_CHAT_FREE_MESSAGES_SETTING_KEY, { free_messages_per_day: value });
+    res.json({ ok: true, settings: { free_messages_per_day: getAiChatFreeMessagesPerDay() } });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'settings update failed' });
+  }
+});
+
 // Global NFT supply admin endpoint. Live RPC reads of per-chain
 // minted-count + the global cap. Returns null for any chain whose
 // contract isn't deployed yet or whose RPC is unreachable; the cap
@@ -6838,7 +7432,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -7060,7 +7654,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   try {
@@ -7070,6 +7664,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         ? "verified_source IN ('perpl_api', 'perpl_ws')"
         : dex === 'hyperliquid'
           ? "verified_source = 'hyperliquid_api'"
+        : dex === 'risex'
+          ? "verified_source = 'risex_api'"
         : dex === 'decibel'
           ? "verified_source IN ('worker', 'server')"
           : "verified_source = 'worker'";
@@ -7419,8 +8015,9 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
 
 // ==================== TOURNAMENTS ====================
 //
-// Tournaments are admin-curated per-DEX competitions. Players can join one
-// active tournament for their DEX at a time. While joined:
+// Tournaments are admin-curated competitions scoped to one DEX, selected
+// DEXes, or all DEXes. Players can join when their current DEX is eligible.
+// While joined:
 //   - Trophies earned from battles are routed into tournament_participants
 //     (with optional trophy_boost). Per tournament, admins choose whether
 //     players.trophies stays frozen or also receives the raw battle delta.
@@ -7428,9 +8025,8 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
 //     boosted amount lands in both players.gold and tournament_participants.gold.
 //   - Volume + pnl + trades_count are tracked in tournament_participants
 //     for the leaderboard.
-// Tournament state is per-DEX: a Pacifica player can't join a GMX
-// tournament. This is enforced by the JOIN against players.dex inside
-// getActiveTournamentForPlayer and explicitly checked at /join time.
+// Tournament scope is enforced by getActiveTournamentForPlayer and explicitly
+// checked at /join time.
 
 function nowSql() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -7467,6 +8063,34 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
+const TOURNAMENT_DEX_LABELS = {
+  pacifica: 'Pacifica',
+  avantis: 'Avantis',
+  decibel: 'Decibel',
+  gmx: 'GMX',
+  monad: 'Perpl',
+  phoenix: 'Phoenix',
+  hyperliquid: 'Hyperliquid',
+  risex: 'RISEx',
+};
+const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
+const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
+const TOURNAMENT_ATTACK_MATCH_POLICIES = ['all', 'enemy_or_non_participant', 'enemy_only'];
+const TOURNAMENT_TEAM_METRIC_KEYS = ['volume_usd', 'pnl_usd', 'trades_count', 'trophies', 'gold', TOURNAMENT_POINTS_SORT];
+const TOURNAMENT_TEAM_METRIC_LABELS = {
+  volume_usd: 'Volume',
+  pnl_usd: 'Positive PnL',
+  trades_count: 'Trades',
+  trophies: 'Trophies',
+  gold: 'Gold',
+  [TOURNAMENT_POINTS_SORT]: 'Custom points',
+};
+const TOURNAMENT_ATTACK_MATCH_POLICY_LABELS = {
+  all: 'Normal matchmaking',
+  enemy_or_non_participant: 'Block same-team attacks',
+  enemy_only: 'Enemy teams only',
+};
 const DEFAULT_TOURNAMENT_POINT_WEIGHTS = { trophies: 20, volume: 60, pnl: 20 };
 const DEFAULT_TOURNAMENT_PRIZE_CURRENCY = 'USD';
 const TOURNAMENT_SQL_SORT_COLS = {
@@ -7478,6 +8102,163 @@ const TOURNAMENT_SQL_SORT_COLS = {
 
 function normalizeTournamentSort(sortBy, fallback = 'pnl_usd') {
   return TOURNAMENT_SORT_KEYS.includes(sortBy) ? sortBy : fallback;
+}
+
+function normalizeTournamentDexList(input) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try { raw = JSON.parse(trimmed); }
+    catch { raw = trimmed.split(',').map(s => s.trim()); }
+  }
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    const dex = String(item || '').trim().toLowerCase();
+    if (dex === 'all') return [...TOURNAMENT_DEXES];
+    if (TOURNAMENT_DEXES.includes(dex) && !out.includes(dex)) out.push(dex);
+  }
+  return out;
+}
+
+function tournamentEligibleDexes(t) {
+  const scope = String(t?.dex_scope || 'single').toLowerCase();
+  if (scope === 'all') return [...TOURNAMENT_DEXES];
+  const list = normalizeTournamentDexList(t?.eligible_dexes);
+  if (list.length > 0) return list;
+  const dex = String(t?.dex || '').toLowerCase();
+  return TOURNAMENT_DEXES.includes(dex) ? [dex] : ['pacifica'];
+}
+
+function tournamentDexScope(t) {
+  const scope = String(t?.dex_scope || '').toLowerCase();
+  if (scope === 'all') return 'all';
+  const list = tournamentEligibleDexes(t);
+  return list.length > 1 ? 'custom' : 'single';
+}
+
+function tournamentDexLabel(t) {
+  const list = tournamentEligibleDexes(t);
+  if (tournamentDexScope(t) === 'all' || list.length === TOURNAMENT_DEXES.length) return 'All DEXes';
+  return list.map(d => TOURNAMENT_DEX_LABELS[d] || d).join(', ');
+}
+
+function isTournamentForDex(t, dex) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  return TOURNAMENT_DEXES.includes(normalizedDex) && tournamentEligibleDexes(t).includes(normalizedDex);
+}
+
+function normalizeTournamentDexConfig(body = {}, fallback = null) {
+  const rawScope = body.dex_scope ?? body.scope;
+  let requestedScope = ['single', 'custom', 'all'].includes(String(rawScope || '').toLowerCase())
+    ? String(rawScope).toLowerCase()
+    : null;
+  const hasListInput = body.eligible_dexes !== undefined || body.dexes !== undefined || body.dex_list !== undefined;
+  let list = normalizeTournamentDexList(body.eligible_dexes ?? body.dexes ?? body.dex_list);
+  const bodyDex = String(body.dex || '').trim().toLowerCase();
+
+  if (bodyDex === 'all') requestedScope = 'all';
+  if (requestedScope === 'all' || list.length === TOURNAMENT_DEXES.length) {
+    return {
+      dex: TOURNAMENT_DEXES[0],
+      dex_scope: 'all',
+      eligible_dexes: JSON.stringify(TOURNAMENT_DEXES),
+    };
+  }
+
+  if (!hasListInput && !requestedScope && fallback) {
+    list = tournamentEligibleDexes(fallback);
+    requestedScope = tournamentDexScope(fallback);
+  } else if (!list.length && TOURNAMENT_DEXES.includes(bodyDex)) {
+    list = [bodyDex];
+  }
+
+  if (!list.length && fallback) list = tournamentEligibleDexes(fallback);
+  if (!list.length) list = ['pacifica'];
+
+  const dexScope = requestedScope === 'custom' || list.length > 1 ? 'custom' : 'single';
+  return {
+    dex: list[0],
+    dex_scope: dexScope,
+    eligible_dexes: JSON.stringify(list),
+  };
+}
+
+function normalizeTournamentMode(v, fallback = 'individual') {
+  const mode = String(v || fallback || 'individual').trim().toLowerCase();
+  return TOURNAMENT_MODES.includes(mode) ? mode : 'individual';
+}
+
+function normalizeTournamentTeamMetric(v, fallback = 'volume_usd') {
+  const metric = String(v || fallback || 'volume_usd').trim().toLowerCase();
+  return TOURNAMENT_TEAM_METRIC_KEYS.includes(metric) ? metric : 'volume_usd';
+}
+
+function normalizeTournamentTeamPrizeMode(v, fallback = 'winner_takes_all') {
+  const mode = String(v || fallback || 'winner_takes_all').trim().toLowerCase();
+  return TOURNAMENT_TEAM_PRIZE_MODES.includes(mode) ? mode : 'winner_takes_all';
+}
+
+function normalizeTournamentAttackMatchPolicy(v, fallback = 'all') {
+  const policy = String(v || fallback || 'all').trim().toLowerCase();
+  return TOURNAMENT_ATTACK_MATCH_POLICIES.includes(policy) ? policy : 'all';
+}
+
+function normalizeTournamentShieldHours(v, fallback = null) {
+  if (v === undefined) return fallback;
+  if (v === null || v === '') return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) throw new Error('shield_hours must be a number of hours, blank, or 0');
+  return Math.max(0, Math.min(720, Number(n.toFixed(4))));
+}
+
+function tournamentModeLabel(mode) {
+  return normalizeTournamentMode(mode) === 'dex_vs_dex' ? 'DEX vs DEX' : 'Individual';
+}
+
+function tournamentMetricLabel(metric) {
+  return TOURNAMENT_TEAM_METRIC_LABELS[normalizeTournamentTeamMetric(metric)] || 'Volume';
+}
+
+function tournamentAttackMatchPolicyLabel(policy) {
+  return TOURNAMENT_ATTACK_MATCH_POLICY_LABELS[normalizeTournamentAttackMatchPolicy(policy)] || 'Normal matchmaking';
+}
+
+function normalizeTournamentTeamPrizeSplits(input, eligibleDexes = [], { strict = false } = {}) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) raw = [];
+    else {
+      try { raw = JSON.parse(trimmed); }
+      catch {
+        raw = trimmed.split(',').map((part) => {
+          const [dex, share] = part.split(':');
+          return { dex, share_pct: share };
+        });
+      }
+    }
+  }
+  const eligible = new Set((eligibleDexes || []).filter(d => TOURNAMENT_DEXES.includes(d)));
+  const entries = Array.isArray(raw)
+    ? raw
+    : (raw && typeof raw === 'object'
+      ? Object.entries(raw).map(([dex, share]) => ({ dex, share_pct: share }))
+      : []);
+  const byDex = new Map();
+  for (const entry of entries) {
+    const dex = String(entry?.dex || entry?.team || '').trim().toLowerCase();
+    if (!TOURNAMENT_DEXES.includes(dex) || (eligible.size && !eligible.has(dex))) continue;
+    const share = sanitizePrizeNumber(entry?.share_pct ?? entry?.share ?? entry?.percent ?? entry?.pct);
+    byDex.set(dex, { dex, share_pct: Math.min(100, share) });
+  }
+  const out = Array.from(byDex.values()).sort((a, b) => a.dex.localeCompare(b.dex));
+  const total = out.reduce((s, r) => s + Number(r.share_pct || 0), 0);
+  if (strict && Math.abs(total - 100) > 0.01) {
+    throw new Error('DEX prize split shares must add up to 100');
+  }
+  return out;
 }
 
 function isTournamentPointsSort(sortBy) {
@@ -7555,6 +8336,130 @@ function applyTournamentPointsScore(rows, t) {
     r.score = Number((volumeScore + trophyScore + pnlScore).toFixed(4));
   }
   return rows;
+}
+
+function tournamentRowMetricValue(row, metric, t) {
+  const key = normalizeTournamentTeamMetric(metric);
+  if (key === TOURNAMENT_POINTS_SORT) {
+    if (row.score === undefined || row.score === null) applyTournamentPointsScore([row], t);
+    return Math.max(0, Number(row.score) || 0);
+  }
+  if (key === 'pnl_usd') return Math.max(0, Number(row.pnl_usd) || 0);
+  return Math.max(0, Number(row[key]) || 0);
+}
+
+function buildTournamentTeamState(rows, t, prize) {
+  const mode = normalizeTournamentMode(t?.mode);
+  if (mode !== 'dex_vs_dex') return null;
+  const eligible = tournamentEligibleDexes(t);
+  const teamScoreBy = normalizeTournamentTeamMetric(t?.team_score_by, 'volume_usd');
+  const teamPrizeMode = normalizeTournamentTeamPrizeMode(t?.team_prize_mode);
+  const memberRewardBy = normalizeTournamentTeamMetric(t?.team_member_reward_by, 'volume_usd');
+  const teams = new Map();
+  for (const dex of eligible) {
+    teams.set(dex, {
+      dex,
+      label: TOURNAMENT_DEX_LABELS[dex] || dex,
+      players: 0,
+      score: 0,
+      volume_usd: 0,
+      pnl_usd: 0,
+      trades_count: 0,
+      trophies: 0,
+      gold: 0,
+      prize_share_pct: 0,
+      prize_pool_usd: 0,
+      winner: false,
+      rank: null,
+    });
+  }
+  for (const row of rows) {
+    const dex = String(row.team_dex || row.dex || row.player_dex || t.dex || '').toLowerCase();
+    if (!teams.has(dex)) continue;
+    row.team_dex = dex;
+    row.team_label = TOURNAMENT_DEX_LABELS[dex] || dex;
+    row.team_score_value = tournamentRowMetricValue(row, teamScoreBy, t);
+    row.member_reward_value = tournamentRowMetricValue(row, memberRewardBy, t);
+    const team = teams.get(dex);
+    team.players += 1;
+    team.score += row.team_score_value;
+    team.volume_usd += Math.max(0, Number(row.volume_usd) || 0);
+    team.pnl_usd += Math.max(0, Number(row.pnl_usd) || 0);
+    team.trades_count += Math.max(0, Number(row.trades_count) || 0);
+    team.trophies += Math.max(0, Number(row.trophies) || 0);
+    team.gold += Math.max(0, Number(row.gold) || 0);
+  }
+
+  const sortedTeams = Array.from(teams.values())
+    .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0) || a.dex.localeCompare(b.dex));
+  sortedTeams.forEach((team, index) => {
+    team.rank = index + 1;
+    team.score = Number((Number(team.score) || 0).toFixed(4));
+    team.volume_usd = Number((Number(team.volume_usd) || 0).toFixed(2));
+    team.pnl_usd = Number((Number(team.pnl_usd) || 0).toFixed(2));
+  });
+
+  const pool = Number(prize?.pool_usd || 0) || 0;
+  if (pool > 0 && teamPrizeMode === 'custom_split') {
+    const splits = normalizeTournamentTeamPrizeSplits(t?.team_prize_splits, eligible);
+    const shareByDex = new Map(splits.map(s => [s.dex, Number(s.share_pct || 0)]));
+    for (const team of sortedTeams) {
+      team.prize_share_pct = Math.max(0, Number(shareByDex.get(team.dex) || 0));
+      team.prize_pool_usd = Number((pool * team.prize_share_pct / 100).toFixed(2));
+    }
+  } else if (pool > 0 && sortedTeams.length) {
+    const topScore = Number(sortedTeams[0].score) || 0;
+    const winners = topScore > 0
+      ? sortedTeams.filter(team => Math.abs((Number(team.score) || 0) - topScore) < 0.0001)
+      : [];
+    const share = winners.length ? 100 / winners.length : 0;
+    for (const team of winners) {
+      team.winner = true;
+      team.prize_share_pct = Number(share.toFixed(4));
+      team.prize_pool_usd = Number((pool / winners.length).toFixed(2));
+    }
+  }
+
+  const teamMemberTotals = new Map();
+  for (const row of rows) {
+    if (!teams.has(row.team_dex)) continue;
+    teamMemberTotals.set(row.team_dex, (teamMemberTotals.get(row.team_dex) || 0) + (Number(row.member_reward_value) || 0));
+  }
+  const teamPlayerCounts = new Map();
+  for (const row of rows) {
+    if (!teams.has(row.team_dex)) continue;
+    teamPlayerCounts.set(row.team_dex, (teamPlayerCounts.get(row.team_dex) || 0) + 1);
+  }
+  const teamPrizeByDex = new Map(sortedTeams.map(team => [team.dex, Number(team.prize_pool_usd || 0)]));
+  const teamRankByDex = new Map(sortedTeams.map(team => [team.dex, team.rank]));
+  const teamScoreByDex = new Map(sortedTeams.map(team => [team.dex, Number(team.score || 0)]));
+  const teamShareByDex = new Map(sortedTeams.map(team => [team.dex, Number(team.prize_share_pct || 0)]));
+  for (const row of rows) {
+    const teamPool = teamPrizeByDex.get(row.team_dex) || 0;
+    const metricTotal = teamMemberTotals.get(row.team_dex) || 0;
+    const members = teamPlayerCounts.get(row.team_dex) || 0;
+    let prizeAmount = 0;
+    if (teamPool > 0) {
+      prizeAmount = metricTotal > 0
+        ? teamPool * ((Number(row.member_reward_value) || 0) / metricTotal)
+        : (members > 0 ? teamPool / members : 0);
+    }
+    row.team_rank = teamRankByDex.get(row.team_dex) || null;
+    row.team_score = teamScoreByDex.get(row.team_dex) || 0;
+    row.team_prize_pool_usd = teamPool;
+    row.team_prize_share_pct = teamShareByDex.get(row.team_dex) || 0;
+    row.prize_amount = Number(prizeAmount.toFixed(2));
+  }
+
+  return {
+    mode,
+    score_by: teamScoreBy,
+    score_label: tournamentMetricLabel(teamScoreBy),
+    prize_mode: teamPrizeMode,
+    member_reward_by: memberRewardBy,
+    member_reward_label: tournamentMetricLabel(memberRewardBy),
+    teams: sortedTeams,
+  };
 }
 
 function sanitizePrizeCurrency(v) {
@@ -7715,15 +8620,37 @@ function tournamentRowToPublic(t, options = {}) {
   const phase = tournamentPhase(t, now);
   const pointWeights = tournamentPointWeights(t);
   const prize = tournamentPrizeState(t, options.totalVolumeUsd);
+  const eligibleDexes = tournamentEligibleDexes(t);
+  const dexScope = tournamentDexScope(t);
+  const mode = normalizeTournamentMode(t.mode);
+  const teamScoreBy = normalizeTournamentTeamMetric(t.team_score_by, 'volume_usd');
+  const teamPrizeMode = normalizeTournamentTeamPrizeMode(t.team_prize_mode);
+  const teamMemberRewardBy = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
+  const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(t.attack_match_policy, 'all');
   return {
     id: t.id,
     name: t.name,
     description: t.description || '',
     dex: t.dex,
+    dex_scope: dexScope,
+    eligible_dexes: eligibleDexes,
+    dex_label: tournamentDexLabel(t),
+    mode,
+    mode_label: tournamentModeLabel(mode),
+    team_score_by: teamScoreBy,
+    team_score_label: tournamentMetricLabel(teamScoreBy),
+    team_prize_mode: teamPrizeMode,
+    team_prize_splits: normalizeTournamentTeamPrizeSplits(t.team_prize_splits, eligibleDexes),
+    team_member_reward_by: teamMemberRewardBy,
+    team_member_reward_label: tournamentMetricLabel(teamMemberRewardBy),
+    attack_match_policy: attackMatchPolicy,
+    attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
     trophy_boost: Number(t.trophy_boost),
+    shield_hours: t.shield_hours === null || t.shield_hours === undefined ? null : Number(t.shield_hours),
+    shield_label: t.shield_hours === null || t.shield_hours === undefined ? 'Default' : (Number(t.shield_hours) === 0 ? 'No shield' : `${Number(t.shield_hours)}h`),
     freeze_trophies: Number(t.freeze_trophies ?? 1) !== 0,
     sort_by: t.sort_by,
     sort_label: tournamentSortLabel(t),
@@ -7753,6 +8680,7 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'decibel') return "verified_source = 'server'";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
+  if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'phoenix') return "verified_source = 'worker'";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
   return "verified_source = 'worker'";
@@ -7760,7 +8688,7 @@ function tournamentTradeSourceWhere(dex) {
 
 function syncFuturesTournamentRows(playerId, dex) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'].includes(normalizedDex)) {
+  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'].includes(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();
@@ -7768,7 +8696,7 @@ function syncFuturesTournamentRows(playerId, dex) {
   try {
     const sourceWhere = tournamentTradeSourceWhere(normalizedDex);
     const rows = fdb.prepare(`
-      SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+      SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex
       FROM trade_history
       WHERE player_id = ? AND dex = ? AND status = 'filled'
         AND ${sourceWhere}
@@ -7777,6 +8705,7 @@ function syncFuturesTournamentRows(playerId, dex) {
     `).all(playerId, normalizedDex);
     const main = db.recordTournamentTradeRows(playerId, rows, {
       source: 'trade_history',
+      dex: normalizedDex,
       count: true,
       volume: true,
       pnl: true,
@@ -7784,7 +8713,7 @@ function syncFuturesTournamentRows(playerId, dex) {
     let pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
     if (normalizedDex === 'decibel') {
       const pnlRows = fdb.prepare(`
-        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex
         FROM trade_history
         WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
           AND verified_source = 'worker'
@@ -7796,6 +8725,7 @@ function syncFuturesTournamentRows(playerId, dex) {
       `).all(playerId);
       pnl = db.recordTournamentTradeRows(playerId, pnlRows, {
         source: 'trade_history_decibel_pnl',
+        dex: normalizedDex,
         count: false,
         volume: false,
         pnl: true,
@@ -7829,14 +8759,19 @@ router.get('/tournaments', (req, res) => {
   res.json({ tournaments: rows.map(tournamentRowToPublic) });
 });
 
-// Player's current tournament context: the active tournament for their DEX
+// Player's current tournament context: the active tournament available to their DEX
 // (if any) plus their participation row. UI uses this to decide whether to
 // show "Join" or "Leave + leaderboard" on the trophy button.
 router.get('/tournaments/me', auth, (req, res) => {
   const dex = req.player.dex;
   const t = db.db.prepare(`
     SELECT * FROM tournaments
-    WHERE dex = ? AND status = 'active'
+    WHERE status = 'active'
+      AND (
+        COALESCE(dex_scope, 'single') = 'all'
+        OR dex = ?
+        OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
+      )
       AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
@@ -7847,7 +8782,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
       id DESC
     LIMIT 1
-  `).get(dex);
+  `).get(dex, dex);
   if (!t) return res.json({ tournament: null, joined: false, phase: null, can_join: false });
   const pub = tournamentRowToPublic(t);
   let me = db.db.prepare(`
@@ -7889,12 +8824,14 @@ router.get('/tournaments/me', auth, (req, res) => {
       pnl_score: comboMeScore?.pnl_score ?? null,
       joined_at: me.joined_at,
       left_at: me.left_at,
+      team_dex: me.team_dex || null,
+      team_label: me.team_dex ? (TOURNAMENT_DEX_LABELS[me.team_dex] || me.team_dex) : null,
       reward_wallet_evm: me.reward_wallet_evm || null,
     } : null,
   });
 });
 
-// History: ended tournaments for the player's DEX, with their participation
+// History: ended tournaments available to the player's DEX, with their participation
 // summary attached so the panel can show "your final standing" without an
 // extra round-trip per tournament. Used by the History tab in
 // TournamentPanel — the leaderboard itself is fetched lazily on click via
@@ -7911,19 +8848,24 @@ router.get('/tournaments/history', auth, (req, res) => {
            tp.trades_count AS my_trades_count,
            tp.volume_usd AS my_volume_usd,
            tp.pnl_usd    AS my_pnl_usd,
+           tp.team_dex   AS my_team_dex,
            tp.reward_wallet_evm AS my_reward_wallet_evm,
            tp.left_at    AS my_left_at
     FROM tournaments t
     LEFT JOIN tournament_participants tp
       ON tp.tournament_id = t.id AND tp.player_id = ?
-    WHERE t.dex = ?
-      AND (
+    WHERE (
         t.status = 'ended'
         OR (t.end_at IS NOT NULL AND replace(replace(t.end_at, 'T', ' '), ' UTC', '') <= datetime('now'))
       )
+      AND (
+        COALESCE(t.dex_scope, 'single') = 'all'
+        OR t.dex = ?
+        OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || ? || '"') > 0
+      )
     ORDER BY COALESCE(t.end_at, t.created_at) DESC, t.id DESC
     LIMIT ?
-  `).all(req.player.id, dex, limit);
+  `).all(req.player.id, dex, dex, limit);
   const comboScores = new Map();
   for (const r of rows) {
     if (!isTournamentPointsSort(r.sort_by)) continue;
@@ -7948,6 +8890,8 @@ router.get('/tournaments/history', auth, (req, res) => {
         volume_score: comboScores.get(r.id)?.volume_score ?? null,
         trophy_score: comboScores.get(r.id)?.trophy_score ?? null,
         pnl_score: comboScores.get(r.id)?.pnl_score ?? null,
+        team_dex: r.my_team_dex || null,
+        team_label: r.my_team_dex ? (TOURNAMENT_DEX_LABELS[r.my_team_dex] || r.my_team_dex) : null,
         reward_wallet_evm: r.my_reward_wallet_evm || null,
         left_at: r.my_left_at,
       } : null,
@@ -7955,7 +8899,8 @@ router.get('/tournaments/history', auth, (req, res) => {
   });
 });
 
-// Join a tournament. Player can only join their own DEX's tournament. If
+// Join a tournament. Player can join when their current DEX is in the
+// tournament's single/custom/all scope. If
 // they have a stale soft-leave row from a previous join we re-activate it
 // (preserving counters? — no, reset to zero since the user explicitly
 // left). The tournament can be in pre-registration or already live.
@@ -7965,7 +8910,9 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'tournament not found' });
   if (t.status !== 'active') return res.status(400).json({ error: 'tournament not active' });
-  if (t.dex !== req.player.dex) return res.status(403).json({ error: 'tournament is for a different DEX' });
+  if (!isTournamentForDex(t, req.player.dex)) {
+    return res.status(403).json({ error: `tournament is for ${tournamentDexLabel(t)}, not ${req.player.dex}` });
+  }
   const now = nowSql();
   if (cleanSqlDate(t.end_at) && cleanSqlDate(t.end_at) <= now) return res.status(400).json({ error: 'tournament has ended' });
   const phase = tournamentPhase(t, now);
@@ -7980,16 +8927,18 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
+  const teamDex = normalizeTournamentMode(t.mode) === 'dex_vs_dex' ? req.player.dex : null;
   db.db.prepare(`
-    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, reward_wallet_evm)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?)
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, team_dex, reward_wallet_evm)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?, ?)
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       joined_at = datetime('now'),
       left_at = NULL,
       trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
+      team_dex = excluded.team_dex,
       reward_wallet_evm = excluded.reward_wallet_evm,
       last_activity_at = datetime('now')
-  `).run(tid, req.player.id, rewardWalletEvm);
+  `).run(tid, req.player.id, teamDex, rewardWalletEvm);
   const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
@@ -8023,16 +8972,24 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const col = TOURNAMENT_SQL_SORT_COLS[sortBy] || 'tp.pnl_usd';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
   const includeRewardWallets = isAdminRequest(req);
+  const mode = normalizeTournamentMode(t.mode);
+  const needsPointsScore = isTournamentPointsSort(sortBy)
+    || normalizeTournamentTeamMetric(t.team_score_by, 'volume_usd') === TOURNAMENT_POINTS_SORT
+    || normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd') === TOURNAMENT_POINTS_SORT;
   const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd,
-           tp.reward_wallet_evm,
-           p.name, p.wallet
+           tp.team_dex, tp.reward_wallet_evm,
+           p.name, p.wallet, p.dex AS player_dex
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
   `;
   let rows;
-  if (isTournamentPointsSort(sortBy)) {
+  let teamState = null;
+  if (mode === 'dex_vs_dex') {
+    rows = db.db.prepare(baseSql).all(tid);
+    if (needsPointsScore) applyTournamentPointsScore(rows, t);
+  } else if (isTournamentPointsSort(sortBy)) {
     rows = applyTournamentPointsScore(db.db.prepare(baseSql).all(tid), t)
       .sort((a, b) =>
         (Number(b.score) || 0) - (Number(a.score) || 0)
@@ -8052,17 +9009,39 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   }
   const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
   const prize = tournamentPrizeState(t, totalVolumeUsd);
+  if (mode === 'dex_vs_dex') {
+    teamState = buildTournamentTeamState(rows, t, prize);
+    const memberMetric = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
+    rows = rows
+      .sort((a, b) =>
+        (Number(a.team_rank || 999) - Number(b.team_rank || 999))
+        || (Number(b.member_reward_value) || 0) - (Number(a.member_reward_value) || 0)
+        || tournamentRowMetricValue(b, memberMetric, t) - tournamentRowMetricValue(a, memberMetric, t)
+        || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+        || String(a.player_id).localeCompare(String(b.player_id))
+      )
+      .slice(0, limit);
+  }
   const prizeByRank = new Map((prize.payouts || []).map(p => [Number(p.rank), Number(p.amount_usd || 0)]));
   res.json({
     tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     sort_by: sortBy,
     sort_label: tournamentSortLabel(t),
     prize,
+    teams: teamState,
     leaderboard: rows.map((r, i) => ({
       rank: i + 1,
       player_id: r.player_id,
       name: r.name,
       wallet: r.wallet,
+      dex: r.player_dex || r.team_dex || null,
+      team_dex: r.team_dex || r.player_dex || null,
+      team_label: r.team_label || null,
+      team_rank: r.team_rank || null,
+      team_score: r.team_score ?? null,
+      team_prize_pool_usd: r.team_prize_pool_usd ?? null,
+      team_prize_share_pct: r.team_prize_share_pct ?? null,
+      member_reward_value: r.member_reward_value ?? null,
       trophies: r.trophies,
       gold: r.gold,
       trades_count: r.trades_count,
@@ -8072,7 +9051,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
       pnl_score: r.pnl_score ?? null,
-      prize_amount: prizeByRank.get(i + 1) || 0,
+      prize_amount: mode === 'dex_vs_dex' ? (r.prize_amount || 0) : (prizeByRank.get(i + 1) || 0),
       prize_currency: prize.currency,
       ...(includeRewardWallets ? { reward_wallet_evm: r.reward_wallet_evm || null } : {}),
     })),
@@ -8108,13 +9087,22 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
-    name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
-    freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     prize_currency, prize_tiers, rewards_in_cop,
+    mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
-  if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
+  const dexConfig = normalizeTournamentDexConfig(req.body || {});
+  const tournamentMode = normalizeTournamentMode(mode);
+  const teamScoreBy = normalizeTournamentTeamMetric(team_score_by, 'volume_usd');
+  const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode, 'winner_takes_all');
+  const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by, 'volume_usd');
+  const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy, 'all');
+  if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
+    return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
+  }
   const sortCol = normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
@@ -8146,7 +9134,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   if (windowError) return res.status(400).json({ error: windowError });
   let pointWeights;
   let prizeTiers;
+  let shieldHours;
   try {
+    shieldHours = normalizeTournamentShieldHours(shield_hours, null);
     pointWeights = normalizeTournamentPointWeights({
       sort_by: sortCol,
       points_trophy_weight,
@@ -8157,19 +9147,35 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
+  let teamSplits;
+  try {
+    teamSplits = teamPrizeMode === 'custom_split'
+      ? normalizeTournamentTeamPrizeSplits(team_prize_splits, tournamentEligibleDexes(dexConfig), { strict: tournamentMode === 'dex_vs_dex' })
+      : [];
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
-      name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+      name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       prize_currency, prize_tiers, rewards_in_cop,
-      freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
+      shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
-    dex,
+    dexConfig.dex,
+    dexConfig.dex_scope,
+    dexConfig.eligible_dexes,
+    tournamentMode,
+    teamScoreBy,
+    teamPrizeMode,
+    JSON.stringify(teamSplits),
+    teamMemberRewardBy,
+    attackMatchPolicy,
     startIso,
     endIso,
     gb,
@@ -8182,6 +9188,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
     parseBool(rewards_in_cop) ? 1 : 0,
+    shieldHours,
     freeze,
     prereg,
     registrationOpenIso,
@@ -8198,13 +9205,21 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
-    name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
-    freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     prize_currency, prize_tiers, rewards_in_cop,
+    mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
-  const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'];
-  if (dex !== undefined && !validDexes.includes(dex)) return res.status(400).json({ error: 'invalid dex' });
+  const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
+  const tournamentMode = normalizeTournamentMode(mode !== undefined ? mode : t.mode);
+  const teamScoreBy = normalizeTournamentTeamMetric(team_score_by !== undefined ? team_score_by : t.team_score_by, 'volume_usd');
+  const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode !== undefined ? team_prize_mode : t.team_prize_mode, 'winner_takes_all');
+  const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by !== undefined ? team_member_reward_by : t.team_member_reward_by, 'volume_usd');
+  const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy !== undefined ? attack_match_policy : t.attack_match_policy, 'all');
+  if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
+    return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
+  }
   const STATUSES = ['active', 'ended', 'draft'];
   let nextStartAt, nextEndAt, nextRegistrationOpensAt, nextRegistrationClosesAt;
   try {
@@ -8233,7 +9248,10 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const nextSortBy = normalizeTournamentSort(sort_by, t.sort_by);
   let pointWeights;
   let nextPrizeTiers;
+  let teamSplits;
+  let nextShieldHours;
   try {
+    nextShieldHours = normalizeTournamentShieldHours(shield_hours, t.shield_hours === null || t.shield_hours === undefined ? null : Number(t.shield_hours));
     const fallbackWeights = tournamentPointWeights(t);
     pointWeights = normalizeTournamentPointWeights({
       sort_by: nextSortBy,
@@ -8244,17 +9262,29 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     nextPrizeTiers = prize_tiers !== undefined
       ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
       : normalizeTournamentPrizeTiers(t.prize_tiers);
+    teamSplits = teamPrizeMode === 'custom_split'
+      ? normalizeTournamentTeamPrizeSplits(team_prize_splits !== undefined ? team_prize_splits : t.team_prize_splits, tournamentEligibleDexes(dexConfig), { strict: tournamentMode === 'dex_vs_dex' })
+      : [];
   } catch (e) {
     return res.status(400).json({ error: e.message });
   }
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
-    dex: dex !== undefined ? dex : t.dex,
+    dex: dexConfig.dex,
+    dex_scope: dexConfig.dex_scope,
+    eligible_dexes: dexConfig.eligible_dexes,
+    mode: tournamentMode,
+    team_score_by: teamScoreBy,
+    team_prize_mode: teamPrizeMode,
+    team_prize_splits: teamSplits,
+    team_member_reward_by: teamMemberRewardBy,
+    attack_match_policy: attackMatchPolicy,
     start_at: nextStartAt,
     end_at: nextEndAt,
     gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
     trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
+    shield_hours: nextShieldHours,
     freeze_trophies: freeze_trophies !== undefined
       ? (parseBool(freeze_trophies) ? 1 : 0)
       : Number(t.freeze_trophies ?? 1),
@@ -8273,8 +9303,10 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   };
   db.db.prepare(`
-    UPDATE tournaments SET name = ?, description = ?, dex = ?, start_at = ?, end_at = ?,
-                            gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?,
+    UPDATE tournaments SET name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
+                            mode = ?, team_score_by = ?, team_prize_mode = ?, team_prize_splits = ?, team_member_reward_by = ?, attack_match_policy = ?,
+                            start_at = ?, end_at = ?,
+                            gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
@@ -8283,10 +9315,19 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.name,
     next.description,
     next.dex,
+    next.dex_scope,
+    next.eligible_dexes,
+    next.mode,
+    next.team_score_by,
+    next.team_prize_mode,
+    JSON.stringify(next.team_prize_splits),
+    next.team_member_reward_by,
+    next.attack_match_policy,
     next.start_at,
     next.end_at,
     next.gold_boost,
     next.trophy_boost,
+    next.shield_hours,
     next.sort_by,
     next.status,
     next.points_trophy_weight,

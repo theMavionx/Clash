@@ -109,7 +109,7 @@ function ClientLogContextBridge() {
 
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const privySolAddress = (privy.solanaWallets || []).find(w => w?.address)?.address || null;
-  const isEvmDex = dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid';
+  const isEvmDex = dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex';
   const walletAddress = dex === 'decibel'
     ? aptosWallet?.address
     : isEvmDex
