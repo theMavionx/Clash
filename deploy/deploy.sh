@@ -173,9 +173,9 @@ install_system_dependencies() {
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
     mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
-    local hermes_model_chain="google/gemma-4-26b-a4b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,openai/gpt-oss-20b:free,liquid/lfm-2.5-1.2b-instruct:free,openrouter/owl-alpha"
+    local hermes_model_chain="google/gemma-4-26b-a4b-it:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free"
     local hermes_primary_model="google/gemma-4-26b-a4b-it:free"
-    local hermes_fallback_model="nvidia/nemotron-nano-12b-v2-vl:free"
+    local hermes_fallback_model="minimax/minimax-m2.5:free"
 
     if [ ! -f "$ENV_FILE" ]; then
         if [ -f "$DEPLOY_ROOT/.env" ]; then
