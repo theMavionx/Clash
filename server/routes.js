@@ -4324,6 +4324,41 @@ function aiChatJson(value, max = 8000) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function parseAiChatStoredJson(value) {
+  if (!value) return null;
+  try {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  } catch {
+    return null;
+  }
+}
+
+function publicAiChatStoredEvent(row) {
+  if (!row) return null;
+  const output = parseAiChatStoredJson(row.output_json) || {};
+  const quota = parseAiChatStoredJson(row.quota_json) || null;
+  const message = String(
+    output.output_text
+    || output.message
+    || row.response_preview
+    || row.error
+    || ''
+  ).trim();
+  const status = String(row.status || 'ok');
+  const isOk = status === 'ok';
+  return {
+    ok: isOk,
+    pending: false,
+    status,
+    trace_id: row.trace_id,
+    message,
+    error: isOk ? null : (message || row.error || 'AI request failed'),
+    quota: quota?.after || quota || null,
+    created_at: row.created_at,
+    duration_ms: row.duration_ms ?? null,
+  };
+}
+
 function summarizeHermesResult(result = {}) {
   return {
     model: result.model || null,
@@ -4474,7 +4509,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       responsePreview: aiChatPreview(result.output_text, 1200),
       quota: { before: quotaBefore, after: quotaAfter, reservation },
       attempts: resultSummary.attempts,
-      input: { message, history },
+      input: { trace_id: traceId, idempotency_key: idempotencyKey, message, history },
       output: {
         output_text: result.output_text,
         ...resultSummary,
@@ -4517,11 +4552,37 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       requestPreview: aiChatPreview(message),
       responsePreview: aiChatPreview(err.message, 1200),
       quota: { before: quotaBefore, after: quotaAfter, reservation_refunded: !!reservation },
-      input: { message, history },
+      input: { trace_id: traceId, idempotency_key: idempotencyKey, message, history },
       output: err.body || null,
     });
     res.status(err.status || 500).json({ ok: false, error: err.message, quota: quotaAfter, trace_id: traceId });
   }
+});
+
+router.get('/ai-chat/result/:traceId', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const traceId = String(req.params.traceId || '').trim().slice(0, 80);
+  if (!traceId) return res.status(400).json({ ok: false, error: 'trace id required' });
+  const row = db.db.prepare(`
+    SELECT trace_id, status, duration_ms, error, response_preview, output_json, quota_json, created_at
+    FROM hermes_chat_events
+    WHERE player_id = ?
+      AND trace_id = ?
+      AND event_type = 'message'
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(req.player.id, traceId);
+  const event = publicAiChatStoredEvent(row);
+  if (!event) {
+    return res.json({
+      ok: true,
+      pending: true,
+      status: 'pending',
+      trace_id: traceId,
+      quota: getAiMessageQuotaStatus(req.player.id),
+    });
+  }
+  return res.status(event.status === 'quota_blocked' ? 402 : 200).json(event);
 });
 
 router.post('/ai-chat/reset', auth, async (req, res) => {

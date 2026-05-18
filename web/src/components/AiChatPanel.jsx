@@ -268,6 +268,45 @@ function buildContextHistory(rows) {
     }));
 }
 
+function makeAiChatTraceId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAiChatStoredResult(traceId, token) {
+  const r = await fetch(`/api/ai-chat/result/${encodeURIComponent(traceId)}`, {
+    headers: { 'x-token': token },
+    cache: 'no-store',
+  });
+  const data = await r.json().catch(() => ({}));
+  if (data?.pending) return null;
+  if (!r.ok && r.status !== 402) {
+    throw new Error(data?.error || 'AI result lookup failed');
+  }
+  return data;
+}
+
+async function waitForAiChatStoredResult(traceId, token, {
+  initialDelayMs = 7000,
+  intervalMs = 2500,
+  timeoutMs = 105000,
+} = {}) {
+  const started = Date.now();
+  if (initialDelayMs > 0) await sleep(initialDelayMs);
+  while (Date.now() - started < timeoutMs) {
+    const result = await fetchAiChatStoredResult(traceId, token).catch(() => null);
+    if (result) return result;
+    await sleep(intervalMs);
+  }
+  throw new Error('AI result is still pending');
+}
+
 function describeAgentProgress(progress) {
   const explicit = typeof progress?.message === 'string' ? progress.message.trim() : '';
   if (explicit) return explicit.endsWith('...') ? explicit : `${explicit}...`;
@@ -644,29 +683,85 @@ function AiChatPanel({ onClose }) {
     setProgressText('Reading your request...');
     setMessages((rows) => [...rows, { role: 'user', text }]);
     const history = buildContextHistory(messages);
+    const traceId = makeAiChatTraceId();
+    const idempotencyKey = traceId;
+    const requestController = new AbortController();
+    const timeoutId = setTimeout(() => requestController.abort(), 110000);
     try {
-      const r = await fetch('/api/ai-chat/message', {
+      const requestResult = fetch('/api/ai-chat/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
-        body: JSON.stringify({ message: text, history }),
-      });
-      const data = await r.json().catch(() => ({}));
+        signal: requestController.signal,
+        body: JSON.stringify({
+          message: text,
+          history,
+          trace_id: traceId,
+          idempotency_key: idempotencyKey,
+        }),
+      })
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            const err = new Error(data?.error || 'AI request failed');
+            err.status = r.status;
+            err.data = data;
+            throw err;
+          }
+          return data;
+        })
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'request_error', err }));
+
+      const recoveryResult = waitForAiChatStoredResult(traceId, token)
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'recovery_error', err }));
+
+      let result = await Promise.race([requestResult, recoveryResult]);
+      if (result.kind === 'request_error') {
+        if (result.err?.status === 402) throw result.err;
+        const recovered = await recoveryResult;
+        result = recovered.kind === 'data' ? recovered : result;
+      } else if (result.kind === 'recovery_error') {
+        const requested = await requestResult;
+        result = requested.kind === 'data' ? requested : requested;
+      }
+
+      if (result.kind !== 'data') {
+        throw result.err || new Error('AI request failed');
+      }
+
+      const data = result.data || {};
       if (data?.quota) setQuota(data.quota);
-      if (!r.ok) {
+      if (data?.status === 'quota_blocked') {
         // 402 = out of quota → pop the shop modal so the player can
         // top up without re-reading the error first.
-        if (r.status === 402) setShopOpen(true);
+        setShopOpen(true);
         throw new Error(data?.error || 'AI request failed');
       }
+      if (data?.ok === false) throw new Error(data?.error || 'AI request failed');
       setMessages((rows) => [...rows, {
         role: 'assistant',
         text: data?.message || 'Done.',
       }]);
     } catch (err) {
+      if (err?.data?.quota) setQuota(err.data.quota);
+      if (err?.status === 402) setShopOpen(true);
+      const recovered = await fetchAiChatStoredResult(traceId, token).catch(() => null);
+      if (recovered?.quota) setQuota(recovered.quota);
+      if (recovered && recovered.status !== 'quota_blocked' && recovered.ok !== false) {
+        setMessages((rows) => [...rows, {
+          role: 'assistant',
+          text: recovered.message || 'Done.',
+        }]);
+        return;
+      }
+      if (recovered?.status === 'quota_blocked') setShopOpen(true);
       const msg = err?.message || 'AI request failed';
       setError(msg);
       setMessages((rows) => [...rows, { role: 'assistant', text: msg }]);
     } finally {
+      clearTimeout(timeoutId);
+      requestController.abort();
       setStatus('idle');
     }
   }, [input, messages, status, token]);
