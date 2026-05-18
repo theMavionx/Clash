@@ -212,6 +212,26 @@ const HERMES_CHAT_CSS = `
   50%      { box-shadow: 0 2px 8px rgba(0,0,0,0.28), 0 0 0 4px rgba(255,215,0,0.35); }
 }
 .hermes-ribbon { animation: hermesRibbonShimmer 2.6s ease-in-out infinite; }
+/* Step-rail spinner (same animation as Bridge modal's nft-mint-ring-spin
+   but scoped locally so this file doesn't depend on NftMintPanel being
+   mounted simultaneously). */
+@keyframes hermesRingSpin { to { transform: rotate(360deg); } }
+.hermes-step-spinner { animation: hermesRingSpin 0.9s linear infinite; }
+/* Confetti burst on a successful AI top-up. Each shard gets its own
+   rotation + translation via custom properties set inline (--tx/--ty/--rot)
+   so we can scatter 16 shards from one keyframe block. */
+@keyframes hermesConfettiBurst {
+  0%   { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)); opacity: 0; }
+}
+.hermes-confetti-shard {
+  position: absolute; top: 50%; left: 50%;
+  width: 8px; height: 14px;
+  border-radius: 2px;
+  animation: hermesConfettiBurst 1.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+}
 `;
 
 function formatQuotaLine(quota) {
@@ -421,8 +441,36 @@ function AiChatPanel({ onClose }) {
   const [shopPayment, setShopPayment] = useState('usdc');
   const [shopBusy, setShopBusy] = useState(null);
   const [shopNotice, setShopNotice] = useState('');
+  // Bridge-style purchase modal — drives a 3-step rail (sign → confirm
+  // → credit) on top of the shop while a buy is in flight, then flips
+  // to success + confetti when the server credits messages.
+  // Shape: { status, product, granted, pass, error }.
+  //   status ∈ 'signing'|'confirming'|'crediting'|'success'|'error'
+  const [topUpFlow, setTopUpFlow] = useState(null);
+  const topUpTimers = useRef([]);
   const [localEvmWalletState, setLocalEvmWalletState] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+
+  // Heuristic step pacing: real wallet/network/server timing varies wildly,
+  // so we advance the rail on a soft timer that matches typical EVM/Sol
+  // flows — sign (~immediate) → confirm (1.5s) → credit (4s). On success
+  // we jump straight to "success" regardless of where the timer was.
+  const clearTopUpTimers = useCallback(() => {
+    topUpTimers.current.forEach((t) => clearTimeout(t));
+    topUpTimers.current = [];
+  }, []);
+  const beginTopUpFlow = useCallback((product) => {
+    clearTopUpTimers();
+    setTopUpFlow({ status: 'signing', product, granted: 0, pass: null, error: '' });
+    const t1 = setTimeout(() => {
+      setTopUpFlow((prev) => prev && prev.status === 'signing' ? { ...prev, status: 'confirming' } : prev);
+    }, 1500);
+    const t2 = setTimeout(() => {
+      setTopUpFlow((prev) => prev && prev.status === 'confirming' ? { ...prev, status: 'crediting' } : prev);
+    }, 4500);
+    topUpTimers.current = [t1, t2];
+  }, [clearTopUpTimers]);
+  useEffect(() => () => clearTopUpTimers(), [clearTopUpTimers]);
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const localEvmWallet = useMemo(
@@ -802,6 +850,7 @@ function AiChatPanel({ onClose }) {
 
     setShopBusy(product.id);
     setShopNotice('');
+    beginTopUpFlow(product);
     try {
       let result;
       if (shopChain === 'solana') {
@@ -870,12 +919,32 @@ function AiChatPanel({ onClose }) {
           ? 'AI Lifetime Pass is active. I can keep helping you every day.'
           : `${granted || product.messageCredits || 0} AI message credits added. Ready for the next order.`,
       }]);
+      clearTopUpTimers();
+      setTopUpFlow({
+        status: 'success',
+        product,
+        granted: granted || product.messageCredits || 0,
+        pass,
+        error: '',
+      });
     } catch (err) {
-      setShopNotice((err?.shortMessage || err?.message || 'Purchase failed').slice(0, 180));
+      const msg = (err?.shortMessage || err?.message || 'Purchase failed').slice(0, 180);
+      setShopNotice(msg);
+      clearTopUpTimers();
+      setTopUpFlow((prev) => ({
+        status: 'error',
+        product,
+        granted: 0,
+        pass: null,
+        error: msg,
+        // Preserve which step we were on so the rail shows where it
+        // failed (sign vs confirm vs credit).
+        failedAt: prev?.status || 'signing',
+      }));
     } finally {
       setShopBusy(null);
     }
-  }, [aptosAddress, aptosWallet, evmAddress, evmWallet, setSolanaModalVisible, shopChain, shopConfig, shopPayment, solAddress, solWallet, token]);
+  }, [aptosAddress, aptosWallet, beginTopUpFlow, clearTopUpTimers, evmAddress, evmWallet, setSolanaModalVisible, shopChain, shopConfig, shopPayment, solAddress, solWallet, token]);
 
   // On desktop the chat is a sidebar — it must not dim the game or steal
   // clicks from buildings underneath. Make the backdrop transparent and
@@ -1150,6 +1219,22 @@ function AiChatPanel({ onClose }) {
         />
       )}
 
+      {topUpFlow && (
+        <AiTopUpStatusModal
+          flow={topUpFlow}
+          paymentLabel={aiPaymentLabel(shopChain, shopPayment)}
+          onClose={() => {
+            clearTopUpTimers();
+            setTopUpFlow(null);
+          }}
+          onRetry={() => {
+            const p = topUpFlow.product;
+            setTopUpFlow(null);
+            if (p) handleBuyAiProduct(p);
+          }}
+        />
+      )}
+
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
@@ -1169,6 +1254,175 @@ function AiChatPanel({ onClose }) {
 // brown borders, gold accents, red close pill. Same visual language as
 // the rest of the in-game UI so the AI panel doesn't feel like a
 // foreign element.
+// ── Top-up progress modal ────────────────────────────────────────────
+// Bridge-modal pattern adapted for AI message purchases. Step rail
+// (sign → confirm → credit) sits on top of the shop while a buy is in
+// flight; flips to a success card with a confetti burst when the
+// server credits messages, or to an error card with the failure
+// reason. zIndex 320 so it sits above both chat (80) and shop (90).
+function AiTopUpStatusModal({ flow, paymentLabel, onClose, onRetry }) {
+  if (!flow) return null;
+  const { status, product, granted, pass, error, failedAt } = flow;
+  const isFinished = status === 'success' || status === 'error';
+  const isWorking = !isFinished;
+
+  const stepIndex = status === 'signing' ? 1
+    : status === 'confirming' ? 2
+    : status === 'crediting' ? 3
+    : status === 'success' ? 4 : 0;
+  const failedIndex = status === 'error'
+    ? (failedAt === 'crediting' ? 3 : failedAt === 'confirming' ? 2 : 1)
+    : 0;
+
+  const stepState = (idx) => {
+    if (status === 'success') return 'done';
+    if (status === 'error') {
+      if (idx < failedIndex) return 'done';
+      if (idx === failedIndex) return 'error';
+      return 'pending';
+    }
+    if (idx < stepIndex) return 'done';
+    if (idx === stepIndex) return 'active';
+    return 'pending';
+  };
+
+  const steps = [
+    { idx: 1, label: 'Approve in wallet',     hint: `Sign ${paymentLabel} payment` },
+    { idx: 2, label: 'Confirming on chain',   hint: 'Waiting for block confirmation' },
+    { idx: 3, label: 'Crediting AI messages', hint: 'Server is granting your quota' },
+  ];
+
+  const title = status === 'success'
+    ? (pass ? 'Lifetime Pass activated' : 'Messages credited')
+    : status === 'error' ? 'Purchase failed'
+    : 'Processing your purchase…';
+
+  // Deterministic confetti — 18 shards in alternating brand colors,
+  // each with a unique angle/distance so the burst looks scattered
+  // rather than mechanical. CSS vars feed the keyframe.
+  const CONFETTI_COLORS = ['#ffd76a', '#c2851b', '#91df7d', '#3b9b41', '#04DF83', '#5C3A21'];
+  const confetti = [];
+  if (status === 'success') {
+    for (let i = 0; i < 18; i++) {
+      const ang = (Math.PI * 2 * i) / 18 + (i * 0.31);
+      const dist = 90 + (i % 4) * 18;
+      confetti.push({
+        key: i,
+        color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+        tx: Math.cos(ang) * dist + 'px',
+        ty: Math.sin(ang) * dist + 'px',
+        rot: ((i * 53) % 720 - 360) + 'deg',
+        delay: (i * 22) + 'ms',
+      });
+    }
+  }
+
+  return (
+    <div
+      style={topUpStyles.overlay}
+      onClick={isWorking ? undefined : onClose}
+      role="dialog" aria-modal="true"
+    >
+      <div style={topUpStyles.panel} onClick={(e) => e.stopPropagation()}>
+        <div style={topUpStyles.header}>
+          <span style={topUpStyles.title}>{title}</span>
+          {isFinished && (
+            <button type="button" onClick={onClose} style={topUpStyles.closeBtn} aria-label="Close">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        <div style={topUpStyles.body}>
+          {/* Step rail — same look + state machine as the bridge modal */}
+          <ol style={topUpStyles.stepList}>
+            {steps.map((step) => {
+              const st = stepState(step.idx);
+              return (
+                <li key={step.idx} style={topUpStyles.stepItem}>
+                  <span style={{ ...topUpStyles.stepBubble, ...topUpStyles[`stepBubble_${st}`] }}>
+                    {st === 'done'    ? '✓'
+                    : st === 'error'  ? '!'
+                    : st === 'active' ? <span className="hermes-step-spinner" style={topUpStyles.spinner} />
+                    : step.idx}
+                  </span>
+                  <span style={topUpStyles.stepText}>
+                    <span style={{ ...topUpStyles.stepLabel, ...topUpStyles[`stepLabel_${st}`] }}>
+                      {step.label}
+                    </span>
+                    <span style={topUpStyles.stepHint}>{step.hint}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+
+          {status === 'success' && (
+            <div style={topUpStyles.successBox}>
+              {/* Confetti container — absolute-positioned shards burst
+                  out from the center of this card on mount. */}
+              <div style={topUpStyles.confettiLayer} aria-hidden="true">
+                {confetti.map((c) => (
+                  <span
+                    key={c.key}
+                    className="hermes-confetti-shard"
+                    style={{
+                      background: c.color,
+                      animationDelay: c.delay,
+                      '--tx': c.tx,
+                      '--ty': c.ty,
+                      '--rot': c.rot,
+                    }}
+                  />
+                ))}
+              </div>
+              <div style={topUpStyles.successHeadline}>
+                {pass ? '🎉 Lifetime AI Pass active' : `🎉 ${granted} AI messages added`}
+              </div>
+              <div style={topUpStyles.successSub}>
+                {pass
+                  ? `${pass.lifetime_daily_limit || 100} messages every day, forever.`
+                  : product?.title || 'Ready for the next order.'}
+              </div>
+            </div>
+          )}
+
+          {status === 'error' && error && (
+            <div style={topUpStyles.errorBox}>{error}</div>
+          )}
+
+          {isWorking && (
+            <div style={topUpStyles.workingHint}>
+              Keep this window open until all three steps finish.
+            </div>
+          )}
+        </div>
+
+        <div style={topUpStyles.footer}>
+          {status === 'success' && (
+            <button type="button" onClick={onClose} style={topUpStyles.primaryBtn}>
+              Start chatting
+            </button>
+          )}
+          {status === 'error' && (
+            <>
+              <button type="button" onClick={onClose} style={topUpStyles.secondaryBtn}>
+                Close
+              </button>
+              <button type="button" onClick={onRetry} style={topUpStyles.primaryBtn}>
+                Try again
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Shop modal ──────────────────────────────────────────────────────
 // Standalone overlay that opens on top of the chat panel (or
 // automatically on a 402 quota error). Earlier this was an embedded
@@ -2286,6 +2540,138 @@ const styles = {
     borderRadius: '50%',
     background: '#8b6b3f',
     willChange: 'transform, opacity',
+  },
+};
+
+// ── Top-up status modal styles ───────────────────────────────────────
+// Mirrors NftBridgePanel's modalStyles so the AI purchase flow feels
+// like the same family of progress modals across the app. Parchment
+// palette, identical step-rail look, parchment scrollbar on the body.
+const topUpStyles = {
+  overlay: {
+    position: 'fixed', inset: 0,
+    background: 'rgba(20, 12, 4, 0.55)',
+    backdropFilter: 'blur(2px)',
+    WebkitBackdropFilter: 'blur(2px)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    zIndex: 320, pointerEvents: 'all', padding: 16,
+  },
+  panel: {
+    width: 380, maxWidth: '100%', maxHeight: '88vh',
+    background: '#fdf8e7',
+    border: '5px solid #d4c8b0', borderRadius: 18,
+    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    display: 'flex', flexDirection: 'column',
+    fontFamily: 'inherit', overflow: 'hidden',
+  },
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 14px',
+    background: '#d4c8b0', borderBottom: '3px solid #bba882',
+  },
+  title: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
+  closeBtn: {
+    width: 26, height: 26, borderRadius: '50%',
+    background: '#E53935', border: '2px solid #fff', color: '#fff',
+    cursor: 'pointer', padding: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  body: {
+    padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12,
+    overflowY: 'auto',
+    scrollbarWidth: 'thin', scrollbarColor: '#bba882 #fdf8e7',
+  },
+
+  stepList: {
+    listStyle: 'none', margin: 0, padding: 0,
+    display: 'flex', flexDirection: 'column', gap: 10,
+  },
+  stepItem: { display: 'flex', alignItems: 'center', gap: 10 },
+  stepBubble: {
+    width: 28, height: 28, borderRadius: '50%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, fontWeight: 900, flexShrink: 0,
+    background: '#e8dfc8', color: '#9f8759', border: '2px solid #d4c8b0',
+    transition: 'background 0.2s, border-color 0.2s',
+  },
+  stepBubble_pending: {},
+  stepBubble_active: {
+    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
+  },
+  stepBubble_done: {
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    borderColor: '#1f6d34', color: '#fff',
+  },
+  stepBubble_error: {
+    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+  },
+  stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
+  stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },
+  stepLabel_active: { color: '#5C3A21' },
+  stepLabel_done:   { color: '#5C3A21' },
+  stepLabel_error:  { color: '#b71c1c' },
+  stepLabel_pending: {},
+  stepHint: { fontSize: 11, color: '#9f8759', fontWeight: 700 },
+
+  // Spinner inside the "active" step bubble — same look as the bridge
+  // modal's, driven by the local `.hermes-step-spinner` class.
+  spinner: {
+    width: 12, height: 12, borderRadius: '50%',
+    border: '2px solid rgba(92,58,33,0.25)',
+    borderTopColor: '#5C3A21',
+    display: 'inline-block',
+  },
+
+  successBox: {
+    position: 'relative',
+    padding: '14px 12px', borderRadius: 12,
+    background: 'linear-gradient(180deg, #f1fbe5 0%, #d9efc0 100%)',
+    border: '2px solid #7db85a', color: '#1f3e0a',
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    gap: 4, overflow: 'visible',
+    textAlign: 'center',
+  },
+  // Confetti layer fills the success box and lets shards burst out of
+  // its bounds. `overflow: visible` on the parent keeps shards from
+  // being clipped by the rounded corners.
+  confettiLayer: {
+    position: 'absolute', inset: 0,
+    pointerEvents: 'none',
+    overflow: 'visible',
+  },
+  successHeadline: {
+    fontSize: 16, fontWeight: 900, color: '#1B5E20',
+    textShadow: '0 1px 0 rgba(255,255,255,0.5)',
+  },
+  successSub: { fontSize: 12, fontWeight: 700, color: '#3a6320' },
+
+  errorBox: {
+    padding: '8px 10px', borderRadius: 10,
+    background: '#fdecea', border: '2px solid #E53935', color: '#7a1f1c',
+    fontSize: 12, fontWeight: 700,
+  },
+
+  workingHint: {
+    fontSize: 11, color: '#7a5a30', fontStyle: 'italic', textAlign: 'center',
+  },
+
+  footer: {
+    display: 'flex', gap: 8, justifyContent: 'flex-end',
+    padding: '10px 14px',
+    borderTop: '3px solid #d4c8b0', background: '#f5ecd2',
+  },
+  primaryBtn: {
+    padding: '9px 16px', borderRadius: 10, fontSize: 13, fontWeight: 900,
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    border: '2px solid #1f6d34', color: '#fff',
+    cursor: 'pointer',
+    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+  },
+  secondaryBtn: {
+    padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,
+    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
+    cursor: 'pointer',
   },
 };
 
