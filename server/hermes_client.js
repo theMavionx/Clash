@@ -47,7 +47,7 @@ function normalizeHistory(history) {
 function normalizeIntentText(text) {
   return String(text || '')
     .toLowerCase()
-    .replace(/[’']/g, '')
+    .replace(/['`\u2018\u2019\u02bc]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
