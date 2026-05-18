@@ -40,6 +40,8 @@ const AI_ATTACK_COOLDOWN_MS = Number(process.env.CLASH_MCP_AI_ATTACK_COOLDOWN_MS
 const VALID_SHIP_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 const SHIP_TROOP_COST = 100;
 const REINFORCE_COST = 50;
+const AI_ATTACK_MIN_TOTAL_TROOPS = Math.max(1, Math.min(15, Math.floor(Number(process.env.CLASH_MCP_AI_ATTACK_MIN_TOTAL_TROOPS || 3))));
+const AI_ATTACK_DEFAULT_LOADOUT = parseDefaultAttackLoadout(process.env.CLASH_MCP_AI_ATTACK_DEFAULT_LOADOUT || 'Mage,Mage,Knight');
 const AI_ATTACK_SLOT_COUNT = 5;
 const AI_ATTACK_REPLAY_LABEL = 'AI ONLINE BATTLE';
 const AI_CANNON_TARGET_TYPES = ['turret', 'archer_tower'];
@@ -49,6 +51,15 @@ const AI_AUTO_CANNON_MAX_SHOTS = 3;
 const AI_AUTO_RALLY_T_SEC = 5.0;
 const AI_AUTO_RALLY_FLIGHT_SEC = 0.8;
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
+
+function parseDefaultAttackLoadout(value) {
+  const parsed = String(value || '')
+    .split(',')
+    .map((row) => row.trim())
+    .map((row) => VALID_SHIP_TROOPS.find((troop) => troop.toLowerCase() === row.toLowerCase()))
+    .filter(Boolean);
+  return parsed.length ? parsed : ['Mage', 'Mage', 'Knight'];
+}
 
 function defaultCannonShotTime(index) {
   return AI_CANNON_DEFAULT_START_SEC + index * AI_CANNON_DEFAULT_STEP_SEC;
@@ -744,6 +755,96 @@ function getFleet(playerId) {
     .map((ship, ship_index) => ({ ship_index, ...ship }));
 }
 
+function getAttackShips(playerId) {
+  return game.db
+    .prepare(`
+      SELECT id, level, ship_troops, ship_troops_template
+      FROM buildings
+      WHERE player_id = ? AND type = 'port' AND has_ship = 1
+      ORDER BY id ASC
+    `)
+    .all(playerId)
+    .slice(0, combat.MAX_SHIPS)
+    .map((port, ship_index) => {
+      const troops = parseJsonArray(port.ship_troops).filter((troop) => VALID_SHIP_TROOPS.includes(troop));
+      const template = parseJsonArray(port.ship_troops_template).filter((troop) => VALID_SHIP_TROOPS.includes(troop));
+      const capacity = Math.max(0, Number(port.level || 1) * 3);
+      return {
+        ship_index,
+        port_id: port.id,
+        level: port.level,
+        troops,
+        template,
+        capacity,
+        open_slots: Math.max(0, capacity - troops.length),
+      };
+    });
+}
+
+function fleetTroopCount(fleet = []) {
+  return fleet.reduce((sum, ship) => sum + (Array.isArray(ship.troops) ? ship.troops.length : 0), 0);
+}
+
+function autoPrepareFleetForAttack(playerId, minTotalTroops = AI_ATTACK_MIN_TOTAL_TROOPS) {
+  const preparation = {
+    min_total_troops: minTotalTroops,
+    default_loadout: AI_ATTACK_DEFAULT_LOADOUT,
+    total_troops_before: fleetTroopCount(getFleet(playerId)),
+    total_troops_after: 0,
+    reinforced: null,
+    loaded: [],
+    blockers: [],
+  };
+
+  let fleet = getFleet(playerId);
+  let totalTroops = fleetTroopCount(fleet);
+  if (totalTroops >= minTotalTroops) {
+    preparation.total_troops_after = totalTroops;
+    return { success: true, fleet, preparation };
+  }
+
+  const reinforced = reinforceShips(playerId);
+  if (reinforced?.error) {
+    preparation.blockers.push({ step: 'reinforce_ships', error: reinforced.error, cost: reinforced.cost || null });
+  } else if (reinforced?.restored > 0) {
+    preparation.reinforced = {
+      restored: reinforced.restored,
+      cost: reinforced.cost,
+      ships: reinforced.ships || [],
+    };
+  }
+
+  fleet = getFleet(playerId);
+  totalTroops = fleetTroopCount(fleet);
+  let loadIndex = 0;
+  while (totalTroops < minTotalTroops) {
+    const ship = getAttackShips(playerId).find((candidate) => candidate.open_slots > 0);
+    if (!ship) {
+      preparation.blockers.push({ step: 'load_ship_troop', error: 'No open ship troop slots' });
+      break;
+    }
+
+    const troopName = AI_ATTACK_DEFAULT_LOADOUT[loadIndex % AI_ATTACK_DEFAULT_LOADOUT.length] || 'Mage';
+    const loaded = loadShipTroop(playerId, ship.port_id, troopName);
+    if (loaded?.error) {
+      preparation.blockers.push({ step: 'load_ship_troop', port_id: ship.port_id, troop_name: troopName, error: loaded.error, cost: loaded.cost || null });
+      break;
+    }
+    preparation.loaded.push({
+      port_id: ship.port_id,
+      troop_name: troopName,
+      cost: { gold: SHIP_TROOP_COST },
+      ship_troops: loaded.ship_troops || [],
+    });
+    loadIndex += 1;
+    fleet = getFleet(playerId);
+    totalTroops = fleetTroopCount(fleet);
+  }
+
+  preparation.total_troops_after = totalTroops;
+  return { success: totalTroops >= minTotalTroops, fleet, preparation };
+}
+
 function troopLevelsForAction(playerId, troops) {
   const rows = game.getTroopLevels(playerId);
   const levels = {};
@@ -1176,6 +1277,9 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       rules: {
         max_slots: AI_ATTACK_SLOT_COUNT,
         max_ships: combat.MAX_SHIPS,
+        minimum_loaded_troops_before_attack: AI_ATTACK_MIN_TOTAL_TROOPS,
+        default_attack_loadout: AI_ATTACK_DEFAULT_LOADOUT,
+        fleet_preparation: 'execute_ai_attack_plan auto-reinforces ships and loads default troops before reserving cooldown; if fewer than the minimum troops remain loaded, it rejects the battle.',
         cannon_initial_energy: combat.CANNON_INITIAL_ENERGY,
         cannon_shot_cost: 'shot number: 1, 2, 3...',
         cannon_reload_sec: combat.CANNON_RELOAD_SEC,
@@ -1223,8 +1327,15 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       },
     },
     async ({ ships = [], auto_tactics = true, cannon_shots = [], rally_marker = null }) => {
-      const fleet = getFleet(playerId);
+      const fleetPrep = autoPrepareFleetForAttack(playerId);
+      let fleet = fleetPrep.fleet;
       if (fleet.length === 0) return toolError('No loaded ships. Buy ships and load troops first.');
+      if (!fleetPrep.success) {
+        return toolError(`Need at least ${AI_ATTACK_MIN_TOTAL_TROOPS} loaded troops before launching an AI battle.`, {
+          fleet_preparation: fleetPrep.preparation,
+          fleet,
+        });
+      }
 
       const cooldown = reserveAiAttackCooldown(playerId);
       if (!cooldown.ok) {
@@ -1392,6 +1503,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         buildings_snapshot: defenderBuildings,
         attacker_name: session.player.name || 'AI Agent',
         replay_label: AI_ATTACK_REPLAY_LABEL,
+        fleet_preparation: fleetPrep.preparation,
         duration,
         result: finalResult,
         enemy: {

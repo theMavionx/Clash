@@ -68,6 +68,16 @@ function setShipLoadout(game, portId, troops) {
     .run(encoded, encoded, portId);
 }
 
+function setOnlyOneLoadedTroop(game, playerId) {
+  const ports = playerBuildings(game, playerId, 'port');
+  if (!ports.length) return null;
+  for (let i = 0; i < ports.length; i += 1) {
+    const troops = i === 0 ? ['Mage'] : [];
+    setShipLoadout(game, ports[i].id, troops);
+  }
+  return ports[0];
+}
+
 function setTownHallLevel(game, playerId, level) {
   const def = game.BUILDING_DEFS.town_hall;
   const maxHp = def.hp_levels[Math.max(0, Math.min(def.hp_levels.length - 1, level - 1))];
@@ -256,6 +266,10 @@ async function main() {
       addCase(`upgrade troop ${troop}`, () => callTool('upgrade_troop', { troop_type: troop }));
     }
 
+    addCase('attack auto-prepares one-troop fleet', () => {
+      setOnlyOneLoadedTroop(game, attacker.id);
+      return callTool('execute_ai_attack_plan', { auto_tactics: true }, 180000);
+    });
     addCase('attack someone with auto tactics', () => callTool('execute_ai_attack_plan', { auto_tactics: true }, 180000));
     addCase('inspect base after attack', () => callTool('get_base_state', { include_catalog: false }));
     addCase('reinforce ships after battle', () => callTool('reinforce_ships'));
@@ -370,7 +384,12 @@ function summarizePayload(payload = {}) {
   if (Array.isArray(payload.buildings)) return `buildings=${payload.buildings.length}`;
   if (payload.buildings && typeof payload.buildings === 'object') return `catalog=${Object.keys(payload.buildings).length}`;
   if (payload.buildingsCatalog) return `catalog=${Object.keys(payload.buildingsCatalog).length}`;
-  if (payload.success && payload.result) return `battle=${payload.result} duration=${payload.duration}`;
+  if (payload.success && payload.result) {
+    const prep = payload.fleet_preparation
+      ? ` prep=${payload.fleet_preparation.total_troops_before}->${payload.fleet_preparation.total_troops_after}`
+      : '';
+    return `battle=${payload.result} duration=${payload.duration}${prep}`;
+  }
   if (payload.success) return 'success';
   if (payload.type && payload.id) return `${payload.type}#${payload.id}`;
   if (payload.troop_type) return `${payload.troop_type} lvl ${payload.level}`;

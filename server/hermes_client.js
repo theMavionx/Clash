@@ -46,10 +46,33 @@ function normalizeHistory(history) {
 
 function normalizeIntentText(text) {
   return String(text || '')
-    .toLowerCase()
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{Mark}/gu, '')
     .replace(/['`\u2018\u2019\u02bc]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function startsWithToken(text, token) {
+  return text === token
+    || text.startsWith(`${token} `)
+    || text.startsWith(`${token},`)
+    || text.startsWith(`${token}.`)
+    || text.startsWith(`${token}!`)
+    || text.startsWith(`${token}?`);
+}
+
+function isPassiveChat(text) {
+  if (!text) return true;
+  const greetings = ['hi', 'hello', 'hey', 'yo', 'sup', 'gm', 'gn', 'привіт', 'привет', 'вітаю', 'здравствуй', 'здравствуйте', 'hola', 'bonjour', 'salut', 'hallo', 'ciao', 'ola', 'oi', 'hej', 'hei', 'مرحبا', 'سلام', '你好', '您好', 'こんにちは', 'こんばんは', '안녕', 'xin chao'];
+  if (greetings.some((token) => startsWithToken(text, token))) return true;
+  const thanks = ['thanks', 'thank you', 'thx', 'дякую', 'спасибо', 'merci', 'gracias', 'obrigado', 'obrigada', 'danke', 'grazie', 'شكرا', '谢谢', 'ありがとう', '고마워', 'cam on'];
+  if (thanks.some((token) => startsWithToken(text, token))) return true;
+  if (/^(ok|okay|ок|добре|хорошо|fine|cool|nice|супер|круто|ага|yes|no|так|ні|нет)$/i.test(text)) return true;
+  if (/^(who are you|what are you|хто ти|кто ты|як справи|как дела|how are you)\??$/i.test(text)) return true;
+  return false;
 }
 
 function classifyGameIntent(message) {
@@ -60,10 +83,10 @@ function classifyGameIntent(message) {
       kind: 'battle',
       action_required: true,
       goal: 'Start an AI online battle only through MCP tools.',
-      required_loop: 'get_base_state -> confirm loaded ships -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
+      required_loop: 'get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
     };
   }
-  if (/(збери|собери|collect|收集|thu thập).*(ресурс|реси|resources|资源|tài nguyên)|(?:ресурс|реси|resources|资源|tài nguyên).*(збери|собери|collect|收集|thu thập)/i.test(text)) {
+  if (/(збери|собери|collect|收集|thu thap).*(ресурс|реси|resources|资源|tai nguyen)|(?:ресурс|реси|resources|资源|tai nguyen).*(збери|собери|collect|收集|thu thap)/i.test(text)) {
     return {
       kind: 'collect_resources',
       action_required: true,
@@ -71,7 +94,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> collect_resources({}) -> summarize collected resources',
     };
   }
-  if (/(build|place|set up|setup|розстав|побуд|постав|建造|布置|xây).*(base|баз|基地|căn cứ)|(?:base|баз|基地|căn cứ).*(build|place|set up|setup|розстав|побуд|постав|建造|布置|xây)/i.test(text)) {
+  if (/(build|place|set up|setup|розстав|побуд|постав|建造|布置|xay).*(base|баз|基地|can cu)|(?:base|баз|基地|can cu).*(build|place|set up|setup|розстав|побуд|постав|建造|布置|xay)/i.test(text)) {
     return {
       kind: 'auto_build_base',
       action_required: true,
@@ -79,7 +102,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers',
     };
   }
-  if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building|建造|建筑|商店|港口|塔|xây)/i.test(text)) {
+  if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building|建造|建筑|商店|港口|塔|xay)/i.test(text)) {
     return {
       kind: 'build',
       action_required: true,
@@ -87,7 +110,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> if broad base setup use auto_build_base; otherwise get_building_catalog if needed -> find_build_slots -> place_building -> summarize result',
     };
   }
-  if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень|升级|nâng cấp)/i.test(text)) {
+  if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень|升级|nang cap)/i.test(text)) {
     return {
       kind: 'upgrade',
       action_required: true,
@@ -95,7 +118,7 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> identify exact id/type -> upgrade_building or upgrade_troop -> summarize result',
     };
   }
-  if (/(кораб|ship|troop|військ|войск|load|reinforce|віднов|восстанов|船|部队|增援|tàu|quân)/i.test(text)) {
+  if (/(кораб|ship|troop|військ|войск|load|reinforce|віднов|восстанов|船|部队|增援|tau|quan)/i.test(text)) {
     return {
       kind: 'fleet',
       action_required: true,
@@ -110,7 +133,13 @@ function classifyGameIntent(message) {
       goal: 'Explain only Clash of Perps gameplay capabilities.',
     };
   }
-  return { kind: 'general', action_required: false };
+  if (isPassiveChat(text)) return { kind: 'general', action_required: false };
+  return {
+    kind: 'gameplay',
+    action_required: true,
+    goal: 'Infer the player Clash of Perps gameplay request in any language and complete the useful action through MCP tools.',
+    required_loop: 'get_base_state -> infer the requested game action from the player message and recent context -> use the minimum relevant Clash MCP tool(s) -> summarize confirmed result or blocker',
+  };
 }
 
 function buildIntentInstructions(intent) {
@@ -277,5 +306,6 @@ module.exports = {
   provision,
   chat,
   reset,
+  classifyGameIntent,
   tryStaticReply,
 };

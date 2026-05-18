@@ -598,6 +598,8 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking upgrade targets and resource costs';
     case 'fleet':
       return 'Checking ships, troops, and reinforcements';
+    case 'gameplay':
+      return 'Reading the game state and choosing the right game action';
     default:
       return fallback;
   }

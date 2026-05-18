@@ -29,6 +29,7 @@ Treat the `cop_ai_...` key as a secret. Do not print it back to the user, commit
 3. Make one change at a time, then inspect the returned state or call `get_base_state` again.
 4. Prefer economy stability: keep storage/caps healthy, keep mine and sawmill upgraded, and avoid spending the last resources without a clear goal.
 5. Keep one attack path usable: port -> ship -> loaded troops -> reinforce after casualties.
+6. Before any AI battle, ensure at least 3 total troops are loaded across ships. If only one troop is loaded, reinforce ships first, then load more troops before attacking.
 
 ## In-Game Chat Behavior
 
@@ -72,12 +73,14 @@ Treat the `cop_ai_...` key as a secret. Do not print it back to the user, commit
 - `reinforce_ships()`: restore missing troops from templates after battle. Cost is 50 gold per restored troop.
 
 After every battle, inspect casualties and call `reinforce_ships` when the player has enough gold.
+Before every battle, keep at least 3 total loaded troops across ships. Do not intentionally start an AI battle with one troop; call `reinforce_ships` and `load_ship_troop` first. The MCP server also auto-prepares the fleet inside `execute_ai_attack_plan` and rejects the battle before cooldown if the minimum cannot be reached.
 
 ## Attack Workflow
 
 Use `execute_ai_attack_plan` for battles. It finds an enemy, validates the complete replay server-side, settles victory or defeat, stores the battle log, removes casualties, and broadcasts `AI ONLINE BATTLE` to any currently open browser.
 
 The MCP server allows one AI battle per player per minute. If the tool returns a cooldown error, wait for the cooldown instead of retrying repeatedly.
+The MCP server requires at least 3 total loaded troops before a battle. `execute_ai_attack_plan` will try to restore template casualties and load the default attack loadout (`Mage`, `Mage`, `Knight`) first, then either launches or returns the exact blocker.
 
 Default smart attack:
 
@@ -125,7 +128,7 @@ Manual attack shape:
 - "Build my base / arrange everything": call `get_base_state`, then `auto_build_base({ "focus": "balanced" })`. Do not ask the player for grids or a building list.
 - "Build an archer tower": call `get_base_state`, `find_build_slots({ "type": "archer_tower" })`, then `place_building`.
 - "Upgrade sawmill to level 2": find the sawmill in `get_base_state`, then call `upgrade_building` until it reaches level 2 or resources run out.
-- "Find an enemy and attack": confirm a loaded ship exists, then call `execute_ai_attack_plan({})`.
+- "Find an enemy and attack": confirm or prepare at least 3 loaded troops, then call `execute_ai_attack_plan({})`.
 - "Recover after battle": call `get_base_state`, inspect ships/casualties, then `reinforce_ships`.
 
 ## Safety Rules
