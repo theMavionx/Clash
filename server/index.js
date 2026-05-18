@@ -636,6 +636,9 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
             <input id="tn_freeze_trophies" type="checkbox" checked style="width:auto;margin:0"> Freeze main trophies
           </label>
+          <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
+            <input id="tn_seeker_only" type="checkbox" style="width:auto;margin:0"> Seeker-only tournament
+          </label>
           <label style="font-size:11px;color:#9ca3af">Sort by
             <select id="tn_sort" onchange="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="points">Custom points</option>
@@ -693,7 +696,7 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Access</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -2291,7 +2294,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="16" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="17" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -2309,6 +2312,7 @@ function renderTournaments() {
       + '<td>' + t.id + '</td>'
       + '<td>' + esc(t.name) + (t.description ? '<div style="font-size:10px;color:#9ca3af">' + esc(t.description) + '</div>' : '') + '</td>'
       + '<td>' + esc(t.dex_label || tournamentDexScopeLabel(t)) + '<div style="font-size:10px;color:#6b7280">' + esc((t.mode === 'dex_vs_dex' ? 'DEX vs DEX · ' : '') + (t.dex_scope || 'single')) + '</div></td>'
+      + '<td>' + (t.seeker_only ? '<span style="color:#a78bfa">SEEKER</span>' : '<span style="color:#9ca3af">ALL</span>') + '</td>'
       + '<td>' + statusBadge + '</td>'
       + '<td><span style="color:' + phaseColor + '">' + esc(t.phase || '') + '</span></td>'
       + '<td style="font-size:11px">' + esc(t.start_at || '') + '</td>'
@@ -2360,6 +2364,7 @@ function getTournamentFormBody() {
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
     shield_hours: document.getElementById('tn_shield_hours').value.trim() === '' ? null : Number(document.getElementById('tn_shield_hours').value),
     freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
+    seeker_only: document.getElementById('tn_seeker_only').checked,
     sort_by: document.getElementById('tn_sort').value,
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
@@ -2395,6 +2400,7 @@ function resetTournamentForm() {
   document.getElementById('tn_trophy').value = '1';
   document.getElementById('tn_shield_hours').value = '';
   document.getElementById('tn_freeze_trophies').checked = true;
+  document.getElementById('tn_seeker_only').checked = false;
   document.getElementById('tn_sort').value = 'points';
   document.getElementById('tn_points_trophy').value = '20';
   document.getElementById('tn_points_volume').value = '60';
@@ -2439,6 +2445,7 @@ function editTournament(id) {
   document.getElementById('tn_trophy').value = t.trophy_boost || 1;
   document.getElementById('tn_shield_hours').value = t.shield_hours == null ? '' : t.shield_hours;
   document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;
+  document.getElementById('tn_seeker_only').checked = !!t.seeker_only;
   document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
   const weights = tournamentPointsWeights(t);
   document.getElementById('tn_points_trophy').value = weights.trophies;

@@ -165,6 +165,37 @@ function toolError(message, extra = {}) {
   return { ...jsonResult({ error: message, ...extra, ok: false }), isError: true };
 }
 
+const GENERIC_ATTACK_TARGETS = new Set([
+  'a', 'an', 'the', 'any', 'all', 'one', 'some',
+  'again', 'new', 'another', 'next', 'random', 'fresh', 'different',
+  'base', 'bases', 'enemy', 'enemies', 'opponent', 'opponents', 'target',
+  'player', 'players', 'user', 'users', 'someone', 'somebody', 'anyone',
+  'good', 'best', 'strong', 'stronger', 'hard', 'harder', 'weak', 'weaker',
+  'normal', 'easy', 'nearby', 'shield', 'shielded', 'battle', 'fight', 'raid',
+  'когось', 'ворога', 'врага', 'базу', 'база', 'гравця', 'игрока',
+  'гравець', 'игрок', 'нову', 'новую', 'іншу', 'другую', 'ще', 'снова',
+  'знову', 'рандомну', 'случайную',
+]);
+
+function normalizeAttackTargetName(value) {
+  const candidate = String(value || '')
+    .normalize('NFKC')
+    .replace(/^@+/, '')
+    .replace(/[.,!?;:()[\]{}"'`]+$/g, '')
+    .trim();
+  if (!candidate) return '';
+  const normalized = candidate
+    .toLocaleLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{Mark}/gu, '')
+    .replace(/['`\u2018\u2019\u02bc]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized || GENERIC_ATTACK_TARGETS.has(normalized)) return '';
+  if (/^(?:base|enemy|player|user|target|opponent|battle|raid)[_-]?\d*$/i.test(candidate)) return '';
+  return candidate;
+}
+
 function requestLogMeta(req) {
   return {
     ip: req?.ip || req?.socket?.remoteAddress || '',
@@ -1289,6 +1320,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         auto_tactics: 'By default execute_ai_attack_plan analyzes the enemy base, chooses focused-or-split landing slots, fires cannon shots at high-threat defenses, and drops one rally marker on a nearby non-defense priority target when useful. Pass auto_tactics:false for a fully manual plan.',
         request_shape: {
           target_player_name: 'optional exact player name for targeted attacks, e.g. egor4042007',
+          target_player_name_rule: 'omit this field for generic requests like attack a base, attack again, new base, random enemy, or battle again',
           auto_tactics: true,
           ships: [{ ship_index: 0, slot: 0, t: 0.2 }],
           cannon_shots: [{ target_type: 'strongest_defense', t: 4.0 }, { target_type: 'weakest_defense', t: 5.1 }],
@@ -1329,7 +1361,7 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       },
     },
     async ({ target_player_name = '', ships = [], auto_tactics = true, cannon_shots = [], rally_marker = null }) => {
-      const targetName = String(target_player_name || '').trim();
+      const targetName = normalizeAttackTargetName(target_player_name);
       if (targetName && typeof game.inspectEnemyByName === 'function') {
         const targetPreview = game.inspectEnemyByName(playerId, targetName);
         if (targetPreview.error) return toolError(targetPreview.error, targetPreview);

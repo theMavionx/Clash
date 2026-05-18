@@ -78,6 +78,35 @@ function startsWithToken(text, token) {
     || text.startsWith(`${token}?`);
 }
 
+const GENERIC_ATTACK_TARGETS = new Set([
+  'a', 'an', 'the', 'any', 'all', 'one', 'some',
+  'again', 'new', 'another', 'next', 'random', 'fresh', 'different',
+  'base', 'bases', 'enemy', 'enemies', 'opponent', 'opponents', 'target',
+  'player', 'players', 'user', 'users', 'someone', 'somebody', 'anyone',
+  'good', 'best', 'strong', 'stronger', 'hard', 'harder', 'weak', 'weaker',
+  'normal', 'easy', 'nearby', 'shield', 'shielded', 'battle', 'fight', 'raid',
+  'когось', 'ворога', 'врага', 'базу', 'база', 'гравця', 'игрока',
+  'гравець', 'игрок', 'нову', 'новую', 'іншу', 'другую', 'ще', 'снова',
+  'знову', 'рандомну', 'случайную',
+]);
+
+function cleanupAttackTargetName(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/^@+/, '')
+    .replace(/[.,!?;:()[\]{}"'`]+$/g, '')
+    .trim();
+}
+
+function isGenericAttackTargetName(value) {
+  const candidate = cleanupAttackTargetName(value);
+  if (!candidate) return true;
+  const normalized = normalizeIntentText(candidate);
+  if (!normalized || GENERIC_ATTACK_TARGETS.has(normalized)) return true;
+  if (/^(?:base|enemy|player|user|target|opponent|battle|raid)[_-]?\d*$/i.test(candidate)) return true;
+  return false;
+}
+
 function isPassiveChat(text) {
   if (!text) return true;
   const greetings = ['hi', 'hello', 'hey', 'yo', 'sup', 'gm', 'gn', 'привіт', 'привет', 'вітаю', 'здравствуй', 'здравствуйте', 'hola', 'bonjour', 'salut', 'hallo', 'ciao', 'ola', 'oi', 'hej', 'hei', 'مرحبا', 'سلام', '你好', '您好', 'こんにちは', 'こんばんは', '안녕', 'xin chao'];
@@ -105,9 +134,46 @@ function extractAttackTargetName(message) {
   return '';
 }
 
+function extractAttackTargetNameV2(message) {
+  const raw = String(message || '').normalize('NFKC').trim();
+  if (!raw) return '';
+  const patterns = [
+    /\b(?:attack|raid|hit|battle)\s+(?:(?:the|a|an)\s+)?(?:player|user|enemy|opponent)\s+(?:named|called\s+)?@?([\p{L}\p{N}_.-]{2,60})\b/iu,
+    /\b(?:attack|raid|hit|battle)\s+@?([\p{L}\p{N}_.-]{2,60})\b/iu,
+    /(?:атакуй|атакувати|атаковать|атака\s+на|напади\s+на|напасть\s+на|нападай\s+на|ударь\s+по|ударь)\s+(?:(?:гравця|игрока|ворога|врага)\s+)?@?([\p{L}\p{N}_.-]{2,60})/iu,
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const candidate = cleanupAttackTargetName(match?.[1] || '');
+    if (candidate && !isGenericAttackTargetName(candidate)) return candidate;
+  }
+  return '';
+}
+
+function isAttackIntentText(text) {
+  return /(атак|напад|raid|battle|enemy|ворог|враг|бій|бой|进攻|攻击|打仗|敵|敌|danh|attack)/i.test(text);
+}
+
+function battleIntentForTarget(targetPlayerName = '') {
+  return {
+    kind: targetPlayerName ? 'targeted_battle' : 'battle',
+    action_required: true,
+    goal: targetPlayerName
+      ? `Start an AI online battle against ${targetPlayerName} only through MCP tools.`
+      : 'Start an AI online battle only through MCP tools.',
+    target_player_name: targetPlayerName || undefined,
+    required_loop: targetPlayerName
+      ? `get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ target_player_name: "${targetPlayerName}", auto_tactics: true }) -> if shielded, report remaining shield hours in English; otherwise summarize result and losses`
+      : 'get_base_state -> ensure at least 3 loaded troops by reinforcing/loading if needed -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
+  };
+}
+
 function classifyGameIntent(message) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
+  if (isAttackIntentText(text)) {
+    return battleIntentForTarget(extractAttackTargetNameV2(message));
+  }
   if (/(атак|атакуй|напад|напади|raid|battle|enemy|ворог|враг|бій|бой|进攻|攻击|打仗|敵|敌|đánh|attack)/i.test(text)) {
     const targetPlayerName = extractAttackTargetName(message);
     return {
@@ -190,7 +256,7 @@ function buildIntentInstructions(intent) {
       'This is a real game-action request. Do not answer with only advice.',
       'Use Clash MCP tools before the final answer. Never claim an action happened unless the tool result confirms it.',
       `Required loop: ${intent.required_loop}`,
-      'If a tool blocks the action, stop and report the exact blocker in player-facing language.'
+      'If a tool blocks the action, stop and report the exact blocker in clear English. Do not translate blocker/error messages.'
     );
   }
   return lines.join('\n');
@@ -198,6 +264,17 @@ function buildIntentInstructions(intent) {
 
 function tryStaticReply(message) {
   const intent = classifyGameIntent(message);
+  if (intent.kind === 'skills') {
+    return {
+      ok: true,
+      model: 'static-router',
+      fallback: false,
+      fallback_index: 0,
+      attempted_models: [],
+      output_text: 'I can inspect your base, collect resources, build and upgrade buildings, manage ships and troops, reinforce battle losses, and launch AI online battles.',
+      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
+    };
+  }
   if (intent.kind === 'skills') {
     return {
       ok: true,

@@ -1,41 +1,20 @@
-// Step 4 — Risk picker. Three cards (Safe / Balanced / Aggressive) instead
-// of raw "1x / 2x / 5x / 10x" so beginners pick by FEEL not by number.
-// Within each card a tiny slider lets advanced-curious users dial precise
-// leverage if they want.
+// Step 4 — Risk picker. One continuous slider from 1× to maxLeverage.
+// The risk *label* (Safe / Balanced / Aggressive) updates live above
+// the slider as the player drags, so they still pick by feel without
+// needing to make a separate "which tier?" choice up-front.
 
-import { memo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 // eslint-disable-next-line no-unused-vars -- used as JSX namespace (`motion.button`), false positive
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { colors, shared } from './styles';
 
-const TIERS = [
-  {
-    id: 'safe',
-    label: 'SAFE',
-    icon: '🛡️',
-    range: [1, 3],
-    default: 2,
-    color: colors.safe,
-    desc: 'Slow and steady. Big price moves needed before liquidation.',
-  },
-  {
-    id: 'balanced',
-    label: 'BALANCED',
-    icon: '⚖️',
-    range: [4, 7],
-    default: 5,
-    color: colors.balanced,
-    desc: 'Middle ground. Decent reward for moderate risk.',
-  },
-  {
-    id: 'aggressive',
-    label: 'AGGRESSIVE',
-    icon: '🔥',
-    range: [8, 20],
-    default: 10,
-    color: colors.aggressive,
-    desc: 'High reward, high risk. Small price drops can wipe you out.',
-  },
+// Risk tiers used purely for the live label + accent color. Ranges
+// stay the same as the previous 3-card picker so the existing copy
+// keeps reading correctly.
+const TIER_BANDS = [
+  { id: 'safe',       label: 'SAFE',       icon: '🛡️', color: colors.safe,       max: 3,   blurb: 'Slow and steady. Big price moves needed before liquidation.' },
+  { id: 'balanced',   label: 'BALANCED',   icon: '⚖️',  color: colors.balanced,   max: 7,   blurb: 'Middle ground. Decent reward for moderate risk.' },
+  { id: 'aggressive', label: 'AGGRESSIVE', icon: '🔥', color: colors.aggressive, max: 9999, blurb: 'High reward, high risk. Small price drops can wipe you out.' },
 ];
 
 function tierForLev(lev) {
@@ -44,23 +23,22 @@ function tierForLev(lev) {
   return 'aggressive';
 }
 
+function bandFor(lev) {
+  return TIER_BANDS.find((b) => lev <= b.max) || TIER_BANDS[TIER_BANDS.length - 1];
+}
+
 function fmtUsd(n) {
   const v = Math.max(0, Number(n) || 0);
   return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
 }
 
 function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBack }) {
-  const [tierId, setTierId] = useState('safe');
-  const [lev, setLev] = useState(2);
+  // Sensible starting point: middle of the available range, rounded to
+  // a whole number. Picks "5×" on a 20× venue, "3×" on a 10× venue.
+  const initialLev = Math.max(1, Math.round(maxLeverage / 4));
+  const [lev, setLev] = useState(initialLev);
 
-  // Selecting a tier snaps leverage to that tier's default. Doing this in
-  // a click handler instead of an effect avoids an unnecessary re-render
-  // and the React-rules-of-hooks "set-state-in-effect" warning.
-  const pickTier = (t) => {
-    setTierId(t.id);
-    setLev(Math.min(maxLeverage, t.default));
-  };
-
+  const band = bandFor(lev);
   const positionSize = amount * lev;
   // Liquidation rough estimate — for an isolated position, you blow up when
   // your loss equals your collateral, i.e. price moves -1/leverage on a
@@ -68,79 +46,80 @@ function BasicLeveragePicker({ amount, direction, maxLeverage = 20, onPick, onBa
   // contract-accurate value.)
   const liqMovePct = 100 / lev;
   const directionColor = direction === 'long' ? colors.long : colors.short;
-  const tier = TIERS.find(x => x.id === tierId);
+
+  // Painted slider fill — same hue as the active tier so the bar visually
+  // shifts color from green → yellow → red as the player drags right.
+  const pct = useMemo(() => {
+    const min = 1;
+    return Math.max(0, Math.min(100, ((lev - min) / Math.max(1, maxLeverage - min)) * 100));
+  }, [lev, maxLeverage]);
+  const sliderBg = `linear-gradient(90deg, ${band.color} 0%, ${band.color} ${pct}%, ${colors.border} ${pct}%, ${colors.border} 100%)`;
 
   return (
     // Centre everything as one block — same pattern as the other steps.
     <div style={{ ...shared.page, justifyContent: 'center' }}>
       <h2 style={S.tightTitle}>Risk multiplier</h2>
 
-      <div style={S.tierRow}>
-        {TIERS.map((t, i) => {
-          const active = t.id === tierId;
-          return (
-            <motion.button
-              key={t.id}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.06, type: 'spring', stiffness: 280, damping: 22 }}
-              whileTap={{ scale: 0.96 }}
-              onClick={() => pickTier(t)}
-              style={{
-                ...S.tierCard,
-                ...(active
-                  ? { borderColor: t.color, boxShadow: `0 4px 0 ${t.color}, 0 8px 20px rgba(0,0,0,0.18)`, opacity: 1 }
-                  : { opacity: 0.55 }),
-              }}
-            >
-              <div style={S.tierIcon}>{t.icon}</div>
-              <div style={{ ...S.tierLabel, color: t.color }}>{t.label}</div>
-              <div style={S.tierRange}>{t.range[0]}–{t.range[1]}×</div>
-            </motion.button>
-          );
-        })}
+      {/* Live risk-tier banner — replaces the 3-card picker. Icon +
+          label + blurb all swap as the slider crosses tier thresholds,
+          so the player keeps the "pick by feel" affordance without a
+          separate up-front choice. */}
+      <motion.div
+        key={band.id}
+        initial={{ opacity: 0, y: 4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.18 }}
+        style={{
+          ...S.banner,
+          borderColor: band.color,
+          boxShadow: `0 4px 0 ${band.color}, 0 8px 16px rgba(0,0,0,0.15)`,
+        }}
+      >
+        <div style={S.bannerLeft}>
+          <span style={S.bannerIcon}>{band.icon}</span>
+          <span style={{ ...S.bannerLabel, color: band.color }}>{band.label}</span>
+        </div>
+        <span style={{ ...S.bannerValue, color: band.color }}>
+          {lev.toFixed(lev < 10 ? 1 : 0)}×
+        </span>
+      </motion.div>
+
+      <p style={S.bannerBlurb}>{band.blurb}</p>
+
+      <div style={S.sliderCard}>
+        <input
+          type="range"
+          min={1}
+          max={maxLeverage}
+          step={lev < 10 ? 0.5 : 1}
+          value={lev}
+          onChange={(e) => setLev(Number(e.target.value))}
+          style={{
+            ...S.fineSlider,
+            background: sliderBg,
+            accentColor: band.color,
+          }}
+          aria-label="Risk multiplier"
+        />
+        <div style={S.scaleRow}>
+          <span>1×</span>
+          <span style={{ color: colors.balanced }}>·</span>
+          <span style={{ color: colors.aggressive }}>{maxLeverage}×</span>
+        </div>
+
+        <div style={S.statsRow}>
+          <div style={S.stat}>
+            <div style={S.statLabel}>Position size</div>
+            <div style={S.statValue}>${fmtUsd(positionSize)}</div>
+          </div>
+          <div style={S.stat}>
+            <div style={S.statLabel}>Liquidates at</div>
+            <div style={{ ...S.statValue, color: colors.short }}>
+              {direction === 'long' ? '−' : '+'}{liqMovePct.toFixed(1)}%
+            </div>
+          </div>
+        </div>
       </div>
-
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={tierId}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.15 }}
-          style={S.detailCard}
-        >
-          {/* Compact: multiplier + value in one row, slider, stats inline.
-              Removed the standalone description and the warn box (the
-              tier label + multiplier already convey the risk level). */}
-          <div style={S.fineRow}>
-            <span style={S.fineLabel}>Multiplier</span>
-            <span style={{ ...S.fineValue, color: tier.color }}>{lev.toFixed(lev < 10 ? 1 : 0)}×</span>
-          </div>
-          <input
-            type="range"
-            min={tier.range[0]}
-            max={Math.min(tier.range[1], maxLeverage)}
-            step={lev < 10 ? 0.5 : 1}
-            value={lev}
-            onChange={e => setLev(Number(e.target.value))}
-            style={{ ...S.fineSlider, accentColor: tier.color }}
-          />
-
-          <div style={S.statsRow}>
-            <div style={S.stat}>
-              <div style={S.statLabel}>Position size</div>
-              <div style={S.statValue}>${fmtUsd(positionSize)}</div>
-            </div>
-            <div style={S.stat}>
-              <div style={S.statLabel}>Liquidates at</div>
-              <div style={{ ...S.statValue, color: colors.short }}>
-                {direction === 'long' ? '−' : '+'}{liqMovePct.toFixed(1)}%
-              </div>
-            </div>
-          </div>
-        </motion.div>
-      </AnimatePresence>
 
       <motion.button
         onClick={() => onPick(lev)}
@@ -158,56 +137,71 @@ export default memo(BasicLeveragePicker);
 export { tierForLev };
 
 const S = {
-  // Tight title — replaces the title+subtitle stack to save ~50px of
-  // vertical real estate on cramped panels. Single bold line, no margin.
   tightTitle: {
     fontSize: 'clamp(16px, 3vh, 20px)',
     fontWeight: 900, color: colors.ink,
     textAlign: 'center', letterSpacing: '0.3px',
-    margin: '2px 0 4px', lineHeight: 1.1,
+    margin: '2px 0 6px', lineHeight: 1.1,
   },
-  tierRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6,
-  },
-  tierCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-    padding: '8px 6px',
+
+  // Live risk-tier banner — sits where the 3-card picker used to.
+  // Drop-shadow color follows the active tier so the whole card pulses
+  // with the chosen risk level.
+  banner: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 10, padding: '10px 14px',
     background: 'linear-gradient(180deg, #fdf8e7 0%, #f3ebd1 100%)',
-    borderWidth: 3, borderStyle: 'solid', borderColor: colors.border,
-    borderRadius: 12, cursor: 'pointer',
-    transition: 'opacity 0.2s ease',
-    fontFamily: 'inherit',
-    boxSizing: 'border-box',
+    borderWidth: 3, borderStyle: 'solid', borderRadius: 14,
+    transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
   },
-  tierIcon: { fontSize: 20, lineHeight: 1 },
-  tierLabel: {
-    fontSize: 11, fontWeight: 900, letterSpacing: '0.5px',
+  bannerLeft: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
+  bannerIcon: { fontSize: 22, lineHeight: 1 },
+  bannerLabel: {
+    fontSize: 14, fontWeight: 900, letterSpacing: '0.6px',
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
-  tierRange: {
-    fontSize: 10, fontWeight: 700, color: colors.inkFaint,
+  bannerValue: {
+    fontSize: 'clamp(20px, 4vh, 26px)', fontWeight: 900,
+    fontVariantNumeric: 'tabular-nums',
+    textShadow: '0 1px 0 rgba(255,255,255,0.45)',
   },
-  detailCard: {
-    padding: 10, borderRadius: 12,
+  bannerBlurb: {
+    margin: '2px 4px 4px',
+    fontSize: 12, fontWeight: 700, color: colors.inkFaint,
+    textAlign: 'center', lineHeight: 1.35,
+  },
+
+  // Slider + stats container — kept in one card so the multiplier
+  // control reads as a single object rather than three loose rows.
+  sliderCard: {
+    padding: '12px 12px 10px', borderRadius: 12,
     background: 'rgba(255,255,255,0.5)',
     borderWidth: 2, borderStyle: 'solid', borderColor: colors.border,
-    display: 'flex', flexDirection: 'column', gap: 6,
+    display: 'flex', flexDirection: 'column', gap: 8,
     boxSizing: 'border-box',
   },
-  fineRow: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-  },
-  fineLabel: { fontSize: 11, fontWeight: 800, color: colors.inkFaint, letterSpacing: '0.3px' },
-  fineValue: {
-    fontSize: 'clamp(18px, 3.5vh, 22px)', fontWeight: 900,
-    fontVariantNumeric: 'tabular-nums',
-  },
+  // Thicker bar than the previous tier sub-slider so it reads as the
+  // primary control of the step. Background gradient is set inline
+  // (painted fill that tracks the current value).
   fineSlider: {
-    width: '100%', height: 6, borderRadius: 3,
+    width: '100%', height: 10,
+    borderRadius: 6,
     cursor: 'pointer',
-    margin: '0 0 2px',
+    margin: 0,
+    appearance: 'none',
+    WebkitAppearance: 'none',
+    outline: 'none',
   },
+  scaleRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    fontSize: 10, fontWeight: 800, color: colors.inkFaint,
+    letterSpacing: '0.3px',
+    margin: '-2px 2px 0',
+  },
+
   statsRow: {
     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
+    marginTop: 2,
   },
   stat: {
     padding: '6px 8px', borderRadius: 8,

@@ -19,6 +19,7 @@ import {
   createRisexRegisterPayload,
   encodeRisexCancelOrder,
   encodeRisexOrder,
+  forgetRisexSigner,
   getOrCreateRisexSigner,
   isRisexAddress,
   normalizeRisexInviteCode,
@@ -56,10 +57,11 @@ function num(value, fallback = 0) {
 function signerStatusOk(data) {
   if (!data) return false;
   if (data.active === true || data.valid === true || data.enabled === true) return true;
-  const text = String(data.status_text || data.statusText || data.state || data.message || '').toLowerCase();
+  const text = String(data.status_description || data.status_text || data.statusText || data.state || data.message || '').toLowerCase();
+  if (/notexist|not.exist|revoked|expired|unauthori[sz]ed|disabled/.test(text)) return false;
   if (/active|valid|enabled|registered/.test(text)) return true;
   const status = Number(data.status);
-  return Number.isFinite(status) && status > 0;
+  return Number.isFinite(status) && status === 1;
 }
 
 function positionCloseSide(side) {
@@ -85,6 +87,8 @@ export function useRisex() {
     message: 'Connect wallet to check RISE USDC balance',
     chainId: null,
   });
+  const [bridgeSourceBalances, setBridgeSourceBalances] = useState({});
+  const [bridgeSourceBalanceStatus, setBridgeSourceBalanceStatus] = useState({});
   const [depositStatus, setDepositStatus] = useState(null);
   const [bridgeDepositSourceChainId, setBridgeDepositSourceChainId] = useState(
     RISEX_BRIDGE_CHAIN_BY_ID[RISEX_DEFAULT_DEPOSIT_SOURCE_CHAIN_ID]
@@ -266,6 +270,50 @@ export function useRisex() {
     }
   }, [walletAddr, getPublicClient, provider]);
 
+  const readBridgeSourceUsdc = useCallback(async (chainId = bridgeDepositSourceChainId) => {
+    const id = Number(chainId || bridgeDepositSourceChainId || RISEX_DEFAULT_DEPOSIT_SOURCE_CHAIN_ID);
+    const source = RISEX_BRIDGE_CHAIN_BY_ID[id];
+    if (!walletAddr || !source || typeof getPublicClient !== 'function') {
+      return null;
+    }
+    setBridgeSourceBalanceStatus(prev => ({
+      ...prev,
+      [id]: { status: 'checking', message: `Checking ${source.name} USDC balance...` },
+    }));
+    try {
+      let balance = null;
+      if (token) {
+        const data = await fetchJson(`/api/futures/risex/bridge/source-balance?dex=risex&account=${walletAddr}&source_chain_id=${id}`, {
+          headers: authHeaders({ 'Content-Type': undefined }),
+        });
+        balance = Number(data?.balance_usdc ?? data?.balance ?? 0);
+      } else {
+        const publicClient = getPublicClient(id);
+        const raw = await publicClient.readContract({
+          address: source.usdc,
+          abi: RISEX_USDC_ABI,
+          functionName: 'balanceOf',
+          args: [walletAddr],
+        });
+        balance = Number(formatUnits(raw, RISEX_USDC_DECIMALS));
+      }
+      setBridgeSourceBalances(prev => ({ ...prev, [id]: balance }));
+      setBridgeSourceBalanceStatus(prev => ({
+        ...prev,
+        [id]: { status: 'ready', message: null, checkedAt: Date.now() },
+      }));
+      return balance;
+    } catch (e) {
+      const message = risexErrorMessage(e, `Could not read ${source.name} USDC balance`);
+      console.warn('[useRisex] bridge source USDC read failed:', message, { chainId: id, wallet: walletAddr });
+      setBridgeSourceBalanceStatus(prev => ({
+        ...prev,
+        [id]: { status: 'error', message, checkedAt: Date.now() },
+      }));
+      return null;
+    }
+  }, [walletAddr, token, fetchJson, authHeaders, getPublicClient, bridgeDepositSourceChainId]);
+
   const switchToRise = useCallback(async () => {
     if (!walletAddr) return { error: 'Connect your EVM wallet first' };
     if (typeof ensureChain !== 'function') return { error: 'Wallet network switching is not available' };
@@ -293,12 +341,29 @@ export function useRisex() {
   useEffect(() => {
     if (walletAddr) return;
     setWalletUsdc(null);
+    setBridgeSourceBalances({});
+    setBridgeSourceBalanceStatus({});
     setWalletUsdcStatus({
       status: 'idle',
       message: 'Connect wallet to check RISE USDC balance',
       chainId: null,
     });
   }, [walletAddr]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) return undefined;
+    let cancelled = false;
+    (async () => {
+      await Promise.all(RISEX_BRIDGE_CHAINS.map(chain => readBridgeSourceUsdc(chain.id)));
+      if (cancelled) return;
+    })();
+    return () => { cancelled = true; };
+  }, [isActiveDex, walletAddr, readBridgeSourceUsdc]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr) return;
+    readBridgeSourceUsdc(bridgeDepositSourceChainId);
+  }, [isActiveDex, walletAddr, bridgeDepositSourceChainId, readBridgeSourceUsdc]);
 
   const refreshSignerStatus = useCallback(async () => {
     if (!walletAddr || !token) {
@@ -502,6 +567,7 @@ export function useRisex() {
     if (walletMismatch) throw new Error('Connected wallet does not match your registered RISEx wallet');
     const checked = await refreshSignerStatus();
     if (checked.ready) return readRisexSigner(walletAddr);
+    if (readRisexSigner(walletAddr)) forgetRisexSigner(walletAddr);
     const activated = await activate();
     if (activated?.error) throw new Error(activated.error);
     const signer = readRisexSigner(walletAddr);
@@ -510,29 +576,45 @@ export function useRisex() {
   }, [walletAddr, walletMismatch, refreshSignerStatus, activate]);
 
   const placeOrder = useCallback(async (orderParams) => {
-    const signer = await ensureReady();
-    const [domain, nonceState] = await Promise.all([
-      fetchJson('/api/futures/risex/eip712-domain?dex=risex', { headers: authHeaders({ 'Content-Type': undefined }) }),
-      fetchJson(`/api/futures/risex/nonce-state?dex=risex&account=${walletAddr}`, { headers: authHeaders({ 'Content-Type': undefined }) }),
-    ]);
-    const hash = encodeRisexOrder(orderParams);
-    const permit = await createRisexPermit({
-      account: walletAddr,
-      signer,
-      domain,
-      nonceState,
-      hash,
-    });
-    return fetchJson('/api/futures/risex/orders/place?dex=risex', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
+    const submit = async () => {
+      const signer = await ensureReady();
+      const [domain, nonceState] = await Promise.all([
+        fetchJson('/api/futures/risex/eip712-domain?dex=risex', { headers: authHeaders({ 'Content-Type': undefined }) }),
+        fetchJson(`/api/futures/risex/nonce-state?dex=risex&account=${walletAddr}`, { headers: authHeaders({ 'Content-Type': undefined }) }),
+      ]);
+      const hash = encodeRisexOrder(orderParams);
+      const permit = await createRisexPermit({
         account: walletAddr,
-        ...orderParams,
-        permit,
-      }),
-    });
-  }, [ensureReady, fetchJson, authHeaders, walletAddr]);
+        signer,
+        domain,
+        nonceState,
+        hash,
+      });
+      return fetchJson('/api/futures/risex/orders/place?dex=risex', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          account: walletAddr,
+          ...orderParams,
+          permit,
+        }),
+      });
+    };
+    try {
+      return await submit();
+    } catch (e) {
+      if (!/SignerNotAuthorized|InvalidSignature|NotAuthorized|session key|signer/i.test(String(e?.message || e))) {
+        throw e;
+      }
+      console.warn('[useRisex] stale signer rejected by RISEx; clearing and re-registering', e?.message || e);
+      forgetRisexSigner(walletAddr);
+      setSetupVerified(false);
+      setSignerState(null);
+      const activated = await activate();
+      if (activated?.error) throw new Error(activated.error);
+      return submit();
+    }
+  }, [ensureReady, fetchJson, authHeaders, walletAddr, activate]);
 
   const importFills = useCallback(async ({ attempts = CLAIM_LOOKBACK_ATTEMPTS, delayMs = 1500 } = {}) => {
     if (!walletAddr || !token) return null;
@@ -731,7 +813,7 @@ export function useRisex() {
       ]);
       const hash = encodeRisexCancelOrder({
         market_id: Number(market.market_id),
-        order_id: publicOrderId,
+        resting_order_id: restingOrderId,
       });
       const permit = await createRisexPermit({
         account: walletAddr,
@@ -865,7 +947,14 @@ export function useRisex() {
           if (attempt < 4) await delay(2500 + attempt * 1500);
         }
       }
-      if (lastError) throw lastError;
+      if (lastError) {
+        console.warn('[useRisex] bridge process deferred:', lastError?.message || lastError);
+        result = {
+          ok: false,
+          deferred: true,
+          process_error: risexErrorMessage(lastError, 'Bridge process is still indexing'),
+        };
+      }
 
       const jobId = result?.jobId || result?.job_id || result?.id || null;
       setDepositStatus(prev => ({
@@ -877,6 +966,7 @@ export function useRisex() {
         message: jobId ? 'Bridge job is processing' : 'Waiting for RISEx credit',
       }));
       await fetchAccount();
+      await readBridgeSourceUsdc(source.id);
       await fetchBridgeHistory();
       setTimeout(fetchAccount, 10_000);
       setTimeout(fetchAccount, 30_000);
@@ -888,7 +978,9 @@ export function useRisex() {
         sourceChain: source.name,
         txHash,
         jobId,
-        info: `RISEx bridge deposit submitted from ${source.name}. It can take a few minutes before the trading balance updates.`,
+        info: result?.deferred
+          ? `USDC transfer sent from ${source.name}. RISEx credited it after indexing; balance can take a few minutes to refresh.`
+          : `RISEx bridge deposit submitted from ${source.name}. It can take a few minutes before the trading balance updates.`,
       };
     } catch (e) {
       const msg = risexErrorMessage(e, 'RISEx deposit failed');
@@ -911,6 +1003,7 @@ export function useRisex() {
     authHeaders,
     fetchAccount,
     fetchBridgeHistory,
+    readBridgeSourceUsdc,
   ]);
 
   const withdraw = useCallback(async () => {
@@ -933,6 +1026,8 @@ export function useRisex() {
     markets,
     walletUsdc,
     walletUsdcStatus,
+    bridgeSourceBalances,
+    bridgeSourceBalanceStatus,
     depositStatus,
     bridgeDepositSourceChainId,
     setBridgeDepositSourceChainId,

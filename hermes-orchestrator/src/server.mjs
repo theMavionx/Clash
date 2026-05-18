@@ -37,7 +37,10 @@ loadEnvFile(path.join(CWD, '..', '..', '.env'));
 loadEnvFile(path.join(CWD, 'server', '.env'));
 loadEnvFile(path.join(CWD, 'web', '.env'));
 
-const ROOT = path.resolve(process.env.CLASH_HERMES_ROOT || '/srv/clash-hermes');
+const DEFAULT_ROOT = process.platform === 'win32'
+  ? path.resolve(CWD, '..', '.clash-hermes-local')
+  : '/srv/clash-hermes';
+const ROOT = path.resolve(process.env.CLASH_HERMES_ROOT || DEFAULT_ROOT);
 const PLAYERS_DIR = path.resolve(process.env.CLASH_HERMES_PLAYERS_DIR || path.join(ROOT, 'players'));
 const STATE_DIR = path.resolve(process.env.CLASH_HERMES_STATE_DIR || path.join(ROOT, 'state'));
 const STATE_FILE = path.resolve(process.env.CLASH_HERMES_STATE_FILE || path.join(STATE_DIR, 'players.json'));
@@ -176,7 +179,8 @@ const GLOBAL_GAME_MEMORY = [
   '',
   'Common action mapping:',
   '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
-  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, report the shield remaining hours from the tool result.',
+  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, report the shield remaining hours from the tool result in English.',
+  '- Generic requests like "attack a base", "attack new base", "battle again", or "find an enemy" are NOT named attacks. Omit target_player_name and use normal matchmaking.',
   '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
   '- "build my base", "set up base", or "arrange everything" means use auto_build_base with balanced focus. Do not ask the player for grids or a building list.',
   '- "build from shop" for one specific building means use get_building_catalog, find_build_slots, then place_building.',
@@ -187,6 +191,8 @@ const GLOBAL_GAME_MEMORY = [
   '- Cannon shots target defensive towers first: turret and archer_tower. Do not waste cannon shots on Town Hall.',
   '- Rally marker is optional. Use it only if it helps focus troops on a nearby useful objective.',
   '- Named/targeted attacks cost 2x the normal gold attack cost for the attacker Town Hall level.',
+  '- Never pass generic words such as base, enemy, player, again, new, random, or another as target_player_name.',
+  '- Always write Blocked/Error/Need messages in English, even when the user speaks another language.',
   '- Respect the one MCP battle per minute cooldown. Do not spam retries during cooldown.',
   '',
   'Construction rules:',
@@ -206,7 +212,7 @@ function initialPlayerMemory(row) {
     `Player id: ${row.safe_id}`,
     '',
     'Preferences:',
-    '- Use concise player-facing replies in the same language as the user.',
+    '- Use concise player-facing replies in the same language as the user, but keep Blocked/Error/Need messages in English.',
     '- Prefer useful autonomous decisions when the request is clear.',
     '- Keep battle, build, upgrade, and resource actions grounded in fresh MCP tool state.',
     '',
@@ -385,6 +391,14 @@ function playerBaseUrl(row) {
   return `http://127.0.0.1:${row.port}`;
 }
 
+function formatHermesStartError(err) {
+  const code = err?.code ? ` (${err.code})` : '';
+  if (err?.code === 'ENOENT') {
+    return `Hermes runtime was not found: ${HERMES_BIN}. Install Hermes locally or set HERMES_BIN to the Hermes executable.`;
+  }
+  return `Hermes failed to start${code}: ${err?.message || 'unknown error'}`;
+}
+
 async function fetchJson(url, options = {}, timeoutMs = 30_000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -447,6 +461,28 @@ async function ensurePlayerRunning(playerId) {
     },
     stdio: ['ignore', out, err],
   });
+  let startupDone = false;
+  const startupFailure = new Promise((_, reject) => {
+    const fail = async (message) => {
+      if (startupDone) return;
+      startupDone = true;
+      if (processes.get(safeId) === child) processes.delete(safeId);
+      const latest = state.players[safeId];
+      if (latest) {
+        latest.last_error = message;
+        latest.updated_at = nowIso();
+        await saveState().catch(() => {});
+      }
+      reject(new Error(message));
+    };
+    child.once('error', (spawnErr) => {
+      fail(formatHermesStartError(spawnErr));
+    });
+    child.once('exit', (code, signal) => {
+      if (startupDone || code === 0) return;
+      fail(`Hermes exited before becoming ready: code=${code} signal=${signal || ''}`.trim());
+    });
+  });
   processes.set(safeId, child);
   row.last_started_at = nowIso();
   row.last_error = null;
@@ -461,7 +497,13 @@ async function ensurePlayerRunning(playerId) {
       await saveState().catch(() => {});
     }
   });
-  await waitForHermes(row);
+  await Promise.race([
+    waitForHermes(row).then((ready) => {
+      startupDone = true;
+      return ready;
+    }),
+    startupFailure,
+  ]);
   return child;
 }
 
@@ -718,6 +760,7 @@ async function chatWithPlayer(playerId, body) {
         intent.required_loop ? `Required loop: ${intent.required_loop}` : '',
         'You must use Clash MCP tools before the final answer unless a fresh tool result already proves the action is impossible.',
         'After the required tool returns a clear success or blocker, stop using tools and answer immediately in 1-3 short player-facing sentences.',
+        'If the action is blocked or fails, write the Blocked/Error/Need message in English.',
         'Do not do extra catalog/state checks after auto_build_base, collect_resources, or execute_ai_attack_plan returns.',
         'Do not respond with a generic capability list for this request.',
       ].filter(Boolean).join('\n')

@@ -84,6 +84,8 @@ Use `execute_ai_attack_plan` for battles. It finds an enemy, validates the compl
 The MCP server allows one AI battle per player per minute. If the tool returns a cooldown error, wait for the cooldown instead of retrying repeatedly.
 The MCP server requires at least 3 total loaded troops before a battle. `execute_ai_attack_plan` will try to restore template casualties and load the default attack loadout (`Mage`, `Mage`, `Knight`) first, then either launches or returns the exact blocker.
 For a named enemy request such as "attack egor4042007", pass `target_player_name` to `execute_ai_attack_plan`. The MCP server resolves the player by name, checks shields and attackability, then either starts the battle or returns a blocker. If the target is shielded, report the returned shield remaining hours to the player.
+Generic requests such as "attack a base", "attack a new base", "battle again", "find an enemy", or "attack random enemy" are not named attacks. Omit `target_player_name` for those. Never pass generic words such as `base`, `enemy`, `player`, `again`, `new`, `random`, or `another` as `target_player_name`.
+Blocked/error/need messages must be written in English exactly enough for the player to understand the blocker.
 Named/targeted attacks cost 2x the normal gold attack cost for the attacker's current Town Hall level. The tool returns both `normal_attack_cost_gold` and final `attack_cost_gold` when relevant.
 
 Default smart attack:

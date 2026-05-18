@@ -11,7 +11,7 @@ import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
-import { RISEX_BRIDGE_CHAINS, RISEX_BRIDGE_URL } from '../lib/risexConfig';
+import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
@@ -139,8 +139,21 @@ const fmtPrice = (p) => {
 };
 
 function numOrNull(value) {
+  if (value == null || value === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function displayLeverage(value) {
+  const n = numOrNull(value);
+  if (n == null || n <= 0) return null;
+  if (n > 10000) {
+    const scaled = n / 1e18;
+    if (Number.isFinite(scaled) && scaled > 0 && scaled <= 500) {
+      return Math.round(scaled * 10) / 10;
+    }
+  }
+  return Math.round(n * 10) / 10;
 }
 
 function cleanSignedZero(value) {
@@ -161,9 +174,9 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   const providedPnl = numOrNull(pos.pnl_usd);
   const derivedPnl = markP ? (markP - entryP) * amt * (pos.side === 'bid' ? 1 : -1) : 0;
   const pnlVal = cleanSignedZero(providedPnl ?? derivedPnl);
-  const rawLev = numOrNull(pos.leverage);
+  const rawLev = displayLeverage(pos.leverage);
   const setLev = rawLev && rawLev > 0
-    ? Math.round(rawLev * 10) / 10
+    ? rawLev
     : ((margin > 0 && posValueUsd > 0) ? Math.round((posValueUsd / margin) * 10) / 10 : (leverageSettings[pos.symbol] || 1));
   const providedPct = numOrNull(pos.pnl_pct);
   const pnlPct = providedPct ?? (margin > 0
@@ -1121,6 +1134,7 @@ function FuturesPanel() {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
     connected: tradingConnected,
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
+    bridgeSourceBalances, bridgeSourceBalanceStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
     closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp, switchToRise,
     // Avantis-only — undefined on the Pacifica branch.
@@ -2486,6 +2500,48 @@ function FuturesPanel() {
                   <span>HYPERLIQUID</span>
                 </div>
               </>
+            ) : dex === 'risex' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #04DF83 0%, #009C5D 100%)',
+                  border: '4px solid #00B86B',
+                  boxShadow: '0 5px 0 #007A49, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.risex.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your RISE wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  RISEx trades are signed by your EVM wallet on RISE. Add the RISE network if your wallet asks.
+                </div>
+                {renderPrivyEmailButton('#04DF83', '#009C5D')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#04DF83', privyEnabled ? '#6B573E' : '#009C5D'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT RISE WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#007A49', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>RISEX - RISE MAINNET</span>
+                </div>
+              </>
             ) : dex === 'phoenix' ? (
               <>
                 <div style={{
@@ -3685,7 +3741,7 @@ function FuturesPanel() {
                 <span style={S.detail}>Entry: ${fmtPrice(parseFloat(pos.entry_price))}</span>
               </div>
               <div style={S.row}>
-                <span style={S.detail}>Mark: {markP ? `$${markP.toLocaleString()}` : '—'}</span>
+                <span style={S.detail}>Mark: ${fmtPrice(markP)}</span>
                 <span style={{fontSize: 14, fontWeight: 900, color: pnlColor}}>
                   {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
                 </span>
@@ -3898,8 +3954,6 @@ function FuturesPanel() {
       ? (walletUsdcStatus?.message
         || (risexWalletNeedsSwitch ? 'Switch your wallet to RISE to read your RISE USDC balance.' : null))
       : null;
-    const risexShowBridgeLink = dex === 'risex'
-      && (risexWalletNeedsSwitch || risexWalletError || (walletUsdc !== null && walletUsdc <= 0.000001));
     const risexWalletValue = (() => {
       if (dex !== 'risex') return walletUsdc !== null ? `$${walletUsdc.toFixed(2)}` : '$--';
       if (walletUsdc !== null && !risexWalletNeedsSwitch && !risexWalletError) return `$${walletUsdc.toFixed(2)}`;
@@ -3917,6 +3971,19 @@ function FuturesPanel() {
       : RISEX_BRIDGE_CHAINS;
     const risexDepositSource = risexDepositSources.find(chain => Number(chain.id) === Number(bridgeDepositSourceChainId))
       || risexDepositSources[0];
+    const risexSourceBalance = dex === 'risex' && risexDepositSource
+      ? bridgeSourceBalances?.[Number(risexDepositSource.id)]
+      : null;
+    const risexSourceBalanceState = dex === 'risex' && risexDepositSource
+      ? bridgeSourceBalanceStatus?.[Number(risexDepositSource.id)]?.status
+      : null;
+    const risexSourceBalanceText = (() => {
+      if (dex !== 'risex') return '';
+      if (typeof risexSourceBalance === 'number' && Number.isFinite(risexSourceBalance)) return `$${risexSourceBalance.toFixed(2)}`;
+      if (risexSourceBalanceState === 'checking') return 'checking...';
+      if (risexSourceBalanceState === 'error') return 'unavailable';
+      return '$--';
+    })();
     const risexDepositBusy = dex === 'risex'
       && ['preparing', 'switching', 'signing', 'confirming', 'bridging', 'depositing'].includes(String(depositStatus?.status || ''));
     const risexDepositButtonLabel = (() => {
@@ -4011,28 +4078,6 @@ function FuturesPanel() {
             <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: risexWalletNeedsSwitch ? '#B45309' : '#B91C1C', fontWeight: 800}}>
               {risexWalletMessage}
             </div>
-          )}
-          {risexShowBridgeLink && (
-            <a
-              href={RISEX_BRIDGE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                ...S.btnSmall,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginTop: 8,
-                width: '100%',
-                padding: '8px 10px',
-                background: '#16A34A',
-                color: '#fff',
-                border: '2px solid #15803D',
-                textDecoration: 'none',
-              }}
-            >
-              Open RISEx bridge
-            </a>
           )}
         </div>
 
@@ -4233,7 +4278,7 @@ function FuturesPanel() {
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
-                    From {risexDepositSource?.name || 'Arbitrum'} to RISE
+                    {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
                 : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
@@ -4275,6 +4320,10 @@ function FuturesPanel() {
                 if (dex === 'risex') {
                   if (!risexDepositSource) {
                     setLocalAlert('Select a source chain for the RISEx bridge deposit.');
+                    return;
+                  }
+                  if (typeof risexSourceBalance === 'number' && Number.isFinite(risexSourceBalance) && v > risexSourceBalance + 0.000001) {
+                    setLocalAlert(`${risexDepositSource.name} wallet has ${risexSourceBalance.toFixed(2)} USDC`);
                     return;
                   }
                 }

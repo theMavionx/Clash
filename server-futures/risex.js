@@ -2,6 +2,13 @@ const RISEX_API = String(process.env.RISEX_API_URL || 'https://api.rise.trade').
 const RISEX_BRIDGE_API = String(process.env.RISEX_BRIDGE_API_URL || 'https://www.rise.trade/api/bridge').replace(/\/+$/u, '');
 const RISEX_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.RISEX_FILL_LOOKBACK_LIMIT || 100)));
 const RISEX_RISE_CHAIN_ID = 4153;
+const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
+const RISEX_DEFAULT_RPC_URLS = Object.freeze({
+  1: ['https://ethereum-rpc.publicnode.com', 'https://rpc.ankr.com/eth'],
+  8453: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com'],
+  42161: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one-rpc.publicnode.com'],
+  [RISEX_RISE_CHAIN_ID]: ['https://rpc.risechain.com'],
+});
 const RISEX_BRIDGE_CHAINS = Object.freeze({
   1: {
     id: 1,
@@ -42,9 +49,44 @@ function normalizeAddress(addr) {
   return isEvmAddress(s) ? s : null;
 }
 
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function rpcUrlsForChain(chainId) {
+  const id = Number(chainId);
+  const envValue = id === 1
+    ? process.env.RISEX_ETHEREUM_RPC_URLS || process.env.ETHEREUM_RPC_URLS || process.env.ETH_RPC_URLS || process.env.ETHEREUM_RPC_URL || process.env.ETH_RPC_URL
+    : id === 8453
+      ? process.env.RISEX_BASE_RPC_URLS || process.env.BASE_RPC_URLS || process.env.BASE_RPC_URL
+      : id === 42161
+        ? process.env.RISEX_ARBITRUM_RPC_URLS || process.env.ARBITRUM_RPC_URLS || process.env.ARBITRUM_RPC_URL
+        : id === RISEX_RISE_CHAIN_ID
+          ? process.env.RISEX_RISE_RPC_URLS || process.env.RISE_RPC_URLS || process.env.RISE_RPC_URL
+          : '';
+  const fromEnv = splitList(envValue);
+  return fromEnv.length ? fromEnv : (RISEX_DEFAULT_RPC_URLS[id] || []);
+}
+
 function num(value, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function fixed18(value, fallback = 0) {
+  if (value == null || value === '') return fallback;
+  const text = String(value).trim();
+  const n = Number(text);
+  if (!Number.isFinite(n)) return fallback;
+  // RISEx position snapshots currently expose on-chain fixed-18 integers
+  // for size, quote amount, prices, and leverage, while trade history returns
+  // decimal strings. Only scale whole integer-looking values so decimals like
+  // "76639.4" pass through unchanged.
+  if (/^-?\d+$/u.test(text) && Math.abs(n) >= 1e9) return n / 1e18;
+  return n;
 }
 
 function rows(payload, keys = []) {
@@ -139,6 +181,71 @@ function bridgeDappId(sourceChainId) {
   return Number(sourceChainId) === RISEX_RISE_CHAIN_ID ? 0 : 1;
 }
 
+function balanceOfCallData(account) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('account required (0x...)');
+  return `${ERC20_BALANCE_OF_SELECTOR}${clean.slice(2).padStart(64, '0')}`;
+}
+
+async function rpcRequest(url, method, params) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+  if (!res.ok || data?.error) {
+    throw new Error(data?.error?.message || text || `RPC ${method} failed (${res.status})`);
+  }
+  return data?.result;
+}
+
+async function readErc20Balance({ chainId, token, account }) {
+  const cleanToken = normalizeAddress(token);
+  const cleanAccount = normalizeAddress(account);
+  if (!cleanToken) throw new Error('token required (0x...)');
+  if (!cleanAccount) throw new Error('account required (0x...)');
+  const urls = rpcUrlsForChain(chainId);
+  if (!urls.length) throw new Error(`No RPC configured for chain ${chainId}`);
+  const data = balanceOfCallData(cleanAccount);
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const result = await rpcRequest(url, 'eth_call', [{ to: cleanToken, data }, 'latest']);
+      if (!/^0x[0-9a-fA-F]*$/u.test(String(result || ''))) {
+        throw new Error(`Invalid RPC balance response: ${String(result || '').slice(0, 80)}`);
+      }
+      return BigInt(result || '0x0');
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw new Error(lastError?.message || `Failed to read ERC20 balance on chain ${chainId}`);
+}
+
+async function getBridgeSourceUsdcBalance(account, opts = {}) {
+  const clean = normalizeAddress(account);
+  if (!clean) throw new Error('account required (0x...)');
+  const source = bridgeChain(opts.sourceChainId);
+  const raw = await readErc20Balance({
+    chainId: source.id,
+    token: source.usdc,
+    account: clean,
+  });
+  const balance = Number(raw) / 1e6;
+  return {
+    account: clean,
+    source_chain_id: source.id,
+    source_chain: source.name,
+    usdc: source.usdc,
+    balance_raw: raw.toString(),
+    balance_usdc: balance,
+    balance,
+  };
+}
+
 function symbolOf(value) {
   return String(value || '')
     .trim()
@@ -225,7 +332,16 @@ async function registerSigner(body) {
 }
 
 function inviteHasAccess(check, accountInfo) {
+  if (accountInfo?.has_access === true || check?.has_access === true) return true;
+  // RISEx mainnet can return `status: PENDING` for an already-redeemed
+  // account while `/v1/invite/redeem` rejects a second attempt with
+  // "account already exists for this address". For Clash setup that is
+  // enough to continue to signer registration; the downstream RISEx auth
+  // endpoint will still be the source of truth if the account truly cannot
+  // trade yet.
+  if (check?.redeemed === true || accountInfo?.redeemed === true) return true;
   if (accountInfo?.has_access != null) return accountInfo.has_access === true;
+  if (check?.has_access != null) return check.has_access === true;
   const status = String(accountInfo?.status || check?.status || '').toLowerCase();
   return /\b(active|approved|redeemed|access|enabled)\b/u.test(status);
 }
@@ -422,24 +538,34 @@ function normalizePosition(p, byMarket) {
   const marketId = Number(p?.market_id ?? p?.marketId ?? p?.market);
   const market = byMarket.get(marketId);
   const symbol = symbolOf(p?.symbol || p?.market_symbol || market?.symbol);
-  const rawSize = num(p?.size ?? p?.position_size ?? p?.base_size ?? p?.quantity);
+  const rawSize = fixed18(p?.size ?? p?.position_size ?? p?.base_size ?? p?.quantity);
   const amount = Math.abs(rawSize);
   if (!symbol || amount <= 0) return null;
-  const entry = num(p?.entry_price ?? p?.avg_entry_price ?? p?.entryPrice);
-  const mark = num(p?.mark_price ?? p?.markPrice ?? market?.mark, entry);
-  const notional = amount * (mark || entry || 0);
+  const entry = fixed18(p?.entry_price ?? p?.avg_entry_price ?? p?.entryPrice);
+  const mark = fixed18(p?.mark_price ?? p?.markPrice, market?.mark || entry);
+  const quoteAmount = fixed18(p?.quote_amount ?? p?.quoteAmount, 0);
+  const notional = Math.abs(quoteAmount) > 0
+    ? Math.abs(quoteAmount)
+    : amount * (mark || entry || 0);
+  const leverage = fixed18(p?.leverage, 1);
+  const margin = fixed18(p?.margin ?? p?.margin_used, notional / Math.max(1, leverage || 1));
+  const pnlSource = p?.unrealized_pnl ?? p?.unrealizedPnl ?? p?.pnl;
+  const pnl = pnlSource == null || pnlSource === '' ? null : fixed18(pnlSource, 0);
+  const pnlPctSource = p?.roe ?? p?.pnl_pct;
+  const pnlPct = pnlPctSource == null || pnlPctSource === '' ? null : num(pnlPctSource);
+  const liquidation = fixed18(p?.liquidation_price, 0);
   return {
     symbol,
     side: rawSize < 0 ? 'ask' : sideFromValue(p?.side),
     amount: String(amount),
-    size_usd: num(p?.position_value ?? p?.notional ?? notional),
+    size_usd: fixed18(p?.position_value ?? p?.notional, notional),
     entry_price: String(entry),
     mark_price: String(mark),
-    liquidation_price: p?.liquidation_price != null ? String(p.liquidation_price) : null,
-    margin: String(num(p?.margin ?? p?.margin_used ?? (notional / Math.max(1, num(p?.leverage, 1))))),
-    leverage: String(num(p?.leverage, 1)),
-    pnl_usd: String(num(p?.unrealized_pnl ?? p?.unrealizedPnl ?? p?.pnl)),
-    pnl_pct: num(p?.roe ?? p?.pnl_pct),
+    liquidation_price: liquidation > 0 ? String(liquidation) : null,
+    margin: String(margin),
+    leverage: String(leverage),
+    pnl_usd: pnl == null ? null : String(pnl),
+    pnl_pct: pnlPct,
     pair_index: marketId,
     trade_index: null,
     is_isolated: String(p?.margin_mode || '').toLowerCase() === 'isolated',
@@ -632,6 +758,7 @@ module.exports = {
   placeOrder,
   cancelOrder,
   getBridgeDepositAddress,
+  getBridgeSourceUsdcBalance,
   processBridgeDeposit,
   getBridgeStatus,
   getBridgeHistory,

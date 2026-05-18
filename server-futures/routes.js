@@ -1343,6 +1343,16 @@ router.post('/risex/invite/redeem', auth, async (req, res) => {
     }
     res.json(result);
   } catch (e) {
+    if (/account already exists/i.test(String(e?.message || ''))) {
+      const verified = requireRisexOwner(req, res);
+      if (!verified) return;
+      const invite = await risex.getInviteStatus(verified.account).catch(() => null);
+      return res.json({
+        ok: true,
+        already_exists: true,
+        invite,
+      });
+    }
     console.warn('[risex] invite redeem failed:', e.message);
     res.status(400).json({ error: e.message || 'Failed to redeem RISEx invite code' });
   }
@@ -1389,7 +1399,13 @@ router.post('/risex/orders/place', auth, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.warn('[risex] place order failed:', e.message);
-    res.status(400).json({ error: e.message || 'Failed to place RISEx order' });
+    const message = e.message || 'Failed to place RISEx order';
+    const signerRejected = /SignerNotAuthorized|InvalidSignature|NotAuthorized|session key|signer/i.test(message);
+    res.status(400).json({
+      error: message,
+      code: signerRejected ? 'RISEX_SIGNER_NOT_AUTHORIZED' : 'RISEX_ORDER_REJECTED',
+      retryable_setup: signerRejected,
+    });
   }
 });
 
@@ -1397,7 +1413,7 @@ router.post('/risex/orders/cancel', auth, async (req, res) => {
   try {
     const verified = requireRisexOwner(req, res);
     if (!verified) return;
-    const { account: _account, resting_order_id: _restingOrderId, ...payload } = req.body || {};
+    const { account: _account, ...payload } = req.body || {};
     const result = await risex.cancelOrder(payload);
     res.json(result);
   } catch (e) {
@@ -1417,6 +1433,18 @@ router.post('/risex/deposit', auth, async (req, res) => {
   } catch (e) {
     console.warn('[risex] deprecated deposit route failed:', e.message);
     res.status(502).json({ error: 'Failed to handle RISEx deposit request', detail: e.message });
+  }
+});
+
+router.get('/risex/bridge/source-balance', auth, async (req, res) => {
+  try {
+    const verified = requireRisexOwner(req, res);
+    if (!verified) return;
+    const sourceChainId = req.query?.source_chain_id || req.query?.sourceChainId;
+    res.json(await risex.getBridgeSourceUsdcBalance(verified.account, { sourceChainId }));
+  } catch (e) {
+    console.warn('[risex] bridge source balance failed:', e.message);
+    res.status(502).json({ error: 'Failed to read RISEx bridge source USDC balance', detail: e.message });
   }
 });
 
@@ -1461,8 +1489,18 @@ router.post('/risex/bridge/process', auth, async (req, res) => {
       txHash,
     }));
   } catch (e) {
+    const message = e.message || 'Failed to process RISEx bridge deposit';
+    if (/\/process 404|Bridge API error:\s*404|POST \/process 404|404:\s*Bridge API error/i.test(message)) {
+      console.warn('[risex] bridge process deferred:', message);
+      return res.status(202).json({
+        ok: false,
+        deferred: true,
+        status: 'pending_index',
+        detail: message,
+      });
+    }
     console.warn('[risex] bridge process failed:', e.message);
-    res.status(502).json({ error: 'Failed to process RISEx bridge deposit', detail: e.message });
+    res.status(502).json({ error: 'Failed to process RISEx bridge deposit', detail: message });
   }
 });
 

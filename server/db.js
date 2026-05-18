@@ -82,6 +82,13 @@ try { db.exec(`ALTER TABLE players ADD COLUMN futures_mode TEXT`); } catch {}
 // so the WS clients map stayed empty and admin always showed everyone
 // offline.
 try { db.exec(`ALTER TABLE players ADD COLUMN last_seen_at TEXT`); } catch {}
+// Seeker/Saga device capability. The browser can only persist the Solana
+// Mobile signal and optional .skr handle; a cryptographic SGT ownership check
+// can be layered on later if tournaments need hard anti-spoofing.
+try { db.exec(`ALTER TABLE players ADD COLUMN is_seeker INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN seeker_id TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN seeker_source TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN seeker_detected_at TEXT`); } catch {}
 
 // Marketplace indexer state. The indexer reads V3 marketplace events
 // (Listed / Cancelled / Sold) from Base and writes them into the two tables
@@ -430,6 +437,7 @@ try {
       prize_currency TEXT NOT NULL DEFAULT 'USD',
       prize_tiers    TEXT NOT NULL DEFAULT '[]',
       rewards_in_cop INTEGER NOT NULL DEFAULT 0,
+      seeker_only  INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -468,6 +476,7 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
   try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
   try {
@@ -485,7 +494,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("points_trophy_weight") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("points_trophy_weight") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -516,6 +525,7 @@ try {
             prize_currency TEXT NOT NULL DEFAULT 'USD',
             prize_tiers    TEXT NOT NULL DEFAULT '[]',
             rewards_in_cop INTEGER NOT NULL DEFAULT 0,
+            seeker_only  INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
             preregistration_enabled INTEGER NOT NULL DEFAULT 0,
@@ -525,7 +535,7 @@ try {
           INSERT INTO tournaments_new (
             id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
-            prize_currency, prize_tiers, rewards_in_cop, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            prize_currency, prize_tiers, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
@@ -551,6 +561,7 @@ try {
             COALESCE(prize_currency, 'USD'),
             COALESCE(prize_tiers, '[]'),
             COALESCE(rewards_in_cop, 0),
+            COALESCE(seeker_only, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
             created_at,
             COALESCE(preregistration_enabled, 0),
@@ -582,6 +593,7 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_mode TEXT NOT NULL 
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_splits TEXT NOT NULL DEFAULT '[]'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN attack_match_policy TEXT NOT NULL DEFAULT 'all'`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
 try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
 try {
@@ -728,6 +740,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_players_wallet ON players(wallet) WHERE wallet IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_players_dex ON players(dex) WHERE dex IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_players_last_seen ON players(last_seen_at) WHERE last_seen_at IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_players_seeker ON players(is_seeker) WHERE is_seeker = 1;
     CREATE INDEX IF NOT EXISTS idx_battle_sessions_defender_active ON battle_sessions(defender_id, status, reserved_until);
     CREATE INDEX IF NOT EXISTS idx_battle_sessions_attacker_active ON battle_sessions(attacker_id, status, reserved_until);
   `);
@@ -814,6 +827,14 @@ const stmts = {
   // The TEXT column stores ISO-ish "YYYY-MM-DD HH:MM:SS" so SQLite's
   // datetime() comparisons work directly.
   bumpPlayerLastSeen: db.prepare(`UPDATE players SET last_seen_at = datetime('now') WHERE id = ?`),
+  markPlayerSeeker: db.prepare(`
+    UPDATE players
+    SET is_seeker = 1,
+        seeker_id = COALESCE(NULLIF(?, ''), seeker_id),
+        seeker_source = COALESCE(NULLIF(?, ''), seeker_source, 'client'),
+        seeker_detected_at = datetime('now')
+    WHERE id = ?
+  `),
   insertAiAgentKey: db.prepare(`
     INSERT INTO ai_agent_keys (id, player_id, name, key_hash, key_prefix, key_suffix, scopes)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1075,7 +1096,7 @@ const stmts = {
   // means the participant is still active (didn't soft-leave).
   // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, p.team_dex, t.gold_boost, t.trophy_boost,
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex, t.gold_boost, t.trophy_boost,
            COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
            t.shield_hours, t.start_at, t.end_at, p.joined_at
     FROM tournament_participants p
@@ -1089,13 +1110,14 @@ const stmts = {
         OR t.dex = pl.dex
         OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || pl.dex || '"') > 0
       )
+      AND (COALESCE(t.seeker_only, 0) = 0 OR COALESCE(pl.is_seeker, 0) = 1)
       AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     ORDER BY t.id DESC
     LIMIT 1
   `),
   getActiveTournamentAttackPolicyForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.name, t.dex, t.dex_scope, t.eligible_dexes, t.mode,
+    SELECT t.id AS tournament_id, t.name, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only,
            COALESCE(t.attack_match_policy, 'all') AS attack_match_policy,
            p.team_dex, pl.dex AS player_dex
     FROM tournament_participants p
@@ -1111,6 +1133,7 @@ const stmts = {
         OR t.dex = pl.dex
         OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || pl.dex || '"') > 0
       )
+      AND (COALESCE(t.seeker_only, 0) = 0 OR COALESCE(pl.is_seeker, 0) = 1)
       AND (t.end_at IS NULL OR replace(replace(t.end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND replace(replace(t.start_at, 'T', ' '), ' UTC', '') <= datetime('now')
     ORDER BY t.id DESC

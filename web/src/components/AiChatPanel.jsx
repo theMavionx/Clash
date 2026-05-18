@@ -16,6 +16,7 @@ import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem
 
 const CHAT_HISTORY_LIMIT = 40;
 const CONTEXT_MESSAGE_LIMIT = 4;
+const PENDING_REQUEST_TTL_MS = 10 * 60 * 1000;
 const INITIAL_MESSAGES = [
   { role: 'assistant', text: 'Ready when you are.' },
 ];
@@ -237,11 +238,60 @@ const HERMES_CHAT_CSS = `
 function formatQuotaLine(quota) {
   if (!quota) return 'Loading message balance...';
   const credits = Math.max(0, Number(quota.credits || 0));
-  const creditText = credits > 0 ? ` • ${credits} credits` : '';
+  const total = Math.max(0, Number(quota.available_messages || 0));
   if (quota.lifetime_daily_limit > 0) {
-    return `${quota.subscription_available}/${quota.lifetime_daily_limit} Pro today${creditText}`;
+    return `${total} available | Pro ${quota.subscription_available}/${quota.lifetime_daily_limit} today | Paid ${credits}`;
   }
-  return `${quota.free_available}/${quota.free_daily_limit} free today${creditText}`;
+  return `${total} available | Free ${quota.free_available}/${quota.free_daily_limit} today | Paid ${credits}`;
+}
+
+function quotaSummaryRows(quota) {
+  if (!quota) {
+    return [
+      { label: 'Free today', value: '...' },
+      { label: 'Paid messages', value: '...' },
+      { label: 'Used today', value: '...' },
+    ];
+  }
+  const credits = Math.max(0, Number(quota.credits || 0));
+  const total = Math.max(0, Number(quota.available_messages || 0));
+  const used = Math.max(0, Number(quota.total_used_today || 0));
+  if (quota.lifetime_daily_limit > 0) {
+    return [
+      { label: 'Pro today', value: `${quota.subscription_available}/${quota.lifetime_daily_limit}` },
+      { label: 'Paid messages', value: String(credits) },
+      { label: 'Used today', value: String(used) },
+      { label: 'Total available', value: String(total), strong: true },
+    ];
+  }
+  return [
+    { label: 'Free today', value: `${quota.free_available}/${quota.free_daily_limit}` },
+    { label: 'Paid messages', value: String(credits) },
+    { label: 'Used today', value: String(used) },
+    { label: 'Total available', value: String(total), strong: true },
+  ];
+}
+
+function AiQuotaSummary({ quota, compact = false }) {
+  const rows = quotaSummaryRows(quota);
+  return (
+    <div style={{ ...styles.quotaSummary, ...(compact ? styles.quotaSummaryCompact : null) }}>
+      <div style={styles.quotaSummaryHeader}>
+        <span style={styles.quotaSummaryTitle}>AI message balance</span>
+        <span style={styles.quotaSummaryTotal}>
+          {quota ? `${Math.max(0, Number(quota.available_messages || 0))} left` : 'Loading'}
+        </span>
+      </div>
+      <div style={styles.quotaStats}>
+        {rows.map((row) => (
+          <div key={row.label} style={{ ...styles.quotaStat, ...(row.strong ? styles.quotaStatStrong : null) }}>
+            <span style={styles.quotaStatLabel}>{row.label}</span>
+            <span style={styles.quotaStatValue}>{row.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function getChatStorageKey(player, token) {
@@ -252,10 +302,18 @@ function getChatStorageKey(player, token) {
 function normalizeMessages(value) {
   if (!Array.isArray(value)) return INITIAL_MESSAGES;
   const rows = value
-    .map((item) => ({
-      role: item?.role === 'user' ? 'user' : 'assistant',
-      text: typeof item?.text === 'string' ? item.text.slice(0, 4000) : '',
-    }))
+    .map((item) => {
+      const traceId = typeof item?.traceId === 'string'
+        ? item.traceId
+        : typeof item?.trace_id === 'string'
+          ? item.trace_id
+          : '';
+      return {
+        role: item?.role === 'user' ? 'user' : 'assistant',
+        text: typeof item?.text === 'string' ? item.text.slice(0, 4000) : '',
+        ...(traceId ? { traceId: traceId.slice(0, 120) } : {}),
+      };
+    })
     .filter((item) => item.text.trim())
     .slice(-CHAT_HISTORY_LIMIT);
   return rows.length ? rows : INITIAL_MESSAGES;
@@ -278,6 +336,69 @@ function saveChatMessages(storageKey, rows) {
   } catch {
     // Storage can be unavailable in private mode; chat should still work.
   }
+}
+
+function pendingStorageKey(storageKey) {
+  return `${storageKey}:pending`;
+}
+
+function loadPendingRequests(storageKey) {
+  if (typeof window === 'undefined') return [];
+  try {
+    const now = Date.now();
+    const raw = window.localStorage.getItem(pendingStorageKey(storageKey));
+    const rows = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((item) => ({
+        traceId: typeof item?.traceId === 'string' ? item.traceId.slice(0, 120) : '',
+        message: typeof item?.message === 'string' ? item.message.slice(0, 1000) : '',
+        startedAt: Number(item?.startedAt || 0),
+      }))
+      .filter((item) => item.traceId && item.startedAt && now - item.startedAt < PENDING_REQUEST_TTL_MS);
+  } catch {
+    return [];
+  }
+}
+
+function savePendingRequests(storageKey, rows) {
+  if (typeof window === 'undefined') return;
+  try {
+    const next = rows.filter((item) => item?.traceId).slice(-8);
+    if (next.length) window.localStorage.setItem(pendingStorageKey(storageKey), JSON.stringify(next));
+    else window.localStorage.removeItem(pendingStorageKey(storageKey));
+  } catch {
+    // Ignore storage failures; the live request can still finish.
+  }
+}
+
+function addPendingRequest(storageKey, request) {
+  const rows = loadPendingRequests(storageKey).filter((item) => item.traceId !== request.traceId);
+  rows.push(request);
+  savePendingRequests(storageKey, rows);
+}
+
+function removePendingRequest(storageKey, traceId) {
+  savePendingRequests(storageKey, loadPendingRequests(storageKey).filter((item) => item.traceId !== traceId));
+}
+
+function appendStoredChatMessage(storageKey, row) {
+  const rows = loadChatMessages(storageKey);
+  const traceId = row?.traceId || '';
+  const role = row?.role === 'user' ? 'user' : 'assistant';
+  if (traceId && rows.some((item) => item.traceId === traceId && item.role === role)) {
+    return rows;
+  }
+  const next = normalizeMessages([...rows, row]);
+  saveChatMessages(storageKey, next);
+  return next;
+}
+
+function aiErrorMessage(err, fallback = 'AI request failed') {
+  const raw = String(err?.message || fallback).trim();
+  if (!raw) return fallback;
+  if (err?.name === 'AbortError') return 'AI request is still running. Reopen the chat in a moment to see the result.';
+  return raw;
 }
 
 function buildContextHistory(rows) {
@@ -426,6 +547,7 @@ function AiChatPanel({ onClose }) {
   const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const storageKey = useMemo(() => getChatStorageKey(player, token), [player, token]);
   const skipNextPersist = useRef(true);
+  const mountedRef = useRef(true);
   const [messages, setMessages] = useState(() => loadChatMessages(storageKey));
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
@@ -452,6 +574,10 @@ function AiChatPanel({ onClose }) {
   const topUpTimers = useRef([]);
   const [localEvmWalletState, setLocalEvmWalletState] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   // Heuristic step pacing: real wallet/network/server timing varies wildly,
   // so we advance the rail on a soft timer that matches typical EVM/Sol
@@ -627,6 +753,50 @@ function AiChatPanel({ onClose }) {
   }, [storageKey]);
 
   useEffect(() => {
+    if (!token) return undefined;
+    let cancelled = false;
+    const pending = loadPendingRequests(storageKey);
+    if (!pending.length) return undefined;
+
+    setStatus('sending');
+    setProgressText('Finishing the previous game action...');
+
+    const recover = async () => {
+      for (const item of pending) {
+        try {
+          const data = await waitForAiChatStoredResult(item.traceId, token, {
+            initialDelayMs: 0,
+            intervalMs: 2500,
+            timeoutMs: 105000,
+          });
+          if (cancelled || !data) continue;
+          if (data?.quota) setQuota(data.quota);
+          const isBlocked = data?.status === 'quota_blocked' || data?.ok === false;
+          const text = isBlocked
+            ? (data?.error || 'AI request failed')
+            : (data?.message || 'Done.');
+          appendStoredChatMessage(storageKey, {
+            role: 'assistant',
+            text,
+            traceId: `${item.traceId}:assistant`,
+          });
+          removePendingRequest(storageKey, item.traceId);
+        } catch (err) {
+          if (!cancelled) setError(aiErrorMessage(err, 'AI request is still running. Reopen the chat in a moment to see the result.'));
+        }
+      }
+      if (!cancelled) {
+        setMessages(loadChatMessages(storageKey));
+        setStatus('idle');
+        setProgressText('');
+      }
+    };
+
+    recover();
+    return () => { cancelled = true; };
+  }, [storageKey, token]);
+
+  useEffect(() => {
     if (skipNextPersist.current) {
       skipNextPersist.current = false;
       return;
@@ -731,17 +901,24 @@ function AiChatPanel({ onClose }) {
     setError('');
     setStatus('sending');
     setProgressText('Reading your request...');
-    setMessages((rows) => [...rows, { role: 'user', text }]);
     const history = buildContextHistory(messages);
     const traceId = makeAiChatTraceId();
     const idempotencyKey = traceId;
-    const requestController = new AbortController();
-    const timeoutId = setTimeout(() => requestController.abort(), 110000);
+    appendStoredChatMessage(storageKey, {
+      role: 'user',
+      text,
+      traceId: `${traceId}:user`,
+    });
+    addPendingRequest(storageKey, {
+      traceId,
+      message: text,
+      startedAt: Date.now(),
+    });
+    setMessages(loadChatMessages(storageKey));
     try {
       const requestResult = fetch('/api/ai-chat/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-token': token },
-        signal: requestController.signal,
         body: JSON.stringify({
           message: text,
           history,
@@ -789,32 +966,47 @@ function AiChatPanel({ onClose }) {
         throw new Error(data?.error || 'AI request failed');
       }
       if (data?.ok === false) throw new Error(data?.error || 'AI request failed');
-      setMessages((rows) => [...rows, {
+      appendStoredChatMessage(storageKey, {
         role: 'assistant',
         text: data?.message || 'Done.',
-      }]);
+        traceId: `${traceId}:assistant`,
+      });
+      removePendingRequest(storageKey, traceId);
+      if (mountedRef.current) setMessages(loadChatMessages(storageKey));
     } catch (err) {
       if (err?.data?.quota) setQuota(err.data.quota);
       if (err?.status === 402) setShopOpen(true);
       const recovered = await fetchAiChatStoredResult(traceId, token).catch(() => null);
       if (recovered?.quota) setQuota(recovered.quota);
       if (recovered && recovered.status !== 'quota_blocked' && recovered.ok !== false) {
-        setMessages((rows) => [...rows, {
+        appendStoredChatMessage(storageKey, {
           role: 'assistant',
           text: recovered.message || 'Done.',
-        }]);
+          traceId: `${traceId}:assistant`,
+        });
+        removePendingRequest(storageKey, traceId);
+        if (mountedRef.current) setMessages(loadChatMessages(storageKey));
         return;
       }
       if (recovered?.status === 'quota_blocked') setShopOpen(true);
-      const msg = err?.message || 'AI request failed';
-      setError(msg);
-      setMessages((rows) => [...rows, { role: 'assistant', text: msg }]);
+      const msg = aiErrorMessage(err);
+      if (recovered || (err?.status && err.status < 500)) {
+        appendStoredChatMessage(storageKey, {
+          role: 'assistant',
+          text: msg,
+          traceId: `${traceId}:assistant`,
+        });
+        removePendingRequest(storageKey, traceId);
+        if (mountedRef.current) setMessages(loadChatMessages(storageKey));
+      }
+      if (mountedRef.current) setError(msg);
     } finally {
-      clearTimeout(timeoutId);
-      requestController.abort();
-      setStatus('idle');
+      if (mountedRef.current) {
+        setStatus('idle');
+        setProgressText('');
+      }
     }
-  }, [input, messages, status, token]);
+  }, [input, messages, status, storageKey, token]);
 
   const onKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1081,6 +1273,8 @@ function AiChatPanel({ onClose }) {
             </button>
           </div>
         )}
+
+        <AiQuotaSummary quota={quota} />
 
         <div ref={listRef} className="shop-scroll" style={styles.messages}>
           {/* Empty state: when the only thing in the thread is the seed
@@ -1484,6 +1678,8 @@ function AiShopModal({
         </header>
 
         <div className="shop-scroll" style={styles.shopBody}>
+          <AiQuotaSummary quota={quota} compact />
+
           {/* Payment selector — chips, no duplicate "Pay token" header
               since the chip set is self-explanatory. */}
           <div style={styles.shopPaymentGrid}>
@@ -1828,6 +2024,73 @@ const styles = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     maxWidth: 260,
+  },
+  quotaSummary: {
+    margin: '10px 14px 0',
+    padding: '8px 10px',
+    borderRadius: 12,
+    border: '1px solid #d7c49a',
+    background: 'linear-gradient(180deg, #fff7df 0%, #f6e8bf 100%)',
+    boxShadow: '0 1px 3px rgba(95,58,33,0.10), inset 0 1px 0 rgba(255,255,255,0.55)',
+    flex: '0 0 auto',
+  },
+  quotaSummaryCompact: {
+    margin: 0,
+  },
+  quotaSummaryHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 7,
+  },
+  quotaSummaryTitle: {
+    fontSize: 11,
+    fontWeight: 900,
+    color: '#5C3A21',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
+  quotaSummaryTotal: {
+    fontSize: 11,
+    fontWeight: 900,
+    color: '#1B5E20',
+    whiteSpace: 'nowrap',
+  },
+  quotaStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(82px, 1fr))',
+    gap: 6,
+  },
+  quotaStat: {
+    minWidth: 0,
+    padding: '6px 7px',
+    borderRadius: 9,
+    border: '1px solid rgba(139,107,63,0.22)',
+    background: 'rgba(255,250,240,0.72)',
+  },
+  quotaStatStrong: {
+    border: '1px solid rgba(31,109,52,0.35)',
+    background: 'rgba(225,246,211,0.72)',
+  },
+  quotaStatLabel: {
+    display: 'block',
+    fontSize: 9,
+    fontWeight: 850,
+    color: '#8b6b3f',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  quotaStatValue: {
+    display: 'block',
+    marginTop: 2,
+    fontSize: 13,
+    fontWeight: 950,
+    color: '#3a1f00',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   headerActions: {
     display: 'flex',

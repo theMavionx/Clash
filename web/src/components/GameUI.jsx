@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import ResourceBar from './ResourceBar';
 import PlayerInfo from './PlayerInfo';
 import ActionButtons from './ActionButtons';
@@ -11,9 +11,11 @@ import FpsTracker from './FpsTracker';
 import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay from './TutorialOverlay';
-import { useSend, useUI, useSelectedBuilding, useTutorial } from '../hooks/useGodot';
+import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
 import { useLayout } from '../hooks/useIsMobile';
+import { useSolanaMobile } from '../hooks/useSolanaMobile';
+import { useSkrHandle } from '../hooks/useSkrHandle';
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
 
@@ -32,8 +34,12 @@ export default function GameUI() {
   const { sendToGodot, setShopOpen } = useSend();
   const { ready, shopOpen, error, showRegister, cloudVisible, enemyMode, futuresOpen, battleResult, setBattleResult } = useUI();
   const { tutorialFlags, tutorialPhase, setTutorialFlags, setTutorialPhase } = useTutorial();
+  const player = usePlayer();
   const { selectedBuilding } = useSelectedBuilding();
   const { isMobile, actionScale } = useLayout();
+  const { isSolanaMobile, ready: solanaMobileReady } = useSolanaMobile();
+  const { handle: seekerHandle } = useSkrHandle(player?.wallet);
+  const seekerMarkRef = useRef('');
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -41,6 +47,7 @@ export default function GameUI() {
   const [showBattleLog, setShowBattleLog] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showAiChat, setShowAiChat] = useState(false);
+  const canShowAiChatButton = !enemyMode?.active || !!enemyMode?.is_replay;
 
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
@@ -80,6 +87,34 @@ export default function GameUI() {
   useEffect(() => {
     if (showAiChat) addClientBreadcrumb('ui.panel_open', { panel: 'ai_chat' });
   }, [showAiChat]);
+
+  useEffect(() => {
+    if (!solanaMobileReady || !isSolanaMobile) return;
+    const token = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
+    if (!token) return;
+    const key = `${token}|${seekerHandle?.full || ''}`;
+    if (seekerMarkRef.current === key) return;
+    seekerMarkRef.current = key;
+    fetch('/api/players/device-capability', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-token': token },
+      body: JSON.stringify({
+        is_seeker: true,
+        seeker_source: 'solana_mobile',
+        seeker_id: seekerHandle?.full || seekerHandle?.name || '',
+      }),
+    }).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).then((data) => {
+      addClientBreadcrumb('seeker.capability_marked', {
+        seeker_id: data?.seeker_id || seekerHandle?.full || null,
+      });
+    }).catch((e) => {
+      seekerMarkRef.current = '';
+      console.warn('[GameUI] Seeker capability mark failed:', e?.message || e);
+    });
+  }, [solanaMobileReady, isSolanaMobile, player?.token, seekerHandle?.full, seekerHandle?.name]);
 
   const handleCloseShop = useCallback(() => {
     setShopOpen(false);
@@ -131,7 +166,7 @@ export default function GameUI() {
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
-      {!enemyMode?.active && (() => {
+      {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
         // SHOP / TRADE columns regardless of which phone the player has.
         // btnSize/btnSmall here match ActionButtons.jsx exactly.

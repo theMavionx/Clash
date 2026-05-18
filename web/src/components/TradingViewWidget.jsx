@@ -117,6 +117,35 @@ function normalizeDecibelCandles(rows) {
     .sort((a, b) => a.time - b.time);
 }
 
+function fmtLineUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '$0.00';
+  const sign = n >= 0 ? '+' : '-';
+  return `${sign}$${Math.abs(n).toFixed(2)}`;
+}
+
+function fmtBaseAmount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 100) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (n >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (n >= 0.01) return n.toFixed(4).replace(/0+$/u, '').replace(/\.$/u, '');
+  return n.toFixed(6).replace(/0+$/u, '').replace(/\.$/u, '');
+}
+
+function displayPositionAmount(pos, mark, entry) {
+  const raw = Math.abs(Number(pos?.amount || 0));
+  const sizeUsd = Math.abs(Number(pos?.size_usd || pos?.notional || 0));
+  const refPrice = Number(mark || entry || pos?.mark_price || pos?.entry_price || 0);
+  if (sizeUsd > 0 && refPrice > 0) {
+    const implied = sizeUsd / refPrice;
+    if (!raw || Math.abs(raw * refPrice - sizeUsd) > Math.max(1, sizeUsd * 0.25)) {
+      return implied;
+    }
+  }
+  return raw;
+}
+
 async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
   const read = await getReadClient();
   const rows = await read.candlesticks.getByName({
@@ -340,15 +369,16 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         const entry = parseFloat(pos.entry_price);
         if (!entry) continue;
         const isLong = pos.side === 'bid';
-        const pnl = mark ? ((mark - entry) * parseFloat(pos.amount) * (isLong ? 1 : -1)) : 0;
-        const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+        const amount = displayPositionAmount(pos, mark, entry);
+        const pnl = mark ? ((mark - entry) * amount * (isLong ? 1 : -1)) : 0;
+        const pnlStr = fmtLineUsd(pnl);
         const line = seriesRef.current.createPriceLine({
           price: entry,
           color: isLong ? '#4CAF50' : '#E53935',
           lineWidth: 2,
           lineStyle: 2, // dashed
           axisLabelVisible: true,
-          title: `${isLong ? 'LONG' : 'SHORT'} ${pnlStr}`,
+          title: `${isLong ? 'Long' : 'Short'} ${fmtBaseAmount(amount)} ${symbol} ${pnlStr}`,
         });
         linesRef.current.push(line);
       }

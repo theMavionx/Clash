@@ -1,17 +1,19 @@
 import {
-  encodePacked,
+  encodeAbiParameters,
   formatUnits,
   hexToBytes,
   keccak256,
+  stringToHex,
 } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   RISEX_AUTH_ADDRESS,
+  RISEX_ROUTER_ADDRESS,
   RISE_CHAIN_ID,
 } from './risexConfig';
 
 export const RISEX_SIGNER_STORAGE_PREFIX = 'clash_risex_signer_v1';
-export const RISEX_REGISTER_MESSAGE = 'Please sign in with your wallet to access RISEx.';
+export const RISEX_REGISTER_MESSAGE = 'Registering signer for RISEx';
 export const RISEX_SIGNER_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const RISEX_PERMIT_TTL_SECONDS = 300;
 export const RISEX_MIN_DEPOSIT_USDC = 1;
@@ -23,6 +25,7 @@ export const RISEX_STP = Object.freeze({ EXPIRE_MAKER: 0, EXPIRE_TAKER: 1, EXPIR
 
 export const REGISTER_SIGNER_TYPES = {
   RegisterSigner: [
+    { name: 'account', type: 'address' },
     { name: 'signer', type: 'address' },
     { name: 'message', type: 'string' },
     { name: 'expiration', type: 'uint32' },
@@ -31,14 +34,22 @@ export const REGISTER_SIGNER_TYPES = {
   ],
 };
 
+export const VERIFY_SIGNER_TYPES = {
+  VerifySigner: [
+    { name: 'account', type: 'address' },
+    { name: 'nonceAnchor', type: 'uint48' },
+    { name: 'nonceBitmap', type: 'uint8' },
+  ],
+};
+
 export const VERIFY_WITNESS_TYPES = {
   VerifyWitness: [
     { name: 'account', type: 'address' },
+    { name: 'target', type: 'address' },
     { name: 'hash', type: 'bytes32' },
     { name: 'nonceAnchor', type: 'uint48' },
     { name: 'nonceBitmap', type: 'uint8' },
     { name: 'deadline', type: 'uint32' },
-    { name: 'permission', type: 'uint8' },
   ],
 };
 
@@ -50,8 +61,13 @@ const EIP712_DOMAIN_TYPES = [
 ];
 
 const MAX_BITMAP_INDEX = 207;
-const RISEX_PERMISSION_ALL = 1;
 const runtimeSignerCache = new Map();
+const ACTION_PLACE_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_PLACE_ORDER_V1'));
+const ACTION_CANCEL_ORDER_HASH = keccak256(stringToHex('RISE_PERPS_CANCEL_ORDER_V1'));
+const V3_FLAG_PERMIT = 1;
+const V3_FLAG_BUILDER = 2;
+const V3_FLAG_CLIENT_ID = 4;
+const V3_FLAG_TTL = 16;
 
 export function isRisexAddress(addr) {
   return /^0x[0-9a-fA-F]{40}$/.test(String(addr || '').trim());
@@ -190,6 +206,15 @@ export function rememberRisexSigner(owner, record) {
   return next;
 }
 
+export function forgetRisexSigner(owner) {
+  const key = signerStorageKey(owner);
+  runtimeSignerCache.delete(key);
+  const storage = signerStorage();
+  if (storage) {
+    try { storage.removeItem(key); } catch { /* storage disabled */ }
+  }
+}
+
 export function getOrCreateRisexSigner(owner) {
   if (!isRisexAddress(owner)) throw new Error('Connect your EVM wallet first');
   const existing = readRisexSigner(owner);
@@ -309,6 +334,16 @@ export function fixSignatureV(signature) {
   return `0x${Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
+function hexSignatureToBase64(signature) {
+  const bytes = hexToBytes(signature);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  if (typeof btoa === 'function') return btoa(binary);
+  const BufferCtor = globalThis.Buffer;
+  if (BufferCtor?.from) return BufferCtor.from(bytes).toString('base64');
+  throw new Error('Base64 encoder is not available');
+}
+
 export async function createRisexRegisterPayload({
   account,
   signer,
@@ -319,14 +354,11 @@ export async function createRisexRegisterPayload({
   label = 'clashofperps',
 }) {
   const expiresAt = Math.floor(Date.now() / 1000) + RISEX_SIGNER_TTL_SECONDS;
-  let nonceAnchor = Number(nonceState?.nonce_anchor || 0);
-  let nonceBitmap = Number(nonceState?.current_bitmap_index ?? nonceState?.nonce_bitmap_index ?? 0);
-  if (nonceBitmap > MAX_BITMAP_INDEX) {
-    nonceAnchor += 1;
-    nonceBitmap = 0;
-  }
+  const nonceAnchor = Number(nonceState?.nonce_anchor || 0) + 1;
+  const nonceBitmap = 0;
   const cleanDomain = risexDomain(domain);
   const message = {
+    account,
     signer: signer.address,
     message: RISEX_REGISTER_MESSAGE,
     expiration: expiresAt,
@@ -342,15 +374,26 @@ export async function createRisexRegisterPayload({
     primaryType: 'RegisterSigner',
     message,
   }));
+  const signerSignature = fixSignatureV(await signer.account.signTypedData({
+    domain: cleanDomain,
+    types: VERIFY_SIGNER_TYPES,
+    primaryType: 'VerifySigner',
+    message: {
+      account,
+      nonceAnchor,
+      nonceBitmap,
+    },
+  }));
   return {
     account,
     signer: signer.address,
-    message: RISEX_REGISTER_MESSAGE,
+    message: message.message,
     nonce_anchor: String(nonceAnchor),
     nonce_bitmap: nonceBitmap,
     nonce_bitmap_index: nonceBitmap,
     expiration: String(expiresAt),
     account_signature: accountSignature,
+    signer_signature: signerSignature,
     label,
   };
 }
@@ -382,33 +425,76 @@ function encodeOrderFlags(p) {
   if (p.post_only) orderFlags |= 2;
   if (p.reduce_only) orderFlags |= 4;
   orderFlags |= (p.stp_mode & 3) << 3;
+  orderFlags |= (p.order_type & 1) << 5;
+  orderFlags |= ((p.time_in_force ?? p.tif ?? 0) & 3) << 6;
   return orderFlags & 0xff;
 }
 
+function encodeRisexOrderData(p) {
+  const marketId = BigInt(Number(p.market_id) & 0xffff);
+  const sizeSteps = BigInt(p.size_steps ?? p.size ?? 0) & 0xffffffffn;
+  const priceTicks = BigInt(p.price_ticks ?? p.price ?? 0) & 0xffffffn;
+  const headerVersion = 1n;
+  let data = 0n;
+  data |= marketId << 70n;
+  data |= sizeSteps << 38n;
+  data |= priceTicks << 14n;
+  data |= BigInt(encodeOrderFlags(p)) << 6n;
+  data |= (headerVersion & 31n) << 1n;
+  return data;
+}
+
+function encodeRisexHeaderFlags(p) {
+  const builderId = Number(p.builder_id ?? 0);
+  const clientOrderId = BigInt(p.client_order_id ?? 0);
+  const ttlUnits = Number(p.ttl_units ?? 0);
+  let flags = V3_FLAG_PERMIT;
+  if (builderId !== 0) flags |= V3_FLAG_BUILDER;
+  if (clientOrderId !== 0n) flags |= V3_FLAG_CLIENT_ID;
+  if (ttlUnits !== 0) flags |= V3_FLAG_TTL;
+  return flags;
+}
+
 export function encodeRisexOrder(orderParams) {
-  const encoded = encodePacked(
-    ['uint64', 'uint128', 'uint128', 'uint8', 'uint8', 'uint8', 'uint32'],
+  const p = {
+    ...orderParams,
+    size_steps: orderParams.size_steps ?? orderParams.size ?? 0,
+    price_ticks: orderParams.price_ticks ?? orderParams.price ?? 0,
+    time_in_force: orderParams.time_in_force ?? orderParams.tif ?? 0,
+    builder_id: orderParams.builder_id ?? 0,
+    client_order_id: orderParams.client_order_id ?? 0,
+    ttl_units: orderParams.ttl_units ?? 0,
+  };
+  const encoded = encodeAbiParameters(
     [
-      BigInt(orderParams.market_id),
-      BigInt(orderParams.size ?? orderParams.size_steps ?? 0),
-      BigInt(orderParams.price ?? orderParams.price_ticks ?? 0),
-      encodeOrderFlags(orderParams),
-      Number(orderParams.order_type ?? 0),
-      Number(orderParams.tif ?? orderParams.time_in_force ?? 0),
-      Number(orderParams.expiry ?? 0),
+      { type: 'bytes32' },
+      { type: 'uint8' },
+      { type: 'uint256' },
+      { type: 'uint16' },
+      { type: 'uint64' },
+      { type: 'uint16' },
+    ],
+    [
+      ACTION_PLACE_ORDER_HASH,
+      encodeRisexHeaderFlags(p),
+      encodeRisexOrderData(p),
+      Number(p.builder_id),
+      BigInt(p.client_order_id),
+      Number(p.ttl_units),
     ],
   );
   return keccak256(encoded);
 }
 
 export function encodeRisexCancelOrder(cancelParams) {
-  const orderId = cancelParams?.order_id ?? cancelParams?.resting_order_id;
+  const orderId = cancelParams?.resting_order_id ?? cancelParams?.order_id;
   if (orderId == null) {
-    throw new Error('RISEx cancel needs order_id from the open order');
+    throw new Error('RISEx cancel needs resting_order_id from the open order');
   }
-  const marketId = BigInt(cancelParams.market_id);
-  const packed = (marketId << 192n) | BigInt(orderId);
-  const encoded = `0x${packed.toString(16).padStart(64, '0')}`;
+  const encoded = encodeAbiParameters(
+    [{ type: 'bytes32' }, { type: 'uint256' }, { type: 'uint256' }],
+    [ACTION_CANCEL_ORDER_HASH, BigInt(cancelParams.market_id), BigInt(orderId)],
+  );
   return keccak256(encoded);
 }
 
@@ -418,7 +504,7 @@ export async function createRisexPermit({
   domain,
   nonceState,
   hash,
-  permission = RISEX_PERMISSION_ALL,
+  target = RISEX_ROUTER_ADDRESS,
 }) {
   const nonceAnchor = Number(nonceState?.nonce_anchor || 0);
   let nonceBitmapIndex = Number(nonceState?.current_bitmap_index ?? nonceState?.nonce_bitmap_index ?? 0);
@@ -434,11 +520,11 @@ export async function createRisexPermit({
     primaryType: 'VerifyWitness',
     message: {
       account,
+      target,
       hash,
       nonceAnchor: nextAnchor,
       nonceBitmap: nonceBitmapIndex,
       deadline,
-      permission,
     },
   }));
   return {
@@ -448,8 +534,7 @@ export async function createRisexPermit({
     nonce_bitmap: nonceBitmapIndex,
     nonce_bitmap_index: nonceBitmapIndex,
     deadline: String(deadline),
-    permission,
-    signature: rawSig,
+    signature: hexSignatureToBase64(rawSig),
   };
 }
 

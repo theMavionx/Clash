@@ -4109,9 +4109,44 @@ router.post('/players/set-dex', auth, (req, res) => {
   res.json({ success: true, dex: req.player.dex, note: 'DEX is per-account; ignore field' });
 });
 
+function normalizeSeekerText(value, max = 128) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim().replace(/[\x00-\x1F\x7F]/g, '').slice(0, max);
+}
+
+function normalizeSeekerCapability(body = {}) {
+  const source = normalizeSeekerText(
+    body.seeker_source ?? body.seekerSource ?? body.source ?? body.walletSource ?? '',
+    64
+  );
+  const seekerId = normalizeSeekerText(
+    body.seeker_id ?? body.seekerId ?? body.skr_handle ?? body.skrHandle ?? body.skr ?? '',
+    128
+  );
+  const rawFlag = body.is_seeker ?? body.isSeeker ?? body.seeker ?? body.solana_mobile ?? body.solanaMobile;
+  const sourceLooksMobile = /seeker|saga|solana[_ -]?mobile|mobile wallet adapter|mwa/i.test(source);
+  const isSeeker = rawFlag === true || rawFlag === 1 || rawFlag === '1'
+    || String(rawFlag).toLowerCase() === 'true'
+    || !!seekerId
+    || sourceLooksMobile;
+  if (!isSeeker) return null;
+  return {
+    seeker_id: seekerId || '',
+    seeker_source: source || 'client',
+  };
+}
+
+function markPlayerSeekerIfPresent(playerId, body) {
+  const seeker = normalizeSeekerCapability(body);
+  if (!playerId || !seeker) return null;
+  db.stmts.markPlayerSeeker.run(seeker.seeker_id, seeker.seeker_source, playerId);
+  return seeker;
+}
+
 router.post('/players/register', (req, res) => {
   const { name, wallet, dex, fid } = req.body;
   const requestedDex = VALID_DEXES.has(dex) ? dex : 'pacifica';
+  const seekerCapability = normalizeSeekerCapability(req.body || {});
 
   // ── Per-DEX canonical lookup ────────────────────────────────────────
   // Each (wallet, dex) is now its own player row. The user's Avantis
@@ -4158,6 +4193,9 @@ router.post('/players/register', (req, res) => {
       // No more dex-switching on the existing row — DEX is now part of
       // identity. If the caller wanted a different DEX they fall through
       // to the new-row branch above.
+      if (seekerCapability) {
+        db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, existing.id);
+      }
       const state = db.getFullPlayerState(existing.id);
       return res.json({ ...state, token: existing.token });
     }
@@ -4199,9 +4237,36 @@ router.post('/players/register', (req, res) => {
   } else {
     db.db.prepare('UPDATE players SET dex = ? WHERE id = ?').run(requestedDex, result.id);
   }
+  if (seekerCapability) {
+    db.stmts.markPlayerSeeker.run(seekerCapability.seeker_id, seekerCapability.seeker_source, result.id);
+  }
   const state = db.getFullPlayerState(result.id);
   logAuth('Player registered', { name: finalName, wallet: wallet || null, dex: requestedDex });
   res.json({ ...state, token: result.token });
+});
+
+router.post('/players/device-capability', auth, (req, res) => {
+  const seeker = markPlayerSeekerIfPresent(req.player.id, req.body || {});
+  if (!seeker) {
+    return res.json({
+      ok: true,
+      seeker_marked: false,
+      is_seeker: !!Number(req.player.is_seeker || 0),
+      seeker_id: req.player.seeker_id || null,
+    });
+  }
+  logAuth('Seeker capability marked', {
+    player_id: req.player.id,
+    source: seeker.seeker_source,
+    seeker_id: seeker.seeker_id || null,
+  });
+  res.json({
+    ok: true,
+    seeker_marked: true,
+    is_seeker: true,
+    seeker_id: seeker.seeker_id || req.player.seeker_id || null,
+    seeker_source: seeker.seeker_source,
+  });
 });
 
 // Login (get state by token)
@@ -8429,6 +8494,18 @@ function isTournamentForDex(t, dex) {
   return TOURNAMENT_DEXES.includes(normalizedDex) && tournamentEligibleDexes(t).includes(normalizedDex);
 }
 
+function isTournamentSeekerOnly(t) {
+  return Number(t?.seeker_only || 0) === 1;
+}
+
+function isSeekerPlayer(player) {
+  return Number(player?.is_seeker || 0) === 1 || !!player?.seeker_id;
+}
+
+function tournamentAccessLabel(t) {
+  return isTournamentSeekerOnly(t) ? 'Seeker only' : 'All eligible players';
+}
+
 function normalizeTournamentDexConfig(body = {}, fallback = null) {
   const rawScope = body.dex_scope ?? body.scope;
   let requestedScope = ['single', 'custom', 'all'].includes(String(rawScope || '').toLowerCase())
@@ -8915,6 +8992,8 @@ function tournamentRowToPublic(t, options = {}) {
     dex_scope: dexScope,
     eligible_dexes: eligibleDexes,
     dex_label: tournamentDexLabel(t),
+    seeker_only: isTournamentSeekerOnly(t),
+    access_label: tournamentAccessLabel(t),
     mode,
     mode_label: tournamentModeLabel(mode),
     team_score_by: teamScoreBy,
@@ -9044,6 +9123,7 @@ router.get('/tournaments', (req, res) => {
 // show "Join" or "Leave + leaderboard" on the trophy button.
 router.get('/tournaments/me', auth, (req, res) => {
   const dex = req.player.dex;
+  const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
   const t = db.db.prepare(`
     SELECT * FROM tournaments
     WHERE status = 'active'
@@ -9052,6 +9132,7 @@ router.get('/tournaments/me', auth, (req, res) => {
         OR dex = ?
         OR instr(COALESCE(eligible_dexes, '[]'), '"' || ? || '"') > 0
       )
+      AND (COALESCE(seeker_only, 0) = 0 OR ? = 1)
       AND (end_at IS NULL OR replace(replace(end_at, 'T', ' '), ' UTC', '') > datetime('now'))
       AND (
         replace(replace(start_at, 'T', ' '), ' UTC', '') <= datetime('now')
@@ -9062,7 +9143,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       replace(replace(start_at, 'T', ' '), ' UTC', '') ASC,
       id DESC
     LIMIT 1
-  `).get(dex, dex);
+  `).get(dex, dex, seekerAccess);
   if (!t) return res.json({ tournament: null, joined: false, phase: null, can_join: false });
   const pub = tournamentRowToPublic(t);
   let me = db.db.prepare(`
@@ -9119,6 +9200,7 @@ router.get('/tournaments/me', auth, (req, res) => {
 router.get('/tournaments/history', auth, (req, res) => {
   const dex = req.player.dex;
   const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  const seekerAccess = isSeekerPlayer(req.player) ? 1 : 0;
   // status = 'ended' OR end_at < now (catch tournaments whose admin forgot
   // to flip the status flag — auto-ended by time still belongs in history).
   const rows = db.db.prepare(`
@@ -9143,9 +9225,10 @@ router.get('/tournaments/history', auth, (req, res) => {
         OR t.dex = ?
         OR instr(COALESCE(t.eligible_dexes, '[]'), '"' || ? || '"') > 0
       )
+      AND (COALESCE(t.seeker_only, 0) = 0 OR ? = 1 OR tp.player_id IS NOT NULL)
     ORDER BY COALESCE(t.end_at, t.created_at) DESC, t.id DESC
     LIMIT ?
-  `).all(req.player.id, dex, dex, limit);
+  `).all(req.player.id, dex, dex, seekerAccess, limit);
   const comboScores = new Map();
   for (const r of rows) {
     if (!isTournamentPointsSort(r.sort_by)) continue;
@@ -9192,6 +9275,9 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   if (t.status !== 'active') return res.status(400).json({ error: 'tournament not active' });
   if (!isTournamentForDex(t, req.player.dex)) {
     return res.status(403).json({ error: `tournament is for ${tournamentDexLabel(t)}, not ${req.player.dex}` });
+  }
+  if (isTournamentSeekerOnly(t) && !isSeekerPlayer(req.player)) {
+    return res.status(403).json({ error: 'tournament is Seeker-only; open the game from a Seeker/Solana Mobile device first' });
   }
   const now = nowSql();
   if (cleanSqlDate(t.end_at) && cleanSqlDate(t.end_at) <= now) return res.status(400).json({ error: 'tournament has ended' });
@@ -9370,7 +9456,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    prize_currency, prize_tiers, rewards_in_cop,
+    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
@@ -9442,10 +9528,10 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     INSERT INTO tournaments (
       name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
-      prize_currency, prize_tiers, rewards_in_cop,
+      prize_currency, prize_tiers, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -9470,6 +9556,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
     parseBool(rewards_in_cop) ? 1 : 0,
+    parseBool(seeker_only) ? 1 : 0,
     shieldHours,
     freeze,
     prereg,
@@ -9490,7 +9577,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
-    prize_currency, prize_tiers, rewards_in_cop,
+    prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
   const dexConfig = normalizeTournamentDexConfig(req.body || {}, t);
@@ -9579,6 +9666,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,
     rewards_in_cop: rewards_in_cop !== undefined ? (parseBool(rewards_in_cop) ? 1 : 0) : Number(t.rewards_in_cop || 0),
+    seeker_only: seeker_only !== undefined ? (parseBool(seeker_only) ? 1 : 0) : Number(t.seeker_only || 0),
     status: STATUSES.includes(status) ? status : t.status,
     preregistration_enabled: preregistration_enabled !== undefined
       ? (parseBool(preregistration_enabled) ? 1 : 0)
@@ -9592,7 +9680,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             start_at = ?, end_at = ?,
                             gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
-                            prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?,
+                            prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
@@ -9620,6 +9708,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.prize_currency,
     JSON.stringify(next.prize_tiers),
     next.rewards_in_cop,
+    next.seeker_only,
     next.freeze_trophies,
     next.preregistration_enabled,
     next.registration_opens_at,
