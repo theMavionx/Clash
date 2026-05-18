@@ -2647,6 +2647,7 @@ async function loadShop() {
       const h = aiBilling.hermes || {};
       document.getElementById('aiFreeMessagesPerDay').value = aiBilling.settings?.free_messages_per_day ?? 0;
       document.getElementById('aiChatBillingSummary').innerHTML =
+        '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (aiBilling.settings?.free_messages_per_day ?? 0) + '</div><div class="l">Free msgs / day</div></div>' +
         '<div class="stat"><div class="v">' + (u.today || 0) + '</div><div class="l">AI msgs today</div></div>' +
         '<div class="stat"><div class="v">' + (u.week || 0) + '</div><div class="l">AI msgs 7d</div></div>' +
         '<div class="stat"><div class="v">' + (u.all || 0) + '</div><div class="l">AI msgs all</div></div>' +
