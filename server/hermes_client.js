@@ -71,12 +71,20 @@ function classifyGameIntent(message) {
       required_loop: 'get_base_state -> collect_resources({}) -> summarize collected resources',
     };
   }
+  if (/(build|place|set up|setup|розстав|побуд|постав).*(base|баз)|(?:base|баз).*(build|place|set up|setup|розстав|побуд|постав)/i.test(text)) {
+    return {
+      kind: 'auto_build_base',
+      action_required: true,
+      goal: 'Autonomously build and arrange the player base through MCP tools without asking for grids or a building list.',
+      required_loop: 'get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers',
+    };
+  }
   if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building)/i.test(text)) {
     return {
       kind: 'build',
       action_required: true,
       goal: 'Place a valid building using catalog and build-slot tools.',
-      required_loop: 'get_base_state -> get_building_catalog if needed -> find_build_slots -> place_building -> summarize result',
+      required_loop: 'get_base_state -> if broad base setup use auto_build_base; otherwise get_building_catalog if needed -> find_build_slots -> place_building -> summarize result',
     };
   }
   if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень)/i.test(text)) {

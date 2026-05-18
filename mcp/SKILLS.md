@@ -55,7 +55,8 @@ Treat the `cop_ai_...` key as a secret. Do not print it back to the user, commit
 - `get_base_state({ include_catalog?: boolean })`: inspect the full current base. Start here.
 - `get_building_catalog()`: inspect building costs, footprints, unlocks, troop definitions, and grid rules.
 - `collect_resources({ building_id? })`: collect one producer, or all mines/sawmills when `building_id` is omitted.
-- `find_build_slots({ type, grid_index?, limit? })`: get valid open cells for a building.
+- `auto_build_base({ focus?, max_buildings? })`: for broad requests like "build my base" or "arrange everything", automatically choose useful affordable buildings, choose the correct grid, find valid slots, and place them.
+- `find_build_slots({ type, grid_index?, limit? })`: get valid open cells for a specific building.
 - `place_building({ type, grid_x, grid_z, grid_index? })`: place a building. Use grid 0 for normal buildings and grid 1 for ports.
 - `upgrade_building({ building_id })`: upgrade an owned building by id.
 - `move_building({ building_id, grid_x, grid_z, grid_index? })`: move a building. Ports with docked ships cannot be moved.
@@ -121,7 +122,8 @@ Manual attack shape:
 ## Common User Requests
 
 - "Collect my resources": call `get_base_state`, then `collect_resources({})`.
-- "Build an archer tower": call `get_base_state`, `find_build_slots({ "type": "archer_tower", "grid_index": 0 })`, then `place_building`.
+- "Build my base / arrange everything": call `get_base_state`, then `auto_build_base({ "focus": "balanced" })`. Do not ask the player for grids or a building list.
+- "Build an archer tower": call `get_base_state`, `find_build_slots({ "type": "archer_tower" })`, then `place_building`.
 - "Upgrade sawmill to level 2": find the sawmill in `get_base_state`, then call `upgrade_building` until it reaches level 2 or resources run out.
 - "Find an enemy and attack": confirm a loaded ship exists, then call `execute_ai_attack_plan({})`.
 - "Recover after battle": call `get_base_state`, inspect ships/casualties, then `reinforce_ships`.

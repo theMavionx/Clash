@@ -156,7 +156,8 @@ const GLOBAL_GAME_MEMORY = [
   'Common action mapping:',
   '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
   '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
-  '- "build from shop" means use get_building_catalog, find_build_slots, then place_building.',
+  '- "build my base", "set up base", or "arrange everything" means use auto_build_base with balanced focus. Do not ask the player for grids or a building list.',
+  '- "build from shop" for one specific building means use get_building_catalog, find_build_slots, then place_building.',
   '- "upgrade X" means inspect owned ids, then upgrade_building or upgrade_troop.',
   '',
   'Battle rules:',
@@ -561,6 +562,8 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking production buildings and collecting resources';
     case 'build':
       return 'Checking the catalog and finding a valid build slot';
+    case 'auto_build_base':
+      return 'Planning and placing useful base buildings';
     case 'upgrade':
       return 'Checking upgrade targets and resource costs';
     case 'fleet':

@@ -1,9 +1,10 @@
-const CLASH_PROMPT_VERSION = 'clash-game-agent-v4';
+const CLASH_PROMPT_VERSION = 'clash-game-agent-v5';
 
 const TOOL_INCLUDE = [
   'get_base_state',
   'get_building_catalog',
   'get_attack_slots',
+  'auto_build_base',
   'find_build_slots',
   'place_building',
   'collect_resources',
@@ -95,10 +96,17 @@ const CLASH_AGENT_PLAYBOOK = [
   '## Building Workflow',
   '',
   '1. Call get_base_state.',
-  '2. Call get_building_catalog if costs, unlocks, or canonical type names are unclear.',
-  '3. Call find_build_slots with the intended type and grid.',
-  '4. Pick a valid returned slot and call place_building.',
-  '5. If the user asked for "shop", use the normal building catalog and MCP building tools, not UI assumptions.',
+  '2. For broad requests like "build my base", "set up the base", "розстав все", or "побудуй базу", call auto_build_base({ focus: "balanced" }) and summarize what was built or why it was blocked.',
+  '3. For one specific building, call get_building_catalog if costs, unlocks, or canonical type names are unclear.',
+  '4. For one specific building, call find_build_slots with the intended type; do not ask the player for grid_index.',
+  '5. Pick a valid returned slot and call place_building.',
+  '6. If the user asked for "shop", use the normal building catalog and MCP building tools, not UI assumptions.',
+  '',
+  'Autonomy rules for building:',
+  '- Never ask the player which grid to use. Ports go to the port coast automatically; all normal base buildings go to the main island automatically.',
+  '- If the user gives a broad base-building request, choose useful missing affordable buildings yourself.',
+  '- If resources are insufficient, build what is affordable and report the next missing resource.',
+  '- Ask a clarification only for cosmetic preferences, not for normal gameplay placement.',
   '',
   'Canonical building rules:',
   '- Use barn for troop/storage-related building requests. Do not use barracks.',

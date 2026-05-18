@@ -278,6 +278,94 @@ function prioritizeAgentBuildSlots(type, gridIndex, slots, limit) {
   return [...bodySlots, ...edgeSlots].slice(0, limit);
 }
 
+function autoBuildPriority(focus = 'balanced') {
+  const normalized = String(focus || 'balanced').toLowerCase();
+  if (normalized === 'economy') {
+    return ['mine', 'sawmill', 'storage', 'barn', 'port', 'mine', 'sawmill', 'archer_tower', 'tombstone', 'turret'];
+  }
+  if (normalized === 'defense') {
+    return ['mine', 'sawmill', 'archer_tower', 'barn', 'port', 'tombstone', 'turret', 'storage', 'archer_tower', 'turret'];
+  }
+  return [
+    'mine', 'sawmill', 'barn', 'port', 'archer_tower',
+    'storage', 'mine', 'sawmill', 'tombstone', 'archer_tower',
+    'port', 'turret', 'mine', 'sawmill', 'storage', 'barn',
+    'archer_tower', 'tombstone', 'turret', 'port',
+  ];
+}
+
+function buildingCounts(buildings) {
+  const counts = {};
+  for (const building of buildings || []) counts[building.type] = (counts[building.type] || 0) + 1;
+  return counts;
+}
+
+function maxForCurrentTownHall(type, townHallLevel) {
+  const limits = game.TH_MAX_COUNT[type] || [];
+  if (!limits.length) return game.BUILDING_DEFS[type]?.max_count || 0;
+  return limits[Math.min(Math.max(Number(townHallLevel) || 1, 1) - 1, limits.length - 1)] || 0;
+}
+
+async function autoBuildBase(playerId, agentKey, options = {}) {
+  const maxBuildings = Math.max(1, Math.min(12, Math.floor(Number(options.max_buildings) || 6)));
+  const focus = String(options.focus || 'balanced').toLowerCase();
+  const placed = [];
+  const skipped = [];
+  const tried = new Set();
+
+  for (const type of autoBuildPriority(focus)) {
+    if (placed.length >= maxBuildings) break;
+    if (tried.has(`${type}:${placed.length}`)) continue;
+    tried.add(`${type}:${placed.length}`);
+    if (!game.BUILDING_DEFS[type]) continue;
+
+    const buildings = game.getPlayerBuildings(playerId).map(normalizeBuilding);
+    const counts = buildingCounts(buildings);
+    const townHallLevel = getTownHallLevel(buildings);
+    const maxCount = maxForCurrentTownHall(type, townHallLevel);
+    if (maxCount <= 0 || (counts[type] || 0) >= maxCount) {
+      skipped.push({ type, reason: maxCount <= 0 ? `unlocks later` : `max ${maxCount} at Town Hall level ${townHallLevel}` });
+      continue;
+    }
+
+    const cost = game.BUILDING_DEFS[type].cost || {};
+    if (!game.canAfford(playerId, cost.gold || 0, cost.wood || 0, cost.ore || 0)) {
+      skipped.push({ type, reason: 'not enough resources', cost });
+      continue;
+    }
+
+    const gridIndex = defaultGridFor(type);
+    const searchLimit = gridIndex === 0 ? 300 : 80;
+    const slot = prioritizeAgentBuildSlots(
+      type,
+      gridIndex,
+      game.findOpenBuildingSlots(playerId, type, gridIndex, searchLimit),
+      1
+    )[0];
+    if (!slot) {
+      skipped.push({ type, reason: 'no valid open slot', grid_index: gridIndex });
+      continue;
+    }
+
+    const result = game.placeBuilding(playerId, type, slot.grid_x, slot.grid_z, gridIndex);
+    if (result.error) {
+      skipped.push({ type, reason: result.error, detail: result });
+      continue;
+    }
+    placed.push(result);
+    await notifyAgentAction(agentKey, 'place_building', { building: result, resources: result.resources });
+  }
+
+  return {
+    success: placed.length > 0,
+    focus,
+    placed,
+    skipped,
+    resources: game.getResources(playerId),
+    base: buildBaseState(playerId, false),
+  };
+}
+
 function normalizeTroopType(value) {
   const type = String(value || '').trim().toLowerCase();
   return game.TROOP_DEFS[type] ? type : null;
@@ -1348,6 +1436,23 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       };
       await notifyAgentAction(agentKey, 'ai_attack_replay', livePayload);
       return jsonResult({ success: true, ...livePayload });
+    }
+  );
+
+  server.registerTool(
+    'auto_build_base',
+    {
+      title: 'Auto Build Base',
+      description: 'Autonomously choose useful missing affordable buildings, pick the correct grid, find valid slots, place them, and return blockers. Use for broad requests like build my base or arrange everything.',
+      inputSchema: {
+        focus: z.enum(['balanced', 'economy', 'defense']).optional(),
+        max_buildings: z.number().int().min(1).max(12).optional(),
+      },
+    },
+    async ({ focus = 'balanced', max_buildings = 6 }) => {
+      const result = await autoBuildBase(playerId, agentKey, { focus, max_buildings });
+      if (!result.success) return toolError('No affordable/valid buildings could be placed', result);
+      return jsonResult(result);
     }
   );
 
