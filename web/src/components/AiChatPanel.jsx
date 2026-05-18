@@ -236,10 +236,12 @@ const HERMES_CHAT_CSS = `
 
 function formatQuotaLine(quota) {
   if (!quota) return 'Loading message balance...';
+  const credits = Math.max(0, Number(quota.credits || 0));
+  const creditText = credits > 0 ? ` • ${credits} credits` : '';
   if (quota.lifetime_daily_limit > 0) {
-    return `${quota.subscription_available}/${quota.lifetime_daily_limit} Pro today`;
+    return `${quota.subscription_available}/${quota.lifetime_daily_limit} Pro today${creditText}`;
   }
-  return `${quota.free_available}/${quota.free_daily_limit} free today`;
+  return `${quota.free_available}/${quota.free_daily_limit} free today${creditText}`;
 }
 
 function getChatStorageKey(player, token) {
