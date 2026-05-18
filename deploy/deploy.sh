@@ -231,6 +231,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
     ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    ensure_env_default "CLASH_HERMES_PRIMARY_RETRIES" "3"
     ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
 
     set_env_value "NODE_ENV" "production"
@@ -242,6 +243,7 @@ prepare_shared_runtime() {
     set_env_value "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
     set_env_value "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     set_env_value "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    set_env_value "CLASH_HERMES_PRIMARY_RETRIES" "3"
     set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then

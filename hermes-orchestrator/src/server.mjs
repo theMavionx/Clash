@@ -31,6 +31,7 @@ const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODELS = MODEL_CHAIN.slice(1);
 const FALLBACK_MODEL = FALLBACK_MODELS[0] || '';
 const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 1);
+const PRIMARY_MODEL_RETRIES = Number(process.env.CLASH_HERMES_PRIMARY_RETRIES || 3);
 const MCP_URL = process.env.CLASH_MCP_URL || 'https://mcp.clashofperps.fun/mcp';
 const HERMES_READY_TIMEOUT_MS = Number(process.env.CLASH_HERMES_READY_TIMEOUT_MS || 45_000);
 const HERMES_IDLE_SHUTDOWN_MS = Number(process.env.CLASH_HERMES_IDLE_SHUTDOWN_MS || 15 * 60_000);
@@ -424,11 +425,14 @@ function extractOutputText(response) {
 function hermesTextFailure(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
+  if (/free-models-per-day|add\s+10\s+credits|daily\s+quota|negative\s+credit/i.test(raw)) {
+    return { message: raw.slice(0, 300), no_retry: true };
+  }
   if (/api call failed/i.test(raw) && /http\s*(429|5\d\d)|provider returned error|rate.?limit/i.test(raw)) {
-    return { message: raw.slice(0, 300), no_retry: /http\s*429|rate.?limit/i.test(raw) };
+    return { message: raw.slice(0, 300), no_retry: false };
   }
   if (/http\s*429/i.test(raw) || /rate.?limit/i.test(raw)) {
-    return { message: raw.slice(0, 300), no_retry: true };
+    return { message: raw.slice(0, 300), no_retry: false };
   }
   if (/\bmcp_clash_|execute_ai_attack_plan|get_base_state|collect_resources|place_building|upgrade_building/i.test(raw)) {
     return { message: 'Model leaked internal MCP tool names instead of a player-facing answer', no_retry: true };
@@ -488,7 +492,8 @@ async function chatWithPlayer(playerId, body) {
 
   let lastError = null;
   const attemptedModels = [];
-  const attemptsPerModel = Math.max(1, FALLBACK_AFTER_RETRIES);
+  const primaryAttempts = Math.max(1, PRIMARY_MODEL_RETRIES);
+  const fallbackAttempts = Math.max(1, FALLBACK_AFTER_RETRIES);
   await setPlayerProgress(safeId, {
     phase: 'preparing',
     message: 'Preparing the game agent',
@@ -526,13 +531,14 @@ async function chatWithPlayer(playerId, body) {
       });
       continue;
     }
-    for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
+    const attemptsForModel = modelIndex === 0 ? primaryAttempts : fallbackAttempts;
+    for (let attempt = 1; attempt <= attemptsForModel; attempt += 1) {
       try {
         await setPlayerProgress(safeId, {
           phase: modelIndex === 0 ? 'thinking' : 'fallback_thinking',
           message: modelIndex === 0 ? 'Reading the game state and planning' : 'A backup route is planning the answer',
           attempt,
-          max_attempts: attemptsPerModel,
+          max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
         });
@@ -541,7 +547,7 @@ async function chatWithPlayer(playerId, body) {
           phase: 'checking_answer',
           message: 'Checking the answer before sending it',
           attempt,
-          max_attempts: attemptsPerModel,
+          max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
         });
@@ -553,7 +559,7 @@ async function chatWithPlayer(playerId, body) {
           message: 'Answer ready',
           at: nowIso(),
           attempt,
-          max_attempts: attemptsPerModel,
+          max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
         };
@@ -575,7 +581,7 @@ async function chatWithPlayer(playerId, body) {
           phase: err.no_retry ? 'route_rejected' : 'route_timeout',
           message: err.no_retry ? 'That route produced an unsafe answer, trying another one' : 'That route is slow, trying another one',
           attempt,
-          max_attempts: attemptsPerModel,
+          max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
         });
@@ -589,6 +595,9 @@ async function chatWithPlayer(playerId, body) {
           no_retry: !!err.no_retry,
         }));
         if (err.no_retry) break;
+        if (attempt < attemptsForModel) {
+          await new Promise((resolve) => setTimeout(resolve, Math.min(1500 * attempt, 5000)));
+        }
       }
     }
   }
@@ -596,7 +605,7 @@ async function chatWithPlayer(playerId, body) {
   await setPlayerProgress(safeId, {
     phase: 'failed',
     message: 'All routes failed for this request',
-    attempt: attemptsPerModel,
+    attempt: fallbackAttempts,
     model_index: MODEL_CHAIN.length - 1,
     total_models: MODEL_CHAIN.length,
   });
