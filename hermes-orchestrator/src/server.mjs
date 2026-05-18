@@ -641,6 +641,8 @@ async function chatWithPlayer(playerId, body) {
         intent.goal ? `Goal: ${intent.goal}` : '',
         intent.required_loop ? `Required loop: ${intent.required_loop}` : '',
         'You must use Clash MCP tools before the final answer unless a fresh tool result already proves the action is impossible.',
+        'After the required tool returns a clear success or blocker, stop using tools and answer immediately in 1-3 short player-facing sentences.',
+        'Do not do extra catalog/state checks after auto_build_base, collect_resources, or execute_ai_attack_plan returns.',
         'Do not respond with a generic capability list for this request.',
       ].filter(Boolean).join('\n')
     : '';

@@ -235,7 +235,8 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
     ensure_env_default "CLASH_HERMES_ACTION_PRIMARY_RETRIES" "1"
     ensure_env_default "CLASH_HERMES_ACTION_FALLBACK_RETRIES" "1"
-    ensure_env_default "CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS" "75000"
+    ensure_env_default "CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS" "240000"
+    ensure_env_default "CLASH_HERMES_BACKEND_TIMEOUT_MS" "300000"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "10"
@@ -250,7 +251,8 @@ prepare_shared_runtime() {
     set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
     set_env_value "CLASH_HERMES_ACTION_PRIMARY_RETRIES" "1"
     set_env_value "CLASH_HERMES_ACTION_FALLBACK_RETRIES" "1"
-    set_env_value "CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS" "75000"
+    set_env_value "CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS" "240000"
+    set_env_value "CLASH_HERMES_BACKEND_TIMEOUT_MS" "300000"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
         if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then
@@ -697,6 +699,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Accept-Encoding "";
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
         gzip off;
     }
 

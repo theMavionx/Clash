@@ -1,4 +1,4 @@
-const CLASH_PROMPT_VERSION = 'clash-game-agent-v5';
+const CLASH_PROMPT_VERSION = 'clash-game-agent-v6';
 
 const TOOL_INCLUDE = [
   'get_base_state',
@@ -74,6 +74,8 @@ const CLASH_AGENT_PLAYBOOK = [
   '- Done: what changed.',
   '- Result: resources, building, upgrade, troops, or battle outcome when available.',
   '- Next: one useful next action if it is obvious.',
+  'After a successful MCP tool result, answer immediately. Do not keep planning, re-checking, or asking follow-up questions unless the tool result explicitly requires it.',
+  'For broad base setup, one get_base_state plus one auto_build_base call is enough. Then summarize built buildings and blockers.',
   '',
   'For failures, summarize with this shape:',
   '- Blocked: exact reason from tool result.',

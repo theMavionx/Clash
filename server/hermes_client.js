@@ -8,7 +8,7 @@ const ORCHESTRATOR_TOKEN = process.env.CLASH_HERMES_ORCHESTRATOR_TOKEN || proces
 const MODEL_CHAIN = resolveModelChain(process.env);
 const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODEL = MODEL_CHAIN[1] || '';
-const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 190_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 300_000);
 
 function configured() {
   return !!(ORCHESTRATOR_URL && ORCHESTRATOR_TOKEN);
