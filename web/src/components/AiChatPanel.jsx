@@ -324,15 +324,9 @@ function AiChatPanel({ onClose }) {
           onTouchEnd={isMobile ? onDragEnd : undefined}
           onTouchCancel={isMobile ? onDragEnd : undefined}
         >
-          <div>
-            <div style={styles.title}>AI Agent</div>
-            <div style={styles.sub}>
-              <span style={styles.onlineDot} />
-              Online
-            </div>
-          </div>
+          <div style={styles.title}>AI Agent</div>
           <button style={styles.close} onClick={onClose} aria-label="Close AI chat">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -438,17 +432,14 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '5px 0 2px',
+    padding: '3px 0 1px',
     cursor: 'grab',
     touchAction: 'none',
-    // Transparent — the drag area blends into the parchment panel so the
-    // top of the sheet reads as one cohesive surface, not a thick beige
-    // "frame". Only the small pill remains visible as the affordance.
     background: 'transparent',
     flex: '0 0 auto',
   },
   dragHandle: {
-    width: 40, height: 4,
+    width: 32, height: 3,
     borderRadius: 2,
     background: '#bba882',
   },
@@ -456,18 +447,16 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    padding: '6px 12px 8px',
-    // Header background follows the panel parchment too — the only
-    // demarcation between header and messages is a single hairline.
+    gap: 8,
+    padding: '2px 12px 4px',
     background: 'transparent',
     borderBottom: '1px solid #e6dcc1',
     flex: '0 0 auto',
   },
   title: {
-    fontSize: 18, fontWeight: 900, color: '#5C3A21',
+    fontSize: 14, fontWeight: 900, color: '#5C3A21',
     letterSpacing: 0,
-    textShadow: '0 1px 0 rgba(255,255,255,0.4)',
+    lineHeight: 1.1,
   },
   sub: {
     fontSize: 11, fontWeight: 800, color: '#1B5E20',
@@ -481,11 +470,11 @@ const styles = {
     boxShadow: '0 0 6px rgba(76,175,80,0.7)',
   },
   close: {
-    width: 28, height: 28, borderRadius: '50%',
-    background: '#E53935', border: '2px solid #fff', color: '#fff',
+    width: 22, height: 22, borderRadius: '50%',
+    background: '#E53935', border: '1.5px solid #fff', color: '#fff',
     cursor: 'pointer', padding: 0,
-    fontSize: 14, fontWeight: 900, lineHeight: '24px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.25)',
+    fontSize: 12, fontWeight: 900, lineHeight: '20px',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   messages: {
