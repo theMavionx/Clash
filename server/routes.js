@@ -7105,6 +7105,7 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
     `).get() || {};
     const purchaseSkus = ['ai_messages_100', 'ai_lifetime_daily_100'];
     const placeholders = purchaseSkus.map(() => '?').join(',');
+    const aiPurchaseWhere = "utility IN ('ai_messages_100', 'ai_lifetime_daily_100')";
     const purchases = db.db.prepare(`
       SELECT utility AS sku,
              COUNT(*) AS purchases,
@@ -7168,6 +7169,201 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
       quota_json: undefined,
       attempts_json: undefined,
     }));
+    const usageWindows = db.db.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN day = ? THEN total_used ELSE 0 END), 0) AS messages_today,
+        COUNT(DISTINCT CASE WHEN day = ? AND total_used > 0 THEN player_id END) AS users_today,
+        COALESCE(SUM(CASE WHEN day >= date('now', '-6 days') THEN total_used ELSE 0 END), 0) AS messages_7d,
+        COUNT(DISTINCT CASE WHEN day >= date('now', '-6 days') AND total_used > 0 THEN player_id END) AS users_7d,
+        COALESCE(SUM(total_used), 0) AS messages_all,
+        COUNT(DISTINCT CASE WHEN total_used > 0 THEN player_id END) AS users_all
+      FROM ai_message_daily_usage
+    `).get(today, today) || {};
+    const hermesWindows = db.db.prepare(`
+      SELECT
+        COUNT(*) AS events_all,
+        COUNT(DISTINCT player_id) AS users_all,
+        COALESCE(SUM(CASE WHEN status != 'ok' OR error IS NOT NULL THEN 1 ELSE 0 END), 0) AS errors_all,
+        COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS events_24h,
+        COUNT(DISTINCT CASE WHEN created_at > datetime('now', '-24 hours') THEN player_id END) AS users_24h,
+        COALESCE(SUM(CASE WHEN (status != 'ok' OR error IS NOT NULL) AND created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS errors_24h,
+        COALESCE(SUM(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END), 0) AS events_7d,
+        COUNT(DISTINCT CASE WHEN created_at > datetime('now', '-7 days') THEN player_id END) AS users_7d,
+        COALESCE(SUM(CASE WHEN (status != 'ok' OR error IS NOT NULL) AND created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END), 0) AS errors_7d
+      FROM hermes_chat_events
+      WHERE event_type = 'message'
+    `).get() || {};
+    const users = db.db.prepare(`
+      WITH actor_ids AS (
+        SELECT player_id FROM ai_message_daily_usage
+        UNION SELECT player_id FROM hermes_chat_events WHERE player_id IS NOT NULL
+        UNION SELECT player_id FROM mcp_events WHERE player_id IS NOT NULL
+        UNION SELECT player_id FROM utility_purchases WHERE ${aiPurchaseWhere}
+        UNION SELECT player_id FROM ai_message_credit_balances WHERE credits > 0
+        UNION SELECT player_id FROM ai_message_entitlements WHERE lifetime_daily_limit > 0
+      ),
+      usage_rollup AS (
+        SELECT player_id,
+               COALESCE(SUM(total_used), 0) AS total_used,
+               COALESCE(SUM(free_used), 0) AS free_used,
+               COALESCE(SUM(subscription_used), 0) AS subscription_used,
+               COALESCE(SUM(credit_used), 0) AS credit_used,
+               COALESCE(SUM(CASE WHEN day = ? THEN total_used ELSE 0 END), 0) AS today_used,
+               COALESCE(SUM(CASE WHEN day >= date('now', '-6 days') THEN total_used ELSE 0 END), 0) AS week_used,
+               MAX(day) AS last_usage_day
+        FROM ai_message_daily_usage
+        GROUP BY player_id
+      ),
+      hermes_rollup AS (
+        SELECT player_id,
+               COUNT(*) AS hermes_requests,
+               COALESCE(SUM(CASE WHEN status != 'ok' OR error IS NOT NULL THEN 1 ELSE 0 END), 0) AS hermes_errors,
+               COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS hermes_h24,
+               COALESCE(SUM(CASE WHEN (status != 'ok' OR error IS NOT NULL) AND created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS hermes_h24_errors,
+               ROUND(COALESCE(AVG(duration_ms), 0), 0) AS hermes_avg_duration_ms,
+               MAX(created_at) AS last_chat_at
+        FROM hermes_chat_events
+        WHERE event_type = 'message' AND player_id IS NOT NULL
+        GROUP BY player_id
+      ),
+      mcp_rollup AS (
+        SELECT player_id,
+               COUNT(*) AS mcp_calls,
+               COALESCE(SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END), 0) AS mcp_errors,
+               COALESCE(SUM(CASE WHEN tool = 'execute_ai_attack_plan' AND status = 'ok' THEN 1 ELSE 0 END), 0) AS mcp_ai_battles,
+               MAX(created_at) AS last_mcp_at
+        FROM mcp_events
+        WHERE player_id IS NOT NULL
+        GROUP BY player_id
+      ),
+      purchase_rollup AS (
+        SELECT player_id,
+               COUNT(*) AS ai_purchases,
+               COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+               MAX(created_at) AS last_purchase_at
+        FROM utility_purchases
+        WHERE ${aiPurchaseWhere}
+        GROUP BY player_id
+      )
+      SELECT a.player_id,
+             COALESCE(p.name, '(deleted)') AS name,
+             COALESCE(p.dex, '-') AS dex,
+             COALESCE(u.total_used, 0) AS total_used,
+             COALESCE(u.free_used, 0) AS free_used,
+             COALESCE(u.subscription_used, 0) AS subscription_used,
+             COALESCE(u.credit_used, 0) AS credit_used,
+             COALESCE(u.today_used, 0) AS today_used,
+             COALESCE(u.week_used, 0) AS week_used,
+             u.last_usage_day,
+             COALESCE(h.hermes_requests, 0) AS hermes_requests,
+             COALESCE(h.hermes_errors, 0) AS hermes_errors,
+             COALESCE(h.hermes_h24, 0) AS hermes_h24,
+             COALESCE(h.hermes_h24_errors, 0) AS hermes_h24_errors,
+             COALESCE(h.hermes_avg_duration_ms, 0) AS hermes_avg_duration_ms,
+             h.last_chat_at,
+             COALESCE(m.mcp_calls, 0) AS mcp_calls,
+             COALESCE(m.mcp_errors, 0) AS mcp_errors,
+             COALESCE(m.mcp_ai_battles, 0) AS mcp_ai_battles,
+             m.last_mcp_at,
+             COALESCE(cb.credits, 0) AS credits,
+             COALESCE(en.lifetime_daily_limit, 0) AS lifetime_daily_limit,
+             COALESCE(pr.ai_purchases, 0) AS ai_purchases,
+             (COALESCE(pr.usd_e6_sum, 0) / 1000000.0) AS spent_usd,
+             pr.last_purchase_at
+      FROM actor_ids a
+      LEFT JOIN players p ON p.id = a.player_id
+      LEFT JOIN usage_rollup u ON u.player_id = a.player_id
+      LEFT JOIN hermes_rollup h ON h.player_id = a.player_id
+      LEFT JOIN mcp_rollup m ON m.player_id = a.player_id
+      LEFT JOIN ai_message_credit_balances cb ON cb.player_id = a.player_id
+      LEFT JOIN ai_message_entitlements en ON en.player_id = a.player_id
+      LEFT JOIN purchase_rollup pr ON pr.player_id = a.player_id
+      ORDER BY COALESCE(u.total_used, 0) DESC,
+               COALESCE(h.hermes_requests, 0) DESC,
+               COALESCE(pr.usd_e6_sum, 0) DESC,
+               h.last_chat_at DESC
+      LIMIT 200
+    `).all(today).map((row) => ({
+      ...row,
+      spent_usd: Number(row.spent_usd || 0),
+    }));
+    const paymentsByChain = db.db.prepare(`
+      SELECT LOWER(COALESCE(NULLIF(chain, ''), 'unknown')) AS chain,
+             COUNT(*) AS payments,
+             COUNT(DISTINCT player_id) AS buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             COALESCE(SUM(CASE WHEN created_at > datetime('now', '-24 hours') THEN 1 ELSE 0 END), 0) AS h24,
+             COALESCE(SUM(CASE WHEN created_at > datetime('now', '-7 days') THEN 1 ELSE 0 END), 0) AS d7,
+             MAX(created_at) AS last_at
+      FROM utility_purchases
+      WHERE ${aiPurchaseWhere}
+      GROUP BY LOWER(COALESCE(NULLIF(chain, ''), 'unknown'))
+      ORDER BY usd_e6_sum DESC, payments DESC
+    `).all().map((row) => ({
+      ...row,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+    const paymentsByToken = db.db.prepare(`
+      SELECT LOWER(COALESCE(NULLIF(chain, ''), 'unknown')) AS chain,
+             UPPER(COALESCE(NULLIF(token, ''), 'unknown')) AS token,
+             COUNT(*) AS payments,
+             COUNT(DISTINCT player_id) AS buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             MAX(created_at) AS last_at
+      FROM utility_purchases
+      WHERE ${aiPurchaseWhere}
+      GROUP BY LOWER(COALESCE(NULLIF(chain, ''), 'unknown')),
+               UPPER(COALESCE(NULLIF(token, ''), 'unknown'))
+      ORDER BY usd_e6_sum DESC, payments DESC
+    `).all().map((row) => ({
+      ...row,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+    const paymentsByProductChain = db.db.prepare(`
+      SELECT utility AS sku,
+             LOWER(COALESCE(NULLIF(chain, ''), 'unknown')) AS chain,
+             UPPER(COALESCE(NULLIF(token, ''), 'unknown')) AS token,
+             COUNT(*) AS payments,
+             COUNT(DISTINCT player_id) AS buyers,
+             COALESCE(SUM(CAST(usd_price_e6 AS INTEGER)), 0) AS usd_e6_sum,
+             MAX(created_at) AS last_at
+      FROM utility_purchases
+      WHERE ${aiPurchaseWhere}
+      GROUP BY utility,
+               LOWER(COALESCE(NULLIF(chain, ''), 'unknown')),
+               UPPER(COALESCE(NULLIF(token, ''), 'unknown'))
+      ORDER BY usd_e6_sum DESC, payments DESC
+    `).all().map((row) => ({
+      ...row,
+      title: GAME_SHOP_PRODUCTS[row.sku]?.title || row.sku,
+      revenue_usd: (Number(row.usd_e6_sum) || 0) / 1_000_000,
+    }));
+    const paymentRecent = db.db.prepare(`
+      SELECT u.id, u.player_id, COALESCE(p.name, '(deleted)') AS name,
+             COALESCE(p.dex, '-') AS dex,
+             u.utility AS sku, u.chain, u.token, u.tx_hash, u.payer, u.amount,
+             u.usd_price_e6, u.created_at
+      FROM utility_purchases u
+      LEFT JOIN players p ON p.id = u.player_id
+      WHERE ${aiPurchaseWhere}
+      ORDER BY u.id DESC
+      LIMIT 80
+    `).all().map((row) => ({
+      ...row,
+      title: GAME_SHOP_PRODUCTS[row.sku]?.title || row.sku,
+      price_usd: (Number(row.usd_price_e6) || 0) / 1_000_000,
+    }));
+    const hermesErrorsRecent = db.db.prepare(`
+      SELECT e.id, e.created_at, e.trace_id, e.event_type, e.intent, e.player_id,
+             COALESCE(e.player_name, p.name) AS player_name,
+             e.status, e.duration_ms, e.model, e.error,
+             e.request_preview
+      FROM hermes_chat_events e
+      LEFT JOIN players p ON p.id = e.player_id
+      WHERE e.status != 'ok' OR e.error IS NOT NULL
+      ORDER BY e.id DESC
+      LIMIT 80
+    `).all();
     res.set('Cache-Control', 'no-store');
     res.json({
       settings: { free_messages_per_day: freeMessagesPerDay },
@@ -7184,7 +7380,29 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
         players_with_credits: Number(balances.players_with_credits || 0),
         lifetime_players: Number(entitlements.lifetime_players || 0),
       },
+      usage_windows: {
+        messages_today: Number(usageWindows.messages_today || 0),
+        users_today: Number(usageWindows.users_today || 0),
+        messages_7d: Number(usageWindows.messages_7d || 0),
+        users_7d: Number(usageWindows.users_7d || 0),
+        messages_all: Number(usageWindows.messages_all || 0),
+        users_all: Number(usageWindows.users_all || 0),
+        hermes_events_24h: Number(hermesWindows.events_24h || 0),
+        hermes_users_24h: Number(hermesWindows.users_24h || 0),
+        hermes_errors_24h: Number(hermesWindows.errors_24h || 0),
+        hermes_events_7d: Number(hermesWindows.events_7d || 0),
+        hermes_users_7d: Number(hermesWindows.users_7d || 0),
+        hermes_errors_7d: Number(hermesWindows.errors_7d || 0),
+        hermes_events_all: Number(hermesWindows.events_all || 0),
+        hermes_users_all: Number(hermesWindows.users_all || 0),
+        hermes_errors_all: Number(hermesWindows.errors_all || 0),
+      },
       purchases,
+      users,
+      payments_by_chain: paymentsByChain,
+      payments_by_token: paymentsByToken,
+      payments_by_product_chain: paymentsByProductChain,
+      payment_recent: paymentRecent,
       hermes: {
         total: Number(hermes.total || 0),
         errors: Number(hermes.errors || 0),
@@ -7194,6 +7412,7 @@ router.get('/admin/ai-chat/billing', adminAuth, (req, res) => {
       },
       hermes_models: hermesModels,
       hermes_intents: hermesIntents,
+      hermes_errors_recent: hermesErrorsRecent,
       hermes_recent: hermesRecent,
     });
   } catch (err) {

@@ -732,10 +732,40 @@ app.get('/api/admin/panel', (req, res) => {
       <button class="btn" onclick="saveAiChatSettings()">Save AI settings</button>
       <span id="aiChatSettingsStatus" style="font-size:12px;color:#94a3b8"></span>
     </div>
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Usage by Player</h2>
+    <table><thead><tr>
+      <th>Player</th><th>DEX</th><th>Msgs today</th><th>Msgs 7d</th><th>Msgs all</th><th>Hermes</th><th>MCP</th><th>Credits / pass</th><th>Purchases</th><th>Last chat</th>
+    </tr></thead><tbody id="aiChatUsersBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Chain</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>24h</th><th>7d</th><th>Last</th>
+    </tr></thead><tbody id="aiChatPaymentChainsBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Token</h2>
+    <table><thead><tr>
+      <th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>Last</th>
+    </tr></thead><tbody id="aiChatPaymentTokensBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Payments by Product / Chain</h2>
+    <table><thead><tr>
+      <th>Product</th><th>Chain</th><th>Token</th><th>Payments</th><th>Buyers</th><th>Revenue</th><th>Last</th>
+    </tr></thead><tbody id="aiChatPaymentProductsBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent AI Payments</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Product</th><th>Chain / token</th><th>Price</th><th>Payer</th><th>Tx</th>
+    </tr></thead><tbody id="aiChatPaymentRecentBody"></tbody></table>
+
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">AI Agent Model Stats</h2>
     <table><thead><tr>
       <th>Model</th><th>Requests</th><th>Errors</th><th>Avg</th><th>Last</th>
     </tr></thead><tbody id="aiChatModelBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent AI Agent Errors</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Player</th><th>Intent</th><th>Model</th><th>Duration</th><th>Error / Request</th>
+    </tr></thead><tbody id="aiChatErrorsBody"></tbody></table>
 
     <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent AI Agent Logs</h2>
     <table><thead><tr>
@@ -2702,7 +2732,15 @@ async function loadShop() {
     const fmtTime = (t) => t ? new Date(t.replace(' ', 'T') + 'Z').toLocaleString() : '—';
     const txLink = (chain, hash) => {
       if (!hash) return '—';
-      const explorer = chain === 'base' ? 'https://basescan.org/tx/' : null;
+      const key = String(chain || '').toLowerCase();
+      const explorers = {
+        base: 'https://basescan.org/tx/',
+        arbitrum: 'https://arbiscan.io/tx/',
+        monad: 'https://testnet.monadexplorer.com/tx/',
+        solana: 'https://solscan.io/tx/',
+        aptos: 'https://explorer.aptoslabs.com/txn/',
+      };
+      const explorer = explorers[key] || null;
       const short = '<code class="mono">' + esc(hash.slice(0, 10) + '…' + hash.slice(-6)) + '</code>';
       return explorer ? '<a href="' + explorer + esc(hash) + '" target="_blank" style="color:#fbbf24">' + short + '</a>' : short;
     };
@@ -2720,16 +2758,96 @@ async function loadShop() {
       const u = aiBilling.usage || {};
       const b = aiBilling.balances || {};
       const h = aiBilling.hermes || {};
+      const w = aiBilling.usage_windows || {};
+      const aiPaymentTotals = (aiBilling.payments_by_chain || []).reduce((acc, row) => {
+        acc.payments += Number(row.payments || 0);
+        acc.revenue += Number(row.revenue_usd || 0);
+        return acc;
+      }, { payments: 0, revenue: 0 });
       document.getElementById('aiFreeMessagesPerDay').value = aiBilling.settings?.free_messages_per_day ?? 0;
       document.getElementById('aiChatBillingSummary').innerHTML =
         '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (aiBilling.settings?.free_messages_per_day ?? 0) + '</div><div class="l">Free msgs / day</div></div>' +
         '<div class="stat"><div class="v">' + (u.today || 0) + '</div><div class="l">AI msgs today</div></div>' +
         '<div class="stat"><div class="v">' + (u.week || 0) + '</div><div class="l">AI msgs 7d</div></div>' +
         '<div class="stat"><div class="v">' + (u.all || 0) + '</div><div class="l">AI msgs all</div></div>' +
+        '<div class="stat"><div class="v">' + (w.users_7d || 0) + '</div><div class="l">AI users 7d</div></div>' +
+        '<div class="stat"><div class="v">' + aiPaymentTotals.payments + '</div><div class="l">AI payments</div></div>' +
+        '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(aiPaymentTotals.revenue) + '</div><div class="l">AI revenue</div></div>' +
         '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (b.outstanding_credits || 0) + '</div><div class="l">Outstanding credits</div></div>' +
         '<div class="stat"><div class="v">' + (b.lifetime_players || 0) + '</div><div class="l">Lifetime passes</div></div>' +
         '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">' + (h.h24_errors || 0) + '</div><div class="l">Hermes errors 24h</div></div>' +
         '<div class="stat"><div class="v">' + (h.avg_duration_ms || 0) + 'ms</div><div class="l">Avg response</div></div>';
+      const aiUsers = aiBilling.users || [];
+      document.getElementById('aiChatUsersBody').innerHTML = aiUsers.length === 0
+        ? '<tr><td colspan="10" style="color:#6b7280;text-align:center;padding:18px">No AI chat users yet</td></tr>'
+        : aiUsers.map((row) => {
+            const hermesErrors = Number(row.hermes_errors || 0);
+            const mcpErrors = Number(row.mcp_errors || 0);
+            return '<tr>' +
+              '<td style="font-weight:800">' + esc(row.name || row.player_id || '-') + '<div class="mono" style="font-size:10px;color:#64748b">' + esc(String(row.player_id || '').slice(0, 12)) + '</div></td>' +
+              '<td>' + esc(row.dex || '-') + '</td>' +
+              '<td>' + (row.today_used || 0) + '</td>' +
+              '<td>' + (row.week_used || 0) + '</td>' +
+              '<td><strong>' + (row.total_used || 0) + '</strong><div style="font-size:10px;color:#94a3b8">free ' + (row.free_used || 0) + ' / sub ' + (row.subscription_used || 0) + ' / credits ' + (row.credit_used || 0) + '</div></td>' +
+              '<td>' + (row.hermes_requests || 0) + '<div style="font-size:10px;color:' + (hermesErrors ? '#fca5a5' : '#94a3b8') + '">errors ' + hermesErrors + ' / avg ' + (row.hermes_avg_duration_ms || 0) + 'ms</div></td>' +
+              '<td>' + (row.mcp_calls || 0) + '<div style="font-size:10px;color:' + (mcpErrors ? '#fca5a5' : '#94a3b8') + '">errors ' + mcpErrors + '</div></td>' +
+              '<td>' + (row.credits || 0) + '<div style="font-size:10px;color:#94a3b8">daily ' + (row.lifetime_daily_limit || 0) + '</div></td>' +
+              '<td>' + (row.ai_purchases || 0) + '<div style="font-size:10px;color:#4ade80">' + fmtUsd(row.spent_usd) + '</div></td>' +
+              '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_chat_at || row.last_usage_day || row.last_purchase_at)) + '</td>' +
+            '</tr>';
+          }).join('');
+
+      const payChains = aiBilling.payments_by_chain || [];
+      document.getElementById('aiChatPaymentChainsBody').innerHTML = payChains.length === 0
+        ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:18px">No AI payments yet</td></tr>'
+        : payChains.map((row) => '<tr>' +
+            '<td><span class="badge">' + esc(row.chain || 'unknown') + '</span></td>' +
+            '<td>' + (row.payments || 0) + '</td>' +
+            '<td>' + (row.buyers || 0) + '</td>' +
+            '<td style="color:#4ade80;font-weight:800">' + fmtUsd(row.revenue_usd) + '</td>' +
+            '<td>' + (row.h24 || 0) + '</td>' +
+            '<td>' + (row.d7 || 0) + '</td>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+          '</tr>').join('');
+
+      const payTokens = aiBilling.payments_by_token || [];
+      document.getElementById('aiChatPaymentTokensBody').innerHTML = payTokens.length === 0
+        ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:18px">No AI token payments yet</td></tr>'
+        : payTokens.map((row) => '<tr>' +
+            '<td><span class="badge">' + esc(row.chain || 'unknown') + '</span></td>' +
+            '<td class="mono">' + esc(row.token || 'unknown') + '</td>' +
+            '<td>' + (row.payments || 0) + '</td>' +
+            '<td>' + (row.buyers || 0) + '</td>' +
+            '<td style="color:#4ade80;font-weight:800">' + fmtUsd(row.revenue_usd) + '</td>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+          '</tr>').join('');
+
+      const payProducts = aiBilling.payments_by_product_chain || [];
+      document.getElementById('aiChatPaymentProductsBody').innerHTML = payProducts.length === 0
+        ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:18px">No AI product payments yet</td></tr>'
+        : payProducts.map((row) => '<tr>' +
+            '<td style="font-weight:700">' + esc(row.title || row.sku || '-') + '<div class="mono" style="font-size:10px;color:#64748b">' + esc(row.sku || '') + '</div></td>' +
+            '<td><span class="badge">' + esc(row.chain || 'unknown') + '</span></td>' +
+            '<td class="mono">' + esc(row.token || 'unknown') + '</td>' +
+            '<td>' + (row.payments || 0) + '</td>' +
+            '<td>' + (row.buyers || 0) + '</td>' +
+            '<td style="color:#4ade80;font-weight:800">' + fmtUsd(row.revenue_usd) + '</td>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+          '</tr>').join('');
+
+      const aiPayments = aiBilling.payment_recent || [];
+      document.getElementById('aiChatPaymentRecentBody').innerHTML = aiPayments.length === 0
+        ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:18px">No recent AI payments</td></tr>'
+        : aiPayments.map((row) => '<tr>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + '</td>' +
+            '<td style="font-weight:700">' + esc(row.name || row.player_id || '-') + '<div style="font-size:10px;color:#64748b">' + esc(row.dex || '-') + '</div></td>' +
+            '<td>' + esc(row.title || row.sku || '-') + '</td>' +
+            '<td><span class="badge">' + esc(row.chain || '-') + '</span><div class="mono" style="font-size:10px;color:#94a3b8">' + esc(row.token || '-') + '</div></td>' +
+            '<td style="color:#4ade80;font-weight:700">' + fmtUsd(row.price_usd) + '</td>' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af">' + (row.payer ? esc(row.payer.slice(0, 8) + 'вЂ¦' + row.payer.slice(-4)) : 'вЂ”') + '</td>' +
+            '<td>' + txLink(row.chain, row.tx_hash) + '</td>' +
+          '</tr>').join('');
+
       const aiModels = aiBilling.hermes_models || [];
       document.getElementById('aiChatModelBody').innerHTML = aiModels.length === 0
         ? '<tr><td colspan="5" style="color:#6b7280;text-align:center;padding:18px">No AI chat model logs yet</td></tr>'
@@ -2739,6 +2857,20 @@ async function loadShop() {
             '<td style="color:' + ((row.errors || 0) ? '#fca5a5' : '#94a3b8') + '">' + (row.errors || 0) + '</td>' +
             '<td>' + (row.avg_duration_ms || 0) + 'ms</td>' +
             '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtTime(row.last_at)) + '</td>' +
+          '</tr>').join('');
+      const aiErrors = aiBilling.hermes_errors_recent || [];
+      document.getElementById('aiChatErrorsBody').innerHTML = aiErrors.length === 0
+        ? '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:18px">No AI chat errors yet</td></tr>'
+        : aiErrors.map((row) => '<tr class="log-row-error">' +
+            '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtTime(row.created_at)) + '</td>' +
+            '<td style="font-weight:700">' + esc(row.player_name || row.player_id || '-') + '</td>' +
+            '<td><span class="badge">' + esc(row.intent || '-') + '</span><div class="mono" style="font-size:10px;color:#64748b">trace ' + esc(String(row.trace_id || '').slice(0, 12)) + '</div></td>' +
+            '<td class="mono" style="font-size:10px;color:#cbd5e1">' + esc(row.model || '-') + '</td>' +
+            '<td>' + (row.duration_ms ?? '-') + 'ms</td>' +
+            '<td style="max-width:560px;white-space:normal;line-height:1.35">' +
+              '<div style="color:#fca5a5">' + esc(row.error || row.status || '-') + '</div>' +
+              '<div style="color:#fbbf24;margin-top:4px">' + esc(row.request_preview || '') + '</div>' +
+            '</td>' +
           '</tr>').join('');
       const aiRecent = aiBilling.hermes_recent || [];
       document.getElementById('aiChatRecentBody').innerHTML = aiRecent.length === 0
@@ -2767,7 +2899,13 @@ async function loadShop() {
     } else {
       document.getElementById('aiChatBillingSummary').innerHTML =
         '<div style="color:#ef4444">AI billing failed: ' + esc(aiBilling?.error || 'unknown') + '</div>';
+      document.getElementById('aiChatUsersBody').innerHTML = '<tr><td colspan="10" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatPaymentChainsBody').innerHTML = '<tr><td colspan="7" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatPaymentTokensBody').innerHTML = '<tr><td colspan="6" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatPaymentProductsBody').innerHTML = '<tr><td colspan="7" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatPaymentRecentBody').innerHTML = '<tr><td colspan="7" style="color:#ef4444">Unavailable</td></tr>';
       document.getElementById('aiChatModelBody').innerHTML = '<tr><td colspan="5" style="color:#ef4444">Unavailable</td></tr>';
+      document.getElementById('aiChatErrorsBody').innerHTML = '<tr><td colspan="6" style="color:#ef4444">Unavailable</td></tr>';
       document.getElementById('aiChatRecentBody').innerHTML = '<tr><td colspan="7" style="color:#ef4444">Unavailable</td></tr>';
     }
 
