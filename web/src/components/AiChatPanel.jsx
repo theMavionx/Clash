@@ -1274,7 +1274,7 @@ function AiChatPanel({ onClose }) {
           </div>
         )}
 
-        <AiQuotaSummary quota={quota} />
+        {!isMobile && <AiQuotaSummary quota={quota} />}
 
         <div ref={listRef} className="shop-scroll" style={styles.messages}>
           {/* Empty state: when the only thing in the thread is the seed
