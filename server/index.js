@@ -559,14 +559,40 @@ app.get('/api/admin/panel', (req, res) => {
             <input id="tn_freeze_trophies" type="checkbox" checked style="width:auto;margin:0"> Freeze main trophies
           </label>
           <label style="font-size:11px;color:#9ca3af">Sort by
-            <select id="tn_sort" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+            <select id="tn_sort" onchange="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="points">Custom points</option>
               <option value="pnl_usd">PnL (USD)</option>
               <option value="trophies">Trophies</option>
               <option value="volume_usd">Volume (USD)</option>
-              <option value="volume_trophies_50_50">50% Volume / 50% Trophies</option>
               <option value="gold">Gold</option>
             </select>
           </label>
+          <div id="tn_points_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
+            <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Point weights</div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_trophy_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Trophies %</span><input id="tn_points_trophy" type="number" min="0" max="100" step="1" value="20" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_volume_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Volume %</span><input id="tn_points_volume" type="number" min="0" max="100" step="1" value="60" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_pnl_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Positive PnL %</span><input id="tn_points_pnl" type="number" min="0" max="100" step="1" value="20" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+            </div>
+            <div id="tn_points_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Enabled weights must total 100. Points are raw, not capped.</div>
+          </div>
+          <div id="tn_prize_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+              <div style="font-size:11px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.4px">Prize pool tiers</div>
+              <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:6px">Currency
+                <input id="tn_prize_currency" value="USD" maxlength="12" style="width:72px;background:#111827;border:1px solid #374151;border-radius:6px;padding:5px;color:#e5e7eb;text-transform:uppercase">
+              </label>
+            </div>
+            <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <input id="tn_rewards_cop" type="checkbox" onchange="updateTournamentPrizeUi()" style="width:auto;margin:0"> Rewards in COP token (players must enter EVM payout address)
+            </label>
+            <div id="tn_prize_rows" style="display:flex;flex-direction:column;gap:8px"></div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+              <button type="button" class="btn" onclick="addTournamentPrizeTier()">Add tier</button>
+              <button type="button" class="btn" onclick="loadTournamentPrizeExample()" style="background:#4b5563">Load example</button>
+              <span id="tn_prize_hint" style="font-size:11px;color:#9ca3af">No prize tiers configured.</span>
+            </div>
+          </div>
           <label style="font-size:11px;color:#9ca3af">Status
             <select id="tn_status" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
               <option value="active">Active</option>
@@ -584,12 +610,12 @@ app.get('/api/admin/panel', (req, res) => {
         <h3 style="color:#f59e0b;font-size:13px;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.5px">Live Leaderboard</h3>
         <div id="tn_lb_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament below to view its leaderboard.</div>
         <table style="font-size:12px"><thead><tr>
-          <th>#</th><th>Player</th><th>Score</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
+          <th>#</th><th>Player</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
         </tr></thead><tbody id="tn_lb_body"></tbody></table>
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Freeze</th><th>Sort</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -606,7 +632,8 @@ app.get('/api/admin/panel', (req, res) => {
       • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
       • <strong>GMX</strong> — Modelled as <code>volume × fee_per_side × tier_rebate</code>. Volume from local futures.db, tier rate read on-chain from <code>tiers(referrerTiers(affiliate))</code> on GMX ReferralStorage; fee_per_side default 0.05% (env <code>GMX_AVG_FEE_BPS</code>).<br>
       • <strong>Decibel</strong> — Authenticated REST <code>/api/v1/account_overviews?account=&lt;builder-subaccount&gt;</code>: <code>fee_income</code> field, our cumulative builder rebate. Withdrawable USDC shown beside.<br>
-      • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).
+      • <strong>Avantis</strong> — Modelled as <code style="color:#fbbf24">volume × fee_per_side × tier1_rebate</code>. Volume from local futures.db (worker+client rows), tier1 rebate read on-chain from <code>referralTiers(1) = 5%</code>, fee_per_side default 0.08% (env <code>AVANTIS_AVG_FEE_BPS</code> to tune).<br>
+      • <strong>Phoenix</strong> — Modelled as <code style="color:#fbbf24">verified Phoenix volume × Flight builder fee</code>. Default Flight fee is 10bps / 0.1% (<code>PHOENIX_FLIGHT_BUILDER_FEE_BPS</code>). Phoenix currently collects Flight fees only on liquidity-removing fills.
     </div>
   </div>
 
@@ -1638,12 +1665,247 @@ let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
 
-function tournamentSortLabel(sortBy) {
+function isTournamentPointsSort(sortBy) {
+  return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
+}
+
+function tournamentPointsWeights(t) {
+  if (t && t.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
+  const w = (t && t.points_weights) || {};
+  return {
+    trophies: Number(w.trophies ?? t?.points_trophy_weight ?? 20) || 0,
+    volume: Number(w.volume ?? t?.points_volume_weight ?? 60) || 0,
+    pnl: Number(w.pnl ?? t?.points_pnl_weight ?? 20) || 0,
+  };
+}
+
+function fmtTournamentWeight(n) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\\.?0+$/, '');
+}
+
+function fmtTournamentUsd(n, currency) {
+  const value = Number(n) || 0;
+  const text = value >= 1000
+    ? Math.round(value).toLocaleString()
+    : value.toLocaleString(undefined, { minimumFractionDigits: value % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  return '$' + text + (currency ? ' ' + currency : '');
+}
+
+function tournamentPointParts(weights) {
+  const parts = [];
+  if (Number(weights.trophies) > 0) parts.push(fmtTournamentWeight(weights.trophies) + '% Trophies');
+  if (Number(weights.volume) > 0) parts.push(fmtTournamentWeight(weights.volume) + '% Volume');
+  if (Number(weights.pnl) > 0) parts.push(fmtTournamentWeight(weights.pnl) + '% PnL');
+  return parts;
+}
+
+function tournamentPrizeExample() {
+  return [
+    {
+      volume_usd: 500000,
+      pool_usd: 500,
+      payouts: [
+        { rank: 1, amount_usd: 300 },
+        { rank: 2, amount_usd: 150 },
+        { rank: 3, amount_usd: 50 },
+      ],
+    },
+    {
+      volume_usd: 1000000,
+      pool_usd: 1000,
+      payouts: [
+        { rank: 1, amount_usd: 600 },
+        { rank: 2, amount_usd: 300 },
+        { rank: 3, amount_usd: 100 },
+      ],
+    },
+  ];
+}
+
+function normalizeTournamentPrizeTiersAdmin(tiers) {
+  const arr = Array.isArray(tiers) ? tiers : [];
+  return arr.map((tier) => {
+    const payouts = Array.isArray(tier?.payouts) ? tier.payouts : [];
+    return {
+      volume_usd: Math.max(0, Number(tier?.volume_usd) || 0),
+      pool_usd: Math.max(0, Number(tier?.pool_usd) || 0),
+      payouts: payouts.map((p) => ({
+        rank: Math.max(1, Math.floor(Number(p?.rank) || 1)),
+        amount_usd: Math.max(0, Number(p?.amount_usd) || 0),
+      })).filter((p) => p.amount_usd > 0).sort((a, b) => a.rank - b.rank),
+    };
+  }).filter((tier) => tier.volume_usd > 0 || tier.pool_usd > 0 || tier.payouts.length > 0)
+    .sort((a, b) => a.volume_usd - b.volume_usd);
+}
+
+function readTournamentPrizeTiers() {
+  const rows = Array.from(document.querySelectorAll('[data-prize-tier]'));
+  return normalizeTournamentPrizeTiersAdmin(rows.map((row) => {
+    const payouts = Array.from(row.querySelectorAll('[data-prize-payout]')).map((pRow) => ({
+      rank: pRow.querySelector('[data-prize-rank]')?.value,
+      amount_usd: pRow.querySelector('[data-prize-amount]')?.value,
+    }));
+    return {
+      volume_usd: row.querySelector('[data-prize-volume]')?.value,
+      pool_usd: row.querySelector('[data-prize-pool]')?.value,
+      payouts,
+    };
+  }));
+}
+
+function renderTournamentPrizeTiers(tiers) {
+  const box = document.getElementById('tn_prize_rows');
+  if (!box) return;
+  const normalized = normalizeTournamentPrizeTiersAdmin(tiers);
+  if (normalized.length === 0) {
+    box.innerHTML = '';
+    updateTournamentPrizeUi();
+    return;
+  }
+  box.innerHTML = normalized.map((tier, idx) => {
+    const payouts = tier.payouts.length ? tier.payouts : [{ rank: 1, amount_usd: 0 }];
+    return '<div data-prize-tier="' + idx + '" style="border:1px solid #374151;border-radius:8px;padding:8px;background:#111827">'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">'
+      + '<label style="font-size:11px;color:#9ca3af">Total volume unlock ($)<input data-prize-volume type="number" min="0" step="1000" value="' + tier.volume_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+      + '<label style="font-size:11px;color:#9ca3af">Prize pool ($)<input data-prize-pool type="number" min="0" step="1" value="' + tier.pool_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+      + '<button type="button" class="btn" onclick="removeTournamentPrizeTier(' + idx + ')" style="background:#7f1d1d">Remove</button>'
+      + '</div>'
+      + '<div style="font-size:10px;color:#9ca3af;margin:8px 0 4px">Rank payouts</div>'
+      + payouts.map((p, payoutIdx) =>
+        '<div data-prize-payout style="display:grid;grid-template-columns:72px 1fr auto;gap:8px;align-items:end;margin-top:5px">'
+        + '<label style="font-size:11px;color:#9ca3af">Rank<input data-prize-rank type="number" min="1" step="1" value="' + p.rank + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+        + '<label style="font-size:11px;color:#9ca3af">Amount ($)<input data-prize-amount type="number" min="0" step="1" value="' + p.amount_usd + '" oninput="updateTournamentPrizeUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>'
+        + '<button type="button" class="btn" onclick="removeTournamentPrizePayout(' + idx + ',' + payoutIdx + ')" style="background:#4b5563">Remove</button>'
+        + '</div>'
+      ).join('')
+      + '<button type="button" class="btn" onclick="addTournamentPrizePayout(' + idx + ')" style="margin-top:8px;background:#374151">Add payout</button>'
+      + '</div>';
+  }).join('');
+  updateTournamentPrizeUi();
+}
+
+function addTournamentPrizeTier() {
+  const tiers = readTournamentPrizeTiers();
+  const nextVolume = (tiers[tiers.length - 1]?.volume_usd || 0) + 500000;
+  tiers.push({ volume_usd: nextVolume, pool_usd: 500, payouts: [{ rank: 1, amount_usd: 300 }, { rank: 2, amount_usd: 150 }, { rank: 3, amount_usd: 50 }] });
+  renderTournamentPrizeTiers(tiers);
+}
+
+function removeTournamentPrizeTier(index) {
+  const tiers = readTournamentPrizeTiers();
+  tiers.splice(index, 1);
+  renderTournamentPrizeTiers(tiers);
+}
+
+function addTournamentPrizePayout(index) {
+  const tiers = readTournamentPrizeTiers();
+  const tier = tiers[index] || { volume_usd: 0, pool_usd: 0, payouts: [] };
+  const nextRank = tier.payouts.reduce((max, p) => Math.max(max, Number(p.rank) || 0), 0) + 1;
+  tier.payouts.push({ rank: nextRank, amount_usd: 1 });
+  tiers[index] = tier;
+  renderTournamentPrizeTiers(tiers);
+}
+
+function removeTournamentPrizePayout(index, payoutIndex) {
+  const tiers = readTournamentPrizeTiers();
+  if (tiers[index]) tiers[index].payouts.splice(payoutIndex, 1);
+  renderTournamentPrizeTiers(tiers);
+}
+
+function loadTournamentPrizeExample() {
+  renderTournamentPrizeTiers(tournamentPrizeExample());
+}
+
+function updateTournamentPrizeUi() {
+  const hint = document.getElementById('tn_prize_hint');
+  if (!hint) return;
+  const tiers = readTournamentPrizeTiers();
+  const cop = document.getElementById('tn_rewards_cop')?.checked;
+  const currency = document.getElementById('tn_prize_currency');
+  if (currency && cop) currency.value = 'COP';
+  if (!tiers.length) {
+    hint.style.color = '#9ca3af';
+    hint.textContent = cop ? 'COP rewards enabled. Players must enter an EVM payout address when joining.' : 'No prize tiers configured.';
+    return;
+  }
+  const invalid = tiers.find((tier) => tier.payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0) > Number(tier.pool_usd || 0) + 0.01);
+  if (invalid) {
+    hint.style.color = '#fca5a5';
+    hint.textContent = 'Payouts cannot exceed their tier prize pool.';
+    return;
+  }
+  const top = tiers[tiers.length - 1];
+  hint.style.color = '#9ca3af';
+  hint.textContent = tiers.length + ' tier(s), top pool ' + fmtTournamentUsd(top.pool_usd, document.getElementById('tn_prize_currency')?.value || 'USD')
+    + ' at ' + fmtTournamentUsd(top.volume_usd, '') + ' total volume.'
+    + (cop ? ' COP payout addresses required.' : '');
+}
+
+function tournamentPrizeLabel(t) {
+  const currency = t?.prize_currency || 'USD';
+  const pool = Number(t?.prize_pool_usd || 0);
+  const active = t?.prize_active_tier;
+  const next = t?.prize_next_tier;
+  const totalVolume = Number(t?.prize_total_volume_usd || 0);
+  if (pool > 0 && active) {
+    return fmtTournamentUsd(pool, currency) + (t?.rewards_in_cop ? ' <span style="color:#fbbf24">COP</span>' : '')
+      + '<div style="font-size:10px;color:#9ca3af">active at ' + fmtTournamentUsd(active.volume_usd || 0, '') + ' vol · current ' + fmtTournamentUsd(totalVolume, '') + '</div>';
+  }
+  if (next) {
+    return '<span style="color:#9ca3af">Next ' + fmtTournamentUsd(next.pool_usd || 0, currency)
+      + '</span><div style="font-size:10px;color:#9ca3af">needs ' + fmtTournamentUsd(next.volume_usd || 0, '') + ' vol</div>';
+  }
+  return '<span style="color:#6b7280">—</span>';
+}
+
+function tournamentSortLabel(tOrSort) {
+  const sortBy = typeof tOrSort === 'string' ? tOrSort : tOrSort?.sort_by;
   if (sortBy === 'trophies') return 'Trophies';
   if (sortBy === 'volume_usd') return 'Volume (USD)';
   if (sortBy === 'gold') return 'Gold';
-  if (sortBy === 'volume_trophies_50_50') return '50% Volume / 50% Trophies';
+  if (isTournamentPointsSort(sortBy)) {
+    const w = tournamentPointsWeights(typeof tOrSort === 'string' ? { sort_by: sortBy } : tOrSort);
+    const parts = tournamentPointParts(w);
+    return 'Points (' + (parts.length ? parts.join(' / ') : 'no enabled metrics') + ')';
+  }
   return 'PnL (USD)';
+}
+
+function readTournamentWeight(id, fallback) {
+  const enabled = document.getElementById(id + '_on');
+  if (enabled && !enabled.checked) return 0;
+  const el = document.getElementById(id);
+  const n = Number(el && el.value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, n));
+}
+
+function updateTournamentPointsUi() {
+  const sort = document.getElementById('tn_sort');
+  const box = document.getElementById('tn_points_box');
+  const hint = document.getElementById('tn_points_hint');
+  if (!sort || !box || !hint) return;
+  const isPoints = sort.value === 'points';
+  box.style.opacity = isPoints ? '1' : '0.45';
+  ['tn_points_trophy', 'tn_points_volume', 'tn_points_pnl'].forEach((id) => {
+    const input = document.getElementById(id);
+    const enabled = document.getElementById(id + '_on');
+    if (enabled) enabled.disabled = !isPoints;
+    if (input) {
+      input.disabled = !isPoints || (enabled && !enabled.checked);
+      input.style.opacity = input.disabled ? '0.55' : '1';
+    }
+  });
+  const weights = {
+    trophies: readTournamentWeight('tn_points_trophy', 20),
+    volume: readTournamentWeight('tn_points_volume', 60),
+    pnl: readTournamentWeight('tn_points_pnl', 20),
+  };
+  const total = weights.trophies + weights.volume + weights.pnl;
+  const parts = tournamentPointParts(weights);
+  hint.style.color = Math.abs(total - 100) < 0.001 ? '#9ca3af' : '#fca5a5';
+  hint.textContent = 'Total: ' + total + '%. ' + (parts.length ? 'Points = ' + parts.join(' + ') + '.' : 'Enable at least one metric.');
 }
 
 async function loadTournaments() {
@@ -1659,7 +1921,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="14" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="15" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -1685,7 +1947,8 @@ function renderTournaments() {
       + '<td>' + t.gold_boost + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
-      + '<td>' + esc(t.sort_label || tournamentSortLabel(t.sort_by)) + '</td>'
+      + '<td>' + esc(t.sort_label || tournamentSortLabel(t)) + '</td>'
+      + '<td style="font-size:11px">' + tournamentPrizeLabel(t) + '</td>'
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
       +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
@@ -1698,6 +1961,11 @@ function renderTournaments() {
 }
 
 function getTournamentFormBody() {
+  const pointWeights = {
+    trophies: readTournamentWeight('tn_points_trophy', 20),
+    volume: readTournamentWeight('tn_points_volume', 60),
+    pnl: readTournamentWeight('tn_points_pnl', 20),
+  };
   return {
     name: document.getElementById('tn_name').value.trim(),
     description: document.getElementById('tn_desc').value.trim(),
@@ -1711,6 +1979,12 @@ function getTournamentFormBody() {
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
     freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
     sort_by: document.getElementById('tn_sort').value,
+    points_trophy_weight: pointWeights.trophies,
+    points_volume_weight: pointWeights.volume,
+    points_pnl_weight: pointWeights.pnl,
+    prize_currency: (document.getElementById('tn_prize_currency').value.trim() || 'USD').toUpperCase(),
+    prize_tiers: readTournamentPrizeTiers(),
+    rewards_in_cop: document.getElementById('tn_rewards_cop').checked,
     status: document.getElementById('tn_status').value,
   };
 }
@@ -1731,8 +2005,19 @@ function resetTournamentForm() {
   document.getElementById('tn_gold').value = '1';
   document.getElementById('tn_trophy').value = '1';
   document.getElementById('tn_freeze_trophies').checked = true;
-  document.getElementById('tn_sort').value = 'pnl_usd';
+  document.getElementById('tn_sort').value = 'points';
+  document.getElementById('tn_points_trophy').value = '20';
+  document.getElementById('tn_points_volume').value = '60';
+  document.getElementById('tn_points_pnl').value = '20';
+  document.getElementById('tn_points_trophy_on').checked = true;
+  document.getElementById('tn_points_volume_on').checked = true;
+  document.getElementById('tn_points_pnl_on').checked = true;
+  document.getElementById('tn_prize_currency').value = 'USD';
+  document.getElementById('tn_rewards_cop').checked = false;
+  renderTournamentPrizeTiers([]);
   document.getElementById('tn_status').value = 'active';
+  updateTournamentPointsUi();
+  updateTournamentPrizeUi();
 }
 
 function editTournament(id) {
@@ -1753,14 +2038,40 @@ function editTournament(id) {
   document.getElementById('tn_gold').value = t.gold_boost || 1;
   document.getElementById('tn_trophy').value = t.trophy_boost || 1;
   document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;
-  document.getElementById('tn_sort').value = t.sort_by || 'pnl_usd';
+  document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
+  const weights = tournamentPointsWeights(t);
+  document.getElementById('tn_points_trophy').value = weights.trophies;
+  document.getElementById('tn_points_volume').value = weights.volume;
+  document.getElementById('tn_points_pnl').value = weights.pnl;
+  document.getElementById('tn_points_trophy_on').checked = Number(weights.trophies) > 0;
+  document.getElementById('tn_points_volume_on').checked = Number(weights.volume) > 0;
+  document.getElementById('tn_points_pnl_on').checked = Number(weights.pnl) > 0;
+  document.getElementById('tn_prize_currency').value = t.prize_currency || 'USD';
+  document.getElementById('tn_rewards_cop').checked = !!t.rewards_in_cop;
+  renderTournamentPrizeTiers(t.prize_tiers || []);
   document.getElementById('tn_status').value = t.status || 'active';
+  updateTournamentPointsUi();
+  updateTournamentPrizeUi();
   document.getElementById('tn_form_title').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function saveTournament() {
   const body = getTournamentFormBody();
   if (!body.name) { alert('Name required'); return; }
+  if (body.sort_by === 'points') {
+    const total = body.points_trophy_weight + body.points_volume_weight + body.points_pnl_weight;
+    if (Math.abs(total - 100) > 0.001) {
+      alert('Point weights must add up to 100%. Current total: ' + total + '%.');
+      return;
+    }
+  }
+  const badTier = (body.prize_tiers || []).find((tier) =>
+    tier.payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0) > Number(tier.pool_usd || 0) + 0.01
+  );
+  if (badTier) {
+    alert('Prize payouts cannot exceed the tier prize pool.');
+    return;
+  }
   const editingId = TOURNAMENT_EDIT_ID;
   const r = await fetch(editingId ? '/api/admin/tournaments/' + editingId : '/api/admin/tournaments', {
     method: editingId ? 'PATCH' : 'POST',
@@ -1797,19 +2108,27 @@ async function deleteTournament(id) {
 async function loadTournamentLeaderboard(id) {
   TOURNAMENT_LB_ID = id;
   try {
-    // Public endpoint — no admin key needed; goes through nginx /api proxy.
-    const r = await fetch('/api/tournaments/' + id + '/leaderboard?limit=50');
+    const r = await fetch('/api/tournaments/' + id + '/leaderboard?limit=50', {
+      headers: { 'x-admin-key': KEY },
+    });
     const j = await r.json();
     if (!r.ok) { alert(j.error || 'Failed'); return; }
     const t = j.tournament;
+    const prize = j.prize || {};
+    const prizeMeta = Number(prize.pool_usd || 0) > 0
+      ? ' · prize: ' + fmtTournamentUsd(prize.pool_usd, prize.currency || t.prize_currency || 'USD')
+      : (prize.next_tier ? ' · next prize: ' + fmtTournamentUsd(prize.next_tier.pool_usd || 0, prize.currency || t.prize_currency || 'USD') + ' @ ' + fmtTournamentUsd(prize.next_tier.volume_usd || 0, '') + ' vol' : '');
     document.getElementById('tn_lb_meta').textContent =
-      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + ' · ' + (j.leaderboard.length) + ' players';
+      '#' + t.id + ' ' + t.name + ' · ' + t.dex + ' · ' + (t.phase || t.status) + ' · sort: ' + (j.sort_label || tournamentSortLabel(j.sort_by)) + prizeMeta + ' · ' + (j.leaderboard.length) + ' players';
     document.getElementById('tn_lb_body').innerHTML = j.leaderboard.map(r => {
       const score = r.score == null ? '—' : Number(r.score || 0).toFixed(1);
+      const prizeAmount = Number(r.prize_amount || 0);
+      const rewardWallet = r.reward_wallet_evm ? '<div style="font-size:10px;color:#9ca3af">' + esc(r.reward_wallet_evm) + '</div>' : '';
       return '<tr>'
         + '<td>' + r.rank + '</td>'
         + '<td>' + esc(r.name || (r.wallet || '').slice(0, 8)) + '</td>'
         + '<td>' + score + '</td>'
+        + '<td>' + (prizeAmount > 0 ? fmtTournamentUsd(prizeAmount, r.prize_currency || prize.currency || t.prize_currency || 'USD') : '—') + rewardWallet + '</td>'
         + '<td>' + r.trophies + '</td>'
         + '<td>' + r.gold + '</td>'
         + '<td>' + r.trades_count + '</td>'
@@ -1886,6 +2205,7 @@ async function loadEarnings(force) {
       ['decibel',  'Decibel',  '#facc15', '#facc15'],
       ['avantis',  'Avantis',  '#38bdf8', '#0EA5E9'],
       ['gmx',      'GMX',      '#a5b4fc', '#4f46e5'],
+      ['phoenix',  'Phoenix',  '#fb923c', '#f97316'],
       ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
     ];
@@ -1902,6 +2222,9 @@ async function loadEarnings(force) {
       const subLine = (() => {
         if (!ok) return '';
         if (d.volume_usd != null) {
+          if (d.model === 'single_builder_fee' || d.builder_fee_pct != null) {
+            return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades · $' + Number(d.volume_usd).toFixed(0) + ' vol × ' + (d.builder_fee_pct ?? d.fee_per_side_pct ?? 0) + '% builder fee</span>';
+          }
           return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' trades · $' + Number(d.volume_usd).toFixed(0) + ' vol × ' + (d.rebate_pct ?? 0) + '% × ' + (d.fee_per_side_pct ?? 0) + '%</span>';
         }
         if (d.trades != null) {
@@ -2166,7 +2489,7 @@ switchTab = function(name) {
   if (name === 'client') loadClientLogs();
   if (name === 'stats') loadStats();
   if (name === 'tasks') loadTasks();
-  if (name === 'tournaments') loadTournaments();
+  if (name === 'tournaments') { updateTournamentPointsUi(); updateTournamentPrizeUi(); loadTournaments(); }
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
   if (name === 'shop') loadShop();

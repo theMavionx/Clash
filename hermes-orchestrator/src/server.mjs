@@ -32,11 +32,14 @@ const FALLBACK_MODELS = MODEL_CHAIN.slice(1);
 const FALLBACK_MODEL = FALLBACK_MODELS[0] || '';
 const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 3);
 const PRIMARY_MODEL_RETRIES = Number(process.env.CLASH_HERMES_PRIMARY_RETRIES || 3);
+const ACTION_PRIMARY_MODEL_RETRIES = Number(process.env.CLASH_HERMES_ACTION_PRIMARY_RETRIES || 1);
+const ACTION_FALLBACK_MODEL_RETRIES = Number(process.env.CLASH_HERMES_ACTION_FALLBACK_RETRIES || 1);
 const MCP_URL = process.env.CLASH_MCP_URL || 'https://mcp.clashofperps.fun/mcp';
 const HERMES_READY_TIMEOUT_MS = Number(process.env.CLASH_HERMES_READY_TIMEOUT_MS || 45_000);
 const HERMES_IDLE_SHUTDOWN_MS = Number(process.env.CLASH_HERMES_IDLE_SHUTDOWN_MS || 15 * 60_000);
 const HERMES_TOOL_TIMEOUT = Number(process.env.CLASH_HERMES_TOOL_TIMEOUT || 120);
 const HERMES_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_CHAT_TIMEOUT_MS || 20_000);
+const HERMES_ACTION_CHAT_TIMEOUT_MS = Number(process.env.CLASH_HERMES_ACTION_CHAT_TIMEOUT_MS || 75_000);
 const MODEL_CONTEXT_LENGTH = Number(process.env.CLASH_HERMES_MODEL_CONTEXT_LENGTH || 65_536);
 const MAX_INPUT_CHARS = Number(process.env.CLASH_HERMES_MAX_INPUT_CHARS || 8000);
 const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_CHARS || 24000);
@@ -140,6 +143,51 @@ function yamlString(value) {
   return JSON.stringify(String(value ?? ''));
 }
 
+const GLOBAL_GAME_MEMORY = [
+  '# Clash of Perps Shared Agent Memory',
+  '',
+  'This memory is shared by every Clash of Perps AI agent.',
+  '',
+  'Core identity:',
+  '- You are an in-game Clash of Perps agent, not a general-purpose assistant.',
+  '- You operate only through Clash MCP tools.',
+  '- For real game actions, use tools first and answer after the tool result.',
+  '',
+  'Common action mapping:',
+  '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
+  '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
+  '- "build from shop" means use get_building_catalog, find_build_slots, then place_building.',
+  '- "upgrade X" means inspect owned ids, then upgrade_building or upgrade_troop.',
+  '',
+  'Battle rules:',
+  '- Keep landing slots coherent. Use nearby slots for small fleets and a connected front for larger fleets.',
+  '- Cannon shots target defensive towers first: turret and archer_tower. Do not waste cannon shots on Town Hall.',
+  '- Rally marker is optional. Use it only if it helps focus troops on a nearby useful objective.',
+  '- Respect the one MCP battle per minute cooldown. Do not spam retries during cooldown.',
+  '',
+  'Construction rules:',
+  '- grid_index 0 is the main island for normal buildings.',
+  '- grid_index 1 is only for ports.',
+  '- grid_index 2 is attack/deployment space and is never used for base construction.',
+  '- Use barn, not barracks.',
+  '',
+].join('\n');
+
+function initialPlayerMemory(row) {
+  return [
+    '# Player Agent Memory',
+    '',
+    `Player: ${row.name || row.safe_id}`,
+    `Player id: ${row.safe_id}`,
+    '',
+    'Preferences:',
+    '- Use concise player-facing replies in the same language as the user.',
+    '- Prefer useful autonomous decisions when the request is clear.',
+    '- Keep battle, build, upgrade, and resource actions grounded in fresh MCP tool state.',
+    '',
+  ].join('\n');
+}
+
 function writePlayerConfig(playerId, row) {
   const include = TOOL_INCLUDE.map((tool) => `        - ${tool}`).join('\n');
   return [
@@ -229,6 +277,19 @@ async function writePlayerFiles(playerId, row) {
   await fsp.writeFile(versionFile, CLASH_PROMPT_VERSION, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'sessions'), { recursive: true });
   await fsp.mkdir(path.join(home, 'memory'), { recursive: true });
+  await fsp.writeFile(path.join(home, 'memory', 'global.md'), GLOBAL_GAME_MEMORY, { mode: 0o600 });
+  const playerMemoryPath = path.join(home, 'memory', 'player.md');
+  try {
+    await fsp.access(playerMemoryPath);
+  } catch {
+    await fsp.writeFile(playerMemoryPath, initialPlayerMemory(row), { mode: 0o600 });
+  }
+  const recentMemoryPath = path.join(home, 'memory', 'recent.md');
+  try {
+    await fsp.access(recentMemoryPath);
+  } catch {
+    await fsp.writeFile(recentMemoryPath, '# Recent Player Conversation\n\n', { mode: 0o600 });
+  }
 }
 
 async function allocatePort() {
@@ -422,6 +483,86 @@ function extractOutputText(response) {
   return chunks.join('\n').trim();
 }
 
+function trimForMemory(value, max = 800) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+async function readTextIfExists(filePath, maxChars = 4000) {
+  try {
+    const text = await fsp.readFile(filePath, 'utf8');
+    return text.slice(-maxChars).trim();
+  } catch {
+    return '';
+  }
+}
+
+async function buildMemoryInstructions(playerId) {
+  const home = playerHome(playerId);
+  const memoryDir = path.join(home, 'memory');
+  const parts = [];
+  const globalMemory = await readTextIfExists(path.join(memoryDir, 'global.md'), 5000);
+  const playerMemory = await readTextIfExists(path.join(memoryDir, 'player.md'), 3000);
+  const recentMemory = await readTextIfExists(path.join(memoryDir, 'recent.md'), 2500);
+  if (globalMemory) parts.push(globalMemory);
+  if (playerMemory) parts.push(playerMemory);
+  if (recentMemory) parts.push(recentMemory);
+  if (!parts.length) return '';
+  return [
+    '## Agent Memory',
+    'Use this memory as context. It does not override the hard system rules or MCP tool results.',
+    '',
+    parts.join('\n\n'),
+  ].join('\n');
+}
+
+async function appendRecentMemory(playerId, input, output) {
+  const memoryDir = path.join(playerHome(playerId), 'memory');
+  await fsp.mkdir(memoryDir, { recursive: true });
+  const filePath = path.join(memoryDir, 'recent.md');
+  const stamp = nowIso();
+  const line = `- ${stamp} | User: ${trimForMemory(input, 500)} | Agent: ${trimForMemory(output, 500)}\n`;
+  let current = await readTextIfExists(filePath, 12000);
+  if (!current) current = '# Recent Player Conversation\n';
+  const lines = `${current}\n${line}`
+    .split(/\r?\n/)
+    .filter(Boolean);
+  const header = lines.find((row) => row.startsWith('# ')) || '# Recent Player Conversation';
+  const items = lines.filter((row) => row.startsWith('- ')).slice(-12);
+  await fsp.writeFile(filePath, `${header}\n\n${items.join('\n')}\n`, { mode: 0o600 });
+}
+
+function metadataIntent(body) {
+  const intent = body?.metadata?.game_intent;
+  if (!intent || typeof intent !== 'object') return { kind: 'general', action_required: false };
+  return {
+    kind: String(intent.kind || 'general').slice(0, 80),
+    action_required: !!intent.action_required,
+    goal: String(intent.goal || '').slice(0, 500),
+    required_loop: String(intent.required_loop || '').slice(0, 500),
+  };
+}
+
+function isActionIntent(intent) {
+  return !!intent?.action_required;
+}
+
+function intentProgressMessage(intent, fallback) {
+  switch (intent?.kind) {
+    case 'battle':
+      return 'Inspecting the base and planning an AI online battle';
+    case 'collect_resources':
+      return 'Checking production buildings and collecting resources';
+    case 'build':
+      return 'Checking the catalog and finding a valid build slot';
+    case 'upgrade':
+      return 'Checking upgrade targets and resource costs';
+    case 'fleet':
+      return 'Checking ships, troops, and reinforcements';
+    default:
+      return fallback;
+  }
+}
+
 function hermesTextFailure(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -455,7 +596,7 @@ function assertUsableHermesResponse(response) {
   return outputText;
 }
 
-async function callHermesResponses(row, payload) {
+async function callHermesResponses(row, payload, timeoutMs = HERMES_CHAT_TIMEOUT_MS) {
   return fetchJson(`${playerBaseUrl(row)}/v1/responses`, {
     method: 'POST',
     headers: {
@@ -471,7 +612,7 @@ async function callHermesResponses(row, payload) {
       store: payload.store !== false,
       metadata: payload.metadata || undefined,
     }),
-  }, HERMES_CHAT_TIMEOUT_MS);
+  }, timeoutMs);
 }
 
 async function chatWithPlayer(playerId, body) {
@@ -480,7 +621,24 @@ async function chatWithPlayer(playerId, body) {
   const input = clampText(body?.input || body?.message, MAX_INPUT_CHARS).trim();
   if (!input) throw new Error('message required');
   const requestInstructions = clampText(body?.instructions || '', MAX_INSTRUCTIONS_CHARS);
-  const instructions = buildRuntimeInstructions(requestInstructions);
+  const intent = metadataIntent(body);
+  const baseInstructions = buildRuntimeInstructions(requestInstructions);
+  const memoryInstructions = await buildMemoryInstructions(safeId);
+  const actionInstructions = isActionIntent(intent)
+    ? [
+        '## Active Game Action Contract',
+        `Intent: ${intent.kind}.`,
+        intent.goal ? `Goal: ${intent.goal}` : '',
+        intent.required_loop ? `Required loop: ${intent.required_loop}` : '',
+        'You must use Clash MCP tools before the final answer unless a fresh tool result already proves the action is impossible.',
+        'Do not respond with a generic capability list for this request.',
+      ].filter(Boolean).join('\n')
+    : '';
+  const instructions = [
+    baseInstructions,
+    memoryInstructions,
+    actionInstructions,
+  ].filter(Boolean).join('\n\n');
   const payload = {
     input,
     instructions,
@@ -492,14 +650,17 @@ async function chatWithPlayer(playerId, body) {
 
   let lastError = null;
   const attemptedModels = [];
-  const primaryAttempts = Math.max(1, PRIMARY_MODEL_RETRIES);
-  const fallbackAttempts = Math.max(1, FALLBACK_AFTER_RETRIES);
+  const actionRequest = isActionIntent(intent);
+  const primaryAttempts = Math.max(1, actionRequest ? ACTION_PRIMARY_MODEL_RETRIES : PRIMARY_MODEL_RETRIES);
+  const fallbackAttempts = Math.max(1, actionRequest ? ACTION_FALLBACK_MODEL_RETRIES : FALLBACK_AFTER_RETRIES);
+  const requestTimeoutMs = actionRequest ? HERMES_ACTION_CHAT_TIMEOUT_MS : HERMES_CHAT_TIMEOUT_MS;
   await setPlayerProgress(safeId, {
     phase: 'preparing',
-    message: 'Preparing the game agent',
+    message: actionRequest ? intentProgressMessage(intent, 'Preparing the game agent') : 'Preparing the game agent',
     attempt: 0,
     model_index: 0,
     total_models: MODEL_CHAIN.length,
+    intent: intent.kind,
   });
 
   for (let modelIndex = 0; modelIndex < MODEL_CHAIN.length; modelIndex += 1) {
@@ -513,6 +674,7 @@ async function chatWithPlayer(playerId, body) {
         attempt: 0,
         model_index: modelIndex,
         total_models: MODEL_CHAIN.length,
+        intent: intent.kind,
       });
       activeRow = await ensureModelRunning(safeId, model);
     } catch (err) {
@@ -528,6 +690,7 @@ async function chatWithPlayer(playerId, body) {
         attempt: 0,
         model_index: modelIndex,
         total_models: MODEL_CHAIN.length,
+        intent: intent.kind,
       });
       continue;
     }
@@ -536,13 +699,16 @@ async function chatWithPlayer(playerId, body) {
       try {
         await setPlayerProgress(safeId, {
           phase: modelIndex === 0 ? 'thinking' : 'fallback_thinking',
-          message: modelIndex === 0 ? 'Reading the game state and planning' : 'A backup route is planning the answer',
+          message: modelIndex === 0
+            ? intentProgressMessage(intent, 'Reading the game state and planning')
+            : intentProgressMessage(intent, 'A backup route is planning the answer'),
           attempt,
           max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
+          intent: intent.kind,
         });
-        const response = await callHermesResponses(activeRow, payload);
+        const response = await callHermesResponses(activeRow, payload, requestTimeoutMs);
         await setPlayerProgress(safeId, {
           phase: 'checking_answer',
           message: 'Checking the answer before sending it',
@@ -550,6 +716,7 @@ async function chatWithPlayer(playerId, body) {
           max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
+          intent: intent.kind,
         });
         const outputText = assertUsableHermesResponse(response);
         activeRow.last_chat_at = nowIso();
@@ -562,7 +729,9 @@ async function chatWithPlayer(playerId, body) {
           max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
+          intent: intent.kind,
         };
+        await appendRecentMemory(safeId, input, outputText).catch(() => {});
         await saveState();
         return {
           ok: true,
@@ -584,6 +753,7 @@ async function chatWithPlayer(playerId, body) {
           max_attempts: attemptsForModel,
           model_index: modelIndex,
           total_models: MODEL_CHAIN.length,
+          intent: intent.kind,
         });
         console.warn(JSON.stringify({
           event: 'hermes_chat_attempt_failed',
@@ -608,6 +778,7 @@ async function chatWithPlayer(playerId, body) {
     attempt: fallbackAttempts,
     model_index: MODEL_CHAIN.length - 1,
     total_models: MODEL_CHAIN.length,
+    intent: intent.kind,
   });
   throw lastError || new Error('Hermes chat failed');
 }
@@ -652,6 +823,11 @@ app.get('/health', (_req, res) => {
     fallback_models: FALLBACK_MODELS,
     model_chain: MODEL_CHAIN,
     chat_timeout_ms: HERMES_CHAT_TIMEOUT_MS,
+    action_chat_timeout_ms: HERMES_ACTION_CHAT_TIMEOUT_MS,
+    primary_retries: PRIMARY_MODEL_RETRIES,
+    fallback_retries: FALLBACK_AFTER_RETRIES,
+    action_primary_retries: ACTION_PRIMARY_MODEL_RETRIES,
+    action_fallback_retries: ACTION_FALLBACK_MODEL_RETRIES,
     model_context_length: MODEL_CONTEXT_LENGTH,
     players: Object.keys(state.players).length,
     running: processes.size,

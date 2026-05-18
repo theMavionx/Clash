@@ -84,6 +84,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   if (!Array.isArray(fills)) fills = Array.isArray(fills?.data) ? fills.data : [];
 
   let imported = 0;
+  let adopted = 0;
   let skipped = 0;
   for (const fill of fills) {
     const ts = fillTimeMs(fill);
@@ -97,8 +98,16 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       continue;
     }
     try {
-      const before = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
+      const before = db.db.prepare('SELECT id, player_id FROM trade_history WHERE client_order_id = ?').get(trade.clientOrderId);
       if (before) {
+        if (before.player_id !== playerId && trade.clientOrderId.startsWith(`hyperliquid:${cleanWallet}:`)) {
+          const moved = db.db.prepare(`
+            UPDATE trade_history
+            SET player_id = ?
+            WHERE id = ? AND dex = 'hyperliquid' AND verified_source = 'hyperliquid_api'
+          `).run(playerId, before.id);
+          if (moved.changes > 0) adopted++;
+        }
         skipped++;
         continue;
       }
@@ -112,7 +121,7 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
       }
     }
   }
-  return { ok: true, imported, skipped, total: fills.length };
+  return { ok: true, imported, adopted, skipped, total: fills.length };
 }
 
 async function pollOnce(mainDb) {

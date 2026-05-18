@@ -3984,7 +3984,10 @@ router.get('/ai-chat/status', auth, async (req, res) => {
       });
       return res.status(503).json({ ok: false, error: 'Hermes orchestrator is not configured', agent: state });
     }
-    const status = await hermesClient.getStatus(req.player.id);
+    let status = await hermesClient.getStatus(req.player.id);
+    if (!status?.player?.running) {
+      status = await hermesClient.provision(req.player, agent.mcp_key);
+    }
     const state = db.markHermesAgentState(req.player.id, {
       status: status?.player?.running ? 'running' : 'ready',
       orchestrator: status?.player || status,
@@ -5458,21 +5461,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       db.db.prepare('INSERT INTO trading_rewards (player_id, dex, wallet) VALUES (?, ?, ?)').run(req.player.id, dex, wallet || '');
       reward = db.db.prepare('SELECT * FROM trading_rewards WHERE player_id = ? AND dex = ?').get(req.player.id, dex);
     }
-    // GMX briefly used a $50 minimum notional in this claim path. That let
-    // task progress see verified trade_history rows while gold/tournament
-    // volume skipped them and still advanced last_trade_id. If a GMX row has
-    // never paid anything, rewind the cursor once so those verified rows can
-    // be credited under the no-threshold GMX rules below.
-    if (dex === 'gmx'
+    // GMX briefly used a $50 minimum notional in this claim path. Hyperliquid
+    // had a similar early-rollout risk while we were tuning import timing.
+    // If a row has never paid anything, rewind the cursor once so verified
+    // rows can be credited under the current rules.
+    if ((dex === 'gmx' || dex === 'hyperliquid')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
       db.db.prepare('UPDATE trading_rewards SET last_trade_id = 0 WHERE player_id = ? AND dex = ?')
         .run(req.player.id, dex);
       reward = { ...reward, last_trade_id: 0 };
-      console.log(`[claim-gold gmx] rewound zero-credit cursor for player=${req.player.name}`);
+      console.log(`[claim-gold ${dex}] rewound zero-credit cursor for player=${req.player.name}`);
     }
     let newTrades = [];
+    let hyperliquidWalletRowsAvailable = 0;
     try {
       // Avantis/GMX stay worker-only. Decibel uses server rows as the
       // instant source of truth: they are inserted only after our server-side
@@ -5486,13 +5489,42 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           : dex === 'hyperliquid'
             ? "AND verified_source = 'hyperliquid_api'"
           : "AND verified_source = 'worker'";
-      newTrades = fdb.prepare(`
-        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
-        FROM trade_history
-        WHERE player_id = ? AND dex = ? AND status = 'filled'
-          ${sourceWhere} AND id > ?
-        ORDER BY id ASC
-      `).all(req.player.id, dex, reward.last_trade_id || 0);
+      const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
+        ? `hyperliquid:${String(wallet).toLowerCase()}:%`
+        : null;
+      if (hyperliquidWalletPrefix) {
+        // Hyperliquid fill client_order_id is wallet-scoped. This fallback
+        // lets a user keep rewards if the same EVM wallet was re-registered
+        // and an older import row sits under a stale player_id. The main DB's
+        // UNIQUE(wallet,dex) still keeps the live Hyperliquid account unique.
+        hyperliquidWalletRowsAvailable = fdb.prepare(`
+          SELECT COUNT(*) AS n
+          FROM trade_history
+          WHERE dex = 'hyperliquid' AND status = 'filled'
+            AND verified_source = 'hyperliquid_api'
+            AND lower(client_order_id) LIKE ?
+            AND id > ?
+        `).get(hyperliquidWalletPrefix, reward.last_trade_id || 0)?.n || 0;
+        newTrades = fdb.prepare(`
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          FROM trade_history
+          WHERE dex = ? AND status = 'filled'
+            ${sourceWhere} AND id > ?
+            AND (
+              player_id = ?
+              OR lower(client_order_id) LIKE ?
+            )
+          ORDER BY id ASC
+        `).all(dex, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix);
+      } else {
+        newTrades = fdb.prepare(`
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          FROM trade_history
+          WHERE player_id = ? AND dex = ? AND status = 'filled'
+            ${sourceWhere} AND id > ?
+          ORDER BY id ASC
+        `).all(req.player.id, dex, reward.last_trade_id || 0);
+      }
     } catch (e) {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
@@ -5527,7 +5559,15 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         pnl: true,
       });
     };
-    console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
+    console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} wallet_rows=${hyperliquidWalletRowsAvailable || '-'} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
+    const hyperliquidClaimDebug = () => dex === 'hyperliquid' ? {
+      last_trade_id: reward.last_trade_id || 0,
+      wallet_rows_available: hyperliquidWalletRowsAvailable,
+      first_deposit: Boolean(reward.first_deposit),
+      first_trade: Boolean(reward.first_trade),
+      player_id: String(req.player.id || '').slice(0, 8),
+      wallet: EVM_WALLET_RE.test(String(wallet || '')) ? `${String(wallet).slice(0, 10)}...` : null,
+    } : undefined;
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
       const pnlSync = syncDecibelTournamentPnl();
@@ -5541,7 +5581,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         });
       }
       console.log(`[claim-gold ${dex}] player=${req.player.name} -> NO NEW TRADES (returning 0)`);
-      return res.json({ gold: 0, reason: 'No new trades' });
+      return res.json({
+        gold: 0,
+        reason: 'No new trades',
+        dex,
+        detail: hyperliquidClaimDebug(),
+      });
     }
 
     // Sanity: clamp each trade's notional to a sane range so a bugged/forged
@@ -5685,7 +5730,12 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       return res.json({ gold: txnResult.paid, reason: reasons.join(' + ') || 'Trading reward', dex });
     }
     console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
-    return res.json({ gold: 0, reason: newTrades.length ? 'Below reward threshold' : 'No new trades', dex });
+    return res.json({
+      gold: 0,
+      reason: newTrades.length ? 'Below reward threshold' : 'No new trades',
+      dex,
+      detail: hyperliquidClaimDebug(),
+    });
   }
 
   // ── Pacifica branch ──
@@ -6002,11 +6052,12 @@ function rateGate(playerId, ms = 20) {
   return true;
 }
 
-// List active tasks + player progress
+// List active tasks + player progress.
+// This is a read-only hydration endpoint hit by React effects and panel
+// refreshes. It is idempotent, and the browser can legitimately issue two
+// requests in the same tick during reconnect/dev StrictMode, so we do not
+// rate-limit it. Claim/start endpoints below keep their write protections.
 router.get('/tasks', auth, async (req, res) => {
-  if (!rateGate('list:' + req.player.id, 500)) {
-    return res.status(429).json({ error: 'slow down' });
-  }
   const list = tasks.getActiveTasks();
   const out = [];
   for (const t of list) {
@@ -6232,6 +6283,10 @@ function adminAuth(req, res, next) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   next();
+}
+
+function isAdminRequest(req) {
+  return !!(ADMIN_KEY && req.headers['x-admin-key'] === ADMIN_KEY);
 }
 
 // List all players with full details (shields, wallet, last attack)
@@ -7407,8 +7462,11 @@ function parseBool(v) {
   return v === true || v === 1 || v === '1' || String(v).toLowerCase() === 'true';
 }
 
+const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
-const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_COMBINED_SORT];
+const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
+const DEFAULT_TOURNAMENT_POINT_WEIGHTS = { trophies: 20, volume: 60, pnl: 20 };
+const DEFAULT_TOURNAMENT_PRIZE_CURRENCY = 'USD';
 const TOURNAMENT_SQL_SORT_COLS = {
   pnl_usd: 'tp.pnl_usd',
   trophies: 'tp.trophies',
@@ -7420,29 +7478,183 @@ function normalizeTournamentSort(sortBy, fallback = 'pnl_usd') {
   return TOURNAMENT_SORT_KEYS.includes(sortBy) ? sortBy : fallback;
 }
 
-function tournamentSortLabel(sortBy) {
+function isTournamentPointsSort(sortBy) {
+  return sortBy === TOURNAMENT_POINTS_SORT || sortBy === TOURNAMENT_COMBINED_SORT;
+}
+
+function fmtTournamentWeight(n) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+}
+
+function sanitizeTournamentWeight(v, fallback = 0) {
+  if (v === undefined || v === null || v === '') return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Number(n.toFixed(4))));
+}
+
+function tournamentPointWeights(tOrBody, fallback = DEFAULT_TOURNAMENT_POINT_WEIGHTS) {
+  const sortBy = typeof tOrBody === 'string' ? tOrBody : normalizeTournamentSort(tOrBody?.sort_by, TOURNAMENT_POINTS_SORT);
+  if (sortBy === TOURNAMENT_COMBINED_SORT) {
+    return { trophies: 50, volume: 50, pnl: 0 };
+  }
+  const weights = {
+    trophies: sanitizeTournamentWeight(tOrBody?.points_trophy_weight, fallback.trophies),
+    volume: sanitizeTournamentWeight(tOrBody?.points_volume_weight, fallback.volume),
+    pnl: sanitizeTournamentWeight(tOrBody?.points_pnl_weight, fallback.pnl),
+  };
+  const total = weights.trophies + weights.volume + weights.pnl;
+  if (sortBy === TOURNAMENT_POINTS_SORT && total <= 0) {
+    return { ...DEFAULT_TOURNAMENT_POINT_WEIGHTS };
+  }
+  return weights;
+}
+
+function normalizeTournamentPointWeights(input, fallback = DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal = false } = {}) {
+  const weights = tournamentPointWeights(input || {}, fallback);
+  const total = weights.trophies + weights.volume + weights.pnl;
+  if (requireTotal && Math.abs(total - 100) > 0.001) {
+    throw new Error('point weights must add up to 100');
+  }
+  return weights;
+}
+
+function tournamentSortLabel(tOrSort) {
+  const sortBy = typeof tOrSort === 'string' ? tOrSort : normalizeTournamentSort(tOrSort?.sort_by);
   switch (sortBy) {
     case 'trophies': return 'Trophies';
     case 'volume_usd': return 'Volume (USD)';
     case 'gold': return 'Gold';
-    case TOURNAMENT_COMBINED_SORT: return '50% Volume / 50% Trophies';
+    case TOURNAMENT_POINTS_SORT:
+    case TOURNAMENT_COMBINED_SORT: {
+      const w = tournamentPointWeights(tOrSort);
+      const parts = [];
+      if (Number(w.trophies) > 0) parts.push(`${fmtTournamentWeight(w.trophies)}% Trophies`);
+      if (Number(w.volume) > 0) parts.push(`${fmtTournamentWeight(w.volume)}% Volume`);
+      if (Number(w.pnl) > 0) parts.push(`${fmtTournamentWeight(w.pnl)}% PnL`);
+      return `Points (${parts.length ? parts.join(' / ') : 'no enabled metrics'})`;
+    }
     case 'pnl_usd':
     default:
       return 'PnL (USD)';
   }
 }
 
-function applyVolumeTrophyScore(rows) {
-  const maxVolume = rows.reduce((m, r) => Math.max(m, Number(r.volume_usd) || 0), 0);
-  const maxTrophies = rows.reduce((m, r) => Math.max(m, Number(r.trophies) || 0), 0);
+function applyTournamentPointsScore(rows, t) {
+  const w = tournamentPointWeights(t);
   for (const r of rows) {
-    const volumeScore = maxVolume > 0 ? ((Number(r.volume_usd) || 0) / maxVolume) * 50 : 0;
-    const trophyScore = maxTrophies > 0 ? ((Number(r.trophies) || 0) / maxTrophies) * 50 : 0;
+    const volumeScore = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
+    const trophyScore = Math.max(0, Number(r.trophies) || 0) * (w.trophies / 100);
+    const pnlScore = Math.max(0, Number(r.pnl_usd) || 0) * (w.pnl / 100);
     r.volume_score = Number(volumeScore.toFixed(4));
     r.trophy_score = Number(trophyScore.toFixed(4));
-    r.score = Number((volumeScore + trophyScore).toFixed(4));
+    r.pnl_score = Number(pnlScore.toFixed(4));
+    r.score = Number((volumeScore + trophyScore + pnlScore).toFixed(4));
   }
   return rows;
+}
+
+function sanitizePrizeCurrency(v) {
+  const s = String(v || DEFAULT_TOURNAMENT_PRIZE_CURRENCY).trim().toUpperCase();
+  return /^[A-Z0-9]{2,12}$/.test(s) ? s : DEFAULT_TOURNAMENT_PRIZE_CURRENCY;
+}
+
+function sanitizePrizeNumber(v, fallback = 0) {
+  if (v === undefined || v === null || v === '') return fallback;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(1_000_000_000, Number(n.toFixed(2))));
+}
+
+function normalizeRewardEvmWallet(v) {
+  const s = String(v || '').trim();
+  if (!s) return null;
+  return EVM_WALLET_RE.test(s) ? s.toLowerCase() : null;
+}
+
+function normalizePrizePayouts(input) {
+  const arr = Array.isArray(input)
+    ? input
+    : (input && typeof input === 'object'
+      ? Object.entries(input).map(([rank, amount]) => ({ rank, amount_usd: amount }))
+      : []);
+  const byRank = new Map();
+  for (const raw of arr) {
+    const rank = Math.floor(Number(raw?.rank ?? raw?.place ?? raw?.position));
+    const amount = sanitizePrizeNumber(raw?.amount_usd ?? raw?.amount ?? raw?.prize_usd ?? raw?.prize);
+    if (!Number.isFinite(rank) || rank <= 0 || rank > 100 || amount <= 0) continue;
+    byRank.set(rank, {
+      rank,
+      amount_usd: amount,
+    });
+  }
+  return Array.from(byRank.values()).sort((a, b) => a.rank - b.rank);
+}
+
+function normalizeTournamentPrizeTiers(input, { strict = false } = {}) {
+  let raw = input;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw || '[]'); } catch { raw = []; }
+  }
+  const arr = Array.isArray(raw) ? raw : [];
+  const tiers = [];
+  for (let i = 0; i < arr.length; i += 1) {
+    const tier = arr[i] || {};
+    const volume = sanitizePrizeNumber(
+      tier.volume_usd ?? tier.total_volume_usd ?? tier.threshold_usd ?? tier.threshold ?? tier.volume,
+    );
+    const payouts = normalizePrizePayouts(tier.payouts ?? tier.prizes ?? tier.rewards);
+    const payoutSum = Number(payouts.reduce((s, p) => s + Number(p.amount_usd || 0), 0).toFixed(2));
+    const pool = sanitizePrizeNumber(tier.pool_usd ?? tier.prize_pool_usd ?? tier.pool ?? tier.amount_usd, payoutSum);
+    if (strict && payoutSum > pool + 0.01) {
+      throw new Error(`prize tier #${i + 1} payouts exceed pool`);
+    }
+    if (pool <= 0 && payouts.length === 0 && volume <= 0) continue;
+    tiers.push({
+      volume_usd: volume,
+      pool_usd: pool,
+      payouts,
+      payout_sum_usd: payoutSum,
+    });
+  }
+  return tiers.sort((a, b) => a.volume_usd - b.volume_usd);
+}
+
+function tournamentTotalVolumeUsd(tournamentId) {
+  if (!tournamentId) return 0;
+  try {
+    const row = db.db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN left_at IS NULL THEN volume_usd ELSE 0 END), 0) AS total
+      FROM tournament_participants
+      WHERE tournament_id = ?
+    `).get(tournamentId);
+    return Number(row?.total || 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function tournamentPrizeState(t, totalVolumeUsd = null) {
+  const tiers = normalizeTournamentPrizeTiers(t?.prize_tiers);
+  const totalVolume = sanitizePrizeNumber(
+    totalVolumeUsd == null ? tournamentTotalVolumeUsd(t?.id) : totalVolumeUsd,
+  );
+  let activeTier = null;
+  let nextTier = null;
+  for (const tier of tiers) {
+    if (totalVolume + 0.0001 >= Number(tier.volume_usd || 0)) activeTier = tier;
+    else if (!nextTier) nextTier = tier;
+  }
+  return {
+    currency: sanitizePrizeCurrency(t?.prize_currency),
+    total_volume_usd: totalVolume,
+    tiers,
+    active_tier: activeTier,
+    next_tier: nextTier,
+    pool_usd: activeTier?.pool_usd || 0,
+    payouts: activeTier?.payouts || [],
+  };
 }
 
 function validateTournamentWindow({ start_at, end_at, registration_opens_at, registration_closes_at }) {
@@ -7496,9 +7708,11 @@ function canJoinTournament(t, now = nowSql()) {
   return false;
 }
 
-function tournamentRowToPublic(t) {
+function tournamentRowToPublic(t, options = {}) {
   const now = nowSql();
   const phase = tournamentPhase(t, now);
+  const pointWeights = tournamentPointWeights(t);
+  const prize = tournamentPrizeState(t, options.totalVolumeUsd);
   return {
     id: t.id,
     name: t.name,
@@ -7510,7 +7724,19 @@ function tournamentRowToPublic(t) {
     trophy_boost: Number(t.trophy_boost),
     freeze_trophies: Number(t.freeze_trophies ?? 1) !== 0,
     sort_by: t.sort_by,
-    sort_label: tournamentSortLabel(t.sort_by),
+    sort_label: tournamentSortLabel(t),
+    points_trophy_weight: pointWeights.trophies,
+    points_volume_weight: pointWeights.volume,
+    points_pnl_weight: pointWeights.pnl,
+    points_weights: pointWeights,
+    prize_currency: prize.currency,
+    prize_tiers: prize.tiers,
+    prize_total_volume_usd: prize.total_volume_usd,
+    prize_pool_usd: prize.pool_usd,
+    prize_active_tier: prize.active_tier,
+    prize_next_tier: prize.next_tier,
+    prize_payouts: prize.payouts,
+    rewards_in_cop: !!Number(t.rewards_in_cop || 0),
     status: t.status,
     phase,
     preregistration_enabled: !!Number(t.preregistration_enabled || 0),
@@ -7519,6 +7745,65 @@ function tournamentRowToPublic(t) {
     can_join: canJoinTournament(t, now),
     created_at: t.created_at,
   };
+}
+
+function tournamentTradeSourceWhere(dex) {
+  if (dex === 'decibel') return "verified_source = 'server'";
+  if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
+  if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
+  if (dex === 'phoenix') return "verified_source = 'worker'";
+  if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
+  return "verified_source = 'worker'";
+}
+
+function syncFuturesTournamentRows(playerId, dex) {
+  const normalizedDex = String(dex || '').toLowerCase();
+  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'].includes(normalizedDex)) {
+    return { ok: true, skipped: true };
+  }
+  const fdb = futuresDbReadonly();
+  if (!fdb) return { ok: false, reason: 'futures db unavailable' };
+  try {
+    const sourceWhere = tournamentTradeSourceWhere(normalizedDex);
+    const rows = fdb.prepare(`
+      SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+      FROM trade_history
+      WHERE player_id = ? AND dex = ? AND status = 'filled'
+        AND ${sourceWhere}
+      ORDER BY id ASC
+      LIMIT 2000
+    `).all(playerId, normalizedDex);
+    const main = db.recordTournamentTradeRows(playerId, rows, {
+      source: 'trade_history',
+      count: true,
+      volume: true,
+      pnl: true,
+    });
+    let pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
+    if (normalizedDex === 'decibel') {
+      const pnlRows = fdb.prepare(`
+        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+        FROM trade_history
+        WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
+          AND verified_source = 'worker'
+          AND side IN ('close_long', 'close_short')
+          AND pnl IS NOT NULL AND pnl != ''
+          AND notional_usd >= 10
+        ORDER BY id ASC
+        LIMIT 2000
+      `).all(playerId);
+      pnl = db.recordTournamentTradeRows(playerId, pnlRows, {
+        source: 'trade_history_decibel_pnl',
+        count: false,
+        volume: false,
+        pnl: true,
+      });
+    }
+    return { ok: true, rows: rows.length, main, pnl };
+  } catch (e) {
+    console.warn(`[tournament-sync ${normalizedDex}] failed for player=${String(playerId).slice(0, 8)}:`, e.message);
+    return { ok: false, reason: e.message };
+  }
 }
 
 // List all live tournaments visible to players (active, not yet ended).
@@ -7563,17 +7848,26 @@ router.get('/tournaments/me', auth, (req, res) => {
   `).get(dex);
   if (!t) return res.json({ tournament: null, joined: false, phase: null, can_join: false });
   const pub = tournamentRowToPublic(t);
-  const me = db.db.prepare(`
+  let me = db.db.prepare(`
     SELECT * FROM tournament_participants
     WHERE tournament_id = ? AND player_id = ?
   `).get(t.id, req.player.id);
+  if (me && me.left_at === null && pub.phase === 'live') {
+    const sync = syncFuturesTournamentRows(req.player.id, dex);
+    if (sync?.ok && ((sync.main?.credited_rows || 0) > 0 || (sync.pnl?.credited_rows || 0) > 0)) {
+      me = db.db.prepare(`
+        SELECT * FROM tournament_participants
+        WHERE tournament_id = ? AND player_id = ?
+      `).get(t.id, req.player.id);
+    }
+  }
   let comboMeScore = null;
-  if (me && t.sort_by === TOURNAMENT_COMBINED_SORT) {
-    const scored = applyVolumeTrophyScore(db.db.prepare(`
-      SELECT player_id, trophies, volume_usd
+  if (me && isTournamentPointsSort(t.sort_by)) {
+    const scored = applyTournamentPointsScore(db.db.prepare(`
+      SELECT player_id, trophies, volume_usd, pnl_usd
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
-    `).all(t.id));
+    `).all(t.id), t);
     comboMeScore = scored.find(s => s.player_id === req.player.id) || null;
   }
   res.json({
@@ -7590,8 +7884,10 @@ router.get('/tournaments/me', auth, (req, res) => {
       score: comboMeScore?.score ?? null,
       volume_score: comboMeScore?.volume_score ?? null,
       trophy_score: comboMeScore?.trophy_score ?? null,
+      pnl_score: comboMeScore?.pnl_score ?? null,
       joined_at: me.joined_at,
       left_at: me.left_at,
+      reward_wallet_evm: me.reward_wallet_evm || null,
     } : null,
   });
 });
@@ -7613,6 +7909,7 @@ router.get('/tournaments/history', auth, (req, res) => {
            tp.trades_count AS my_trades_count,
            tp.volume_usd AS my_volume_usd,
            tp.pnl_usd    AS my_pnl_usd,
+           tp.reward_wallet_evm AS my_reward_wallet_evm,
            tp.left_at    AS my_left_at
     FROM tournaments t
     LEFT JOIN tournament_participants tp
@@ -7627,12 +7924,12 @@ router.get('/tournaments/history', auth, (req, res) => {
   `).all(req.player.id, dex, limit);
   const comboScores = new Map();
   for (const r of rows) {
-    if (r.sort_by !== TOURNAMENT_COMBINED_SORT) continue;
-    const scored = applyVolumeTrophyScore(db.db.prepare(`
-      SELECT player_id, trophies, volume_usd
+    if (!isTournamentPointsSort(r.sort_by)) continue;
+    const scored = applyTournamentPointsScore(db.db.prepare(`
+      SELECT player_id, trophies, volume_usd, pnl_usd
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
-    `).all(r.id));
+    `).all(r.id), r);
     const mine = scored.find(s => s.player_id === req.player.id);
     if (mine) comboScores.set(r.id, mine);
   }
@@ -7648,6 +7945,8 @@ router.get('/tournaments/history', auth, (req, res) => {
         score: comboScores.get(r.id)?.score ?? null,
         volume_score: comboScores.get(r.id)?.volume_score ?? null,
         trophy_score: comboScores.get(r.id)?.trophy_score ?? null,
+        pnl_score: comboScores.get(r.id)?.pnl_score ?? null,
+        reward_wallet_evm: r.my_reward_wallet_evm || null,
         left_at: r.my_left_at,
       } : null,
     })),
@@ -7673,19 +7972,25 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
     return res.status(400).json({ error: 'pre-registration is closed' });
   }
   if (!canJoinTournament(t, now)) return res.status(400).json({ error: phase === 'live' ? 'registration is closed' : 'tournament is not joinable' });
+  const rewardWalletEvm = normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
+  if (Number(t.rewards_in_cop || 0) && !rewardWalletEvm) {
+    return res.status(400).json({ error: 'valid EVM reward wallet required for COP rewards' });
+  }
   // Insert or re-activate. Reset counters on re-join — explicitly leaving
   // means the player accepts losing their slot's stats.
   db.db.prepare(`
-    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd)
-    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0)
+    INSERT INTO tournament_participants (tournament_id, player_id, joined_at, left_at, trophies, gold, trades_count, volume_usd, pnl_usd, reward_wallet_evm)
+    VALUES (?, ?, datetime('now'), NULL, 0, 0, 0, 0, 0, ?)
     ON CONFLICT(tournament_id, player_id) DO UPDATE SET
       joined_at = datetime('now'),
       left_at = NULL,
       trophies = 0, gold = 0, trades_count = 0, volume_usd = 0, pnl_usd = 0,
+      reward_wallet_evm = excluded.reward_wallet_evm,
       last_activity_at = datetime('now')
-  `).run(tid, req.player.id);
+  `).run(tid, req.player.id, rewardWalletEvm);
+  const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
-  res.json({ ok: true, joined: true, phase });
+  res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
 });
 
 // Soft leave: sets left_at so getActiveTournamentForPlayer stops returning
@@ -7715,19 +8020,22 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const sortBy = normalizeTournamentSort(t.sort_by);
   const col = TOURNAMENT_SQL_SORT_COLS[sortBy] || 'tp.pnl_usd';
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+  const includeRewardWallets = isAdminRequest(req);
   const baseSql = `
     SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd,
+           tp.reward_wallet_evm,
            p.name, p.wallet
     FROM tournament_participants tp
     JOIN players p ON p.id = tp.player_id
     WHERE tp.tournament_id = ? AND tp.left_at IS NULL
   `;
   let rows;
-  if (sortBy === TOURNAMENT_COMBINED_SORT) {
-    rows = applyVolumeTrophyScore(db.db.prepare(baseSql).all(tid))
+  if (isTournamentPointsSort(sortBy)) {
+    rows = applyTournamentPointsScore(db.db.prepare(baseSql).all(tid), t)
       .sort((a, b) =>
         (Number(b.score) || 0) - (Number(a.score) || 0)
         || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+        || (Number(b.pnl_usd) || 0) - (Number(a.pnl_usd) || 0)
         || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
         || (Number(b.trades_count) || 0) - (Number(a.trades_count) || 0)
         || String(a.player_id).localeCompare(String(b.player_id))
@@ -7740,10 +8048,14 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
     LIMIT ?
     `).all(tid, limit);
   }
+  const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
+  const prize = tournamentPrizeState(t, totalVolumeUsd);
+  const prizeByRank = new Map((prize.payouts || []).map(p => [Number(p.rank), Number(p.amount_usd || 0)]));
   res.json({
-    tournament: tournamentRowToPublic(t),
+    tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
     sort_by: sortBy,
-    sort_label: tournamentSortLabel(sortBy),
+    sort_label: tournamentSortLabel(t),
+    prize,
     leaderboard: rows.map((r, i) => ({
       rank: i + 1,
       player_id: r.player_id,
@@ -7757,6 +8069,10 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       score: r.score ?? null,
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
+      pnl_score: r.pnl_score ?? null,
+      prize_amount: prizeByRank.get(i + 1) || 0,
+      prize_currency: prize.currency,
+      ...(includeRewardWallets ? { reward_wallet_evm: r.reward_wallet_evm || null } : {}),
     })),
   });
 });
@@ -7770,7 +8086,8 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
   const counts = db.db.prepare(`
     SELECT tournament_id,
            COUNT(player_id) AS players,
-           SUM(CASE WHEN player_id IS NOT NULL AND left_at IS NULL THEN 1 ELSE 0 END) AS active_players
+           SUM(CASE WHEN player_id IS NOT NULL AND left_at IS NULL THEN 1 ELSE 0 END) AS active_players,
+           COALESCE(SUM(CASE WHEN left_at IS NULL THEN volume_usd ELSE 0 END), 0) AS active_volume_usd
     FROM tournament_participants
     GROUP BY tournament_id
   `).all();
@@ -7778,7 +8095,7 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
   for (const c of counts) countMap[c.tournament_id] = c;
   res.json({
     tournaments: rows.map(t => ({
-      ...tournamentRowToPublic(t),
+      ...tournamentRowToPublic(t, { totalVolumeUsd: countMap[t.id]?.active_volume_usd || 0 }),
       participants: countMap[t.id]?.active_players || 0,
       registered: countMap[t.id]?.players || 0,
     })),
@@ -7786,15 +8103,17 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 });
 
 // Create a tournament. start_at defaults to now, end_at is optional, boosts
-// default to 1.0 (no boost), sort_by defaults to pnl_usd.
+// default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
     name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    points_trophy_weight, points_volume_weight, points_pnl_weight,
+    prize_currency, prize_tiers, rewards_in_cop,
   } = req.body || {};
   if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
   if (!['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'].includes(dex)) return res.status(400).json({ error: 'invalid dex' });
-  const sortCol = normalizeTournamentSort(sort_by);
+  const sortCol = normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
@@ -7823,13 +8142,28 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     registration_closes_at: registrationCloseIso,
   });
   if (windowError) return res.status(400).json({ error: windowError });
+  let pointWeights;
+  let prizeTiers;
+  try {
+    pointWeights = normalizeTournamentPointWeights({
+      sort_by: sortCol,
+      points_trophy_weight,
+      points_volume_weight,
+      points_pnl_weight,
+    }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: sortCol === TOURNAMENT_POINTS_SORT });
+    prizeTiers = normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
       name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+      points_trophy_weight, points_volume_weight, points_pnl_weight,
+      prize_currency, prize_tiers, rewards_in_cop,
       freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -7840,6 +8174,12 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     tb,
     sortCol,
     stat,
+    pointWeights.trophies,
+    pointWeights.volume,
+    pointWeights.pnl,
+    sanitizePrizeCurrency(prize_currency),
+    JSON.stringify(prizeTiers),
+    parseBool(rewards_in_cop) ? 1 : 0,
     freeze,
     prereg,
     registrationOpenIso,
@@ -7858,6 +8198,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const {
     name, description, dex, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
+    points_trophy_weight, points_volume_weight, points_pnl_weight,
+    prize_currency, prize_tiers, rewards_in_cop,
   } = req.body || {};
   const validDexes = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid'];
   if (dex !== undefined && !validDexes.includes(dex)) return res.status(400).json({ error: 'invalid dex' });
@@ -7886,6 +8228,23 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   });
   if (windowError) return res.status(400).json({ error: windowError });
+  const nextSortBy = normalizeTournamentSort(sort_by, t.sort_by);
+  let pointWeights;
+  let nextPrizeTiers;
+  try {
+    const fallbackWeights = tournamentPointWeights(t);
+    pointWeights = normalizeTournamentPointWeights({
+      sort_by: nextSortBy,
+      points_trophy_weight: points_trophy_weight !== undefined ? points_trophy_weight : t.points_trophy_weight,
+      points_volume_weight: points_volume_weight !== undefined ? points_volume_weight : t.points_volume_weight,
+      points_pnl_weight: points_pnl_weight !== undefined ? points_pnl_weight : t.points_pnl_weight,
+    }, fallbackWeights, { requireTotal: nextSortBy === TOURNAMENT_POINTS_SORT });
+    nextPrizeTiers = prize_tiers !== undefined
+      ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
+      : normalizeTournamentPrizeTiers(t.prize_tiers);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
   const next = {
     name: name && typeof name === 'string' ? name.trim() : t.name,
     description: description !== undefined ? String(description).slice(0, 500) : t.description,
@@ -7897,7 +8256,13 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     freeze_trophies: freeze_trophies !== undefined
       ? (parseBool(freeze_trophies) ? 1 : 0)
       : Number(t.freeze_trophies ?? 1),
-    sort_by: normalizeTournamentSort(sort_by, t.sort_by),
+    sort_by: nextSortBy,
+    points_trophy_weight: pointWeights.trophies,
+    points_volume_weight: pointWeights.volume,
+    points_pnl_weight: pointWeights.pnl,
+    prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
+    prize_tiers: nextPrizeTiers,
+    rewards_in_cop: rewards_in_cop !== undefined ? (parseBool(rewards_in_cop) ? 1 : 0) : Number(t.rewards_in_cop || 0),
     status: STATUSES.includes(status) ? status : t.status,
     preregistration_enabled: preregistration_enabled !== undefined
       ? (parseBool(preregistration_enabled) ? 1 : 0)
@@ -7908,6 +8273,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   db.db.prepare(`
     UPDATE tournaments SET name = ?, description = ?, dex = ?, start_at = ?, end_at = ?,
                             gold_boost = ?, trophy_boost = ?, sort_by = ?, status = ?,
+                            points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
+                            prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
   `).run(
@@ -7920,6 +8287,12 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.trophy_boost,
     next.sort_by,
     next.status,
+    next.points_trophy_weight,
+    next.points_volume_weight,
+    next.points_pnl_weight,
+    next.prize_currency,
+    JSON.stringify(next.prize_tiers),
+    next.rewards_in_cop,
     next.freeze_trophies,
     next.preregistration_enabled,
     next.registration_opens_at,

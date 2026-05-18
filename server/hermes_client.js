@@ -44,6 +44,85 @@ function normalizeHistory(history) {
     .slice(-4);
 }
 
+function normalizeIntentText(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[’']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function classifyGameIntent(message) {
+  const text = normalizeIntentText(message);
+  if (!text) return { kind: 'general', action_required: false };
+  if (/(атак|атакуй|напад|напади|raid|battle|enemy|ворог|враг|бій|бой)/i.test(text)) {
+    return {
+      kind: 'battle',
+      action_required: true,
+      goal: 'Start an AI online battle only through MCP tools.',
+      required_loop: 'get_base_state -> confirm loaded ships -> execute_ai_attack_plan({ auto_tactics: true }) -> summarize result and losses',
+    };
+  }
+  if (/(збери|собери|collect).*(ресурс|реси|resources)|(?:ресурс|реси|resources).*(збери|собери|collect)/i.test(text)) {
+    return {
+      kind: 'collect_resources',
+      action_required: true,
+      goal: 'Collect available game resources only through MCP tools.',
+      required_loop: 'get_base_state -> collect_resources({}) -> summarize collected resources',
+    };
+  }
+  if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building)/i.test(text)) {
+    return {
+      kind: 'build',
+      action_required: true,
+      goal: 'Place a valid building using catalog and build-slot tools.',
+      required_loop: 'get_base_state -> get_building_catalog if needed -> find_build_slots -> place_building -> summarize result',
+    };
+  }
+  if (/(апгрейд|апгрейдни|upgrade|level|lvl|рівень|уровень)/i.test(text)) {
+    return {
+      kind: 'upgrade',
+      action_required: true,
+      goal: 'Upgrade the requested building or troop using MCP tools.',
+      required_loop: 'get_base_state -> identify exact id/type -> upgrade_building or upgrade_troop -> summarize result',
+    };
+  }
+  if (/(кораб|ship|troop|військ|войск|load|reinforce|віднов|восстанов)/i.test(text)) {
+    return {
+      kind: 'fleet',
+      action_required: true,
+      goal: 'Manage ships, troops, loadouts, or reinforcements through MCP tools.',
+      required_loop: 'get_base_state -> choose valid port/ship/troop ids -> use the relevant ship/troop MCP tool -> summarize result',
+    };
+  }
+  if (/(скіли|skills|що ти вмієш|что ты умеешь|можеш|умеешь)/i.test(text)) {
+    return {
+      kind: 'skills',
+      action_required: false,
+      goal: 'Explain only Clash of Perps gameplay capabilities.',
+    };
+  }
+  return { kind: 'general', action_required: false };
+}
+
+function buildIntentInstructions(intent) {
+  if (!intent || intent.kind === 'general') return '';
+  const lines = [
+    '## Current Request Intent',
+    `Intent: ${intent.kind}.`,
+    `Goal: ${intent.goal || 'Help with Clash of Perps gameplay.'}`,
+  ];
+  if (intent.action_required) {
+    lines.push(
+      'This is a real game-action request. Do not answer with only advice.',
+      'Use Clash MCP tools before the final answer. Never claim an action happened unless the tool result confirms it.',
+      `Required loop: ${intent.required_loop}`,
+      'If a tool blocks the action, stop and report the exact blocker in player-facing language.'
+    );
+  }
+  return lines.join('\n');
+}
+
 function buildChatInput(message, history) {
   const current = String(message || '').trim().slice(0, 8000);
   const safeHistory = normalizeHistory(history);
@@ -59,6 +138,17 @@ function buildChatInput(message, history) {
   const budget = Math.max(0, 8000 - currentBlock.length - 32);
   input = `# Recent Chat Context\n${historyText.slice(-budget)}\n\n${currentBlock}`;
   return input.slice(0, 8000);
+}
+
+function buildInstructionsForMessage(message) {
+  const intent = classifyGameIntent(message);
+  const intentInstructions = buildIntentInstructions(intent);
+  return {
+    intent,
+    instructions: intentInstructions
+      ? `${CLASH_RUNTIME_INSTRUCTIONS}\n\n${intentInstructions}`
+      : CLASH_RUNTIME_INSTRUCTIONS,
+  };
 }
 
 async function request(path, options = {}) {
@@ -115,11 +205,12 @@ async function chat(player, mcpKey, message, options = {}) {
   const safePlayer = sanitizePlayer(player);
   const history = normalizeHistory(options.history);
   await provision(safePlayer, mcpKey);
+  const requestContext = buildInstructionsForMessage(message);
   return request(`/players/${encodeURIComponent(safePlayer.id)}/chat`, {
     method: 'POST',
     body: {
       input: buildChatInput(message, history),
-      instructions: CLASH_RUNTIME_INSTRUCTIONS,
+      instructions: requestContext.instructions,
       previous_response_id: options.previous_response_id || null,
       idempotency_key: options.idempotency_key || crypto.randomUUID(),
       metadata: {
@@ -127,6 +218,7 @@ async function chat(player, mcpKey, message, options = {}) {
         player_name: safePlayer.name,
         source: 'clash-web-chat',
         history_count: history.length,
+        game_intent: requestContext.intent,
         ...(options.metadata || {}),
       },
     },

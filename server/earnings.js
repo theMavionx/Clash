@@ -308,6 +308,60 @@ async function fetchGmxEarnings() {
 // Fallback matches the deploy.sh default (10 bps = 0.1%). Production
 // always has DECIBEL_BUILDER_FEE_BPS set via env so this fallback only
 // fires in fresh local checkouts.
+const PHOENIX_FLIGHT_BUILDER_AUTHORITY = (
+  process.env.PHOENIX_FLIGHT_BUILDER_AUTHORITY
+  || process.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY
+  || 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsXaLvrKkfMP8qci9'
+).trim();
+const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT = (
+  process.env.PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
+  || process.env.VITE_PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
+  || 'Czk948LDdK9iTWbRB8MEoV4ngX2EAxxHdXx8mfgZxuTA'
+).trim();
+const PHOENIX_FLIGHT_BUILDER_FEE_BPS = Number(
+  process.env.PHOENIX_FLIGHT_BUILDER_FEE_BPS
+  || process.env.VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS
+  || 10,
+) || 10;
+
+async function fetchPhoenixEarnings() {
+  const Db = loadSqlite();
+  let volume = 0;
+  let trades = 0;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    const fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+    try { fdb.pragma('journal_mode = WAL'); } catch {}
+    try {
+      const r = fdb.prepare(`
+        SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
+        FROM trade_history
+        WHERE dex = 'phoenix' AND status = 'filled'
+          AND verified_source = 'worker'
+      `).get();
+      volume = Number(r?.vol) || 0;
+      trades = Number(r?.n) || 0;
+    } finally {
+      fdb.close();
+    }
+  }
+
+  const feeBps = Math.max(0, PHOENIX_FLIGHT_BUILDER_FEE_BPS);
+  const earned = volume * (feeBps / 10000);
+  return {
+    earned_usd: earned,
+    address: PHOENIX_FLIGHT_BUILDER_AUTHORITY || null,
+    subaccount: PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT || null,
+    currency: 'USDC (Phoenix)',
+    volume_usd: volume,
+    trades,
+    builder_fee_pct: feeBps / 100,
+    fee_per_side_pct: feeBps / 100,
+    model: 'single_builder_fee',
+    note: `Modelled: verified Phoenix fills volume x ${feeBps}bps Flight builder fee. Phoenix Flight currently collects on liquidity-removing fills only; resting maker portions may not accrue builder fees.`,
+    source_detail: 'phoenix_volume_x_flight_fee',
+  };
+}
+
 const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 10;
 
 async function fetchPerplEarnings() {
@@ -338,8 +392,9 @@ async function fetchPerplEarnings() {
     currency: 'AUSD (Monad)',
     volume_usd: volume,
     trades,
-    rebate_pct: PERPL_BUILDER_FEE_BPS / 100,
+    builder_fee_pct: PERPL_BUILDER_FEE_BPS / 100,
     fee_per_side_pct: PERPL_BUILDER_FEE_BPS / 100,
+    model: 'single_builder_fee',
     note: `Modelled: volume x ${PERPL_BUILDER_FEE_BPS}bps builder fee from verified Perpl fills.`,
     source_detail: 'volume_x_builder_fee',
   };
@@ -377,8 +432,9 @@ async function fetchHyperliquidEarnings() {
     currency: 'USDC (Hyperliquid)',
     volume_usd: volume,
     trades,
-    rebate_pct: feeBps / 100,
+    builder_fee_pct: feeBps / 100,
     fee_per_side_pct: feeBps / 100,
+    model: 'single_builder_fee',
     note: HYPERLIQUID_BUILDER_ADDRESS
       ? `Modelled: volume x ${feeBps}bps builder fee from verified Hyperliquid fills.`
       : 'Builder address not configured yet. Volume is indexed, but builder fee attribution is off until HYPERLIQUID_BUILDER_ADDRESS is set.',
@@ -395,11 +451,12 @@ async function fetchAllEarnings({ force = false } = {}) {
   if (!force && _cache && now - _cacheAt < CACHE_TTL_MS) {
     return { ..._cache, cached: true, age_ms: now - _cacheAt };
   }
-  const [pac, dec, avt, gmx, mon, hl] = await Promise.allSettled([
+  const [pac, dec, avt, gmx, phx, mon, hl] = await Promise.allSettled([
     fetchPacificaEarnings(),
     fetchDecibelEarnings(),
     fetchAvantisEarnings(),
     fetchGmxEarnings(),
+    fetchPhoenixEarnings(),
     fetchPerplEarnings(),
     fetchHyperliquidEarnings(),
   ]);
@@ -412,11 +469,12 @@ async function fetchAllEarnings({ force = false } = {}) {
     decibel:  { ...wrap('decibel',  dec), source: 'decibel_account_overview_fee_income' },
     avantis:  { ...wrap('avantis',  avt), source: 'avantis_volume_x_rate' },
     gmx:      { ...wrap('gmx',      gmx), source: 'gmx_volume_x_rate' },
+    phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_volume_x_flight_fee' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_volume_x_builder_fee' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_volume_x_builder_fee' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','monad','hyperliquid'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

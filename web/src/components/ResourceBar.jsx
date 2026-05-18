@@ -27,51 +27,97 @@ function ResourceBar() {
 
   // Publish icon screen positions to window so Godot's fly-to-icon animation
   // can target the real React HUD icons. Godot reads these via JavaScriptBridge.
+  const barRef = useRef(null);
   const iconRefs = useRef({ gold: null, wood: null, ore: null });
   useEffect(() => {
     const publish = () => {
-      const dpr = window.devicePixelRatio || 1;
+      const canvas = document.getElementById('godot-canvas');
+      const canvasRect = canvas?.getBoundingClientRect?.();
+      const canvasScaleX = canvas && canvasRect?.width
+        ? canvas.width / canvasRect.width
+        : (window.devicePixelRatio || 1);
+      const canvasScaleY = canvas && canvasRect?.height
+        ? canvas.height / canvasRect.height
+        : (window.devicePixelRatio || 1);
       const out = {};
       const outCss = {};
       for (const key of ['gold', 'wood', 'ore']) {
         const el = iconRefs.current[key];
         if (!el) continue;
         const r = el.getBoundingClientRect();
+        const cssX = r.left + r.width / 2;
+        const cssY = r.top + r.height / 2;
         out[key] = {
-          x: Math.round((r.left + r.width / 2) * dpr),
-          y: Math.round((r.top + r.height / 2) * dpr),
+          x: Math.round((cssX - (canvasRect?.left || 0)) * canvasScaleX),
+          y: Math.round((cssY - (canvasRect?.top || 0)) * canvasScaleY),
         };
         outCss[key] = {
-          x: r.left + r.width / 2,
-          y: r.top + r.height / 2,
+          x: cssX,
+          y: cssY,
         };
       }
       window.godotResourceIconPositions = out;
       // CSS-pixel variant for React-side overlays (purchase fly animation,
-      // floating gain numbers). DPR-scaled coords above target Godot's native
-      // canvas where 1 unit == 1 device pixel; React DOM uses CSS pixels.
+      // floating gain numbers). Godot coords above are converted through the
+      // live canvas rect, which matters on phones where DPR is capped by the
+      // Godot export and differs from window.devicePixelRatio.
       window.__clashResourceBarPositionsCss = outCss;
+      return { godot: out, css: outCss };
+    };
+    const getPosition = (key, mode = 'godot') => {
+      const positions = publish();
+      const map = mode === 'css' ? positions.css : positions.godot;
+      return map?.[key] ? JSON.stringify(map[key]) : '';
+    };
+    const publishBurst = () => {
+      publish();
+      let frames = 0;
+      const tick = () => {
+        publish();
+        frames += 1;
+        if (frames < 12) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     };
     publish();
+    window.__clashPublishResourceIconPositions = publish;
+    window.__clashGetResourceIconPosition = getPosition;
     const ro = new ResizeObserver(publish);
+    if (barRef.current) ro.observe(barRef.current);
     for (const el of Object.values(iconRefs.current)) if (el) ro.observe(el);
     window.addEventListener('resize', publish);
+    window.addEventListener('orientationchange', publishBurst);
     window.addEventListener('scroll', publish, true);
+    window.visualViewport?.addEventListener?.('resize', publishBurst);
+    window.visualViewport?.addEventListener?.('scroll', publish);
     const iv = setInterval(publish, 2000); // catch layout shifts from mobile/orientation
     return () => {
       ro.disconnect();
       window.removeEventListener('resize', publish);
+      window.removeEventListener('orientationchange', publishBurst);
       window.removeEventListener('scroll', publish, true);
+      window.visualViewport?.removeEventListener?.('resize', publishBurst);
+      window.visualViewport?.removeEventListener?.('scroll', publish);
       clearInterval(iv);
+      if (window.__clashPublishResourceIconPositions === publish) {
+        delete window.__clashPublishResourceIconPositions;
+      }
+      if (window.__clashGetResourceIconPosition === getPosition) {
+        delete window.__clashGetResourceIconPosition;
+      }
     };
   }, [mobile, isLandscape]);
+
+  useEffect(() => {
+    window.__clashPublishResourceIconPositions?.();
+  });
 
   const handleClick = useCallback((key) => {
     sendToGodot('add_resources', { resource: key });
   }, [sendToGodot]);
 
   return (
-    <div style={{ ...styles.bar, ...(mobile ? (isLandscape ? styles.barLandscape : styles.barMobile) : {}) }}>
+    <div ref={barRef} style={{ ...styles.bar, ...(mobile ? (isLandscape ? styles.barLandscape : styles.barMobile) : {}) }}>
       {ITEMS.map(({ key, icon, indicator, offset }) => {
         const current = data[key] || 0;
         const max = caps[key] || 5000;

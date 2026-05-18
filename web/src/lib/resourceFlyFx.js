@@ -31,7 +31,8 @@ export function flyResourcesToBars(rewards, options = {}) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (!rewards || typeof rewards !== 'object') return;
 
-  const targets = window.__clashResourceBarPositionsCss || null;
+  const freshPositions = window.__clashPublishResourceIconPositions?.();
+  const targets = freshPositions?.css || window.__clashResourceBarPositionsCss || null;
   if (!targets) return;
 
   const perResource = Math.max(1, Math.min(20, options.count ?? PER_RESOURCE));

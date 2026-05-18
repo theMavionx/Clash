@@ -808,6 +808,25 @@ export function useHyperliquid() {
 
   importFillsRef.current = importHyperliquidFills;
 
+  const refreshServerResources = useCallback(async (token) => {
+    if (!token) return null;
+    try {
+      const res = await fetch('/api/resources', { headers: { 'x-token': token } });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) return null;
+      const resources = {
+        gold: Number(data.gold || 0),
+        wood: Number(data.wood || 0),
+        ore: Number(data.ore || 0),
+      };
+      window.onGodotMessage?.({ action: 'resources', data: resources });
+      return resources;
+    } catch (e) {
+      console.warn('[useHyperliquid] resource refresh failed:', e?.message || e);
+      return null;
+    }
+  }, []);
+
   const claimGold = useCallback(async ({ tokenOverride = null, reason = 'poll' } = {}) => {
     if (!walletAddr) {
       console.warn('[useHyperliquid] claim-gold skipped: no wallet');
@@ -833,6 +852,7 @@ export function useHyperliquid() {
         reason,
         gold: data?.gold || 0,
         detail: data?.reason || null,
+        debug: data?.detail || null,
         dex: data?.dex || 'hyperliquid',
       });
       if (data.gold > 0) {
@@ -840,13 +860,14 @@ export function useHyperliquid() {
         if (window.onGodotMessage) {
           window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
+        setTimeout(() => refreshServerResources(token), 500);
       }
       return data;
     } catch (e) {
       console.warn('[useHyperliquid] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr, getRewardAuthToken]);
+  }, [walletAddr, getRewardAuthToken, refreshServerResources]);
 
   claimGoldRef.current = claimGold;
 
@@ -868,13 +889,14 @@ export function useHyperliquid() {
       const claimed = typeof claimFn === 'function'
         ? await claimFn({ tokenOverride: token, reason: label })
         : null;
-      if (imported?.imported > 0 || (claimed && Number(claimed.gold || 0) > 0)) {
+      if (imported?.imported > 0 || imported?.adopted > 0 || (claimed && Number(claimed.gold || 0) > 0)) {
         console.log(`[useHyperliquid] rewards synced after ${label}`, { imported, claimed });
+        await refreshServerResources(token);
       }
     };
     run(5, 1500);
     setTimeout(() => run(2, 1500), 12_000);
-  }, [walletAddr, importHyperliquidFills, getRewardAuthToken]);
+  }, [walletAddr, importHyperliquidFills, getRewardAuthToken, refreshServerResources]);
 
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;

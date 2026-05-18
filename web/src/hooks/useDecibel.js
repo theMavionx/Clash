@@ -2215,6 +2215,12 @@ function decodeTradeError(e, fallback) {
       }
       if (/reject|cancel|denied/i.test(reason)) return 'Signature cancelled';
       if (/slippage|price/i.test(reason)) return 'Price moved past slippage — widen slippage or retry';
+      if (/builderFee must be/i.test(reason)) {
+        return `Decibel builder fee config mismatch: ${String(reason)}`;
+      }
+      if (/builderAddr is not an approved Clash builder subaccount/i.test(reason)) {
+        return 'Decibel builder address config mismatch on the server';
+      }
       if (/builder/i.test(reason)) return 'Builder fee not yet approved — tap "Activate" to authorise';
       if (/delegat/i.test(reason)) return 'Trading delegation expired — tap "Activate" to refresh';
       return String(reason);

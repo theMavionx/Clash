@@ -4,18 +4,23 @@
 // fdf8e7 paper, d4c8b0 stitched border, brown title, red round close button,
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
-import { memo, useState, useMemo } from 'react';
+import { memo, useEffect, useState, useMemo } from 'react';
 import { useTournament, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const fmt = (n) => (Number(n) || 0).toLocaleString().replace(/,/g, ' ');
+const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 
 function fmtUsd(n) {
   const v = Number(n) || 0;
   if (Math.abs(v) >= 1000) return '$' + Math.round(v).toLocaleString().replace(/,/g, ' ');
   return '$' + v.toFixed(2);
+}
+
+function fmtPrize(amount, currency = 'USD') {
+  return `${fmtUsd(amount)} ${currency || 'USD'}`;
 }
 
 function fmtDate(s) {
@@ -25,13 +30,39 @@ function fmtDate(s) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
+function isPointsSort(sortBy) {
+  return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
+}
+
+function pointWeights(t) {
+  if (t?.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
+  const w = t?.points_weights || {};
+  return {
+    trophies: Number(w.trophies ?? t?.points_trophy_weight ?? 20) || 0,
+    volume: Number(w.volume ?? t?.points_volume_weight ?? 60) || 0,
+    pnl: Number(w.pnl ?? t?.points_pnl_weight ?? 20) || 0,
+  };
+}
+
+function fmtWeight(n) {
+  const v = Number(n) || 0;
+  return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/\.?0+$/, '');
+}
+
 function sortLabel(tOrSort) {
   const sortBy = typeof tOrSort === 'string' ? tOrSort : tOrSort?.sort_by;
   if (typeof tOrSort === 'object' && tOrSort?.sort_label) return tOrSort.sort_label;
   if (sortBy === 'trophies') return 'Trophies';
   if (sortBy === 'volume_usd') return 'Volume';
   if (sortBy === 'gold') return 'Gold';
-  if (sortBy === 'volume_trophies_50_50') return '50% Vol / 50% Trophies';
+  if (isPointsSort(sortBy)) {
+    const w = pointWeights(typeof tOrSort === 'string' ? { sort_by: sortBy } : tOrSort);
+    const parts = [];
+    if (Number(w.trophies) > 0) parts.push(`${fmtWeight(w.trophies)}% Trophy`);
+    if (Number(w.volume) > 0) parts.push(`${fmtWeight(w.volume)}% Volume`);
+    if (Number(w.pnl) > 0) parts.push(`${fmtWeight(w.pnl)}% PnL`);
+    return parts.length ? parts.join(' / ') : 'Custom points';
+  }
   return 'PnL';
 }
 
@@ -40,7 +71,7 @@ function featuredMetric(sortKey, row) {
   if (sortKey === 'trophies') return { value: fmt(row.trophies), color: '#b45309' };
   if (sortKey === 'gold') return { value: fmt(row.gold), color: '#b45309' };
   if (sortKey === 'volume_usd') return { value: fmtUsd(row.volume_usd), color: '#b45309' };
-  if (sortKey === 'volume_trophies_50_50') {
+  if (isPointsSort(sortKey)) {
     return { value: `${Number(row.score || 0).toFixed(1)} pts`, color: '#b45309' };
   }
   return {
@@ -87,7 +118,12 @@ function TournamentPanel({ onClose }) {
   const canJoin = !isHistory && !!me?.can_join;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
   const [busy, setBusy] = useState(false);
+  const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
+
+  useEffect(() => {
+    if (myStats?.reward_wallet_evm) setRewardWalletEvm(myStats.reward_wallet_evm);
+  }, [myStats?.reward_wallet_evm]);
 
   const myRank = useMemo(() => {
     if (!board || !player?.player_id) return null;
@@ -97,8 +133,15 @@ function TournamentPanel({ onClose }) {
 
   const handleJoin = async () => {
     if (!t || busy || !canJoin) return;
+    const needsCopWallet = !!t.rewards_in_cop;
+    const rewardWallet = rewardWalletEvm.trim();
+    if (needsCopWallet && !EVM_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid EVM address for COP rewards.');
+      return;
+    }
     setBusy(true);
-    await join(t.id);
+    const result = await join(t.id, { rewardWalletEvm: needsCopWallet ? rewardWallet : undefined });
+    if (result && result.ok === false) alert(result.error || 'Could not join tournament');
     setBusy(false);
   };
   const handleLeave = async () => {
@@ -242,6 +285,9 @@ function TournamentPanel({ onClose }) {
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
                   <span style={S.tag}>{t.freeze_trophies === false ? 'Main trophies live' : 'Main trophies frozen'}</span>
+                  {Number(t.prize_pool_usd || 0) > 0 && <span style={S.prizeTag}>Prize {fmtPrize(t.prize_pool_usd, t.prize_currency)}</span>}
+                  {Number(t.prize_next_tier?.pool_usd || 0) > 0 && <span style={S.tag}>Next {fmtPrize(t.prize_next_tier.pool_usd, t.prize_currency)} @ {fmtUsd(t.prize_next_tier.volume_usd)} vol</span>}
+                  {t.rewards_in_cop && <span style={S.prizeTag}>COP rewards</span>}
                   {preregistration && t.start_at && <span style={S.tag}>Starts {fmtDate(t.start_at)}</span>}
                   {preregistration && t.registration_opens_at && <span style={S.tag}>Reg opens {fmtDate(t.registration_opens_at)}</span>}
                   {preregistration && t.registration_closes_at && <span style={S.tag}>Reg closes {fmtDate(t.registration_closes_at)}</span>}
@@ -250,9 +296,24 @@ function TournamentPanel({ onClose }) {
               </div>
 
               {!isHistory && !joined && (
-                <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
-                  {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
-                </button>
+                <>
+                  {t.rewards_in_cop && (
+                    <div style={S.rewardBox}>
+                      <div style={S.rewardLabel}>COP reward address</div>
+                      <input
+                        style={S.rewardInput}
+                        value={rewardWalletEvm}
+                        onChange={(e) => setRewardWalletEvm(e.target.value)}
+                        placeholder="0x..."
+                        autoCapitalize="none"
+                        spellCheck={false}
+                      />
+                    </div>
+                  )}
+                  <button style={{ ...S.joinBtn, opacity: canJoin ? 1 : 0.6 }} onClick={handleJoin} disabled={busy || !canJoin}>
+                    {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
+                  </button>
+                </>
               )}
 
               {isHistory && myStats && (
@@ -262,7 +323,7 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
-                    {t.sort_by === 'volume_trophies_50_50' && (
+                    {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
                     )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
@@ -304,7 +365,7 @@ function TournamentPanel({ onClose }) {
                     {myRank && <span style={S.myCardRank}>#{myRank}</span>}
                   </div>
                   <div style={S.statRow}>
-                    {t.sort_by === 'volume_trophies_50_50' && (
+                    {isPointsSort(t.sort_by) && (
                       <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
                     )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
@@ -341,6 +402,7 @@ function TournamentPanel({ onClose }) {
                   const medalColor = r.rank === 1 ? '#FFD700' : r.rank === 2 ? '#C0C0C0' : r.rank === 3 ? '#CD7F32' : null;
                   const sortKey = board.sort_by;
                   const featuredDisplay = featuredMetric(sortKey, r);
+                  const prizeAmount = Number(r.prize_amount || 0);
                   return (
                     <div
                       key={r.player_id}
@@ -365,6 +427,7 @@ function TournamentPanel({ onClose }) {
                         </span>
                         <span style={S.subRow}>
                           {fmt(r.trophies)} 🏆 · {r.trades_count} trades · {fmtUsd(r.volume_usd)} vol
+                          {prizeAmount > 0 && <> · <strong style={S.prizeText}>{fmtPrize(prizeAmount, r.prize_currency || t.prize_currency)} prize</strong></>}
                         </span>
                       </div>
                       <span style={{ ...S.featured, color: featuredDisplay.color }}>{featuredDisplay.value}</span>
@@ -492,6 +555,21 @@ const S = {
     textTransform: 'uppercase', letterSpacing: 0.4,
     textShadow: '0 1px 0 rgba(0,0,0,0.25)',
   },
+  prizeTag: {
+    fontSize: 10, fontWeight: 900, padding: '3px 7px', borderRadius: 6,
+    background: '#dcfce7', border: '2px solid #16a34a', color: '#15803d',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+
+  rewardBox: {
+    background: '#fef3c7', border: '3px solid #f59e0b', borderRadius: 14, padding: 10,
+  },
+  rewardLabel: { fontSize: 11, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
+  rewardInput: {
+    width: '100%', boxSizing: 'border-box', border: '2px solid #d4c8b0', borderRadius: 10,
+    background: '#fdf8e7', color: '#5C3A21', fontSize: 12, fontWeight: 800,
+    padding: '8px 10px', outline: 'none',
+  },
 
   joinBtn: {
     width: '100%', padding: '12px 16px', borderRadius: 14,
@@ -538,5 +616,6 @@ const S = {
   info: { flex: 1, display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
   name: { fontSize: 13, fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   subRow: { fontSize: 10, fontWeight: 700, color: '#a3906a' },
+  prizeText: { color: '#15803d', fontWeight: 900 },
   featured: { fontSize: 14, fontWeight: 900, flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
 };

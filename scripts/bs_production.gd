@@ -42,6 +42,33 @@ func _load_collect_texture(res_type: String) -> Texture2D:
 		return ImageTexture.create_from_image(image)
 	return null
 
+func _read_react_resource_target(res_type: String, fallback: Vector2) -> Vector2:
+	if not OS.has_feature("web"):
+		return fallback
+	var safe_res_type := res_type.replace("\\", "").replace("'", "")
+	var js := """
+(function(){
+  try {
+    if (window.__clashGetResourceIconPosition) {
+      return window.__clashGetResourceIconPosition('%s', 'godot') || '';
+    }
+    if (window.__clashPublishResourceIconPositions) {
+      window.__clashPublishResourceIconPositions();
+    }
+    var p = window.godotResourceIconPositions && window.godotResourceIconPositions['%s'];
+    return p ? JSON.stringify(p) : '';
+  } catch (e) {
+    return '';
+  }
+})()
+""" % [safe_res_type, safe_res_type]
+	var js_target = JavaScriptBridge.eval(js)
+	if js_target is String and js_target != "":
+		var parsed = JSON.parse_string(js_target)
+		if parsed is Dictionary and parsed.has("x") and parsed.has("y"):
+			return Vector2(float(parsed.get("x", fallback.x)), float(parsed.get("y", fallback.y)))
+	return fallback
+
 # ── Production tick ────────────────────────────────────────────
 
 ## Advance stored resources for every production building by one second's worth
@@ -217,17 +244,11 @@ func _spawn_collection_flying_icon(start_pos: Vector2, res_type: String) -> void
 	elif res_type == "ore":
 		target_pos = Vector2(screen_w - 80.0, 40.0)
 
-	# On web: read the real React HUD icon position published by ResourceBar.jsx
-	# into window.godotResourceIconPositions[res_type] = {x, y} (device pixels).
+	# On web: read the real React HUD icon position published by ResourceBar.jsx.
+	# ResourceBar converts CSS icon centers into Godot canvas coordinates, so
+	# mobile DPR/canvas scaling and responsive HUD shifts still land icon-to-icon.
 	if OS.has_feature("web"):
-		var js_target = JavaScriptBridge.eval(
-			"(window.godotResourceIconPositions && window.godotResourceIconPositions['" + res_type + "']) ? " +
-			"window.godotResourceIconPositions['" + res_type + "'].x + ',' + window.godotResourceIconPositions['" + res_type + "'].y : ''"
-		)
-		if js_target is String and js_target != "":
-			var parts: PackedStringArray = js_target.split(",")
-			if parts.size() == 2:
-				target_pos = Vector2(float(parts[0]), float(parts[1]))
+		target_pos = _read_react_resource_target(res_type, target_pos)
 	elif is_instance_valid(bs.gold_label) and bs.gold_label.is_visible_in_tree():
 		# Desktop/editor: use Godot's own HUD labels if they're visible.
 		if res_type == "gold" and is_instance_valid(bs.gold_label):

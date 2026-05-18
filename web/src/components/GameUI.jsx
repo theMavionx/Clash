@@ -161,7 +161,7 @@ export default function GameUI() {
             aria-label="Open AI agent chat"
           >
             <img
-              src="/icons/ai-agent.jpg"
+              src="/icons/ai-agent.png"
               alt=""
               style={styles.aiChatButtonImg}
               draggable={false}

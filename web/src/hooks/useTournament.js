@@ -58,15 +58,19 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     return () => clearInterval(id);
   }, [active, token, pollMs, refresh]);
 
-  const join = useCallback(async (tournamentId) => {
+  const join = useCallback(async (tournamentId, options = {}) => {
     if (!token) return false;
     const res = await fetch(`/api/tournaments/${tournamentId}/join`, {
       method: 'POST',
-      headers: { 'x-token': token },
+      headers: { 'x-token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reward_wallet_evm: options.rewardWalletEvm || options.reward_wallet_evm || undefined,
+      }),
     });
-    const ok = res.ok;
+    let data = null;
+    try { data = await res.json(); } catch {}
     await refresh();
-    return ok;
+    return { ok: res.ok, ...(data || {}) };
   }, [token, refresh]);
 
   const leave = useCallback(async (tournamentId) => {

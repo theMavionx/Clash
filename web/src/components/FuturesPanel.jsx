@@ -314,6 +314,139 @@ const HYPERLIQUID_STEP_HINTS = {
     'Refreshing Hyperliquid state to confirm the approvals are visible before the trade panel opens.',
 };
 
+// ── Hyperliquid setup-gate styles ────────────────────────────────────
+// Visual language matches BridgeStatusModal in NftBridgePanel.jsx so
+// the player perceives the two flows as one family. Parchment body,
+// gold-on-brown title, step-bubble progress rail, big green primary
+// CTA. Embedded `act-spin` keyframes are declared inline by the gate's
+// `<style>` tag — see the surrounding setupGate JSX.
+const hlGateStyles = {
+  frame: {
+    margin: '0 auto',
+    width: '100%',
+    maxWidth: 460,
+    padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
+    display: 'flex', flexDirection: 'column',
+    gap: 'clamp(10px, 2vh, 16px)',
+    fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  titleBlock: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    alignItems: 'center', textAlign: 'center',
+  },
+  kicker: {
+    fontSize: 11, fontWeight: 900, color: '#1B5E20',
+    letterSpacing: 1.4, textTransform: 'uppercase',
+  },
+  title: {
+    fontSize: 'clamp(18px, 2.6vh, 22px)', fontWeight: 900, color: '#5C3A21',
+    lineHeight: 1.2,
+  },
+  subtitle: {
+    fontSize: 12, fontWeight: 700, color: '#8a7252',
+    lineHeight: 1.45, maxWidth: 380,
+  },
+
+  stepList: {
+    listStyle: 'none', margin: 0, padding: '12px 14px',
+    background: '#fffbef',
+    border: '1px solid #d4c8b0',
+    borderRadius: 12,
+    display: 'flex', flexDirection: 'column', gap: 12,
+  },
+  stepItem: {
+    display: 'flex', alignItems: 'flex-start', gap: 11,
+  },
+  stepBubble: {
+    width: 28, height: 28, borderRadius: '50%',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 13, fontWeight: 900, flexShrink: 0,
+    marginTop: 1,
+    background: '#e8dfc8', color: '#9f8759',
+    border: '2px solid #d4c8b0',
+    transition: 'background 0.2s, border-color 0.2s, color 0.2s',
+  },
+  stepBubble_pending: {},
+  stepBubble_active: {
+    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
+  },
+  stepBubble_done: {
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    borderColor: '#1f6d34', color: '#fff',
+  },
+  stepBubble_error: {
+    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+  },
+  stepText: {
+    display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25,
+    flex: 1,
+  },
+  stepLabel: {
+    fontSize: 13, fontWeight: 800, color: '#7a5a30',
+  },
+  stepLabel_active: { color: '#5C3A21' },
+  stepLabel_done: { color: '#5C3A21' },
+  stepLabel_error: { color: '#b71c1c' },
+  stepLabel_pending: {},
+  stepHint: {
+    fontSize: 11, color: '#9f8759', fontWeight: 700,
+    marginTop: 1, overflowWrap: 'anywhere',
+  },
+
+  // Spinner reuses `act-spin` keyframes injected by the gate render so
+  // it animates the same way as the legacy big-circle spinner used to.
+  spinner: {
+    width: 12, height: 12, borderRadius: '50%',
+    border: '2px solid rgba(92,58,33,0.25)',
+    borderTopColor: '#5C3A21',
+    animation: 'act-spin 0.9s linear infinite',
+  },
+
+  workingHint: {
+    fontSize: 13, fontWeight: 800, color: '#5C3A21',
+    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
+    border: '2px solid #c2851b',
+    padding: '10px 14px', borderRadius: 12,
+    textAlign: 'center',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.45)',
+    animation: 'act-pulse 2.4s ease-in-out infinite',
+  },
+
+  primaryBtn: {
+    padding: '12px 18px', borderRadius: 12,
+    fontSize: 14, fontWeight: 900,
+    background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
+    border: '2px solid #1f6d34',
+    color: '#fff',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    letterSpacing: 0.3,
+    textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+    boxShadow: '0 4px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.4)',
+  },
+  primaryBtnBusy: { opacity: 0.7, cursor: 'not-allowed' },
+
+  errorBox: {
+    color: '#7a1f1c',
+    background: '#fdecea',
+    border: '1px solid #E53935',
+    borderRadius: 10,
+    padding: '8px 10px',
+    fontSize: 12, fontWeight: 700,
+    overflowWrap: 'anywhere',
+  },
+
+  // Subtle footnote below the primary action — used by the Decibel gate
+  // for the "your funds stay in your wallet" reassurance line.
+  footnote: {
+    fontSize: 11, fontWeight: 700,
+    color: '#9f8759',
+    textAlign: 'center',
+    lineHeight: 1.4,
+  },
+};
+
 // Decibel deposit gate. Shown after the user has activated trading but
 // before they've moved any USDC onto the subaccount. The whole panel
 // turns into a deposit prompt — there's nothing else to do here, since
@@ -2439,38 +2572,83 @@ function FuturesPanel() {
     const builderEligibilityReason = account?.builder_eligibility_reason || '';
     const oneTapApproved = oneTapTrading?.approved === true;
     const oneTapOn = oneTapTrading?.enabled === true;
+    const activeLabel = activationStep?.label || '';
+
+    // Compute per-step state for the new step-bubble UI: pending / active
+    // / done / error. Mirrors how the NFT-bridge progress modal renders
+    // its three burn → relay → mint stages, so HL and the bridge feel
+    // like the same family of progress dialogs.
+    const builderState = builderApproved
+      ? 'done'
+      : (isRunning && activeLabel === 'Approve builder fee') ? 'active'
+      : 'pending';
+    const oneTapState = (oneTapApproved && oneTapOn)
+      ? 'done'
+      : (isRunning && activeLabel === 'Enable one tap trading') ? 'active'
+      : 'pending';
+    const referralState = (isRunning && activeLabel === 'Apply referral code')
+      ? 'active'
+      // Treat referral as done once everything before it has cleared and
+      // we are past the running phase — the server applies it best-
+      // effort during finalisation.
+      : (builderState === 'done' && oneTapState === 'done' && !isRunning && !isChecking)
+        ? 'done'
+        : 'pending';
+
     const steps = [
-      [
-        '1',
-        'Approve builder fee',
-        builderApproved
-          ? account?.builder_fee_approved === true || !builderConfigured
-            ? 'Done'
-            : `Skipped: ${builderEligibilityReason || 'builder wallet must be Standard mode with $100+ perps value'}`
+      {
+        idx: 1,
+        title: 'Approve builder fee',
+        state: builderState,
+        hint: builderApproved
+          ? (account?.builder_fee_approved === true || !builderConfigured)
+            ? 'Done — trade fee routes to Clash.'
+            : `Skipped — ${builderEligibilityReason || 'builder wallet must be Standard mode with $100+ perps value'}`
           : builderCanApprove
-          ? 'Needs wallet signature'
-          : builderEligibilityReason
-          ? builderEligibilityReason
-          : builderConfigured
-          ? `Builder must be Standard mode with $100+ perps value. Current: ${builderMode}, $${builderPerpValue.toFixed(2)}`
-          : 'Not configured',
-      ],
-      [
-        '2',
-        'Enable one tap trading',
-        oneTapApproved && oneTapOn ? 'Done' : 'Needs wallet signature',
-      ],
-      [
-        '3',
-        'Apply referral code',
-        'Best-effort if the wallet has no referrer yet',
-      ],
+            ? 'Awaiting wallet signature.'
+            : builderEligibilityReason
+              ? builderEligibilityReason
+              : builderConfigured
+                ? `Builder must be Standard mode with $100+ perps value. Current: ${builderMode}, $${builderPerpValue.toFixed(2)}.`
+                : 'Not configured.',
+      },
+      {
+        idx: 2,
+        title: 'Enable one tap trading',
+        state: oneTapState,
+        hint: (oneTapApproved && oneTapOn)
+          ? 'Done — orders skip repeated wallet popups.'
+          : 'Awaiting wallet signature.',
+      },
+      {
+        idx: 3,
+        title: 'Apply referral code',
+        state: referralState,
+        hint: referralState === 'done'
+          ? 'Done — Clash referral attached.'
+          : 'Best-effort, applied if your wallet has no referrer yet.',
+      },
     ];
+
+    const headerStatus = isChecking ? 'CHECKING'
+      : isRunning && activationStep?.total > 0
+        ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
+        : 'ACTION REQUIRED';
+    const headerTitle = isRunning
+      ? (activationStep.label || 'Setting up Hyperliquid')
+      : isChecking
+        ? 'Checking your Hyperliquid setup'
+        : 'Enable trading permissions';
+    const headerSubtitle = isRunning
+      ? (stepHint || 'Approve the wallet request to continue.')
+      : isChecking
+        ? 'Reading builder fee approval and one-tap permission before the panel opens.'
+        : 'Hyperliquid opens only after builder-fee routing and one-tap trading are verified.';
 
     return (
       <>
         <style>{animCSS}</style>
-        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.55}50%{opacity:1}}`}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
         <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
           ...(fullscreen ? S.containerFull : S.container),
           ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
@@ -2478,10 +2656,10 @@ function FuturesPanel() {
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
-            <span style={S.headerTitle}>{isRunning ? 'Setting Up Hyperliquid...' : 'Hyperliquid Setup'}</span>
+            <span style={S.headerTitle}>{isRunning ? 'Setting up Hyperliquid…' : 'Hyperliquid setup'}</span>
             {!isRunning && (
               <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             )}
           </div>
@@ -2491,160 +2669,46 @@ function FuturesPanel() {
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
+            background: '#fdf8e7',
           }}>
-            <div style={{
-              margin: 'auto',
-              width: '100%',
-              maxWidth: 420,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 'clamp(10px, 2vh, 18px)',
-              padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
-              flexShrink: 0,
-            }}>
-              <div style={{
-                width: 'clamp(64px, 12vh, 92px)',
-                height: 'clamp(64px, 12vh, 92px)',
-                borderRadius: '50%',
-                background: 'linear-gradient(180deg, #22C55E 0%, #047857 100%)',
-                border: '4px solid #059669',
-                boxShadow: '0 6px 0 #047857, 0 10px 22px rgba(0,0,0,0.28)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-              }}>
-                {isChecking || isRunning ? (
-                  <div style={{
-                    width: '58%',
-                    height: '58%',
-                    border: '5px solid rgba(255,255,255,0.35)',
-                    borderTopColor: '#fff',
-                    borderRadius: '50%',
-                    animation: 'act-spin 0.9s linear infinite',
-                  }} />
-                ) : (
-                  <img src={DEX_CONFIG.hyperliquid.logo} alt="" style={{width: 50, height: 50, objectFit: 'contain'}} />
-                )}
+            <div style={hlGateStyles.frame}>
+              {/* Title block — mirrors BridgeStatusModal's status / title /
+                  subtitle stack so the two progress dialogs read the
+                  same. */}
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{headerStatus}</span>
+                <span style={hlGateStyles.title}>{headerTitle}</span>
+                <span style={hlGateStyles.subtitle}>{headerSubtitle}</span>
               </div>
 
-              <div style={{
-                fontSize: 'clamp(11px, 1.6vh, 13px)',
-                fontWeight: 800,
-                letterSpacing: '0.12em',
-                color: '#059669',
-              }}>
-                {isRunning && activationStep?.total > 0
-                  ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
-                  : isChecking
-                  ? 'CHECKING'
-                  : 'ACTION REQUIRED'}
-              </div>
-
-              <div style={{
-                color: '#5C3A21',
-                fontSize: 'clamp(17px, 2.6vh, 22px)',
-                fontWeight: 900,
-                textAlign: 'center',
-                letterSpacing: '0.4px',
-                lineHeight: 1.25,
-              }}>
-                {isRunning
-                  ? activationStep.label
-                  : isChecking
-                  ? 'Checking your Hyperliquid setup'
-                  : 'Enable trading permissions'}
-              </div>
-
-              <div style={{
-                color: '#8a7252',
-                fontSize: 'clamp(11px, 1.6vh, 13px)',
-                fontWeight: 600,
-                textAlign: 'center',
-                maxWidth: 365,
-                lineHeight: 1.5,
-              }}>
-                {isRunning
-                  ? (stepHint || 'Approve the wallet request to continue.')
-                  : isChecking
-                  ? 'We are checking builder fee approval and one tap trading before opening the panel.'
-                  : 'Hyperliquid opens only after builder fee routing and one tap trading are verified.'}
-              </div>
-
-              <div style={{
-                width: '100%',
-                maxWidth: 380,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-                background: '#fffbef',
-                border: '2px solid #d4c8b0',
-                borderRadius: 12,
-                padding: '14px 16px',
-              }}>
-                {steps.map(([n, title, hint]) => {
-                  const done = hint === 'Done';
-                  return (
-                    <div key={n} style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
-                      <div style={{
-                        width: 22,
-                        height: 22,
-                        borderRadius: '50%',
-                        background: done ? '#16A34A' : '#059669',
-                        color: '#fff',
-                        fontSize: 12,
-                        fontWeight: 900,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                        marginTop: 1,
-                      }}>{done ? 'OK' : n}</div>
-                      <div style={{flex: 1, minWidth: 0}}>
-                        <div style={{fontSize: 12.5, fontWeight: 800, color: '#5C3A21', lineHeight: 1.3}}>{title}</div>
-                        <div style={{
-                          fontSize: 10.5,
-                          fontWeight: 700,
-                          color: done ? '#166534' : '#8a7252',
-                          lineHeight: 1.4,
-                          marginTop: 1,
-                          overflowWrap: 'anywhere',
-                        }}>{hint}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              {/* Step bubbles — pending number / active spinner / done ✓ /
+                  error !. Same model as BridgeStatusModal.stepBubble_*. */}
+              <ol style={hlGateStyles.stepList}>
+                {steps.map((s) => (
+                  <li key={s.idx} style={hlGateStyles.stepItem}>
+                    <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${s.state}`] }}>
+                      {s.state === 'done' ? '✓'
+                        : s.state === 'error' ? '!'
+                        : s.state === 'active' ? <span style={hlGateStyles.spinner} />
+                        : s.idx}
+                    </span>
+                    <span style={hlGateStyles.stepText}>
+                      <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${s.state}`] }}>
+                        {s.title}
+                      </span>
+                      <span style={hlGateStyles.stepHint}>{s.hint}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
 
               {isRunning ? (
-                <div style={{
-                  fontSize: 14,
-                  fontWeight: 800,
-                  color: '#5C3A21',
-                  background: 'linear-gradient(180deg, #dcfce7, #bbf7d0)',
-                  border: '2px solid rgba(22,163,74,0.35)',
-                  padding: '12px 18px',
-                  borderRadius: 12,
-                  textAlign: 'center',
-                  maxWidth: 380,
-                  width: '100%',
-                  animation: 'act-pulse 2.4s ease-in-out infinite',
-                }}>
-                  Approve the wallet request, then keep this page open.
+                <div style={hlGateStyles.workingHint}>
+                  Keep this window open until all three steps finish.
                 </div>
               ) : (
                 <button
-                  style={{
-                    ...cartoonBtn('#22C55E', '#047857'),
-                    padding: 'clamp(12px, 2.2vh, 18px) 36px',
-                    fontSize: 'clamp(14px, 2vh, 17px)',
-                    fontWeight: 900,
-                    letterSpacing: '0.6px',
-                    width: '100%',
-                    maxWidth: 380,
-                    opacity: isChecking || loading ? 0.7 : 1,
-                  }}
+                  style={{ ...hlGateStyles.primaryBtn, ...((isChecking || loading) ? hlGateStyles.primaryBtnBusy : null) }}
                   disabled={isChecking || loading}
                   onClick={async () => {
                     if (!activate) return;
@@ -2652,24 +2716,14 @@ function FuturesPanel() {
                     if (res?.error) setLocalAlert(res.error);
                   }}
                 >
-                  {isChecking || loading ? 'PLEASE WAIT...' : 'SET UP HYPERLIQUID'}
+                  {isChecking || loading ? 'Please wait…' : 'Set up Hyperliquid →'}
                 </button>
               )}
 
               {(error || localAlert) && (
-                <div style={{
-                  color: '#B71C1C',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  textAlign: 'center',
-                  maxWidth: 380,
-                  padding: '8px 12px',
-                  background: '#FFEBEE',
-                  borderRadius: 8,
-                  border: '1px solid #FFCDD2',
-                  overflowWrap: 'anywhere',
-                  wordBreak: 'break-word',
-                }}>{humanizeTradeError(error || localAlert)}</div>
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
               )}
             </div>
           </div>
@@ -2919,10 +2973,81 @@ function FuturesPanel() {
     const isRunning = !!activationStep;
     const isChecking = setupVerified === null && !isRunning;
     const stepHint = activationStep ? (ACTIVATION_STEP_HINTS[activationStep.label] || '') : '';
+    const isReturning = !!subaccountAddr;
+    const activeLabel = activationStep?.label || '';
+    const runIndex = Number(activationStep?.index || 0);
+
+    // Steps shown in the new bridge-style step rail. `runLabels` is what
+    // the activation state machine emits when this step is in flight
+    // (different from the displayed title for some steps — e.g. "Verify
+    // fee routing" maps to the runtime "Enable builder fee routing").
+    const decibelSteps = isReturning
+      ? (gasSponsored
+          ? [
+              { idx: 1, title: 'Authorize fast trading',
+                hint: 'Lets the Clash server signer place orders for you.',
+                runLabels: ['Authorize fast trading'] },
+              { idx: 2, title: 'Verify fee routing',
+                hint: 'Confirms the builder-fee approval required by this integration.',
+                runLabels: ['Enable builder fee routing'] },
+            ]
+          : [
+              { idx: 1, title: 'Check server signer',
+                hint: 'The server-side API wallet pays Aptos gas for orders.',
+                runLabels: ['Preparing activation…'] },
+              { idx: 2, title: 'Authorize fast trading',
+                hint: 'Lets the Clash server signer place orders for you.',
+                runLabels: ['Authorize fast trading'] },
+              { idx: 3, title: 'Verify fee routing',
+                hint: 'Confirms the builder-fee approval required by this integration.',
+                runLabels: ['Enable builder fee routing'] },
+            ])
+      : [
+          { idx: 1, title: 'Create trading account',
+            hint: 'Your subaccount on Decibel — holds USDC + positions.',
+            runLabels: ['Create trading account'] },
+          { idx: 2, title: 'Authorize fast trading',
+            hint: gasSponsored ? 'Trades go through silently after this.' : 'Trades are signed server-side after this.',
+            runLabels: ['Authorize fast trading'] },
+          { idx: 3, title: 'Enable fee routing',
+            hint: 'Required builder-fee approval for this integration.',
+            runLabels: ['Enable builder fee routing'] },
+        ];
+
+    const steps = decibelSteps.map((s) => {
+      let state = 'pending';
+      if (isRunning) {
+        const isActive = s.runLabels.includes(activeLabel);
+        if (isActive) state = 'active';
+        else if (runIndex > 0 && s.idx < runIndex) state = 'done';
+      }
+      return { ...s, state };
+    });
+
+    const headerStatus = isChecking ? 'VERIFYING ON-CHAIN'
+      : isRunning && activationStep?.total > 0
+        ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
+        : isRunning ? 'PREPARING'
+        : 'ACTION REQUIRED';
+    const headerTitle = isRunning
+      ? (activationStep.label || 'Setting up Decibel')
+      : isChecking
+        ? 'Checking your Decibel account'
+        : isReturning ? 'Authorize this device' : 'Activate to start trading';
+    const headerSubtitle = isRunning
+      ? (stepHint || 'Open Petra and approve the request to continue.')
+      : isChecking
+        ? 'Reading your subaccount and trading delegations from Aptos. This takes a moment on first load.'
+        : isReturning
+          ? (apiWalletAddr
+              ? 'We found your Decibel account and server signer. Just authorize the missing on-chain approvals.'
+              : 'We found your Decibel account. Authorize the Clash server signer once so trades sign safely server-side.')
+          : 'You cannot open positions until setup verifies on-chain. New accounts usually need 3 one-time Petra signatures.';
+
     return (
       <>
         <style>{animCSS}</style>
-        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.55}50%{opacity:1}}`}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
         <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
           ...(fullscreen ? S.containerFull : S.container),
           ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
@@ -2930,251 +3055,74 @@ function FuturesPanel() {
           transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
         }}>
           <div style={S.header} onPointerDown={handlePointerDown}>
-            <span style={S.headerTitle}>{isRunning ? 'Activating Trading…' : 'Setup Trading'}</span>
+            <span style={S.headerTitle}>{isRunning ? 'Activating Decibel…' : 'Decibel setup'}</span>
             {/* Close button is hidden while activation is running so the
                 user can't bail out mid-signature and end up half-set-up. */}
             {!isRunning && (
               <button data-nodrag onClick={handleClose} style={S.closeBtn}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             )}
           </div>
           <div style={{
             ...S.body,
-            // Scrollable wrapper. Avoid `justifyContent: center` here —
-            // when content overflows, flex-centering hides the top of the
-            // child (since the negative offset is unreachable by scroll).
-            // Use `margin: auto` on an inner wrapper instead so content
-            // is vertically centered when it fits, and just scrolls when
-            // it doesn't.
             alignItems: 'stretch',
             overflowY: 'auto',
             overflowX: 'hidden',
             padding: 0,
+            background: '#fdf8e7',
           }}>
-            <div style={{
-              margin: 'auto',
-              width: '100%',
-              maxWidth: 420,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 'clamp(10px, 2vh, 18px)',
-              padding: 'clamp(14px, 3vh, 24px) clamp(14px, 4vw, 24px)',
-              flexShrink: 0,
-            }}>
-            {isChecking ? (
-              // ── CHECKING ON-CHAIN ────────────────────────────────────
-              // Briefly shown on first connect / after refresh while we
-              // fetch the subaccount delegations from Aptos. If the server
-              // signer already has a valid delegation, the gate falls through
-              // to trading UI without ever showing the IDLE CTA below.
-              <>
-                <div style={{
-                  width: 'clamp(56px, 10vh, 88px)',
-                  height: 'clamp(56px, 10vh, 88px)',
-                  margin: '8px auto 4px',
-                  border: '6px solid #d4c8b0',
-                  borderTopColor: '#DAA520',
-                  borderRadius: '50%',
-                  animation: 'act-spin 1s linear infinite',
-                  flexShrink: 0,
-                }} />
-                <div style={{
-                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800,
-                  letterSpacing: '0.12em', color: '#DAA520',
-                }}>VERIFYING ON-CHAIN</div>
-                <div style={{
-                  fontSize: 'clamp(15px, 2.2vh, 18px)', fontWeight: 900, color: '#5C3A21',
-                  textAlign: 'center', maxWidth: 380, lineHeight: 1.3,
-                }}>
-                  Checking your Decibel account…
-                </div>
-                <div style={{
-                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 600, color: '#8a7252',
-                  textAlign: 'center', maxWidth: 380, lineHeight: 1.5,
-                }}>
-                  Reading your subaccount and trading delegations from Aptos.
-                  This takes a moment on first load.
-                </div>
-              </>
-            ) : isRunning ? (
-              // ── RUNNING ──────────────────────────────────────────────
-              // The user just clicked ACTIVATE. They'll see a Petra popup
-              // for each signature; we keep them informed about which one
-              // is which, what it does, and that the page must stay open.
-              <>
-                <div style={{
-                  width: 'clamp(56px, 10vh, 88px)',
-                  height: 'clamp(56px, 10vh, 88px)',
-                  margin: '8px auto 4px',
-                  border: '6px solid #d4c8b0',
-                  borderTopColor: '#DAA520',
-                  borderRadius: '50%',
-                  animation: 'act-spin 1s linear infinite',
-                  flexShrink: 0,
-                }} />
-                <div style={{
-                  fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 800, letterSpacing: '0.12em',
-                  color: '#DAA520',
-                }}>
-                  {activationStep.total > 0
-                    ? `STEP ${Math.max(1, activationStep.index)} OF ${activationStep.total}`
-                    : 'PREPARING'}
-                </div>
-                <div style={{
-                  fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900, color: '#5C3A21',
-                  textAlign: 'center', maxWidth: 380, lineHeight: 1.25,
-                }}>
-                  {activationStep.label}
-                </div>
-                {stepHint && (
-                  <div style={{
-                    fontSize: 13, fontWeight: 600, color: '#5C3A21',
-                    background: '#fffbef', border: '2px solid #d4c8b0',
-                    padding: '12px 16px', borderRadius: 12,
-                    lineHeight: 1.5, textAlign: 'left',
-                    maxWidth: 380, width: '100%',
-                  }}>
-                    {stepHint}
-                  </div>
-                )}
-                <div style={{
-                  fontSize: 14, fontWeight: 800, color: '#5C3A21',
-                  background: 'linear-gradient(180deg, #fff8d8, #fef3c7)',
-                  border: '2px solid #d4c8b0',
-                  padding: '12px 18px', borderRadius: 12,
-                  textAlign: 'center', maxWidth: 380, width: '100%',
-                  animation: 'act-pulse 2.4s ease-in-out infinite',
-                }}>
-                  {activationStep.total > 0 && activationStep.index > 0 && activationStep.index <= activationStep.total
-                    ? 'Open Petra and approve the request to continue.'
-                    : 'Working…'}
-                  <div style={{ fontSize: 11, color: '#a3906a', fontWeight: 700, marginTop: 4 }}>
-                    Don't close this window or refresh the page.
-                  </div>
-                </div>
-              </>
-            ) : (
-              // ── IDLE ─────────────────────────────────────────────────
-              // Two flavors based on on-chain state:
-              //   • Fresh user (no subaccount) → "First-time setup" copy
-              //     with all 4 steps and an emphasis on "one-time".
-              //   • Returning user (subaccount exists, delegation missing)
-              //     → "Account found! Authorize this device" with shorter
-              //     2-3 step list. Avoids the "but I already have an
-              //     account, why do I have to start over?" confusion.
-              <>
-                {(() => {
-                  const isReturning = !!subaccountAddr;
-                  const headline = isReturning
-                    ? 'Authorize this device'
-                    : 'Activate to start trading';
-                  const subhead = isReturning
-                    ? (apiWalletAddr
-                        ? 'We found your Decibel account and server signer. Checking the missing on-chain approvals before trading unlocks.'
-                        : 'We found your Decibel account. Authorize the Clash server signer once so trades can be signed safely server-side.')
-                    : gasSponsored
-                      ? 'You cannot open positions until setup verifies on-chain. New accounts usually need 3 one-time Petra signatures.'
-                      : 'You cannot open positions until setup verifies on-chain. New accounts usually need 3 one-time Petra signatures.';
-                  const steps = isReturning
-                    ? (gasSponsored ? [
-                        ['1', 'Authorize fast trading', 'Tells Decibel that the Clash server signer can place orders for you.'],
-                        ['2', 'Verify fee routing', 'Confirms the builder fee approval required by this integration.'],
-                      ] : [
-                        ['1', 'Check server signer', 'The server-side API wallet pays Aptos gas for order transactions.'],
-                        ['2', 'Authorize fast trading', 'Tells Decibel that the Clash server signer can place orders for you.'],
-                        ['3', 'Verify fee routing', 'Confirms the builder fee approval required by this integration.'],
-                      ])
-                    : (gasSponsored ? [
-                        ['1', 'Create trading account', 'Your subaccount on Decibel — holds USDC + positions.'],
-                        ['2', 'Authorize fast trading', 'Trades go through silently after this.'],
-                        ['3', 'Enable fee routing', 'Required builder fee approval for this integration.'],
-                      ] : [
-                        ['1', 'Create trading account', 'Your subaccount on Decibel — holds USDC + positions.'],
-                        ['2', 'Authorize fast trading', 'Trades are signed server-side after this.'],
-                        ['3', 'Enable fee routing', 'Required builder fee approval for this integration.'],
-                      ]);
-                  return (
-                    <>
-                      <div style={{
-                        width: 'clamp(64px, 12vh, 96px)',
-                        height: 'clamp(64px, 12vh, 96px)',
-                        borderRadius: '50%',
-                        background: 'linear-gradient(180deg, #FFE600 0%, #B8860B 100%)',
-                        border: '4px solid #DAA520',
-                        boxShadow: '0 6px 0 #B8860B, 0 10px 22px rgba(0,0,0,0.28)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 'clamp(34px, 6vh, 52px)',
-                        filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
-                        flexShrink: 0,
-                      }}>{isReturning ? '🔓' : '🔊'}</div>
-                      <div style={{
-                        color: '#5C3A21', fontSize: 'clamp(17px, 2.6vh, 22px)', fontWeight: 900,
-                        textAlign: 'center', letterSpacing: '0.4px',
-                      }}>{headline}</div>
-                      <div style={{
-                        color: '#8a7252', fontSize: 'clamp(11px, 1.6vh, 13px)', fontWeight: 600,
-                        textAlign: 'center', maxWidth: 360, lineHeight: 1.5,
-                      }}>
-                        {subhead}
-                      </div>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{headerStatus}</span>
+                <span style={hlGateStyles.title}>{headerTitle}</span>
+                <span style={hlGateStyles.subtitle}>{headerSubtitle}</span>
+              </div>
 
-                      {/* Step list — preview of what's coming. */}
-                      <div style={{
-                        width: '100%', maxWidth: 380,
-                        display: 'flex', flexDirection: 'column', gap: 10,
-                        background: '#fffbef', border: '2px solid #d4c8b0',
-                        borderRadius: 12, padding: '14px 16px',
-                      }}>
-                        {steps.map(([n, title, hint]) => (
-                          <div key={n} style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
-                            <div style={{
-                              width: 22, height: 22, borderRadius: '50%',
-                              background: '#DAA520', color: '#fff',
-                              fontSize: 12, fontWeight: 900,
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              flexShrink: 0, marginTop: 1,
-                            }}>{n}</div>
-                            <div style={{flex: 1, minWidth: 0}}>
-                              <div style={{fontSize: 12.5, fontWeight: 800, color: '#5C3A21', lineHeight: 1.3}}>{title}</div>
-                              <div style={{fontSize: 10.5, fontWeight: 600, color: '#8a7252', lineHeight: 1.4, marginTop: 1}}>{hint}</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+              <ol style={hlGateStyles.stepList}>
+                {steps.map((s) => (
+                  <li key={s.idx} style={hlGateStyles.stepItem}>
+                    <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${s.state}`] }}>
+                      {s.state === 'done' ? '✓'
+                        : s.state === 'error' ? '!'
+                        : s.state === 'active' ? <span style={hlGateStyles.spinner} />
+                        : s.idx}
+                    </span>
+                    <span style={hlGateStyles.stepText}>
+                      <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${s.state}`] }}>
+                        {s.title}
+                      </span>
+                      <span style={hlGateStyles.stepHint}>{s.hint}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
 
-                      <button
-                        style={{
-                          ...cartoonBtn('#DAA520', '#B8860B'),
-                          padding: 'clamp(12px, 2.2vh, 18px) 36px',
-                          fontSize: 'clamp(14px, 2vh, 17px)', fontWeight: 900, letterSpacing: '0.6px',
-                          width: '100%', maxWidth: 380,
-                        }}
-                        onClick={() => { if (linkOurReferrer) linkOurReferrer(); }}
-                      >
-                        {isReturning ? 'AUTHORIZE THIS DEVICE' : 'ACTIVATE TRADING'}
-                      </button>
+              {isRunning ? (
+                <div style={hlGateStyles.workingHint}>
+                  Open Petra and approve the request — don't close this window.
+                </div>
+              ) : (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, ...(isChecking ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={isChecking}
+                  onClick={() => { if (linkOurReferrer) linkOurReferrer(); }}
+                >
+                  {isChecking ? 'Please wait…' : isReturning ? 'Authorize this device →' : 'Activate trading →'}
+                </button>
+              )}
 
-                      <div style={{
-                        fontSize: 11, color: '#a3906a', fontWeight: 700,
-                        textAlign: 'center', maxWidth: 320, lineHeight: 1.4,
-                      }}>
-                        Your USDC and APT stay in your wallet — Decibel is non-custodial.
-                      </div>
-                      {error && (
-                        <div style={{
-                          color: '#B71C1C', fontSize: 12, fontWeight: 700,
-                          textAlign: 'center', maxWidth: 380, padding: '8px 12px',
-                          background: '#FFEBEE', borderRadius: 8, border: '1px solid #FFCDD2',
-                          overflowWrap: 'anywhere', wordBreak: 'break-word',
-                        }}>{humanizeTradeError(error)}</div>
-                      )}
-                    </>
-                  );
-                })()}
-              </>
-            )}
+              {!isRunning && !isChecking && (
+                <div style={hlGateStyles.footnote}>
+                  Your USDC and APT stay in your wallet — Decibel is non-custodial.
+                </div>
+              )}
+
+              {error && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error)}
+                </div>
+              )}
             </div>
           </div>
         </div>

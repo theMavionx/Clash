@@ -319,7 +319,7 @@ try { db.exec(`ALTER TABLE replay_telemetry ADD COLUMN actual_wall_elapsed REAL`
 // FROZEN (reads still happen, writes from battle/quest paths skip them
 // for the joined player). Tournament-only counters live in
 // `tournament_participants` and rank players by an admin-chosen sort
-// key (pnl_usd / trophies / volume / gold / volume_trophies_50_50). Boosts are multipliers
+// key (pnl_usd / trophies / volume / gold / raw weighted points). Boosts are multipliers
 // applied to the in-tournament counters; main account stats see the
 // unboosted (zero) delta. Leaderboard is real-time read from the
 // participant rows; tournament ends → status flips to 'ended', writes
@@ -336,7 +336,13 @@ try {
       gold_boost   REAL NOT NULL DEFAULT 1.0,
       trophy_boost REAL NOT NULL DEFAULT 1.0,
       freeze_trophies INTEGER NOT NULL DEFAULT 1,
-      sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
+      sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
+      points_trophy_weight REAL NOT NULL DEFAULT 0,
+      points_volume_weight REAL NOT NULL DEFAULT 0,
+      points_pnl_weight    REAL NOT NULL DEFAULT 0,
+      prize_currency TEXT NOT NULL DEFAULT 'USD',
+      prize_tiers    TEXT NOT NULL DEFAULT '[]',
+      rewards_in_cop INTEGER NOT NULL DEFAULT 0,
       status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
       created_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -346,10 +352,28 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_opens_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN registration_closes_at TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN freeze_trophies INTEGER NOT NULL DEFAULT 1`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_trophy_weight REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_volume_weight REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN points_pnl_weight REAL NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_currency TEXT NOT NULL DEFAULT 'USD'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try {
+    db.exec(`
+      UPDATE tournaments
+      SET points_trophy_weight = 50,
+          points_volume_weight = 50,
+          points_pnl_weight = 0
+      WHERE sort_by = 'volume_trophies_50_50'
+        AND COALESCE(points_trophy_weight, 0) = 0
+        AND COALESCE(points_volume_weight, 0) = 0
+        AND COALESCE(points_pnl_weight, 0) = 0
+    `);
+  } catch {}
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("points_trophy_weight") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -364,7 +388,13 @@ try {
             gold_boost   REAL NOT NULL DEFAULT 1.0,
             trophy_boost REAL NOT NULL DEFAULT 1.0,
             freeze_trophies INTEGER NOT NULL DEFAULT 1,
-            sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50')),
+            sort_by      TEXT NOT NULL DEFAULT 'pnl_usd' CHECK(sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50')),
+            points_trophy_weight REAL NOT NULL DEFAULT 0,
+            points_volume_weight REAL NOT NULL DEFAULT 0,
+            points_pnl_weight    REAL NOT NULL DEFAULT 0,
+            prize_currency TEXT NOT NULL DEFAULT 'USD',
+            prize_tiers    TEXT NOT NULL DEFAULT '[]',
+            rewards_in_cop INTEGER NOT NULL DEFAULT 0,
             status       TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','ended','draft')),
             created_at   TEXT NOT NULL DEFAULT (datetime('now')),
             preregistration_enabled INTEGER NOT NULL DEFAULT 0,
@@ -373,14 +403,21 @@ try {
           );
           INSERT INTO tournaments_new (
             id, name, description, dex, start_at, end_at, gold_boost, trophy_boost,
-            freeze_trophies, sort_by, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
+            freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
+            prize_currency, prize_tiers, rewards_in_cop, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
           )
           SELECT
             id, name, description,
             CASE WHEN dex IN ('pacifica','avantis','decibel','gmx','monad','phoenix','hyperliquid') THEN dex ELSE 'pacifica' END,
             start_at, end_at, gold_boost, trophy_boost,
             COALESCE(freeze_trophies, 1),
-            CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
+            CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
+            COALESCE(points_trophy_weight, CASE WHEN sort_by = 'volume_trophies_50_50' THEN 50 ELSE 0 END),
+            COALESCE(points_volume_weight, CASE WHEN sort_by = 'volume_trophies_50_50' THEN 50 ELSE 0 END),
+            COALESCE(points_pnl_weight, 0),
+            COALESCE(prize_currency, 'USD'),
+            COALESCE(prize_tiers, '[]'),
+            COALESCE(rewards_in_cop, 0),
             CASE WHEN status IN ('active','ended','draft') THEN status ELSE 'active' END,
             created_at,
             COALESCE(preregistration_enabled, 0),
@@ -412,12 +449,14 @@ try {
       trades_count     INTEGER NOT NULL DEFAULT 0,
       volume_usd       REAL NOT NULL DEFAULT 0,
       pnl_usd          REAL NOT NULL DEFAULT 0,
+      reward_wallet_evm TEXT,
       last_activity_at TEXT,
       PRIMARY KEY (tournament_id, player_id)
     );
     CREATE INDEX IF NOT EXISTS idx_tp_player_active ON tournament_participants(player_id, left_at);
     CREATE INDEX IF NOT EXISTS idx_tp_leaderboard ON tournament_participants(tournament_id, pnl_usd DESC);
   `);
+  try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN reward_wallet_evm TEXT`); } catch {}
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
 
 try {
@@ -1696,7 +1735,7 @@ function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
 }
 
 function getPlayerBuildings(playerId) {
-  return stmts.getBuildings.all(playerId);
+  return decorateBuildingsWithProduction(stmts.getBuildings.all(playerId));
 }
 
 function upgradeTroop(playerId, troopType) {
@@ -1730,37 +1769,73 @@ function getTroopLevels(playerId) {
   return stmts.getTroopLevels.all(playerId);
 }
 
+function parseSqliteUtcDate(value) {
+  if (!value) return null;
+  const raw = String(value);
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z';
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getBuildingProductionSnapshot(building, now = new Date()) {
+  const prod = PRODUCTION_DEFS[building.type];
+  if (!prod) return null;
+  const lastCollected = parseSqliteUtcDate(building.last_collected_at) || parseSqliteUtcDate(building.created_at) || now;
+  const elapsedMinutes = Math.max(0, (now - lastCollected) / 60000);
+  const lvl = Math.max(1, Math.floor(Number(building.level) || 1));
+  const lvlIdx = Math.min(lvl - 1, prod.rate.length - 1);
+  const ratePerMin = prod.rate[lvlIdx];
+  const maxStored = prod.max[lvlIdx];
+  const stored = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
+  return {
+    resource: prod.resource,
+    stored,
+    max: maxStored,
+    rate_per_min: ratePerMin,
+    elapsed_minutes: elapsedMinutes,
+  };
+}
+
+function decorateBuildingsWithProduction(buildings) {
+  const now = new Date();
+  return buildings.map((building) => {
+    const production = getBuildingProductionSnapshot(building, now);
+    if (!production) return building;
+    return {
+      ...building,
+      stored: production.stored,
+      production_resource: production.resource,
+      production_max: production.max,
+      production_rate_per_min: production.rate_per_min,
+    };
+  });
+}
+
 function collectResources(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
 
-  const prod = PRODUCTION_DEFS[building.type];
-  if (!prod) return { error: 'This building does not produce resources' };
+  const production = getBuildingProductionSnapshot(building);
+  if (!production) return { error: 'This building does not produce resources' };
 
-  const now = new Date();
-  const lastCollected = building.last_collected_at ? new Date(building.last_collected_at + 'Z') : new Date(building.created_at + 'Z');
-  const elapsedMinutes = (now - lastCollected) / 60000;
+  if (production.elapsed_minutes < 0.1) return { error: 'Nothing to collect yet' };
 
-  if (elapsedMinutes < 0.1) return { error: 'Nothing to collect yet' };
-
-  const lvlIdx = Math.min(building.level - 1, prod.rate.length - 1);
-  const ratePerMin = prod.rate[lvlIdx];
-  const maxStored = prod.max[lvlIdx];
-  const produced = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
+  const produced = production.stored;
 
   if (produced <= 0) return { error: 'Nothing to collect yet' };
 
   // Add resources
   const addObj = { gold: 0, wood: 0, ore: 0 };
-  addObj[prod.resource] = produced;
+  addObj[production.resource] = produced;
   addResources(playerId, addObj.gold, addObj.wood, addObj.ore);
 
   // Update last_collected_at
+  const now = new Date();
   stmts.updateLastCollected.run(now.toISOString().replace('T', ' ').split('.')[0], buildingId, playerId);
 
   return {
     collected: produced,
-    resource: prod.resource,
+    resource: production.resource,
     building_id: buildingId,
     resources: getResources(playerId),
   };
@@ -1771,21 +1846,15 @@ function getProductionStatus(playerId) {
   const now = new Date();
   const result = [];
   for (const b of buildings) {
-    const prod = PRODUCTION_DEFS[b.type];
-    if (!prod) continue;
-    const lastCollected = b.last_collected_at ? new Date(b.last_collected_at + 'Z') : new Date(b.created_at + 'Z');
-    const elapsedMinutes = (now - lastCollected) / 60000;
-    const lvlIdx = Math.min(b.level - 1, prod.rate.length - 1);
-    const ratePerMin = prod.rate[lvlIdx];
-    const maxStored = prod.max[lvlIdx];
-    const stored = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
+    const production = getBuildingProductionSnapshot(b, now);
+    if (!production) continue;
     result.push({
       building_id: b.id,
       type: b.type,
-      resource: prod.resource,
-      stored,
-      max: maxStored,
-      rate_per_min: ratePerMin,
+      resource: production.resource,
+      stored: production.stored,
+      max: production.max,
+      rate_per_min: production.rate_per_min,
     });
   }
   return result;

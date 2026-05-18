@@ -9,9 +9,10 @@ const INITIAL_MESSAGES = [
 ];
 const AGENT_PROGRESS_MESSAGES = [
   'Reading your request...',
-  'Checking the game tools...',
-  'Looking at the current game state...',
-  'Planning the next move...',
+  'Preparing the game agent...',
+  'Checking the current game state...',
+  'Planning the next game action...',
+  'Calling Clash game tools...',
   'Waiting for the agent route...',
   'Finalizing the answer...',
 ];
@@ -63,6 +64,8 @@ function buildContextHistory(rows) {
 }
 
 function describeAgentProgress(progress) {
+  const explicit = typeof progress?.message === 'string' ? progress.message.trim() : '';
+  if (explicit) return explicit.endsWith('...') ? explicit : `${explicit}...`;
   const phase = String(progress?.phase || '');
   const route = Number(progress?.model_index || 0);
   const backup = route > 0;
@@ -314,24 +317,21 @@ function AiChatPanel({ onClose }) {
             <div style={styles.dragHandle} />
           </div>
         )}
-        <header
-          style={styles.header}
-          // Mobile: dragging the header (not just the small handle pill)
-          // also dismisses the sheet — wider hit target for the
-          // swipe-down gesture. Desktop ignores touch events anyway.
-          onTouchStart={isMobile ? onDragStart : undefined}
-          onTouchMove={isMobile ? onDragMove : undefined}
-          onTouchEnd={isMobile ? onDragEnd : undefined}
-          onTouchCancel={isMobile ? onDragEnd : undefined}
-        >
-          <div style={styles.title}>AI Agent</div>
-          <button style={styles.close} onClick={onClose} aria-label="Close AI chat">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </header>
+        {/* On mobile the title row + close button are gone — the drag
+            handle pill above + tap-outside-to-close (and swipe-down)
+            cover dismissal, and shaving these saves precious height in
+            the half-sheet. Desktop keeps the full header. */}
+        {!isMobile && (
+          <header style={styles.header}>
+            <div style={styles.title}>AI Agent</div>
+            <button style={styles.close} onClick={onClose} aria-label="Close AI chat">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </header>
+        )}
 
         <div ref={listRef} style={styles.messages}>
           {messages.map((m, idx) => (
@@ -411,11 +411,11 @@ const styles = {
   },
   panelMobile: {
     width: '100%',
-    // Half-height sheet — 60vh felt right in QA: tall enough for a
-    // realistic conversation, short enough that the player can still see
-    // resources / map at the top. Accounts for iOS safe-area at the
-    // bottom via env() so the composer doesn't sit under the home bar.
-    height: '60vh',
+    // Bottom sheet at 42vh — 30% shorter than the original 60vh so the
+    // player keeps more of the game (resources, map, bottom HUD) visible
+    // while chatting. Accounts for iOS safe-area at the bottom via env()
+    // so the composer doesn't sit under the home bar.
+    height: '42vh',
     maxWidth: '100%',
     borderRadius: '16px 16px 0 0',
     borderBottom: 'none',

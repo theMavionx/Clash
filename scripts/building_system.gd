@@ -1722,6 +1722,9 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 
 		# HP bar
 		var hp_bar_data = _create_building_hp_bar(node, def)
+		var stored: float = 0.0
+		if b.has("stored"):
+			stored = maxf(0.0, float(b.get("stored", 0.0)))
 
 		var b_data := {
 			"id": building_type,
@@ -1733,6 +1736,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			"hp_bar": hp_bar_data.bar,
 			"hp_fill": hp_bar_data.fill,
 			"server_id": server_id,
+			"stored": stored,
 		}
 		placed_buildings.append(b_data)
 		_apply_building_runtime_level(b_data)
@@ -2580,6 +2584,7 @@ func _spawn_building_locally(building_id: String, grid_pos: Vector2i, def: Dicti
 		"hp_bar": hp_bar_data.bar,
 		"hp_fill": hp_bar_data.fill,
 		"server_id": server_id,
+		"stored": 0.0,
 	}
 	placed_buildings.append(b_data)
 	_apply_building_runtime_level(b_data)
