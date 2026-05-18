@@ -767,14 +767,22 @@ export function useHyperliquid() {
     return () => clearInterval(iv);
   }, [isActiveDex, walletAddr, fetchPrices, fetchAccount]);
 
+  const getRewardAuthToken = useCallback(() => (
+    (typeof window !== 'undefined' ? window._playerToken : null) || player?.token || null
+  ), [player?.token]);
+
   const importHyperliquidFills = useCallback(async ({
     attempts = 3,
     lookbackSeconds = CLAIM_LOOKBACK_SECONDS,
     delayMs = 1500,
+    tokenOverride = null,
   } = {}) => {
     if (!walletAddr) return null;
-    const token = window._playerToken || player?.token || null;
-    if (!token) return null;
+    const token = tokenOverride || getRewardAuthToken();
+    if (!token) {
+      console.warn('[useHyperliquid] import-fills skipped: no player token');
+      return null;
+    }
     try {
       const res = await fetch('/api/futures/hyperliquid/import-fills?dex=hyperliquid', {
         method: 'POST',
@@ -796,14 +804,20 @@ export function useHyperliquid() {
       console.warn('[useHyperliquid] import-fills network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr, player]);
+  }, [walletAddr, getRewardAuthToken]);
 
   importFillsRef.current = importHyperliquidFills;
 
-  const claimGold = useCallback(async () => {
-    if (!walletAddr) return null;
-    const token = window._playerToken || player?.token || null;
-    if (!token) return null;
+  const claimGold = useCallback(async ({ tokenOverride = null, reason = 'poll' } = {}) => {
+    if (!walletAddr) {
+      console.warn('[useHyperliquid] claim-gold skipped: no wallet');
+      return null;
+    }
+    const token = tokenOverride || getRewardAuthToken();
+    if (!token) {
+      console.warn('[useHyperliquid] claim-gold skipped: no player token');
+      return null;
+    }
     try {
       const res = await fetch('/api/trading/claim-gold', {
         method: 'POST',
@@ -815,6 +829,12 @@ export function useHyperliquid() {
         console.warn('[useHyperliquid] claim-gold failed:', res.status, data?.error || data?.reason || '(no body)');
         return data;
       }
+      console.info('[useHyperliquid] claim-gold result', {
+        reason,
+        gold: data?.gold || 0,
+        detail: data?.reason || null,
+        dex: data?.dex || 'hyperliquid',
+      });
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
         if (window.onGodotMessage) {
@@ -826,34 +846,50 @@ export function useHyperliquid() {
       console.warn('[useHyperliquid] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [walletAddr, player]);
+  }, [walletAddr, getRewardAuthToken]);
 
   claimGoldRef.current = claimGold;
 
   const syncRewards = useCallback((label = 'trade') => {
     if (!walletAddr) return;
     const run = async (attempts, delayMs) => {
-      const imported = await importHyperliquidFills({ attempts, delayMs, lookbackSeconds: CLAIM_LOOKBACK_SECONDS });
+      const token = getRewardAuthToken();
+      if (!token) {
+        console.warn(`[useHyperliquid] rewards sync skipped after ${label}: no player token`);
+        return;
+      }
+      const imported = await importHyperliquidFills({
+        attempts,
+        delayMs,
+        lookbackSeconds: CLAIM_LOOKBACK_SECONDS,
+        tokenOverride: token,
+      });
       const claimFn = claimGoldRef.current;
-      if (typeof claimFn === 'function') await claimFn();
-      if (imported?.imported > 0) console.log(`[useHyperliquid] rewards synced after ${label}`, imported);
+      const claimed = typeof claimFn === 'function'
+        ? await claimFn({ tokenOverride: token, reason: label })
+        : null;
+      if (imported?.imported > 0 || (claimed && Number(claimed.gold || 0) > 0)) {
+        console.log(`[useHyperliquid] rewards synced after ${label}`, { imported, claimed });
+      }
     };
     run(5, 1500);
     setTimeout(() => run(2, 1500), 12_000);
-  }, [walletAddr, importHyperliquidFills]);
+  }, [walletAddr, importHyperliquidFills, getRewardAuthToken]);
 
   useEffect(() => {
     if (!walletAddr || !isActiveDex) return;
     const fire = async () => {
       const importFn = importFillsRef.current;
-      if (typeof importFn === 'function') await importFn({ attempts: 1, lookbackSeconds: CLAIM_LOOKBACK_SECONDS });
+      const token = getRewardAuthToken();
+      if (!token) return;
+      if (typeof importFn === 'function') await importFn({ attempts: 1, lookbackSeconds: CLAIM_LOOKBACK_SECONDS, tokenOverride: token });
       const claimFn = claimGoldRef.current;
-      if (typeof claimFn === 'function') await claimFn();
+      if (typeof claimFn === 'function') await claimFn({ tokenOverride: token, reason: 'poll' });
     };
     const kickoff = setTimeout(fire, 3000);
     const iv = setInterval(fire, 30_000);
     return () => { clearTimeout(kickoff); clearInterval(iv); };
-  }, [walletAddr, isActiveDex]);
+  }, [walletAddr, isActiveDex, getRewardAuthToken]);
 
   const verifyTradingSetup = useCallback(async ({ refresh = false } = {}) => {
     if (!walletAddr) {
