@@ -173,9 +173,9 @@ install_system_dependencies() {
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
     mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
-    local hermes_model_chain="google/gemma-4-26b-a4b-it:free,minimax/minimax-m2.5:free,openai/gpt-oss-120b:free,nvidia/nemotron-nano-12b-v2-vl:free,liquid/lfm-2.5-1.2b-instruct:free"
-    local hermes_primary_model="google/gemma-4-26b-a4b-it:free"
-    local hermes_fallback_model="minimax/minimax-m2.5:free"
+    local hermes_model_chain="openai/gpt-oss-120b:free,google/gemma-4-26b-a4b-it:nitro"
+    local hermes_primary_model="openai/gpt-oss-120b:free"
+    local hermes_fallback_model="google/gemma-4-26b-a4b-it:nitro"
 
     if [ ! -f "$ENV_FILE" ]; then
         if [ -f "$DEPLOY_ROOT/.env" ]; then
@@ -232,7 +232,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
     ensure_env_default "CLASH_HERMES_PRIMARY_RETRIES" "3"
-    ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
+    ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
 
     set_env_value "NODE_ENV" "production"
     set_env_value "DECIBEL_BUILDER_FEE_BPS" "10"
@@ -244,7 +244,7 @@ prepare_shared_runtime() {
     set_env_value "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     set_env_value "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
     set_env_value "CLASH_HERMES_PRIMARY_RETRIES" "3"
-    set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "1"
+    set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
 
     if [ ! -f "$SHARED_SERVER_DIR/clash.db" ]; then
         if copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db"; then
