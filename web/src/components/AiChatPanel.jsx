@@ -7,6 +7,14 @@ const CONTEXT_MESSAGE_LIMIT = 4;
 const INITIAL_MESSAGES = [
   { role: 'assistant', text: 'Ready when you are.' },
 ];
+const AGENT_PROGRESS_MESSAGES = [
+  'Reading your request...',
+  'Checking the game tools...',
+  'Looking at the current game state...',
+  'Planning the next move...',
+  'Waiting for the agent route...',
+  'Finalizing the answer...',
+];
 
 function getChatStorageKey(player, token) {
   const id = player?.id || player?.player_id || player?.name || token || 'local';
@@ -54,6 +62,38 @@ function buildContextHistory(rows) {
     }));
 }
 
+function describeAgentProgress(progress) {
+  const phase = String(progress?.phase || '');
+  const route = Number(progress?.model_index || 0);
+  const backup = route > 0;
+  switch (phase) {
+    case 'preparing':
+      return 'Preparing the game agent...';
+    case 'starting_model':
+      return 'Starting the agent route...';
+    case 'fallback_model':
+      return 'Trying a backup route...';
+    case 'thinking':
+      return 'Reading the game state and planning...';
+    case 'fallback_thinking':
+      return 'Backup route is planning the answer...';
+    case 'checking_answer':
+      return 'Checking the answer before sending...';
+    case 'model_start_failed':
+      return 'That route did not start cleanly, switching routes...';
+    case 'route_rejected':
+      return 'That route produced a bad answer, trying another one...';
+    case 'route_timeout':
+      return backup ? 'Backup route is slow, trying another one...' : 'Agent route is slow, trying another one...';
+    case 'completed':
+      return 'Answer ready...';
+    case 'failed':
+      return 'All routes failed for this request...';
+    default:
+      return '';
+  }
+}
+
 function AiChatPanel({ onClose }) {
   const { isMobile } = useLayout();
   const player = usePlayer();
@@ -64,6 +104,7 @@ function AiChatPanel({ onClose }) {
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
+  const [progressText, setProgressText] = useState('');
   const listRef = useRef(null);
 
   // ── Mobile bottom-sheet gesture ──────────────────────────────────────
@@ -143,6 +184,46 @@ function AiChatPanel({ onClose }) {
     return () => { cancelled = true; };
   }, [token]);
 
+  useEffect(() => {
+    if (status !== 'sending') {
+      setProgressText('');
+      return undefined;
+    }
+    let cancelled = false;
+    let step = 0;
+    const updateFallback = () => {
+      if (!cancelled) {
+        setProgressText((current) => current || AGENT_PROGRESS_MESSAGES[step % AGENT_PROGRESS_MESSAGES.length]);
+        step += 1;
+      }
+    };
+    updateFallback();
+    const fallbackTimer = setInterval(() => {
+      if (!cancelled) {
+        setProgressText(AGENT_PROGRESS_MESSAGES[step % AGENT_PROGRESS_MESSAGES.length]);
+        step += 1;
+      }
+    }, 5000);
+    const poll = async () => {
+      if (!token) return;
+      try {
+        const r = await fetch('/api/ai-chat/status', { headers: { 'x-token': token } });
+        const data = await r.json().catch(() => ({}));
+        const next = describeAgentProgress(data?.hermes?.player?.last_progress);
+        if (!cancelled && next) setProgressText(next);
+      } catch {
+        // The rotating local status keeps the chat alive if polling fails.
+      }
+    };
+    poll();
+    const pollTimer = setInterval(poll, 1800);
+    return () => {
+      cancelled = true;
+      clearInterval(fallbackTimer);
+      clearInterval(pollTimer);
+    };
+  }, [status, token]);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || status === 'sending') return;
@@ -153,6 +234,7 @@ function AiChatPanel({ onClose }) {
     setInput('');
     setError('');
     setStatus('sending');
+    setProgressText('Reading your request...');
     setMessages((rows) => [...rows, { role: 'user', text }]);
     const history = buildContextHistory(messages);
     try {
@@ -268,7 +350,7 @@ function AiChatPanel({ onClose }) {
           {status === 'sending' && (
             <div style={{ ...styles.bubble, ...styles.aiBubble }}>
               <div style={styles.role}>Agent</div>
-              <div style={styles.text}>Thinking and checking tools...</div>
+              <div style={styles.text}>{progressText || 'Thinking and checking tools...'}</div>
             </div>
           )}
         </div>
@@ -314,8 +396,8 @@ const styles = {
     width: 'min(420px, calc(100vw - 24px))',
     height: 'min(640px, calc(100vh - 32px))',
     background: '#fdf8e7',
-    border: '6px solid #d4c8b0',
-    borderRadius: 22,
+    border: '3px solid #d4c8b0',
+    borderRadius: 18,
     boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
     color: '#5C3A21',
     display: 'flex',
@@ -341,10 +423,11 @@ const styles = {
     // bottom via env() so the composer doesn't sit under the home bar.
     height: '60vh',
     maxWidth: '100%',
-    borderRadius: '22px 22px 0 0',
+    borderRadius: '16px 16px 0 0',
     borderBottom: 'none',
     borderLeft: 'none',
     borderRight: 'none',
+    borderTopWidth: 1,
     paddingBottom: 'env(safe-area-inset-bottom, 0px)',
   },
   // Tappable drag area at the very top of the mobile sheet — contains
@@ -355,26 +438,30 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: '8px 0 4px',
+    padding: '5px 0 2px',
     cursor: 'grab',
     touchAction: 'none',
-    background: '#d4c8b0',
+    // Transparent — the drag area blends into the parchment panel so the
+    // top of the sheet reads as one cohesive surface, not a thick beige
+    // "frame". Only the small pill remains visible as the affordance.
+    background: 'transparent',
     flex: '0 0 auto',
   },
   dragHandle: {
-    width: 44, height: 5,
-    borderRadius: 3,
-    background: '#9f8759',
-    boxShadow: 'inset 0 1px 0 rgba(0,0,0,0.15)',
+    width: 40, height: 4,
+    borderRadius: 2,
+    background: '#bba882',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
-    padding: '12px 14px',
-    background: '#d4c8b0',
-    borderBottom: '4px solid #bba882',
+    padding: '6px 12px 8px',
+    // Header background follows the panel parchment too — the only
+    // demarcation between header and messages is a single hairline.
+    background: 'transparent',
+    borderBottom: '1px solid #e6dcc1',
     flex: '0 0 auto',
   },
   title: {
@@ -394,11 +481,12 @@ const styles = {
     boxShadow: '0 0 6px rgba(76,175,80,0.7)',
   },
   close: {
-    width: 32, height: 32, borderRadius: '50%',
-    background: '#E53935', border: '3px solid #fff', color: '#fff',
+    width: 28, height: 28, borderRadius: '50%',
+    background: '#E53935', border: '2px solid #fff', color: '#fff',
     cursor: 'pointer', padding: 0,
-    fontSize: 16, fontWeight: 900, lineHeight: '26px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+    fontSize: 14, fontWeight: 900, lineHeight: '24px',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.25)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
   },
   messages: {
     flex: 1, minHeight: 0,
@@ -412,17 +500,17 @@ const styles = {
   },
   bubble: {
     borderRadius: 12,
-    padding: '8px 12px',
-    border: '2px solid #d4c8b0',
+    padding: '7px 11px',
+    border: '1px solid #d4c8b0',
     lineHeight: 1.4,
-    boxShadow: '0 2px 4px rgba(95,58,33,0.08)',
+    boxShadow: '0 1px 2px rgba(95,58,33,0.06)',
   },
   userBubble: {
     alignSelf: 'flex-end',
     // Gold-on-gold gradient mirrors the "primary action" tone used on
     // mint/list buttons elsewhere — feels like the player's own voice.
     background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
-    border: '2px solid #c2851b',
+    border: '1px solid #c2851b',
     color: '#3a1f00',
     maxWidth: '86%',
   },
@@ -439,27 +527,27 @@ const styles = {
   text: { fontSize: 13, fontWeight: 600, whiteSpace: 'pre-wrap' },
   meta: { fontSize: 10, color: '#9f8759', marginTop: 6, fontStyle: 'italic' },
   error: {
-    margin: '0 14px 10px',
+    margin: '0 12px 8px',
     color: '#7a1f1c',
     background: '#fdecea',
-    border: '2px solid #E53935',
-    borderRadius: 10,
-    padding: '8px 10px',
+    border: '1px solid #E53935',
+    borderRadius: 8,
+    padding: '6px 9px',
     fontSize: 12, fontWeight: 700,
   },
   composer: {
     display: 'flex',
     gap: 8,
-    padding: 12,
-    borderTop: '3px solid #d4c8b0',
+    padding: 10,
+    borderTop: '1px solid #d4c8b0',
     background: '#f5ecd2',
     flex: '0 0 auto',
   },
   input: {
     flex: 1,
     resize: 'none',
-    border: '2px solid #d4c8b0',
-    borderRadius: 10,
+    border: '1px solid #d4c8b0',
+    borderRadius: 8,
     background: '#fff',
     color: '#3a2810',
     padding: '8px 10px',
@@ -469,10 +557,10 @@ const styles = {
     minWidth: 0,
   },
   send: {
-    minWidth: 76,
-    padding: '0 14px',
-    border: '2px solid #1f6d34',
-    borderRadius: 10,
+    minWidth: 70,
+    padding: '0 12px',
+    border: '1px solid #1f6d34',
+    borderRadius: 8,
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
     color: '#fff',
     fontSize: 13, fontWeight: 900,

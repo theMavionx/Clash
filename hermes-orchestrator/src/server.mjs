@@ -30,7 +30,7 @@ const MODEL_CHAIN = resolveModelChain(process.env);
 const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODELS = MODEL_CHAIN.slice(1);
 const FALLBACK_MODEL = FALLBACK_MODELS[0] || '';
-const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 2);
+const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 1);
 const MCP_URL = process.env.CLASH_MCP_URL || 'https://mcp.clashofperps.fun/mcp';
 const HERMES_READY_TIMEOUT_MS = Number(process.env.CLASH_HERMES_READY_TIMEOUT_MS || 45_000);
 const HERMES_IDLE_SHUTDOWN_MS = Number(process.env.CLASH_HERMES_IDLE_SHUTDOWN_MS || 15 * 60_000);
@@ -66,6 +66,7 @@ function publicPlayerState(playerId) {
     last_started_at: row.last_started_at || null,
     last_chat_at: row.last_chat_at || null,
     last_error: row.last_error || null,
+    last_progress: row.last_progress || null,
   };
 }
 
@@ -116,6 +117,18 @@ async function saveState() {
   await fsp.writeFile(tmp, JSON.stringify(state, null, 2));
   await fsp.rename(tmp, STATE_FILE);
   await fsp.chmod(STATE_FILE, 0o600).catch(() => {});
+}
+
+async function setPlayerProgress(playerId, progress) {
+  const safeId = safePlayerId(playerId);
+  const row = state.players[safeId];
+  if (!row) return;
+  row.last_progress = {
+    ...progress,
+    at: nowIso(),
+  };
+  row.updated_at = nowIso();
+  await saveState().catch(() => {});
 }
 
 function playerHome(playerId) {
@@ -240,6 +253,7 @@ async function provisionPlayer(playerId, body) {
     created_at: existing.created_at || nowIso(),
     updated_at: nowIso(),
     last_error: null,
+    last_progress: existing.last_progress || null,
   };
   state.players[safeId] = row;
   await writePlayerFiles(safeId, row);
@@ -473,12 +487,26 @@ async function chatWithPlayer(playerId, body) {
   let lastError = null;
   const attemptedModels = [];
   const attemptsPerModel = Math.max(1, FALLBACK_AFTER_RETRIES);
+  await setPlayerProgress(safeId, {
+    phase: 'preparing',
+    message: 'Preparing the game agent',
+    attempt: 0,
+    model_index: 0,
+    total_models: MODEL_CHAIN.length,
+  });
 
   for (let modelIndex = 0; modelIndex < MODEL_CHAIN.length; modelIndex += 1) {
     const model = MODEL_CHAIN[modelIndex];
     attemptedModels.push(model);
     let activeRow = null;
     try {
+      await setPlayerProgress(safeId, {
+        phase: modelIndex === 0 ? 'starting_model' : 'fallback_model',
+        message: modelIndex === 0 ? 'Starting the primary agent route' : 'Switching to a backup route',
+        attempt: 0,
+        model_index: modelIndex,
+        total_models: MODEL_CHAIN.length,
+      });
       activeRow = await ensureModelRunning(safeId, model);
     } catch (err) {
       lastError = err;
@@ -487,14 +515,46 @@ async function chatWithPlayer(playerId, body) {
         latest.last_error = `[${model}] ${err.message}`;
         await saveState();
       }
+      await setPlayerProgress(safeId, {
+        phase: 'model_start_failed',
+        message: 'That route did not start cleanly, trying another one',
+        attempt: 0,
+        model_index: modelIndex,
+        total_models: MODEL_CHAIN.length,
+      });
       continue;
     }
     for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
       try {
+        await setPlayerProgress(safeId, {
+          phase: modelIndex === 0 ? 'thinking' : 'fallback_thinking',
+          message: modelIndex === 0 ? 'Reading the game state and planning' : 'A backup route is planning the answer',
+          attempt,
+          max_attempts: attemptsPerModel,
+          model_index: modelIndex,
+          total_models: MODEL_CHAIN.length,
+        });
         const response = await callHermesResponses(activeRow, payload);
+        await setPlayerProgress(safeId, {
+          phase: 'checking_answer',
+          message: 'Checking the answer before sending it',
+          attempt,
+          max_attempts: attemptsPerModel,
+          model_index: modelIndex,
+          total_models: MODEL_CHAIN.length,
+        });
         const outputText = assertUsableHermesResponse(response);
         activeRow.last_chat_at = nowIso();
         activeRow.last_error = null;
+        activeRow.last_progress = {
+          phase: 'completed',
+          message: 'Answer ready',
+          at: nowIso(),
+          attempt,
+          max_attempts: attemptsPerModel,
+          model_index: modelIndex,
+          total_models: MODEL_CHAIN.length,
+        };
         await saveState();
         return {
           ok: true,
@@ -509,6 +569,14 @@ async function chatWithPlayer(playerId, body) {
         lastError = err;
         activeRow.last_error = `[${model}] ${err.message}`;
         await saveState();
+        await setPlayerProgress(safeId, {
+          phase: err.no_retry ? 'route_rejected' : 'route_timeout',
+          message: err.no_retry ? 'That route produced an unsafe answer, trying another one' : 'That route is slow, trying another one',
+          attempt,
+          max_attempts: attemptsPerModel,
+          model_index: modelIndex,
+          total_models: MODEL_CHAIN.length,
+        });
         console.warn(JSON.stringify({
           event: 'hermes_chat_attempt_failed',
           player_id: safeId,
@@ -523,6 +591,13 @@ async function chatWithPlayer(playerId, body) {
     }
   }
 
+  await setPlayerProgress(safeId, {
+    phase: 'failed',
+    message: 'All routes failed for this request',
+    attempt: attemptsPerModel,
+    model_index: MODEL_CHAIN.length - 1,
+    total_models: MODEL_CHAIN.length,
+  });
   throw lastError || new Error('Hermes chat failed');
 }
 
