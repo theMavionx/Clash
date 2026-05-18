@@ -718,7 +718,7 @@ function AiChatPanel({ onClose }) {
 
       let result = await Promise.race([requestResult, recoveryResult]);
       if (result.kind === 'request_error') {
-        if (result.err?.status === 402) throw result.err;
+        if (result.err?.status && result.err.status < 500) throw result.err;
         const recovered = await recoveryResult;
         result = recovered.kind === 'data' ? recovered : result;
       } else if (result.kind === 'recovery_error') {
