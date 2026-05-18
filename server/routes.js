@@ -9165,6 +9165,8 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
   const sortCol = normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
+  const needsPointWeights = sortCol === TOURNAMENT_POINTS_SORT
+    || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
@@ -9203,7 +9205,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
       points_trophy_weight,
       points_volume_weight,
       points_pnl_weight,
-    }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: sortCol === TOURNAMENT_POINTS_SORT });
+    }, DEFAULT_TOURNAMENT_POINT_WEIGHTS, { requireTotal: needsPointWeights });
     prizeTiers = normalizeTournamentPrizeTiers(prize_tiers, { strict: true });
   } catch (e) {
     return res.status(400).json({ error: e.message });
@@ -9307,6 +9309,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   });
   if (windowError) return res.status(400).json({ error: windowError });
   const nextSortBy = normalizeTournamentSort(sort_by, t.sort_by);
+  const needsPointWeights = nextSortBy === TOURNAMENT_POINTS_SORT
+    || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   let pointWeights;
   let nextPrizeTiers;
   let teamSplits;
@@ -9319,7 +9323,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
       points_trophy_weight: points_trophy_weight !== undefined ? points_trophy_weight : t.points_trophy_weight,
       points_volume_weight: points_volume_weight !== undefined ? points_volume_weight : t.points_volume_weight,
       points_pnl_weight: points_pnl_weight !== undefined ? points_pnl_weight : t.points_pnl_weight,
-    }, fallbackWeights, { requireTotal: nextSortBy === TOURNAMENT_POINTS_SORT });
+    }, fallbackWeights, { requireTotal: needsPointWeights });
     nextPrizeTiers = prize_tiers !== undefined
       ? normalizeTournamentPrizeTiers(prize_tiers, { strict: true })
       : normalizeTournamentPrizeTiers(t.prize_tiers);

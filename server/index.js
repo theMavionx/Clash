@@ -610,6 +610,15 @@ app.get('/api/admin/panel', (req, res) => {
                 </select>
               </label>
             </div>
+            <div id="tn_team_points_box" style="display:none;margin-top:8px;background:#111827;border:1px solid #374151;border-radius:8px;padding:8px">
+              <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Team custom point weights</div>
+              <div style="display:grid;grid-template-columns:repeat(3,minmax(120px,1fr));gap:8px">
+                <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_team_points_trophy_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:auto;margin:0">Trophies %</span><input id="tn_team_points_trophy" type="number" min="0" max="100" step="1" value="20" oninput="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+                <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_team_points_volume_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:auto;margin:0">Volume %</span><input id="tn_team_points_volume" type="number" min="0" max="100" step="1" value="60" oninput="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+                <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_team_points_pnl_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:auto;margin:0">Positive PnL %</span><input id="tn_team_points_pnl" type="number" min="0" max="100" step="1" value="20" oninput="copyTournamentPointWeights('tn_team_points','tn_points');updateTournamentTeamPointsUi();updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              </div>
+              <div id="tn_team_points_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Enabled weights must total 100. Example: 50% trophies + 50% volume.</div>
+            </div>
             <div id="tn_team_splits_rows" style="display:none;margin-top:8px"></div>
             <div id="tn_team_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Select at least two DEXes for a team tournament.</div>
           </div>
@@ -639,9 +648,9 @@ app.get('/api/admin/panel', (req, res) => {
           <div id="tn_points_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
             <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Point weights</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_trophy_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Trophies %</span><input id="tn_points_trophy" type="number" min="0" max="100" step="1" value="20" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
-              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_volume_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Volume %</span><input id="tn_points_volume" type="number" min="0" max="100" step="1" value="60" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
-              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_pnl_on" type="checkbox" checked onchange="updateTournamentPointsUi()" style="width:auto;margin:0">Positive PnL %</span><input id="tn_points_pnl" type="number" min="0" max="100" step="1" value="20" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_trophy_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:auto;margin:0">Trophies %</span><input id="tn_points_trophy" type="number" min="0" max="100" step="1" value="20" oninput="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_volume_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:auto;margin:0">Volume %</span><input id="tn_points_volume" type="number" min="0" max="100" step="1" value="60" oninput="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+              <label style="font-size:11px;color:#9ca3af"><span style="display:flex;align-items:center;gap:6px"><input id="tn_points_pnl_on" type="checkbox" checked onchange="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:auto;margin:0">Positive PnL %</span><input id="tn_points_pnl" type="number" min="0" max="100" step="1" value="20" oninput="copyTournamentPointWeights('tn_points','tn_team_points');updateTournamentPointsUi();updateTournamentTeamPointsUi()" style="width:100%;margin-top:4px;background:#111827;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
             </div>
             <div id="tn_points_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Enabled weights must total 100. Points are raw, not capped.</div>
           </div>
@@ -1927,6 +1936,8 @@ function updateTournamentTeamUi(seedSplits) {
     updateTournamentDexScopeUi();
   }
   renderTournamentTeamSplits(seedSplits);
+  updateTournamentTeamPointsUi();
+  updateTournamentPointsUi();
   updateTournamentTeamHint();
 }
 
@@ -2150,12 +2161,70 @@ function readTournamentWeight(id, fallback) {
   return Math.max(0, Math.min(100, n));
 }
 
+function readTournamentPointWeights(prefix) {
+  return {
+    trophies: readTournamentWeight(prefix + '_trophy', 20),
+    volume: readTournamentWeight(prefix + '_volume', 60),
+    pnl: readTournamentWeight(prefix + '_pnl', 20),
+  };
+}
+
+function setTournamentPointInputs(prefix, weights) {
+  const w = weights || { trophies: 20, volume: 60, pnl: 20 };
+  [
+    ['trophy', Number(w.trophies) || 0],
+    ['volume', Number(w.volume) || 0],
+    ['pnl', Number(w.pnl) || 0],
+  ].forEach(([key, value]) => {
+    const input = document.getElementById(prefix + '_' + key);
+    const enabled = document.getElementById(prefix + '_' + key + '_on');
+    if (input) input.value = value;
+    if (enabled) enabled.checked = value > 0;
+  });
+}
+
+function copyTournamentPointWeights(fromPrefix, toPrefix) {
+  setTournamentPointInputs(toPrefix, readTournamentPointWeights(fromPrefix));
+}
+
+function tournamentTeamUsesCustomPoints() {
+  const mode = document.getElementById('tn_mode')?.value || 'individual';
+  if (mode !== 'dex_vs_dex') return false;
+  return (document.getElementById('tn_team_score_by')?.value || 'volume_usd') === 'points'
+    || (document.getElementById('tn_team_member_reward_by')?.value || 'volume_usd') === 'points';
+}
+
+function updateTournamentTeamPointsUi() {
+  const box = document.getElementById('tn_team_points_box');
+  const hint = document.getElementById('tn_team_points_hint');
+  if (!box || !hint) return;
+  const active = tournamentTeamUsesCustomPoints();
+  box.style.display = active ? 'block' : 'none';
+  ['tn_team_points_trophy', 'tn_team_points_volume', 'tn_team_points_pnl'].forEach((id) => {
+    const input = document.getElementById(id);
+    const enabled = document.getElementById(id + '_on');
+    if (enabled) enabled.disabled = !active;
+    if (input) {
+      input.disabled = !active || (enabled && !enabled.checked);
+      input.style.opacity = input.disabled ? '0.55' : '1';
+    }
+  });
+  const weights = readTournamentPointWeights('tn_team_points');
+  const total = weights.trophies + weights.volume + weights.pnl;
+  const parts = tournamentPointParts(weights);
+  hint.style.color = Math.abs(total - 100) < 0.001 ? '#9ca3af' : '#fca5a5';
+  hint.textContent = 'Total: ' + total + '%. '
+    + (parts.length ? 'Team points = ' + parts.join(' + ') + '.' : 'Enable at least one team metric.')
+    + ' Example: 50% Trophies + 50% Volume.';
+}
+
 function updateTournamentPointsUi() {
   const sort = document.getElementById('tn_sort');
   const box = document.getElementById('tn_points_box');
   const hint = document.getElementById('tn_points_hint');
   if (!sort || !box || !hint) return;
-  const isPoints = sort.value === 'points';
+  const teamUsesPoints = tournamentTeamUsesCustomPoints();
+  const isPoints = sort.value === 'points' || teamUsesPoints;
   box.style.opacity = isPoints ? '1' : '0.45';
   ['tn_points_trophy', 'tn_points_volume', 'tn_points_pnl'].forEach((id) => {
     const input = document.getElementById(id);
@@ -2174,7 +2243,9 @@ function updateTournamentPointsUi() {
   const total = weights.trophies + weights.volume + weights.pnl;
   const parts = tournamentPointParts(weights);
   hint.style.color = Math.abs(total - 100) < 0.001 ? '#9ca3af' : '#fca5a5';
-  hint.textContent = 'Total: ' + total + '%. ' + (parts.length ? 'Points = ' + parts.join(' + ') + '.' : 'Enable at least one metric.');
+  hint.textContent = 'Total: ' + total + '%. '
+    + (parts.length ? 'Points = ' + parts.join(' + ') + '.' : 'Enable at least one metric.')
+    + (teamUsesPoints && sort.value !== 'points' ? ' Used by DEX vs DEX custom points.' : '');
 }
 
 async function loadTournaments() {
@@ -2231,24 +2302,24 @@ function renderTournaments() {
 }
 
 function getTournamentFormBody() {
-  const pointWeights = {
-    trophies: readTournamentWeight('tn_points_trophy', 20),
-    volume: readTournamentWeight('tn_points_volume', 60),
-    pnl: readTournamentWeight('tn_points_pnl', 20),
-  };
   const dexScope = document.getElementById('tn_dex_scope')?.value || 'single';
   const eligibleDexes = selectedTournamentDexes();
+  const mode = document.getElementById('tn_mode')?.value || 'individual';
+  const teamScoreBy = document.getElementById('tn_team_score_by')?.value || 'volume_usd';
+  const teamMemberRewardBy = document.getElementById('tn_team_member_reward_by')?.value || 'volume_usd';
+  const teamUsesPoints = mode === 'dex_vs_dex' && (teamScoreBy === 'points' || teamMemberRewardBy === 'points');
+  const pointWeights = readTournamentPointWeights(teamUsesPoints ? 'tn_team_points' : 'tn_points');
   return {
     name: document.getElementById('tn_name').value.trim(),
     description: document.getElementById('tn_desc').value.trim(),
     dex: eligibleDexes[0] || document.getElementById('tn_dex').value,
     dex_scope: dexScope,
     eligible_dexes: eligibleDexes,
-    mode: document.getElementById('tn_mode')?.value || 'individual',
-    team_score_by: document.getElementById('tn_team_score_by')?.value || 'volume_usd',
+    mode,
+    team_score_by: teamScoreBy,
     team_prize_mode: document.getElementById('tn_team_prize_mode')?.value || 'winner_takes_all',
     team_prize_splits: readTournamentTeamSplits(),
-    team_member_reward_by: document.getElementById('tn_team_member_reward_by')?.value || 'volume_usd',
+    team_member_reward_by: teamMemberRewardBy,
     attack_match_policy: document.getElementById('tn_attack_match_policy')?.value || 'all',
     start_at: document.getElementById('tn_start').value.trim() || undefined,
     end_at: document.getElementById('tn_end').value.trim() || undefined,
@@ -2301,6 +2372,7 @@ function resetTournamentForm() {
   document.getElementById('tn_points_trophy_on').checked = true;
   document.getElementById('tn_points_volume_on').checked = true;
   document.getElementById('tn_points_pnl_on').checked = true;
+  setTournamentPointInputs('tn_team_points', { trophies: 20, volume: 60, pnl: 20 });
   document.getElementById('tn_prize_currency').value = 'USD';
   document.getElementById('tn_rewards_cop').checked = false;
   renderTournamentPrizeTiers([]);
@@ -2345,6 +2417,7 @@ function editTournament(id) {
   document.getElementById('tn_points_trophy_on').checked = Number(weights.trophies) > 0;
   document.getElementById('tn_points_volume_on').checked = Number(weights.volume) > 0;
   document.getElementById('tn_points_pnl_on').checked = Number(weights.pnl) > 0;
+  setTournamentPointInputs('tn_team_points', weights);
   document.getElementById('tn_prize_currency').value = t.prize_currency || 'USD';
   document.getElementById('tn_rewards_cop').checked = !!t.rewards_in_cop;
   renderTournamentPrizeTiers(t.prize_tiers || []);
@@ -2380,7 +2453,9 @@ async function saveTournament() {
       }
     }
   }
-  if (body.sort_by === 'points') {
+  const needsPointWeights = body.sort_by === 'points'
+    || (body.mode === 'dex_vs_dex' && (body.team_score_by === 'points' || body.team_member_reward_by === 'points'));
+  if (needsPointWeights) {
     const total = body.points_trophy_weight + body.points_volume_weight + body.points_pnl_weight;
     if (Math.abs(total - 100) > 0.001) {
       alert('Point weights must add up to 100%. Current total: ' + total + '%.');
