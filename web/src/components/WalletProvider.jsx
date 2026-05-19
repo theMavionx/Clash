@@ -11,7 +11,6 @@ import { farcasterDetectPromise } from '../hooks/useFarcaster';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import {
   forgetSelectedWallet,
-  isPhantomInAppBrowser,
   isUserDismissedWalletError,
 } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
@@ -168,11 +167,6 @@ export default function WalletProvider({ children }) {
   const rpc = useBestRpc();
   const { ready: fcReady, inFrame } = useFarcasterWalletReady();
   const localStorageKey = inFrame ? 'fcWalletName' : 'walletName';
-  // Keep injected wallets passive until an explicit user action. Phantom can
-  // show domain/security warnings when a dapp requests connection on load;
-  // auto-connect is not worth that risk for a multi-chain game screen.
-  const solanaAutoConnect = import.meta.env.VITE_SOLANA_WALLET_AUTO_CONNECT === '1'
-    && !isPhantomInAppBrowser();
 
   const handleWalletError = useCallback((error, adapter) => {
     if (isUserDismissedWalletError(error)) {
@@ -199,7 +193,7 @@ export default function WalletProvider({ children }) {
     <ConnectionProvider endpoint={rpc}>
       <SolWalletProvider
         wallets={wallets}
-        autoConnect={solanaAutoConnect}
+        autoConnect={true}
         localStorageKey={localStorageKey}
         onError={handleWalletError}
       >
