@@ -28,7 +28,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl } from '../lib/solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -436,7 +436,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
       const { Connection, PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
 
       const coreRpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-      const coreRpcUrl = coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL;
+      const coreRpcUrl = solanaBatchSafeRpcUrl(coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL);
       const umi = createUmi(coreRpcUrl).use(mplCore());
       // We can't use a keypairIdentity here because the user wallet is a
       // browser extension — instead, use the wallet adapter's signer.

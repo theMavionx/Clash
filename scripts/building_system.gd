@@ -1435,11 +1435,11 @@ func _update_resource_ui() -> void:
 func _on_add_resource(res_name: String) -> void:
 	var net = _net
 	if net and net.has_token():
-		var args = {"gold": 0, "wood": 0, "ore": 0}
-		args[res_name] = 1000
-		var result = await net.add_resources(args.gold, args.wood, args.ore)
-		if not result.has("error"):
-			_apply_resources_from_server(result)
+		var bridge = _bridge
+		if bridge:
+			bridge.send_to_react("shop_toggled", {"open": true, "reason": "resource_topup"})
+			bridge.send_to_react("resource_topup_required", {"resource": res_name})
+		return
 	else:
 		resources[res_name] += 1000
 		_update_resource_ui()

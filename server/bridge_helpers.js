@@ -20,6 +20,7 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const {
   createSolanaConnection,
+  solanaNonHeliusRpcUrls,
   solanaPrimaryRpcUrl,
   solanaRpcUrls,
   withSolanaRpcFallback,
@@ -539,7 +540,7 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   const asset = await withSolanaRpcFallback(async (rpc) => {
     const umi = createUmi(rpc).use(mplCore());
     return fetchAsset(umi, publicKey(assetPubkey));
-  }, { label: 'Solana bridge source asset read' });
+  }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls()), label: 'Solana bridge source asset read' });
   const owner = solanaAssetOwner(asset);
   const collection = solanaAssetCollection(asset);
   if (String(collection) !== String(dep.collection)) {

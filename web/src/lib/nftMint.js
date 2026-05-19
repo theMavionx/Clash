@@ -1,5 +1,5 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
-import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl } from './solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from './solanaRpc';
 
 export const NFT_SHOP_ABI = [
   {
@@ -306,7 +306,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
       maxAttempts: 4,
       skipPreflight: false,
       buildSignedTransaction: async ({ connection: attemptConnection, blockhash, lastValidBlockHeight }) => {
-        const attemptUmi = createUmi(attemptConnection?.rpcEndpoint || rpcUrl)
+        const attemptUmi = createUmi(solanaBatchSafeRpcUrl(attemptConnection?.rpcEndpoint || rpcUrl))
           .use(mplCore())
           .use(mplCandyMachine())
           .use(signerIdentity(walletSigner, true));

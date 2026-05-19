@@ -47,6 +47,19 @@ function isHeliusSolanaRpcUrl(url) {
   }
 }
 
+function solanaRpcSupportsBatch(url) {
+  return !isHeliusSolanaRpcUrl(url);
+}
+
+function solanaNonHeliusRpcUrls(urls = solanaRpcUrls()) {
+  return (urls || []).filter((url) => url && !isHeliusSolanaRpcUrl(url));
+}
+
+function solanaBatchSafeRpcUrl(preferredUrl, urls = solanaRpcUrls()) {
+  if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
+  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || DEFAULT_SOLANA_RPC_URLS[0];
+}
+
 function parseJsonRpcBody(body) {
   if (typeof body === 'string') {
     try { return JSON.parse(body); } catch { return null; }
@@ -153,9 +166,12 @@ module.exports = {
   createSolanaConnection,
   heliusSolanaRpcUrl,
   isHeliusSolanaRpcUrl,
+  solanaBatchSafeRpcUrl,
   solanaConnectionConfig,
   solanaRpcFetchForUrl,
+  solanaNonHeliusRpcUrls,
   solanaPrimaryRpcUrl,
+  solanaRpcSupportsBatch,
   solanaRpcUrls,
   splitSolanaRpcUrls,
   withSolanaRpcFallback,

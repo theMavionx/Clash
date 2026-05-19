@@ -18,6 +18,7 @@ const path = require('path');
 const fs = require('fs');
 const {
   createSolanaConnection,
+  solanaNonHeliusRpcUrls,
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
@@ -77,7 +78,7 @@ function timeoutPromise(promise, ms, label) {
 }
 
 function solanaOwnedRpcUrls() {
-  return solanaRpcUrls();
+  return solanaNonHeliusRpcUrls(solanaRpcUrls());
 }
 
 const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
@@ -741,7 +742,7 @@ function mountNftV3Endpoints(router, ctx) {
               12_000,
               `Solana Core owner scan ${rpc}`,
             );
-          }, { label: 'Solana Core owner scan' });
+          }, { urls: solanaOwnedRpcUrls(), label: 'Solana Core owner scan' });
         } catch (err) {
           if (recentCoreBody) {
             _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
@@ -2217,7 +2218,7 @@ function mountNftV3Endpoints(router, ctx) {
       }
       throw lastErr;
     }, {
-      extraUrls: [solanaDeploy.rpcUrl],
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
       label: 'Solana bridge mint',
     });
   }
@@ -2233,7 +2234,7 @@ function mountNftV3Endpoints(router, ctx) {
       const umi = createUmi(rpc).use(mplCore());
       return fetchAssetsByCollection(umi, publicKey(solanaDeploy.collection));
     }, {
-      extraUrls: [solanaDeploy.rpcUrl],
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
       label: 'Solana bridge mint recovery',
     });
     const wanted = String(sourceRef || '').toLowerCase();

@@ -106,6 +106,19 @@ export function isHeliusSolanaRpcUrl(url) {
   }
 }
 
+export function solanaRpcSupportsBatch(url) {
+  return !isHeliusSolanaRpcUrl(url);
+}
+
+export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
+  return (urls || []).filter((url) => url && !isHeliusSolanaRpcUrl(url));
+}
+
+export function solanaBatchSafeRpcUrl(preferredUrl, urls = SOLANA_RPC_URLS) {
+  if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
+  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || DEFAULT_SOLANA_RPC_URL;
+}
+
 function parseJsonRpcBody(body) {
   if (typeof body === 'string') {
     try { return JSON.parse(body); } catch { return null; }

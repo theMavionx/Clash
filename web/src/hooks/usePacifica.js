@@ -606,6 +606,7 @@ export function usePacifica() {
 
     const body = {
       account,
+      agent_wallet: null,
       signature,
       timestamp: JSON.parse(message).timestamp,
       expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,

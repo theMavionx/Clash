@@ -10,6 +10,8 @@ const FETCH_SNIPPET_MAX = 900;
 const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
 const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`)/;
+const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web-extension:\/\/|Cannot redefine property: ethereum|Invalid property descriptor|tpweb3_|tronlinkParams|Backpack was unable to override window\.ethereum|Attempting to use a disconnected port object)/i;
+const NOISY_CLIENT_EVENT_RE = /^(page-load: iframe=|SDK imported, calling ready\(\)|ready\(\) done)/;
 const CHUNK_ERROR_RE = /(Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk \d+ failed|ChunkLoadError|dynamically imported module)/i;
 
 let installed = false;
@@ -238,6 +240,8 @@ function scheduleFlush() {
 function shouldStoreEvent(event) {
   if (!event?.message || NOISY_LOG_RE.test(event.message)) return false;
   if (NOISY_SERVER_RE.test(event.message)) return false;
+  if (NOISY_CLIENT_EVENT_RE.test(event.message)) return false;
+  if (EXTENSION_ERROR_RE.test(event.message) || EXTENSION_ERROR_RE.test(event.stack || '')) return false;
   return true;
 }
 
@@ -325,6 +329,12 @@ function shouldIgnoreFetch(path) {
   return !path || path.includes('/api/client-log');
 }
 
+function shouldStoreFetchFailure(path, status) {
+  if (status === 400 && /^\/api\/find-enemy(?:\?|$)/.test(path || '')) return false;
+  if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
+  return true;
+}
+
 function readResponseSnippet(response) {
   const type = response.headers?.get?.('content-type') || '';
   if (type && !/(json|text|javascript|xml|html|plain)/i.test(type)) {
@@ -346,6 +356,7 @@ function patchFetch() {
     return original.fetch(...args).then((response) => {
       const duration_ms = Math.round(performance.now() - started);
       if (!shouldIgnoreFetch(req.path) && response.status >= 400) {
+        const storeFailure = shouldStoreFetchFailure(req.path, response.status);
         const base = {
           request_id: requestId,
           method: req.method,
@@ -353,14 +364,16 @@ function patchFetch() {
           status: response.status,
           duration_ms,
         };
-        addBreadcrumbInternal('fetch.http_error', base, response.status >= 500 ? 'error' : 'warn');
-        readResponseSnippet(response).then((snippet) => {
-          enqueue(makeEvent(response.status >= 500 ? 'error' : 'warn', [
-            `fetch ${req.method} ${req.path} -> ${response.status}`,
-          ], 'fetch', '', {
-            payload: { fetch: { ...base, response_snippet: snippet } },
-          }));
-        });
+        addBreadcrumbInternal(storeFailure ? 'fetch.http_error' : 'fetch.expected_http_status', base, storeFailure ? (response.status >= 500 ? 'error' : 'warn') : 'debug');
+        if (storeFailure) {
+          readResponseSnippet(response).then((snippet) => {
+            enqueue(makeEvent(response.status >= 500 ? 'error' : 'warn', [
+              `fetch ${req.method} ${req.path} -> ${response.status}`,
+            ], 'fetch', '', {
+              payload: { fetch: { ...base, response_snippet: snippet } },
+            }));
+          });
+        }
       }
       return response;
     }).catch((err) => {

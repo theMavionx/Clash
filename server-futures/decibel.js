@@ -739,6 +739,8 @@ async function configureUserSettingsForMarket(args) {
 let marketsCache = null;
 let marketsCacheAt = 0;
 const MARKETS_CACHE_MS = 10 * 60 * 1000;
+const DECIBEL_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const decibelSleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchMarkets() {
   if (marketsCache && Date.now() - marketsCacheAt < MARKETS_CACHE_MS) return marketsCache;
@@ -764,13 +766,34 @@ async function fetchDecibelRows(path, query = {}) {
     }
   }
   const suffix = params.toString() ? `?${params.toString()}` : '';
-  const r = await fetch(`${DECIBEL_HTTP}/api/v1/${path}${suffix}`, { headers: authHeaders() });
-  if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    throw new Error(`Decibel ${path} failed: ${r.status} ${body || r.statusText}`);
+  const url = `${DECIBEL_HTTP}/api/v1/${path}${suffix}`;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const r = await fetch(url, { headers: authHeaders() });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        lastError = new Error(`Decibel ${path} failed: ${r.status} ${body || r.statusText}`);
+        if (attempt < 2 && DECIBEL_RETRY_STATUSES.has(r.status)) {
+          await decibelSleep(250 * (attempt + 1));
+          continue;
+        }
+        lastError.noRetry = true;
+        throw lastError;
+      }
+      const j = await r.json();
+      return Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+    } catch (err) {
+      lastError = err;
+      if (err?.noRetry) throw err;
+      if (attempt < 2) {
+        await decibelSleep(250 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
   }
-  const j = await r.json();
-  return Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+  throw lastError || new Error(`Decibel ${path} failed`);
 }
 
 let pricesCache = null;

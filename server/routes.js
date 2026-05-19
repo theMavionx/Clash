@@ -17,6 +17,7 @@ const {
 } = require('./solana_token2022_nft');
 const {
   createSolanaConnection,
+  solanaNonHeliusRpcUrls,
   solanaRpcUrls: buildSolanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
@@ -1763,7 +1764,7 @@ async function readSolanaNftMintedCount(deployment) {
       const umi = createUmi(rpcUrl).use(mplCore());
       return fetchCollection(umi, publicKey(collectionAddr));
     }, {
-      extraUrls: [deployment?.rpcUrl],
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([deployment?.rpcUrl])),
       label: 'Solana NFT collection supply read',
     });
     const numMinted = Number(col.numMinted ?? 0);
@@ -5527,14 +5528,33 @@ router.get('/ships', auth, (req, res) => {
   res.json({ ships });
 });
 
-// Report a single troop death during battle — removes one from ship_troops immediately
-// Rate-limited: 5ms cooldown (was 500ms, bumped 100× per user request).
-const _troopDiedTimestamps = {};
-router.post('/troop-died', auth, (req, res) => {
+// Report a single troop death during battle. Troops can die in bursts during one
+// physics frame, so use a short token bucket instead of a per-request cooldown.
+const TROOP_DIED_RATE_WINDOW_MS = 1000;
+const TROOP_DIED_RATE_MAX = 120;
+const _troopDiedBuckets = new Map();
+
+function _allowTroopDied(playerId) {
   const now = Date.now();
-  const last = _troopDiedTimestamps[req.player.id] || 0;
-  if (now - last < 5) return res.status(429).json({ error: 'Too fast' });
-  _troopDiedTimestamps[req.player.id] = now;
+  const key = String(playerId || '');
+  const bucket = _troopDiedBuckets.get(key);
+  if (bucket && bucket.resetAt > now) {
+    if (bucket.count >= TROOP_DIED_RATE_MAX) return false;
+    bucket.count += 1;
+    return true;
+  }
+  _troopDiedBuckets.set(key, { count: 1, resetAt: now + TROOP_DIED_RATE_WINDOW_MS });
+  if (_troopDiedBuckets.size > 1000) {
+    for (const [id, entry] of _troopDiedBuckets) {
+      if (!entry || entry.resetAt <= now) _troopDiedBuckets.delete(id);
+      if (_troopDiedBuckets.size <= 800) break;
+    }
+  }
+  return true;
+}
+
+router.post('/troop-died', auth, (req, res) => {
+  if (!_allowTroopDied(req.player.id)) return res.status(429).json({ error: 'Too fast' });
 
   const { troop_name } = req.body;
   if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop' });
