@@ -178,7 +178,7 @@ from `.claude/docs/coding-standards.md`.
 | D10 | Marketplace location | Base only. |
 | D11 | Marketplace payment tokens | ETH, USDC, CoP |
 | D12 | Royalty | EIP-2981, 2.5% to treasury `0xC024884ad9C5540996492Cc2DD080964941A3094`. **No separate platform fee.** |
-| D13 | Global supply cap | 500 — unchanged. Bridge mints do NOT count against cap (they're 1-to-1 swaps, not new supply). |
+| D13 | Global supply cap | 333. Bridge mints do NOT count against cap (they're 1-to-1 swaps, not new supply). |
 | D14 | Existing 50 NFTs default level | L1 on system launch. No user action required. |
 | D15 | Metadata for upgraded NFTs | Server-resolved per-request — reads chain `level(id)` then returns level-specific JSON. |
 | D16 | Aptos rollout | Launches with V3 (Phase 5 runs in parallel with EVM phases, ships together). |
@@ -221,7 +221,7 @@ The V3 system is **DONE** (Phase 1) when ALL of the following are true on mainne
 - [ ] All 50 pre-existing NFTs (43 Base, 7 Solana) show as **L1** in player UI without re-minting.
 - [ ] A pre-existing NFT can be upgraded normally (same code path as new ones).
 - [ ] Marketplace on Base allows listing, buying, and cancelling; royalty 2.5% goes to treasury on every sale.
-- [ ] Server NEVER signs a quote/receipt that would exceed the 500 global cap (bridge mints are exempt).
+- [ ] Server NEVER signs a quote/receipt that would exceed the 333 global cap (bridge mints are exempt).
 - [ ] No private key (mnemonic, signer key, API key) appears in any tracked file.
 - [ ] Documentation in `docs/architecture/` describes the system for new contributors.
 
@@ -244,7 +244,7 @@ config only) unless marked **on-chain**.
 | Upgrade price USD | $8.9 | Server env `NFT_UPGRADE_USD_PRICE_E6` + on-chain `setUpgradePrice()` |
 | L2 win threshold | 1 000 | Server env `NFT_L2_WIN_THRESHOLD` (server is authoritative gate) |
 | L3 win threshold | 10 000 | Server env `NFT_L3_WIN_THRESHOLD` |
-| Global cap | 500 | Server env `NFT_GLOBAL_SUPPLY_CAP` |
+| Global cap | 333 | Server env `NFT_GLOBAL_SUPPLY_CAP` |
 | Marketplace royalty | 2.5% | On-chain `setRoyalty(uint256 bps)` on Base V3 |
 | Royalty receiver | treasury | On-chain `setRoyaltyReceiver(address)` |
 | Bridge receipt TTL | 24 h | Server env `NFT_BRIDGE_DEADLINE_SECONDS` |

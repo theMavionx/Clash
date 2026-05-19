@@ -75,17 +75,18 @@ function getPlayerByWalletAnyForm(wallet, excludeId = null) {
 // Keep on-chain token URIs stable while letting us replace image/metadata
 // content from the server via env/deploy changes.
 const NFT_MAX_SUPPLY = Number(process.env.NFT_MAX_SUPPLY || process.env.NFT_BASE_MAX_SUPPLY || 250);
+const NFT_DEFAULT_GLOBAL_SUPPLY_CAP = 333;
 // Marketplace-hub bridge mints can create Base token IDs above Base's
 // original sale cap. Keep metadata available up to the global cap by
 // default; override if a future migration needs a wider tokenId window.
 const NFT_METADATA_MAX_TOKEN_ID = Number(
   process.env.NFT_METADATA_MAX_TOKEN_ID
   || process.env.NFT_GLOBAL_SUPPLY_CAP
-  || Math.max(NFT_MAX_SUPPLY, 500)
+  || Math.max(NFT_MAX_SUPPLY, NFT_DEFAULT_GLOBAL_SUPPLY_CAP)
 );
 const NFT_METADATA_SUPPLY_LABEL = Number(
   process.env.NFT_GLOBAL_SUPPLY_CAP
-  || NFT_METADATA_MAX_TOKEN_ID
+  || NFT_DEFAULT_GLOBAL_SUPPLY_CAP
 );
 const NFT_IMAGE_PATH = path.join(__dirname, 'public', 'nft', 'demonking.png');
 const NFT_LEVEL_IMAGE_PATHS = {
@@ -1571,14 +1572,14 @@ function fallbackNftSupply(source = 'fallback') {
   };
 }
 
-// Global cross-chain NFT supply cap. The cap of 500 is enforced by the
+// Global cross-chain NFT supply cap. The cap of 333 is enforced by the
 // server (single source of truth) across Base + Solana + Arbitrum + Monad
 // + Aptos. EVM contracts still use their per-chain `maxSupply` for primary
 // sale/admin minting, while bridgeMint is allowed to exceed a local cap so
 // Base can serve as the marketplace hub. We sign initial mint quotes only
 // while the SUM of live NFTs across chains is under this global limit.
 // Set via env so we can lift it later without a code change.
-const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || 500);
+const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || NFT_DEFAULT_GLOBAL_SUPPLY_CAP);
 
 // Light-weight in-memory cache for the most recent per-chain supply read
 // so a flood of quote requests doesn't fan out RPC calls to every chain.
@@ -2015,7 +2016,7 @@ router.get('/nft/mint/config', async (req, res) => {
   const solanaSaleActive = process.env.NFT_SOLANA_SALE_ACTIVE
     ? process.env.NFT_SOLANA_SALE_ACTIVE !== '0'
     : !!solanaDeployment.saleActive;
-  // Global supply state across all chains — UI displays this as "X / 500"
+  // Global supply state across all chains — UI displays this as "X / cap"
   // and disables mint buttons when remaining=0 even if a single chain has
   // headroom. Falls back gracefully on RPC errors.
   let globalSupply = { totalMinted: 0, cap: NFT_GLOBAL_SUPPLY_CAP, remaining: NFT_GLOBAL_SUPPLY_CAP, perChain: {} };
@@ -2073,7 +2074,7 @@ router.post('/nft/base/quote', async (req, res) => {
     // Global cross-chain supply gate — must pass before we sign anything.
     // The contract has its own per-chain cap (250 here) but we additionally
     // refuse to sign when total minted across Base/Solana/Arbitrum/Monad/
-    // Aptos has hit NFT_GLOBAL_SUPPLY_CAP (default 500). Stops the case
+    // Aptos has hit NFT_GLOBAL_SUPPLY_CAP (default 333). Stops the case
     // where each chain individually has headroom but the global drop is
     // already exhausted.
     await assertGlobalSupplyAvailable(Number(quantity));

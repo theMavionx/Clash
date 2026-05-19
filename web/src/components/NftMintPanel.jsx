@@ -282,7 +282,7 @@ function getSupplyInfo(config, chain) {
 function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   // Server-side global: authoritative — sums minted across all 5 chains.
   if (globalSupply && Number.isFinite(globalSupply.cap)) {
-    const maxSupply = Number(globalSupply.cap) || 500;
+    const maxSupply = Number(globalSupply.cap) || 333;
     const totalMinted = countOrNull(globalSupply.totalMinted);
     const remaining = countOrNull(globalSupply.remaining)
       ?? (totalMinted == null ? null : Math.max(0, maxSupply - totalMinted));
@@ -307,7 +307,7 @@ function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   return {
     title: 'Total Genesis',
     totalMinted,
-    maxSupply: maxSupply || 500,
+    maxSupply: maxSupply || 333,
     remaining,
     progress,
     loaded: baseSupply?.loaded || solanaSupply?.loaded,

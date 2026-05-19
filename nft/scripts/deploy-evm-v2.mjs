@@ -90,9 +90,9 @@ console.log(`Implementation: ${implementation}`);
 // Each chain gets its own per-chain max supply (the contract enforces this
 // as a hard ceiling). Server's NFT_GLOBAL_SUPPLY_CAP is the cross-chain
 // gate — set the per-chain cap loose enough that one chain can absorb
-// most of the demand without hitting the floor. Default 500 = same as
+// most of the demand without hitting the floor. Default 333 = same as
 // the global cap, i.e. the server is the binding constraint.
-const initialMaxSupply = BigInt(env[`NFT_${chainKey.toUpperCase()}_MAX_SUPPLY`] || env.NFT_GLOBAL_SUPPLY_CAP || 500);
+const initialMaxSupply = BigInt(env[`NFT_${chainKey.toUpperCase()}_MAX_SUPPLY`] || env.NFT_GLOBAL_SUPPLY_CAP || 333);
 const initialMaxPerTx = BigInt(env[`NFT_${chainKey.toUpperCase()}_MAX_PER_TX`] || env.NFT_BASE_MAX_PER_TX || 10);
 const initialPriceWei = BigInt(env[`NFT_${chainKey.toUpperCase()}_PRICE_WEI`] || env.NFT_PRICE_WEI || '0');
 

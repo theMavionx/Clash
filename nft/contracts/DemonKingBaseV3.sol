@@ -355,7 +355,7 @@ contract DemonKingBaseV3 is
 
     // Live token count on THIS chain: lifetime mints minus tokens removed
     // via bridgeBurn. The server sums currentSupply() across all chains
-    // for the displayed "X / 500 minted" so a bridged NFT contributes +1
+    // for the displayed "X / global cap minted" so a bridged NFT contributes +1
     // on dest and -1 on source, leaving the global count stable.
     function currentSupply() external view returns (uint256) {
         return totalMinted - totalBurned;

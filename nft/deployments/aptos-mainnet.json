@@ -35,5 +35,8 @@
   "bridgeMintCapExemptUpgradeTxHash": "0x9fe7f39b0a65a1c9df3dd9cbde4017ebe5790b9e6b676eb88dd90fe1bbcebb24",
   "bridgeMintCapExemptUpgradeGasUsed": 1043,
   "bridgeMintCapExemptUpgradeAt": "2026-05-16T19:58:31.931Z",
-  "aptosPaymentMint": true
+  "aptosPaymentMint": true,
+  "currentMaxSupply": "333",
+  "currentMaxSupplyTxHash": "0xe3413b3289f19592f74f027e8a260266ac81e188dfd027fbca7d70f86865687b",
+  "currentMaxSupplyUpdatedAt": "2026-05-19T09:49:27.171Z"
 }

@@ -246,7 +246,7 @@ receipt.
 |------|---------|-------|
 | Quote signer pubkey | server pubkey | `admin_set_signer` |
 | Upgrade USDC amount | $8.9 | Server env (same as other chains) |
-| Max supply | 500 | Hardcoded in Config at init |
+| Max supply | 333 | Stored in Config and adjustable by admin via `set_max_supply` |
 | Sale active | true at init | `admin_pause(false)` |
 
 ---

@@ -52,7 +52,7 @@ These must hold under all conditions. Each is checked in tests.
 | S2 | **No upgrade without payment + win threshold.** Server signs only after both checks; contract verifies signature. | Integration test (fuzzed) |
 | S3 | **No bridge mint without source burn.** Each receiptId is bound to a real, observed, finalized burn event. | Audit + replay tests |
 | S4 | **No replay.** Each nonce / receiptId is consumed exactly once on-chain. | Replay attack tests |
-| S5 | **No supply > 500.** Global cap is checked by server before signing any mint quote. Bridge mints exempt. | Stress test |
+| S5 | **No supply > 333.** Global cap is checked by server before signing any mint quote. Bridge mints exempt. | Stress test |
 | S6 | **No expired signatures accepted.** All quotes/receipts include `deadline`; contract checks `block.timestamp <= deadline`. | Replay tests |
 | S7 | **No private-key leak.** Mnemonic, signer keys, admin key never logged, never written to tracked files. | Pre-commit hook + secrets scan |
 | S8 | **No owner privilege escalation.** Proxy owner can upgrade impl but cannot mint/burn without normal flow. | Audit |

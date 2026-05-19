@@ -51,5 +51,8 @@
   "bridgeFeeUpdatedAt": "2026-05-16T16:13:37.584Z",
   "baseTokenUri": "https://clashofperps.fun/api/nft/monad/",
   "baseUriTxHash": "0x2d3b171a1fbbb2e32037119243ee4998eb6859cac034b2e44dae9d2d19f7220e",
-  "baseUriUpdatedAt": "2026-05-16T19:44:55.026Z"
+  "baseUriUpdatedAt": "2026-05-16T19:44:55.026Z",
+  "currentMaxSupply": "333",
+  "currentMaxSupplyTxHash": "0xb653590b9cad0cc74bc0bf60f30cd972457014b523c37acb30c462a3ff3a6d1b",
+  "currentMaxSupplyUpdatedAt": "2026-05-19T09:45:25.700Z"
 }

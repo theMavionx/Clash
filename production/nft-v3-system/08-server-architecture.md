@@ -16,7 +16,7 @@ The server is the single trusted authority for:
 - Issuing **bridge receipts** — only after observing finalized burn events.
 - Tracking **battle wins per NFT** keyed by `(chain, tokenId)` — **Phase B only**.
 - Resolving **token metadata** with the right level-specific image.
-- Enforcing the **global supply cap** of 500.
+- Enforcing the **global supply cap** of 333.
 
 This document specifies database tables, endpoints, key handling, and the
 state machines.

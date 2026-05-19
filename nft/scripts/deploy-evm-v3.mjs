@@ -353,5 +353,5 @@ console.log(`\n✓ Wrote ${spec.v3DeployFile}.`);
 
 console.log('\nNext:');
 console.log(`  - Update server's config to read ${spec.v3DeployFile} (replaces ${spec.v2DeployFile} as canonical).`);
-console.log(`  - Bump maxSupply to 500 with setMaxSupply if you want per-chain cap = global cap.`);
+console.log(`  - Bump maxSupply to 333 with setMaxSupply if you want per-chain cap = global cap.`);
 console.log(`  - If CoP is bridged to ${spec.chain.name} later, call setCopToken to enable the CoP upgrade path.`);
