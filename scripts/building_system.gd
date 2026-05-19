@@ -75,13 +75,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf"],
+		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 6000, 10000],
+		"hp_levels": [3500, 6000, 10000, 17000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 12000, "wood": 55000, "ore": 50000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -113,11 +113,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb", "res://Model/Archer_towers/4.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800],
 		"cost": {"gold": 400, "wood": 1500},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -132,9 +132,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.4, 0.4, 0.45, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Tombstone/GLB format/1.glb",
-		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb"],
+		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb"],
 		"model_scale": 0.3,
-		"hp_levels": [1000, 1500, 2000],
+		"model_scales": [0.3, 0.3, 0.3, 0.1],
+		"hp_levels": [1000, 1500, 2000, 2700],
 		"cost": {"gold": 200, "ore": 800},
 	},
 	"flag": {
@@ -220,22 +221,23 @@ const TH_UNLOCK: Dictionary = {
 	"turret": 3,
 }
 
-# Max count per building per TH level: [th1, th2, th3]
+# Max count per building per TH level: [th1, th2, th3, th4]
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3],
-	"sawmill": [1, 2, 3],
-	"barn": [1, 1, 2],
-	"port": [1, 2, 5],
-	"archer_tower": [1, 2, 3],
-	"tombstone": [0, 1, 3],
-	"turret": [0, 0, 3],
-	"storage": [0, 1, 2],
-	"town_hall": [1, 1, 1],
+	"mine": [1, 2, 3, 4],
+	"sawmill": [1, 2, 3, 4],
+	"barn": [1, 1, 2, 3],
+	"port": [1, 2, 5, 6],
+	"archer_tower": [1, 2, 3, 4],
+	"tombstone": [0, 1, 3, 4],
+	"turret": [0, 0, 3, 4],
+	"storage": [0, 1, 2, 3],
+	"town_hall": [1, 1, 1, 1],
 }
 
 const TH_UPGRADE_REQUIRES: Dictionary = {
 	1: ["mine", "sawmill", "barn", "port"],
 	2: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower"],
+	3: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret"],
 }
 
 func _get_th_level() -> int:
@@ -1711,7 +1713,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				scene_res = load(scene_path)
 			if scene_res:
 				var model = scene_res.instantiate()
-				var s = def.get("model_scale", 0.2)
+				var s = _get_model_scale(def, level)
 				model.scale = Vector3(s, s, s)
 				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 				var offsets = def.get("model_offsets", [])
@@ -2078,7 +2080,7 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
 
 	var model = scene_res.instantiate()
-	var s = def.get("model_scale", 0.2)
+	var s = _get_model_scale(def, level)
 	model.scale = Vector3(s, s, s)
 	model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 	var offsets = def.get("model_offsets", [])
@@ -3024,7 +3026,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				model.add_child(new_base)
 			# Add the new model
 			var new_model = scene_res.instantiate()
-			var s = def.get("model_scale", 0.2)
+			var s = _get_model_scale(def, b.level)
 			new_model.scale = Vector3(s, s, s)
 			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			var offsets = def.get("model_offsets", [])
@@ -3109,6 +3111,15 @@ func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
 	for res_name in cost:
 		result[res_name] = cost[res_name] * next_level
 	return result
+
+
+## Returns scale for [param level]. Per-level override via "model_scales" array,
+## otherwise falls back to scalar "model_scale".
+func _get_model_scale(def: Dictionary, level: int = 1) -> float:
+	var scales: Array = def.get("model_scales", [])
+	if level >= 1 and scales.size() >= level:
+		return float(scales[level - 1])
+	return float(def.get("model_scale", 0.2))
 
 
 func _auto_center_model(model: Node3D) -> void:
@@ -3532,7 +3543,7 @@ func _update_building_hp_bars() -> void:
 			continue
 		b.hp_bar.visible = true
 		var def = building_defs.get(b.id, {})
-		var model_scale = def.get("model_scale", 0.2)
+		var model_scale = _get_model_scale(def, int(b.get("level", 1)))
 		var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 		b.hp_bar.global_position = b.node.global_position + Vector3(0, bar_height, 0)
 		if update_billboard and cam:
