@@ -94,6 +94,14 @@ export function risexErrorMessage(error, fallback = 'RISEx request failed') {
   return msg || fallback;
 }
 
+function firstFiniteNumber(values, fallback = 0) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return fallback;
+}
+
 export function normalizeRisexMarkets(rows = []) {
   return (Array.isArray(rows) ? rows : [])
     .map((m) => {
@@ -108,9 +116,39 @@ export function normalizeRisexMarkets(rows = []) {
         || m?.underlying
         || m?.config?.name,
       );
-      const mark = Number(m?.mark_price ?? m?.mark ?? m?.oracle_price ?? 0);
-      const stepSize = Number(m?.config?.step_size ?? m?.step_size ?? 0.000001);
-      const stepPrice = Number(m?.config?.step_price ?? m?.step_price ?? 0.1);
+      const mark = firstFiniteNumber([
+        m?.mark_price,
+        m?.mark,
+        m?.mid_price,
+        m?.mid,
+        m?.oracle_price,
+        m?.last_price,
+        m?.index_price,
+      ], 0);
+      const stepSize = firstFiniteNumber([
+        m?.config?.step_size,
+        m?._risex?.stepSize,
+        m?.step_size,
+        m?.lot_size,
+        m?.config?.lot_size,
+        m?.config?.size_increment,
+        m?.size_increment,
+      ], 0.000001);
+      const stepPrice = firstFiniteNumber([
+        m?.config?.step_price,
+        m?._risex?.stepPrice,
+        m?.step_price,
+        m?.tick_size,
+        m?.config?.tick_size,
+        m?.config?.price_increment,
+        m?.price_increment,
+      ], 0.1);
+      const minOrderSize = firstFiniteNumber([
+        m?.config?.min_order_size,
+        m?.min_order_size,
+        m?.min_size,
+        stepSize,
+      ], stepSize);
       return {
         symbol,
         base: symbol,
@@ -121,7 +159,7 @@ export function normalizeRisexMarkets(rows = []) {
         pair_index: marketId,
         lot_size: String(stepSize || 0.000001),
         tick_size: String(stepPrice || 0.1),
-        min_order_size: String(m?.config?.min_order_size ?? m?.min_order_size ?? stepSize ?? 0.000001),
+        min_order_size: String(minOrderSize || stepSize || 0.000001),
         max_leverage: Number(m?.config?.max_leverage ?? m?.max_leverage ?? 25),
         mark,
         mid: Number(m?.mid_price ?? m?.mid ?? mark),
