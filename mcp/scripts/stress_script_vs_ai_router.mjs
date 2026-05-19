@@ -84,7 +84,7 @@ const cases = [
     message: 'закрий позу',
     expected_tool: 'decibel_close_position',
     history: [
-      { role: 'assistant', text: 'Done: SOL long opened with 100% USDC, 4x leverage, $20 notional.' },
+      { role: 'assistant', text: 'SOL long opened with 100% USDC, 4x leverage, $20 notional.' },
     ],
   },
   {

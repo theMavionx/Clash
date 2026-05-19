@@ -648,6 +648,8 @@ const TRANSIENT_AGENT_FAILURE_PATTERNS = [
   /account is clean/i,
   /ready for new trades/i,
   /active orders on Decibel/i,
+  /^\s*(?:Done|Result|Next):\s/i,
+  /\|\s*Agent:\s*(?:Done|Result|Next):\s/i,
 ];
 
 function isTransientAgentFailureText(value) {

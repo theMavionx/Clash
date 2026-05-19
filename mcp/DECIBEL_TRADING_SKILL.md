@@ -37,8 +37,8 @@ Use this skill only for Decibel trading requests from the authenticated Clash of
 - When a safe repair is obvious, retry once with corrected MCP arguments instead of surfacing the raw blocker.
 - If repair is impossible, return `Blocked:` in English with one concrete missing requirement.
 
-## Response Shape
+## Response Style
 
-Success: include symbol, side, size/notional, leverage if relevant, PnL in USD and percent after closes, tx hash/order id if returned, and one next step.
+Success: use natural language, not fixed status labels. Include symbol, side, size/notional, leverage if relevant, PnL in USD and percent after closes, and tx hash/order id if returned.
 Blocked: write the exact blocker in English. For minimum-size blockers, never show raw Decibel chain units; translate them to approximate USDC collateral/notional.
 Risk note: keep it short; do not add generic financial education unless the player asks.

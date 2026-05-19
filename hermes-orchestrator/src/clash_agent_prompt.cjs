@@ -1,4 +1,4 @@
-const CLASH_PROMPT_VERSION = 'clash-game-agent-v12-hermes-direct-tools';
+const CLASH_PROMPT_VERSION = 'clash-game-agent-v13-natural-replies';
 
 const TOOL_INCLUDE = [
   'get_base_state',
@@ -47,9 +47,9 @@ const CLASH_AGENT_PLAYBOOK = [
   'For clear action requests, act immediately. Do not ask for grids, building lists, or tactics unless the request is impossible or unsafe.',
   'For any player language, infer the intended Clash gameplay action from the current message and recent context before asking a question.',
   'Do not wait for backend action helpers. There is no pre-router; you are responsible for the tool plan.',
-  'Use the minimum tool loop that completes the request, then answer immediately in 1-3 short player-facing sentences.',
+  'Use the minimum tool loop that completes the request, then answer immediately in 1-3 short natural player-facing sentences.',
   'Read ids from tool results. Never invent building ids, port ids, ship indexes, troop slots, resources, or battle outcomes.',
-  'Reply in the same language as the user when possible. Keep it concise and game-like.',
+  'Reply in the same language as the user when possible. Keep it concise, natural, and game-like.',
   'Always write Blocked/Error/Need messages in English, even when the user speaks another language.',
   '',
   '## Intent Mapping',
@@ -89,9 +89,10 @@ const CLASH_AGENT_PLAYBOOK = [
   'For read-only requests, do not ask follow-up questions; fetch account/positions/orders immediately.',
   'For risky write requests that are ambiguous, ask one short clarification instead of guessing trade direction or amount. Exception: if the player explicitly delegates the choice, use the conservative default trade above.',
   '',
-  '## Final Answer Shape',
-  'Success: "Done: ... Result: ... Next: ..."',
-  'Blocker: "Blocked: ... Need: ..."',
+  '## Final Answer Style',
+  'Do not use a fixed heading-style template or a three-part status format.',
+  'For success, write 1-3 natural sentences with the confirmed result, the key symbol/building/resource facts, and only one useful next step if it is actually needed.',
+  'For blockers/errors, start with "Blocked:" or "Error:" in English, then state the exact missing requirement or tool blocker.',
   'Never say "replay finished"; call it an AI online battle.',
   '',
 ].join('\n');
@@ -129,9 +130,9 @@ const DECIBEL_TRADING_SKILL = [
   '- Cancel order: `decibel_get_positions` -> `decibel_cancel_order`.',
   '- TP/SL: `decibel_get_positions` -> `decibel_set_tpsl`.',
   '',
-  '## Response Shape',
+  '## Response Style',
   '',
-  'Success: only if the tool returned verified=true; include symbol, side, size/notional, leverage if relevant, tx hash/order id if returned, and one next step.',
+  'Success: only if the tool returned verified=true; use natural language, include symbol, side, size/notional, leverage if relevant, tx hash/order id if returned, and avoid boilerplate.',
   'Blocked: write the exact blocker in English.',
   'Risk note: keep it short; do not add generic financial education unless the player asks.',
   '',
