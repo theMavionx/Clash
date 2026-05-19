@@ -19,9 +19,9 @@ extends BaseTroop
 
 
 const LEVEL_STATS = {
-	1: {"hp": 570,  "damage": 42, "atk_speed": 1.538},
-	2: {"hp": 750,  "damage": 55, "atk_speed": 1.429},
-	3: {"hp": 990,  "damage": 72, "atk_speed": 1.333},
+	1: {"hp": 560,  "damage": 78,  "atk_speed": 2.200},
+	2: {"hp": 735,  "damage": 102, "atk_speed": 2.050},
+	3: {"hp": 960,  "damage": 134, "atk_speed": 1.900},
 }
 
 const DEMON_ANIM_FILES: Array = [
@@ -61,14 +61,74 @@ const ANIM_NAME_MAP: Dictionary = {
 
 const DEMON_ALBEDO: Texture2D = preload("res://Model/Characters/Model/DemonKing_albedo.png")
 const DEMON_EMISSION: Texture2D = preload("res://Model/Characters/Model/DemonKing_emission.png")
+const DEMON_MASK_ALBEDO: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask_albedo.png")
+const DEMON_MASK_01: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask01.png")
+const DEMON_MASK_02: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask02.png")
+const DEMON_MASK_03: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask03.png")
+const DEMON_MASK_TINT_SHADER: Shader = preload("res://shaders/demon_mask_tint.gdshader")
+
+# ── Tint palettes (9 colors per variant, ordered to match shader uniforms
+#    color01 .. color09). Pink is the project default; Orange/Blue/Purple are
+#    the three stock variants from the RPGMonsterBundlePolyart pack (mat files
+#    PAMaskTint01.mat / 02.mat / 03.mat respectively). Switch variants by
+#    pointing ACTIVE_PALETTE at a different constant.
+const TINT_PINK: Array[Color] = [
+	Color(0.91, 0.16, 0.55),  # 01 hot pink primary
+	Color(0.97, 0.13, 0.45),  # 02 bright magenta
+	Color(0.71, 0.06, 0.40),  # 03 deep magenta
+	Color(0.85, 0.28, 0.62),  # 04 light pink
+	Color(0.88, 0.21, 0.50),  # 05 medium
+	Color(0.78, 0.28, 0.55),  # 06 muted rose
+	Color(1.00, 0.17, 0.60),  # 07 vibrant magenta
+	Color(0.36, 0.36, 0.36),  # 08 neutral gray (skin/teeth)
+	Color(0.95, 0.70, 0.85),  # 09 pale pink accent
+]
+
+const TINT_ORANGE: Array[Color] = [
+	Color(0.99, 0.31, 0.00),
+	Color(0.86, 0.08, 0.00),
+	Color(0.85, 0.27, 0.00),
+	Color(1.00, 0.49, 0.00),
+	Color(0.57, 0.07, 0.00),
+	Color(1.00, 0.30, 0.00),
+	Color(1.00, 0.43, 0.00),
+	Color(0.36, 0.36, 0.36),
+	Color(0.89, 0.65, 0.42),
+]
+
+const TINT_BLUE: Array[Color] = [
+	Color(0.00, 0.34, 0.90),
+	Color(0.10, 0.32, 0.94),
+	Color(0.21, 0.32, 0.88),
+	Color(0.31, 0.45, 0.83),
+	Color(0.14, 0.32, 0.62),
+	Color(0.35, 0.33, 0.88),
+	Color(0.00, 0.21, 1.00),
+	Color(0.36, 0.36, 0.36),
+	Color(0.38, 0.58, 0.78),
+]
+
+const TINT_PURPLE: Array[Color] = [
+	Color(0.37, 0.16, 0.91),
+	Color(0.54, 0.13, 0.97),
+	Color(0.25, 0.06, 0.71),
+	Color(0.62, 0.28, 0.85),
+	Color(0.40, 0.21, 0.88),
+	Color(0.44, 0.28, 0.78),
+	Color(0.60, 0.17, 1.00),
+	Color(0.36, 0.36, 0.36),
+	Color(0.52, 0.47, 0.75),
+]
+
+const ACTIVE_PALETTE: Array[Color] = TINT_PINK  # default skin — change to TINT_ORANGE/BLUE/PURPLE to swap
 
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
-	move_speed = 0.42        # 16% slower than Knight — heavy unit feel
-	attack_range = 0.30      # 25% greater reach — physically larger
+	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
+	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed
@@ -186,18 +246,30 @@ func _use_embedded_anim_player_and_merge() -> void:
 			run_dup.loop_mode = Animation.LOOP_LINEAR
 			lib.add_animation("Running_A", run_dup)
 
-	print("[DemonKing] lib anims: ", anim_player.get_animation_list())
+	# Pre-cache the attack anim length NOW (lib is finalised). Without this,
+	# the FIRST swing falls through to the atk_speed*0.35 fallback in
+	# _do_attack and lands at a different time than every subsequent swing.
+	# Cache once → consistent damage timing from swing #1 onward.
+	if anim_player.has_animation(attack_anim):
+		var attack_anim_res: Animation = anim_player.get_animation(attack_anim)
+		if attack_anim_res:
+			_attack_anim_length = attack_anim_res.length
+
+	print("[DemonKing] lib anims: ", anim_player.get_animation_list(), " | attack_anim_length=", _attack_anim_length)
 
 
-## Decide loop mode by clip name. Cyclic motion loops linearly; everything
-## else (single-trigger combat anims) is one-shot so it doesn't replay
-## continuously while waiting for the next attack_timer cycle.
+## Decide loop mode by clip name. Cyclic motion AND post-battle cheering loop
+## linearly; single-trigger combat anims are one-shot so they don't replay
+## while we wait for the next attack_timer cycle.
 static func _loop_mode_for(clip_name: String) -> int:
 	var lower: String = clip_name.to_lower()
 	if lower.findn("run") != -1 \
 		or lower.findn("walk") != -1 \
 		or lower.findn("idle") != -1 \
-		or lower.findn("sense") != -1:
+		or lower.findn("sense") != -1 \
+		or lower.findn("victory") != -1 \
+		or lower.findn("cheer") != -1 \
+		or lower.findn("taunt") != -1:
 		return Animation.LOOP_LINEAR
 	return Animation.LOOP_NONE
 
@@ -239,17 +311,20 @@ func _find_first_anim_player(node: Node, skip: AnimationPlayer) -> AnimationPlay
 	return null
 
 
-## DemonKing FBX has no embedded textures (Unity stripped to .mat); apply the
-## Polyart Albedo + Emission as a StandardMaterial3D override on every
-## MeshInstance3D. Emission glows where the source PNG has non-black pixels
-## (eyes, fire details).
+## DemonKing FBX has no embedded textures (Unity stripped to .mat). Apply
+## the Polyart MaskTint shader: 1 base mask-tint albedo + 3 region masks
+## + 9 colors from ACTIVE_PALETTE. Same shader, swappable palette — choose
+## variant by re-pointing ACTIVE_PALETTE at the top of this file.
 func _apply_demon_albedo(root: Node) -> void:
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = DEMON_ALBEDO
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST  # polyart look
-	mat.emission_enabled = true
-	mat.emission_texture = DEMON_EMISSION
-	mat.emission_energy_multiplier = 1.5
+	var mat := ShaderMaterial.new()
+	mat.shader = DEMON_MASK_TINT_SHADER
+	mat.set_shader_parameter("albedo", DEMON_MASK_ALBEDO)
+	mat.set_shader_parameter("emission_tex", DEMON_EMISSION)
+	mat.set_shader_parameter("mask01", DEMON_MASK_01)
+	mat.set_shader_parameter("mask02", DEMON_MASK_02)
+	mat.set_shader_parameter("mask03", DEMON_MASK_03)
+	for i in 9:
+		mat.set_shader_parameter("color%02d" % (i + 1), ACTIVE_PALETTE[i])
 	_assign_material_recursive(root, mat)
 
 
@@ -263,8 +338,17 @@ static func _assign_material_recursive(node: Node, mat: Material) -> void:
 		_assign_material_recursive(child, mat)
 
 
-## Same swing/hit-frame contract as Knight: damage lands when attack_timer
-## crosses hit_anim_threshold * atk_speed. Fists, not weapons — no sword sync.
+## Damage timed to HALF of the (trimmed) attack animation duration — the
+## visual peak of the swing. The animation is pre-trimmed to 70% of source
+## length in _use_embedded_anim_player_and_merge (Unity's FBX export leaves
+## a jittery "return-to-rest" tail), and its length is pre-cached so
+## (length / 2) lands cleanly on the impact frame from the FIRST swing
+## onward — without the cache, swing #1 would fall through to a different
+## fallback timing than swing #2+.
+var _hit_this_swing: bool = false
+var _attack_anim_length: float = -1.0
+
+
 func _do_attack(delta: float) -> void:
 	if _resume_chase_if_target_far():
 		_hit_this_swing = false
@@ -279,9 +363,7 @@ func _do_attack(delta: float) -> void:
 			anim_player.stop()
 			anim_player.play(attack_anim)
 
-	if not _hit_this_swing and attack_timer >= atk_speed * 0.4:
+	var hit_at: float = _attack_anim_length * 0.5 if _attack_anim_length > 0.0 else atk_speed * 0.35
+	if not _hit_this_swing and attack_timer >= hit_at:
 		_hit_this_swing = true
 		_deal_target_damage()
-
-
-var _hit_this_swing: bool = false

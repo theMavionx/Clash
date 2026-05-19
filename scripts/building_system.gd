@@ -559,11 +559,11 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
-		"buy_cost": 250,               # vs 100 for regular troops; ~2x slot + premium
+		"buy_cost": 500,               # 5x Knight — reflects 2-slot + premium tier
 		"costs": {
-			1: {"gold": 250, "ore": 150},
-			2: {"gold": 500, "ore": 300},
-			3: {"gold": 1000, "ore": 600},
+			1: {"gold": 500,  "ore": 0},   # spawn cost
+			2: {"gold": 1200, "ore": 5},   # ore introduced at L2 — rare resource gate
+			3: {"gold": 2500, "ore": 15},
 		}
 	},
 }
