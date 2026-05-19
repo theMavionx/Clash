@@ -44,9 +44,10 @@ The Clash backend reads:
 ```env
 CLASH_HERMES_ORCHESTRATOR_URL=http://127.0.0.1:8600
 CLASH_HERMES_ORCHESTRATOR_TOKEN=horg_...
-CLASH_HERMES_MODEL_CHAIN=openai/gpt-oss-120b:free,google/gemma-4-26b-a4b-it:nitro
-CLASH_HERMES_PRIMARY_MODEL=openai/gpt-oss-120b:free
-CLASH_HERMES_FALLBACK_MODEL=google/gemma-4-26b-a4b-it:nitro
+CLASH_HERMES_MODEL_CHAIN=openai/gpt-oss-120b,qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro
+CLASH_HERMES_PRIMARY_MODEL=openai/gpt-oss-120b
+CLASH_HERMES_FALLBACK_MODEL=qwen/qwen3-30b-a3b-instruct-2507:nitro
+CLASH_HERMES_PROVIDER_ORDER=cerebras
 CLASH_HERMES_PRIMARY_RETRIES=3
 CLASH_HERMES_FALLBACK_AFTER_RETRIES=3
 CLASH_HERMES_CHAT_TIMEOUT_MS=20000

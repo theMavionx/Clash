@@ -226,6 +226,7 @@ try {
       duration_ms   INTEGER,
       error         TEXT,
       input_json    TEXT,
+      output_json   TEXT,
       metadata_json TEXT,
       ip            TEXT,
       ua            TEXT,
@@ -236,6 +237,7 @@ try {
     CREATE INDEX IF NOT EXISTS idx_mcp_events_status_recent ON mcp_events(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_mcp_events_player_recent ON mcp_events(player_id, created_at DESC);
   `);
+  try { db.exec(`ALTER TABLE mcp_events ADD COLUMN output_json TEXT`); } catch {}
 } catch (e) { console.warn('[db] mcp_events migration:', e.message); }
 
 try {
@@ -877,8 +879,8 @@ const stmts = {
   `),
   insertMcpEvent: db.prepare(`
     INSERT INTO mcp_events
-      (player_id, ai_key_id, ai_key_prefix, tool, status, duration_ms, error, input_json, metadata_json, ip, ua)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (player_id, ai_key_id, ai_key_prefix, tool, status, duration_ms, error, input_json, output_json, metadata_json, ip, ua)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `),
   getHermesAgent: db.prepare(`
     SELECT *
@@ -1738,6 +1740,7 @@ function logMcpEvent(event = {}) {
       Number.isFinite(duration) ? Math.max(0, Math.round(duration)) : null,
       boundedJson(event.error, 2000),
       boundedJson(event.input ?? event.input_json, 8000),
+      boundedJson(event.output ?? event.output_json, 20000),
       boundedJson(event.metadata ?? event.metadata_json, 8000),
       event.ip || null,
       event.ua || event.userAgent || null

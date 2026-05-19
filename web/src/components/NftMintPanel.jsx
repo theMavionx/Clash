@@ -2533,8 +2533,8 @@ const styles = {
     boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
   },
   // Bridge entry button rendered inside the hero summary row — small pill
-  // with icon + "Bridge" label. Sits right under the "Genesis supply 500"
-  // chip so it's visually grouped with the NFT preview, not the modal chrome.
+  // with icon + "Bridge" label. Sits right under the dynamic supply chip
+  // so it's visually grouped with the NFT preview, not the modal chrome.
   heroBridgeBtn: {
     alignSelf: 'flex-start',
     display: 'inline-flex', alignItems: 'center', gap: 6,

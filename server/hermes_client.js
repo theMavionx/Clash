@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { CLASH_RUNTIME_INSTRUCTIONS } = require('../hermes-orchestrator/src/clash_agent_prompt.cjs');
 const { resolveModelChain } = require('../hermes-orchestrator/src/clash_agent_settings.cjs');
+const { execFileSync } = require('node:child_process');
 
 const DEFAULT_URL = 'http://127.0.0.1:8600';
 const ORCHESTRATOR_URL = String(process.env.CLASH_HERMES_ORCHESTRATOR_URL || DEFAULT_URL).replace(/\/+$/, '');
@@ -10,6 +11,7 @@ const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODEL = MODEL_CHAIN[1] || '';
 const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 300_000);
 const DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
+let cachedWslOrchestratorUrl = '';
 
 function logHermesClient(event, payload = {}) {
   if (!DETAILED_LOGS) return;
@@ -36,6 +38,45 @@ function assertConfigured() {
   }
 }
 
+function isLocalhostUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function getWslOrchestratorUrl() {
+  if (cachedWslOrchestratorUrl) return cachedWslOrchestratorUrl;
+  if (process.platform !== 'win32') return '';
+  if (!isLocalhostUrl(ORCHESTRATOR_URL)) return '';
+  try {
+    const out = execFileSync('wsl.exe', ['--', 'bash', '-lc', "hostname -I | awk '{print $1}'"], {
+      encoding: 'utf8',
+      timeout: 3000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const ip = out.split(/\s+/)[0];
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
+      const port = new URL(ORCHESTRATOR_URL).port || '8600';
+      cachedWslOrchestratorUrl = `http://${ip}:${port}`;
+    }
+  } catch {
+    cachedWslOrchestratorUrl = '';
+  }
+  return cachedWslOrchestratorUrl;
+}
+
+function orchestratorBaseUrls() {
+  const wslUrl = getWslOrchestratorUrl();
+  const urls = [];
+  if (wslUrl) urls.push(wslUrl);
+  urls.push(ORCHESTRATOR_URL);
+  return urls;
+}
+
 function sanitizePlayer(player) {
   return {
     id: String(player?.id || ''),
@@ -44,6 +85,38 @@ function sanitizePlayer(player) {
     level: player?.level || null,
     trophies: player?.trophies || null,
   };
+}
+
+const TRANSIENT_AI_CHAT_FAILURE_PATTERNS = [
+  /AI message limit reached/i,
+  /Open the AI shop/i,
+  /Hermes exited before becoming ready/i,
+  /Hermes orchestrator fetch failed/i,
+  /\bECONNREFUSED\b/i,
+  /\bGateway Timeout\b/i,
+  /\b504\b/i,
+  /AI request is still running/i,
+  /AI result is still pending/i,
+  /All routes failed/i,
+  /route did not start cleanly/i,
+  /Order executed at/i,
+  /execution price/i,
+  /Opened a .* leverage .* on/i,
+  /Closed .* position/i,
+  /reduced position/i,
+  /final PnL settlement/i,
+  /BTC long position/i,
+  /You have no open positions/i,
+  /Decibel positions/i,
+  /open orders/i,
+  /account is clean/i,
+  /ready for new trades/i,
+  /active orders on Decibel/i,
+];
+
+function isTransientAiChatFailureText(text) {
+  const value = String(text || '').trim();
+  return !!value && TRANSIENT_AI_CHAT_FAILURE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
 function normalizeHistory(history) {
@@ -55,6 +128,7 @@ function normalizeHistory(history) {
       return role && text ? { role, text } : null;
     })
     .filter(Boolean)
+    .filter((item) => item.role !== 'assistant' || !isTransientAiChatFailureText(item.text))
     .slice(-4);
 }
 
@@ -168,9 +242,299 @@ function battleIntentForTarget(targetPlayerName = '') {
   };
 }
 
+const DECIBEL_SYMBOL_RE = /\b(?:BTC|ETH|SOL|APT|SUI|XRP|DOGE|BNB|AVAX|LINK|ARB|OP|TIA|WIF|PEPE|MEGA|MOVE|HYPE|MON|USDC|USD)\b/i;
+const DECIBEL_TRADING_WORD_RE = new RegExp([
+  'decibel', 'perp', 'perps', 'futures',
+  'trade', 'trading', 'position', 'positions', 'order', 'orders',
+  'long', 'short', 'buy', 'sell', 'bid', 'ask',
+  'price', 'prices', 'market', 'markets', 'funding',
+  'leverage', 'margin', 'collateral', 'notional', 'size',
+  'balance', 'equity', 'pnl', 'profit', 'loss',
+  'tp', 'sl', 'take profit', 'stop loss', 'close', 'cancel',
+  '\\u043b\\u043e\\u043d\\u0433',        // long
+  '\\u0448\\u043e\\u0440\\u0442',        // short
+  '\\u043f\\u043e\\u0437\\u0438\\u0446', // position
+  '\\u0443\\u0433\\u043e\\u0434',        // trade/deal
+  '\\u043e\\u0440\\u0434\\u0435\\u0440', // order
+  '\\u043f\\u043b\\u0435\\u0447',        // leverage
+  '\\u0431\\u0430\\u043b\\u0430\\u043d\\u0441',
+  '\\u0437\\u0430\\u043a\\u0440',        // close
+  '\\u043e\\u0442\\u043a\\u0440',        // open
+  '\\u0432\\u0456\\u0434\\u043a\\u0440', // open uk
+  '\\u043a\\u0443\\u043f',               // buy
+  '\\u043f\\u0440\\u043e\\u0434',        // sell
+  '\\u4ed3', '\\u591a', '\\u7a7a', '\\u8ba2\\u5355', '\\u6760\\u6746', '\\u4ef7\\u683c', '\\u5e02\\u573a'
+].join('|'), 'iu');
+const DECIBEL_ACCOUNT_RE = /(balance|equity|account|wallet|overview|pnl|profit|loss|\u0431\u0430\u043b\u0430\u043d\u0441|\u0433\u0430\u043c\u0430\u043d|\u043a\u043e\u0448\u0435\u043b|\u76c8\u4e8f|\u8d26\u6237|\u5e73\u8861)/iu;
+const DECIBEL_POSITION_READ_RE = /(position|positions|open trades|my trades|\u043f\u043e\u0437\u0438\u0446|\u4ed3\u4f4d|\u6301\u4ed3)/iu;
+const DECIBEL_ORDER_READ_RE = /(?:\b(?:open|active|pending|my|list|show|check|what)\s+orders?\b|\borders?\s+(?:do\s+i\s+have|open|active|pending|list|show|check)\b|\u043e\u0440\u0434\u0435\u0440|\u8ba2\u5355)/iu;
+const DECIBEL_MARKET_RE = /(market|markets|price|prices|mark price|funding|\u0446\u0456\u043d|\u0446\u0435\u043d|\u043f\u0440\u0430\u0439\u0441|\u043a\u043e\u0442\u0438\u0440|\u0440\u0438\u043d\u043e\u043a|\u0440\u044b\u043d\u043e\u043a|\u4ef7\u683c|\u5e02\u573a|\u884c\u60c5)/iu;
+const DECIBEL_CLOSE_RE = /(close|reduce|\u0437\u0430\u043a\u0440|\u0437\u043c\u0435\u043d\u0448|\u0443\u043c\u0435\u043d\u044c\u0448|\u5e73\u4ed3|\u5173\u95ed|\u6e1b\u4ed3|\u51cf\u4ed3)/iu;
+const DECIBEL_CANCEL_RE = /(cancel|remove order|\u043e\u0442\u043c\u0435\u043d|\u0441\u043a\u0430\u0441\u0443|\u53d6\u6d88|\u64a4\u5355)/iu;
+const DECIBEL_TPSL_RE = /(take profit|stop loss|\btp\b|\bsl\b|\u0442\u0435\u0439\u043a|\u043f\u0440\u043e\u0444\u0456\u0442|\u043f\u0440\u043e\u0444\u0438\u0442|\u0441\u0442\u043e\u043f|\u043b\u043e\u0441|\u6b62\u76c8|\u6b62\u635f|\u6b62\u635f)/iu;
+const DECIBEL_LEVERAGE_RE = /(leverage|\d+\s*x\b|\u043f\u043b\u0435\u0447|\u043b\u0435\u0432\u0435\u0440|\u6760\u6746)/iu;
+const DECIBEL_PLACE_ORDER_RE = /(long|short|buy|sell|open\s+(?:a\s+)?(?:long|short|trade|position|order)|market order|limit order|\u043b\u043e\u043d\u0433|\u0448\u043e\u0440\u0442|\u043e\u0442\u043a\u0440|\u0432\u0456\u0434\u043a\u0440|\u043a\u0443\u043f|\u043f\u0440\u043e\u0434|\u5f00\u591a|\u5f00\u7a7a|\u4e70|\u5356|\u505a\u591a|\u505a\u7a7a)/iu;
+const DECIBEL_NON_TRADE_SHORT_LONG_RE = /\b(?:short|long)\s+(?:answer|reply|message|sentence|text|summary|response)\b/iu;
+const DECIBEL_AUTONOMOUS_ORDER_RE = /(?:\b(?:open|place|make|start)\s+(?:an?\s+)?(?:any|random|interesting|surprise|whatever|your\s+choice)?\s*(?:trade|position|order)\b|\b(?:surprise\s+me|choose\s+(?:yourself|for\s+me)|your\s+choice|pick\s+(?:for\s+me|one)|decide\s+yourself)\b|(?:\u0441\u0430\u043c|\u0441\u0430\u043c\u0430).*(?:\u0443\u0433\u043e\u0434|\u0441\u0434\u0435\u043b|\u0442\u0440\u0435\u0439\u0434|\u043f\u0440\u0438\u0434\u0443\u043c)|(?:\u0449\u043e\u0441\u044c|\u0447\u0442\u043e-\u0442\u043e|\u044f\u043a\u0443\u0441\w*|\u043a\u0430\u043a\u0443\u044e-\u0442\u043e).*(?:\u0443\u0433\u043e\u0434|\u0441\u0434\u0435\u043b|\u0442\u0440\u0435\u0439\u0434|\u0446\u0456\u043a\u0430\u0432|\u0438\u043d\u0442\u0435\u0440\u0435\u0441\u043d)|(?:\u043e\u0442\u043a\u0440|\u0432\u0456\u0434\u043a\u0440).*(?:\u043b\u044e\u0431|\u0431\u0443\u0434\u044c|\u044f\u043a\u0443\u0441\w*|\u0449\u043e\u0441\u044c|\u0447\u0442\u043e-\u0442\u043e).*(?:\u0443\u0433\u043e\u0434|\u0441\u0434\u0435\u043b|\u0442\u0440\u0435\u0439\u0434))/iu;
+const DECIBEL_DELEGATED_DECISION_RE = /(?:\u0442\u0432\u043e.{0,24}\u043b\u043e\u0433|\u0442\u0432\u043e.{0,24}\u0440\u043e\u0437\u0441\u0443\u0434|\u0442\u0432\u043e.{0,24}\u0432\u044b\u0431\u043e\u0440|\u044f\u043a\u0443\u0441\w*.{0,24}\u043f\u043e\u0437|\u043a\u0430\u043a\u0443\u044e.{0,24}\u043f\u043e\u0437|\u0449\u043e\u0441\w*.{0,32}(?:\u043f\u0440\u0438\u043a\u043e\u043b|\u0446\u0456\u043a\u0430\u0432)|\u0447\u0442\u043e-\u0442\u043e.{0,32}(?:\u0438\u043d\u0442\u0435\u0440\u0435\u0441|\u043f\u0440\u0438\u043a\u043e\u043b)|\b(?:fun|cool|interesting)\s+(?:trade|position|order)\b)/iu;
+const DECIBEL_STABLE_SYMBOLS = new Set(['USD', 'USDC']);
+
+function extractDecibelSymbol(message) {
+  const matches = String(message || '').normalize('NFKC').match(new RegExp(DECIBEL_SYMBOL_RE.source, 'ig')) || [];
+  for (const match of matches) {
+    const symbol = String(match || '').toUpperCase();
+    if (symbol && !DECIBEL_STABLE_SYMBOLS.has(symbol)) return symbol;
+  }
+  return '';
+}
+
+function extractRecentDecibelSymbolFromHistory(history = []) {
+  const rows = Array.isArray(history) ? history.slice(-8).reverse() : [];
+  for (const row of rows) {
+    const text = String(row?.text || row?.content || '').normalize('NFKC');
+    if (!/(opened|open|position|long|short|closed|закр|відкр|откр|пози|позу)/iu.test(text)) continue;
+    const symbol = extractDecibelSymbol(text);
+    if (symbol) return symbol;
+  }
+  return '';
+}
+
+function extractDecibelPercent(message) {
+  const text = String(message || '').normalize('NFKC');
+  if (/\b(?:all|full|everything|entire|100%)\b/i.test(text)) return 100;
+  if (/\b(?:half|50%)\b/i.test(text)) return 50;
+  const match = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  const value = Number(match?.[1]);
+  return Number.isFinite(value) && value > 0 ? Math.max(1, Math.min(100, value)) : 100;
+}
+
+function extractDecibelLeverage(message) {
+  const match = String(message || '').normalize('NFKC').match(/\b(\d+(?:\.\d+)?)\s*x\b/i);
+  const value = Number(match?.[1]);
+  return Number.isFinite(value) && value > 0 ? Math.max(1, Math.min(50, value)) : undefined;
+}
+
+function extractDecibelSide(message, normalizedText = '') {
+  const text = normalizedText || normalizeIntentText(message);
+  if (/(?:^|\s)(short|sell|ask)(?:\s|$)|\u0448\u043e\u0440\u0442|\u043f\u0440\u043e\u0434|\u5356|\u505a\u7a7a|\u5f00\u7a7a/iu.test(text)) return 'short';
+  if (/(?:^|\s)(long|buy|bid)(?:\s|$)|\u043b\u043e\u043d\u0433|\u043a\u0443\u043f|\u4e70|\u505a\u591a|\u5f00\u591a/iu.test(text)) return 'long';
+  return '';
+}
+
+function extractDecibelUsdAmount(message) {
+  const text = String(message || '').normalize('NFKC');
+  const dollar = text.match(/\$\s*(\d+(?:[.,]\d+)?)/);
+  if (dollar) {
+    const value = Number(String(dollar[1]).replace(',', '.'));
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  const stable = text.match(/\b(\d+(?:[.,]\d+)?)\s*(?:usdc|usd)\b/i);
+  if (stable) {
+    const value = Number(String(stable[1]).replace(',', '.'));
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function extractDecibelUsdcPercent(message) {
+  const text = String(message || '').normalize('NFKC');
+  if (/\b(?:all|full|entire|whole|everything|max|maximum)\b.{0,40}\b(?:money|balance|wallet|funds|capital|usdc|usd)\b/i.test(text)
+    || /\b(?:money|balance|wallet|funds|capital|usdc|usd)\b.{0,40}\b(?:all|full|entire|whole|everything|max|maximum)\b/i.test(text)
+    || /(?:\u0432\u0441[её\u0438\u0456\u044e\u044f]|\u0443\u0441[і\u0456]\w*|\u0432\u0435\u0441\u044c|\u0432\u0441\u044e|\u0443\u0441\u044e|\u0432\u0435\u0441\u044c).{0,40}(?:\u0433\u0440\u043e\u0448|\u0434\u0435\u043d\u044c\u0433|\u0431\u0430\u043b\u0430\u043d\u0441|\u0433\u0430\u043c\u0430\u043d|\u043a\u043e\u0448\u0435\u043b|\u0441\u0440\u0435\u0434\u0441\u0442\u0432|usdc|usd)/iu.test(text)
+    || /(?:\u0433\u0440\u043e\u0448|\u0434\u0435\u043d\u044c\u0433|\u0431\u0430\u043b\u0430\u043d\u0441|\u0433\u0430\u043c\u0430\u043d|\u043a\u043e\u0448\u0435\u043b|\u0441\u0440\u0435\u0434\u0441\u0442\u0432|usdc|usd).{0,40}(?:\u0432\u0441[её\u0438\u0456\u044e\u044f]|\u0443\u0441[і\u0456]\w*|\u0432\u0435\u0441\u044c|\u0432\u0441\u044e|\u0443\u0441\u044e|\u0432\u0435\u0441\u044c)/iu.test(text)
+  ) {
+    return 100;
+  }
+  const match = text.match(/\b(\d+(?:[.,]\d+)?)\s*%\s*(?:of\s+)?(?:my\s+)?(?:usdc|usd|balance|wallet)\b/i);
+  const value = Number(String(match?.[1] || '').replace(',', '.'));
+  return Number.isFinite(value) && value > 0 ? Math.max(0.01, Math.min(100, value)) : 0;
+}
+
+function isAutonomousDecibelOrder(message) {
+  const text = String(message || '').normalize('NFKC');
+  return DECIBEL_AUTONOMOUS_ORDER_RE.test(text) || DECIBEL_DELEGATED_DECISION_RE.test(text);
+}
+
+function extractFastDecibelAction(message, intent = null, history = []) {
+  const currentIntent = intent || classifyGameIntent(message);
+  if (!currentIntent?.kind || !String(currentIntent.kind).startsWith('decibel_')) return null;
+  const text = normalizeIntentText(message);
+  const symbol = extractDecibelSymbol(message);
+
+  if (currentIntent.kind === 'decibel_close_position') {
+    const body = {
+      percent: extractDecibelPercent(message),
+    };
+    const closeSymbol = symbol || extractRecentDecibelSymbolFromHistory(history);
+    if (closeSymbol) body.symbol = closeSymbol;
+    return {
+      kind: 'decibel_close_position',
+      tool: 'decibel_close_position',
+      path: '/fast/decibel/close-position',
+      body,
+    };
+  }
+
+  if (currentIntent.kind === 'decibel_place_order') {
+    const side = extractDecibelSide(message, text);
+    const notionalUsd = extractDecibelUsdAmount(message);
+    const collateralPct = extractDecibelUsdcPercent(message);
+    const autonomous = isAutonomousDecibelOrder(message);
+    if (autonomous && (!symbol || !side || (!(notionalUsd > 0) && !(collateralPct > 0)))) {
+      const leverage = extractDecibelLeverage(message) || 2;
+      return {
+        kind: 'decibel_place_order',
+        tool: 'decibel_place_order',
+        path: '/fast/decibel/place-order',
+        body: {
+          symbol: symbol || 'BTC',
+          side: side || 'long',
+          order_type: 'market',
+          collateral_pct: collateralPct > 0 ? collateralPct : 10,
+          leverage,
+          slippage_pct: 1,
+          autonomous_default: true,
+        },
+      };
+    }
+    if (!symbol || !side || (!(notionalUsd > 0) && !(collateralPct > 0))) return null;
+    const body = {
+      symbol,
+      side,
+      order_type: /\blimit\b/i.test(message) ? 'limit' : 'market',
+    };
+    if (notionalUsd > 0) body.notional_usd = notionalUsd;
+    if (collateralPct > 0) body.collateral_pct = collateralPct;
+    const leverage = extractDecibelLeverage(message);
+    if (leverage) body.leverage = leverage;
+    const price = String(message || '').normalize('NFKC').match(/\b(?:at|price)\s+\$?\s*(\d+(?:[.,]\d+)?)/i);
+    if (body.order_type === 'limit' && price) body.price = Number(String(price[1]).replace(',', '.'));
+    if (body.order_type === 'limit' && !(body.price > 0)) return null;
+    return {
+      kind: 'decibel_place_order',
+      tool: 'decibel_place_order',
+      path: '/fast/decibel/place-order',
+      body,
+    };
+  }
+
+  return null;
+}
+
+function decibelIntentLoop(kind) {
+  switch (kind) {
+    case 'decibel_account':
+      return {
+        tools: ['decibel_get_account'],
+        loop: 'decibel_get_account({ include_orders: true }) -> summarize equity/balance, positions, and open orders',
+        goal: 'Read the authenticated Decibel account through MCP tools.',
+      };
+    case 'decibel_markets':
+      return {
+        tools: ['decibel_get_markets'],
+        loop: 'decibel_get_markets({}) -> summarize requested symbols, mark prices, and constraints',
+        goal: 'Read Decibel market data through MCP tools.',
+      };
+    case 'decibel_close_position':
+      return {
+        tools: ['decibel_close_position'],
+        loop: 'Call decibel_close_position. If symbol is missing, the MCP tool closes the only open position or returns a blocker listing open symbols.',
+        goal: 'Close or reduce an existing Decibel position through MCP tools.',
+      };
+    case 'decibel_cancel_order':
+      return {
+        tools: ['decibel_get_positions', 'decibel_cancel_order'],
+        loop: 'decibel_get_positions({ include_orders: true }) -> identify exact open order id -> decibel_cancel_order({ symbol, order_id }) -> summarize result',
+        goal: 'Cancel an existing Decibel order through MCP tools.',
+      };
+    case 'decibel_tpsl':
+      return {
+        tools: ['decibel_get_positions', 'decibel_set_tpsl'],
+        loop: 'decibel_get_positions({ include_orders: true }) -> identify exact position -> decibel_set_tpsl({ symbol, take_profit?, stop_loss? }) -> summarize result',
+        goal: 'Set Decibel take-profit or stop-loss through MCP tools.',
+      };
+    case 'decibel_leverage':
+      return {
+        tools: ['decibel_get_positions', 'decibel_set_leverage'],
+        loop: 'decibel_get_positions({ include_orders: true }) -> identify symbol -> decibel_set_leverage({ symbol, leverage }) -> summarize result',
+        goal: 'Configure Decibel leverage through MCP tools.',
+      };
+    case 'decibel_place_order':
+    default:
+      return {
+        tools: ['decibel_place_order'],
+        loop: 'If symbol, side, and size/notional/collateral are clear, call decibel_place_order once with leverage included if specified. Do not call decibel_get_account, decibel_get_markets, or decibel_set_leverage first unless required fields are missing.',
+        goal: 'Open a Decibel long/short order through MCP tools with mandatory Clash builder routing.',
+      };
+  }
+}
+
+function classifyDecibelTradingIntent(message, normalizedText) {
+  const raw = String(message || '').normalize('NFKC');
+  const text = normalizedText || normalizeIntentText(raw);
+  const autonomousOrder = isAutonomousDecibelOrder(raw);
+  const hasTradingWord = DECIBEL_TRADING_WORD_RE.test(text)
+    || DECIBEL_MARKET_RE.test(text)
+    || DECIBEL_ACCOUNT_RE.test(text)
+    || DECIBEL_POSITION_READ_RE.test(text)
+    || DECIBEL_ORDER_READ_RE.test(text)
+    || DECIBEL_CLOSE_RE.test(text)
+    || DECIBEL_CANCEL_RE.test(text)
+    || DECIBEL_TPSL_RE.test(text)
+    || DECIBEL_LEVERAGE_RE.test(text)
+    || DECIBEL_PLACE_ORDER_RE.test(text);
+  const hasSymbol = DECIBEL_SYMBOL_RE.test(raw);
+  if (/(build order|building order|base build order)/i.test(raw)) return null;
+  if (!hasSymbol && !autonomousOrder && DECIBEL_NON_TRADE_SHORT_LONG_RE.test(text)) return null;
+  if (!hasTradingWord && !(/decibel/i.test(raw) || (hasSymbol && (/\d/.test(raw) || DECIBEL_MARKET_RE.test(text))))) {
+    return null;
+  }
+  if (!hasSymbol && !/(decibel|position|positions|order|orders|balance|equity|pnl|trade|trading|long|short|buy|sell|close|cancel|leverage|tp|sl|\u043f\u043e\u0437\u0438\u0446|\u043e\u0440\u0434\u0435\u0440|\u0443\u0433\u043e\u0434|\u0431\u0430\u043b\u0430\u043d\u0441|\u043b\u043e\u043d\u0433|\u0448\u043e\u0440\u0442|\u043f\u043b\u0435\u0447|\u0437\u0430\u043a\u0440|\u0432\u0456\u0434\u043a\u0440|\u043e\u0442\u043a\u0440|\u4ed3|\u8ba2\u5355|\u6760\u6746|\u4ef7\u683c)/iu.test(text)) {
+    return null;
+  }
+
+  let kind = 'decibel_place_order';
+  const wantsPlaceOrder = (DECIBEL_PLACE_ORDER_RE.test(text) || autonomousOrder) && !DECIBEL_ORDER_READ_RE.test(text);
+  if (DECIBEL_ACCOUNT_RE.test(text)) {
+    kind = 'decibel_account';
+  }
+  if (DECIBEL_POSITION_READ_RE.test(text) || DECIBEL_ORDER_READ_RE.test(text)) {
+    kind = 'decibel_account';
+  }
+  if (DECIBEL_MARKET_RE.test(text)) {
+    kind = 'decibel_markets';
+  }
+  if (wantsPlaceOrder) {
+    kind = 'decibel_place_order';
+  }
+  if (DECIBEL_CLOSE_RE.test(text)) {
+    kind = 'decibel_close_position';
+  }
+  if (DECIBEL_CANCEL_RE.test(text)) {
+    kind = 'decibel_cancel_order';
+  }
+  if (DECIBEL_TPSL_RE.test(text)) {
+    kind = 'decibel_tpsl';
+  }
+  if (DECIBEL_LEVERAGE_RE.test(text) && !wantsPlaceOrder) {
+    kind = 'decibel_leverage';
+  }
+
+  const mapped = decibelIntentLoop(kind);
+  return {
+    kind,
+    action_required: kind !== 'decibel_markets' && kind !== 'decibel_account' ? true : true,
+    goal: mapped.goal,
+    required_loop: mapped.loop,
+    expected_tools: mapped.tools,
+  };
+}
+
 function classifyGameIntent(message) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
+  const decibelIntent = classifyDecibelTradingIntent(message, text);
+  if (decibelIntent) return decibelIntent;
   if (isAttackIntentText(text)) {
     return battleIntentForTarget(extractAttackTargetNameV2(message));
   }
@@ -251,6 +615,9 @@ function buildIntentInstructions(intent) {
     `Intent: ${intent.kind}.`,
     `Goal: ${intent.goal || 'Help with Clash of Perps gameplay.'}`,
   ];
+  if (Array.isArray(intent.expected_tools) && intent.expected_tools.length) {
+    lines.push(`Expected MCP tools: ${intent.expected_tools.join(' -> ')}.`);
+  }
   if (intent.action_required) {
     lines.push(
       'This is a real game-action request. Do not answer with only advice.',
@@ -264,6 +631,22 @@ function buildIntentInstructions(intent) {
 
 function tryStaticReply(message) {
   const intent = classifyGameIntent(message);
+  const normalized = normalizeIntentText(message);
+  const raw = String(message || '').normalize('NFKC').trim();
+  const isGreeting = /^(hi|hello|hey|yo|sup|gm|привіт|привет|вітаю|здравствуй|здравствуйте|hola|bonjour|salut|hallo|ciao|ola|oi|hej|hei|你好|您好|こんにちは|こんばんは|안녕|xin chao)\b/i.test(raw);
+  if (intent.kind === 'general' && (isGreeting || isPassiveChat(normalized))) {
+    return {
+      ok: true,
+      model: 'static-router',
+      fallback: false,
+      fallback_index: 0,
+      attempted_models: ['static-router'],
+      output_text: 'Ready. Tell me what to do: collect resources, arrange the base, attack an enemy, or manage a Decibel trade.',
+      timings: { total_ms: 0 },
+      attempts: [],
+      timing_events: [],
+    };
+  }
   if (intent.kind === 'skills') {
     return {
       ok: true,
@@ -271,7 +654,7 @@ function tryStaticReply(message) {
       fallback: false,
       fallback_index: 0,
       attempted_models: [],
-      output_text: 'I can inspect your base, collect resources, build and upgrade buildings, manage ships and troops, reinforce battle losses, and launch AI online battles.',
+      output_text: 'I can inspect your base, collect resources, build and upgrade buildings, manage ships and troops, reinforce battle losses, launch AI online battles, and manage Decibel positions/orders when your account uses Decibel.',
       timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
     };
   }
@@ -300,20 +683,32 @@ function tryStaticReply(message) {
   return null;
 }
 
-function buildChatInput(message, history) {
+function buildChatInput(message, history, internalContext = '') {
   const current = String(message || '').trim().slice(0, 8000);
   const safeHistory = normalizeHistory(history);
-  if (!safeHistory.length) return current;
+  const internal = String(internalContext || '').trim().slice(0, 2000);
+  if (!safeHistory.length && !internal) return current;
 
   const historyText = safeHistory
     .map((item) => `${item.role === 'user' ? 'User' : 'Agent'}: ${item.text}`)
     .join('\n');
+  const historyBlock = safeHistory.length ? `# Recent Chat Context\n${historyText}\n\n` : '';
+  const internalBlock = internal ? `# Internal Server Context\n${internal}\n\n` : '';
   const currentBlock = `# Current Player Message\n${current}`;
-  let input = `# Recent Chat Context\n${historyText}\n\n${currentBlock}`;
+  const contextRules = [
+    '# Context Rules',
+    'Recent Chat Context is only conversational context.',
+    'Internal Server Context is authoritative implementation context and must not be quoted as if the user wrote it.',
+    'Do not copy old quota, network, timeout, or runtime errors as the answer.',
+    'Current server quota and current MCP/tool results are authoritative.',
+  ].join('\n');
+  let input = `${historyBlock}${internalBlock}${contextRules}\n\n${currentBlock}`;
   if (input.length <= 8000) return input;
 
-  const budget = Math.max(0, 8000 - currentBlock.length - 32);
-  input = `# Recent Chat Context\n${historyText.slice(-budget)}\n\n${currentBlock}`;
+  const fixedLength = internalBlock.length + currentBlock.length + contextRules.length + 64;
+  const budget = Math.max(0, 8000 - fixedLength);
+  const trimmedHistoryBlock = safeHistory.length ? `# Recent Chat Context\n${historyText.slice(-budget)}\n\n` : '';
+  input = `${trimmedHistoryBlock}${internalBlock}${contextRules}\n\n${currentBlock}`;
   return input.slice(0, 8000);
 }
 
@@ -334,28 +729,50 @@ async function request(path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), options.timeoutMs || REQUEST_TIMEOUT_MS);
   try {
-    const url = `${ORCHESTRATOR_URL}${path}`;
     const method = options.method || 'GET';
-    let res;
-    try {
-      res = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
-          'Content-Type': 'application/json',
-          ...(options.headers || {}),
-        },
-        body: options.body == null ? undefined : JSON.stringify(options.body),
-        signal: controller.signal,
-      });
-    } catch (err) {
-      const cause = err?.cause || {};
+    let res = null;
+    let url = '';
+    let lastNetworkError = null;
+    for (const baseUrl of orchestratorBaseUrls()) {
+      url = `${baseUrl}${path}`;
+      try {
+        res = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
+            'Content-Type': 'application/json',
+            ...(options.headers || {}),
+          },
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+          signal: controller.signal,
+        });
+        if (baseUrl !== ORCHESTRATOR_URL) {
+          logHermesClient('request_wsl_endpoint_ok', { method, path, base_url: baseUrl });
+        }
+        break;
+      } catch (err) {
+        lastNetworkError = err;
+        const cause = err?.cause || {};
+        const detail = cause?.code
+          ? `${cause.code}${cause.address ? ` ${cause.address}` : ''}${cause.port ? `:${cause.port}` : ''}`
+          : err?.name || 'network error';
+        logHermesClient('request_network_error', {
+          method,
+          path,
+          base_url: baseUrl,
+          duration_ms: Date.now() - startedAt,
+          error: detail,
+        });
+      }
+    }
+    if (!res) {
+      const cause = lastNetworkError?.cause || {};
       const detail = cause?.code
         ? `${cause.code}${cause.address ? ` ${cause.address}` : ''}${cause.port ? `:${cause.port}` : ''}`
-        : err?.name || 'network error';
-      const wrapped = new Error(`Hermes orchestrator fetch failed (${url}): ${detail}`);
+        : lastNetworkError?.name || 'network error';
+      const wrapped = new Error(`Hermes orchestrator fetch failed (${url || ORCHESTRATOR_URL + path}): ${detail}`);
       wrapped.status = 502;
-      wrapped.cause = err;
+      wrapped.cause = lastNetworkError;
       logHermesClient('request_error', {
         method,
         path,
@@ -415,7 +832,7 @@ async function chat(player, mcpKey, message, options = {}) {
   return request(`/players/${encodeURIComponent(safePlayer.id)}/chat`, {
     method: 'POST',
     body: {
-      input: buildChatInput(message, history),
+      input: buildChatInput(message, history, options.internal_context),
       instructions: requestContext.instructions,
       previous_response_id: options.previous_response_id || null,
       idempotency_key: options.idempotency_key || crypto.randomUUID(),
@@ -449,5 +866,6 @@ module.exports = {
   chat,
   reset,
   classifyGameIntent,
+  extractFastDecibelAction,
   tryStaticReply,
 };

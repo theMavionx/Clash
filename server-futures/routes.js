@@ -400,6 +400,7 @@ router.get('/decibel/signer', auth, async (req, res) => {
 });
 
 router.post('/decibel/orders/place', auth, async (req, res) => {
+  const startedAt = Date.now();
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
@@ -417,6 +418,51 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     if (result?.success === false) {
       return res.status(400).json({ ...result, clientOrderId: orderPayload.clientOrderId });
     }
+    const rawTif = String(orderPayload.timeInForce ?? orderPayload.time_in_force ?? '').toLowerCase();
+    const orderType = String(orderPayload.order_type || orderPayload.orderType || '').toLowerCase() === 'market'
+      || rawTif === 'ioc'
+      || rawTif === '2'
+      ? 'market'
+      : 'limit';
+    const side = orderPayload.isReduceOnly
+      ? (orderPayload.isBuy ? 'short' : 'long')
+      : (orderPayload.isBuy ? 'long' : 'short');
+    const verification = orderPayload.isReduceOnly
+      ? { verified: true, effect: 'reduce_only_tx_confirmed' }
+      : await decibel.waitForPlacedOrderEffect({
+        subaccountAddr: verified.subaccount,
+        marketName: orderPayload.marketName,
+        marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
+        symbol: orderPayload.symbol,
+        side,
+        clientOrderId: orderPayload.clientOrderId,
+        orderType,
+        reduceOnly: false,
+        txResult: result,
+        attempts: 6,
+        delayMs: 900,
+      });
+    if (!verification.verified) {
+      return res.status(409).json({
+        success: false,
+        error: verification.reason || 'Decibel order was submitted, but no matching position or open order was verified.',
+        clientOrderId: orderPayload.clientOrderId,
+        transactionHash: result.transactionHash || result.hash || null,
+        result,
+        verification,
+      });
+    }
+    console.log('[decibel] order placed', {
+      player: req.playerId,
+      market: orderPayload.marketName,
+      reduceOnly: !!orderPayload.isReduceOnly,
+      orderType,
+      verification: verification.effect,
+      verifyAttempts: verification.attempts,
+      total_ms: Date.now() - startedAt,
+      tx_ms: result?.timings?.total_ms,
+      tx_wait_ms: result?.timings?.wait_ms,
+    });
     if (result?.success !== false) {
       try {
         const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
@@ -448,7 +494,7 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
         console.warn('[decibel] reward row skipped:', e.message);
       }
     }
-    res.json({ ...result, clientOrderId: orderPayload.clientOrderId });
+    res.json({ ...result, clientOrderId: orderPayload.clientOrderId, verified: true, verification });
   } catch (e) {
     console.error('[decibel] place order error:', e);
     res.status(500).json({ error: e.message || 'Failed to place Decibel order' });

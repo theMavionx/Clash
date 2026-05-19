@@ -173,9 +173,9 @@ install_system_dependencies() {
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
     mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
-    local hermes_model_chain="qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro"
-    local hermes_primary_model="qwen/qwen3-30b-a3b-instruct-2507:nitro"
-    local hermes_fallback_model="google/gemma-4-26b-a4b-it:nitro"
+    local hermes_model_chain="openai/gpt-oss-120b,qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro"
+    local hermes_primary_model="openai/gpt-oss-120b"
+    local hermes_fallback_model="qwen/qwen3-30b-a3b-instruct-2507:nitro"
 
     if [ ! -f "$ENV_FILE" ]; then
         if [ -f "$DEPLOY_ROOT/.env" ]; then
@@ -231,6 +231,7 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
     ensure_env_default "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     ensure_env_default "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    ensure_env_default "CLASH_HERMES_PROVIDER_ORDER" "cerebras"
     ensure_env_default "CLASH_HERMES_PRIMARY_RETRIES" "3"
     ensure_env_default "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
     ensure_env_default "CLASH_HERMES_ACTION_PRIMARY_RETRIES" "1"
@@ -247,6 +248,7 @@ prepare_shared_runtime() {
     set_env_value "CLASH_HERMES_MODEL_CHAIN" "$hermes_model_chain"
     set_env_value "CLASH_HERMES_PRIMARY_MODEL" "$hermes_primary_model"
     set_env_value "CLASH_HERMES_FALLBACK_MODEL" "$hermes_fallback_model"
+    set_env_value "CLASH_HERMES_PROVIDER_ORDER" "cerebras"
     set_env_value "CLASH_HERMES_PRIMARY_RETRIES" "3"
     set_env_value "CLASH_HERMES_FALLBACK_AFTER_RETRIES" "3"
     set_env_value "CLASH_HERMES_ACTION_PRIMARY_RETRIES" "1"

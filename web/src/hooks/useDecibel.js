@@ -1515,6 +1515,7 @@ export function useDecibel() {
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
     setLoading(true);
     setError(null);
+    const startedAt = performance.now();
     const gen = walletGenRef.current;
     const checkGen = () => {
       if (walletGenRef.current !== gen) {
@@ -1568,10 +1569,17 @@ export function useDecibel() {
         ...builderArgs,
       });
       checkGen();
+      D.log('market order server returned', {
+        ms: Math.round(performance.now() - startedAt),
+        tx_ms: result?.timings?.total_ms,
+        tx_wait_ms: result?.timings?.wait_ms,
+        verification: result?.verification?.effect,
+        verify_attempts: result?.verification?.attempts,
+      });
 
       const txHash = assertWriteSuccess(result, 'Market order');
       const dedup = `decibel:open:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
-      await reportTrade({
+      void reportTrade({
         tx_hash: txHash, symbol, side: isBuy ? 'long' : 'short',
         amount: collateral, leverage: lev, order_type: 'market',
         price: livePrice, dedup_key: dedup,
@@ -1594,6 +1602,7 @@ export function useDecibel() {
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif, leverage) => {
     setLoading(true);
     setError(null);
+    const startedAt = performance.now();
     const gen = walletGenRef.current;
     const checkGen = () => {
       if (walletGenRef.current !== gen) {
@@ -1638,10 +1647,17 @@ export function useDecibel() {
         ...builderArgs,
       });
       checkGen();
+      D.log('limit order server returned', {
+        ms: Math.round(performance.now() - startedAt),
+        tx_ms: result?.timings?.total_ms,
+        tx_wait_ms: result?.timings?.wait_ms,
+        verification: result?.verification?.effect,
+        verify_attempts: result?.verification?.attempts,
+      });
 
       const txHash = assertWriteSuccess(result, 'Limit order');
       const dedup = `decibel:open:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
-      await reportTrade({
+      void reportTrade({
         tx_hash: txHash, symbol, side: isBuy ? 'long' : 'short',
         amount: collateral, leverage: lev, price: priceN, order_type: 'limit',
         dedup_key: dedup,
@@ -1667,6 +1683,7 @@ export function useDecibel() {
   const closePosition = useCallback(async (symbol, side, amount, slippagePct = 1) => {
     setLoading(true);
     setError(null);
+    const startedAt = performance.now();
     try {
       requireServerSigner();
       const amt = Number(amount);
@@ -1713,9 +1730,16 @@ export function useDecibel() {
         rewardNotionalUsd: amt * slipPrice,
         ...builderArgs,
       });
+      D.log('close order server returned', {
+        ms: Math.round(performance.now() - startedAt),
+        tx_ms: result?.timings?.total_ms,
+        tx_wait_ms: result?.timings?.wait_ms,
+        verification: result?.verification?.effect,
+        verify_attempts: result?.verification?.attempts,
+      });
       const txHash = assertWriteSuccess(result, 'Close order');
       const dedupKey = `decibel:close:${address.toLowerCase()}:${market.market_name}:${result?.orderId || Date.now()}`;
-      await reportTrade({
+      void reportTrade({
         tx_hash: txHash, symbol,
         side: closingLong ? 'close_long' : 'close_short',
         amount: amt, leverage: 1, order_type: 'close', dedup_key: dedupKey,

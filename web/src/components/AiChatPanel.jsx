@@ -394,6 +394,13 @@ function appendStoredChatMessage(storageKey, row) {
   return next;
 }
 
+function hasStoredChatMessage(storageKey, traceId, role = 'assistant') {
+  if (!traceId) return false;
+  return loadChatMessages(storageKey).some((item) => (
+    item?.traceId === traceId && item?.role === role
+  ));
+}
+
 function aiErrorMessage(err, fallback = 'AI request failed') {
   const raw = String(err?.message || fallback).trim();
   if (!raw) return fallback;
@@ -548,6 +555,8 @@ function AiChatPanel({ onClose }) {
   const storageKey = useMemo(() => getChatStorageKey(player, token), [player, token]);
   const skipNextPersist = useRef(true);
   const mountedRef = useRef(true);
+  const activeTraceRef = useRef('');
+  const sendingStartedAtRef = useRef(0);
   const [messages, setMessages] = useState(() => loadChatMessages(storageKey));
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
@@ -575,8 +584,11 @@ function AiChatPanel({ onClose }) {
   const [localEvmWalletState, setLocalEvmWalletState] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   // Heuristic step pacing: real wallet/network/server timing varies wildly,
@@ -758,6 +770,8 @@ function AiChatPanel({ onClose }) {
     const pending = loadPendingRequests(storageKey);
     if (!pending.length) return undefined;
 
+    activeTraceRef.current = pending[pending.length - 1]?.traceId || '';
+    sendingStartedAtRef.current = pending[pending.length - 1]?.startedAt || Date.now();
     setStatus('sending');
     setProgressText('Finishing the previous game action...');
 
@@ -781,6 +795,7 @@ function AiChatPanel({ onClose }) {
             traceId: `${item.traceId}:assistant`,
           });
           removePendingRequest(storageKey, item.traceId);
+          if (activeTraceRef.current === item.traceId) activeTraceRef.current = '';
         } catch (err) {
           if (!cancelled) setError(aiErrorMessage(err, 'AI request is still running. Reopen the chat in a moment to see the result.'));
         }
@@ -890,6 +905,85 @@ function AiChatPanel({ onClose }) {
     };
   }, [status, token]);
 
+  useEffect(() => {
+    if (status !== 'sending' || !token) return undefined;
+    let cancelled = false;
+
+    const checkStoredAnswer = async () => {
+      const pending = loadPendingRequests(storageKey);
+      if (!pending.length) return;
+
+      let changed = false;
+      for (const item of pending) {
+        try {
+          const data = await fetchAiChatStoredResult(item.traceId, token);
+          if (cancelled || !data) continue;
+          if (data?.quota) setQuota(data.quota);
+          const isBlocked = data?.status === 'quota_blocked' || data?.ok === false;
+          const text = isBlocked
+            ? (data?.error || 'AI request failed')
+            : (data?.message || 'Done.');
+          appendStoredChatMessage(storageKey, {
+            role: 'assistant',
+            text,
+            traceId: `${item.traceId}:assistant`,
+          });
+          removePendingRequest(storageKey, item.traceId);
+          if (activeTraceRef.current === item.traceId) activeTraceRef.current = '';
+          if (data?.status === 'quota_blocked') setShopOpen(true);
+          changed = true;
+        } catch {
+          // The main request/recovery path still owns visible errors.
+        }
+      }
+
+      if (!cancelled && changed && mountedRef.current) {
+        setMessages(loadChatMessages(storageKey));
+        if (!loadPendingRequests(storageKey).length) {
+          setStatus('idle');
+          setProgressText('');
+        }
+      }
+    };
+
+    checkStoredAnswer();
+    const timer = setInterval(checkStoredAnswer, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [status, storageKey, token]);
+
+  useEffect(() => {
+    if (status !== 'sending') return undefined;
+    let cancelled = false;
+
+    const settleIfStored = () => {
+      const activeTrace = activeTraceRef.current;
+      const pending = loadPendingRequests(storageKey);
+      const activeAnswerStored = activeTrace
+        ? hasStoredChatMessage(storageKey, `${activeTrace}:assistant`, 'assistant')
+        : false;
+      const staleWithoutPending = !pending.length
+        && sendingStartedAtRef.current > 0
+        && Date.now() - sendingStartedAtRef.current > 3000;
+
+      if (!cancelled && mountedRef.current && (activeAnswerStored || staleWithoutPending)) {
+        setMessages(loadChatMessages(storageKey));
+        setStatus('idle');
+        setProgressText('');
+        if (activeAnswerStored || !pending.length) activeTraceRef.current = '';
+      }
+    };
+
+    settleIfStored();
+    const timer = setInterval(settleIfStored, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [status, storageKey]);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || status === 'sending') return;
@@ -904,6 +998,8 @@ function AiChatPanel({ onClose }) {
     const history = buildContextHistory(messages);
     const traceId = makeAiChatTraceId();
     const idempotencyKey = traceId;
+    activeTraceRef.current = traceId;
+    sendingStartedAtRef.current = Date.now();
     appendStoredChatMessage(storageKey, {
       role: 'user',
       text,
@@ -972,6 +1068,7 @@ function AiChatPanel({ onClose }) {
         traceId: `${traceId}:assistant`,
       });
       removePendingRequest(storageKey, traceId);
+      if (activeTraceRef.current === traceId) activeTraceRef.current = '';
       if (mountedRef.current) setMessages(loadChatMessages(storageKey));
     } catch (err) {
       if (err?.data?.quota) setQuota(err.data.quota);
@@ -985,6 +1082,7 @@ function AiChatPanel({ onClose }) {
           traceId: `${traceId}:assistant`,
         });
         removePendingRequest(storageKey, traceId);
+        if (activeTraceRef.current === traceId) activeTraceRef.current = '';
         if (mountedRef.current) setMessages(loadChatMessages(storageKey));
         return;
       }
@@ -997,6 +1095,7 @@ function AiChatPanel({ onClose }) {
           traceId: `${traceId}:assistant`,
         });
         removePendingRequest(storageKey, traceId);
+        if (activeTraceRef.current === traceId) activeTraceRef.current = '';
         if (mountedRef.current) setMessages(loadChatMessages(storageKey));
       }
       if (mountedRef.current) setError(msg);
@@ -1005,6 +1104,7 @@ function AiChatPanel({ onClose }) {
         setStatus('idle');
         setProgressText('');
       }
+      sendingStartedAtRef.current = 0;
     }
   }, [input, messages, status, storageKey, token]);
 
@@ -2610,7 +2710,9 @@ const styles = {
     transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
   },
   inputWrapActive: {
-    borderColor: '#c2851b',
+    // Use the full `border` shorthand here so React doesn't warn about
+    // mixing shorthand (base) + longhand (active) during re-render.
+    border: '1.5px solid #c2851b',
     boxShadow:
       'inset 0 1px 2px rgba(95,58,33,0.06),' +
       ' 0 0 0 3px rgba(194,133,27,0.18)',
@@ -2657,7 +2759,9 @@ const styles = {
   },
   sendReady: {
     background: 'linear-gradient(180deg, #91df7d 0%, #2f8b3a 100%)',
-    borderColor: '#1f6d34',
+    // Full shorthand again — base has `border: '1.5px solid #1f6d34'`,
+    // mixing shorthand + longhand makes React warn on transitions.
+    border: '1.5px solid #1f6d34',
   },
 
   // ── Welcome / empty state ─────────────────────────────────────────
@@ -2847,15 +2951,15 @@ const topUpStyles = {
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    borderColor: '#1f6d34', color: '#fff',
+    border: '2px solid #1f6d34', color: '#fff',
   },
   stepBubble_error: {
-    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
   },
   stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
   stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },

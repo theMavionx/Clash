@@ -12,6 +12,8 @@ const require = createRequire(import.meta.url);
 const game = require('../../server/db.js');
 const combat = require('../../server/combat_defs.js');
 const { verifyReplay } = require('../../server/combat_session.js');
+const futuresDb = require('../../server-futures/db.js');
+const decibel = require('../../server-futures/decibel.js');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,8 +23,13 @@ const SKILL_PATHS = [
   path.resolve(__dirname, '..', 'SKILL.md'),
   path.resolve(__dirname, '..', 'AGENT_SKILL.md'),
 ].filter(Boolean);
+const DECIBEL_SKILL_PATHS = [
+  process.env.CLASH_MCP_DECIBEL_SKILL_PATH,
+  path.resolve(__dirname, '..', 'DECIBEL_TRADING_SKILL.md'),
+  path.resolve(__dirname, '..', '..', '.agents', 'skills', 'clash-decibel-trading', 'SKILL.md'),
+].filter(Boolean);
 const PORT = Number(process.env.CLASH_MCP_PORT || 4100);
-const HOST = process.env.CLASH_MCP_HOST || '127.0.0.1';
+const HOST = process.env.CLASH_MCP_HOST || '0.0.0.0';
 const PUBLIC_URL = (process.env.CLASH_MCP_PUBLIC_URL || 'https://mcp.clashofperps.fun').replace(/\/+$/, '');
 const GAME_API_URL = (process.env.CLASH_GAME_API_URL || 'http://127.0.0.1:4000/api').replace(/\/+$/, '');
 const DEFAULT_CORS_ORIGINS = [
@@ -51,6 +58,21 @@ const AI_AUTO_CANNON_MAX_SHOTS = 3;
 const AI_AUTO_RALLY_T_SEC = 5.0;
 const AI_AUTO_RALLY_FLIGHT_SEC = 0.8;
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
+const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
+const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
+const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 10;
+const DECIBEL_BUILDER_FEE_BPS_RAW = Number(process.env.DECIBEL_BUILDER_FEE_BPS || DEFAULT_DECIBEL_BUILDER_FEE_BPS);
+const DECIBEL_BUILDER_FEE_BPS = Number.isFinite(DECIBEL_BUILDER_FEE_BPS_RAW) && DECIBEL_BUILDER_FEE_BPS_RAW > 0
+  ? DECIBEL_BUILDER_FEE_BPS_RAW
+  : DEFAULT_DECIBEL_BUILDER_FEE_BPS;
+const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
+  '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
+const DECIBEL_ALLOWED_BUILDER_ADDRS = new Set(
+  String(process.env.DECIBEL_ALLOWED_BUILDER_ADDRS || process.env.DECIBEL_BUILDER_SUBACCOUNT || DEFAULT_DECIBEL_BUILDER_SUBACCOUNT)
+    .split(',')
+    .map((s) => decibel.normalizeAptosAddress(s))
+    .filter(Boolean)
+);
 
 function parseDefaultAttackLoadout(value) {
   const parsed = String(value || '')
@@ -72,6 +94,13 @@ function cannonShotTime(shot, index) {
 
 function readSkill() {
   for (const skillPath of SKILL_PATHS) {
+    try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
+  }
+  return '';
+}
+
+function readDecibelSkill() {
+  for (const skillPath of DECIBEL_SKILL_PATHS) {
     try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
   }
   return '';
@@ -215,6 +244,16 @@ function toolResultErrorMessage(result) {
   }
 }
 
+function toolResultLogPayload(result) {
+  const text = String(result?.content?.[0]?.text || '');
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { text: text.slice(0, 4000) };
+  }
+}
+
 function instrumentMcpTools(server, session, reqMeta = {}) {
   const rawRegisterTool = server.registerTool.bind(server);
   const keyInfo = session?.key || {};
@@ -223,8 +262,10 @@ function instrumentMcpTools(server, session, reqMeta = {}) {
     const startedAt = Date.now();
     let status = 'ok';
     let error = '';
+    let output = null;
     try {
       const result = await handler(args, extra);
+      output = toolResultLogPayload(result);
       if (result?.isError) {
         status = 'error';
         error = toolResultErrorMessage(result);
@@ -244,6 +285,7 @@ function instrumentMcpTools(server, session, reqMeta = {}) {
         durationMs: Date.now() - startedAt,
         error,
         input: args || {},
+        output,
         ip: reqMeta.ip || '',
         ua: reqMeta.ua || '',
       });
@@ -1240,6 +1282,601 @@ function reinforceShips(playerId) {
   })();
 }
 
+function decibelBuilderFields() {
+  const builderAddr = DECIBEL_ALLOWED_BUILDER_ADDRS.values().next().value || '';
+  if (!builderAddr) return null;
+  return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
+}
+
+function decibelMarketSymbol(market) {
+  const explicit = String(market?.symbol || '').trim();
+  if (explicit) return explicit.toUpperCase();
+  const name = String(market?.market_name || market?.marketName || market?.name || '').trim();
+  return (name.split(/[-/]/)[0] || name || 'UNKNOWN').toUpperCase();
+}
+
+function decibelMarketAddress(market) {
+  return String(market?.market_addr || market?.market || market?.marketAddr || '').trim();
+}
+
+function normalizeDecibelMarket(market, priceRow = null) {
+  const symbol = decibelMarketSymbol(market);
+  const mark = Number(priceRow?.mark_px ?? priceRow?.mark_price ?? market?.mark_price ?? market?.oracle_price ?? market?.price ?? 0);
+  return {
+    symbol,
+    market_name: String(market?.market_name || market?.marketName || market?.name || `${symbol}-USD`),
+    market_addr: decibelMarketAddress(market) || null,
+    px_decimals: Number(market?.px_decimals ?? market?.pxDecimals ?? 6),
+    sz_decimals: Number(market?.sz_decimals ?? market?.szDecimals ?? 6),
+    tick_size: String(market?.tick_size ?? market?.tickSize ?? '0'),
+    lot_size: String(market?.lot_size ?? market?.lotSize ?? '0'),
+    min_size: String(market?.min_size ?? market?.minSize ?? '0'),
+    mark_price: Number.isFinite(mark) && mark > 0 ? mark : null,
+  };
+}
+
+function marketMatchesSymbol(market, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  const upper = raw.toUpperCase();
+  const compact = upper.replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+  const addr = decibel.normalizeAptosAddress(raw);
+  const marketAddr = decibelMarketAddress(market);
+  const name = String(market?.market_name || market?.marketName || market?.name || '').toUpperCase();
+  const symbol = decibelMarketSymbol(market);
+  return (
+    (marketAddr && decibel.normalizeAptosAddress(marketAddr) === addr)
+    || name === upper
+    || name.replace(/[-_/ ]/g, '') === upper.replace(/[-_/ ]/g, '')
+    || symbol === upper
+    || symbol === compact
+  );
+}
+
+async function getDecibelMarket(symbolOrName) {
+  const markets = await decibel.fetchMarkets();
+  const market = markets.find((row) => marketMatchesSymbol(row, symbolOrName));
+  if (!market) {
+    throw new Error(`Unknown Decibel market: ${symbolOrName}`);
+  }
+  const prices = await decibel.fetchMarketPrices();
+  const marketAddr = decibelMarketAddress(market).toLowerCase();
+  const priceRow = prices.find((row) => String(row?.market || row?.market_addr || '').toLowerCase() === marketAddr) || null;
+  return normalizeDecibelMarket(market, priceRow);
+}
+
+async function getDecibelMarketsBySymbols(symbols = []) {
+  const wanted = symbols.map((symbol) => String(symbol || '').trim()).filter(Boolean);
+  const out = [];
+  for (const symbol of wanted) {
+    try {
+      out.push(await getDecibelMarket(symbol));
+    } catch {
+      // Some markets may not be listed on the current Decibel deployment.
+    }
+  }
+  return out;
+}
+
+function priceToDecibelChainUnits(human, market) {
+  const d = Number(market?.px_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel price decimals');
+  const n = Number(human);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Price must be greater than zero');
+  return Math.max(1, Math.round(n * Math.pow(10, d)));
+}
+
+function sizeToDecibelChainUnits(human, market) {
+  const d = Number(market?.sz_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel size decimals');
+  const n = Number(human);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Size must be greater than zero');
+  let raw = BigInt(Math.max(1, Math.round(n * Math.pow(10, d))));
+  const lot = market?.lot_size == null ? 0n : BigInt(Math.max(0, Math.round(Number(market.lot_size))));
+  if (lot > 0n) raw = (raw / lot) * lot;
+  const min = market?.min_size == null ? 0n : BigInt(Math.max(0, Math.round(Number(market.min_size))));
+  if (raw <= 0n) throw new Error('Order size is below this market lot size');
+  if (min > 0n && raw < min) throw new Error('Order size is below the Decibel minimum for this market');
+  return raw;
+}
+
+function decibelSizeDecimals(market) {
+  const d = Number(market?.sz_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel size decimals');
+  return d;
+}
+
+function decibelMinSizeBase(market) {
+  const min = Number(market?.min_size ?? market?.minSize ?? 0);
+  if (!Number.isFinite(min) || min <= 0) return 0;
+  return min / Math.pow(10, decibelSizeDecimals(market));
+}
+
+function decibelMinOrderInfo(market, executionPrice, leverage = 1) {
+  const minSizeBase = decibelMinSizeBase(market);
+  const minNotionalUsd = minSizeBase > 0 ? minSizeBase * Number(executionPrice || 0) : 0;
+  const lev = Math.max(1, Number(leverage || 1));
+  return {
+    min_size_base: minSizeBase,
+    min_notional_usd: minNotionalUsd,
+    min_collateral_usd: minNotionalUsd > 0 ? minNotionalUsd / lev : 0,
+  };
+}
+
+function formatUsdApprox(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'unknown';
+  return `$${n.toFixed(n >= 100 ? 2 : 4).replace(/\.?0+$/, '')}`;
+}
+
+function decibelTickSize(market) {
+  const tick = Number(market?.tick_size ?? 0);
+  return Number.isFinite(tick) && tick > 0 ? tick : 0;
+}
+
+function decibelSideIsBuy(side) {
+  const value = String(side || '').trim().toLowerCase();
+  if (['buy', 'long', 'bid'].includes(value)) return true;
+  if (['sell', 'short', 'ask'].includes(value)) return false;
+  throw new Error('side must be long/buy or short/sell');
+}
+
+function decibelPriceForOrder({ order_type, price, mark_price, side, slippage_pct }) {
+  const isMarket = String(order_type || 'market').toLowerCase() === 'market';
+  const base = Number(isMarket ? mark_price : price);
+  if (!Number.isFinite(base) || base <= 0) {
+    throw new Error(isMarket ? 'Decibel mark price unavailable' : 'Limit price is required');
+  }
+  if (!isMarket) return base;
+  const slip = Math.max(0.001, Math.min(50, Number(slippage_pct ?? 0.5))) / 100;
+  return decibelSideIsBuy(side) ? base * (1 + slip) : base * (1 - slip);
+}
+
+function decibelPositionSymbol(position) {
+  return decibel.symbolFromMarket(position);
+}
+
+function normalizeDecibelPosition(position) {
+  const symbol = decibelPositionSymbol(position);
+  const size = Number(position?.size ?? 0);
+  const entry = Number(position?.entry_price ?? position?.entryPrice ?? 0);
+  const isLong = decibel.positionIsLong(position);
+  return {
+    symbol,
+    side: isLong ? 'long' : 'short',
+    size: Math.abs(size),
+    entry_price: Number.isFinite(entry) ? entry : null,
+    leverage: decibel.positionLeverage(position),
+    notional_usd: decibel.positionNotionalUsd(position),
+    collateral_usd: decibel.positionCollateralUsd(position),
+    market_addr: String(position?.market || position?.market_addr || position?.marketAddr || ''),
+    market_name: position?.marketName || position?.market_name || null,
+    liquidation_price: position?.liquidation_price ?? position?.liq_price ?? position?.liquidationPrice ?? null,
+    unrealized_pnl: position?.unrealized_pnl ?? position?.pnl ?? position?.unrealizedPnl ?? null,
+    tp_order_id: position?.tp_order_id ?? position?.tpOrderId ?? null,
+    sl_order_id: position?.sl_order_id ?? position?.slOrderId ?? null,
+    raw: position,
+  };
+}
+
+function estimateDecibelClosePnl(position, closeSize, exitPrice) {
+  const normalized = position?.symbol ? position : normalizeDecibelPosition(position);
+  const size = Number(closeSize);
+  const entry = Number(normalized.entry_price);
+  const exit = Number(exitPrice);
+  if (!(size > 0) || !(entry > 0) || !(exit > 0)) return null;
+
+  const direction = normalized.side === 'short' ? -1 : 1;
+  const pnlUsd = (exit - entry) * size * direction;
+  const closedEntryNotional = size * entry;
+  const closedExitNotional = size * exit;
+  const totalSize = Number(normalized.size);
+  const sizeRatio = totalSize > 0 ? Math.min(1, size / totalSize) : 1;
+  const collateral = Number(normalized.collateral_usd);
+  const closedCollateral = collateral > 0
+    ? collateral * sizeRatio
+    : closedEntryNotional / Math.max(1, Number(normalized.leverage || 1));
+  const pnlPct = closedCollateral > 0 ? (pnlUsd / closedCollateral) * 100 : null;
+  const priceMovePct = normalized.side === 'short'
+    ? ((entry - exit) / entry) * 100
+    : ((exit - entry) / entry) * 100;
+
+  return {
+    realized_pnl_usd_estimate: Number(pnlUsd.toFixed(6)),
+    realized_pnl_pct_estimate: pnlPct == null ? null : Number(pnlPct.toFixed(4)),
+    price_move_pct: Number(priceMovePct.toFixed(4)),
+    entry_price: entry,
+    exit_price: exit,
+    closed_size_base: size,
+    closed_entry_notional_usd: Number(closedEntryNotional.toFixed(6)),
+    closed_exit_notional_usd: Number(closedExitNotional.toFixed(6)),
+    closed_collateral_usd: Number(closedCollateral.toFixed(6)),
+    method: 'entry_exit_estimate',
+  };
+}
+
+const decibelSessionCache = new Map();
+const DECIBEL_SESSION_CACHE_MS = 60_000;
+
+async function requireDecibelSession(session, requestedSubaccount = '') {
+  if (session?.player?.dex !== 'decibel') {
+    return {
+      ok: false,
+      error: `Decibel trading is only available for accounts registered on Decibel. Current account DEX: ${session?.player?.dex || 'unknown'}.`,
+    };
+  }
+  const owner = decibel.normalizeAptosAddress(session?.player?.wallet || '');
+  if (!owner || !String(owner).startsWith('0x')) {
+    return { ok: false, error: 'No Aptos wallet is registered for this Decibel player.' };
+  }
+  const cacheKey = owner.toLowerCase();
+  const cached = decibelSessionCache.get(cacheKey);
+  const requested = requestedSubaccount ? decibel.normalizeAptosAddress(requestedSubaccount) : '';
+  if (cached && Date.now() - cached.at < DECIBEL_SESSION_CACHE_MS) {
+    if (requested && requested !== cached.value.subaccount) {
+      return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
+    }
+    return cached.value;
+  }
+  const primary = decibel.normalizeAptosAddress(await decibel.getPrimarySubaccountAddr(owner));
+  if (requested && requested !== primary) {
+    return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
+  }
+  const subaccounts = await decibel.fetchUserSubaccounts(owner);
+  const value = {
+    ok: true,
+    owner,
+    subaccount: primary,
+    subaccounts,
+  };
+  decibelSessionCache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}
+
+function maybeRecordDecibelReward(playerId, orderPayload, result, verifiedSource = 'server') {
+  try {
+    const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
+    if (!reward.rewardable) return null;
+    const n = Number(reward.notional_usd);
+    if (!Number.isFinite(n) || n < DECIBEL_MIN_REWARD_NOTIONAL_USD || n > DECIBEL_MAX_REWARD_NOTIONAL_USD) {
+      console.log(`[mcp.decibel] reward skipped: notional ${Number.isFinite(n) ? n.toFixed(4) : String(n)} outside reward range`);
+      return null;
+    }
+    return futuresDb.addTrade(playerId, {
+      symbol: reward.symbol,
+      side: reward.side,
+      orderType: reward.orderType,
+      amount: String(reward.amount),
+      price: String(reward.price),
+      orderId: reward.txHash || result.orderId || null,
+      clientOrderId: reward.clientOrderId,
+      status: 'filled',
+      dex: 'decibel',
+      notional_usd: n,
+      verifiedSource,
+    });
+  } catch (error) {
+    console.warn('[mcp.decibel] reward row skipped:', error?.message || error);
+    return null;
+  }
+}
+
+async function placeDecibelOrderForAgent(session, playerId, args, options = {}) {
+  try {
+    const account = options.account || await requireDecibelSession(session, args?.subaccountAddr || args?.subaccount || '');
+    if (!account.ok) return { error: account.error };
+    const builder = decibelBuilderFields();
+    if (!builder) return { error: 'Decibel builder fee routing is not configured.' };
+
+    let market = await getDecibelMarket(args.symbol || args.market || args.marketName);
+    const orderType = String(args.order_type || args.orderType || 'market').toLowerCase();
+    const side = String(args.side || '').trim().toLowerCase();
+    const isBuy = decibelSideIsBuy(side);
+    let markPrice = Number(market.mark_price || await decibel.fetchMarketMarkUsd(market.market_addr));
+    let executionPrice = decibelPriceForOrder({
+      order_type: orderType,
+      price: args.price,
+      mark_price: markPrice,
+      side,
+      slippage_pct: args.slippage_pct ?? args.slippagePct,
+    });
+    const leverage = Math.max(1, Math.min(50, Number(args.leverage || args.rewardLeverage || 1)));
+    let collateralUsd = Number(args.collateral_usd ?? args.collateralUsd ?? args.amount_usd ?? args.amount ?? 0);
+    let collateralSource = null;
+    const collateralPct = Number(args.collateral_pct ?? args.collateralPct ?? args.balance_percent ?? args.balancePercent ?? 0);
+    let walletUsdcBalance = null;
+    if (!(collateralUsd > 0) && Number.isFinite(collateralPct) && collateralPct > 0) {
+      walletUsdcBalance = await decibel.fetchUsdcBalance(account.owner);
+      collateralUsd = walletUsdcBalance * (Math.max(0.01, Math.min(100, collateralPct)) / 100);
+      collateralSource = {
+        type: 'wallet_usdc_percent',
+        percent: Math.max(0.01, Math.min(100, collateralPct)),
+        wallet_usdc_balance: walletUsdcBalance,
+      };
+    }
+    let sizeBase = Number(args.size_base ?? args.size ?? 0) > 0
+      ? Number(args.size_base ?? args.size)
+      : Number(args.notional_usd ?? args.notionalUsd ?? 0) > 0
+        ? Number(args.notional_usd ?? args.notionalUsd) / executionPrice
+        : collateralUsd > 0
+          ? (collateralUsd * leverage) / executionPrice
+          : 0;
+    if (!(sizeBase > 0)) {
+      return { error: 'Order requires size, notional_usd, or collateral_usd.' };
+    }
+    const autonomousDefault = !!args.autonomous_default || !!args.autonomousDefault || !!args.auto_adjust_min_size || !!args.autoAdjustMinSize;
+    const explicitSize = Number(args.size_base ?? args.size ?? args.notional_usd ?? args.notionalUsd ?? args.collateral_usd ?? args.collateralUsd ?? args.amount_usd ?? args.amount ?? 0) > 0;
+    let autonomousAdjustment = null;
+
+    const ensureMinOrderSize = async () => {
+      const minInfo = decibelMinOrderInfo(market, executionPrice, leverage);
+      if (!(minInfo.min_size_base > 0) || sizeBase >= minInfo.min_size_base) return true;
+      if (!autonomousDefault || explicitSize) {
+        return {
+          error: `Decibel minimum for ${market.symbol} is about ${formatUsdApprox(minInfo.min_notional_usd)} notional (${formatUsdApprox(minInfo.min_collateral_usd)} collateral at ${leverage}x). Need: Specify a larger amount or percentage of your USDC balance.`,
+          minimum_order: {
+            symbol: market.symbol,
+            min_size_base: minInfo.min_size_base,
+            min_notional_usd: minInfo.min_notional_usd,
+            min_collateral_usd: minInfo.min_collateral_usd,
+            leverage,
+          },
+        };
+      }
+      if (walletUsdcBalance == null) walletUsdcBalance = await decibel.fetchUsdcBalance(account.owner);
+      if (walletUsdcBalance >= minInfo.min_collateral_usd) {
+        const oldSizeBase = sizeBase;
+        const oldCollateralUsd = collateralUsd;
+        sizeBase = minInfo.min_size_base;
+        collateralUsd = minInfo.min_collateral_usd;
+        collateralSource = {
+          ...(collateralSource || {}),
+          type: collateralSource?.type || 'autonomous_minimum_adjustment',
+          wallet_usdc_balance: walletUsdcBalance,
+          adjusted_to_decibel_minimum: true,
+          requested_size_base: oldSizeBase,
+          requested_collateral_usd: oldCollateralUsd,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+        };
+        autonomousAdjustment = {
+          reason: 'selected_minimum_valid_size',
+          symbol: market.symbol,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+        };
+        return true;
+      }
+
+      const alternatives = await getDecibelMarketsBySymbols(['DOGE', 'SOL', 'APT', 'ETH', 'BTC']);
+      let best = null;
+      for (const candidate of alternatives) {
+        const candidateMark = Number(candidate.mark_price || await decibel.fetchMarketMarkUsd(candidate.market_addr));
+        if (!(candidateMark > 0)) continue;
+        const candidateExecution = decibelPriceForOrder({
+          order_type: orderType,
+          price: args.price,
+          mark_price: candidateMark,
+          side,
+          slippage_pct: args.slippage_pct ?? args.slippagePct,
+        });
+        const candidateMin = decibelMinOrderInfo(candidate, candidateExecution, leverage);
+        if (!(candidateMin.min_collateral_usd > 0)) continue;
+        if (candidateMin.min_collateral_usd <= walletUsdcBalance && (!best || candidateMin.min_collateral_usd < best.min.min_collateral_usd)) {
+          best = { market: candidate, markPrice: candidateMark, executionPrice: candidateExecution, min: candidateMin };
+        }
+      }
+      if (best) {
+        const previousSymbol = market.symbol;
+        market = best.market;
+        markPrice = best.markPrice;
+        executionPrice = best.executionPrice;
+        sizeBase = best.min.min_size_base;
+        collateralUsd = best.min.min_collateral_usd;
+        collateralSource = {
+          type: 'autonomous_affordable_market_selection',
+          wallet_usdc_balance: walletUsdcBalance,
+          requested_symbol: previousSymbol,
+          selected_symbol: market.symbol,
+          min_notional_usd: best.min.min_notional_usd,
+          min_collateral_usd: best.min.min_collateral_usd,
+        };
+        autonomousAdjustment = {
+          reason: 'selected_affordable_market_minimum',
+          requested_symbol: previousSymbol,
+          symbol: market.symbol,
+          min_notional_usd: best.min.min_notional_usd,
+          min_collateral_usd: best.min.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+        };
+        return true;
+      }
+      return {
+        error: `Decibel minimum for ${market.symbol} is about ${formatUsdApprox(minInfo.min_notional_usd)} notional (${formatUsdApprox(minInfo.min_collateral_usd)} collateral at ${leverage}x), but available USDC is about ${formatUsdApprox(walletUsdcBalance)}. Need: Add more USDC or choose a smaller-minimum market.`,
+        minimum_order: {
+          symbol: market.symbol,
+          min_size_base: minInfo.min_size_base,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+          leverage,
+        },
+      };
+    };
+
+    const minCheck = await ensureMinOrderSize();
+    if (minCheck !== true) return minCheck;
+
+    const clientOrderId = decibel.normalizeClientOrderId(args.client_order_id || args.clientOrderId)
+      || decibel.newClientOrderId();
+    const isMarket = orderType === 'market';
+    const orderPayload = {
+      marketName: market.market_name,
+      price: priceToDecibelChainUnits(executionPrice, market),
+      size: sizeToDecibelChainUnits(sizeBase, market).toString(),
+      isBuy,
+      timeInForce: isMarket ? 'ioc' : 'gtc',
+      isReduceOnly: !!options.reduceOnly || !!args.reduce_only || !!args.reduceOnly,
+      clientOrderId,
+      subaccountAddr: account.subaccount,
+      tickSize: decibelTickSize(market),
+      pxDecimals: market.px_decimals,
+      szDecimals: market.sz_decimals,
+      rewardSymbol: market.symbol,
+      rewardOrderType: options.rewardOrderType || (isMarket ? 'market' : 'limit'),
+      rewardLeverage: leverage,
+      rewardNotionalUsd: sizeBase * executionPrice,
+      ...builder,
+    };
+    let leverageResult = null;
+    if (!orderPayload.isReduceOnly && Number(args.leverage || args.rewardLeverage || 0) > 0) {
+      leverageResult = await decibel.configureUserSettingsForMarket({
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        userLeverage: leverage,
+      });
+      if (leverageResult?.success === false) {
+        return { error: leverageResult.error || 'Decibel leverage update failed', leverageResult, orderPayload };
+      }
+    }
+    const result = await decibel.placeOrder(orderPayload);
+    if (result?.success === false) return { error: result.error || 'Decibel order failed', result, orderPayload };
+    const order = {
+      symbol: market.symbol,
+      market_name: market.market_name,
+      side: isBuy ? 'long' : 'short',
+      order_type: orderType,
+      reduce_only: orderPayload.isReduceOnly,
+      size_base: sizeBase,
+      execution_price: executionPrice,
+      mark_price: markPrice || null,
+      notional_usd: sizeBase * executionPrice,
+      collateral_usd: collateralUsd > 0 ? collateralUsd : (sizeBase * executionPrice) / leverage,
+      collateral_source: collateralSource,
+      autonomous_adjustment: autonomousAdjustment,
+      leverage,
+      builderAddr: builder.builderAddr,
+      builderFee: builder.builderFee,
+    };
+    const verification = orderPayload.isReduceOnly
+      ? { verified: true, effect: 'reduce_only_tx_confirmed' }
+      : await decibel.waitForPlacedOrderEffect({
+        subaccountAddr: account.subaccount,
+        marketName: market.market_name,
+        marketAddr: market.market_addr,
+        symbol: market.symbol,
+        side: order.side,
+        clientOrderId,
+        orderType,
+        reduceOnly: false,
+        txResult: result,
+        attempts: 6,
+        delayMs: 900,
+      });
+    if (!verification.verified) {
+      return {
+        error: verification.reason || 'Decibel order was submitted, but no matching position or open order was verified.',
+        result: { ...result, clientOrderId },
+        order,
+        verification,
+        orderPayload,
+      };
+    }
+    const reward = maybeRecordDecibelReward(playerId, orderPayload, result, 'server');
+    return {
+      success: true,
+      verified: true,
+      verification,
+      result: { ...result, clientOrderId },
+      order,
+      leverage_result: leverageResult,
+      reward,
+    };
+  } catch (error) {
+    return { error: error?.message || String(error || 'Decibel order failed') };
+  }
+}
+
+async function runDecibelPlaceOrderAction(session, playerId, agentKey, args) {
+  const placed = await placeDecibelOrderForAgent(session, playerId, args);
+  if (placed.error) return { ok: false, error: placed.error, ...placed };
+  await notifyAgentAction(agentKey, 'decibel_place_order', placed);
+  return { ok: true, ...placed };
+}
+
+async function runDecibelClosePositionAction(session, playerId, agentKey, args = {}) {
+  const account = await requireDecibelSession(session);
+  if (!account.ok) return { ok: false, error: account.error };
+  const symbol = String(args.symbol || '').trim();
+
+  const positions = await decibel.fetchAccountPositions(account.subaccount);
+  const openPositions = positions.filter((row) => Math.abs(Number(row?.size ?? 0)) > 0);
+  const position = symbol
+    ? openPositions.find((row) => decibelPositionSymbol(row) === symbol.toUpperCase())
+      || openPositions.find((row) => marketMatchesSymbol(row, symbol))
+    : openPositions.length === 1
+      ? openPositions[0]
+      : null;
+  if (!position) {
+    if (!symbol && openPositions.length > 1) {
+      const choices = openPositions
+        .map((row) => {
+          const p = normalizeDecibelPosition(row);
+          return `${p.symbol} ${p.side}`;
+        })
+        .join(', ');
+      return { ok: false, error: `Multiple open Decibel positions found: ${choices}. Need: Specify which symbol to close.` };
+    }
+    return { ok: false, error: symbol ? `No open Decibel position found for ${symbol}` : 'No open Decibel position found to close.' };
+  }
+
+  const normalized = normalizeDecibelPosition(position);
+  const closeSize = Number(args.size_base ?? args.size ?? 0) > 0
+    ? Number(args.size_base ?? args.size)
+    : normalized.size * (Math.max(1, Math.min(100, Number(args.percent || 100))) / 100);
+  if (!(closeSize > 0)) return { ok: false, error: 'Close size must be greater than zero' };
+
+  const closingLong = normalized.side === 'long';
+  const orderArgs = {
+    symbol: normalized.symbol,
+    side: closingLong ? 'sell' : 'buy',
+    order_type: 'market',
+    size_base: Math.min(closeSize, normalized.size),
+    slippage_pct: args.slippage_pct ?? 1,
+    client_order_id: args.client_order_id,
+    reduce_only: true,
+  };
+  const placed = await placeDecibelOrderForAgent(session, playerId, orderArgs, {
+    reduceOnly: true,
+    rewardOrderType: 'close',
+    account,
+  });
+  if (placed.error) return { ok: false, error: placed.error, ...placed, closed_position: normalized };
+  const closedSize = Math.min(closeSize, normalized.size);
+  const closePnl = estimateDecibelClosePnl(normalized, closedSize, placed?.order?.execution_price);
+  const remainingSize = Math.max(0, normalized.size - closedSize);
+  const output = {
+    ok: true,
+    ...placed,
+    closed_position: normalized,
+    close_result: {
+      symbol: normalized.symbol,
+      side: normalized.side,
+      requested_percent: Math.max(1, Math.min(100, Number(args.percent || 100))),
+      closed_size_base: closedSize,
+      remaining_size_base: Number(remainingSize.toFixed(8)),
+      remaining_notional_usd: Number((remainingSize * Number(placed?.order?.execution_price || normalized.entry_price || 0)).toFixed(6)),
+      ...closePnl,
+      settlement_note: closePnl
+        ? 'PnL is estimated from entry and execution price; final exchange settlement may update slightly.'
+        : 'Final PnL settlement is not available yet.',
+    },
+  };
+  await notifyAgentAction(agentKey, 'decibel_close_position', output);
+  return output;
+}
+
 function registerTools(server, session, agentKey, reqMeta = {}) {
   instrumentMcpTools(server, session, reqMeta);
   const playerId = session.player.id;
@@ -1850,6 +2487,289 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       return jsonResult({ ...result, base: buildBaseState(playerId, false) });
     }
   );
+
+  server.registerTool(
+    'decibel_get_account',
+    {
+      title: 'Decibel Account',
+      description: 'Read the authenticated player Decibel account, primary subaccount, overview, positions, open orders, and builder routing. Use before trading or when the player asks for account/positions/balance.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+        include_history: z.boolean().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    async ({ include_orders = true, include_history = false, limit = 10 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [overview, positions, openOrders, orderHistory, tradeHistory, signer] = await Promise.all([
+        decibel.fetchAccountOverview(account.subaccount, { includePerformance: true }),
+        decibel.fetchAccountPositions(account.subaccount),
+        include_orders ? decibel.fetchOpenOrders(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchOrderHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchTradeHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        decibel.getServerSignerInfo().catch((error) => ({ error: error?.message || String(error) })),
+      ]);
+      return jsonResult({
+        success: true,
+        dex: 'decibel',
+        owner: account.owner,
+        primary_subaccount: account.subaccount,
+        subaccounts: account.subaccounts,
+        builder: decibelBuilderFields(),
+        signer,
+        overview,
+        positions: positions.map(normalizeDecibelPosition),
+        open_orders: openOrders,
+        order_history: orderHistory,
+        trade_history: tradeHistory,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_get_markets',
+    {
+      title: 'Decibel Markets',
+      description: 'List Decibel markets with mark prices and chain formatting metadata.',
+      inputSchema: {
+        symbols: z.array(z.string()).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ symbols = [], limit = 40 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [markets, prices] = await Promise.all([decibel.fetchMarkets(), decibel.fetchMarketPrices()]);
+      const priceByMarket = new Map(prices.map((row) => [String(row?.market || row?.market_addr || '').toLowerCase(), row]));
+      const requested = (symbols || []).map((s) => String(s).trim()).filter(Boolean);
+      const filtered = requested.length
+        ? markets.filter((market) => requested.some((symbol) => marketMatchesSymbol(market, symbol)))
+        : markets;
+      return jsonResult({
+        success: true,
+        markets: filtered.slice(0, limit).map((market) => normalizeDecibelMarket(
+          market,
+          priceByMarket.get(decibelMarketAddress(market).toLowerCase()) || null
+        )),
+        total_markets: markets.length,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_get_positions',
+    {
+      title: 'Decibel Positions',
+      description: 'Read current Decibel open positions and optionally open orders/history.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+        include_history: z.boolean().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    async ({ include_orders = true, include_history = false, limit = 10 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [positions, openOrders, orderHistory, tradeHistory] = await Promise.all([
+        decibel.fetchAccountPositions(account.subaccount),
+        include_orders ? decibel.fetchOpenOrders(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchOrderHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchTradeHistory(account.subaccount, { limit }) : Promise.resolve([]),
+      ]);
+      return jsonResult({
+        success: true,
+        primary_subaccount: account.subaccount,
+        positions: positions.map(normalizeDecibelPosition),
+        open_orders: openOrders,
+        order_history: orderHistory,
+        trade_history: tradeHistory,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_place_order',
+    {
+      title: 'Decibel Place Order',
+      description: 'Open a Decibel market/limit long or short using the Clash server signer and mandatory builder fee routing. Requires clear symbol, side, and size/notional/collateral.',
+      inputSchema: {
+        symbol: z.string(),
+        side: z.enum(['long', 'short', 'buy', 'sell', 'bid', 'ask']),
+        order_type: z.enum(['market', 'limit']).optional(),
+        price: z.number().positive().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+        collateral_usd: z.number().positive().optional(),
+        collateral_pct: z.number().positive().max(100).optional(),
+        notional_usd: z.number().positive().optional(),
+        leverage: z.number().positive().max(50).optional(),
+        slippage_pct: z.number().positive().max(50).optional(),
+        client_order_id: z.string().optional(),
+      },
+    },
+    async (args) => {
+      const placed = await runDecibelPlaceOrderAction(session, playerId, agentKey, args);
+      if (!placed.ok) return toolError(placed.error, placed);
+      return jsonResult(placed);
+    }
+  );
+
+  server.registerTool(
+    'decibel_close_position',
+    {
+      title: 'Decibel Close Position',
+      description: 'Close or partially close one Decibel position with a reduce-only market order. If symbol is omitted, closes the only open position or returns a blocker listing open symbols.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+        percent: z.number().positive().max(100).optional(),
+        slippage_pct: z.number().positive().max(50).optional(),
+        client_order_id: z.string().optional(),
+      },
+    },
+    async ({ symbol, size, size_base, percent, slippage_pct, client_order_id }) => {
+      const placed = await runDecibelClosePositionAction(session, playerId, agentKey, {
+        symbol,
+        size,
+        size_base,
+        percent,
+        slippage_pct,
+        client_order_id,
+      });
+      if (!placed.ok) return toolError(placed.error, placed);
+      return jsonResult(placed);
+    }
+  );
+
+  server.registerTool(
+    'decibel_cancel_order',
+    {
+      title: 'Decibel Cancel Order',
+      description: 'Cancel a Decibel open order by order id and market symbol/name.',
+      inputSchema: {
+        symbol: z.string(),
+        order_id: z.string(),
+      },
+    },
+    async ({ symbol, order_id }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const market = await getDecibelMarket(symbol);
+      const result = await decibel.cancelOrder({
+        orderId: order_id,
+        marketName: market.market_name,
+        subaccountAddr: account.subaccount,
+      });
+      if (result?.success === false) return toolError(result.error || 'Decibel cancel failed', result);
+      await notifyAgentAction(agentKey, 'decibel_cancel_order', { result, symbol: market.symbol, order_id });
+      return jsonResult({ success: true, result, symbol: market.symbol, market_name: market.market_name, order_id });
+    }
+  );
+
+  server.registerTool(
+    'decibel_set_leverage',
+    {
+      title: 'Decibel Set Leverage',
+      description: 'Configure Decibel cross-margin leverage for a market before opening a position.',
+      inputSchema: {
+        symbol: z.string(),
+        leverage: z.number().positive().max(50),
+      },
+    },
+    async ({ symbol, leverage }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const market = await getDecibelMarket(symbol);
+      const result = await decibel.configureUserSettingsForMarket({
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        userLeverage: Math.max(1, Math.min(50, Number(leverage) || 1)),
+      });
+      if (result?.success === false) return toolError(result.error || 'Decibel leverage update failed', result);
+      await notifyAgentAction(agentKey, 'decibel_set_leverage', { result, symbol: market.symbol, leverage });
+      return jsonResult({ success: true, result, symbol: market.symbol, leverage });
+    }
+  );
+
+  server.registerTool(
+    'decibel_set_tpsl',
+    {
+      title: 'Decibel Set TP/SL',
+      description: 'Set or update take-profit and/or stop-loss orders for an existing Decibel position.',
+      inputSchema: {
+        symbol: z.string(),
+        take_profit: z.number().positive().optional(),
+        stop_loss: z.number().positive().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+      },
+    },
+    async ({ symbol, take_profit, stop_loss, size, size_base }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      if (!(Number(take_profit) > 0) && !(Number(stop_loss) > 0)) {
+        return toolError('Provide take_profit, stop_loss, or both.');
+      }
+      const market = await getDecibelMarket(symbol);
+      const positions = await decibel.fetchAccountPositions(account.subaccount);
+      const position = positions.find((row) => decibelPositionSymbol(row) === market.symbol)
+        || positions.find((row) => marketMatchesSymbol(row, symbol));
+      if (!position) return toolError(`No open Decibel position found for ${symbol}`);
+      const normalized = normalizeDecibelPosition(position);
+      const isLong = normalized.side === 'long';
+      const sizeHuman = Number(size_base ?? size ?? normalized.size);
+      const chainSize = sizeToDecibelChainUnits(Math.min(sizeHuman, normalized.size), market).toString();
+      const tick = decibelTickSize(market);
+      const leg = {};
+      if (Number(take_profit) > 0) {
+        const trigger = priceToDecibelChainUnits(take_profit, market);
+        const limit = Math.max(1, trigger + (isLong ? Math.max(1, tick) : -Math.max(1, tick)));
+        Object.assign(leg, {
+          tpOrderId: normalized.tp_order_id || undefined,
+          tpTriggerPrice: trigger,
+          tpLimitPrice: limit,
+          tpSize: chainSize,
+        });
+      }
+      if (Number(stop_loss) > 0) {
+        const trigger = priceToDecibelChainUnits(stop_loss, market);
+        const limit = Math.max(1, trigger + (isLong ? -Math.max(1, tick) : Math.max(1, tick)));
+        Object.assign(leg, {
+          slOrderId: normalized.sl_order_id || undefined,
+          slTriggerPrice: trigger,
+          slLimitPrice: limit,
+          slSize: chainSize,
+        });
+      }
+      const base = {
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        tickSize: tick,
+        ...leg,
+      };
+      const results = [];
+      if (base.tpTriggerPrice && base.tpOrderId) {
+        results.push({ leg: 'tp', ...(await decibel.updateTpOrderForPosition({ ...base, prevOrderId: base.tpOrderId })) });
+      }
+      if (base.slTriggerPrice && base.slOrderId) {
+        results.push({ leg: 'sl', ...(await decibel.updateSlOrderForPosition({ ...base, prevOrderId: base.slOrderId })) });
+      }
+      if ((base.tpTriggerPrice && !base.tpOrderId) || (base.slTriggerPrice && !base.slOrderId)) {
+        results.push({ leg: 'tp_sl', ...(await decibel.placeTpSlOrderForPosition({
+          ...base,
+          ...(base.tpOrderId ? { tpTriggerPrice: undefined, tpLimitPrice: undefined, tpSize: undefined } : {}),
+          ...(base.slOrderId ? { slTriggerPrice: undefined, slLimitPrice: undefined, slSize: undefined } : {}),
+        })) });
+      }
+      const failed = results.find((row) => row?.success === false);
+      if (failed) return toolError(failed.error || 'Decibel TP/SL failed', { results });
+      const payload = { success: true, symbol: market.symbol, position: normalized, results };
+      await notifyAgentAction(agentKey, 'decibel_set_tpsl', payload);
+      return jsonResult(payload);
+    }
+  );
 }
 
 function createServer(session, agentKey, reqMeta = {}) {
@@ -1880,6 +2800,7 @@ app.get('/health', (_req, res) => {
     transport: 'streamable-http',
     mcp_endpoint: `${PUBLIC_URL}/mcp`,
     skill: `${PUBLIC_URL}/skills.md`,
+    decibel_skill: `${PUBLIC_URL}/decibel-skills.md`,
   });
 });
 
@@ -1891,8 +2812,77 @@ app.get('/skills.md', (_req, res) => {
   res.type('text/markdown').send(readSkill());
 });
 
+app.get('/decibel-skills.md', (_req, res) => {
+  res.type('text/markdown').send(readDecibelSkill());
+});
+
 app.get('/.well-known/oauth-protected-resource', (req, res) => {
   res.json(protectedResourceMetadata(req));
+});
+
+async function handleFastDecibelAction(req, res, tool, runner) {
+  const startedAt = Date.now();
+  const input = req.body && typeof req.body === 'object' ? req.body : {};
+  const playerId = req.agentSession?.player?.id || null;
+  const aiKeyId = req.agentSession?.key?.id || null;
+  const aiKeyPrefix = req.agentSession?.key?.key_prefix || null;
+  try {
+    const output = await runner(input);
+    const status = output?.ok === false || output?.error ? 'error' : 'ok';
+    game.logMcpEvent({
+      playerId,
+      aiKeyId,
+      aiKeyPrefix,
+      tool,
+      status,
+      durationMs: Date.now() - startedAt,
+      error: output?.error || null,
+      input,
+      output,
+      metadata: { transport: 'fast-rest' },
+      ...requestLogMeta(req),
+    });
+    if (status !== 'ok') return res.status(400).json(output);
+    return res.json(output);
+  } catch (error) {
+    const output = { ok: false, error: error?.message || String(error || 'Decibel action failed') };
+    game.logMcpEvent({
+      playerId,
+      aiKeyId,
+      aiKeyPrefix,
+      tool,
+      status: 'error',
+      durationMs: Date.now() - startedAt,
+      error: output.error,
+      input,
+      output,
+      metadata: { transport: 'fast-rest' },
+      ...requestLogMeta(req),
+    });
+    return res.status(500).json(output);
+  }
+}
+
+app.post('/fast/decibel/place-order', rateLimit, agentAuth, async (req, res) => {
+  await handleFastDecibelAction(req, res, 'decibel_place_order', (input) => (
+    runDecibelPlaceOrderAction(
+      req.agentSession,
+      req.agentSession.player.id,
+      req.agentKey,
+      input
+    )
+  ));
+});
+
+app.post('/fast/decibel/close-position', rateLimit, agentAuth, async (req, res) => {
+  await handleFastDecibelAction(req, res, 'decibel_close_position', (input) => (
+    runDecibelClosePositionAction(
+      req.agentSession,
+      req.agentSession.player.id,
+      req.agentKey,
+      input
+    )
+  ));
 });
 
 app.all('/mcp', rateLimit, agentAuth, async (req, res) => {

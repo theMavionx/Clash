@@ -28,6 +28,7 @@ const router = express.Router();
 const STRICT_BATTLE_REPLAY_VERIFICATION = process.env.BATTLE_REPLAY_STRICT === '1';
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
 const AI_CHAT_DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
+const CLASH_MCP_INTERNAL_URL = String(process.env.CLASH_MCP_INTERNAL_URL || 'http://127.0.0.1:4100').replace(/\/+$/, '');
 
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
@@ -4426,6 +4427,9 @@ function summarizeHermesResult(result = {}) {
     fallback_index: result.fallback_index ?? null,
     attempted_models: Array.isArray(result.attempted_models) ? result.attempted_models : [],
     timings: result.timings || null,
+    timing_events: Array.isArray(result.timing_events || result.timingEvents)
+      ? (result.timing_events || result.timingEvents).slice(-80)
+      : [],
     attempts: Array.isArray(result.attempts)
       ? result.attempts.map((attempt) => ({
           model: attempt.model || null,
@@ -4456,8 +4460,271 @@ function logAiChatServer(event, data = {}) {
   }
 }
 
+function createAiChatStageLogger({ traceId, player, intent, startedAt, requestPreview }) {
+  let lastAt = startedAt || Date.now();
+  return function logStage(stage, data = {}) {
+    const now = Date.now();
+    const stepMs = Math.max(0, now - lastAt);
+    const elapsedMs = Math.max(0, now - (startedAt || now));
+    lastAt = now;
+    const payload = {
+      stage,
+      elapsed_ms: elapsedMs,
+      step_ms: stepMs,
+      ...data,
+    };
+    logAiChatServer('stage', {
+      trace_id: traceId,
+      player_id: player?.id || null,
+      player_name: player?.name || null,
+      intent: intent?.kind || null,
+      ...payload,
+    });
+    db.logHermesChatEvent({
+      traceId,
+      eventType: 'stage',
+      playerId: player?.id || null,
+      playerName: player?.name || null,
+      intent: intent?.kind || null,
+      status: data.status || 'ok',
+      durationMs: stepMs,
+      model: data.model || null,
+      error: data.error || null,
+      requestPreview: stage,
+      responsePreview: data.message || data.error || requestPreview || '',
+      input: { trace_id: traceId, stage, request_preview: requestPreview || null },
+      output: payload,
+    });
+  };
+}
+
+function logHermesTimingEvents({ traceId, player, intent, events = [] }) {
+  if (!Array.isArray(events) || events.length === 0) return;
+  for (const event of events.slice(-80)) {
+    const stage = String(event?.stage || event?.phase || 'unknown').slice(0, 120);
+    db.logHermesChatEvent({
+      traceId,
+      eventType: 'orchestrator_stage',
+      playerId: player?.id || null,
+      playerName: player?.name || null,
+      intent: intent?.kind || null,
+      status: event?.status || 'ok',
+      durationMs: Number.isFinite(Number(event?.step_ms)) ? Number(event.step_ms) : null,
+      model: event?.model || null,
+      error: event?.error || null,
+      requestPreview: stage,
+      responsePreview: event?.message || event?.error || '',
+      output: event,
+    });
+  }
+}
+
+function fmtUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return `$${n.toFixed(n >= 100 ? 2 : 4).replace(/\.?0+$/, '')}`;
+}
+
+function fmtSignedUsd(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const abs = fmtUsd(Math.abs(n));
+  if (!abs) return null;
+  return `${n >= 0 ? '+' : '-'}${abs}`;
+}
+
+function fmtPct(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const sign = n >= 0 ? '+' : '-';
+  return `${sign}${Math.abs(n).toFixed(Math.abs(n) >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
+}
+
+function shortHash(value) {
+  const text = String(value || '');
+  if (text.length <= 14) return text;
+  return `${text.slice(0, 8)}...${text.slice(-6)}`;
+}
+
+function summarizeFastDecibelResult(action, payload) {
+  if (!payload || payload.ok === false || payload.error) {
+    return `Blocked: ${payload?.error || 'Decibel action failed.'}`;
+  }
+  const order = payload.order || {};
+  const symbol = order.symbol || action?.body?.symbol || 'market';
+  const side = order.side || action?.body?.side || 'position';
+  const leverage = Number(order.leverage || action?.body?.leverage || 1);
+  const notional = fmtUsd(order.notional_usd);
+  const price = fmtUsd(order.execution_price || order.mark_price);
+  const tx = shortHash(payload.result?.hash || payload.result?.transactionHash);
+  const txText = tx ? ` Tx: ${tx}.` : '';
+
+  if (action?.kind === 'decibel_close_position') {
+    const closed = payload.closed_position || {};
+    const closeResult = payload.close_result || {};
+    const closedSide = closed.side || side;
+    const size = Number(closeResult.closed_size_base || order.size_base || closed.size);
+    const sizeText = Number.isFinite(size) && size > 0 ? ` size ${Number(size.toFixed(8))}` : '';
+    const pnlUsd = fmtSignedUsd(closeResult.realized_pnl_usd_estimate);
+    const pnlPct = fmtPct(closeResult.realized_pnl_pct_estimate);
+    const pnlText = pnlUsd
+      ? ` PnL estimate: ${pnlUsd}${pnlPct ? ` (${pnlPct})` : ''}.`
+      : ' PnL estimate is not available yet.';
+    const remaining = Number(closeResult.remaining_notional_usd);
+    const remainingText = Number.isFinite(remaining) && remaining > 0.01
+      ? ` Remaining notional: ${fmtUsd(remaining)}.`
+      : '';
+    return `Done: Closed ${symbol} ${closedSide} position${sizeText}. Result: reduce-only market order confirmed${price ? ` near ${price}` : ''}.${pnlText}${remainingText}${txText}`;
+  }
+
+  const levText = leverage > 1 ? `${leverage}x ` : '';
+  const defaultText = action?.body?.autonomous_default
+    ? ' I chose the conservative default you delegated.'
+    : '';
+  const adjustmentText = order.autonomous_adjustment
+    ? ' I adjusted to Decibel minimum size/market rules.'
+    : '';
+  return `Done: Opened ${levText}${symbol} ${side}.${defaultText}${adjustmentText} Result: ${notional ? `${notional} notional ` : ''}market order confirmed${price ? ` near ${price}` : ''}; builder fee routing applied.${txText}`;
+}
+
+async function callFastMcpAction(agentKey, action, traceId) {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90_000);
+  const url = `${CLASH_MCP_INTERNAL_URL}${action.path}`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${agentKey}`,
+        'Content-Type': 'application/json',
+        'x-trace-id': traceId,
+      },
+      body: JSON.stringify(action.body || {}),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text }; }
+    const elapsed = Date.now() - startedAt;
+    if ((payload?.ok === false || payload?.error) && response.status < 500) {
+      return {
+        ok: false,
+        blocked: true,
+        error: payload?.error || payload?.message || `MCP fast action blocked with HTTP ${response.status}`,
+        output_text: summarizeFastDecibelResult(action, payload),
+        model: 'fast-decibel-router',
+        fallback: false,
+        fallback_index: 0,
+        attempted_models: ['fast-decibel-router'],
+        timings: {
+          total_ms: elapsed,
+          mcp_fast_ms: elapsed,
+        },
+        timing_events: [
+          {
+            stage: 'mcp_fast_action',
+            status: 'blocked',
+            step_ms: elapsed,
+            elapsed_ms: elapsed,
+            message: `MCP fast route returned a blocker for ${action.tool}`,
+            tool: action.tool,
+            error: payload?.error || null,
+          },
+        ],
+        fast_action: action,
+        payload,
+      };
+    }
+    if (!response.ok || payload?.ok === false || payload?.error) {
+      const err = new Error(payload?.error || payload?.message || `MCP fast action failed with HTTP ${response.status}`);
+      err.status = response.status || 502;
+      err.body = payload;
+      err.durationMs = elapsed;
+      throw err;
+    }
+    return {
+      output_text: summarizeFastDecibelResult(action, payload),
+      model: 'fast-decibel-router',
+      fallback: false,
+      fallback_index: 0,
+      attempted_models: ['fast-decibel-router'],
+      timings: {
+        total_ms: elapsed,
+        mcp_fast_ms: elapsed,
+      },
+      timing_events: [
+        {
+          stage: 'mcp_fast_action',
+          status: 'ok',
+          step_ms: elapsed,
+          elapsed_ms: elapsed,
+          message: `Executed ${action.tool} through MCP fast route`,
+          tool: action.tool,
+        },
+      ],
+      fast_action: action,
+      payload,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function buildFastActionRepairContext(action, fastResult) {
+  const body = (() => {
+    try {
+      return JSON.stringify(action?.body || {});
+    } catch {
+      return '{}';
+    }
+  })();
+  const blocker = fastResult?.error || fastResult?.payload?.error || fastResult?.output_text || 'MCP fast route blocked.';
+  return [
+    '# Internal Fast Route Blocker',
+    `The deterministic MCP fast route tried tool "${action?.tool || 'unknown'}" with args ${body}.`,
+    `It was blocked with: ${blocker}`,
+    'Repair the request using available MCP tools if possible. Infer obvious missing values from current player state, positions, balances, and recent chat history. If it is still impossible, answer in English with "Blocked:" and one concrete requirement.',
+  ].join('\n').slice(0, 2000);
+}
+
+function mergeFastBlockedTiming(fastResult, hermesResult) {
+  if (!fastResult || !hermesResult || typeof hermesResult !== 'object') return hermesResult;
+  const fastEvents = Array.isArray(fastResult.timing_events || fastResult.timingEvents)
+    ? (fastResult.timing_events || fastResult.timingEvents)
+    : [];
+  const hermesEvents = Array.isArray(hermesResult.timing_events || hermesResult.timingEvents)
+    ? (hermesResult.timing_events || hermesResult.timingEvents)
+    : [];
+  return {
+    ...hermesResult,
+    fast_action_blocked: {
+      tool: fastResult.fast_action?.tool || null,
+      error: fastResult.error || null,
+      output_text: fastResult.output_text || null,
+      timings: fastResult.timings || null,
+    },
+    timings: {
+      ...(hermesResult.timings || {}),
+      mcp_fast_blocked_ms: fastResult.timings?.mcp_fast_ms ?? fastResult.timings?.total_ms ?? null,
+    },
+    timing_events: [
+      ...fastEvents,
+      {
+        stage: 'mcp_fast_blocked_repair_fallback',
+        status: 'ok',
+        message: 'MCP fast route was blocked, dispatching to Hermes repair fallback',
+        tool: fastResult.fast_action?.tool || null,
+        error: fastResult.error || null,
+      },
+      ...hermesEvents,
+    ],
+  };
+}
+
 router.post('/ai-chat/message', auth, async (req, res) => {
   const startedAt = Date.now();
+  const mcpEventStartId = Number(db.db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM mcp_events').get()?.id || 0);
   const traceId = String(req.body?.trace_id || req.body?.traceId || crypto.randomUUID()).slice(0, 80);
   const idempotencyKey = String(req.body?.idempotency_key || crypto.randomUUID()).slice(0, 120);
   const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
@@ -4466,10 +4733,23 @@ router.post('/ai-chat/message', auth, async (req, res) => {
   const history = normalizeAiChatHistory(req.body?.history);
   const intent = hermesClient.classifyGameIntent(message);
   const quotaBefore = getAiMessageQuotaStatus(req.player.id);
+  const logStage = createAiChatStageLogger({
+    traceId,
+    player: req.player,
+    intent,
+    startedAt,
+    requestPreview: aiChatPreview(message),
+  });
 
   let model = null;
   let reservation = null;
   try {
+    logStage('message_received', {
+      message: 'AI chat request received',
+      message_chars: message.length,
+      history_count: history.length,
+      action_required: !!intent.action_required,
+    });
     logAiChatServer('message_received', {
       trace_id: traceId,
       player_id: req.player.id,
@@ -4481,12 +4761,31 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       quota_before: quotaBefore,
       request_preview: aiChatPreview(message),
     });
+    logStage('load_or_create_agent_start', { message: 'Loading Hermes agent key/state' });
     const agent = db.getOrCreateHermesAgent(req.player.id);
     if (agent.error) return res.status(400).json(agent);
+    logStage('load_or_create_agent_done', { message: 'Hermes agent key/state loaded' });
+    logStage('static_reply_check_start', { message: 'Checking static fast reply route' });
     const staticResult = hermesClient.tryStaticReply(message);
+    const fastAction = staticResult ? null : hermesClient.extractFastDecibelAction(message, intent, history);
+    logStage('static_reply_check_done', {
+      message: staticResult
+        ? 'Static reply route selected'
+        : fastAction
+          ? 'MCP fast action route selected'
+          : 'No static route, reserving quota',
+      static_reply: !!staticResult,
+      fast_action: fastAction ? fastAction.tool : null,
+    });
+    logStage('quota_reserve_start', { message: staticResult ? 'Static reply does not consume quota' : 'Reserving AI message quota' });
     const reserved = staticResult ? null : reserveAiChatMessage(req.player.id);
     if (reserved && !reserved.ok) {
       const durationMs = Date.now() - startedAt;
+      logStage('quota_blocked', {
+        status: 'blocked',
+        message: 'AI message quota blocked the request',
+        quota: reserved.quota,
+      });
       logAiChatServer('quota_blocked', {
         trace_id: traceId,
         player_id: req.player.id,
@@ -4516,32 +4815,128 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       });
     }
     reservation = reserved?.reservation || null;
-    logAiChatServer(staticResult ? 'static_reply' : 'dispatch_hermes', {
+    logStage('quota_reserve_done', {
+      message: reservation ? `Reserved ${reservation.bucket} message` : 'No quota reservation needed',
+      reservation: reservation ? { bucket: reservation.bucket, day: reservation.day } : null,
+    });
+    const routeType = staticResult ? 'static_reply' : fastAction ? 'dispatch_mcp_fast' : 'dispatch_hermes';
+    logAiChatServer(routeType, {
       trace_id: traceId,
       player_id: req.player.id,
       intent: intent.kind,
       idempotency_key: idempotencyKey,
       reservation: reservation ? { source: reservation.source, day: reservation.day } : null,
+      fast_action: fastAction ? { tool: fastAction.tool, body: fastAction.body } : null,
     });
-    const result = staticResult || await hermesClient.chat(req.player, agent.mcp_key, message, {
-      previous_response_id: req.body?.previous_response_id,
+    logStage(staticResult ? 'static_reply_start' : fastAction ? 'mcp_fast_dispatch_start' : 'hermes_dispatch_start', {
+      message: staticResult
+        ? 'Preparing static reply'
+        : fastAction
+          ? 'Dispatching request to MCP fast action route'
+          : 'Dispatching request to Hermes orchestrator',
       idempotency_key: idempotencyKey,
-      metadata: {
-        ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
-        trace_id: traceId,
-      },
-      history,
+      fast_action: fastAction ? fastAction.tool : null,
+    });
+    let result = null;
+    let fastBlockedResult = null;
+    if (staticResult) {
+      result = staticResult;
+    } else if (fastAction) {
+      const fastResult = await callFastMcpAction(agent.mcp_key, fastAction, traceId);
+      if (fastResult?.blocked) {
+        fastBlockedResult = fastResult;
+        logStage('mcp_fast_blocked_fallback_start', {
+          message: 'MCP fast action route was blocked, dispatching to Hermes repair fallback',
+          fast_action: fastAction.tool,
+          error: fastResult.error || null,
+        });
+        logAiChatServer('mcp_fast_blocked_fallback', {
+          trace_id: traceId,
+          player_id: req.player.id,
+          intent: intent.kind,
+          fast_action: { tool: fastAction.tool, body: fastAction.body },
+          error: aiChatPreview(fastResult.error || fastResult.output_text, 700),
+        });
+        const hermesRepairResult = await hermesClient.chat(req.player, agent.mcp_key, message, {
+          previous_response_id: req.body?.previous_response_id,
+          idempotency_key: idempotencyKey,
+          internal_context: buildFastActionRepairContext(fastAction, fastResult),
+          metadata: {
+            ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+            trace_id: traceId,
+            fast_action_blocked: true,
+            fast_action_tool: fastAction.tool,
+          },
+          history,
+        });
+        result = mergeFastBlockedTiming(fastResult, hermesRepairResult);
+      } else {
+        result = fastResult;
+      }
+    } else {
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: req.body?.previous_response_id,
+        idempotency_key: idempotencyKey,
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+        },
+        history,
+      });
+    }
+    logStage(staticResult ? 'static_reply_done' : fastBlockedResult ? 'mcp_fast_blocked_fallback_done' : fastAction ? 'mcp_fast_dispatch_done' : 'hermes_dispatch_done', {
+      message: staticResult
+        ? 'Static reply ready'
+        : fastBlockedResult
+          ? 'Hermes repair fallback returned a response after MCP fast route blocker'
+          : fastAction
+          ? 'MCP fast action route returned a response'
+          : 'Hermes orchestrator returned a response',
+      model: result.model || null,
+      fallback: !!result.fallback,
+      response_chars: String(result.output_text || '').length,
+      fast_action: fastAction ? fastAction.tool : null,
+      fast_action_blocked: !!fastBlockedResult,
     });
     model = result.model || null;
+    const expectedTools = Array.isArray(intent.expected_tools) ? intent.expected_tools.filter(Boolean) : [];
+    const responseText = String(result.output_text || '').trim();
+    const responseClaimsSuccess = /^(?:Done|Success|Completed)\s*:/i.test(responseText);
+    if (!staticResult && intent.action_required && responseClaimsSuccess && expectedTools.length) {
+      const placeholders = expectedTools.map(() => '?').join(',');
+      const toolEvent = db.db.prepare(`
+        SELECT id, tool, status, duration_ms, error
+        FROM mcp_events
+        WHERE id > ?
+          AND player_id = ?
+          AND tool IN (${placeholders})
+          AND status = 'ok'
+          AND (error IS NULL OR error = '')
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(mcpEventStartId, req.player.id, ...expectedTools);
+      if (!toolEvent) {
+        const err = new Error(`Agent response claimed success without calling required MCP tool (${expectedTools.join(' or ')}).`);
+        err.status = 502;
+        err.body = {
+          expected_tools: expectedTools,
+          response_preview: aiChatPreview(responseText, 500),
+        };
+        throw err;
+      }
+    }
     const durationMs = Date.now() - startedAt;
     const quotaAfter = getAiMessageQuotaStatus(req.player.id);
     const resultSummary = summarizeHermesResult(result);
+    logHermesTimingEvents({ traceId, player: req.player, intent, events: result.timing_events || result.timingEvents || [] });
+    logStage('mark_agent_state_start', { message: 'Persisting Hermes agent state' });
     db.markHermesAgentState(req.player.id, {
       status: 'running',
       orchestrator: result,
       provisioned: true,
       chatted: true,
     });
+    logStage('mark_agent_state_done', { message: 'Hermes agent state persisted' });
     logAiChatServer('message_ok', {
       trace_id: traceId,
       player_id: req.player.id,
@@ -4556,6 +4951,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       response_preview: aiChatPreview(result.output_text, 900),
       quota_after: quotaAfter,
     });
+    logStage('message_persist_start', { message: 'Writing final AI chat event' });
     db.logHermesChatEvent({
       traceId,
       eventType: 'message',
@@ -4573,7 +4969,14 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       output: {
         output_text: result.output_text,
         ...resultSummary,
+        timing_events: result.timing_events || result.timingEvents || [],
       },
+    });
+    logStage('message_persist_done', { message: 'Final AI chat event written' });
+    logStage('response_send', {
+      message: 'Sending AI chat response to client',
+      total_ms: Date.now() - startedAt,
+      quota_after: quotaAfter,
     });
     res.json({
       ok: true,
@@ -4587,6 +4990,13 @@ router.post('/ai-chat/message', auth, async (req, res) => {
     }
     const durationMs = Date.now() - startedAt;
     const quotaAfter = getAiMessageQuotaStatus(req.player.id);
+    logStage('message_error', {
+      status: 'error',
+      message: 'AI chat request failed',
+      model,
+      error: err.message,
+      total_ms: durationMs,
+    });
     db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
     logAiChatServer('message_error', {
       trace_id: traceId,
