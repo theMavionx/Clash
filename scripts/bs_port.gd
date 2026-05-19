@@ -86,6 +86,8 @@ func _load_troop_to_ship(troop_name: String) -> void:
 		return
 	var ship_level: int = port_node.get_meta("ship_level", 1)
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
+	var tdef: Dictionary = bs.troop_defs.get(troop_name, {})
+	var slot_cost: int = int(tdef.get("slot_cost", 1))
 	# Ask server first — server is authoritative on capacity.
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
@@ -100,10 +102,13 @@ func _load_troop_to_ship(troop_name: String) -> void:
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
-		# Offline fallback only — keep the local capacity check.
-		if ship_troops.size() >= ship_level:
+		# Offline fallback. Capacity = ship_level * 3 (was `>= ship_level` before,
+		# a pre-existing bug that capped offline ships to 1/2/3 troops total).
+		if ship_troops.size() + slot_cost > ship_level * 3:
 			return
 		ship_troops.append(troop_name)
+		for _i in range(slot_cost - 1):
+			ship_troops.append("_SLOT_FILLER_")
 		port_node.set_meta("ship_troops", ship_troops)
 	bs._refresh_port_panel()
 	var updated_troops: Array = port_node.get_meta("ship_troops", [])
@@ -237,7 +242,7 @@ func _get_all_port_ships() -> Array:
 
 ## Returns {pos: Vector3, port_node: Node3D} of the nearest port whose ship has
 ## free troop slots. Returns {} if none found.
-func _find_port_with_free_slot(from_pos: Vector3) -> Dictionary:
+func _find_port_with_free_slot(from_pos: Vector3, needed_slots: int = 1) -> Dictionary:
 	var best: Dictionary = {}
 	var best_dist: float = INF
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
@@ -248,8 +253,9 @@ func _find_port_with_free_slot(from_pos: Vector3) -> Dictionary:
 					continue
 				var ship_level: int = pnode.get_meta("ship_level", 1)
 				var ship_troops: Array = pnode.get_meta("ship_troops", [])
-				if ship_troops.size() >= ship_level * 3:
-					continue  # full
+				var capacity: int = ship_level * 3
+				if capacity - ship_troops.size() < needed_slots:
+					continue  # not enough room on this ship
 				var d: float = from_pos.distance_to(pnode.global_position)
 				if d < best_dist:
 					best_dist = d

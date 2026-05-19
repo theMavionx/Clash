@@ -501,7 +501,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1,
+	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -552,6 +552,18 @@ var troop_defs: Dictionary = {
 			1: {"gold": 120, "wood": 120},
 			2: {"gold": 250, "wood": 250},
 			3: {"gold": 500, "wood": 500},
+		}
+	},
+	"DemonKing": {
+		"display": "Demon King (Heavy Boss)",
+		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
+		"script": "res://scripts/demon_king.gd",
+		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
+		"buy_cost": 250,               # vs 100 for regular troops; ~2x slot + premium
+		"costs": {
+			1: {"gold": 250, "ore": 150},
+			2: {"gold": 500, "ore": 300},
+			3: {"gold": 1000, "ore": 600},
 		}
 	},
 }
@@ -3815,13 +3827,20 @@ func _refresh_port_panel() -> void:
 		info_lbl.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
 		port_vbox.add_child(info_lbl)
 
-		# Show loaded troops
+		# Show loaded troops (aggregate filler sentinels into the preceding troop)
 		if ship_troops.size() > 0:
+			var display_idx: int = 0
 			for i in range(ship_troops.size()):
 				var troop_name: String = ship_troops[i]
+				if troop_name == "_SLOT_FILLER_":
+					continue  # extra capacity used by a multi-slot troop above
+				display_idx += 1
 				var tlvl = troop_levels.get(troop_name, 1)
+				var tdef_d: Dictionary = troop_defs.get(troop_name, {})
+				var slots_d: int = int(tdef_d.get("slot_cost", 1))
+				var slots_suffix: String = "" if slots_d == 1 else " [%d slots]" % slots_d
 				var slot_lbl = Label.new()
-				slot_lbl.text = "  %d. %s (Lv.%d)" % [i + 1, troop_name, tlvl]
+				slot_lbl.text = "  %d. %s (Lv.%d)%s" % [display_idx, troop_name, tlvl, slots_suffix]
 				slot_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
 				slot_lbl.add_theme_font_size_override("font_size", 14)
 				port_vbox.add_child(slot_lbl)
@@ -3834,14 +3853,22 @@ func _refresh_port_panel() -> void:
 			load_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.6))
 			load_title.add_theme_font_size_override("font_size", 14)
 			port_vbox.add_child(load_title)
-			for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+			var ship_free: int = ship_capacity - ship_troops.size()
+			for troop_name in troop_defs.keys():
 				var tlvl = troop_levels.get(troop_name, 0)
 				if tlvl < 1:
 					continue
+				var tdef_l: Dictionary = troop_defs[troop_name]
+				var slot_cost_l: int = int(tdef_l.get("slot_cost", 1))
+				var slot_suffix_l: String = "" if slot_cost_l == 1 else " · %d slots" % slot_cost_l
 				var load_btn = Button.new()
-				load_btn.text = "Load %s (Lv.%d)" % [troop_name, tlvl]
+				load_btn.text = "Load %s (Lv.%d)%s" % [troop_name, tlvl, slot_suffix_l]
 				load_btn.custom_minimum_size = Vector2(0, 36)
-				_style_button(load_btn, Color(0.2, 0.4, 0.3), Color(0.25, 0.5, 0.35))
+				if ship_free >= slot_cost_l:
+					_style_button(load_btn, Color(0.2, 0.4, 0.3), Color(0.25, 0.5, 0.35))
+				else:
+					_style_button(load_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+					load_btn.disabled = true
 				var tn = troop_name
 				load_btn.pressed.connect(func(): _load_troop_to_ship(tn))
 				port_vbox.add_child(load_btn)
@@ -4170,7 +4197,7 @@ func _refresh_barn_panel() -> void:
 	troops_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	barn_vbox.add_child(troops_title)
 
-	for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+	for troop_name in troop_defs.keys():
 		var tdef = troop_defs[troop_name]
 		var lvl = troop_levels[troop_name]
 
@@ -4262,14 +4289,18 @@ func _refresh_barn_panel() -> void:
 		no_ship_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 		barn_vbox.add_child(no_ship_lbl)
 	else:
-		for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+		for troop_name in troop_defs.keys():
 			var lvl2 = troop_levels[troop_name]
 			if lvl2 < 1:
 				continue
+			var tdef_buy: Dictionary = troop_defs[troop_name]
+			var buy_cost: int = int(tdef_buy.get("buy_cost", BUY_TROOP_COST))
+			var slot_cost: int = int(tdef_buy.get("slot_cost", 1))
 			var buy_btn = Button.new()
-			buy_btn.text = "Buy %s — %d Gold (Lv.%d)" % [troop_name, BUY_TROOP_COST, lvl2]
+			var slot_suffix: String = "" if slot_cost == 1 else " · %d slots" % slot_cost
+			buy_btn.text = "Buy %s — %d Gold (Lv.%d)%s" % [troop_name, buy_cost, lvl2, slot_suffix]
 			buy_btn.custom_minimum_size = Vector2(0, 44)
-			if slots_free > 0 and resources.get("gold", 0) >= BUY_TROOP_COST:
+			if slots_free >= slot_cost and resources.get("gold", 0) >= buy_cost:
 				_style_button(buy_btn, Color(0.4, 0.35, 0.15), Color(0.5, 0.45, 0.2))
 			else:
 				_style_button(buy_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
@@ -4383,18 +4414,20 @@ func _get_total_ship_capacity() -> int:
 
 
 func _buy_troop(troop_name: String) -> void:
-	if resources.get("gold", 0) < BUY_TROOP_COST:
-		return
-	if _port._get_free_ship_slots() <= 0:
-		return
 	var tdef = troop_defs.get(troop_name, {})
 	var model_path: String = tdef.get("model", "")
 	var script_path: String = tdef.get("script", "")
 	if model_path == "" or script_path == "":
 		return
-	# Find port with free slot from barn position
+	var buy_cost: int = int(tdef.get("buy_cost", BUY_TROOP_COST))
+	var slot_cost: int = int(tdef.get("slot_cost", 1))
+	if resources.get("gold", 0) < buy_cost:
+		return
+	if _port._get_free_ship_slots() < slot_cost:
+		return
+	# Find port with enough free slots from barn position
 	var spawn_pos: Vector3 = _get_building_spawn_pos()
-	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos)
+	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos, slot_cost)
 	if port_info.is_empty():
 		return
 	# Ask server first
@@ -4410,12 +4443,17 @@ func _buy_troop(troop_name: String) -> void:
 			resources.ore = result.resources.ore
 			_update_resource_ui()
 	else:
-		resources["gold"] -= BUY_TROOP_COST
+		resources["gold"] -= buy_cost
 		_update_resource_ui()
-	# Reserve the ship slot immediately
+	# Reserve ship slots immediately. For multi-slot units we append the troop
+	# name once and pad with "_SLOT_FILLER_" sentinels so capacity math (which
+	# just calls ship_troops.size()) works without any special-casing. The
+	# attack deploy loop skips unknown TROOP_DEFS keys, so fillers spawn nothing.
 	var port_node: Node3D = port_info.port_node
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	ship_troops.append(troop_name)
+	for _i in range(slot_cost - 1):
+		ship_troops.append("_SLOT_FILLER_")
 	port_node.set_meta("ship_troops", ship_troops)
 	_refresh_barn_panel()
 	# Spawn the actual combat troop model (same as attack troops).
@@ -4565,6 +4603,11 @@ func _build_fleet() -> Array:
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
 			if not ship_troops.is_empty():
 				fleet.append({"level": ship_level, "troops": ship_troops.duplicate()})
+	# Sandbox guarantee: every attack on TestMain ships a DemonKing + Knight so
+	# the player can iterate on demon combat without setting up a port/ship.
+	# "_SLOT_FILLER_" pads DemonKing's 2-slot footprint and is ignored at deploy.
+	if test_mode:
+		fleet.append({"level": 1, "troops": ["DemonKing", "_SLOT_FILLER_"]})
 	return fleet
 
 
