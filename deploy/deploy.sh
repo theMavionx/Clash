@@ -14,8 +14,8 @@
 
 set -Eeuo pipefail
 
-DOMAIN="clashofperps.fun"
-MCP_DOMAIN="${CLASH_MCP_DOMAIN:-mcp.clashofperps.fun}"
+DOMAIN="${CLASH_DOMAIN:-clashofperps.fun}"
+MCP_DOMAIN="${CLASH_MCP_DOMAIN:-mcp.$DOMAIN}"
 EMAIL="egor4042007@gmail.com"
 DEPLOY_ROOT="/opt/clash"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
@@ -763,6 +763,7 @@ server {
     client_max_body_size 200M;
 }
 SSLCONF
+    sed -i "s|clashofperps.fun|$DOMAIN|g" /etc/nginx/sites-available/$DOMAIN
 
     cat > /etc/nginx/sites-available/$MCP_DOMAIN << MCPCONF
 server {
