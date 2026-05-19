@@ -1224,7 +1224,6 @@ function AiChatPanel({ onClose }) {
                 <div style={styles.titleLine}>
                   <span style={styles.title}>ClashHermes</span>
                 </div>
-                <div style={styles.quotaChip}>{formatQuotaLine(quota)}</div>
               </div>
             </div>
             <div data-nodrag style={styles.headerActions}>
@@ -1260,7 +1259,6 @@ function AiChatPanel({ onClose }) {
                 <div style={styles.titleLine}>
                   <span style={styles.title}>ClashHermes</span>
                 </div>
-                <div style={styles.quotaChip}>{formatQuotaLine(quota)}</div>
               </div>
             </div>
             <button
@@ -1273,8 +1271,6 @@ function AiChatPanel({ onClose }) {
             </button>
           </div>
         )}
-
-        {!isMobile && <AiQuotaSummary quota={quota} />}
 
         <div ref={listRef} className="shop-scroll" style={styles.messages}>
           {/* Empty state: when the only thing in the thread is the seed
@@ -2014,16 +2010,6 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 2,
-  },
-  quotaChip: {
-    fontSize: 10,
-    fontWeight: 800,
-    color: '#1B5E20',
-    lineHeight: 1.1,
-    whiteSpace: 'nowrap',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    maxWidth: 260,
   },
   quotaSummary: {
     margin: '10px 14px 0',
