@@ -31,7 +31,7 @@ Treat the `cop_ai_...` key as a secret. Do not print it back to the user, commit
 5. Keep one attack path usable: port -> ship -> loaded troops -> reinforce after casualties.
 6. Before any AI battle, ensure at least 3 total troops are loaded across ships. If only one troop is loaded, reinforce ships first, then load more troops before attacking.
 
-For Decibel trading requests, do not run a gameplay base preflight. Use the Decibel MCP tools directly. The Clash backend runs a deterministic script-first router for common trade actions; if that route is blocked, Hermes receives the blocker as internal context and should repair the request with MCP tools instead of immediately asking the player.
+For Decibel trading requests, do not run a gameplay base preflight. Hermes is the decision layer: interpret the request and use Decibel MCP tools directly. There is no backend trade pre-router; if a tool blocks and a safe repair is obvious, repair once with another MCP call before asking the player.
 
 ## In-Game Chat Behavior
 
@@ -47,8 +47,8 @@ For Decibel trading requests, do not run a gameplay base preflight. Use the Deci
 
 ## Hermes Routing Behavior
 
-- Fast script routes handle clear Decibel open/close requests first. If a fast route succeeds, answer from the confirmed MCP result.
-- If the fast route is blocked, use the blocker details and current context to repair the request. Example: if "close the position" has no symbol, call `decibel_close_position({})`; the MCP server closes the only open position or returns the exact multi-position blocker.
+- Hermes interprets every player chat message and calls Clash MCP tools directly.
+- If a Decibel tool is blocked, use the blocker details and current context to repair the request when safe. Example: if "close the position" has no symbol, call `decibel_close_position({})`; the MCP server closes the only open position or returns the exact multi-position blocker.
 - Do not repeat a stale blocker from previous chat memory. Current MCP tool output is authoritative.
 - When the user delegates a choice ("open something interesting", "surprise me", "you choose"), use the conservative delegated Decibel default: BTC long market, 2x leverage, 10% available USDC collateral.
 

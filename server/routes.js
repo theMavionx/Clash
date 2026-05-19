@@ -28,7 +28,6 @@ const router = express.Router();
 const STRICT_BATTLE_REPLAY_VERIFICATION = process.env.BATTLE_REPLAY_STRICT === '1';
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
 const AI_CHAT_DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
-const CLASH_MCP_INTERNAL_URL = String(process.env.CLASH_MCP_INTERNAL_URL || 'http://127.0.0.1:4100').replace(/\/+$/, '');
 
 // ---------- Validation Helpers ----------
 const SOLANA_WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana base58
@@ -4519,207 +4518,22 @@ function logHermesTimingEvents({ traceId, player, intent, events = [] }) {
   }
 }
 
-function fmtUsd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  return `$${n.toFixed(n >= 100 ? 2 : 4).replace(/\.?0+$/, '')}`;
-}
-
-function fmtSignedUsd(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  const abs = fmtUsd(Math.abs(n));
-  if (!abs) return null;
-  return `${n >= 0 ? '+' : '-'}${abs}`;
-}
-
-function fmtPct(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
-  const sign = n >= 0 ? '+' : '-';
-  return `${sign}${Math.abs(n).toFixed(Math.abs(n) >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
-}
-
-function shortHash(value) {
-  const text = String(value || '');
-  if (text.length <= 14) return text;
-  return `${text.slice(0, 8)}...${text.slice(-6)}`;
-}
-
-function summarizeFastDecibelResult(action, payload) {
-  if (!payload || payload.ok === false || payload.error) {
-    return `Blocked: ${payload?.error || 'Decibel action failed.'}`;
+function playerFacingAiError(err, intent) {
+  const text = String(err?.message || '');
+  if (/quota|message limit/i.test(text)) return 'AI message limit reached. Need: open the AI shop or wait for the daily reset.';
+  if (/claimed success without calling required MCP tool/i.test(text)) {
+    return 'The agent could not verify that the action actually happened. Need: try again.';
   }
-  const order = payload.order || {};
-  const symbol = order.symbol || action?.body?.symbol || 'market';
-  const side = order.side || action?.body?.side || 'position';
-  const leverage = Number(order.leverage || action?.body?.leverage || 1);
-  const notional = fmtUsd(order.notional_usd);
-  const price = fmtUsd(order.execution_price || order.mark_price);
-  const tx = shortHash(payload.result?.hash || payload.result?.transactionHash);
-  const txText = tx ? ` Tx: ${tx}.` : '';
-
-  if (action?.kind === 'decibel_close_position') {
-    const closed = payload.closed_position || {};
-    const closeResult = payload.close_result || {};
-    const closedSide = closed.side || side;
-    const size = Number(closeResult.closed_size_base || order.size_base || closed.size);
-    const sizeText = Number.isFinite(size) && size > 0 ? ` size ${Number(size.toFixed(8))}` : '';
-    const pnlUsd = fmtSignedUsd(closeResult.realized_pnl_usd_estimate);
-    const pnlPct = fmtPct(closeResult.realized_pnl_pct_estimate);
-    const pnlText = pnlUsd
-      ? ` PnL estimate: ${pnlUsd}${pnlPct ? ` (${pnlPct})` : ''}.`
-      : ' PnL estimate is not available yet.';
-    const remaining = Number(closeResult.remaining_notional_usd);
-    const remainingText = Number.isFinite(remaining) && remaining > 0.01
-      ? ` Remaining notional: ${fmtUsd(remaining)}.`
-      : '';
-    return `Done: Closed ${symbol} ${closedSide} position${sizeText}. Result: reduce-only market order confirmed${price ? ` near ${price}` : ''}.${pnlText}${remainingText}${txText}`;
+  if (/Hermes orchestrator|fetch failed|ECONNREFUSED|ETIMEDOUT|AbortError|timeout|HTTP\s*5\d\d|OpenRouter|provider/i.test(text)) {
+    return 'The AI route is temporarily unavailable. Need: try again in a moment.';
   }
-
-  const levText = leverage > 1 ? `${leverage}x ` : '';
-  const defaultText = action?.body?.autonomous_default
-    ? ' I chose the conservative default you delegated.'
-    : '';
-  const adjustmentText = order.autonomous_adjustment
-    ? ' I adjusted to Decibel minimum size/market rules.'
-    : '';
-  return `Done: Opened ${levText}${symbol} ${side}.${defaultText}${adjustmentText} Result: ${notional ? `${notional} notional ` : ''}market order confirmed${price ? ` near ${price}` : ''}; builder fee routing applied.${txText}`;
-}
-
-async function callFastMcpAction(agentKey, action, traceId) {
-  const startedAt = Date.now();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 90_000);
-  const url = `${CLASH_MCP_INTERNAL_URL}${action.path}`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${agentKey}`,
-        'Content-Type': 'application/json',
-        'x-trace-id': traceId,
-      },
-      body: JSON.stringify(action.body || {}),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : null; } catch { payload = { raw: text }; }
-    const elapsed = Date.now() - startedAt;
-    if ((payload?.ok === false || payload?.error) && response.status < 500) {
-      return {
-        ok: false,
-        blocked: true,
-        error: payload?.error || payload?.message || `MCP fast action blocked with HTTP ${response.status}`,
-        output_text: summarizeFastDecibelResult(action, payload),
-        model: 'fast-decibel-router',
-        fallback: false,
-        fallback_index: 0,
-        attempted_models: ['fast-decibel-router'],
-        timings: {
-          total_ms: elapsed,
-          mcp_fast_ms: elapsed,
-        },
-        timing_events: [
-          {
-            stage: 'mcp_fast_action',
-            status: 'blocked',
-            step_ms: elapsed,
-            elapsed_ms: elapsed,
-            message: `MCP fast route returned a blocker for ${action.tool}`,
-            tool: action.tool,
-            error: payload?.error || null,
-          },
-        ],
-        fast_action: action,
-        payload,
-      };
-    }
-    if (!response.ok || payload?.ok === false || payload?.error) {
-      const err = new Error(payload?.error || payload?.message || `MCP fast action failed with HTTP ${response.status}`);
-      err.status = response.status || 502;
-      err.body = payload;
-      err.durationMs = elapsed;
-      throw err;
-    }
-    return {
-      output_text: summarizeFastDecibelResult(action, payload),
-      model: 'fast-decibel-router',
-      fallback: false,
-      fallback_index: 0,
-      attempted_models: ['fast-decibel-router'],
-      timings: {
-        total_ms: elapsed,
-        mcp_fast_ms: elapsed,
-      },
-      timing_events: [
-        {
-          stage: 'mcp_fast_action',
-          status: 'ok',
-          step_ms: elapsed,
-          elapsed_ms: elapsed,
-          message: `Executed ${action.tool} through MCP fast route`,
-          tool: action.tool,
-        },
-      ],
-      fast_action: action,
-      payload,
-    };
-  } finally {
-    clearTimeout(timer);
+  if (/Decibel/i.test(text)) {
+    return 'The Decibel action failed before a verified result. Need: try again with a clear symbol, side, and amount.';
   }
-}
-
-function buildFastActionRepairContext(action, fastResult) {
-  const body = (() => {
-    try {
-      return JSON.stringify(action?.body || {});
-    } catch {
-      return '{}';
-    }
-  })();
-  const blocker = fastResult?.error || fastResult?.payload?.error || fastResult?.output_text || 'MCP fast route blocked.';
-  return [
-    '# Internal Fast Route Blocker',
-    `The deterministic MCP fast route tried tool "${action?.tool || 'unknown'}" with args ${body}.`,
-    `It was blocked with: ${blocker}`,
-    'Repair the request using available MCP tools if possible. Infer obvious missing values from current player state, positions, balances, and recent chat history. If it is still impossible, answer in English with "Blocked:" and one concrete requirement.',
-  ].join('\n').slice(0, 2000);
-}
-
-function mergeFastBlockedTiming(fastResult, hermesResult) {
-  if (!fastResult || !hermesResult || typeof hermesResult !== 'object') return hermesResult;
-  const fastEvents = Array.isArray(fastResult.timing_events || fastResult.timingEvents)
-    ? (fastResult.timing_events || fastResult.timingEvents)
-    : [];
-  const hermesEvents = Array.isArray(hermesResult.timing_events || hermesResult.timingEvents)
-    ? (hermesResult.timing_events || hermesResult.timingEvents)
-    : [];
-  return {
-    ...hermesResult,
-    fast_action_blocked: {
-      tool: fastResult.fast_action?.tool || null,
-      error: fastResult.error || null,
-      output_text: fastResult.output_text || null,
-      timings: fastResult.timings || null,
-    },
-    timings: {
-      ...(hermesResult.timings || {}),
-      mcp_fast_blocked_ms: fastResult.timings?.mcp_fast_ms ?? fastResult.timings?.total_ms ?? null,
-    },
-    timing_events: [
-      ...fastEvents,
-      {
-        stage: 'mcp_fast_blocked_repair_fallback',
-        status: 'ok',
-        message: 'MCP fast route was blocked, dispatching to Hermes repair fallback',
-        tool: fastResult.fast_action?.tool || null,
-        error: fastResult.error || null,
-      },
-      ...hermesEvents,
-    ],
-  };
+  if (intent?.action_required) {
+    return 'The action failed before a verified result. Need: try again or choose a simpler action.';
+  }
+  return 'The AI request failed. Need: try again.';
 }
 
 router.post('/ai-chat/message', auth, async (req, res) => {
@@ -4765,20 +4579,8 @@ router.post('/ai-chat/message', auth, async (req, res) => {
     const agent = db.getOrCreateHermesAgent(req.player.id);
     if (agent.error) return res.status(400).json(agent);
     logStage('load_or_create_agent_done', { message: 'Hermes agent key/state loaded' });
-    logStage('static_reply_check_start', { message: 'Checking static fast reply route' });
-    const staticResult = hermesClient.tryStaticReply(message);
-    const fastAction = staticResult ? null : hermesClient.extractFastDecibelAction(message, intent, history);
-    logStage('static_reply_check_done', {
-      message: staticResult
-        ? 'Static reply route selected'
-        : fastAction
-          ? 'MCP fast action route selected'
-          : 'No static route, reserving quota',
-      static_reply: !!staticResult,
-      fast_action: fastAction ? fastAction.tool : null,
-    });
-    logStage('quota_reserve_start', { message: staticResult ? 'Static reply does not consume quota' : 'Reserving AI message quota' });
-    const reserved = staticResult ? null : reserveAiChatMessage(req.player.id);
+    logStage('quota_reserve_start', { message: 'Reserving AI message quota' });
+    const reserved = reserveAiChatMessage(req.player.id);
     if (reserved && !reserved.ok) {
       const durationMs = Date.now() - startedAt;
       logStage('quota_blocked', {
@@ -4819,90 +4621,37 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       message: reservation ? `Reserved ${reservation.bucket} message` : 'No quota reservation needed',
       reservation: reservation ? { bucket: reservation.bucket, day: reservation.day } : null,
     });
-    const routeType = staticResult ? 'static_reply' : fastAction ? 'dispatch_mcp_fast' : 'dispatch_hermes';
-    logAiChatServer(routeType, {
+    logAiChatServer('dispatch_hermes', {
       trace_id: traceId,
       player_id: req.player.id,
       intent: intent.kind,
       idempotency_key: idempotencyKey,
       reservation: reservation ? { source: reservation.source, day: reservation.day } : null,
-      fast_action: fastAction ? { tool: fastAction.tool, body: fastAction.body } : null,
     });
-    logStage(staticResult ? 'static_reply_start' : fastAction ? 'mcp_fast_dispatch_start' : 'hermes_dispatch_start', {
-      message: staticResult
-        ? 'Preparing static reply'
-        : fastAction
-          ? 'Dispatching request to MCP fast action route'
-          : 'Dispatching request to Hermes orchestrator',
+    logStage('hermes_dispatch_start', {
+      message: 'Dispatching request to Hermes orchestrator',
       idempotency_key: idempotencyKey,
-      fast_action: fastAction ? fastAction.tool : null,
     });
-    let result = null;
-    let fastBlockedResult = null;
-    if (staticResult) {
-      result = staticResult;
-    } else if (fastAction) {
-      const fastResult = await callFastMcpAction(agent.mcp_key, fastAction, traceId);
-      if (fastResult?.blocked) {
-        fastBlockedResult = fastResult;
-        logStage('mcp_fast_blocked_fallback_start', {
-          message: 'MCP fast action route was blocked, dispatching to Hermes repair fallback',
-          fast_action: fastAction.tool,
-          error: fastResult.error || null,
-        });
-        logAiChatServer('mcp_fast_blocked_fallback', {
-          trace_id: traceId,
-          player_id: req.player.id,
-          intent: intent.kind,
-          fast_action: { tool: fastAction.tool, body: fastAction.body },
-          error: aiChatPreview(fastResult.error || fastResult.output_text, 700),
-        });
-        const hermesRepairResult = await hermesClient.chat(req.player, agent.mcp_key, message, {
-          previous_response_id: req.body?.previous_response_id,
-          idempotency_key: idempotencyKey,
-          internal_context: buildFastActionRepairContext(fastAction, fastResult),
-          metadata: {
-            ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
-            trace_id: traceId,
-            fast_action_blocked: true,
-            fast_action_tool: fastAction.tool,
-          },
-          history,
-        });
-        result = mergeFastBlockedTiming(fastResult, hermesRepairResult);
-      } else {
-        result = fastResult;
-      }
-    } else {
-      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
-        previous_response_id: req.body?.previous_response_id,
-        idempotency_key: idempotencyKey,
-        metadata: {
-          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
-          trace_id: traceId,
-        },
-        history,
-      });
-    }
-    logStage(staticResult ? 'static_reply_done' : fastBlockedResult ? 'mcp_fast_blocked_fallback_done' : fastAction ? 'mcp_fast_dispatch_done' : 'hermes_dispatch_done', {
-      message: staticResult
-        ? 'Static reply ready'
-        : fastBlockedResult
-          ? 'Hermes repair fallback returned a response after MCP fast route blocker'
-          : fastAction
-          ? 'MCP fast action route returned a response'
-          : 'Hermes orchestrator returned a response',
+    const result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+      previous_response_id: req.body?.previous_response_id,
+      idempotency_key: idempotencyKey,
+      metadata: {
+        ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+        trace_id: traceId,
+      },
+      history,
+    });
+    logStage('hermes_dispatch_done', {
+      message: 'Hermes orchestrator returned a response',
       model: result.model || null,
       fallback: !!result.fallback,
       response_chars: String(result.output_text || '').length,
-      fast_action: fastAction ? fastAction.tool : null,
-      fast_action_blocked: !!fastBlockedResult,
     });
     model = result.model || null;
     const expectedTools = Array.isArray(intent.expected_tools) ? intent.expected_tools.filter(Boolean) : [];
     const responseText = String(result.output_text || '').trim();
     const responseClaimsSuccess = /^(?:Done|Success|Completed)\s*:/i.test(responseText);
-    if (!staticResult && intent.action_required && responseClaimsSuccess && expectedTools.length) {
+    if (intent.action_required && responseClaimsSuccess && expectedTools.length) {
       const placeholders = expectedTools.map(() => '?').join(',');
       const toolEvent = db.db.prepare(`
         SELECT id, tool, status, duration_ms, error
@@ -4990,11 +4739,13 @@ router.post('/ai-chat/message', auth, async (req, res) => {
     }
     const durationMs = Date.now() - startedAt;
     const quotaAfter = getAiMessageQuotaStatus(req.player.id);
+    const playerError = playerFacingAiError(err, intent);
     logStage('message_error', {
       status: 'error',
       message: 'AI chat request failed',
       model,
       error: err.message,
+      player_error: playerError,
       total_ms: durationMs,
     });
     db.markHermesAgentState(req.player.id, { status: 'error', error: err.message });
@@ -5020,12 +4771,16 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       model,
       error: err.message,
       requestPreview: aiChatPreview(message),
-      responsePreview: aiChatPreview(err.message, 1200),
+      responsePreview: aiChatPreview(playerError, 1200),
       quota: { before: quotaBefore, after: quotaAfter, reservation_refunded: !!reservation },
       input: { trace_id: traceId, idempotency_key: idempotencyKey, message, history },
-      output: err.body || null,
+      output: {
+        error: playerError,
+        internal_error: err.message,
+        body: err.body || null,
+      },
     });
-    res.status(err.status || 500).json({ ok: false, error: err.message, quota: quotaAfter, trace_id: traceId });
+    res.status(err.status || 500).json({ ok: false, error: playerError, quota: quotaAfter, trace_id: traceId });
   }
 });
 

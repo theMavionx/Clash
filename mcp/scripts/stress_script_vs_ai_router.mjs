@@ -133,9 +133,8 @@ function firstExpectedTool(intent) {
 function scriptPlan(testCase) {
   const started = performance.now();
   const intent = hermesClient.classifyGameIntent(testCase.message);
-  const fastAction = hermesClient.extractFastDecibelAction(testCase.message, intent, testCase.history);
-  const tool = fastAction?.tool || firstExpectedTool(intent);
-  const args = fastAction?.body || {};
+  const tool = firstExpectedTool(intent);
+  const args = {};
   const elapsed = performance.now() - started;
   return {
     ok: tool === testCase.expected_tool,
@@ -143,7 +142,7 @@ function scriptPlan(testCase) {
     tool,
     args,
     intent: intent?.kind || null,
-    mode: fastAction ? 'direct_fast_action' : 'intent_tool_plan',
+    mode: 'intent_classifier_hint',
   };
 }
 

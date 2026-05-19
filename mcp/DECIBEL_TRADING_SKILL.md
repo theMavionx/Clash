@@ -11,6 +11,7 @@ Use this skill only for Decibel trading requests from the authenticated Clash of
 
 - Use only Clash MCP Decibel tools. Do not call upstream Decibel MCP directly.
 - The MCP adapter injects mandatory Clash builder routing. Never ask the model or user for `builderAddr` or `builderFee`.
+- Hermes interprets player trading requests and calls Decibel MCP tools directly. There is no backend trade pre-router.
 - The player can trade only the Decibel wallet registered to their Clash account.
 - For read-only requests, call tools immediately and summarize.
 - For write requests, require clear symbol, side, and size/notional/collateral before placing an order unless the player explicitly delegates the choice.
@@ -30,11 +31,10 @@ Use this skill only for Decibel trading requests from the authenticated Clash of
 - Cancel order: `decibel_get_positions` -> `decibel_cancel_order`.
 - TP/SL: `decibel_get_positions` -> `decibel_set_tpsl`.
 
-## Script-First / AI-Repair Flow
+## Tool Blocker Repair
 
-- The Clash web backend first tries deterministic script routing for common Decibel commands.
-- If the script route succeeds, summarize the confirmed MCP result.
-- If the script route is blocked, Hermes receives the blocker as internal server context. Use that context to repair with MCP tools instead of asking the player immediately.
+- If a Decibel MCP tool blocks, inspect the blocker and current context.
+- When a safe repair is obvious, retry once with corrected MCP arguments instead of surfacing the raw blocker.
 - If repair is impossible, return `Blocked:` in English with one concrete missing requirement.
 
 ## Response Shape

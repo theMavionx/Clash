@@ -356,72 +356,6 @@ function isAutonomousDecibelOrder(message) {
   return DECIBEL_AUTONOMOUS_ORDER_RE.test(text) || DECIBEL_DELEGATED_DECISION_RE.test(text);
 }
 
-function extractFastDecibelAction(message, intent = null, history = []) {
-  const currentIntent = intent || classifyGameIntent(message);
-  if (!currentIntent?.kind || !String(currentIntent.kind).startsWith('decibel_')) return null;
-  const text = normalizeIntentText(message);
-  const symbol = extractDecibelSymbol(message);
-
-  if (currentIntent.kind === 'decibel_close_position') {
-    const body = {
-      percent: extractDecibelPercent(message),
-    };
-    const closeSymbol = symbol || extractRecentDecibelSymbolFromHistory(history);
-    if (closeSymbol) body.symbol = closeSymbol;
-    return {
-      kind: 'decibel_close_position',
-      tool: 'decibel_close_position',
-      path: '/fast/decibel/close-position',
-      body,
-    };
-  }
-
-  if (currentIntent.kind === 'decibel_place_order') {
-    const side = extractDecibelSide(message, text);
-    const notionalUsd = extractDecibelUsdAmount(message);
-    const collateralPct = extractDecibelUsdcPercent(message);
-    const autonomous = isAutonomousDecibelOrder(message);
-    if (autonomous && (!symbol || !side || (!(notionalUsd > 0) && !(collateralPct > 0)))) {
-      const leverage = extractDecibelLeverage(message) || 2;
-      return {
-        kind: 'decibel_place_order',
-        tool: 'decibel_place_order',
-        path: '/fast/decibel/place-order',
-        body: {
-          symbol: symbol || 'BTC',
-          side: side || 'long',
-          order_type: 'market',
-          collateral_pct: collateralPct > 0 ? collateralPct : 10,
-          leverage,
-          slippage_pct: 1,
-          autonomous_default: true,
-        },
-      };
-    }
-    if (!symbol || !side || (!(notionalUsd > 0) && !(collateralPct > 0))) return null;
-    const body = {
-      symbol,
-      side,
-      order_type: /\blimit\b/i.test(message) ? 'limit' : 'market',
-    };
-    if (notionalUsd > 0) body.notional_usd = notionalUsd;
-    if (collateralPct > 0) body.collateral_pct = collateralPct;
-    const leverage = extractDecibelLeverage(message);
-    if (leverage) body.leverage = leverage;
-    const price = String(message || '').normalize('NFKC').match(/\b(?:at|price)\s+\$?\s*(\d+(?:[.,]\d+)?)/i);
-    if (body.order_type === 'limit' && price) body.price = Number(String(price[1]).replace(',', '.'));
-    if (body.order_type === 'limit' && !(body.price > 0)) return null;
-    return {
-      kind: 'decibel_place_order',
-      tool: 'decibel_place_order',
-      path: '/fast/decibel/place-order',
-      body,
-    };
-  }
-
-  return null;
-}
-
 function decibelIntentLoop(kind) {
   switch (kind) {
     case 'decibel_account':
@@ -630,60 +564,6 @@ function buildIntentInstructions(intent) {
   return lines.join('\n');
 }
 
-function tryStaticReply(message) {
-  const intent = classifyGameIntent(message);
-  const normalized = normalizeIntentText(message);
-  const raw = String(message || '').normalize('NFKC').trim();
-  const isGreeting = /^(hi|hello|hey|yo|sup|gm|привіт|привет|вітаю|здравствуй|здравствуйте|hola|bonjour|salut|hallo|ciao|ola|oi|hej|hei|你好|您好|こんにちは|こんばんは|안녕|xin chao)\b/i.test(raw);
-  if (intent.kind === 'general' && (isGreeting || isPassiveChat(normalized))) {
-    return {
-      ok: true,
-      model: 'static-router',
-      fallback: false,
-      fallback_index: 0,
-      attempted_models: ['static-router'],
-      output_text: 'Ready. Tell me what to do: collect resources, arrange the base, attack an enemy, or manage a Decibel trade.',
-      timings: { total_ms: 0 },
-      attempts: [],
-      timing_events: [],
-    };
-  }
-  if (intent.kind === 'skills') {
-    return {
-      ok: true,
-      model: 'static-router',
-      fallback: false,
-      fallback_index: 0,
-      attempted_models: [],
-      output_text: 'I can inspect your base, collect resources, build and upgrade buildings, manage ships and troops, reinforce battle losses, launch AI online battles, and manage Decibel positions/orders when your account uses Decibel.',
-      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
-    };
-  }
-  if (intent.kind === 'skills') {
-    return {
-      ok: true,
-      model: 'static-router',
-      fallback: false,
-      fallback_index: 0,
-      attempted_models: [],
-      output_text: 'Я можу переглядати твою базу, збирати ресурси, будувати й апгрейдити будівлі, керувати кораблями та військами, відновлювати втрати після бою і запускати AI-атаки.',
-      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
-    };
-  }
-  if (/^(how to play|help|guide|tutorial)$/i.test(normalizeIntentText(message))) {
-    return {
-      ok: true,
-      model: 'static-router',
-      fallback: false,
-      fallback_index: 0,
-      attempted_models: [],
-      output_text: 'Build your economy, collect resources, upgrade Town Hall, load troops into ships, then launch AI battles. I can do those actions for you when you ask.',
-      timings: { total_ms: 0, model_ensure_ms: 0, model_call_ms: 0 },
-    };
-  }
-  return null;
-}
-
 function buildChatInput(message, history, internalContext = '') {
   const current = String(message || '').trim().slice(0, 8000);
   const safeHistory = normalizeHistory(history);
@@ -867,6 +747,4 @@ module.exports = {
   chat,
   reset,
   classifyGameIntent,
-  extractFastDecibelAction,
-  tryStaticReply,
 };
