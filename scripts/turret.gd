@@ -6,6 +6,7 @@ const LEVEL_STATS = {
 	1: {"damage": 80, "fire_rate": 0.5},
 	2: {"damage": 180, "fire_rate": 0.25},
 	3: {"damage": 320, "fire_rate": 0.166},
+	4: {"damage": 500, "fire_rate": 0.12},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [

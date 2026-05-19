@@ -25,11 +25,11 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800],
+		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "wood": 500},
 		"produces": "ore",
-		"produce_rate": [6, 11, 18],    # per minute per level
-		"produce_max": [200, 400, 800],  # max stored before collection
+		"produce_rate": [6, 11, 18, 27],    # per minute per level
+		"produce_max": [200, 400, 800, 1600],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -62,11 +62,11 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800],
+		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "ore": 500},
 		"produces": "wood",
-		"produce_rate": [8, 15, 24],
-		"produce_max": [250, 500, 1000],
+		"produce_rate": [8, 15, 24, 36],
+		"produce_max": [250, 500, 1000, 2000],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -91,7 +91,7 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
-		"hp_levels": [900, 1600, 2800],
+		"hp_levels": [900, 1600, 2800, 4500],
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
@@ -104,7 +104,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200],
+		"hp_levels": [1400, 2500, 4200, 6500],
 		"cost": {"gold": 300, "wood": 1200},
 	},
 	"archer_tower": {
@@ -181,11 +181,14 @@ const TH_BASE_CAPACITY: Dictionary = {
 	1: {"gold": 10000, "wood": 10000, "ore": 10000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 40000, "wood": 40000, "ore": 40000},
+	4: {"gold": 70000, "wood": 70000, "ore": 70000},
+	5: {"gold": 110000, "wood": 110000, "ore": 110000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 30000, "wood": 30000, "ore": 30000},
+	4: {"gold": 50000, "wood": 50000, "ore": 50000},
 }
 
 func _get_resource_caps() -> Dictionary:
