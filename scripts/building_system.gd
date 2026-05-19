@@ -12,6 +12,7 @@ extends Node3D
 @export var always_show_grid: bool = false
 @export var allowed_buildings: PackedStringArray = []  # Empty = all allowed
 @export var blocked_buildings: PackedStringArray = []  # These are never allowed
+@export var test_mode: bool = false  # Sandbox: infinite resources, no unlocks, no max counts, no server sync
 
 # ── Building Definitions ──────────────────────────────────────
 var building_defs: Dictionary = {
@@ -252,6 +253,8 @@ func _has_town_hall() -> bool:
 	return false
 
 func _is_building_unlocked(building_id: String) -> bool:
+	if test_mode:
+		return true
 	if building_id != "town_hall" and not _has_town_hall():
 		return false
 	if not TH_UNLOCK.has(building_id):
@@ -260,6 +263,8 @@ func _is_building_unlocked(building_id: String) -> bool:
 
 func _can_upgrade_th() -> Dictionary:
 	## Returns {"can": bool, "missing": []} for TH upgrade readiness
+	if test_mode:
+		return {"can": true, "missing": []}
 	var th_level: int = _get_th_level()
 	var required: Array = TH_UPGRADE_REQUIRES.get(th_level, [])
 	var missing: Array = []
@@ -575,6 +580,9 @@ func _ready() -> void:
 	_preload_defense_resources()
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
+	if test_mode:
+		_net = null  # Local-only: bypass all server gating
+		resources = {"wood": 9_999_999, "gold": 9_999_999, "ore": 9_999_999}
 	_cannon = BSCannon.new().init(self)
 	_rally = BSRally.new().init(self)
 	_battle = BSBattle.new().init(self)
@@ -1469,6 +1477,8 @@ func _update_player_name_label() -> void:
 
 
 func _create_register_panel() -> void:
+	if test_mode:
+		return  # Sandbox: no login required
 	var net = _net
 	if net and net.has_token():
 		# Already registered — try to login and load state
@@ -1938,7 +1948,7 @@ func _toggle_shop() -> void:
 
 
 func _start_placement(building_id: String) -> void:
-	if building_id != "town_hall" and not _has_town_hall():
+	if not test_mode and building_id != "town_hall" and not _has_town_hall():
 		_show_error("Build Town Hall first!")
 		return
 	if not _is_building_unlocked(building_id):
@@ -2512,15 +2522,15 @@ func _try_place_building() -> bool:
 		return false
 	var def = building_defs[current_building_id]
 
-	if current_building_id != "town_hall" and not _has_town_hall():
+	if not test_mode and current_building_id != "town_hall" and not _has_town_hall():
 		_show_error("Build Town Hall first!")
 		return false
 
 	if not _can_place(current_grid_pos, def.cells):
 		return false
 
-	# Check max_count limit (e.g. Town Hall = 1)
-	if def.has("max_count"):
+	# Check max_count limit (e.g. Town Hall = 1) — bypassed in test_mode
+	if not test_mode and def.has("max_count"):
 		var count = 0
 		for b in placed_buildings:
 			if b.id == current_building_id:
@@ -2876,18 +2886,19 @@ func _upgrade_selected() -> void:
 		return
 	var bid: String = selected_building.get("id", "")
 	var th_level: int = _get_th_level()
-	# TH upgrade — check required buildings
-	if bid == "town_hall":
-		var check: Dictionary = _can_upgrade_th()
-		if not check.can:
-			var missing_str: String = ", ".join(check.missing)
-			_show_error("Upgrade all buildings first: " + missing_str)
-			return
-	else:
-		# Non-TH buildings can't exceed TH level
-		if level + 1 > th_level:
-			_show_error("Upgrade Town Hall to level %d first" % (level + 1))
-			return
+	# TH upgrade — check required buildings (bypassed in test_mode)
+	if not test_mode:
+		if bid == "town_hall":
+			var check: Dictionary = _can_upgrade_th()
+			if not check.can:
+				var missing_str: String = ", ".join(check.missing)
+				_show_error("Upgrade all buildings first: " + missing_str)
+				return
+		else:
+			# Non-TH buildings can't exceed TH level
+			if level + 1 > th_level:
+				_show_error("Upgrade Town Hall to level %d first" % (level + 1))
+				return
 
 	var b = selected_building
 	var net = _net
@@ -2955,8 +2966,8 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			if is_instance_valid(m):
 				m.material_overlay = mat
 
-	# Wait for the "glow upgrade" phase (3 seconds)
-	await get_tree().create_timer(3.0).timeout
+	# Wait for the "glow upgrade" phase (3 seconds; instant in test_mode)
+	await get_tree().create_timer(0.05 if test_mode else 3.0).timeout
 
 	if not is_instance_valid(self) or not is_instance_valid(model):
 		return # node or building destroyed while waiting
@@ -2970,7 +2981,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 
 	# Bounce DOWN (squash)
 	var tw_down = create_tween()
-	tw_down.tween_property(model, "scale", Vector3.ZERO, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw_down.tween_property(model, "scale", Vector3.ZERO, 0.05 if test_mode else 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tw_down.finished
 
 	if not is_instance_valid(self) or not is_instance_valid(model):
@@ -3034,7 +3045,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 
 	# Bounce UP (reveal)
 	var tw_up = create_tween()
-	tw_up.tween_property(model, "scale", Vector3.ONE, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw_up.tween_property(model, "scale", Vector3.ONE, 0.05 if test_mode else 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 	# Tombstone → update skeletons
 	if b.id == "tombstone":
@@ -4259,6 +4270,8 @@ func _refresh_barn_panel() -> void:
 
 
 func _can_afford(costs: Dictionary) -> bool:
+	if test_mode:
+		return true
 	for res_name in costs:
 		if resources.get(res_name, 0) < costs[res_name]:
 			return false
