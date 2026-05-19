@@ -18,6 +18,11 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const {
+  solanaPrimaryRpcUrl,
+  solanaRpcUrls,
+  withSolanaRpcFallback,
+} = require('./solana_rpc');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 
@@ -285,14 +290,20 @@ const SOLANA_MEMO_PROGRAM   = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 const SOLANA_MPL_CORE_PROGRAM = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
 
 let _solanaConnection = null;
+let _solanaConnections = null;
 function solanaConnection() {
   if (_solanaConnection) return _solanaConnection;
   const { Connection } = require('@solana/web3.js');
-  const rpc = process.env.NFT_SOLANA_RPC_URL
-    || process.env.SOLANA_RPC_URL
-    || 'https://solana-rpc.publicnode.com';
+  const rpc = solanaPrimaryRpcUrl();
   _solanaConnection = new Connection(rpc, 'confirmed');
   return _solanaConnection;
+}
+
+function solanaConnections() {
+  if (_solanaConnections) return _solanaConnections;
+  const { Connection } = require('@solana/web3.js');
+  _solanaConnections = solanaRpcUrls().map((rpc) => new Connection(rpc, 'confirmed'));
+  return _solanaConnections;
 }
 
 function ixProgramIdStr(ix) {
@@ -475,11 +486,17 @@ async function isSolanaToken2022Account(assetPubkey) {
   try {
     const { PublicKey } = require('@solana/web3.js');
     const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
-    const account = await solanaConnection().getAccountInfo(new PublicKey(assetPubkey), 'confirmed');
-    return !!account?.owner?.equals?.(TOKEN_2022_PROGRAM_ID);
+    for (const conn of solanaConnections()) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const account = await conn.getAccountInfo(new PublicKey(assetPubkey), 'confirmed');
+        if (account) return !!account.owner?.equals?.(TOKEN_2022_PROGRAM_ID);
+      } catch {}
+    }
   } catch {
-    return false;
+    // fall through
   }
+  return false;
 }
 
 async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
@@ -487,12 +504,21 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   if (!dep?.collection) throw new Error('Solana collection not configured');
   try {
     const { getToken2022NftInfo } = require('./solana_token2022_nft');
-    return await getToken2022NftInfo({
-      mint: assetPubkey,
-      expectedOwner,
-      connection: solanaConnection(),
-      collectionPubkey: dep.collection,
-    });
+    let token2022Err = null;
+    for (const connection of solanaConnections()) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        return await getToken2022NftInfo({
+          mint: assetPubkey,
+          expectedOwner,
+          connection,
+          collectionPubkey: dep.collection,
+        });
+      } catch (err) {
+        token2022Err = err;
+      }
+    }
+    throw token2022Err || new Error('Token-2022 read failed');
   } catch (err) {
     const msg = String(err?.message || err);
     if (await isSolanaToken2022Account(assetPubkey)) {
@@ -509,10 +535,10 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
   const { mplCore, fetchAsset } = await import('@metaplex-foundation/mpl-core');
   const { publicKey } = await import('@metaplex-foundation/umi');
-  const umi = createUmi(process.env.NFT_SOLANA_RPC_URL
-    || process.env.SOLANA_RPC_URL
-    || 'https://solana-rpc.publicnode.com').use(mplCore());
-  const asset = await fetchAsset(umi, publicKey(assetPubkey));
+  const asset = await withSolanaRpcFallback(async (rpc) => {
+    const umi = createUmi(rpc).use(mplCore());
+    return fetchAsset(umi, publicKey(assetPubkey));
+  }, { label: 'Solana bridge source asset read' });
   const owner = solanaAssetOwner(asset);
   const collection = solanaAssetCollection(asset);
   if (String(collection) !== String(dep.collection)) {
@@ -589,11 +615,15 @@ async function verifySolanaToken2022Burn({ conn, allIxs, asset, owner }) {
 // Returns { asset, level, destinationChainId, destAddress } or { error }.
 async function verifySolanaBurnTx(txSig, opts = {}) {
   try {
-    const conn = solanaConnection();
-    const parsed = await conn.getParsedTransaction(txSig, {
-      maxSupportedTransactionVersion: 0, commitment: 'confirmed',
-    });
-    if (!parsed) return { error: 'tx not found' };
+    const { Connection } = require('@solana/web3.js');
+    const { conn, parsed } = await withSolanaRpcFallback(async (rpc) => {
+      const connection = new Connection(rpc, 'confirmed');
+      const tx = await connection.getParsedTransaction(txSig, {
+        maxSupportedTransactionVersion: 0, commitment: 'confirmed',
+      });
+      if (!tx) throw new Error('tx not found');
+      return { conn: connection, parsed: tx };
+    }, { label: 'Solana burn tx read' });
     if (parsed.meta?.err) return { error: 'tx reverted on chain' };
 
     const ixs = parsed.transaction.message.instructions || [];

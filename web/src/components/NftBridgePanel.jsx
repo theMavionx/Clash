@@ -435,7 +435,9 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
       const { fromWeb3JsInstruction } = await import('@metaplex-foundation/umi-web3js-adapters');
       const { Connection, PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
 
-      const umi = createUmi(DEFAULT_SOLANA_RPC_URL).use(mplCore());
+      const coreRpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
+      const coreRpcUrl = coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL;
+      const umi = createUmi(coreRpcUrl).use(mplCore());
       // We can't use a keypairIdentity here because the user wallet is a
       // browser extension — instead, use the wallet adapter's signer.
       // umi-signer-wallet-adapters is the canonical glue.

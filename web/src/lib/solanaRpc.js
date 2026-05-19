@@ -74,9 +74,9 @@ const DIRECT_SOLANA_RPC_URLS = [
   envDirectSolanaRpc,
   ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
-  heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}` : '',
   defaultDirectBrowserRpc,
   ...(includeOfficialDirectRpc ? [officialDirectBrowserRpc] : []),
+  heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}` : '',
 ];
 
 const PROXY_SOLANA_RPC_URLS = [

@@ -15,6 +15,10 @@ const {
   solanaToken2022CollectionId,
   solanaToken2022Symbol,
 } = require('./solana_token2022_nft');
+const {
+  solanaRpcUrls: buildSolanaRpcUrls,
+  withSolanaRpcFallback,
+} = require('./solana_rpc');
 
 const router = express.Router();
 
@@ -1457,21 +1461,8 @@ function getSolanaSignerKeypair() {
 
 let _solanaConnectionCache = null;
 let _solanaConnectionListCache = null;
-function splitSolanaRpcUrls(raw) {
-  return String(raw || '')
-    .split(/[,\s]+/)
-    .map((url) => url.trim())
-    .filter(Boolean);
-}
-
-function solanaRpcUrls() {
-  return Array.from(new Set([
-    ...splitSolanaRpcUrls(process.env.NFT_SOLANA_RPC_URL),
-    ...splitSolanaRpcUrls(process.env.SOLANA_RPC_URL),
-    ...splitSolanaRpcUrls(process.env.VITE_SOLANA_RPC_URL),
-    'https://solana-rpc.publicnode.com',
-    'https://api.mainnet-beta.solana.com',
-  ].filter((url) => /^https?:\/\//i.test(String(url || '')))));
+function solanaRpcUrls(extraUrls = []) {
+  return buildSolanaRpcUrls(extraUrls);
 }
 
 function getSolanaConnection() {
@@ -1523,19 +1514,21 @@ async function resolveSolanaMintDecimals(mint, fallback = SOLANA_SKR_DECIMALS_DE
   try {
     const { PublicKey } = require('@solana/web3.js');
     const { getMint, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
-    const connection = getSolanaConnection();
     const mintPk = new PublicKey(mint);
     const programs = [TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].filter(Boolean);
     let mintInfo = null;
-    for (const programId of programs) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        mintInfo = await getMint(connection, mintPk, 'confirmed', programId);
-        break;
-      } catch {
-        // Try the next token program. SKR can be either SPL Token or Token-2022
-        // depending on the deployed mint, so the mint account is the source of truth.
+    for (const connection of getSolanaConnections()) {
+      for (const programId of programs) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          mintInfo = await getMint(connection, mintPk, 'confirmed', programId);
+          break;
+        } catch {
+          // Try the next token program. SKR can be either SPL Token or Token-2022
+          // depending on the deployed mint, so the mint account is the source of truth.
+        }
       }
+      if (mintInfo) break;
     }
     if (Number.isFinite(Number(mintInfo?.decimals))) {
       decimals = Number(mintInfo.decimals);
@@ -1758,10 +1751,6 @@ async function readSolanaNftMintedCount(deployment) {
       const r = await readSolanaNftSupply(deployment);
       return Number.isFinite(r?.totalMinted) ? r.totalMinted : null;
     }
-    const { Connection, PublicKey } = require('@solana/web3.js');
-    const rpcUrl = process.env.NFT_SOLANA_RPC_URL
-      || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const connection = new Connection(rpcUrl, 'confirmed');
     // mpl-core CollectionV1 lives at the collection account itself. We use
     // UMI's deserializer rather than hand-rolling the byte layout — the
     // `numMinted` and `numBurned` fields are at variable offsets depending
@@ -1769,8 +1758,13 @@ async function readSolanaNftMintedCount(deployment) {
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { mplCore, fetchCollection } = await import('@metaplex-foundation/mpl-core');
     const { publicKey } = await import('@metaplex-foundation/umi');
-    const umi = createUmi(rpcUrl).use(mplCore());
-    const col = await fetchCollection(umi, publicKey(collectionAddr));
+    const col = await withSolanaRpcFallback(async (rpcUrl) => {
+      const umi = createUmi(rpcUrl).use(mplCore());
+      return fetchCollection(umi, publicKey(collectionAddr));
+    }, {
+      extraUrls: [deployment?.rpcUrl],
+      label: 'Solana NFT collection supply read',
+    });
     const numMinted = Number(col.numMinted ?? 0);
     const numBurned = Number(col.currentSize != null
       ? (numMinted - Number(col.currentSize)) // some SDK versions expose currentSize directly
@@ -1964,14 +1958,14 @@ async function readSolanaNftSupply(deployment) {
   }
 
   const { Connection, PublicKey } = require('@solana/web3.js');
-  const rpcUrl = process.env.NFT_SOLANA_RPC_URL
-    || process.env.SOLANA_RPC_URL
-    || process.env.VITE_SOLANA_RPC_URL
-    || deployment.rpcUrl
-    || 'https://solana-rpc.publicnode.com';
   const maxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || deployment.maxSupply || NFT_MAX_SUPPLY);
-  const connection = new Connection(rpcUrl, 'confirmed');
-  const account = await connection.getAccountInfo(new PublicKey(deployment.candyMachine), 'confirmed');
+  const account = await withSolanaRpcFallback(async (rpcUrl) => {
+    const connection = new Connection(rpcUrl, 'confirmed');
+    return connection.getAccountInfo(new PublicKey(deployment.candyMachine), 'confirmed');
+  }, {
+    extraUrls: [deployment.rpcUrl],
+    label: 'Solana NFT candy-machine supply read',
+  });
   if (!account?.data || account.data.length < 112) {
     return {
       totalMinted: 0,

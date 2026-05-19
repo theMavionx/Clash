@@ -16,6 +16,10 @@
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const {
+  solanaRpcUrls,
+  withSolanaRpcFallback,
+} = require('./solana_rpc');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
 
@@ -72,12 +76,7 @@ function timeoutPromise(promise, ms, label) {
 }
 
 function solanaOwnedRpcUrls() {
-  return [
-    process.env.NFT_SOLANA_RPC_URL,
-    process.env.SOLANA_RPC_URL,
-    'https://solana-rpc.publicnode.com',
-    'https://api.mainnet-beta.solana.com',
-  ].filter((url, index, all) => url && all.indexOf(url) === index);
+  return solanaRpcUrls();
 }
 
 const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
@@ -732,15 +731,16 @@ function mountNftV3Endpoints(router, ctx) {
         const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
         const { mplCore, fetchAssetsByOwner } = await import('@metaplex-foundation/mpl-core');
         const { publicKey } = await import('@metaplex-foundation/umi');
-        const rpc = process.env.NFT_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-        const umi = createUmi(rpc).use(mplCore());
         let assets = [];
         try {
-          assets = await timeoutPromise(
-            fetchAssetsByOwner(umi, publicKey(ownerRaw), { skipDerivePlugins: true }),
-            12_000,
-            'Solana Core owner scan',
-          );
+          assets = await withSolanaRpcFallback(async (rpc) => {
+            const umi = createUmi(rpc).use(mplCore());
+            return timeoutPromise(
+              fetchAssetsByOwner(umi, publicKey(ownerRaw), { skipDerivePlugins: true }),
+              12_000,
+              `Solana Core owner scan ${rpc}`,
+            );
+          }, { label: 'Solana Core owner scan' });
         } catch (err) {
           if (recentCoreBody) {
             _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
@@ -2119,29 +2119,35 @@ function mountNftV3Endpoints(router, ctx) {
   // ── Solana mint helper for bridge-into-Solana. Server-mediated. ────
   async function mintSolanaAssetForBridge({ recipient, level, sourceRef }) {
     const mintStandard = String(process.env.NFT_SOLANA_MINT_STANDARD || 'token2022').toLowerCase();
+    const solanaDeploy = deploymentOf('solana');
     if (mintStandard !== 'mpl-core' && mintStandard !== 'core') {
       const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
       if (!rawKey) throw new Error('Solana authority key missing (SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY)');
       const { mintToken2022Nft } = require('./solana_token2022_nft');
+      const { Connection } = require('@solana/web3.js');
+      const connection = await withSolanaRpcFallback(async (rpc) => {
+        const candidate = new Connection(rpc, 'confirmed');
+        await candidate.getLatestBlockhash('confirmed');
+        return candidate;
+      }, {
+        extraUrls: [solanaDeploy?.rpcUrl],
+        label: 'Solana bridge Token-2022 RPC probe',
+      });
       return mintToken2022Nft({
         recipient,
         level,
         sourceRef,
         payerSecretKey: parseSolanaSecretKey(rawKey),
-        connection: solanaConnection(),
+        connection,
       });
     }
 
-    const solanaDeploy = deploymentOf('solana');
     if (!solanaDeploy?.candyMachine || !solanaDeploy?.collection) {
       throw new Error('Solana deployment missing candyMachine or collection');
     }
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { generateSigner, keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
     const { mplCore, create: createAsset } = await import('@metaplex-foundation/mpl-core');
-
-    const rpc = process.env.NFT_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const umi = createUmi(rpc).use(mplCore());
 
     // Authority key = the same Solana key used by the candy-machine deploy.
     // Accept SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY in any of the formats
@@ -2150,8 +2156,6 @@ function mountNftV3Endpoints(router, ctx) {
     const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
     if (!rawKey) throw new Error('Solana authority key missing (SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY)');
     const secretBytes = parseSolanaSecretKey(rawKey);
-    const authKeypair = umi.eddsa.createKeypairFromSecretKey(secretBytes);
-    umi.use(keypairIdentity(authKeypair));
 
     // Resilient submission. Public RPC (solana-rpc.publicnode.com) often
     // returns "block height exceeded" on `sendAndConfirm` under load, so we:
@@ -2159,54 +2163,62 @@ function mountNftV3Endpoints(router, ctx) {
     //   - retry the WHOLE build-and-send up to 3 times with a fresh blockhash
     //   - confirm via repeated getSignatureStatuses (not the bundled poll)
     const { base58 } = await import('@metaplex-foundation/umi/serializers');
-    let lastErr;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const asset = generateSigner(umi);
-      const ix = createAsset(umi, {
-        asset,
-        collection: publicKey(solanaDeploy.collection),
-        name: `Demon King (bridged)`,
-        uri: `${(process.env.NFT_PUBLIC_BASE_URL || 'https://clashofperps.fun').replace(/\/+$/, '')}/api/nft/solana/bridged`,
-        owner: publicKey(recipient),
-        plugins: [
-          { type: 'Attributes', attributeList: [
-            { key: 'level',     value: String(level) },
-            { key: 'sourceRef', value: String(sourceRef) },
-          ]},
-        ],
-      });
-      try {
-        const sig = await ix.sendAndConfirm(umi, {
-          send:    { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
-          confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+    return withSolanaRpcFallback(async (rpc) => {
+      const umi = createUmi(rpc).use(mplCore());
+      const authKeypair = umi.eddsa.createKeypairFromSecretKey(secretBytes);
+      umi.use(keypairIdentity(authKeypair));
+      let lastErr;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const asset = generateSigner(umi);
+        const ix = createAsset(umi, {
+          asset,
+          collection: publicKey(solanaDeploy.collection),
+          name: `Demon King (bridged)`,
+          uri: `${(process.env.NFT_PUBLIC_BASE_URL || 'https://clashofperps.fun').replace(/\/+$/, '')}/api/nft/solana/bridged`,
+          owner: publicKey(recipient),
+          plugins: [
+            { type: 'Attributes', attributeList: [
+              { key: 'level',     value: String(level) },
+              { key: 'sourceRef', value: String(sourceRef) },
+            ]},
+          ],
         });
-        const txSig = base58.deserialize(sig.signature)[0];
-        return { assetAddress: asset.publicKey.toString(), txSig };
-      } catch (err) {
-        lastErr = err;
-        const msg = String(err?.message || err);
-        // Confirm-side hiccup: the tx may have actually landed even though the
-        // SDK gave up waiting. Poll getSignatureStatuses by extracting the
-        // signature from the error if present.
-        const sigMatch = msg.match(/Signature\s+([1-9A-HJ-NP-Za-km-z]{40,88})/);
-        if (sigMatch) {
-          const probeSig = sigMatch[1];
-          const conn = solanaConnection();
-          for (let i = 0; i < 20; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const s = await conn.getSignatureStatuses([probeSig]);
-            const v = s?.value?.[0];
-            if (v?.confirmationStatus === 'confirmed' || v?.confirmationStatus === 'finalized') {
-              return { assetAddress: asset.publicKey.toString(), txSig: probeSig };
+        try {
+          const sig = await ix.sendAndConfirm(umi, {
+            send:    { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
+            confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+          });
+          const txSig = base58.deserialize(sig.signature)[0];
+          return { assetAddress: asset.publicKey.toString(), txSig };
+        } catch (err) {
+          lastErr = err;
+          const msg = String(err?.message || err);
+          // Confirm-side hiccup: the tx may have actually landed even though the
+          // SDK gave up waiting. Poll getSignatureStatuses by extracting the
+          // signature from the error if present.
+          const sigMatch = msg.match(/Signature\s+([1-9A-HJ-NP-Za-km-z]{40,88})/);
+          if (sigMatch) {
+            const probeSig = sigMatch[1];
+            const conn = solanaConnection();
+            for (let i = 0; i < 20; i++) {
+              await new Promise(r => setTimeout(r, 2000));
+              const s = await conn.getSignatureStatuses([probeSig]);
+              const v = s?.value?.[0];
+              if (v?.confirmationStatus === 'confirmed' || v?.confirmationStatus === 'finalized') {
+                return { assetAddress: asset.publicKey.toString(), txSig: probeSig };
+              }
+              if (v?.err) break;
             }
-            if (v?.err) break;
           }
+          if (!/block height|expired|already.*processed/i.test(msg) || attempt === 3) throw err;
+          await new Promise(r => setTimeout(r, 1500 * attempt));  // back-off before retry
         }
-        if (!/block height|expired|already.*processed/i.test(msg) || attempt === 3) throw err;
-        await new Promise(r => setTimeout(r, 1500 * attempt));  // back-off before retry
       }
-    }
-    throw lastErr;
+      throw lastErr;
+    }, {
+      extraUrls: [solanaDeploy.rpcUrl],
+      label: 'Solana bridge mint',
+    });
   }
 
   async function recoverSolanaBridgeMintRecord(sourceRef) {
@@ -2216,9 +2228,13 @@ function mountNftV3Endpoints(router, ctx) {
     const { mplCore, fetchAssetsByCollection } = await import('@metaplex-foundation/mpl-core');
     const { publicKey } = await import('@metaplex-foundation/umi');
 
-    const rpc = process.env.NFT_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || 'https://solana-rpc.publicnode.com';
-    const umi = createUmi(rpc).use(mplCore());
-    const assets = await fetchAssetsByCollection(umi, publicKey(solanaDeploy.collection));
+    const assets = await withSolanaRpcFallback(async (rpc) => {
+      const umi = createUmi(rpc).use(mplCore());
+      return fetchAssetsByCollection(umi, publicKey(solanaDeploy.collection));
+    }, {
+      extraUrls: [solanaDeploy.rpcUrl],
+      label: 'Solana bridge mint recovery',
+    });
     const wanted = String(sourceRef || '').toLowerCase();
     const hit = assets.find((asset) => {
       const attrs = asset?.attributes?.attributeList;

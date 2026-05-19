@@ -24,15 +24,14 @@ const {
   getTokenMetadata,
   tokenMetadataInitializeWithRentTransfer,
 } = require('@solana/spl-token');
+const { solanaPrimaryRpcUrl } = require('./solana_rpc');
 
 const DEFAULT_SYMBOL = 'DKING';
 const DEFAULT_COLLECTION_ID = 'demon-king-token2022-v1';
 const DEFAULT_PUBLIC_BASE_URL = 'https://clashofperps.fun';
 
 function solanaRpcUrl() {
-  return process.env.NFT_SOLANA_RPC_URL
-    || process.env.SOLANA_RPC_URL
-    || 'https://solana-rpc.publicnode.com';
+  return solanaPrimaryRpcUrl();
 }
 
 function solanaToken2022Symbol() {
