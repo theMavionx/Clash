@@ -3460,13 +3460,23 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 	if not model_res or not script_res:
 		b["skeletons"] = alive
 		return
+	const SQUARE_CORNERS: Array[Vector3] = [
+		Vector3( 0.15, 0,  0.15),
+		Vector3(-0.15, 0,  0.15),
+		Vector3(-0.15, 0, -0.15),
+		Vector3( 0.15, 0, -0.15),
+	]
 	while alive.size() < target_count:
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
 		var spawn_index: int = alive.size()
-		var angle := (TAU * float(spawn_index)) / maxf(float(target_count), 1.0)
-		var offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
+		var offset: Vector3
+		if target_count == 4:
+			offset = SQUARE_CORNERS[spawn_index % 4]
+		else:
+			var angle := (TAU * float(spawn_index)) / maxf(float(target_count), 1.0)
+			offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
 		get_tree().current_scene.add_child(skel)
 		skel.global_position = tomb_pos + offset
 		skel.tombstone_pos = tomb_pos
