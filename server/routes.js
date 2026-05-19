@@ -16,6 +16,7 @@ const {
   solanaToken2022Symbol,
 } = require('./solana_token2022_nft');
 const {
+  createSolanaConnection,
   solanaRpcUrls: buildSolanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
@@ -1469,14 +1470,14 @@ function getSolanaConnection() {
   if (_solanaConnectionCache) return _solanaConnectionCache;
   const { Connection } = require('@solana/web3.js');
   const rpcUrl = solanaRpcUrls()[0] || 'https://solana-rpc.publicnode.com';
-  _solanaConnectionCache = new Connection(rpcUrl, 'confirmed');
+  _solanaConnectionCache = createSolanaConnection(Connection, rpcUrl, 'confirmed');
   return _solanaConnectionCache;
 }
 
 function getSolanaConnections() {
   if (_solanaConnectionListCache) return _solanaConnectionListCache;
   const { Connection } = require('@solana/web3.js');
-  _solanaConnectionListCache = solanaRpcUrls().map((rpcUrl) => new Connection(rpcUrl, 'confirmed'));
+  _solanaConnectionListCache = solanaRpcUrls().map((rpcUrl) => createSolanaConnection(Connection, rpcUrl, 'confirmed'));
   return _solanaConnectionListCache;
 }
 
@@ -1960,7 +1961,7 @@ async function readSolanaNftSupply(deployment) {
   const { Connection, PublicKey } = require('@solana/web3.js');
   const maxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || deployment.maxSupply || NFT_MAX_SUPPLY);
   const account = await withSolanaRpcFallback(async (rpcUrl) => {
-    const connection = new Connection(rpcUrl, 'confirmed');
+    const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
     return connection.getAccountInfo(new PublicKey(deployment.candyMachine), 'confirmed');
   }, {
     extraUrls: [deployment.rpcUrl],
@@ -9468,6 +9469,39 @@ router.post('/tournaments/:id/join', auth, (req, res) => {
   const sync = phase === 'live' ? syncFuturesTournamentRows(req.player.id, req.player.dex) : null;
   console.log(`[tournament ${tid} join] player=${req.player.name} (${req.player.dex}) phase=${phase} -> JOINED ${t.name}`);
   res.json({ ok: true, joined: true, phase, sync: sync ? { ok: !!sync.ok } : null });
+});
+
+// Add or repair the COP payout address for an already-registered player.
+// This deliberately does not call the join path because join reactivates and
+// resets counters on conflict. Older participants may have joined before the
+// COP reward-address requirement existed.
+router.post('/tournaments/:id/reward-wallet', auth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  if (!Number(t.rewards_in_cop || 0)) {
+    return res.status(400).json({ error: 'this tournament does not use COP reward addresses' });
+  }
+  const participant = db.db.prepare(`
+    SELECT reward_wallet_evm, left_at
+    FROM tournament_participants
+    WHERE tournament_id = ? AND player_id = ?
+  `).get(tid, req.player.id);
+  if (!participant || participant.left_at !== null) {
+    return res.status(400).json({ error: 'you are not registered in this tournament' });
+  }
+  const rewardWalletEvm = normalizeRewardEvmWallet(req.body?.reward_wallet_evm ?? req.body?.rewardWalletEvm);
+  if (!rewardWalletEvm) {
+    return res.status(400).json({ error: 'valid EVM reward wallet required for COP rewards' });
+  }
+  db.db.prepare(`
+    UPDATE tournament_participants
+    SET reward_wallet_evm = ?, last_activity_at = datetime('now')
+    WHERE tournament_id = ? AND player_id = ? AND left_at IS NULL
+  `).run(rewardWalletEvm, tid, req.player.id);
+  console.log(`[tournament ${tid} reward-wallet] player=${req.player.name} -> ${rewardWalletEvm}`);
+  res.json({ ok: true, reward_wallet_evm: rewardWalletEvm });
 });
 
 // Soft leave: sets left_at so getActiveTournamentForPlayer stops returning

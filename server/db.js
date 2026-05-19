@@ -636,6 +636,7 @@ try {
   `);
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN team_dex TEXT`); } catch {}
   try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN reward_wallet_evm TEXT`); } catch {}
+  try { db.exec(`ALTER TABLE tournament_participants ADD COLUMN last_activity_at TEXT`); } catch {}
 } catch (e) { console.warn('[db] tournament_participants migration:', e.message); }
 
 try {

@@ -1,5 +1,5 @@
 // Clock-skew compensation shared between Pacifica master-sign and agent-sign
-// paths. Pacifica enforces `now - timestamp <= expiry_window` (5000ms) on
+// paths. Pacifica enforces `now - timestamp <= expiry_window` on
 // every signed request. Some Windows clocks drift enough to make signed
 // requests fail with "Invalid message", so we apply a server-time offset.
 //

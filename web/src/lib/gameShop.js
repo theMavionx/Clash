@@ -381,7 +381,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
   });
 }
 
-async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, task }) {
+async function withSolanaRpcFallback({ Connection, createSolanaConnection, primaryConnection, rpcUrls, task }) {
   const endpoints = uniqueStrings([
     primaryConnection?.rpcEndpoint,
     ...(rpcUrls || []),
@@ -390,7 +390,7 @@ async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, t
   for (const endpoint of endpoints) {
     const connection = endpoint === primaryConnection?.rpcEndpoint
       ? primaryConnection
-      : new Connection(endpoint, 'confirmed');
+      : createSolanaConnection(Connection, endpoint, 'confirmed');
     try {
       // eslint-disable-next-line no-await-in-loop
       return { connection, value: await task(connection) };
@@ -401,9 +401,10 @@ async function withSolanaRpcFallback({ Connection, primaryConnection, rpcUrls, t
   throw lastError || new Error('All Solana RPC endpoints failed');
 }
 
-async function readSolBalanceWithFallback({ Connection, primaryConnection, rpcUrls, ownerPk }) {
+async function readSolBalanceWithFallback({ Connection, createSolanaConnection, primaryConnection, rpcUrls, ownerPk }) {
   const result = await withSolanaRpcFallback({
     Connection,
+    createSolanaConnection,
     primaryConnection,
     rpcUrls,
     task: (conn) => conn.getBalance(ownerPk, 'confirmed'),
@@ -426,9 +427,10 @@ function parseTokenAccountRows(rows, PublicKey) {
   }).filter((row) => row?.pubkey);
 }
 
-async function readTokenAccountsWithFallback({ Connection, PublicKey, primaryConnection, rpcUrls, ownerPk, mintPk }) {
+async function readTokenAccountsWithFallback({ Connection, createSolanaConnection, PublicKey, primaryConnection, rpcUrls, ownerPk, mintPk }) {
   const result = await withSolanaRpcFallback({
     Connection,
+    createSolanaConnection,
     primaryConnection,
     rpcUrls,
     task: (conn) => conn.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, 'confirmed'),
@@ -572,7 +574,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   const [
     { Connection, PublicKey, TransactionInstruction, SystemProgram, ComputeBudgetProgram },
     splToken,
-    { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_LEORPC_URL, SOLANA_RPC_URLS, selectFreshSolanaRpcUrl },
+    { DEFAULT_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_RPC_URL, SAME_ORIGIN_SOLANA_LEORPC_URL, SOLANA_RPC_URLS, createSolanaConnection, selectFreshSolanaRpcUrl },
     { isBlockhashExpiredError, sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@solana/web3.js'),
@@ -607,7 +609,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   ]);
   const rpcSelection = await selectFreshSolanaRpcUrl(shopPrimaryRpcUrls, { timeoutMs: 2500 }).catch(() => null);
   const rpcUrl = rpcSelection?.selected?.url || shopRpcUrls[0] || DEFAULT_SOLANA_RPC_URL;
-  let connection = new Connection(rpcUrl, 'confirmed');
+  let connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
   solanaShopLog('rpc_selected', {
     ...shopTrace,
     rpc_host: (() => { try { return new URL(rpcUrl, window.location.origin).host; } catch { return String(rpcUrl); } })(),
@@ -626,6 +628,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
   if (payment === 'sol') {
     const balanceResult = await readSolBalanceWithFallback({
       Connection,
+      createSolanaConnection,
       primaryConnection: connection,
       rpcUrls: shopRpcUrls,
       ownerPk: buyerPk,
@@ -648,6 +651,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     const mintPk = new PublicKey(quote.mint);
     const tokenRead = await readTokenAccountsWithFallback({
       Connection,
+      createSolanaConnection,
       PublicKey,
       primaryConnection: connection,
       rpcUrls: shopRpcUrls,
@@ -673,6 +677,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     }
     const feeBalance = await readSolBalanceWithFallback({
       Connection,
+      createSolanaConnection,
       primaryConnection: connection,
       rpcUrls: shopRpcUrls,
       ownerPk: buyerPk,

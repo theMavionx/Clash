@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const {
+  createSolanaConnection,
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
@@ -145,7 +146,7 @@ async function listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, collection) {
   let lastErr = null;
   for (const rpc of solanaOwnedRpcUrls()) {
     try {
-      const conn = new Connection(rpc, 'confirmed');
+      const conn = createSolanaConnection(Connection, rpc, 'confirmed');
       const signatures = await timeoutPromise(
         conn.getSignaturesForAddress(ownerPk, { limit: 15 }, 'confirmed'),
         6_000,
@@ -219,7 +220,7 @@ async function listOwnedSolanaToken2022Nfts(ownerRaw) {
   let lastErr = null;
   for (const rpc of solanaOwnedRpcUrls()) {
     try {
-      const conn = new Connection(rpc, 'confirmed');
+      const conn = createSolanaConnection(Connection, rpc, 'confirmed');
       const rows = await timeoutPromise(
         conn.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed'),
         8_000,
@@ -2126,7 +2127,7 @@ function mountNftV3Endpoints(router, ctx) {
       const { mintToken2022Nft } = require('./solana_token2022_nft');
       const { Connection } = require('@solana/web3.js');
       const connection = await withSolanaRpcFallback(async (rpc) => {
-        const candidate = new Connection(rpc, 'confirmed');
+        const candidate = createSolanaConnection(Connection, rpc, 'confirmed');
         await candidate.getLatestBlockhash('confirmed');
         return candidate;
       }, {

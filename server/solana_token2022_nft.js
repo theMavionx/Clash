@@ -24,7 +24,7 @@ const {
   getTokenMetadata,
   tokenMetadataInitializeWithRentTransfer,
 } = require('@solana/spl-token');
-const { solanaPrimaryRpcUrl } = require('./solana_rpc');
+const { createSolanaConnection, solanaPrimaryRpcUrl } = require('./solana_rpc');
 
 const DEFAULT_SYMBOL = 'DKING';
 const DEFAULT_COLLECTION_ID = 'demon-king-token2022-v1';
@@ -165,7 +165,7 @@ function token2022MintRentBytes() {
   return getMintLen([ExtensionType.MetadataPointer]);
 }
 
-async function estimateToken2022NftRent(connection = new Connection(solanaRpcUrl(), 'confirmed')) {
+async function estimateToken2022NftRent(connection = createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed')) {
   const mintBytes = token2022MintRentBytes();
   const mintRentLamports = await connection.getMinimumBalanceForRentExemption(mintBytes);
   // Metadata is added by tokenMetadataInitializeWithRentTransfer after mint
@@ -190,7 +190,7 @@ async function estimateToken2022NftRent(connection = new Connection(solanaRpcUrl
 
 async function mintToken2022Nft({ recipient, level = 1, sourceRef = null, payerSecretKey = null, connection = null } = {}) {
   if (!recipient) throw new Error('recipient required');
-  const conn = connection || new Connection(solanaRpcUrl(), 'confirmed');
+  const conn = connection || createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed');
   const payer = payerFromSecretKey(payerSecretKey);
   const recipientPk = new PublicKey(recipient);
   const mint = Keypair.generate();
@@ -298,7 +298,7 @@ async function completeExistingToken2022NftMint({
 } = {}) {
   if (!mint) throw new Error('mint required');
   if (!recipient) throw new Error('recipient required');
-  const conn = connection || new Connection(solanaRpcUrl(), 'confirmed');
+  const conn = connection || createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed');
   const payer = payerFromSecretKey(payerSecretKey);
   const recipientPk = new PublicKey(recipient);
   const mintPk = new PublicKey(mint);
@@ -393,7 +393,7 @@ async function completeExistingToken2022NftMint({
 async function getToken2022NftInfo({ mint, expectedOwner, connection = null, collectionPubkey = null } = {}) {
   if (!mint) throw new Error('mint required');
   if (!expectedOwner) throw new Error('expectedOwner required');
-  const conn = connection || new Connection(solanaRpcUrl(), 'confirmed');
+  const conn = connection || createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed');
   const mintPk = new PublicKey(mint);
   const ownerPk = new PublicKey(expectedOwner);
   const [meta, mintInfo, accounts] = await Promise.all([

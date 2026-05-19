@@ -7,6 +7,7 @@ const bs58 = require('bs58');
 const REST_URL = 'https://api.pacifica.fi/api/v1';
 const WS_URL = 'wss://ws.pacifica.fi/ws';
 const BUILDER_CODE = 'clashofperps';
+const SIGN_EXPIRY_WINDOW_MS = 30_000;
 
 // ---------- Signing ----------
 
@@ -59,14 +60,14 @@ function buildSignedRequest(type, payload, secretKeyBase58) {
   const publicKey = keypair.publicKey.toBase58();
   const timestamp = Date.now();
 
-  const header = { type, timestamp, expiry_window: 5000 };
+  const header = { type, timestamp, expiry_window: SIGN_EXPIRY_WINDOW_MS };
   const { signature } = signMessage(header, payload, keypair);
 
   return {
     account: publicKey,
     signature,
     timestamp,
-    expiry_window: 5000,
+    expiry_window: SIGN_EXPIRY_WINDOW_MS,
     ...payload,
   };
 }

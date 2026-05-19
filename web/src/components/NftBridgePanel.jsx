@@ -28,7 +28,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl } from '../lib/solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl } from '../lib/solanaRpc';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -411,7 +411,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         }));
 
         const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-        const conn = new Connection(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+        const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
         const latest = await conn.getLatestBlockhash('confirmed');
         tx.feePayer = ownerPk;
         tx.recentBlockhash = latest.blockhash;
@@ -482,7 +482,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         const signature = extractSolanaSignatureFromError(err);
         if (signature && isSolanaExpiryError(err)) {
           const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-          const conn = new Connection(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+          const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
           const landed = await waitForSolanaLateLanding(conn, signature, 'Solana Core burn');
           if (landed) return signature;
         }

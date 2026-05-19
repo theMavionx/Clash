@@ -1,6 +1,6 @@
 // V3 NFT client helpers — paired with server/nft_v3_endpoints.js.
 //
-import { SOLANA_RPC_URLS } from './solanaRpc';
+import { SOLANA_RPC_URLS, createSolanaConnection } from './solanaRpc';
 
 // Public API:
 //   fetchNftState(chain, tokenId)
@@ -877,7 +877,7 @@ async function fetchOwnedToken2022SolanaNftsFromRpc(url, address, signal) {
   ]);
   const { TOKEN_2022_PROGRAM_ID, getTokenMetadata } = splToken;
   const owner = new PublicKey(address);
-  const conn = new Connection(url, 'confirmed');
+  const conn = createSolanaConnection(Connection, url, 'confirmed');
   const rows = await withTimeout(
     conn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed'),
     OWNED_SOLANA_TOKEN2022_TIMEOUT_MS,

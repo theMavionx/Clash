@@ -7,6 +7,7 @@ import {
   SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS,
   SOLANA_RPC_PROBE_TIMEOUT_MS,
   SOLANA_RPC_URLS,
+  createSolanaConnection,
   solanaRpcHost,
 } from './solanaRpc';
 
@@ -201,7 +202,11 @@ function buildConnectionCandidates(primaryConnection) {
   for (const url of SOLANA_RPC_URLS) {
     const endpoint = normalizeRpcEndpoint(url);
     if (!endpoint || seen.has(endpoint)) continue;
-    add(connectionCandidate(new Connection(endpoint, { commitment: 'confirmed' }), candidates.length, 'fallback'));
+    add(connectionCandidate(
+      createSolanaConnection(Connection, endpoint, { commitment: 'confirmed' }),
+      candidates.length,
+      'fallback',
+    ));
   }
   return candidates;
 }

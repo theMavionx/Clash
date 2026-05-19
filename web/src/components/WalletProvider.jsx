@@ -18,6 +18,7 @@ import {
   DEFAULT_SOLANA_RPC_URL,
   SOLANA_RPC_URLS,
   selectFreshSolanaRpcUrl,
+  solanaConnectionConfig,
   solanaRpcHost,
 } from '../lib/solanaRpc';
 
@@ -165,6 +166,7 @@ export default function WalletProvider({ children }) {
   }, [smReady, isSolanaMobile]);
 
   const rpc = useBestRpc();
+  const rpcConfig = useMemo(() => solanaConnectionConfig(rpc, { commitment: 'confirmed' }), [rpc]);
   const { ready: fcReady, inFrame } = useFarcasterWalletReady();
   const localStorageKey = inFrame ? 'fcWalletName' : 'walletName';
 
@@ -190,7 +192,7 @@ export default function WalletProvider({ children }) {
   if (!fcReady || !smReady) return null;
 
   return (
-    <ConnectionProvider endpoint={rpc}>
+    <ConnectionProvider endpoint={rpc} config={rpcConfig}>
       <SolWalletProvider
         wallets={wallets}
         autoConnect={true}
