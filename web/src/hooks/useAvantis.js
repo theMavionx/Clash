@@ -116,6 +116,26 @@ function asBool(v) {
   return false;
 }
 
+function contractPriceValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n / 1e10;
+  }
+  return 0;
+}
+
+function humanPriceValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n;
+  }
+  return 0;
+}
+
 function normalizePosition(p, markets) {
   // Avantis Core API /user-data.positions shape (confirmed via live probe):
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, sl, tp, ... }
@@ -125,7 +145,17 @@ function normalizePosition(p, markets) {
   const pairIdx = p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex;
   const isBuy = asBool(p.buy ?? p.isLong ?? p.trade?.buy ?? false);
   const symbol = p.symbol || pairIndexToSymbol(pairIdx, markets);
-  const openPrice = Number(p.openPrice ?? p.trade?.openPrice ?? 0) / 1e10 || Number(p.entry_price ?? 0);
+  const openPrice = contractPriceValue(p.openPrice, p.trade?.openPrice) || humanPriceValue(p.entry_price);
+  const takeProfit = contractPriceValue(p.tp, p.trade?.tp) || humanPriceValue(p.takeProfit, p.take_profit);
+  const stopLoss = contractPriceValue(p.sl, p.trade?.sl) || humanPriceValue(p.stopLoss, p.stop_loss);
+  const liquidationPrice = contractPriceValue(
+    p.liquidationPrice,
+    p.trade?.liquidationPrice,
+    p.liqPrice,
+    p.trade?.liqPrice,
+  ) || humanPriceValue(
+    p.liquidation_price,
+  );
   // Collateral = USDC posted as margin. Flat field on current Core API.
   let collateral = 0;
   if (p.collateral !== undefined && p.collateral !== null) {
@@ -146,9 +176,13 @@ function normalizePosition(p, markets) {
     margin: String(collateral),
     leverage: String(leverage),
     pnl: String(pnl),
+    take_profit: takeProfit > 0 ? String(takeProfit) : '',
+    stop_loss: stopLoss > 0 ? String(stopLoss) : '',
+    liquidation_price: liquidationPrice > 0 ? String(liquidationPrice) : '',
     pair_index: Number(pairIdx),
     trade_index: Number(p.index ?? p.trade?.index ?? 0),
     is_isolated: true,
+    _raw: p,
   };
 }
 
@@ -159,7 +193,9 @@ function normalizeOrder(o, markets) {
   const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
   const isBuy = asBool(o.buy ?? o.trade?.buy ?? false);
   const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
-  const openPrice = Number(o.openPrice ?? o.trade?.openPrice ?? 0) / 1e10 || Number(o.price ?? 0);
+  const openPrice = contractPriceValue(o.openPrice, o.trade?.openPrice) || humanPriceValue(o.price);
+  const takeProfit = contractPriceValue(o.tp, o.trade?.tp) || humanPriceValue(o.takeProfit, o.take_profit);
+  const stopLoss = contractPriceValue(o.sl, o.trade?.sl) || humanPriceValue(o.stopLoss, o.stop_loss);
   let collateral = 0;
   if (o.collateral !== undefined && o.collateral !== null) {
     collateral = Number(o.collateral) / 1e6;
@@ -177,8 +213,11 @@ function normalizeOrder(o, markets) {
     leverage: String(leverage),
     order_type: 'LIMIT',
     tif: 'GTC',
+    take_profit: takeProfit > 0 ? String(takeProfit) : '',
+    stop_loss: stopLoss > 0 ? String(stopLoss) : '',
     pair_index: Number(pairIdx),
     trade_index: Number(o.index ?? o.trade?.index ?? 0),
+    _raw: o,
   };
 }
 

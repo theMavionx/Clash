@@ -186,6 +186,36 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
   return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor };
 }
 
+function getPositionTpsl(pos) {
+  const tp = numOrNull(pos?.take_profit ?? pos?.takeProfit ?? pos?.tp);
+  const sl = numOrNull(pos?.stop_loss ?? pos?.stopLoss ?? pos?.sl);
+  return {
+    tp: tp && tp > 0 ? tp : 0,
+    sl: sl && sl > 0 ? sl : 0,
+  };
+}
+
+function formatTpslInputValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n >= 1 ? String(Number(n.toFixed(2))) : String(Number(n.toFixed(8)));
+}
+
+function PositionTpslRow({ pos }) {
+  const { tp, sl } = getPositionTpsl(pos);
+  if (!tp && !sl) return null;
+  return (
+    <div style={S.row}>
+      <span style={{ ...S.detail, color: tp ? '#4CAF50' : '#a3906a' }}>
+        TP: {tp ? `$${fmtPrice(tp)}` : '-'}
+      </span>
+      <span style={{ ...S.detail, color: sl ? '#E53935' : '#a3906a' }}>
+        SL: {sl ? `$${fmtPrice(sl)}` : '-'}
+      </span>
+    </div>
+  );
+}
+
 function timeMs(value) {
   if (value == null || value === '') return 0;
   const n = Number(value);
@@ -874,13 +904,23 @@ const PositionsList = memo(function PositionsList({
                 {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
               </span>
             </div>
+            <PositionTpslRow pos={pos} />
 
             {/* Action buttons. Basic mode hides TP/SL — risk management
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
               <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
               {!isBasic && (
-                <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                <button style={S.btnBlue} onClick={() => {
+                  if (expanded === 'tpsl') {
+                    setExpandedPos(null);
+                    return;
+                  }
+                  const { tp, sl } = getPositionTpsl(pos);
+                  setTpPrice(formatTpslInputValue(tp));
+                  setSlPrice(formatTpslInputValue(sl));
+                  setExpandedPos(`${posKey}:tpsl`);
+                }}>TP/SL</button>
               )}
             </div>
 
@@ -979,7 +1019,7 @@ const BottomPanel = memo(function BottomPanel({
               <thead><tr>
                 <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
                 <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
-                <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
+                <th style={S.th}>PnL %</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
               </tr></thead>
               <tbody>{filteredPositions.map((p, i) => {
                 const {
@@ -991,6 +1031,7 @@ const BottomPanel = memo(function BottomPanel({
                   pnlPct,
                   pnlColor,
                 } = getPositionMetrics(p, prices, leverageSettings);
+                const { tp, sl } = getPositionTpsl(p);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -1000,6 +1041,11 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                    <td style={S.td}>
+                      <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
+                      <span style={{color: '#a3906a'}}> / </span>
+                      <span style={{color: sl ? '#E53935' : '#a3906a', fontWeight: 800}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
+                    </td>
                     <td style={S.td}>{lev}x</td>
                     <td style={S.td}>
                       <button
@@ -3766,6 +3812,7 @@ function FuturesPanel() {
                   </div>
                 );
               })()}
+              <PositionTpslRow pos={pos} />
 
               {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
                   Pro too (per-user-request) — same icon as Basic for
@@ -3773,7 +3820,16 @@ function FuturesPanel() {
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
                 {!isBasic && (
-                  <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                  <button style={S.btnBlue} onClick={() => {
+                    if (expanded === 'tpsl') {
+                      setExpandedPos(null);
+                      return;
+                    }
+                    const { tp, sl } = getPositionTpsl(pos);
+                    setTpPrice(formatTpslInputValue(tp));
+                    setSlPrice(formatTpslInputValue(sl));
+                    setExpandedPos(`${posKey}:tpsl`);
+                  }}>TP/SL</button>
                 )}
                 <button
                   style={{
