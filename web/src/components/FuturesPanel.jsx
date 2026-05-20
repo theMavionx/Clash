@@ -4072,6 +4072,8 @@ function FuturesPanel() {
       available = parseFloat(account?.available_to_withdraw || 0);
       marginUsed = parseFloat(account?.total_margin_used || 0);
     }
+    const phoenixHasMarginRisk = dex === 'phoenix' && ((positions?.length || 0) > 0 || (orders?.length || 0) > 0);
+    const withdrawMax = Math.max(0, available - (phoenixHasMarginRisk ? 0.01 : 0));
     const hyperliquidSpot = dex === 'hyperliquid'
       ? Math.max(0, Number(account?.spot_usdc_balance ?? 0))
       : 0;
@@ -4498,25 +4500,34 @@ function FuturesPanel() {
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
-              <span style={S.detail}>Max: ${available.toFixed(2)}</span>
+              <span style={S.detail}>Max: ${withdrawMax.toFixed(2)}</span>
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               <input type="number" placeholder="Amount" value={withdrawAmt} onChange={e => setWithdrawAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button
-                style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px', opacity: available <= 0 ? 0.5 : 1}}
-                onClick={() => setWithdrawAmt(String(Math.floor(available * 100) / 100))}
-                disabled={available <= 0}
+                style={{...S.btnSmall, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px', opacity: withdrawMax <= 0 ? 0.5 : 1}}
+                onClick={() => setWithdrawAmt(String(Math.floor(withdrawMax * 100) / 100))}
+                disabled={withdrawMax <= 0}
               >MAX</button>
               <button
-                style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px', opacity: available <= 0 ? 0.5 : 1}}
+                style={{...S.btnPurple, flex: 2, whiteSpace: 'nowrap', padding: '8px 4px', opacity: withdrawMax <= 0 ? 0.5 : 1}}
                 onClick={async () => {
+                  const v = parseFloat(withdrawAmt);
+                  if (!Number.isFinite(v) || v <= 0) {
+                    setLocalAlert('Enter a positive amount');
+                    return;
+                  }
+                  if (v > withdrawMax + 0.000001) {
+                    setLocalAlert(`Max withdraw is ${withdrawMax.toFixed(2)} USDC`);
+                    return;
+                  }
                   const r = await withdraw(withdrawAmt);
                   if (!r?.error) setWithdrawAmt('');
                 }}
-                disabled={loading || !withdrawAmt || available <= 0}
+                disabled={loading || !withdrawAmt || withdrawMax <= 0}
               >
-                {loading ? '...' : (available <= 0 ? 'No funds' : 'Withdraw')}
+                {loading ? '...' : (withdrawMax <= 0 ? 'No funds' : 'Withdraw')}
               </button>
             </div>
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>

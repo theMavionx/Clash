@@ -82,8 +82,8 @@ function BasicTradeFlow({
   // unified margin we use `available_to_spend` (free margin clamped to 0)
   // — NOT raw `balance`, which can be negative when an open position is
   // in drawdown even though account_equity is still positive. Wallet USDC
-  // is not spendable until deposited into Pacifica, so do not fall back
-  // to walletUsdc there.
+  // is not spendable until deposited into a custodial/perps account, so do
+  // not fall back to walletUsdc for those DEXes.
   //
   // Priority order matches FuturesPanel.pacBalance, so Pro and Basic
   // disagree about a balance only when the account object literally
@@ -103,7 +103,7 @@ function BasicTradeFlow({
         ?? 0
     ));
     if (accBal > 0) return accBal;
-    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex') return 0;
+    if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix') return 0;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc, dex]);
 

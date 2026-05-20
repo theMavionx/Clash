@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
+import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildWithdrawIxsResolved, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
@@ -28,6 +28,7 @@ const PHOENIX_TX_METADATA_TTL_MS = 12_000;
 const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
 const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
+const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
@@ -117,6 +118,7 @@ function phoenixMetadataSummary(orderClient, symbol) {
 }
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+const USDC_MINT_ADDRESS = USDC_MINT.toBase58();
 const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOC_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
@@ -165,7 +167,15 @@ function tokenAmountValue(value) {
 function toRawUsdc(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive USDC amount');
-  return BigInt(Math.floor(n * 10 ** USDC_DECIMALS));
+  const raw = BigInt(Math.floor(n * 10 ** USDC_DECIMALS));
+  if (raw <= 0n) throw new Error(`Minimum amount is ${1 / 10 ** USDC_DECIMALS} USDC`);
+  return raw;
+}
+
+function formatUsdcAmount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '0';
+  return n.toFixed(6).replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '');
 }
 
 function sideToPhoenix(side) {
@@ -592,6 +602,7 @@ export function usePhoenix() {
   const refreshTraderStateCachedAtRef = useRef(0);
   const refreshTraderStateLastResultRef = useRef(undefined);
   const refreshTraderStateRetryMsRef = useRef(PHOENIX_TRADER_STATE_DEDUP_MS);
+  const accountRef = useRef(null);
   const txClientRef = useRef(null);
   const txClientEndpointRef = useRef(null);
   const txClientReadyAtRef = useRef(0);
@@ -604,6 +615,13 @@ export function usePhoenix() {
   const client = getPhoenixClient(connection?.rpcEndpoint);
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const setPhoenixAccount = useCallback((nextOrUpdater) => {
+    setAccount(prev => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      accountRef.current = next;
+      return next;
+    });
+  }, []);
 
   const disposeTransactionClient = useCallback(() => {
     disposePhoenixClient(txClientRef.current);
@@ -668,6 +686,75 @@ export function usePhoenix() {
       }
     }
   }, [connection?.rpcEndpoint, disposeTransactionClient]);
+
+  const buildCollateralIxs = useCallback(async (txClient, amount, direction, authority) => {
+    await txClient.exchange?.ready?.();
+    const snapshot = txClient.exchange?.snapshot?.();
+    const exchangeSnapshot = snapshot?.exchange;
+    if (!exchangeSnapshot?.canonicalMint) throw new Error('Phoenix exchange metadata is not ready');
+    const phoenixProgramAddress = txClient.pda.getProgramAddress();
+    const [
+      logAuthorityAddress,
+      emberState,
+      emberVault,
+      traderAccount,
+      phoenixTokenAccount,
+      usdcTokenAccount,
+    ] = await Promise.all([
+      txClient.pda.getLogAuthorityAddress({ phoenixProgramAddress }),
+      txClient.pda.getEmberStateAddress({ phoenixProgramAddress }),
+      txClient.pda.getEmberVaultAddress({ phoenixProgramAddress }),
+      txClient.pda.getTraderAddress({
+        authority,
+        traderPdaIndex: 0,
+        subaccountIndex: 0,
+        phoenixProgramAddress,
+      }),
+      txClient.pda.getTraderTokenAccountAddress({
+        authority,
+        mint: exchangeSnapshot.canonicalMint,
+      }),
+      txClient.pda.getTraderTokenAccountAddress({
+        authority,
+        mint: USDC_MINT_ADDRESS,
+      }),
+    ]);
+    const resolved = {
+      exchange: {
+        phoenixProgramAddress,
+        logAuthorityAddress,
+        globalConfigurationAddress: exchangeSnapshot.globalConfig,
+        canonicalMint: exchangeSnapshot.canonicalMint,
+        usdcMint: USDC_MINT_ADDRESS,
+        perpAssetMap: exchangeSnapshot.perpAssetMap,
+        globalVault: exchangeSnapshot.globalVault,
+        withdrawQueue: exchangeSnapshot.withdrawQueue,
+        globalTraderIndex: exchangeSnapshot.globalTraderIndex,
+        activeTraderBuffer: exchangeSnapshot.activeTraderBuffer,
+        emberState,
+        emberVault,
+      },
+      trader: {
+        authority,
+        traderAccount,
+        usdcTokenAccount,
+        phoenixTokenAccount,
+      },
+      amount,
+    };
+    console.info('[Phoenix] collateral tx resolved', {
+      direction,
+      canonical_mint: shortPhoenixAddress(exchangeSnapshot.canonicalMint),
+      wallet_usdc_mint: shortPhoenixAddress(USDC_MINT_ADDRESS),
+      sdk_usdc_mint: shortPhoenixAddress(exchangeSnapshot.usdcMint),
+      trader_account: shortPhoenixAddress(traderAccount),
+      usdc_token_account: shortPhoenixAddress(usdcTokenAccount),
+      phoenix_token_account: shortPhoenixAddress(phoenixTokenAccount),
+    });
+    return direction === 'withdraw'
+      ? buildWithdrawIxsResolved(resolved)
+      : buildDepositIxsResolved(resolved);
+  }, []);
 
   const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
     const phx = phoenixSymbol(symbol);
@@ -912,7 +999,7 @@ export function usePhoenix() {
       marketsRef.current = list;
       marketsBySymbolRef.current = Object.fromEntries(list.map(m => [m.symbol, m]));
       setMarkets(list);
-      setAccount(prev => prev ? {
+      setPhoenixAccount(prev => prev ? {
         ...prev,
         maker_fee: list[0]?.maker_fee ?? prev.maker_fee,
         taker_fee: list[0]?.taker_fee ?? prev.taker_fee,
@@ -923,7 +1010,7 @@ export function usePhoenix() {
       setError(e?.message || 'Could not load Phoenix markets');
       return [];
     }
-  }, [client, fetchPrices, isActiveDex]);
+  }, [client, fetchPrices, isActiveDex, setPhoenixAccount]);
 
   const refreshTraderState = useCallback(async (options = {}) => {
     if (!isActiveDex || !walletAddr || walletMismatch) {
@@ -1010,7 +1097,7 @@ export function usePhoenix() {
       const firstMarket = marketsRef.current[0] || {};
       setPositions(pos);
       setOrders(ord);
-      setAccount({
+      setPhoenixAccount({
         authority: walletAddr,
         balance: String(crossCollateral),
         account_equity: String(equity),
@@ -1038,7 +1125,7 @@ export function usePhoenix() {
       subaccountsRef.current = [];
       setPositions([]);
       setOrders([]);
-      setAccount({
+      setPhoenixAccount({
         authority: walletAddr,
         balance: '0',
         account_equity: '0',
@@ -1070,7 +1157,7 @@ export function usePhoenix() {
         refreshTraderStateInFlightRef.current = null;
       }
     }
-  }, [client, isActiveDex, walletAddr, walletMismatch]);
+  }, [client, isActiveDex, setPhoenixAccount, walletAddr, walletMismatch]);
 
   const waitForTraderState = useCallback(async (attempts = 8) => {
     for (let i = 0; i < attempts; i += 1) {
@@ -1215,9 +1302,15 @@ export function usePhoenix() {
       try {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
+        const requested = Number(amountUsdc);
+        if (!Number.isFinite(requested) || requested <= 0) throw new Error('Enter a positive USDC amount');
+        const walletBalance = await fetchWalletUsdc();
+        if (requested > walletBalance + 0.000001) {
+          throw new Error(`Not enough Solana USDC: need ${formatUsdcAmount(requested)}, wallet has ${formatUsdcAmount(walletBalance)}.`);
+        }
         const amount = toRawUsdc(amountUsdc);
         const txClient = await getTransactionClient(true);
-        const built = await txClient.ixs.buildDepositIxs({ authority: walletAddr, amount });
+        const built = await buildCollateralIxs(txClient, amount, 'deposit', walletAddr);
         const signature = await sendIxs(built.instructions, 'phoenix.deposit');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         claimGold();
@@ -1230,7 +1323,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, claimGold, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activate, buildCollateralIxs, claimGold, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const withdraw = useCallback(async (amountUsdc) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -1243,9 +1336,20 @@ export function usePhoenix() {
       setLoading(true);
       setError(null);
       try {
+        const requested = Number(amountUsdc);
+        if (!Number.isFinite(requested) || requested <= 0) throw new Error('Enter a positive USDC amount');
+        await refreshTraderState({ force: true });
+        const latestAccount = accountRef.current;
+        const rawAvailable = Math.max(0, Number(latestAccount?.available_to_withdraw || 0));
+        const hasRisk = Number(latestAccount?.positions_count || 0) > 0
+          || Number(latestAccount?.orders_count || 0) > 0;
+        const availableForWithdraw = Math.max(0, rawAvailable - (hasRisk ? PHOENIX_WITHDRAW_RISK_BUFFER_USDC : 0));
+        if (requested > availableForWithdraw + 0.000001) {
+          throw new Error(`Phoenix withdrawable collateral is ${formatUsdcAmount(availableForWithdraw)} USDC. Withdraw less, or close positions/cancel orders first.`);
+        }
         const amount = toRawUsdc(amountUsdc);
         const txClient = await getTransactionClient(true);
-        const built = await txClient.ixs.buildWithdrawIxs({ authority: walletAddr, amount });
+        const built = await buildCollateralIxs(txClient, amount, 'withdraw', walletAddr);
         const signature = await sendIxs(built.instructions, 'phoenix.withdraw');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         return { success: true, signature };
@@ -1257,7 +1361,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [buildCollateralIxs, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const buildBaseUnitsFromMargin = useCallback((symbol, margin, leverage, priceOverride = null) => {
     const priceRow = pricesRef.current.find(p => p.symbol === phoenixSymbol(symbol));
