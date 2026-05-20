@@ -7,7 +7,9 @@ const MAX_QUEUE = 100;
 const MAX_BREADCRUMBS = 90;
 const CLIENT_MAX_PER_MINUTE = 120;
 const FETCH_SNIPPET_MAX = 900;
+const PAYLOAD_JSON_MAX = 7600;
 const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
+const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
 const NOISY_SERVER_RE = /^(WalletConnect Core is already initialized|Backpack couldn't override `window\.ethereum`)/;
 const EXTENSION_ERROR_RE = /(chrome-extension:\/\/|moz-extension:\/\/|safari-web-extension:\/\/|Cannot redefine property: ethereum|Invalid property descriptor|tpweb3_|tronlinkParams|Backpack was unable to override window\.ethereum|Attempting to use a disconnected port object)/i;
@@ -78,8 +80,7 @@ function getRoute() {
 
 function getBuildId() {
   if (runtimeContext.build_id) return runtimeContext.build_id;
-  const env = import.meta.env || {};
-  const envBuild = env.VITE_BUILD_ID || env.VITE_COMMIT_SHA || '';
+  const envBuild = import.meta.env.VITE_BUILD_ID || import.meta.env.VITE_COMMIT_SHA || '';
   if (envBuild) {
     runtimeContext.build_id = envBuild;
     return envBuild;
@@ -90,9 +91,9 @@ function getBuildId() {
       || scripts.find(s => /\/src\/main\.jsx/.test(s.src));
     runtimeContext.build_id = indexScript
       ? (indexScript.src.split('/').pop() || '').replace(/\.js(\?.*)?$/, '')
-      : (env.DEV ? 'dev' : 'unknown');
+      : (import.meta.env.DEV ? 'dev' : 'unknown');
   } catch {
-    runtimeContext.build_id = env.DEV ? 'dev' : 'unknown';
+    runtimeContext.build_id = import.meta.env.DEV ? 'dev' : 'unknown';
   }
   return runtimeContext.build_id;
 }
@@ -227,8 +228,60 @@ export function reportClientEvent(type, data = {}, opts = {}) {
   } catch { /* noop */ }
 }
 
+function isImportantBreadcrumb(crumb) {
+  if (!crumb) return false;
+  if (crumb.level === 'warn' || crumb.level === 'error') return true;
+  return IMPORTANT_BREADCRUMB_RE.test(`${crumb.type || ''} ${JSON.stringify(crumb.data || {})}`);
+}
+
+function compactBreadcrumbsForPayload(list, max) {
+  const all = Array.isArray(list) ? list : [];
+  const important = all.filter(isImportantBreadcrumb).slice(-Math.ceil(max / 2));
+  const recent = all.slice(-max);
+  const merged = [];
+  for (const crumb of [...important, ...recent]) {
+    if (!merged.includes(crumb)) merged.push(crumb);
+  }
+  return merged.slice(-max);
+}
+
 function payloadString(payload) {
-  try { return truncate(JSON.stringify(payload), 7600); } catch { return null; }
+  try {
+    const full = JSON.stringify(payload);
+    if (full.length <= PAYLOAD_JSON_MAX) return full;
+
+    const breadcrumbsList = Array.isArray(payload?.breadcrumbs) ? payload.breadcrumbs : [];
+    const breadcrumbsCompact = compactBreadcrumbsForPayload(breadcrumbsList, 40);
+    const compact = {
+      ...payload,
+      breadcrumbs: breadcrumbsCompact,
+      payload_truncated: true,
+      original_payload_bytes: full.length,
+      dropped_breadcrumbs: Math.max(0, breadcrumbsList.length - breadcrumbsCompact.length),
+    };
+    const compactText = JSON.stringify(compact);
+    if (compactText.length <= PAYLOAD_JSON_MAX) return compactText;
+
+    const small = {
+      args: Array.isArray(payload?.args) ? payload.args.slice(0, 4) : payload?.args,
+      context: payload?.context || null,
+      event: payload?.event || undefined,
+      fetch: payload?.fetch || undefined,
+      breadcrumbs: compactBreadcrumbsForPayload(breadcrumbsList, 15),
+      payload_truncated: true,
+      original_payload_bytes: full.length,
+    };
+    const smallText = JSON.stringify(small);
+    if (smallText.length <= PAYLOAD_JSON_MAX) return smallText;
+
+    return JSON.stringify({
+      context: payload?.context || null,
+      payload_truncated: true,
+      original_payload_bytes: full.length,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function scheduleFlush() {

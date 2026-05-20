@@ -1,14 +1,9 @@
 const rawEnvSolanaRpc = (import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
 const rawDirectSolanaRpc = (import.meta.env.VITE_DIRECT_SOLANA_RPC_URL || '').trim();
 const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS || '').trim();
-const heliusApiKey = (
-  import.meta.env.VITE_HELIUS_API_KEY
-  || import.meta.env.VITE_SOLANA_HELIUS_API_KEY
-  || ''
-).trim();
 const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || '1'));
 const preferProxyRpc = allowProxyFallback
-  && /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || ''));
+  && !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || '1'));
 const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
 const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
@@ -75,7 +70,6 @@ const DIRECT_SOLANA_RPC_URLS = [
   ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
   ...(includeOfficialDirectRpc ? [officialDirectBrowserRpc] : []),
-  heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}` : '',
 ];
 
 const PROXY_SOLANA_RPC_URLS = [

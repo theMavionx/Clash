@@ -23,8 +23,7 @@ function splitRpcUrls(value) {
 }
 
 export const BASE_RPC_URLS = (() => {
-  const env = typeof import.meta !== 'undefined' ? import.meta.env || {} : {};
-  const override = splitRpcUrls(env.VITE_BASE_RPC_URLS || env.VITE_BASE_RPC_URL);
+  const override = splitRpcUrls(import.meta.env.VITE_BASE_RPC_URLS || import.meta.env.VITE_BASE_RPC_URL);
   if (override.length) return override;
   return [
     'https://base-rpc.publicnode.com',

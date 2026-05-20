@@ -337,7 +337,18 @@ function normalizeRpcUrl(url) {
 
 function envValue(name) {
   try {
-    return String(import.meta.env?.[name] || '').trim();
+    switch (name) {
+      case 'VITE_SOLANA_DAS_RPC_URL':
+        return String(import.meta.env.VITE_SOLANA_DAS_RPC_URL || '').trim();
+      case 'VITE_SOLANA_CORE_RPC_URL':
+        return String(import.meta.env.VITE_SOLANA_CORE_RPC_URL || '').trim();
+      case 'VITE_SOLANA_RPC_URL':
+        return String(import.meta.env.VITE_SOLANA_RPC_URL || '').trim();
+      case 'VITE_SOLANA_ENABLE_CORE_GPA':
+        return String(import.meta.env.VITE_SOLANA_ENABLE_CORE_GPA || '').trim();
+      default:
+        return '';
+    }
   } catch {
     return '';
   }
@@ -570,12 +581,9 @@ async function fetchOwnedNftsBrowserEvm({ chain, address, signal }) {
 }
 
 function solanaDasUrls() {
-  const heliusKey = envValue('VITE_HELIUS_API_KEY') || envValue('VITE_SOLANA_HELIUS_API_KEY');
-  const alchemyKey = envValue('VITE_ALCHEMY_SOLANA_API_KEY') || envValue('VITE_SOLANA_ALCHEMY_API_KEY');
   return uniqueValues([
     envValue('VITE_SOLANA_DAS_RPC_URL'),
-    heliusKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}` : '',
-    alchemyKey ? `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}` : '',
+    ...SOLANA_RPC_URLS,
   ]).map(normalizeRpcUrl);
 }
 

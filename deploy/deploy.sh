@@ -99,11 +99,37 @@ ensure_env_default() {
     fi
 }
 
+env_file_value() {
+    local key="$1"
+    [ -f "$ENV_FILE" ] || return 0
+    grep -E "^${key}=" "$ENV_FILE" 2>/dev/null \
+        | tail -n 1 \
+        | cut -d= -f2- \
+        | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" \
+        || true
+}
+
+first_env_file_value() {
+    local key value
+    for key in "$@"; do
+        value="$(env_file_value "$key")"
+        if [ -n "$value" ]; then
+            printf '%s' "$value"
+            return 0
+        fi
+    done
+}
+
+sed_escape_replacement() {
+    printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'
+}
+
 load_vite_env_for_build() {
     # Vite only embeds variables that are present in the build process env and
     # start with VITE_. Release copies intentionally exclude .env files, so
     # production-only public config (Privy app id, Aptos/Arbitrum API keys)
     # must be lifted from /opt/clash/shared/.env before npm run build.
+    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY
     [ -f "$ENV_FILE" ] || return 0
 
     local count=0
@@ -118,6 +144,11 @@ load_vite_env_for_build() {
         value="${line#*=}"
         case "$key" in
             VITE_*)
+                case "$key" in
+                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY)
+                        continue
+                        ;;
+                esac
                 if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
                     export "$key=$value"
                     loaded_keys+=("$key")
@@ -214,6 +245,7 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
+    ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
     ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
@@ -539,10 +571,12 @@ MCPTEMPCONF
         certbot --nginx -d "$MCP_DOMAIN" --non-interactive --agree-tos -m "$EMAIL"
     fi
 
-    ARBITRUM_ALCHEMY_KEY=""
-    if [ -f "$ENV_FILE" ]; then
-        ARBITRUM_ALCHEMY_KEY="$(grep -E '^ARBITRUM_ALCHEMY_KEY=' "$ENV_FILE" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '\"'\''[:space:]' || true)"
-    fi
+    ARBITRUM_ALCHEMY_KEY="$(env_file_value "ARBITRUM_ALCHEMY_KEY")"
+    SOLANA_HELIUS_API_KEY="$(first_env_file_value \
+        "SOLANA_HELIUS_API_KEY" \
+        "HELIUS_API_KEY" \
+        "VITE_HELIUS_API_KEY" \
+        "VITE_SOLANA_HELIUS_API_KEY")"
 
     cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
 server {
@@ -623,9 +657,9 @@ server {
     }
 
     location /rpc/solana {
-        proxy_pass https://api.mainnet-beta.solana.com/;
+        proxy_pass __SOLANA_RPC_PROXY_PASS__;
         proxy_http_version 1.1;
-        proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_set_header Host __SOLANA_RPC_HOST__;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;
@@ -810,6 +844,19 @@ MCPCONF
         sed -i 's|proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
     fi
+
+    local solana_rpc_proxy_pass solana_rpc_host
+    if [ -n "$SOLANA_HELIUS_API_KEY" ]; then
+        solana_rpc_proxy_pass="https://mainnet.helius-rpc.com/?api-key=$SOLANA_HELIUS_API_KEY"
+        solana_rpc_host="mainnet.helius-rpc.com"
+        log "SOLANA_HELIUS_API_KEY is set; /rpc/solana will proxy to Helius server-side."
+    else
+        solana_rpc_proxy_pass="https://api.mainnet-beta.solana.com/"
+        solana_rpc_host="api.mainnet-beta.solana.com"
+        log "SOLANA_HELIUS_API_KEY is not set; /rpc/solana will use the official public endpoint."
+    fi
+    sed -i "s|__SOLANA_RPC_PROXY_PASS__|$(sed_escape_replacement "$solana_rpc_proxy_pass")|g" /etc/nginx/sites-available/$DOMAIN
+    sed -i "s|__SOLANA_RPC_HOST__|$(sed_escape_replacement "$solana_rpc_host")|g" /etc/nginx/sites-available/$DOMAIN
 
     ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
     ln -sf /etc/nginx/sites-available/$MCP_DOMAIN /etc/nginx/sites-enabled/
