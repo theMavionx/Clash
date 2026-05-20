@@ -14,6 +14,9 @@ import {
 const DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS = 25_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
+const ENABLE_PRE_SIGN_SIMULATION = !/^(0|false|no)$/i.test(
+  String(import.meta.env.VITE_SOLANA_PRE_SIGN_SIMULATION || '1'),
+);
 
 const SEND_OPTIONS = {
   preflightCommitment: 'confirmed',
@@ -127,13 +130,55 @@ function transactionProgramSummary(tx) {
   }
 }
 
+function compiledMessageSummary(tx) {
+  try {
+    const message = tx?.message || tx?.compileMessage?.();
+    const header = message?.header;
+    const accountKeys = message?.staticAccountKeys || message?.accountKeys || [];
+    if (!header) return {};
+    const requiredSigners = Number(header.numRequiredSignatures || 0);
+    const readonlySigned = Number(header.numReadonlySignedAccounts || 0);
+    const readonlyUnsigned = Number(header.numReadonlyUnsignedAccounts || 0);
+    const accountCount = accountKeys.length;
+    const writableSigned = Math.max(0, requiredSigners - readonlySigned);
+    const unsignedCount = Math.max(0, accountCount - requiredSigners);
+    const writableUnsigned = Math.max(0, unsignedCount - readonlyUnsigned);
+    return {
+      tx_account_count: accountCount,
+      tx_required_signatures: requiredSigners,
+      tx_readonly_signed_accounts: readonlySigned,
+      tx_readonly_unsigned_accounts: readonlyUnsigned,
+      tx_writable_accounts: writableSigned + writableUnsigned,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function serializeTransactionForSimulation(tx) {
+  if (!tx || typeof tx.serialize !== 'function') return null;
+  try {
+    return tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+  } catch {
+    try {
+      return tx.serialize();
+    } catch {
+      return null;
+    }
+  }
+}
+
 function transactionSummary(tx) {
   const programs = transactionProgramSummary(tx);
+  const raw = serializeTransactionForSimulation(tx);
   return {
     tx_version: tx?.version === 0 || tx?.message?.version === 0 ? 'v0' : 'legacy',
     tx_instruction_count: programs.length,
     tx_instruction_programs: programs.slice(0, 12).map(shortAddress),
     tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
+    tx_unsigned_bytes: raw?.length || null,
+    tx_near_solana_size_limit: raw?.length ? raw.length >= 1100 : null,
+    ...compiledMessageSummary(tx),
   };
 }
 
@@ -454,6 +499,58 @@ async function simulateRawTransactionForLogs(connection, rawTransaction) {
     logs: Array.isArray(value.logs) ? value.logs : [],
     unitsConsumed: value.unitsConsumed ?? null,
   };
+}
+
+async function preSignSimulateTransaction({ connection, tx, label, attempt }) {
+  if (!ENABLE_PRE_SIGN_SIMULATION) return;
+  const rawTransaction = serializeTransactionForSimulation(tx);
+  if (!rawTransaction?.length) {
+    logTx(label, 'pre_sign_simulation_unavailable', {
+      attempt,
+      rpc_host: rpcHost(connection),
+      reason: 'serialize_failed',
+      ...transactionSummary(tx),
+    }, 'warn');
+    return;
+  }
+
+  try {
+    const simulation = await simulateRawTransactionForLogs(connection, rawTransaction);
+    if (!simulation) {
+      logTx(label, 'pre_sign_simulation_unavailable', {
+        attempt,
+        rpc_host: rpcHost(connection),
+        reason: 'empty_rpc_result',
+        ...transactionSummary(tx),
+      }, 'warn');
+      return;
+    }
+    const payload = {
+      attempt,
+      rpc_host: rpcHost(connection),
+      err: simulation.err || null,
+      units_consumed: simulation.unitsConsumed,
+      logs: simulation.logs.slice(-12),
+      ...transactionSummary(tx),
+    };
+    logTx(label, 'pre_sign_simulation', payload, simulation.err ? 'warn' : 'info');
+    if (simulation.err) {
+      const error = new Error(`Pre-sign simulation failed: ${JSON.stringify(simulation.err)}`);
+      error.name = 'SolanaPreSignSimulationError';
+      error.simulationErr = simulation.err;
+      error.simulationLogs = simulation.logs || [];
+      error.simulationUnitsConsumed = simulation.unitsConsumed;
+      throw error;
+    }
+  } catch (error) {
+    if (error?.name === 'SolanaPreSignSimulationError') throw error;
+    logTx(label, 'pre_sign_simulation_unavailable', {
+      attempt,
+      rpc_host: rpcHost(connection),
+      reason: error?.message || String(error || 'simulateTransaction failed'),
+      ...transactionSummary(tx),
+    }, 'warn');
+  }
 }
 
 async function attachSimulationLogs(error, connection, rawTransaction) {
@@ -966,6 +1063,13 @@ export async function sendSolanaTransactionWithRetry({
       });
 
       const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
+      await preSignSimulateTransaction({
+        connection: attemptConnection,
+        tx,
+        label,
+        attempt,
+      });
+
       let sig = null;
       let rawTransaction = null;
       if (!privyActive && signTransaction) {

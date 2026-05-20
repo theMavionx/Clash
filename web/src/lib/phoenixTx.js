@@ -41,10 +41,20 @@ function instructionSummary(instructions) {
       ));
       return {
         program: shortAddress(ix?.programAddress || ix?.programId),
+        program_id: String(ix?.programAddress || ix?.programId || ''),
         account_count: accounts.length,
         writable_count: flags.filter(flag => flag.isWritable).length,
         signer_count: flags.filter(flag => flag.isSigner).length,
         data_bytes: ix?.data?.length || 0,
+        account_roles: accounts.slice(0, 10).map((account, index) => {
+          const flag = flags[index] || {};
+          return {
+            index,
+            address: shortAddress(account.address || account.pubkey),
+            writable: !!flag.isWritable,
+            signer: !!flag.isSigner,
+          };
+        }),
       };
     }),
   };
