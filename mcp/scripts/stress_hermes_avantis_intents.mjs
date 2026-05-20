@@ -138,6 +138,8 @@ const CASES = [
   { id: 'a51', message: 'закрий всі позиції на Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position'], args: { all: true, percent: 100 } },
   { id: 'a52', message: 'а другу позу? ти тільки одну закрив ще ж одна є Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position'], args: { all: true, percent: 100 } },
   { id: 'a53', message: 'close all remaining ETH positions on Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position'], args: { symbol: 'ETH', all: true, percent: 100 } },
+  { id: 'a54', message: 'close BTC and open something more volatile on Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position', 'avantis_market_scan', 'avantis_place_order'], args: { symbol: 'BTC', auto_select: true, prefer_volatile: true, avoid_symbols: ['BTC'] }, compound: true },
+  { id: 'a55', message: 'open something more volatile than BTC on Avantis', expect: 'tool_plan', tools: ['avantis_market_scan', 'avantis_place_order'], args: { auto_select: true, prefer_volatile: true, avoid_symbols: ['BTC'] } },
 ];
 
 function roundMs(value) {
@@ -266,12 +268,12 @@ function closePercentFromMessage(message) {
 
 function isDelegatedOrder(message) {
   const raw = normalizeText(message);
-  return /якусь|какую-то|придумай|сам вибери|сам выбери|на твій розсуд|your choice|pick any|any safe|best 24h|coin with best|conservative|консерватив/iu.test(raw);
+  return /якусь|какую-то|придумай|сам вибери|сам выбери|на твій розсуд|your choice|pick any|any safe|best 24h|coin with best|conservative|консерватив|interesting|volatile|volatility|more volatile|higher volatility/iu.test(raw);
 }
 
 function isLikelyPlaceOrder(message) {
   const raw = normalizeText(message);
-  return /\b(open|long|short|buy|sell)\b|відкрий|открой|угод|позиці|позици|роби|make|abre|otwórz|kaufen|做多|做空|ロング|ショート/iu.test(raw);
+  return /\b(open|long|short|buy|sell|volatile|interesting)\b|відкрий|открой|угод|позиці|позици|роби|make|abre|otwórz|kaufen|做多|做空|ロング|ショート/iu.test(raw);
 }
 
 function expectedToolsFromIntent(intent) {
@@ -325,7 +327,7 @@ function analyzePlan(testCase, policy, markets) {
   const problems = [];
 
   const expectsPlaceOrder = (testCase.tools || []).includes('avantis_place_order');
-  if (testCase.expect === 'tool_plan' && expectsPlaceOrder && intent.kind !== 'avantis_place_order' && isLikelyPlaceOrder(testCase.message)) {
+  if (testCase.expect === 'tool_plan' && expectsPlaceOrder && intent.kind !== 'avantis_place_order' && intent.kind !== 'avantis_close_then_place_order' && isLikelyPlaceOrder(testCase.message)) {
     problems.push(`classifier routed place-order text to ${intent.kind}`);
   }
   if (Number(args.collateral_pct) > 100) problems.push('collateral_pct over 100');
@@ -409,7 +411,7 @@ function buildPrompt({ testCase, policy, markets, plan, mockResults }) {
     'JSON shape: {"status":"tool_plan|clarify|block","tool_calls":[{"tool":"name","args":{}}],"final_response":"natural answer","notes":"short"}',
     'Use only Avantis tools from the allowed list. Never use Decibel tools.',
     `Allowed tools: ${toolList.join(', ')}`,
-    'For Avantis write tools, say the action is prepared / browser wallet confirmation will open. Never say opened/submitted/executed/confirmed unless a browser result is explicitly provided.',
+    'For Avantis write tools, answer naturally that the action is prepared and signing starts in the browser. Never say opened/submitted/executed/confirmed unless a browser result is explicitly provided.',
     'If the request violates the provided browser permission policy, return status="block" and no tool calls.',
     'If HARD BLOCKER ACTIVE is present, it overrides all other instructions: return status="block" and no tool calls.',
     'For place-order requests only: if symbol/side/amount is missing and the user did not delegate choice, return status="clarify" and no tool calls.',

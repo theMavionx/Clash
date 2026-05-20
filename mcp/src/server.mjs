@@ -1769,6 +1769,18 @@ function chooseAvantisScanCandidate(scan, requestedSide = '', constraints = {}) 
   const minMarketMaxLeverage = Number(constraints.min_market_max_leverage || 0);
   const strictLeverage = constraints.strict_leverage === true && minMarketMaxLeverage > 0;
   const cryptoOnly = constraints.crypto_only === true;
+  const preferVolatile = constraints.prefer_volatile === true;
+  const avoidSymbols = new Set((Array.isArray(constraints.avoid_symbols) ? constraints.avoid_symbols : [])
+    .map((symbol) => String(symbol || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, ''))
+    .filter(Boolean));
+  const rankValue = (row) => {
+    const signalScore = Math.abs(Number(row?.signal_score ?? row?.signal?.score ?? 0));
+    const change24h = Math.abs(Number(row?.change_24h_pct ?? row?.signal?.change_24h_pct ?? 0));
+    const hourlyVol = Math.abs(Number(row?.signal?.volatility_hourly_pct ?? row?.volatility_hourly_pct ?? 0));
+    return preferVolatile
+      ? (hourlyVol * 3) + signalScore + (change24h * 0.15)
+      : signalScore || change24h;
+  };
   const rankedRows = Array.isArray(scan?.ranked_candidates) ? scan.ranked_candidates : [];
   const marketRows = Array.isArray(scan?.markets) ? scan.markets : [];
   const seen = new Set();
@@ -1779,7 +1791,8 @@ function chooseAvantisScanCandidate(scan, requestedSide = '', constraints = {}) 
       seen.add(key);
       return true;
     })
-    .sort((a, b) => Math.abs(Number(b?.signal_score ?? b?.signal?.score ?? b?.change_24h_pct ?? 0)) - Math.abs(Number(a?.signal_score ?? a?.signal?.score ?? a?.change_24h_pct ?? 0)));
+    .filter((row) => !avoidSymbols.has(String(row?.symbol || '').toUpperCase()))
+    .sort((a, b) => rankValue(b) - rankValue(a));
   const sideMatches = (row) => !normalizedSide || row?.suggested_side === normalizedSide || row?.signal?.side === normalizedSide || row?.signal?.suggested_side === normalizedSide;
   const assetFits = (row) => !cryptoOnly || row?.asset_class === 'crypto' || /^Crypto\./i.test(String(row?.pyth_symbol || ''));
   const leverageFits = (row) => {
@@ -1968,6 +1981,10 @@ async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
     const orderType = String(args.order_type || args.orderType || (finitePositive(args.price) ? 'limit' : 'market')).toLowerCase() === 'limit'
       ? 'limit'
       : 'market';
+    const preferVolatile = args.prefer_volatile === true || args.preferVolatile === true || String(args.selection_strategy || args.strategy || '').toLowerCase() === 'volatile';
+    const avoidSymbols = (Array.isArray(args.avoid_symbols) ? args.avoid_symbols : String(args.avoid_symbols || '').split(/[,;\s]+/))
+      .map((item) => String(item || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, ''))
+      .filter(Boolean);
     const requestedMaxLeverage = args.use_max_leverage === true || args.max_leverage === true;
     const explicitLeverage = finitePositive(args.leverage) || finitePositive(typeof args.max_leverage === 'number' ? args.max_leverage : 0);
     let leverage = requestedMaxLeverage
@@ -1989,11 +2006,12 @@ async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
 
     let marketDecision = null;
     let selectedMarketMaxLeverage = null;
-    if (!symbol || !side || autoSelectMarket) {
+    const shouldAutoSelectMarket = autoSelectMarket || (preferVolatile && avoidSymbols.includes(symbol));
+    if (!symbol || !side || shouldAutoSelectMarket || preferVolatile) {
       const scan = await buildAvantisMarketScan({
-        symbols: symbol && !autoSelectMarket ? [symbol] : [],
-        limit: symbol && !autoSelectMarket ? 20 : 120,
-        chart_limit: symbol && !autoSelectMarket ? 8 : 40,
+        symbols: symbol && !shouldAutoSelectMarket ? [symbol] : [],
+        limit: symbol && !shouldAutoSelectMarket ? 20 : 120,
+        chart_limit: symbol && !shouldAutoSelectMarket ? 8 : 40,
         lookback_hours: finitePositive(args.analysis_lookback_hours) || 24,
       });
       const minLeverageForMinNotional = estimatedCollateralUsd > 0 ? AVANTIS_MIN_NOTIONAL_USD / estimatedCollateralUsd : 0;
@@ -2003,7 +2021,9 @@ async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
       const candidate = chooseAvantisScanCandidate(scan, side, {
         min_market_max_leverage: requiredMarketMaxLeverage,
         strict_leverage: requiredMarketMaxLeverage > 0,
-        crypto_only: !symbol || autoSelectMarket,
+        crypto_only: !symbol || shouldAutoSelectMarket,
+        prefer_volatile: preferVolatile,
+        avoid_symbols: avoidSymbols,
       });
       if (!candidate && requiredMarketMaxLeverage > 0) {
         const fittingMarkets = (Array.isArray(scan?.markets) ? scan.markets : [])
@@ -2025,7 +2045,7 @@ async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
         };
       }
       if (candidate) {
-        if (!symbol || autoSelectMarket) symbol = String(candidate.symbol || '').toUpperCase();
+        if (!symbol || shouldAutoSelectMarket) symbol = String(candidate.symbol || '').toUpperCase();
         if (!side) side = normalizeAvantisTradeSide(candidate.suggested_side || candidate.signal?.side || candidate.signal?.suggested_side);
         if (requestedMaxLeverage && Number(candidate.max_leverage) > 0) {
           leverage = Math.min(leverage, Number(candidate.max_leverage));
@@ -2044,6 +2064,8 @@ async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
           reason: candidate.signal?.reason || scan.selection_rule,
           sparkline_24h: candidate.chart?.sparkline || [],
           chart_source: candidate.chart?.source || null,
+          prefer_volatile: preferVolatile || null,
+          avoid_symbols: avoidSymbols.length ? avoidSymbols : null,
           min_leverage_for_min_notional: minLeverageForMinNotional > 0 ? Number(minLeverageForMinNotional.toFixed(3)) : null,
           required_market_max_leverage: requiredMarketMaxLeverage > 0 ? Number(requiredMarketMaxLeverage.toFixed(3)) : null,
           scanned_markets: scan.total_returned,
@@ -3724,6 +3746,10 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         stop_loss: z.number().positive().optional(),
         auto_select: z.boolean().optional(),
         choose_market: z.boolean().optional(),
+        prefer_volatile: z.boolean().optional(),
+        preferVolatile: z.boolean().optional(),
+        selection_strategy: z.enum(['volatile', 'momentum']).optional(),
+        avoid_symbols: z.union([z.array(z.string()), z.string()]).optional(),
         analysis_lookback_hours: z.number().int().min(4).max(168).optional(),
       },
     },

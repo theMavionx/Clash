@@ -553,6 +553,20 @@ function avantisBrowserActionStatusMessage(phase, {
   return `${summary}.`;
 }
 
+function aiBrowserActionsSatisfiedFollowUp(followUp, results = []) {
+  if (!followUp?.message) return false;
+  const requiredTypes = Array.isArray(followUp.after_action_types) ? followUp.after_action_types : [];
+  if (!requiredTypes.length) return true;
+  return requiredTypes.every((type) => results.some((row) => (
+    row?.action?.type === type
+    && row?.result
+    && !row.result.error
+    && !row.result.cancelled
+    && !row.result.skipped
+    && !row.result.duplicate
+  )));
+}
+
 const aiShopBasePublicClient = createPublicClient({ chain: base, transport: http() });
 const aiShopArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const aiShopMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
@@ -1987,10 +2001,102 @@ function AiChatPanel({ onClose }) {
 
   const executeAiBrowserActions = useCallback(async (actions = [], traceId = '') => {
     const list = Array.isArray(actions) ? actions.filter((action) => action?.dex === 'avantis') : [];
+    const results = [];
     for (const action of list) {
-      await executeAvantisBrowserAction(action, traceId);
+      const result = await executeAvantisBrowserAction(action, traceId);
+      results.push({ action, result });
     }
+    return results;
   }, [executeAvantisBrowserAction]);
+
+  const runFollowUpAfterBrowserActions = useCallback(async (followUp, parentTraceId, browserResults = []) => {
+    if (!token || !aiBrowserActionsSatisfiedFollowUp(followUp, browserResults)) return;
+    const text = String(followUp.message || '').trim();
+    if (!text) return;
+    const traceId = makeAiChatTraceId();
+    const idempotencyKey = `${traceId}:after-browser-actions`;
+    activeTraceRef.current = traceId;
+    sendingStartedAtRef.current = Date.now();
+    setProgressText('Continuing after Base confirmation...');
+    appendAssistantBrowserActionMessage(followUp.notice || 'Close confirmed. I am continuing the Avantis request now.', parentTraceId);
+    addPendingRequest(storageKey, {
+      traceId,
+      message: text,
+      startedAt: Date.now(),
+    });
+    try {
+      const history = buildContextHistory(loadChatMessages(storageKey));
+      const requestResult = fetch('/api/ai-chat/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({
+          message: text,
+          history,
+          trace_id: traceId,
+          idempotency_key: idempotencyKey,
+          ai_trade_settings: activeAvantisSettingsPayload,
+          metadata: {
+            continuation: followUp.kind || 'after_browser_actions',
+            parent_trace_id: parentTraceId,
+          },
+        }),
+      })
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            const err = new Error(data?.error || 'AI follow-up failed');
+            err.status = r.status;
+            err.data = data;
+            throw err;
+          }
+          return data;
+        })
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'request_error', err }));
+      const recoveryResult = waitForAiChatStoredResult(traceId, token)
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'recovery_error', err }));
+      let result = await Promise.race([requestResult, recoveryResult]);
+      if (result.kind === 'request_error') {
+        if (result.err?.status && result.err.status < 500) throw result.err;
+        const recovered = await recoveryResult;
+        result = recovered.kind === 'data' ? recovered : result;
+      } else if (result.kind === 'recovery_error') {
+        const requested = await requestResult;
+        result = requested.kind === 'data' ? requested : requested;
+      }
+      if (result.kind !== 'data') throw result.err || new Error('AI follow-up failed');
+      const data = result.data || {};
+      if (data?.quota) setQuota(data.quota);
+      if (data?.ok === false) throw new Error(data?.error || 'AI follow-up failed');
+      appendStoredChatMessage(storageKey, {
+        role: 'assistant',
+        text: data?.message || 'Done.',
+        traceId: `${traceId}:assistant`,
+      });
+      const browserResults = await executeAiBrowserActions(data?.browser_actions, traceId);
+      await runFollowUpAfterBrowserActions(data?.follow_up_after_browser_actions, traceId, browserResults);
+      removePendingRequest(storageKey, traceId);
+    } catch (err) {
+      if (err?.data?.quota) setQuota(err.data.quota);
+      appendStoredChatMessage(storageKey, {
+        role: 'assistant',
+        text: aiErrorMessage(err),
+        traceId: `${traceId}:assistant`,
+      });
+      removePendingRequest(storageKey, traceId);
+    } finally {
+      if (activeTraceRef.current === traceId) activeTraceRef.current = '';
+      sendingStartedAtRef.current = 0;
+      if (mountedRef.current) setMessages(loadChatMessages(storageKey));
+    }
+  }, [
+    token,
+    storageKey,
+    activeAvantisSettingsPayload,
+    executeAiBrowserActions,
+    appendAssistantBrowserActionMessage,
+  ]);
 
   const startNewChat = useCallback(async () => {
     if (status === 'sending' || resettingChat || activeTraceRef.current || loadPendingRequests(storageKey).length) return;
@@ -2123,7 +2229,8 @@ function AiChatPanel({ onClose }) {
           text: recovered.message || 'Done.',
           traceId: `${traceId}:assistant`,
         });
-        await executeAiBrowserActions(recovered?.browser_actions, traceId);
+        const browserResults = await executeAiBrowserActions(recovered?.browser_actions, traceId);
+        await runFollowUpAfterBrowserActions(recovered?.follow_up_after_browser_actions, traceId, browserResults);
         removePendingRequest(storageKey, traceId);
         if (activeTraceRef.current === traceId) activeTraceRef.current = '';
         if (mountedRef.current) setMessages(loadChatMessages(storageKey));
@@ -2149,7 +2256,7 @@ function AiChatPanel({ onClose }) {
       }
       sendingStartedAtRef.current = 0;
     }
-  }, [input, messages, status, storageKey, token, executeAiBrowserActions, activeAvantisSettingsPayload]);
+  }, [input, messages, status, storageKey, token, executeAiBrowserActions, runFollowUpAfterBrowserActions, activeAvantisSettingsPayload]);
 
   const onKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {

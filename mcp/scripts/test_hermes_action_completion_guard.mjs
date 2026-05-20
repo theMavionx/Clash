@@ -132,6 +132,8 @@ const avantisRuntime = composeRuntimeInstructions('avantis');
 const ukSolShortMaxAll = '\u0432\u0456\u0434\u043a\u0440\u0438\u0439 \u043f\u043e \u0441\u043e\u043b\u0430\u043d\u0430 \u0448\u043e\u0440\u0442 \u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e \u0434\u043e\u0432\u0437\u043e\u043b\u0435\u043d\u0435 \u043f\u043b\u0435\u0447\u0435 \u0456 \u043d\u0430 \u0432\u0441\u0456 \u0433\u0440\u043e\u0448\u0456';
 const ukAnyTrade = '\u0432\u0456\u0434\u043a\u0440\u0438\u0439 \u044f\u043a\u0443\u0441\u044c \u0443\u0433\u043e\u0434\u0443 25 \u043f\u043b\u0435\u0447\u0435 \u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c \u043d\u0430 \u0432\u0441\u0456 \u0433\u0440\u043e\u0448\u0456';
 const ukAnyTradeIntent = classifyGameIntent(ukAnyTrade, { dex: 'avantis' });
+const volatileIntent = classifyGameIntent('open something more volatile than BTC on Avantis', { dex: 'avantis' });
+const compoundIntent = classifyGameIntent('close BTC and open something more volatile on Avantis', { dex: 'avantis' });
 const dexScopeRows = [
   {
     name: 'avantis_runtime_excludes_decibel_tools',
@@ -153,6 +155,19 @@ const dexScopeRows = [
       && ukAnyTradeIntent.delegated_choice === true
       && ukAnyTradeIntent.expected_tools?.[0] === 'avantis_market_scan'
       && ukAnyTradeIntent.expected_tools?.[1] === 'avantis_place_order',
+  },
+  {
+    name: 'avantis_volatile_trade_is_delegated_scan',
+    ok: volatileIntent.kind === 'avantis_place_order'
+      && volatileIntent.delegated_choice === true
+      && volatileIntent.expected_tools?.[0] === 'avantis_market_scan'
+      && volatileIntent.expected_tools?.[1] === 'avantis_place_order',
+  },
+  {
+    name: 'avantis_close_then_open_requires_both_terminal_tools',
+    ok: compoundIntent.kind === 'avantis_close_then_place_order'
+      && terminalToolGroupsForIntent(compoundIntent).some((group) => group.includes('avantis_close_position'))
+      && terminalToolGroupsForIntent(compoundIntent).some((group) => group.includes('avantis_place_order')),
   },
 ];
 

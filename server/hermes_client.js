@@ -283,6 +283,7 @@ function battleIntentForTarget(targetPlayerName = '') {
 }
 
 const DECIBEL_SYMBOL_RE = /\b(?:BTC|ETH|SOL|APT|SUI|XRP|DOGE|BNB|AVAX|LINK|ARB|OP|TIA|WIF|PEPE|MEGA|MOVE|HYPE|MON|USDC|USD)\b/i;
+const DECIBEL_BTC_ALIAS_RE = /(?:\bbitcoin\b|\u0431\u0456\u0442\u043e\u043a|\u0431\u0438\u0442\u043e\u043a|\u0431\u0456\u0442\u043a\u043e\u0457\u043d|\u0431\u0438\u0442\u043a\u043e\u0438\u043d)/iu;
 const DECIBEL_SYMBOL_ALIAS_RE = /собак|песик|додж|doge\s+coin|\bdog\s+(?:coin|token)\b/iu;
 const DECIBEL_TRADING_WORD_RE = new RegExp([
   'decibel', 'perp', 'perps', 'futures',
@@ -292,6 +293,7 @@ const DECIBEL_TRADING_WORD_RE = new RegExp([
   'leverage', 'margin', 'collateral', 'notional', 'size',
   'balance', 'equity', 'pnl', 'profit', 'loss',
   'tp', 'sl', 'take profit', 'stop loss', 'close', 'cancel',
+  'interesting', 'volatile', 'volatility', 'risky',
   '\\u043b\\u043e\\u043d\\u0433',        // long
   '\\u0448\\u043e\\u0440\\u0442',        // short
   '\\u043f\\u043e\\u0437\\u0438\\u0446', // position
@@ -304,6 +306,9 @@ const DECIBEL_TRADING_WORD_RE = new RegExp([
   '\\u0432\\u0456\\u0434\\u043a\\u0440', // open uk
   '\\u043a\\u0443\\u043f',               // buy
   '\\u043f\\u0440\\u043e\\u0434',        // sell
+  '\\u0446\\u0456\\u043a\\u0430\\u0432', // interesting uk
+  '\\u0438\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441', // interesting ru
+  '\\u0432\\u043e\\u043b\\u0430\\u0442', // volatility
   '\\u4ed3', '\\u591a', '\\u7a7a', '\\u8ba2\\u5355', '\\u6760\\u6746', '\\u4ef7\\u683c', '\\u5e02\\u573a'
 ].join('|'), 'iu');
 const DECIBEL_ACCOUNT_RE = /(balance|equity|account|wallet|overview|pnl|profit|loss|\u0431\u0430\u043b\u0430\u043d\u0441|\u0433\u0430\u043c\u0430\u043d|\u043a\u043e\u0448\u0435\u043b|\u76c8\u4e8f|\u8d26\u6237|\u5e73\u8861)/iu;
@@ -320,10 +325,12 @@ const WORD_TAIL = '[\\p{L}\\p{M}\\p{N}_-]*';
 const DECIBEL_AUTONOMOUS_ORDER_RE = new RegExp(`(?:\\b(?:open|place|make|start)\\s+(?:an?\\s+)?(?:(?:any|random|interesting|surprise|whatever|safe|conservative|low-risk|your\\s+choice)\\s+){0,3}(?:trade|position|order)\\b|\\b(?:surprise\\s+me|choose\\s+(?:yourself|for\\s+me)|your\\s+choice|pick\\s+(?:for\\s+me|one)|decide\\s+yourself)\\b|(?:\\u0441\\u0430\\u043c|\\u0441\\u0430\\u043c\\u0430).*(?:\\u0443\\u0433\\u043e\\u0434|\\u0441\\u0434\\u0435\\u043b|\\u0442\\u0440\\u0435\\u0439\\u0434|\\u043f\\u0440\\u0438\\u0434\\u0443\\u043c|\\u0432\\u0438\\u0431\\u0435\\u0440|\\u0432\\u044b\\u0431\\u0435\\u0440|\\u043e\\u0431\\u0435\\u0440)|(?:\\u0449\\u043e\\u0441\\u044c|\\u0447\\u0442\\u043e-\\u0442\\u043e|\\u044f\\u043a\\u0443\\u0441${WORD_TAIL}|\\u043a\\u0430\\u043a\\u0443\\u044e-\\u0442\\u043e).*(?:\\u0443\\u0433\\u043e\\u0434|\\u0441\\u0434\\u0435\\u043b|\\u0442\\u0440\\u0435\\u0439\\u0434|\\u0446\\u0456\\u043a\\u0430\\u0432|\\u0438\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441\\u043d)|(?:\\u043e\\u0442\\u043a\\u0440|\\u0432\\u0456\\u0434\\u043a\\u0440).*(?:\\u043b\\u044e\\u0431|\\u0431\\u0443\\u0434\\u044c|\\u044f\\u043a\\u0443\\u0441${WORD_TAIL}|\\u0449\\u043e\\u0441\\u044c|\\u0447\\u0442\\u043e-\\u0442\\u043e).*(?:\\u0443\\u0433\\u043e\\u0434|\\u0441\\u0434\\u0435\\u043b|\\u0442\\u0440\\u0435\\u0439\\u0434|\\u043f\\u043e\\u0437))`, 'iu');
 const DECIBEL_AUTONOMOUS_PICK_ORDER_RE = /\b(?:pick|choose)\s+(?:(?:any|random|safe|interesting|conservative|low-risk|risky|cool|fun|your\s+choice|avantis|decibel)\s+){0,6}(?:trade|position|order)\b/iu;
 const DECIBEL_DELEGATED_DECISION_RE = new RegExp(`(?:\\u0442\\u0432\\u043e.{0,24}\\u043b\\u043e\\u0433|\\u0442\\u0432\\u043e.{0,24}\\u0440\\u043e\\u0437\\u0441\\u0443\\u0434|\\u0442\\u0432\\u043e.{0,24}\\u0432\\u044b\\u0431\\u043e\\u0440|\\u044f\\u043a\\u0443\\u0441${WORD_TAIL}.{0,24}\\u043f\\u043e\\u0437|\\u043a\\u0430\\u043a\\u0443\\u044e.{0,24}\\u043f\\u043e\\u0437|\\u0449\\u043e\\u0441${WORD_TAIL}.{0,32}(?:\\u043f\\u0440\\u0438\\u043a\\u043e\\u043b|\\u043f\\u0440\\u043a\\u0438\\u043e\\u043b|\\u0446\\u0456\\u043a\\u0430\\u0432)|\\u0447\\u0442\\u043e-\\u0442\\u043e.{0,32}(?:\\u0438\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441|\\u043f\\u0440\\u0438\\u043a\\u043e\\u043b)|\\b(?:fun|cool|interesting)\\s+(?:trade|position|order)\\b)`, 'iu');
+const DECIBEL_VOLATILE_ORDER_RE = new RegExp(`(?:\\b(?:open|place|make|start)\\b.{0,80}\\b(?:volatile|volatility|interesting|risky|higher\\s+volatility|more\\s+volatile)\\b|\\b(?:volatile|volatility|interesting|risky|higher\\s+volatility|more\\s+volatile)\\b.{0,80}\\b(?:trade|position|order)\\b|(?:\\u043e\\u0442\\u043a\\u0440|\\u0432\\u0456\\u0434\\u043a\\u0440).{0,80}(?:\\u0449\\u043e\\u0441\\u044c|\\u044f\\u043a\\u0443\\u0441${WORD_TAIL}).{0,80}(?:\\u0446\\u0456\\u043a\\u0430\\u0432|\\u0432\\u043e\\u043b\\u0430\\u0442|\\u043f\\u0440\\u0438\\u043a\\u043e\\u043b|\\u0438\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441)|(?:\\u0431\\u0456\\u043b\\u044c\\u0448|\\u0431\\u043e\\u043b\\u044c\\u0448).{0,24}\\u0432\\u043e\\u043b\\u0430\\u0442)`, 'iu');
 const DECIBEL_STABLE_SYMBOLS = new Set(['USD', 'USDC']);
 
 function extractDecibelSymbol(message) {
   const raw = String(message || '').normalize('NFKC');
+  if (DECIBEL_BTC_ALIAS_RE.test(raw)) return 'BTC';
   if (DECIBEL_SYMBOL_ALIAS_RE.test(raw)) return 'DOGE';
   const matches = raw.match(new RegExp(DECIBEL_SYMBOL_RE.source, 'ig')) || [];
   for (const match of matches) {
@@ -408,7 +415,23 @@ function isAutonomousDecibelOrder(message) {
   const text = String(message || '').normalize('NFKC');
   return DECIBEL_AUTONOMOUS_ORDER_RE.test(text)
     || DECIBEL_AUTONOMOUS_PICK_ORDER_RE.test(text)
-    || DECIBEL_DELEGATED_DECISION_RE.test(text);
+    || DECIBEL_DELEGATED_DECISION_RE.test(text)
+    || DECIBEL_VOLATILE_ORDER_RE.test(text);
+}
+
+function messageRequestsVolatileTrade(message) {
+  const text = String(message || '').normalize('NFKC');
+  return DECIBEL_VOLATILE_ORDER_RE.test(text)
+    || /\b(?:volatile|volatility|interesting|risky|higher\s+volatility|more\s+volatile)\b/iu.test(text)
+    || /(?:\u0446\u0456\u043a\u0430\u0432|\u0438\u043d\u0442\u0435\u0440\u0435\u0441|\u0432\u043e\u043b\u0430\u0442|\u043f\u0440\u0438\u043a\u043e\u043b)/iu.test(text);
+}
+
+function volatileTradeAvoidSymbols(message) {
+  if (!messageRequestsVolatileTrade(message)) return [];
+  const raw = String(message || '').normalize('NFKC');
+  const out = new Set();
+  if (/\bBTC\b/i.test(raw) || DECIBEL_BTC_ALIAS_RE.test(raw)) out.add('BTC');
+  return [...out];
 }
 
 function decibelIntentLoop(kind) {
@@ -430,6 +453,12 @@ function decibelIntentLoop(kind) {
         tools: ['decibel_close_position'],
         loop: 'Call decibel_close_position. If symbol is missing, the MCP tool closes the only open position or returns a blocker listing open symbols.',
         goal: 'Close or reduce an existing Decibel position through MCP tools.',
+      };
+    case 'decibel_close_then_place_order':
+      return {
+        tools: ['decibel_close_position', 'decibel_place_order'],
+        loop: 'Call decibel_close_position for the requested old position, then call decibel_place_order for the requested replacement trade. Do not stop after closing.',
+        goal: 'Close an existing Decibel position and open the requested replacement trade.',
       };
     case 'decibel_cancel_order':
       return {
@@ -484,6 +513,16 @@ function avantisIntentLoop(kind, options = {}) {
         goal: closeAll
           ? 'Prepare browser-signed Avantis close actions for all/remaining positions.'
           : 'Prepare a browser-signed Avantis close/reduce action.',
+      };
+    case 'avantis_close_then_place_order':
+      return {
+        tools: delegatedChoice
+          ? ['avantis_get_positions', 'avantis_close_position', 'avantis_market_scan', 'avantis_place_order']
+          : ['avantis_get_positions', 'avantis_close_position', 'avantis_place_order'],
+        loop: delegatedChoice
+          ? 'avantis_get_positions({ include_orders: true }) -> avantis_close_position({ symbol? or pair_index/trade_index }) -> after that close browser action confirms, scan volatile crypto/token markets with avantis_market_scan and call avantis_place_order for the replacement. Do not stop after the close.'
+          : 'avantis_get_positions({ include_orders: true }) -> avantis_close_position({ symbol? or pair_index/trade_index }) -> after that close browser action confirms, call avantis_place_order for the requested replacement. Do not stop after the close.',
+        goal: 'Close an Avantis position and open the requested replacement trade after the close confirms in the browser.',
       };
     case 'avantis_cancel_order':
       return {
@@ -546,6 +585,7 @@ function classifyDecibelTradingIntent(message, normalizedText) {
 
   let kind = 'decibel_place_order';
   const wantsPlaceOrder = (DECIBEL_PLACE_ORDER_RE.test(tradeText) || autonomousOrder) && !DECIBEL_ORDER_READ_RE.test(tradeText);
+  const wantsClose = DECIBEL_CLOSE_RE.test(tradeText);
   if (DECIBEL_ACCOUNT_RE.test(tradeText)) {
     kind = 'decibel_account';
   }
@@ -558,7 +598,9 @@ function classifyDecibelTradingIntent(message, normalizedText) {
   if (wantsPlaceOrder) {
     kind = 'decibel_place_order';
   }
-  if (DECIBEL_CLOSE_RE.test(tradeText)) {
+  if (wantsClose && wantsPlaceOrder) {
+    kind = 'decibel_close_then_place_order';
+  } else if (wantsClose) {
     kind = 'decibel_close_position';
   }
   if (DECIBEL_CANCEL_RE.test(tradeText)) {
@@ -610,6 +652,7 @@ function remapTradingIntentForDex(intent, dex) {
     decibel_account: 'account',
     decibel_markets: 'markets',
     decibel_place_order: 'place_order',
+    decibel_close_then_place_order: 'close_then_place_order',
     decibel_close_position: 'close_position',
     decibel_cancel_order: 'cancel_order',
     decibel_tpsl: 'tpsl',
@@ -739,7 +782,8 @@ function terminalToolGroupsForIntent(intent = {}) {
     return [['upgrade_building', 'upgrade_troop']];
   }
   const terminalTools = expectedTools.filter((tool) => !SETUP_ONLY_MCP_TOOLS.has(tool));
-  return [[terminalTools[terminalTools.length - 1] || expectedTools[expectedTools.length - 1]]];
+  if (terminalTools.length > 1) return terminalTools.map((tool) => [tool]);
+  return [[terminalTools[0] || expectedTools[expectedTools.length - 1]]];
 }
 
 function terminalToolGroupsSatisfied(usedTools = [], groups = []) {
@@ -798,7 +842,11 @@ function extractRequestedLeverageHint(message) {
 
 function buildTradingPhraseHints(message, intent = {}) {
   const kind = String(intent?.kind || '');
-  if (kind !== 'avantis_place_order' && kind !== 'decibel_place_order') return '';
+  const isPlaceLike = kind === 'avantis_place_order'
+    || kind === 'decibel_place_order'
+    || kind === 'avantis_close_then_place_order'
+    || kind === 'decibel_close_then_place_order';
+  if (!isPlaceLike) return '';
   const raw = String(message || '').normalize('NFKC');
   const lower = raw.toLocaleLowerCase();
   const hints = [];
@@ -810,22 +858,32 @@ function buildTradingPhraseHints(message, intent = {}) {
   const requestedPct = extractRequestedBalancePctHint(raw);
   const requestedLeverage = extractRequestedLeverageHint(raw);
   if (requestedPct != null) {
-    const tool = kind === 'avantis_place_order' ? 'avantis_place_order' : 'decibel_place_order';
+    const tool = kind.startsWith('avantis_') ? 'avantis_place_order' : 'decibel_place_order';
     hints.push(`The current player message asks to use ${requestedPct}% of the wallet balance. For ${tool}, pass collateral_pct: ${requestedPct}; do not convert it to a stale dollar amount.`);
   }
   if (requestedLeverage != null) {
     hints.push(`The current player message specifies ${requestedLeverage}x leverage. Pass leverage: ${requestedLeverage}; do not replace it with a lower conservative default.`);
   }
   if (allFunds) {
-    const tool = kind === 'avantis_place_order' ? 'avantis_place_order' : 'decibel_place_order';
+    const tool = kind.startsWith('avantis_') ? 'avantis_place_order' : 'decibel_place_order';
     hints.push(`The current player message asks to use all available funds. For ${tool}, pass collateral_pct: 100 instead of guessing a stale dollar amount from chat history.`);
   }
   if (maxLeverage) {
-    if (kind === 'avantis_place_order') {
+    if (kind.startsWith('avantis_')) {
       hints.push(`The current player message asks for maximum allowed leverage. For Avantis, pass use_max_leverage: true, or use leverage ${AVANTIS_AI_MAX_LEVERAGE_HINT}x if you need a numeric value. Do not reuse old 20x policy blockers from chat history.`);
     } else {
       hints.push('The current player message asks for maximum allowed leverage. Resolve the market cap with decibel_get_markets if needed, then place the order with that leverage.');
     }
+  }
+  if (messageRequestsVolatileTrade(raw) && kind.startsWith('avantis_')) {
+    const avoid = volatileTradeAvoidSymbols(raw);
+    hints.push([
+      'The current player message asks for an interesting / higher-volatility Avantis replacement trade.',
+      'Use avantis_market_scan before avantis_place_order.',
+      'For avantis_place_order, pass auto_select: true and prefer_volatile: true.',
+      avoid.length ? `Also pass avoid_symbols: ${JSON.stringify(avoid)} and do not reopen those symbols unless every other valid crypto/token market is blocked.` : '',
+      'Prefer crypto/token markets with higher volatility_hourly_pct and strong absolute signal_score; do not default to BTC for "interesting" or "volatile".',
+    ].filter(Boolean).join(' '));
   }
   return hints.length ? hints.join('\n') : '';
 }
@@ -851,6 +909,9 @@ function buildIntentInstructions(intent) {
   }
   if (intent.kind === 'avantis_place_order' && intent.delegated_choice) {
     lines.push('The player delegated symbol/side choice for this Avantis order. Do not ask which symbol or direction. Use avantis_market_scan, choose a ranked crypto/token candidate and suggested side from chart signals, then call avantis_place_order. If explicit leverage is present, choose only a market whose max_leverage is at least that leverage. Do not choose FX/equity/commodity markets unless explicitly named.');
+  }
+  if (intent.kind === 'avantis_close_then_place_order') {
+    lines.push('The player asked for two actions: close an existing Avantis position, then open a replacement trade. Do not stop after preparing the close. If the replacement depends on collateral released by the close, prepare the close first; the browser can continue the replacement after the close transaction confirms.');
   }
   if (intent.kind === 'avantis_close_position' && intent.close_all_positions) {
     lines.push('The player asked to close all/remaining positions. After reading positions, call avantis_close_position({ all: true, percent: 100 }). Do not close only the first matching position.');

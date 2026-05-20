@@ -4500,6 +4500,37 @@ function browserActionSafeMessage(responseText, intent, browserActions = []) {
   return `I prepared ${summary}${suffix}. Signing will start in the browser; I will report the Base transaction result after it is submitted.`;
 }
 
+function buildAiChatBrowserActionFollowUp(message, intent, browserActions = []) {
+  if (intent?.kind !== 'avantis_close_then_place_order') return null;
+  const actions = Array.isArray(browserActions) ? browserActions : [];
+  const hasClose = actions.some((action) => action?.dex === 'avantis' && action?.type === 'close_position');
+  const hasPlace = actions.some((action) => action?.dex === 'avantis' && action?.type === 'place_order');
+  if (!hasClose || hasPlace) return null;
+  const closedSymbols = [...new Set(actions
+    .filter((action) => action?.type === 'close_position')
+    .map((action) => String(action?.args?.symbol || '').trim().toUpperCase())
+    .filter(Boolean))];
+  const avoidSymbols = closedSymbols.includes('BTC') ? ['BTC'] : closedSymbols;
+  const avoidText = avoidSymbols.length
+    ? ` Avoid these just-closed symbols unless every other valid crypto/token market is blocked: ${avoidSymbols.join(', ')}.`
+    : '';
+  return {
+    kind: 'avantis_open_after_close',
+    after_action_types: ['close_position'],
+    notice: 'Close confirmed. I am scanning for the replacement trade now.',
+    message: [
+      'Continue the previous Avantis request after the close transaction confirmed in the browser.',
+      'Open a replacement Avantis trade with higher volatility / something interesting.',
+      'Use avantis_market_scan first, then avantis_place_order.',
+      'For avantis_place_order pass auto_select: true and prefer_volatile: true.',
+      avoidText,
+      'Prefer crypto/token markets with higher volatility_hourly_pct and strong absolute signal_score; do not default to BTC for an interesting or volatile replacement.',
+      'Use the currently available browser-wallet USDC and the active AI trade settings. If the user did not specify size, use a valid affordable amount that meets Avantis minimum notional.',
+      `Original player request: ${String(message || '').slice(0, 500)}`,
+    ].filter(Boolean).join(' '),
+  };
+}
+
 function isAvantisWrongDexToolBoundary(responseText, intent) {
   if (!String(intent?.kind || '').startsWith('avantis_')) return false;
   const text = String(responseText || '');
@@ -4538,6 +4569,7 @@ function publicAiChatStoredEvent(row) {
     error: isOk ? null : (message || row.error || 'AI request failed'),
     quota: quota?.after || quota || null,
     browser_actions: Array.isArray(output.browser_actions) ? output.browser_actions : [],
+    follow_up_after_browser_actions: output.follow_up_after_browser_actions || null,
     created_at: row.created_at,
     duration_ms: row.duration_ms ?? null,
   };
@@ -5448,6 +5480,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
     const quotaAfter = getAiMessageQuotaStatus(req.player.id);
     const resultSummary = summarizeHermesResult(result);
     const browserActions = collectAiChatBrowserActions(req.player.id, mcpEventStartId);
+    const followUpAfterBrowserActions = buildAiChatBrowserActionFollowUp(message, intent, browserActions);
     const outputText = browserActionSafeMessage(String(result.output_text || '').trim(), intent, browserActions);
     logHermesTimingEvents({ traceId, player: req.player, intent, events: result.timing_events || result.timingEvents || [] });
     logStage('mark_agent_state_start', { message: 'Persisting Hermes agent state' });
@@ -5490,6 +5523,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       output: {
         output_text: outputText,
         browser_actions: browserActions,
+        follow_up_after_browser_actions: followUpAfterBrowserActions,
         ...resultSummary,
         timing_events: result.timing_events || result.timingEvents || [],
       },
@@ -5506,6 +5540,7 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       quota: getAiMessageQuotaStatus(req.player.id),
       trace_id: traceId,
       browser_actions: browserActions,
+      follow_up_after_browser_actions: followUpAfterBrowserActions,
     });
   } catch (err) {
     if (reservation) {
