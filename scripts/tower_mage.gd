@@ -13,7 +13,7 @@ const LEVEL_STATS := {
 @export var detect_range: float = 1.0   # same radius as turret/cannon
 @export var orb_speed: float = 1.6
 
-const ORB_COLOR: Color = Color(0.65, 0.1, 1.0)   # purple — matches the tower
+const ORB_COLOR: Color = Color(0.2, 0.6, 1.0)   # bright sky-blue magic bolts
 const POOL_SIZE: int = 6
 const HIT_DIST_SQ: float = 0.05 * 0.05
 const TARGET_SEARCH_INTERVAL: float = 0.15
