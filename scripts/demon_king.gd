@@ -59,7 +59,8 @@ const ANIM_NAME_MAP: Dictionary = {
 	"Taunting":    "Taunting",
 }
 
-const DEMON_ALBEDO: Texture2D = preload("res://Model/Characters/Model/DemonKing_albedo.png")
+# Note: DemonKing_albedo.png is the un-masked base; the MaskTint shader uses
+# DemonKing_mask_albedo.png instead, so the plain albedo isn't preloaded here.
 const DEMON_EMISSION: Texture2D = preload("res://Model/Characters/Model/DemonKing_emission.png")
 const DEMON_MASK_ALBEDO: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask_albedo.png")
 const DEMON_MASK_01: Texture2D = preload("res://Model/Characters/Model/DemonKing_mask01.png")
@@ -126,6 +127,10 @@ const ACTIVE_PALETTE: Array[Color] = TINT_PINK  # default skin — change to TIN
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
 ## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
 func _init_stats() -> void:
+	# Clamp to a valid tier — upgrade_to(lvl) could be handed an out-of-range
+	# level (server desync, bad payload) and LEVEL_STATS[level] would crash.
+	if not LEVEL_STATS.has(level):
+		level = clampi(level, 1, LEVEL_STATS.size())
 	var s = LEVEL_STATS[level]
 	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
 	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
@@ -160,9 +165,16 @@ func _use_embedded_anim_player_and_merge() -> void:
 	# real scene tree.
 	var embedded: AnimationPlayer = _find_first_anim_player(self, anim_player)
 	if embedded == null:
-		push_warning("DemonKing: no embedded AnimationPlayer in body FBX")
+		# No embedded player → keep base_troop's TroopAnimPlayer (already set up
+		# from anim_files). Better a degraded fallback than no animation at all.
+		push_warning("DemonKing: no embedded AnimationPlayer in body FBX — using base anim player")
 		return
+	# Free base_troop's now-unused empty TroopAnimPlayer so it doesn't linger in
+	# the tree (memory + future _find_first_anim_player collisions).
+	var old_player: AnimationPlayer = anim_player
 	anim_player = embedded
+	if is_instance_valid(old_player) and old_player != embedded:
+		old_player.queue_free()
 
 	var lib: AnimationLibrary = null
 	for lib_name in anim_player.get_animation_library_list():
@@ -254,6 +266,10 @@ func _use_embedded_anim_player_and_merge() -> void:
 		var attack_anim_res: Animation = anim_player.get_animation(attack_anim)
 		if attack_anim_res:
 			_attack_anim_length = attack_anim_res.length
+	else:
+		# Alias never resolved (no clip matched "Attack01"). _do_attack still
+		# deals damage via the atk_speed*0.35 fallback, but warn so it's visible.
+		push_warning("DemonKing: '%s' alias missing — attack will use atk_speed fallback timing" % attack_anim)
 
 	print("[DemonKing] lib anims: ", anim_player.get_animation_list(), " | attack_anim_length=", _attack_anim_length)
 
@@ -347,14 +363,25 @@ static func _assign_material_recursive(node: Node, mat: Material) -> void:
 ## fallback timing than swing #2+.
 var _hit_this_swing: bool = false
 var _attack_anim_length: float = -1.0
+var _prev_swing_timer: float = 999.0
 
 
 func _do_attack(delta: float) -> void:
 	if _resume_chase_if_target_far():
 		_hit_this_swing = false
+		_prev_swing_timer = 999.0
 		return
 
 	_face_current_target()
+
+	# A backwards jump in attack_timer means a new swing began: either
+	# base_troop zeroed it on a fresh RUNNING→ATTACKING entry, or our cycle
+	# below subtracted atk_speed. Reset the hit flag so the first swing after
+	# re-entry isn't silently skipped (stale _hit_this_swing from the last
+	# attack session would otherwise block _deal_target_damage).
+	if attack_timer < _prev_swing_timer - 0.0001:
+		_hit_this_swing = false
+
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed
@@ -367,3 +394,5 @@ func _do_attack(delta: float) -> void:
 	if not _hit_this_swing and attack_timer >= hit_at:
 		_hit_this_swing = true
 		_deal_target_damage()
+
+	_prev_swing_timer = attack_timer
