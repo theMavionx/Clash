@@ -539,6 +539,12 @@ export function usePhoenix() {
   const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
   const registeredSolanaWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(registeredWallet) ? registeredWallet : null;
   const walletMismatch = !!(registeredSolanaWallet && walletAddr && registeredSolanaWallet !== walletAddr);
+  const walletMismatchMessage = useMemo(() => {
+    if (!walletMismatch) return '';
+    const connected = shortPhoenixAddress(walletAddr) || 'current wallet';
+    const registered = shortPhoenixAddress(registeredSolanaWallet) || 'registered wallet';
+    return `Wrong Solana wallet: connected ${connected}, account uses ${registered}.`;
+  }, [registeredSolanaWallet, walletAddr, walletMismatch]);
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -671,6 +677,7 @@ export function usePhoenix() {
 
   const sendIxs = useCallback((instructions, label = 'phoenix') => {
     if (!ownerPk) throw new Error('Wallet not connected');
+    if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
     return sendPhoenixInstructions({
       instructions,
       ownerPk,
@@ -683,10 +690,11 @@ export function usePhoenix() {
       privyWalletObj,
       label,
     });
-  }, [ownerPk, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
+  }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
   const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');
+    if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
     const traderAccount = await orderClient.pda.getTraderAddress({
       authority: walletAddr,
       traderPdaIndex: 0,
@@ -701,10 +709,11 @@ export function usePhoenix() {
       traderSubaccountIndex: Number(subaccountIndex) || 0,
       capacity: 32,
     });
-  }, [client, connection, walletAddr]);
+  }, [client, connection, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const claimGold = useCallback(async (opts = {}) => {
     if (!walletAddr) return null;
+    if (walletMismatch) return null;
     const token = tokenRef.current || window._playerToken;
     if (!token) return null;
     if (claimInFlightRef.current) return claimInFlightRef.current;
@@ -765,14 +774,14 @@ export function usePhoenix() {
     } finally {
       if (claimInFlightRef.current === promise) claimInFlightRef.current = null;
     }
-  }, [walletAddr]);
+  }, [walletAddr, walletMismatch]);
 
   useEffect(() => {
     claimGoldRef.current = claimGold;
   }, [claimGold]);
 
   useEffect(() => {
-    if (!isActiveDex || !walletAddr) return undefined;
+    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
     const fire = () => {
       const fn = claimGoldRef.current;
       if (typeof fn === 'function') fn({ importFills: true });
@@ -783,7 +792,7 @@ export function usePhoenix() {
       clearTimeout(first);
       clearInterval(iv);
     };
-  }, [isActiveDex, walletAddr]);
+  }, [isActiveDex, walletAddr, walletMismatch]);
 
   const fetchWalletUsdc = useCallback(async () => {
     if (!walletAddr || !ownerPk) {
@@ -872,7 +881,7 @@ export function usePhoenix() {
   }, [client, fetchPrices, isActiveDex]);
 
   const refreshTraderState = useCallback(async (options = {}) => {
-    if (!isActiveDex || !walletAddr) {
+    if (!isActiveDex || !walletAddr || walletMismatch) {
       setAccountReady(false);
       return null;
     }
@@ -1016,7 +1025,7 @@ export function usePhoenix() {
         refreshTraderStateInFlightRef.current = null;
       }
     }
-  }, [client, isActiveDex, walletAddr]);
+  }, [client, isActiveDex, walletAddr, walletMismatch]);
 
   const waitForTraderState = useCallback(async (attempts = 8) => {
     for (let i = 0; i < attempts; i += 1) {
@@ -1038,7 +1047,7 @@ export function usePhoenix() {
   }, [refreshTraderState]);
 
   const checkInviteStatus = useCallback(async () => {
-    if (!isActiveDex || !walletAddr) {
+    if (!isActiveDex || !walletAddr || walletMismatch) {
       setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
       return null;
     }
@@ -1056,11 +1065,15 @@ export function usePhoenix() {
       setInviteStatus(prev => ({ ...prev, checking: false }));
       return null;
     }
-  }, [client, isActiveDex, walletAddr]);
+  }, [client, isActiveDex, walletAddr, walletMismatch]);
 
   const activate = useCallback(async (inviteOptions = {}) => {
     if (!walletAddr) {
       setError('Wallet not connected');
+      return false;
+    }
+    if (walletMismatch) {
+      setError(walletMismatchMessage || 'Wrong Solana wallet');
       return false;
     }
     const inviteCode = String(
@@ -1129,19 +1142,19 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [checkInviteStatus, client, runOnce, sendIxs, waitForTraderState, walletAddr]);
+  }, [checkInviteStatus, client, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
 
   useEffect(() => {
-    if (!isActiveDex || !walletAddr || traderRegistered) return undefined;
+    if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;
     let cancelled = false;
     (async () => {
       if (!cancelled) await checkInviteStatus();
     })();
     return () => { cancelled = true; };
-  }, [checkInviteStatus, isActiveDex, traderRegistered, walletAddr]);
+  }, [checkInviteStatus, isActiveDex, traderRegistered, walletAddr, walletMismatch]);
 
   useEffect(() => {
-    if (!isActiveDex || !walletAddr) return undefined;
+    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
     let cancelled = false;
     const timer = setTimeout(() => {
       if (cancelled) return;
@@ -1153,12 +1166,17 @@ export function usePhoenix() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [getTransactionClient, isActiveDex, walletAddr]);
+  }, [getTransactionClient, isActiveDex, walletAddr, walletMismatch]);
 
   const depositToPacifica = useCallback(async (amountUsdc) => {
     if (!walletAddr) {
       setError('Wallet not connected');
       return { error: 'Wallet not connected' };
+    }
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
     }
     return runOnce(`deposit:${walletAddr}:${amountUsdc}`, async () => {
       setLoading(true);
@@ -1180,10 +1198,15 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, claimGold, client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [activate, claimGold, client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const withdraw = useCallback(async (amountUsdc) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     return runOnce(`withdraw:${walletAddr}:${amountUsdc}`, async () => {
       setLoading(true);
       setError(null);
@@ -1201,7 +1224,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr]);
+  }, [client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const buildBaseUnitsFromMargin = useCallback((symbol, margin, leverage, priceOverride = null) => {
     const priceRow = pricesRef.current.find(p => p.symbol === phoenixSymbol(symbol));
@@ -1217,6 +1240,11 @@ export function usePhoenix() {
   const placeMarketOrder = useCallback(async (symbol, side, amount, _slippage = '0.5', leverage = 1) => {
     void _slippage;
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     const phx = phoenixSymbol(symbol);
     return runOnce(`market:${walletAddr}:${phx}:${side}:${amount}:${leverage}`, async () => {
       setLoading(true);
@@ -1272,11 +1300,16 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     const phx = phoenixSymbol(symbol);
     return runOnce(`limit:${walletAddr}:${phx}:${side}:${price}:${amount}:${leverage}`, async () => {
       setLoading(true);
@@ -1310,12 +1343,17 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [activate, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;
     void _tradeIndex;
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     const phx = phoenixSymbol(symbol);
     return runOnce(`close:${walletAddr}:${phx}:${side}:${amount}:${fullClose ? 'full' : 'partial'}`, async () => {
       setLoading(true);
@@ -1393,10 +1431,15 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     const phx = phoenixSymbol(symbol);
     return runOnce(`cancel:${walletAddr}:${phx}:${orderId}`, async () => {
       setLoading(true);
@@ -1431,7 +1474,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [orders, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [orders, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const setLeverage = useCallback(async () => ({ success: true }), []);
   const setMarginMode = useCallback(async (_symbol, isolated) => (
@@ -1442,6 +1485,11 @@ export function usePhoenix() {
 
   const setTpsl = useCallback(async (symbol, side, takeProfit, stopLoss) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
+    if (walletMismatch) {
+      const msg = walletMismatchMessage || 'Wrong Solana wallet';
+      setError(msg);
+      return { error: msg };
+    }
     const phx = phoenixSymbol(symbol);
     return runOnce(`tpsl:${walletAddr}:${phx}:${side}:${takeProfit || ''}:${stopLoss || ''}`, async () => {
       setLoading(true);
@@ -1540,7 +1588,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, withFreshPhoenixMetadataRetry]);
+  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -1549,7 +1597,7 @@ export function usePhoenix() {
       if (cancelled) return;
       if (!marketsRef.current.length) await fetchMarkets();
       else await fetchPrices();
-      if (walletAddr) {
+      if (walletAddr && !walletMismatch) {
         await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
       } else {
         setAccountReady(false);
@@ -1559,7 +1607,7 @@ export function usePhoenix() {
     tick();
     const iv = setInterval(tick, POLL_MS);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [fetchMarkets, fetchPrices, fetchWalletUsdc, isActiveDex, refreshTraderState, walletAddr]);
+  }, [fetchMarkets, fetchPrices, fetchWalletUsdc, isActiveDex, refreshTraderState, walletAddr, walletMismatch]);
 
   return {
     connected: !!walletAddr,

@@ -702,6 +702,46 @@ export function isBlockhashExpiredError(error) {
   );
 }
 
+function solanaErrorText(error) {
+  const logs = [
+    ...(Array.isArray(error?.logs) ? error.logs : []),
+    ...(Array.isArray(error?.transactionLogs) ? error.transactionLogs : []),
+    ...(Array.isArray(error?.simulationLogs) ? error.simulationLogs : []),
+    ...(Array.isArray(error?.transactionError?.logs) ? error.transactionError.logs : []),
+    ...(Array.isArray(error?.cause?.logs) ? error.cause.logs : []),
+  ];
+  return [
+    error?.name,
+    error?.code,
+    error?.message,
+    error?.transactionMessage,
+    error?.cause?.name,
+    error?.cause?.code,
+    error?.cause?.message,
+    ...logs,
+  ].filter(Boolean).join('\n') || String(error || '');
+}
+
+function isTransientSolanaRpcError(error) {
+  const text = solanaErrorText(error).toLowerCase();
+  if (
+    /user rejected|rejected the request|denied|cancelled|canceled/i.test(text)
+    || /insufficient funds|insufficient lamports|signature verification failed/i.test(text)
+    || /custom program error|instructionerror|instruction error|simulation failed|transaction simulation failed/i.test(text)
+  ) {
+    return false;
+  }
+  const code = Number(error?.code ?? error?.cause?.code);
+  return (
+    code === -32603
+    || /jsonrpcerror/.test(text)
+    || /internal error|fetch failed|failed to fetch|networkerror/.test(text)
+    || /timeout|timed out|econnreset|econnrefused|socket hang up/.test(text)
+    || /too many requests|rate limit|over rate limit|http 429| 429/.test(text)
+    || /bad gateway|service unavailable|gateway timeout|http 502|http 503|http 504| 502| 503| 504/.test(text)
+  );
+}
+
 export async function sendSignedSolanaTransactionWithRetry({
   buildSignedTransaction,
   connection,
@@ -810,12 +850,14 @@ export async function sendSignedSolanaTransactionWithRetry({
       lastError = error;
       const errorDetails = await describeSolanaError(error, attemptConnection);
       const blockhashExpired = isBlockhashExpiredError(error);
-      if (blockhashExpired) forceFullRpcProbe = true;
+      const transientRpc = isTransientSolanaRpcError(error);
+      if (blockhashExpired || transientRpc) forceFullRpcProbe = true;
       logTx(label, 'attempt_error', {
         attempt,
+        retryable_rpc_error: transientRpc,
         ...errorDetails,
-      }, blockhashExpired ? 'warn' : 'error');
-      if (!blockhashExpired || attempt >= maxAttempts) throw error;
+      }, blockhashExpired || transientRpc ? 'warn' : 'error');
+      if ((!blockhashExpired && !transientRpc) || attempt >= maxAttempts) throw error;
       await sleep(500 * attempt);
     }
   }
@@ -991,14 +1033,16 @@ export async function sendSolanaTransactionWithRetry({
       const errorDetails = await describeSolanaError(error, attemptConnection);
       if (hasLighthouseAssertionLogs(error)) errorDetails.wallet_assertion_program = 'lighthouse';
       const blockhashExpired = isBlockhashExpiredError(error);
-      if (blockhashExpired) forceFullRpcProbe = true;
+      const transientRpc = isTransientSolanaRpcError(error);
+      if (blockhashExpired || transientRpc) forceFullRpcProbe = true;
       logTx(label, 'attempt_error', {
         attempt,
         final_attempt: attempt >= maxAttempts,
+        retryable_rpc_error: transientRpc,
         wallet_path_override: walletPathOverride || null,
         force_versioned_transaction: !!forceVersionedTransaction,
         ...errorDetails,
-      }, blockhashExpired ? 'warn' : 'error');
+      }, blockhashExpired || transientRpc ? 'warn' : 'error');
       if (attempt >= maxAttempts) {
         reportClientEvent('solana_tx.final_error', {
           label,
@@ -1014,7 +1058,7 @@ export async function sendSolanaTransactionWithRetry({
           stack: error?.stack,
         });
       }
-      if (!blockhashExpired || attempt >= maxAttempts) throw error;
+      if ((!blockhashExpired && !transientRpc) || attempt >= maxAttempts) throw error;
       await sleep(500 * attempt);
     }
   }
