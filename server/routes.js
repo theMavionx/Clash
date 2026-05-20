@@ -4497,7 +4497,7 @@ function browserActionSafeMessage(responseText, intent, browserActions = []) {
   if (!hermesClient.responseClaimsActionSucceeded(responseText, intent)) return responseText;
   const summary = browserActions[0]?.summary || 'Avantis action';
   const suffix = browserActions.length > 1 ? ` and ${browserActions.length - 1} more action(s)` : '';
-  return `${summary}${suffix} prepared. Confirm it in your browser wallet to submit on-chain.`;
+  return `I prepared ${summary}${suffix}. Signing will start in the browser; I will report the Base transaction result after it is submitted.`;
 }
 
 function isAvantisWrongDexToolBoundary(responseText, intent) {
@@ -4773,7 +4773,7 @@ function buildTerminalToolAttemptRetryContext(attempt, responseText) {
     'The previous answer returned advice or a blocker, but no required terminal MCP tool was called.',
     `Required terminal MCP tool for this action request: ${terminalToolLabel(attempt.terminal_groups)}.`,
     'The player request is actionable. Do not answer from memory, old chat history, or model knowledge.',
-    'Call the required terminal action tool now. If the tool prepares a browser_action, answer that browser wallet confirmation is opening. If the tool blocks, report the exact tool blocker.',
+    'Call the required terminal action tool now. If the tool prepares a browser_action, answer naturally that signing is starting in the browser. If the tool blocks, report the exact tool blocker.',
     'Do not repeat previous minimum-size, balance, network, or server-unreachable blockers unless the MCP tool returns them in this retry.',
     `Previous answer preview: ${aiChatPreview(responseText, 500)}`,
   ].join('\n');

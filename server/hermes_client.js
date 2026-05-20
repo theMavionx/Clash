@@ -479,8 +479,8 @@ function avantisIntentLoop(kind, options = {}) {
       return {
         tools: ['avantis_get_positions', 'avantis_close_position'],
         loop: closeAll
-          ? 'avantis_get_positions({ include_orders: true }) -> avantis_close_position({ all: true, percent: 100 }) -> tell the player the Avantis close actions are prepared and wallet/smart-wallet signing is starting for every matching position'
-          : 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet position -> avantis_close_position({ symbol? or pair_index/trade_index }) -> tell the player the Avantis close action is prepared and wallet/smart-wallet signing is starting',
+          ? 'avantis_get_positions({ include_orders: true }) -> avantis_close_position({ all: true, percent: 100 }) -> tell the player naturally that the Avantis close actions are prepared and signing is starting for every matching position'
+          : 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet position -> avantis_close_position({ symbol? or pair_index/trade_index }) -> tell the player naturally that the Avantis close action is prepared and signing is starting',
         goal: closeAll
           ? 'Prepare browser-signed Avantis close actions for all/remaining positions.'
           : 'Prepare a browser-signed Avantis close/reduce action.',
@@ -488,13 +488,13 @@ function avantisIntentLoop(kind, options = {}) {
     case 'avantis_cancel_order':
       return {
         tools: ['avantis_get_positions', 'avantis_cancel_order'],
-        loop: 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet order -> avantis_cancel_order({ pair_index, trade_index }) -> tell the player the Avantis cancel action is prepared and wallet/smart-wallet signing is starting',
+        loop: 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet order -> avantis_cancel_order({ pair_index, trade_index }) -> tell the player naturally that the Avantis cancel action is prepared and signing is starting',
         goal: 'Prepare a browser-signed Avantis cancel action.',
       };
     case 'avantis_tpsl':
       return {
         tools: ['avantis_get_positions', 'avantis_set_tpsl'],
-        loop: 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet position -> avantis_set_tpsl({ take_profit?, stop_loss? }) -> tell the player the Avantis TP/SL action is prepared and wallet/smart-wallet signing is starting',
+        loop: 'avantis_get_positions({ include_orders: true }) -> identify exact browser-wallet position -> avantis_set_tpsl({ take_profit?, stop_loss? }) -> tell the player naturally that the Avantis TP/SL action is prepared and signing is starting',
         goal: 'Prepare a browser-signed Avantis take-profit or stop-loss update.',
       };
     case 'avantis_leverage':
@@ -508,7 +508,7 @@ function avantisIntentLoop(kind, options = {}) {
       return {
         tools: delegatedChoice ? ['avantis_market_scan', 'avantis_place_order'] : ['avantis_place_order'],
         loop: delegatedChoice
-          ? 'avantis_market_scan({ limit: 120, chart_limit: 40, lookback_hours: 24 }) -> choose a ranked crypto/token candidate and suggested side -> avantis_place_order({ symbol, side, collateral_pct/collateral_usd, leverage/use_max_leverage, auto_select: true }) -> say the Avantis order is prepared and wallet/smart-wallet signing is starting'
+          ? 'avantis_market_scan({ limit: 120, chart_limit: 40, lookback_hours: 24 }) -> choose a ranked crypto/token candidate and suggested side -> avantis_place_order({ symbol, side, collateral_pct/collateral_usd, leverage/use_max_leverage, auto_select: true }) -> answer naturally that the Avantis order is prepared and signing is starting'
           : 'If symbol, side, and size/notional/collateral are clear, call avantis_place_order once with leverage included if specified. Do not infer minimum-size, balance, or wallet blockers from memory; only report blockers returned by the tool. The tool prepares a browser-signed action; do not claim the trade is open until the browser wallet submits it.',
         goal: 'Prepare a browser-signed Avantis long/short order.',
       };
@@ -859,7 +859,7 @@ function buildIntentInstructions(intent) {
     lines.push('For Avantis leverage-change requests, do not ask whether the player means a new position or an existing one. Call avantis_get_positions, then explain that Avantis leverage is chosen when opening a trade and cannot be changed account-wide after the fact.');
   }
   if (String(intent.kind || '').startsWith('avantis_')) {
-    lines.push('Avantis writes are browser-signed: the MCP write tool only prepares a browser_action. Final on-chain submission happens in the player browser via Smart Wallet auto-signing when enabled, or external wallet prompt otherwise. Say prepared / wallet signing is starting, not "confirm the prompt" and not opened/closed/updated, unless a browser result is explicitly present.');
+    lines.push('Avantis writes are browser-signed: the MCP write tool only prepares a browser_action. Final on-chain submission happens in the player browser via Smart Wallet auto-signing when enabled, or external wallet prompt otherwise. Answer naturally that the action is prepared and signing is starting; avoid rigid status templates, do not say "confirm the prompt", and do not say opened/closed/updated unless a browser result is explicitly present.');
   }
   if (intent.action_required) {
     lines.push(

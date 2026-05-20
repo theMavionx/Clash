@@ -34,7 +34,7 @@ The public `shivam2320/avantis-mcp` server was reviewed as a tool-set reference 
 ## Rules
 
 - Never claim an Avantis write has executed from an MCP result alone.
-- MCP write results mean `browser_action_required: true`; say the action is prepared and wallet/smart-wallet signing is starting. Do not tell the user to confirm a prompt when Smart Wallet auto-signing is available.
+- MCP write results mean `browser_action_required: true`; answer naturally that the action is prepared and signing is starting. Do not use a fixed status template, and do not tell the user to confirm a prompt when Smart Wallet auto-signing is available.
 - The frontend reports the actual transaction hash after browser submission.
 - Do not mention an encrypted server key or server-side Avantis signing. If Smart Wallet setup is needed, explain that the browser may ask the user to enable Avantis delegation and fund the Smart Wallet/delegate address with Base ETH for gas.
 - Treat `$`, `USD`, and `USDC` as `collateral_usd` unless the player explicitly says notional.

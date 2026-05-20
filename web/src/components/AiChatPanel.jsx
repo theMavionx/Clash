@@ -415,7 +415,7 @@ function describeAvantisCloseResult(action, positions = [], prices = [], result 
     const entry = finiteNumber(closeResult.entry_price);
     const exit = finiteNumber(closeResult.exit_price ?? closeResult.close_mark_price);
     const bits = [
-      `Result estimate: closed ${formatAiUsd(closedCollateral || 0)} collateral on ${side} ${symbol}`,
+      `I estimate the close at ${formatAiUsd(closedCollateral || 0)} collateral on ${side} ${symbol}`,
     ];
     if (notional) bits.push(`notional about ${formatAiUsd(notional)}`);
     if (pnlUsd != null) bits.push(`PnL ${formatSignedAiUsd(pnlUsd)}${pnlPct != null ? ` (${formatSignedAiPct(pnlPct)})` : ''}`);
@@ -440,7 +440,7 @@ function describeAvantisCloseResult(action, positions = [], prices = [], result 
   const pnlUsd = snapshot.pnlUsd == null ? null : cleanAiSignedZero(snapshot.pnlUsd * closeFraction);
   const pnlPct = pnlUsd == null || !closeCollateral ? null : (pnlUsd / closeCollateral) * 100;
   const bits = [
-    `Result estimate: closed ${formatAiUsd(closeCollateral || 0)} collateral on ${snapshot.side.toUpperCase()} ${snapshot.symbol || 'position'}`,
+    `I estimate the close at ${formatAiUsd(closeCollateral || 0)} collateral on ${snapshot.side.toUpperCase()} ${snapshot.symbol || 'position'}`,
   ];
   if (snapshot.notional && closeFraction) bits.push(`notional about ${formatAiUsd(snapshot.notional * closeFraction)}`);
   if (pnlUsd != null) bits.push(`PnL ${formatSignedAiUsd(pnlUsd)}${pnlPct != null ? ` (${formatSignedAiPct(pnlPct)})` : ''}`);
@@ -518,6 +518,39 @@ function describeAvantisBrowserAction(action) {
     return `Set ${bits.join(' / ') || 'TP/SL'} on ${args.symbol || 'position'}`;
   }
   return action?.summary || 'Avantis browser action';
+}
+
+function avantisBrowserActionStatusMessage(phase, {
+  useSmartWallet = false,
+  silentPrivy = false,
+  summary = 'Avantis action',
+  hash = '',
+  error = '',
+  closeResult = '',
+} = {}) {
+  const tx = hash ? ` Tx: ${shortTxHash(hash)}` : '';
+  if (phase === 'wallet_prompt') {
+    return `I have the Avantis transaction ready. Your wallet needs one signature for: ${summary}.`;
+  }
+  if (phase === 'signing') {
+    if (useSmartWallet) return `I am signing through your Avantis Smart Wallet now: ${summary}.`;
+    if (silentPrivy) return `I am signing through your Privy wallet now: ${summary}.`;
+    return `Waiting for your wallet signature now: ${summary}.`;
+  }
+  if (phase === 'submitted' || phase === 'confirming') {
+    const suffix = hash ? `: ${shortTxHash(hash)}` : '';
+    return `The transaction is on Base now; I am waiting for confirmation${suffix}.`;
+  }
+  if (phase === 'cancelled') {
+    return 'I stopped before submitting because the wallet confirmation was cancelled.';
+  }
+  if (phase === 'confirmed') {
+    return `Base confirmed it: ${summary}.${tx}${closeResult ? `\n${closeResult}` : ''}`;
+  }
+  if (phase === 'failed') {
+    return `I could not finish the Avantis action: ${error || 'unknown browser error'}`;
+  }
+  return `${summary}.`;
 }
 
 const aiShopBasePublicClient = createPublicClient({ chain: base, transport: http() });
@@ -1830,10 +1863,6 @@ function AiChatPanel({ onClose }) {
         return null;
       });
       const silentPrivy = !!agentPermission && actionFitsAvantisAgentPermission(action, agentPermission);
-      const walletLabel = useSmartWallet
-        ? 'Avantis Smart Wallet'
-        : silentPrivy ? 'Privy wallet'
-        : 'Browser wallet';
       const txStatusSeen = new Set();
       const onTxStatus = (event = {}) => {
         const phase = String(event.phase || '');
@@ -1841,20 +1870,32 @@ function AiChatPanel({ onClose }) {
         if (phase === 'wallet_prompt' && !txStatusSeen.has('wallet_prompt')) {
           txStatusSeen.add('wallet_prompt');
           markBrowserAction(action.id, 'wallet_prompt', { action, signature, summary });
-          appendAssistantBrowserActionMessage(`Open your browser wallet and sign the Avantis transaction: ${summary}.`, traceId);
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('wallet_prompt', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
           return;
         }
         if (phase === 'signing' && !txStatusSeen.has('signing')) {
           txStatusSeen.add('signing');
           markBrowserAction(action.id, 'signing', { action, signature, summary });
-          appendAssistantBrowserActionMessage(`${walletLabel} signing transaction: ${summary}...`, traceId);
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('signing', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
           return;
         }
         if ((phase === 'submitted' || phase === 'confirming') && !txStatusSeen.has('submitted')) {
           txStatusSeen.add('submitted');
           markBrowserAction(action.id, 'confirming', { tx_hash: hash, action, signature, summary });
-          const tx = hash ? `: ${shortTxHash(hash)}` : '';
-          appendAssistantBrowserActionMessage(`${walletLabel} sent transaction, waiting for Base confirmation${tx}.`, traceId);
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('confirming', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+            hash,
+          }), traceId);
         }
       };
       if (!useSmartWallet && !silentPrivy) {
@@ -1867,7 +1908,11 @@ function AiChatPanel({ onClose }) {
         });
         if (!confirmed) {
           markBrowserAction(action.id, 'cancelled', { error: 'User cancelled browser confirmation', action, signature, summary });
-          appendAssistantBrowserActionMessage('Avantis action was not submitted: browser confirmation was cancelled.', traceId);
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('cancelled', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
           return { cancelled: true };
         }
       }
@@ -1901,13 +1946,21 @@ function AiChatPanel({ onClose }) {
 
       if (!result || result.error) throw new Error(result?.error || 'Avantis browser transaction failed.');
       markBrowserAction(action.id, 'confirmed', { ...result, action, signature, summary });
-      const tx = result.tx_hash ? ` Tx: ${shortTxHash(result.tx_hash)}` : '';
       const closeResult = describeAvantisCloseResult(action, avantisPositions, avantisPrices, result);
-      appendAssistantBrowserActionMessage(`${walletLabel} confirmed: ${summary}.${tx}${closeResult ? `\n${closeResult}` : ''}`, traceId);
+      appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('confirmed', {
+        useSmartWallet,
+        silentPrivy,
+        summary,
+        hash: result.tx_hash,
+        closeResult,
+      }), traceId);
       return result;
     } catch (err) {
       markBrowserAction(action.id, 'failed', { error: err?.message || String(err), action, signature, summary });
-      appendAssistantBrowserActionMessage(`Avantis browser action failed: ${err?.message || String(err)}`, traceId);
+      appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('failed', {
+        summary,
+        error: err?.message || String(err),
+      }), traceId);
       return { error: err?.message || String(err) };
     } finally {
       if (signature) browserActionSignatureRunRef.current.delete(signature);

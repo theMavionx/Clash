@@ -500,8 +500,8 @@ async function heuristicDryRun({ testCase, plan, mockResults }) {
     : status === 'clarify'
       ? 'Need one detail before preparing the Avantis action: symbol, side, or amount.'
       : mockResults.at(-1)?.result?.summary
-        ? `${mockResults.at(-1).result.summary} prepared. Confirm it in your browser wallet.`
-        : 'Avantis dry-run action prepared.';
+        ? `I prepared ${mockResults.at(-1).result.summary}; signing starts in the browser.`
+        : 'I prepared the Avantis dry-run action; signing starts in the browser.';
   return {
     mode: 'heuristic_dry_run',
     ok: true,
@@ -642,8 +642,8 @@ async function runLocalRegressions() {
       break;
     }
   }
-  if (!/wallet\/smart-wallet signing is starting/i.test(avantisPrompt)) {
-    failures.push({ id: 'local-prompt-smart-wallet-wording', error: 'prompt does not instruct wallet/smart-wallet signing wording' });
+  if (!/Answer naturally[^.]+signing is starting/i.test(avantisPrompt)) {
+    failures.push({ id: 'local-prompt-smart-wallet-wording', error: 'prompt does not instruct natural signing-start wording' });
   }
 
   const avantisTools = toolIncludeForDex('avantis');

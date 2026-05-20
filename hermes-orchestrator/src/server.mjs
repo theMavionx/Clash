@@ -243,7 +243,7 @@ const GLOBAL_GAME_MEMORY = [
   'Avantis trading rules:',
   '- Avantis trading is part of the Clash agent only for players whose account DEX is avantis.',
   '- Use Clash MCP Avantis tools. Self-custody reads use the player wallet; MCP writes only prepare browser_action payloads for the browser wallet to sign.',
-  '- Do not claim an Avantis write is done from MCP alone. Say prepared / wallet confirmation opened; the frontend reports the actual tx after the browser signs.',
+  '- Do not claim an Avantis write is done from MCP alone. Answer naturally that the action is prepared and signing is starting; the frontend reports the actual tx after the browser signs.',
   '',
 ].join('\n');
 
