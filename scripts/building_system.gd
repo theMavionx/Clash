@@ -3718,11 +3718,20 @@ func _replace_with_ruins(node: Node3D) -> void:
 			if is_instance_valid(arrow_data.get("node")):
 				arrow_data.node.queue_free()
 		node._active_arrows.clear()
+	# Mage Tower pools orbs as dicts {node, active, target} (not bare nodes) in
+	# `_pool`, with in-flight orbs also referenced in `_active`. Free the orb
+	# nodes so a destroyed tower's projectiles vanish instead of freezing —
+	# physics_process was just turned off, so they can no longer move themselves.
 	if "_pool" in node:
 		for p in node._pool:
-			if is_instance_valid(p):
+			if p is Dictionary:
+				if is_instance_valid(p.get("node")):
+					p.node.queue_free()
+			elif is_instance_valid(p):
 				p.queue_free()
 		node._pool.clear()
+	if "_active" in node:
+		node._active.clear()
 	# Free all children EXCEPT the base outline (MeshInstance3D with ShaderMaterial)
 	for child in node.get_children():
 		if child is MeshInstance3D and child.material_override is ShaderMaterial:
