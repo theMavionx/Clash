@@ -30,10 +30,10 @@ var separation_force: float = 0.4
 var building_push_radius: float = 0.18  ## push-away zone around any building center
 var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombstone
 
-var hp: int = 350
-var max_hp: int = 350
-var damage: int = 45
-var atk_speed: float = 0.8
+var hp: int = 380
+var max_hp: int = 380
+var damage: int = 42
+var atk_speed: float = 0.85
 
 var tombstone_pos: Vector3 = Vector3.ZERO
 

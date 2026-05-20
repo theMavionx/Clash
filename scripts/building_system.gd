@@ -12,6 +12,7 @@ extends Node3D
 @export var always_show_grid: bool = false
 @export var allowed_buildings: PackedStringArray = []  # Empty = all allowed
 @export var blocked_buildings: PackedStringArray = []  # These are never allowed
+@export var test_mode: bool = false  # Sandbox: infinite resources, no unlocks, no max counts, no server sync
 
 # ── Building Definitions ──────────────────────────────────────
 var building_defs: Dictionary = {
@@ -24,11 +25,11 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Mine/1.glb",
 		"model_scale": 0.25,
 		"model_rotation_y": 270.0,
-		"hp_levels": [1200, 2200, 3800],
+		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "wood": 500},
 		"produces": "ore",
-		"produce_rate": [6, 11, 18],    # per minute per level
-		"produce_max": [200, 400, 800],  # max stored before collection
+		"produce_rate": [6, 11, 18, 27],    # per minute per level
+		"produce_max": [200, 400, 800, 1600],  # max stored before collection
 	},
 	"barn": {
 		"name": "Barn",
@@ -61,11 +62,11 @@ var building_defs: Dictionary = {
 		"height": 0.35,
 		"scene": "res://Model/Sawmill/1.glb",
 		"model_scale": 0.1,
-		"hp_levels": [1200, 2200, 3800],
+		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "ore": 500},
 		"produces": "wood",
-		"produce_rate": [8, 15, 24],
-		"produce_max": [250, 500, 1000],
+		"produce_rate": [8, 15, 24, 36],
+		"produce_max": [250, 500, 1000, 2000],
 	},
 	"town_hall": {
 		"name": "Town Hall",
@@ -74,13 +75,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf"],
+		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb", "res://Model/Town_Hall/5.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 6000, 10000],
+		"hp_levels": [3500, 6000, 10000, 17000, 28000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 12000, "wood": 55000, "ore": 50000}, 5: {"gold": 30000, "wood": 130000, "ore": 120000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -90,7 +91,7 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
-		"hp_levels": [900, 1600, 2800],
+		"hp_levels": [900, 1600, 2800, 4500],
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
@@ -103,7 +104,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Storage/Storage shed_1.glb", "res://Model/Storage/Storage House_2.glb", "res://Model/Storage/Business Building_3.glb"],
 		"model_scale": 0.3,
 		"model_offset": Vector3(0, 0, -0.04),
-		"hp_levels": [1400, 2500, 4200],
+		"hp_levels": [1400, 2500, 4200, 6500],
 		"cost": {"gold": 300, "wood": 1200},
 	},
 	"archer_tower": {
@@ -112,11 +113,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb", "res://Model/Archer_towers/4.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800],
 		"cost": {"gold": 400, "wood": 1500},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -125,15 +126,37 @@ var building_defs: Dictionary = {
 			"offset_y": 0.3,
 		},
 	},
+	"mage_tower": {
+		"name": "Mage Tower",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
+		"height": 0.5,
+		"scene": "res://Model/MageTower/1.fbx",
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
+		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
+		"model_rotation_y": 0.0,
+		"hp_levels": [700, 1300, 2200],
+		"cost": {"gold": 500, "ore": 800},
+		"hp_bar_height": 0.5,
+		# FBX ships no embedded texture (Unity .mat stripped) — applied at runtime
+		# via _apply_building_albedo. Violet palette + emission glow for the
+		# magic look (matches the DemonKing purple).
+		"albedo_texture": "res://Model/MageTower/mage_tower_albedo.png",
+		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
+		"test_only": true,  # only listed in the shop when test_mode is on
+		# Combat: tower_mage.gd is attached to the building node (like turret),
+		# casting magic orbs at troops within detect_range=1.0 (turret radius).
+	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(3, 3),
 		"color": Color(0.4, 0.4, 0.45, 0.5),
 		"height": 0.3,
 		"scene": "res://Model/Tombstone/GLB format/1.glb",
-		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb"],
+		"scenes": ["res://Model/Tombstone/GLB format/1.glb", "res://Model/Tombstone/GLB format/2.glb", "res://Model/Tombstone/GLB format/3.glb", "res://Model/Tombstone/GLB format/4.glb"],
 		"model_scale": 0.3,
-		"hp_levels": [1000, 1500, 2000],
+		"model_scales": [0.3, 0.3, 0.3, 0.1],
+		"hp_levels": [1000, 1500, 2000, 2700],
 		"cost": {"gold": 200, "ore": 800},
 	},
 	"flag": {
@@ -179,11 +202,14 @@ const TH_BASE_CAPACITY: Dictionary = {
 	1: {"gold": 10000, "wood": 10000, "ore": 10000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 40000, "wood": 40000, "ore": 40000},
+	4: {"gold": 70000, "wood": 70000, "ore": 70000},
+	5: {"gold": 110000, "wood": 110000, "ore": 110000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 30000, "wood": 30000, "ore": 30000},
+	4: {"gold": 50000, "wood": 50000, "ore": 50000},
 }
 
 func _get_resource_caps() -> Dictionary:
@@ -219,22 +245,23 @@ const TH_UNLOCK: Dictionary = {
 	"turret": 3,
 }
 
-# Max count per building per TH level: [th1, th2, th3]
+# Max count per building per TH level: [th1, th2, th3, th4]
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3],
-	"sawmill": [1, 2, 3],
-	"barn": [1, 1, 2],
-	"port": [1, 2, 5],
-	"archer_tower": [1, 2, 3],
-	"tombstone": [0, 1, 3],
-	"turret": [0, 0, 3],
-	"storage": [0, 1, 2],
-	"town_hall": [1, 1, 1],
+	"mine": [1, 2, 3, 4],
+	"sawmill": [1, 2, 3, 4],
+	"barn": [1, 1, 2, 3],
+	"port": [1, 2, 5, 6],
+	"archer_tower": [1, 2, 3, 4],
+	"tombstone": [0, 1, 3, 4],
+	"turret": [0, 0, 3, 4],
+	"storage": [0, 1, 2, 3],
+	"town_hall": [1, 1, 1, 1],
 }
 
 const TH_UPGRADE_REQUIRES: Dictionary = {
 	1: ["mine", "sawmill", "barn", "port"],
 	2: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower"],
+	3: ["mine", "sawmill", "barn", "port", "storage", "tombstone", "archer_tower", "turret"],
 }
 
 func _get_th_level() -> int:
@@ -252,6 +279,8 @@ func _has_town_hall() -> bool:
 	return false
 
 func _is_building_unlocked(building_id: String) -> bool:
+	if test_mode:
+		return true
 	if building_id != "town_hall" and not _has_town_hall():
 		return false
 	if not TH_UNLOCK.has(building_id):
@@ -260,6 +289,8 @@ func _is_building_unlocked(building_id: String) -> bool:
 
 func _can_upgrade_th() -> Dictionary:
 	## Returns {"can": bool, "missing": []} for TH upgrade readiness
+	if test_mode:
+		return {"can": true, "missing": []}
 	var th_level: int = _get_th_level()
 	var required: Array = TH_UPGRADE_REQUIRES.get(th_level, [])
 	var missing: Array = []
@@ -379,6 +410,7 @@ var _cel_shader: Shader
 ## load() calls at transition time.
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
+static var _mage_tower_script_res: Script = null
 
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
@@ -491,7 +523,7 @@ const SHIP_DISPLAY_SCALE: float = 0.05
 var barn_panel: PanelContainer
 var barn_vbox: VBoxContainer
 var troop_levels: Dictionary = {
-	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1,
+	"Knight": 1, "Mage": 1, "Barbarian": 1, "Archer": 1, "Ranger": 1, "DemonKing": 1,
 }
 var troop_defs: Dictionary = {
 	"Knight": {
@@ -544,6 +576,18 @@ var troop_defs: Dictionary = {
 			3: {"gold": 500, "wood": 500},
 		}
 	},
+	"DemonKing": {
+		"display": "Demon King (Heavy Boss)",
+		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
+		"script": "res://scripts/demon_king.gd",
+		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
+		"buy_cost": 500,               # 5x Knight — reflects 2-slot + premium tier
+		"costs": {
+			1: {"gold": 500,  "ore": 0},   # spawn cost
+			2: {"gold": 1200, "ore": 5},   # ore introduced at L2 — rare resource gate
+			3: {"gold": 2500, "ore": 15},
+		}
+	},
 }
 const BUY_TROOP_COST: int = 100
 
@@ -575,6 +619,9 @@ func _ready() -> void:
 	_preload_defense_resources()
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
+	if test_mode:
+		_net = null  # Local-only: bypass all server gating
+		resources = {"wood": 9_999_999, "gold": 9_999_999, "ore": 9_999_999}
 	_cannon = BSCannon.new().init(self)
 	_rally = BSRally.new().init(self)
 	_battle = BSBattle.new().init(self)
@@ -984,6 +1031,40 @@ func _apply_cel_shader(node: Node) -> void:
 	return
 
 
+## Applies a StandardMaterial3D albedo (+ optional emission) to every
+## MeshInstance3D in [param model] when [param def] declares "albedo_texture".
+## Used for FBX models that ship without embedded textures (e.g. the TARBO
+## MageTower). No-op for GLB buildings whose textures are baked in.
+func _apply_building_albedo(model: Node, def: Dictionary) -> void:
+	var albedo_path: String = def.get("albedo_texture", "")
+	if albedo_path == "" or model == null:
+		return
+	var albedo_tex: Texture2D = load(albedo_path)
+	if albedo_tex == null:
+		return
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = albedo_tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST  # polyart palette look
+	var emit_path: String = def.get("emission_texture", "")
+	if emit_path != "":
+		var emit_tex: Texture2D = load(emit_path)
+		if emit_tex:
+			mat.emission_enabled = true
+			mat.emission_texture = emit_tex
+			mat.emission_energy_multiplier = 1.2
+	_assign_albedo_recursive(model, mat)
+
+
+func _assign_albedo_recursive(node: Node, mat: Material) -> void:
+	if node is MeshInstance3D:
+		var mi: MeshInstance3D = node as MeshInstance3D
+		var count: int = mi.mesh.get_surface_count() if mi.mesh else 0
+		for i in count:
+			mi.set_surface_override_material(i, mat)
+	for child in node.get_children():
+		_assign_albedo_recursive(child, mat)
+
+
 func _create_fps_label() -> void:
 	if not canvas:
 		return
@@ -1192,6 +1273,10 @@ func _create_ui() -> void:
 	for id in building_defs:
 		var def = building_defs[id]
 		if def.get("no_shop", false):
+			continue
+		# test_only buildings (e.g. Mage Tower) appear in the shop only on the
+		# sandbox scene where test_mode is enabled.
+		if def.get("test_only", false) and not test_mode:
 			continue
 		var cost = def.get("cost", {})
 		var cost_parts: Array = []
@@ -1469,6 +1554,8 @@ func _update_player_name_label() -> void:
 
 
 func _create_register_panel() -> void:
+	if test_mode:
+		return  # Sandbox: no login required
 	var net = _net
 	if net and net.has_token():
 		# Already registered — try to login and load state
@@ -1695,13 +1782,17 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 			if turret_script:
 				node.set_script(turret_script)
+		elif building_type == "mage_tower":
+			var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+			if mage_script:
+				node.set_script(mage_script)
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
 				scene_res = load(scene_path)
 			if scene_res:
 				var model = scene_res.instantiate()
-				var s = def.get("model_scale", 0.2)
+				var s = _get_model_scale(def, level)
 				model.scale = Vector3(s, s, s)
 				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 				var offsets = def.get("model_offsets", [])
@@ -1718,6 +1809,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 						model.set_script(mine_cart_script)
 				node.add_child(model)
 				_apply_cel_shader(model)
+				_apply_building_albedo(model, def)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -1938,7 +2030,7 @@ func _toggle_shop() -> void:
 
 
 func _start_placement(building_id: String) -> void:
-	if building_id != "town_hall" and not _has_town_hall():
+	if not test_mode and building_id != "town_hall" and not _has_town_hall():
 		_show_error("Build Town Hall first!")
 		return
 	if not _is_building_unlocked(building_id):
@@ -2031,6 +2123,7 @@ func _create_ghost() -> void:
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			ghost.add_child(model)
 			_apply_cel_shader(model)
+			_apply_building_albedo(model, def)
 	add_child(ghost)
 
 
@@ -2068,7 +2161,7 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
 
 	var model = scene_res.instantiate()
-	var s = def.get("model_scale", 0.2)
+	var s = _get_model_scale(def, level)
 	model.scale = Vector3(s, s, s)
 	model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 	var offsets = def.get("model_offsets", [])
@@ -2167,6 +2260,8 @@ func _preload_building_scenes() -> void:
 	# Pre-load turret script so set_script() at transition time is instant
 	if _turret_script_res == null:
 		_turret_script_res = load("res://scripts/turret.gd")
+	if _mage_tower_script_res == null:
+		_mage_tower_script_res = load("res://scripts/tower_mage.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2249,6 +2344,10 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 		if turret_script:
 			node.set_script(turret_script)
+	elif current_building_id == "mage_tower":
+		var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+		if mage_script:
+			node.set_script(mage_script)
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
@@ -2262,6 +2361,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			model.position = def.get("model_offset", Vector3.ZERO)
 			node.add_child(model)
 			_apply_cel_shader(model)
+			_apply_building_albedo(model, def)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -2512,15 +2612,15 @@ func _try_place_building() -> bool:
 		return false
 	var def = building_defs[current_building_id]
 
-	if current_building_id != "town_hall" and not _has_town_hall():
+	if not test_mode and current_building_id != "town_hall" and not _has_town_hall():
 		_show_error("Build Town Hall first!")
 		return false
 
 	if not _can_place(current_grid_pos, def.cells):
 		return false
 
-	# Check max_count limit (e.g. Town Hall = 1)
-	if def.has("max_count"):
+	# Check max_count limit (e.g. Town Hall = 1) — bypassed in test_mode
+	if not test_mode and def.has("max_count"):
 		var count = 0
 		for b in placed_buildings:
 			if b.id == current_building_id:
@@ -2775,7 +2875,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower"]
+	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
@@ -2876,18 +2976,19 @@ func _upgrade_selected() -> void:
 		return
 	var bid: String = selected_building.get("id", "")
 	var th_level: int = _get_th_level()
-	# TH upgrade — check required buildings
-	if bid == "town_hall":
-		var check: Dictionary = _can_upgrade_th()
-		if not check.can:
-			var missing_str: String = ", ".join(check.missing)
-			_show_error("Upgrade all buildings first: " + missing_str)
-			return
-	else:
-		# Non-TH buildings can't exceed TH level
-		if level + 1 > th_level:
-			_show_error("Upgrade Town Hall to level %d first" % (level + 1))
-			return
+	# TH upgrade — check required buildings (bypassed in test_mode)
+	if not test_mode:
+		if bid == "town_hall":
+			var check: Dictionary = _can_upgrade_th()
+			if not check.can:
+				var missing_str: String = ", ".join(check.missing)
+				_show_error("Upgrade all buildings first: " + missing_str)
+				return
+		else:
+			# Non-TH buildings can't exceed TH level
+			if level + 1 > th_level:
+				_show_error("Upgrade Town Hall to level %d first" % (level + 1))
+				return
 
 	var b = selected_building
 	var net = _net
@@ -2955,8 +3056,8 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			if is_instance_valid(m):
 				m.material_overlay = mat
 
-	# Wait for the "glow upgrade" phase (3 seconds)
-	await get_tree().create_timer(3.0).timeout
+	# Wait for the "glow upgrade" phase (3 seconds; instant in test_mode)
+	await get_tree().create_timer(0.05 if test_mode else 3.0).timeout
 
 	if not is_instance_valid(self) or not is_instance_valid(model):
 		return # node or building destroyed while waiting
@@ -2970,7 +3071,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 
 	# Bounce DOWN (squash)
 	var tw_down = create_tween()
-	tw_down.tween_property(model, "scale", Vector3.ZERO, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw_down.tween_property(model, "scale", Vector3.ZERO, 0.05 if test_mode else 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 	await tw_down.finished
 
 	if not is_instance_valid(self) or not is_instance_valid(model):
@@ -3013,7 +3114,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				model.add_child(new_base)
 			# Add the new model
 			var new_model = scene_res.instantiate()
-			var s = def.get("model_scale", 0.2)
+			var s = _get_model_scale(def, b.level)
 			new_model.scale = Vector3(s, s, s)
 			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			var offsets = def.get("model_offsets", [])
@@ -3022,6 +3123,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			else:
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
+			_apply_building_albedo(new_model, def)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar
@@ -3034,7 +3136,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 
 	# Bounce UP (reveal)
 	var tw_up = create_tween()
-	tw_up.tween_property(model, "scale", Vector3.ONE, 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tw_up.tween_property(model, "scale", Vector3.ONE, 0.05 if test_mode else 0.4).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 	# Tombstone → update skeletons
 	if b.id == "tombstone":
@@ -3098,6 +3200,15 @@ func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
 	for res_name in cost:
 		result[res_name] = cost[res_name] * next_level
 	return result
+
+
+## Returns scale for [param level]. Per-level override via "model_scales" array,
+## otherwise falls back to scalar "model_scale".
+func _get_model_scale(def: Dictionary, level: int = 1) -> float:
+	var scales: Array = def.get("model_scales", [])
+	if level >= 1 and scales.size() >= level:
+		return float(scales[level - 1])
+	return float(def.get("model_scale", 0.2))
 
 
 func _auto_center_model(model: Node3D) -> void:
@@ -3445,18 +3556,33 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 	if not model_res or not script_res:
 		b["skeletons"] = alive
 		return
+	# Diamond layout for 4 skeletons: front of cross / behind / both sides.
+	const DIAMOND_POINTS: Array[Vector3] = [
+		Vector3(0, 0,  0.18),  # front (south)
+		Vector3( 0.18, 0, 0),  # right (east)
+		Vector3(0, 0, -0.18),  # back (north)
+		Vector3(-0.18, 0, 0),  # left (west)
+	]
 	while alive.size() < target_count:
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
-		var spawn_index: int = alive.size()
-		var angle := (TAU * float(spawn_index)) / maxf(float(target_count), 1.0)
-		var offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
 		get_tree().current_scene.add_child(skel)
-		skel.global_position = tomb_pos + offset
 		skel.tombstone_pos = tomb_pos
 		_apply_cel_shader(skel)
 		alive.append(skel)
+	# Reposition every guard to the current target_count layout so that an
+	# upgrade (e.g. L3 circle → L4 diamond) re-anchors existing skeletons
+	# instead of dropping the new one onto a stale spot.
+	for i in range(alive.size()):
+		var offset: Vector3
+		if target_count == 4:
+			offset = DIAMOND_POINTS[i]
+		else:
+			var angle := (TAU * float(i)) / maxf(float(target_count), 1.0)
+			offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
+		if is_instance_valid(alive[i]):
+			alive[i].global_position = tomb_pos + offset
 	b["skeletons"] = alive
 
 
@@ -3528,7 +3654,7 @@ func _update_building_hp_bars() -> void:
 			continue
 		b.hp_bar.visible = true
 		var def = building_defs.get(b.id, {})
-		var model_scale = def.get("model_scale", 0.2)
+		var model_scale = _get_model_scale(def, int(b.get("level", 1)))
 		var bar_height = def.get("hp_bar_height", model_scale * 1.5 + 0.05)
 		b.hp_bar.global_position = b.node.global_position + Vector3(0, bar_height, 0)
 		if update_billboard and cam:
@@ -3599,11 +3725,20 @@ func _replace_with_ruins(node: Node3D) -> void:
 			if is_instance_valid(arrow_data.get("node")):
 				arrow_data.node.queue_free()
 		node._active_arrows.clear()
+	# Mage Tower pools orbs as dicts {node, active, target} (not bare nodes) in
+	# `_pool`, with in-flight orbs also referenced in `_active`. Free the orb
+	# nodes so a destroyed tower's projectiles vanish instead of freezing —
+	# physics_process was just turned off, so they can no longer move themselves.
 	if "_pool" in node:
 		for p in node._pool:
-			if is_instance_valid(p):
+			if p is Dictionary:
+				if is_instance_valid(p.get("node")):
+					p.node.queue_free()
+			elif is_instance_valid(p):
 				p.queue_free()
 		node._pool.clear()
+	if "_active" in node:
+		node._active.clear()
 	# Free all children EXCEPT the base outline (MeshInstance3D with ShaderMaterial)
 	for child in node.get_children():
 		if child is MeshInstance3D and child.material_override is ShaderMaterial:
@@ -3782,13 +3917,20 @@ func _refresh_port_panel() -> void:
 		info_lbl.add_theme_color_override("font_color", Color(0.7, 0.9, 1.0))
 		port_vbox.add_child(info_lbl)
 
-		# Show loaded troops
+		# Show loaded troops (aggregate filler sentinels into the preceding troop)
 		if ship_troops.size() > 0:
+			var display_idx: int = 0
 			for i in range(ship_troops.size()):
 				var troop_name: String = ship_troops[i]
+				if troop_name == "_SLOT_FILLER_":
+					continue  # extra capacity used by a multi-slot troop above
+				display_idx += 1
 				var tlvl = troop_levels.get(troop_name, 1)
+				var tdef_d: Dictionary = troop_defs.get(troop_name, {})
+				var slots_d: int = int(tdef_d.get("slot_cost", 1))
+				var slots_suffix: String = "" if slots_d == 1 else " [%d slots]" % slots_d
 				var slot_lbl = Label.new()
-				slot_lbl.text = "  %d. %s (Lv.%d)" % [i + 1, troop_name, tlvl]
+				slot_lbl.text = "  %d. %s (Lv.%d)%s" % [display_idx, troop_name, tlvl, slots_suffix]
 				slot_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
 				slot_lbl.add_theme_font_size_override("font_size", 14)
 				port_vbox.add_child(slot_lbl)
@@ -3801,14 +3943,22 @@ func _refresh_port_panel() -> void:
 			load_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.6))
 			load_title.add_theme_font_size_override("font_size", 14)
 			port_vbox.add_child(load_title)
-			for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+			var ship_free: int = ship_capacity - ship_troops.size()
+			for troop_name in troop_defs.keys():
 				var tlvl = troop_levels.get(troop_name, 0)
 				if tlvl < 1:
 					continue
+				var tdef_l: Dictionary = troop_defs[troop_name]
+				var slot_cost_l: int = int(tdef_l.get("slot_cost", 1))
+				var slot_suffix_l: String = "" if slot_cost_l == 1 else " · %d slots" % slot_cost_l
 				var load_btn = Button.new()
-				load_btn.text = "Load %s (Lv.%d)" % [troop_name, tlvl]
+				load_btn.text = "Load %s (Lv.%d)%s" % [troop_name, tlvl, slot_suffix_l]
 				load_btn.custom_minimum_size = Vector2(0, 36)
-				_style_button(load_btn, Color(0.2, 0.4, 0.3), Color(0.25, 0.5, 0.35))
+				if ship_free >= slot_cost_l:
+					_style_button(load_btn, Color(0.2, 0.4, 0.3), Color(0.25, 0.5, 0.35))
+				else:
+					_style_button(load_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+					load_btn.disabled = true
 				var tn = troop_name
 				load_btn.pressed.connect(func(): _load_troop_to_ship(tn))
 				port_vbox.add_child(load_btn)
@@ -4137,7 +4287,7 @@ func _refresh_barn_panel() -> void:
 	troops_title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	barn_vbox.add_child(troops_title)
 
-	for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+	for troop_name in troop_defs.keys():
 		var tdef = troop_defs[troop_name]
 		var lvl = troop_levels[troop_name]
 
@@ -4229,14 +4379,18 @@ func _refresh_barn_panel() -> void:
 		no_ship_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 		barn_vbox.add_child(no_ship_lbl)
 	else:
-		for troop_name in ["Knight", "Mage", "Barbarian", "Archer", "Ranger"]:
+		for troop_name in troop_defs.keys():
 			var lvl2 = troop_levels[troop_name]
 			if lvl2 < 1:
 				continue
+			var tdef_buy: Dictionary = troop_defs[troop_name]
+			var buy_cost: int = int(tdef_buy.get("buy_cost", BUY_TROOP_COST))
+			var slot_cost: int = int(tdef_buy.get("slot_cost", 1))
 			var buy_btn = Button.new()
-			buy_btn.text = "Buy %s — %d Gold (Lv.%d)" % [troop_name, BUY_TROOP_COST, lvl2]
+			var slot_suffix: String = "" if slot_cost == 1 else " · %d slots" % slot_cost
+			buy_btn.text = "Buy %s — %d Gold (Lv.%d)%s" % [troop_name, buy_cost, lvl2, slot_suffix]
 			buy_btn.custom_minimum_size = Vector2(0, 44)
-			if slots_free > 0 and resources.get("gold", 0) >= BUY_TROOP_COST:
+			if slots_free >= slot_cost and resources.get("gold", 0) >= buy_cost:
 				_style_button(buy_btn, Color(0.4, 0.35, 0.15), Color(0.5, 0.45, 0.2))
 			else:
 				_style_button(buy_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
@@ -4266,6 +4420,8 @@ func _refresh_barn_panel() -> void:
 
 
 func _can_afford(costs: Dictionary) -> bool:
+	if test_mode:
+		return true
 	for res_name in costs:
 		if resources.get(res_name, 0) < costs[res_name]:
 			return false
@@ -4348,18 +4504,20 @@ func _get_total_ship_capacity() -> int:
 
 
 func _buy_troop(troop_name: String) -> void:
-	if resources.get("gold", 0) < BUY_TROOP_COST:
-		return
-	if _port._get_free_ship_slots() <= 0:
-		return
 	var tdef = troop_defs.get(troop_name, {})
 	var model_path: String = tdef.get("model", "")
 	var script_path: String = tdef.get("script", "")
 	if model_path == "" or script_path == "":
 		return
-	# Find port with free slot from barn position
+	var buy_cost: int = int(tdef.get("buy_cost", BUY_TROOP_COST))
+	var slot_cost: int = int(tdef.get("slot_cost", 1))
+	if resources.get("gold", 0) < buy_cost:
+		return
+	if _port._get_free_ship_slots() < slot_cost:
+		return
+	# Find port with enough free slots from barn position
 	var spawn_pos: Vector3 = _get_building_spawn_pos()
-	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos)
+	var port_info: Dictionary = _port._find_port_with_free_slot(spawn_pos, slot_cost)
 	if port_info.is_empty():
 		return
 	# Ask server first
@@ -4375,12 +4533,17 @@ func _buy_troop(troop_name: String) -> void:
 			resources.ore = result.resources.ore
 			_update_resource_ui()
 	else:
-		resources["gold"] -= BUY_TROOP_COST
+		resources["gold"] -= buy_cost
 		_update_resource_ui()
-	# Reserve the ship slot immediately
+	# Reserve ship slots immediately. For multi-slot units we append the troop
+	# name once and pad with "_SLOT_FILLER_" sentinels so capacity math (which
+	# just calls ship_troops.size()) works without any special-casing. The
+	# attack deploy loop skips unknown TROOP_DEFS keys, so fillers spawn nothing.
 	var port_node: Node3D = port_info.port_node
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	ship_troops.append(troop_name)
+	for _i in range(slot_cost - 1):
+		ship_troops.append("_SLOT_FILLER_")
 	port_node.set_meta("ship_troops", ship_troops)
 	_refresh_barn_panel()
 	# Spawn the actual combat troop model (same as attack troops).
@@ -4530,6 +4693,11 @@ func _build_fleet() -> Array:
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
 			if not ship_troops.is_empty():
 				fleet.append({"level": ship_level, "troops": ship_troops.duplicate()})
+	# Sandbox guarantee: every attack on TestMain ships a DemonKing + Knight so
+	# the player can iterate on demon combat without setting up a port/ship.
+	# "_SLOT_FILLER_" pads DemonKing's 2-slot footprint and is ignored at deploy.
+	if test_mode:
+		fleet.append({"level": 1, "troops": ["DemonKing", "_SLOT_FILLER_"]})
 	return fleet
 
 
