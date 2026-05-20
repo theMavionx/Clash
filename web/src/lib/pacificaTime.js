@@ -13,15 +13,14 @@ export function pacificaNow() {
   return Date.now() + pacificaTimeOffsetMs;
 }
 
-export function setPacificaServerTimeFromResponse(response, source = 'response') {
+export function setPacificaServerTimeFromResponse(response) {
   if (!response?.headers?.get) return false;
   const ageHeader = response.headers.get('Age');
   const ageSeconds = Number(ageHeader);
   if (Number.isFinite(ageSeconds) && ageSeconds > 2) {
-    console.log(`[Pacifica] ignoring cached clock header from ${source}: age=${ageSeconds}s`);
     return false;
   }
-  return setPacificaServerTimeFromDateHeader(response.headers.get('Date'), { source });
+  return setPacificaServerTimeFromDateHeader(response.headers.get('Date'));
 }
 
 export function setPacificaServerTimeFromDateHeader(dateHeader, opts = {}) {

@@ -1523,6 +1523,7 @@ func _spawn_fire_explosion(pos: Vector3) -> void:
 	explosion.material_override = mat
 	get_tree().current_scene.add_child(explosion)
 	explosion.global_position = pos + Vector3(0, 0.15, 0)
+	var explosion_ref: WeakRef = weakref(explosion)
 	# Animate frames then free
 	var frame_count: int = _fire_bomb_textures.size()
 	var frame_dur: float = FIRE_BOMB_DURATION / float(frame_count)
@@ -1530,13 +1531,18 @@ func _spawn_fire_explosion(pos: Vector3) -> void:
 	for i in range(frame_count):
 		var idx: int = i
 		tw.tween_callback(func():
-			if is_instance_valid(explosion):
-				(explosion.material_override as StandardMaterial3D).albedo_texture = _fire_bomb_textures[idx]
+			var explosion_node: MeshInstance3D = explosion_ref.get_ref() as MeshInstance3D
+			if is_instance_valid(explosion_node):
+				(explosion_node.material_override as StandardMaterial3D).albedo_texture = _fire_bomb_textures[idx]
 		).set_delay(frame_dur if i > 0 else 0.0)
 	# Fade out in last 30%
 	var fade_start: float = FIRE_BOMB_DURATION * 0.7
 	tw.parallel().tween_property(mat, "albedo_color:a", 0.0, FIRE_BOMB_DURATION * 0.3).set_delay(fade_start)
-	tw.chain().tween_callback(explosion.queue_free)
+	tw.chain().tween_callback(func():
+		var explosion_node: MeshInstance3D = explosion_ref.get_ref() as MeshInstance3D
+		if is_instance_valid(explosion_node):
+			explosion_node.queue_free()
+	)
 
 
 func _attach_to_bone(bone_name: String, attachment_name: String, scene_path: String, node_name: String, rot_deg: Vector3 = Vector3.ZERO) -> BoneAttachment3D:

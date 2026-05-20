@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef } from 'react';
-import { PrivyProvider, usePrivy, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
+import { PrivyProvider, usePrivy, useSendTransaction, useWallets as usePrivyEvmWallets } from '@privy-io/react-auth';
 import { toSolanaWalletConnectors, useCreateWallet as useCreateSolanaWallet, useWallets as usePrivySolanaWallets } from '@privy-io/react-auth/solana';
 import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
 import { base, arbitrum } from 'viem/chains';
@@ -32,6 +32,7 @@ const OPTIONAL_PRIVY_DEFAULT = {
   logout: () => {},
   evmWallets: [],
   solanaWallets: [],
+  evmSendTransaction: null,
 };
 const OptionalPrivyContext = createContext(OPTIONAL_PRIVY_DEFAULT);
 
@@ -42,6 +43,7 @@ export function useOptionalPrivy() {
 function PrivyStateBridge({ children }) {
   const { ready, authenticated, user, login, logout } = usePrivy();
   const { wallets: evmWallets } = usePrivyEvmWallets();
+  const { sendTransaction: evmSendTransaction } = useSendTransaction();
   const { ready: solanaReady, wallets: solanaWallets } = usePrivySolanaWallets();
   const { createWallet: createSolanaWallet } = useCreateSolanaWallet();
   const solanaCreateTriedRef = useRef(false);
@@ -69,7 +71,8 @@ function PrivyStateBridge({ children }) {
     logout,
     evmWallets: evmWallets || [],
     solanaWallets: solanaWallets || [],
-  }), [ready, authenticated, user, login, logout, evmWallets, solanaWallets]);
+    evmSendTransaction,
+  }), [ready, authenticated, user, login, logout, evmWallets, solanaWallets, evmSendTransaction]);
   return (
     <OptionalPrivyContext.Provider value={value}>
       {children}

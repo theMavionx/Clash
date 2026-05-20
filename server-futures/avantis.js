@@ -1,4 +1,4 @@
-const { createWalletClient, createPublicClient, http, parseUnits, formatUnits } = require('viem');
+const { createWalletClient, createPublicClient, http, fallback, parseUnits, formatUnits } = require('viem');
 const { privateKeyToAccount, generatePrivateKey } = require('viem/accounts');
 const { base } = require('viem/chains');
 
@@ -11,14 +11,34 @@ const TRADING_ADDRESS = '0x44914408af82bC9983bbb330e3578E1105e11d4e';
 const TRADING_STORAGE_ADDRESS = '0x8a311D7048c35985aa31C131B9A13e03a5f7422d';
 const USDC_ADDRESS    = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID        = 8453; // Base mainnet
-const BASE_RPC        = 'https://mainnet.base.org';
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+const BASE_RPC_URLS = splitList(
+  process.env.BASE_RPC_URLS ||
+  process.env.BASE_RPC_URL ||
+  process.env.VITE_BASE_RPC_URLS ||
+  process.env.VITE_BASE_RPC_URL
+);
+if (BASE_RPC_URLS.length === 0) {
+  BASE_RPC_URLS.push(
+    'https://base-rpc.publicnode.com',
+    'https://base.public.blockpi.network/v1/rpc/public',
+    'https://base.drpc.org',
+    'https://rpcfree.com/base-rpc',
+    'https://1rpc.io/base',
+    'https://mainnet.base.org',
+  );
+}
+const BASE_RPC        = BASE_RPC_URLS[0];
 const CORE_API        = 'https://core.avantisfi.com';
 const FEED_V3_URL     = 'https://feed-v3.avantisfi.com';
 const SOCKET_API      = 'https://socket-api-pub.avantisfi.com/socket-api/v1/data';
 const PYTH_HERMES     = 'https://hermes.pyth.network';
-
-// Execution fee for market/close orders (~0.00035 ETH)
-const EXECUTION_FEE_WEI = 350000000000000n; // 0.00035 ETH
 
 // Order types
 const ORDER_TYPE = {
@@ -140,9 +160,18 @@ const ERC20_ABI = [
 
 // ---------- Viem client helpers ----------
 
+function baseTransport() {
+  const opts = { retryCount: 0, timeout: 10_000 };
+  if (BASE_RPC_URLS.length === 1) return http(BASE_RPC_URLS[0], opts);
+  return fallback(
+    BASE_RPC_URLS.map(url => http(url, opts)),
+    { rank: false, retryCount: 0 },
+  );
+}
+
 const publicClient = createPublicClient({
   chain: base,
-  transport: http(BASE_RPC),
+  transport: baseTransport(),
 });
 
 function walletClientFromPrivkey(privateKey) {
@@ -150,7 +179,7 @@ function walletClientFromPrivkey(privateKey) {
   return createWalletClient({
     account,
     chain: base,
-    transport: http(BASE_RPC),
+    transport: baseTransport(),
   });
 }
 
@@ -262,31 +291,29 @@ async function getNextTradeIndex(address, pairIndex) {
 }
 
 // ---------- Execution fee ----------
-// Avantis contract charges an ETH fee that covers L1 gas for price settlement.
-// SDK fetches dynamically; we mirror that with a cached fetch from Core API,
-// falling back to the 0.00035 ETH hard default if the endpoint is unreachable.
+// Avantis contract charges an ETH fee that covers keeper execution. The SDK
+// estimates it from current Base gas and uses 0.00035 ETH only as an outage
+// fallback. Core API fee endpoints currently 404, so calculate locally.
 let feeCache = null;
 let feeCacheTime = 0;
 const FEE_FALLBACK_WEI = 350000000000000n; // 0.00035 ETH
+const FEE_MAX_WEI = 5000000000000000n; // 0.005 ETH
+const EXECUTION_L2_GAS_ESTIMATE = 935000n; // 850k * 1.1, matches SDK
+const EXECUTION_L1_CALLDATA_WEI = 5000000000n;
 
 async function getExecutionFeeWei() {
   const now = Date.now();
   if (feeCache && now - feeCacheTime < 30000) return feeCache;
   try {
-    const res = await fetch(`${CORE_API}/execution-fee`);
-    if (res.ok) {
-      const data = await res.json();
-      // API typically returns `{fee: "0.00042"}` in ETH, or raw wei
-      const eth = parseFloat(data.fee || data.execution_fee || data.eth || 0);
-      if (eth > 0 && eth < 0.01) {
-        const wei = BigInt(Math.floor(eth * 1e18));
-        feeCache = wei;
-        feeCacheTime = now;
-        return wei;
-      }
-    }
+    const gasPrice = await publicClient.getGasPrice();
+    let fee = gasPrice * EXECUTION_L2_GAS_ESTIMATE + EXECUTION_L1_CALLDATA_WEI;
+    if (fee <= 0n) throw new Error('empty gas price');
+    if (fee > FEE_MAX_WEI) fee = FEE_MAX_WEI;
+    feeCache = fee;
+    feeCacheTime = now;
+    return fee;
   } catch (e) {
-    console.warn('[avantis] getExecutionFeeWei fetch failed, using fallback:', e.message);
+    console.warn('[avantis] getExecutionFeeWei gas estimate failed, using fallback:', e.message);
   }
   // Cache the fallback too so we don't hammer the API repeatedly on outage
   feeCache = FEE_FALLBACK_WEI;

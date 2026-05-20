@@ -11,7 +11,24 @@ const IMPORT_TIMEOUT_MS = 4000;
 const READY_TIMEOUT_MS = 1800;
 const CONTEXT_TIMEOUT_MS = 1200;
 
+function isLikelyFarcasterSurface() {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window !== window.parent) return true;
+  } catch {
+    return true;
+  }
+  const referrer = String(document?.referrer || '');
+  const ua = String(navigator?.userAgent || '');
+  return /(?:farcaster|warpcast)/i.test(`${referrer} ${ua}`);
+}
+
+function isExpectedSdkReadyError(err) {
+  return /send was called before connect/i.test(String(err?.message || err || ''));
+}
+
 function _log(level, message) {
+  if (level === 'info' && !isLikelyFarcasterSurface()) return;
   fetch('/api/client-log', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -36,9 +53,16 @@ function finishDetect(inMiniApp) {
   _resolveDetect(_inMiniApp);
 }
 
-// Always try the SDK, but fail open outside Farcaster hosts. Some in-app
-// browsers (notably Phantom mobile) never resolve sdk.actions.ready().
-initPromise = withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, null).then(async (mod) => {
+// Only initialize the SDK when the page is plausibly running inside a
+// Farcaster host. Calling actions.ready() in a normal browser can reject from
+// the SDK transport with "send was called before connect".
+initPromise = (async () => {
+  if (!isLikelyFarcasterSurface()) {
+    finishDetect(false);
+    return null;
+  }
+
+  const mod = await withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, null);
   if (!mod?.sdk) {
     _log('info', 'SDK import timed out; treating as regular browser');
     finishDetect(false);
@@ -46,7 +70,18 @@ initPromise = withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, n
   }
   sdkInstance = mod.sdk;
   _log('info', 'SDK imported, calling ready()');
-  await withTimeout(mod.sdk.actions.ready({ disableNativeGestures: true }), READY_TIMEOUT_MS, null);
+  try {
+    await withTimeout(
+      Promise.resolve(mod.sdk.actions.ready({ disableNativeGestures: true })).catch((err) => {
+        if (!isExpectedSdkReadyError(err)) throw err;
+        return null;
+      }),
+      READY_TIMEOUT_MS,
+      null,
+    );
+  } catch (err) {
+    _log('warn', `SDK ready failed: ${err}`);
+  }
   _log('info', 'ready() done');
 
   // Check if we're actually inside a mini app — cache context for useFarcaster hook
@@ -60,7 +95,7 @@ initPromise = withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, n
 
   finishDetect(!!_cachedContext?.user);
   return mod.sdk;
-}).catch((err) => {
+})().catch((err) => {
   _log('error', `SDK init failed: ${err}`);
   finishDetect(false);
   return null;
@@ -68,13 +103,13 @@ initPromise = withTimeout(import('@farcaster/miniapp-sdk'), IMPORT_TIMEOUT_MS, n
 
 /**
  * Synchronous check — returns true if we already know we're in a mini app.
- * Falls back to iframe check if SDK hasn't resolved yet.
+ * Falls back to a host heuristic if SDK hasn't resolved yet.
  */
 export function isFarcasterFrame() {
   if (_inMiniApp) return true;
   if (_resolved) return false;
-  // SDK not resolved yet — use iframe check as temporary guess
-  try { return window !== window.parent; } catch { return true; }
+  // SDK not resolved yet: use the same host heuristic as initialization.
+  return isLikelyFarcasterSurface();
 }
 
 /**

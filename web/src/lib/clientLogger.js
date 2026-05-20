@@ -105,6 +105,8 @@ function maskAddress(addr) {
 
 function redactText(value) {
   return String(value)
+    .replace(/([?&](?:api[-_]?key|apikey)=)[^&\s"')]+/gi, '$1[redacted]')
+    .replace(/(\/v2\/)[A-Za-z0-9_-]{16,}/g, '$1[redacted]')
     .replace(/0x[a-fA-F0-9]{32,64}/g, (m) => maskAddress(m))
     .replace(/\b[1-9A-HJ-NP-Za-km-z]{32,48}\b/g, (m) => maskAddress(m));
 }
@@ -331,6 +333,7 @@ function shouldIgnoreFetch(path) {
 
 function shouldStoreFetchFailure(path, status) {
   if (status === 400 && /^\/api\/find-enemy(?:\?|$)/.test(path || '')) return false;
+  if (status === 400 && /^\/api\/ai-chat\/status(?:\?|$)/.test(path || '')) return false;
   if (status === 429 && /^\/api\/troop-died(?:\?|$)/.test(path || '')) return false;
   return true;
 }

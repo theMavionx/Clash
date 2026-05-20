@@ -3266,7 +3266,7 @@ func explode_building_with_swell(bnode: Node3D, building_id: String) -> void:
 		if child is Node3D and not (child is MeshInstance3D and child.material_override is ShaderMaterial) and not (child is OmniLight3D) and not (child is AnimationPlayer):
 			model_child = child
 			break
-	var bnode_ref: Node3D = bnode
+	var bnode_ref: WeakRef = weakref(bnode)
 	var tw: Tween = create_tween()
 	if model_child and is_instance_valid(model_child):
 		var puff_scale: Vector3 = model_child.scale * 1.2
@@ -3277,13 +3277,14 @@ func explode_building_with_swell(bnode: Node3D, building_id: String) -> void:
 		tw.tween_interval(0.2)
 	# At the peak of the puff: boom + vanish happen on the same frame.
 	tw.tween_callback(func():
-		_spawn_fire_bomb_explosion(bnode_ref)
-		if not is_instance_valid(bnode_ref):
+		var target_node: Node3D = bnode_ref.get_ref() as Node3D
+		if not is_instance_valid(target_node):
 			return
+		_spawn_fire_bomb_explosion(target_node)
 		if building_id == "port":
-			bnode_ref.queue_free()
+			target_node.queue_free()
 		else:
-			_replace_with_ruins(bnode_ref)
+			_replace_with_ruins(target_node)
 	)
 
 
@@ -3311,17 +3312,23 @@ func _spawn_fire_bomb_explosion(at_node: Node3D) -> void:
 	explosion.material_override = mat
 	get_tree().current_scene.add_child(explosion)
 	explosion.global_position = at_node.global_position + Vector3(0, 0.35, 0)
+	var explosion_ref: WeakRef = weakref(explosion)
 	var frames: Array = BaseTroop._fire_bomb_textures
 	var frame_dur: float = BaseTroop.FIRE_BOMB_DURATION / float(frames.size())
 	var tw: Tween = create_tween()
 	for fi in range(frames.size()):
 		var idx2: int = fi
 		tw.tween_callback(func():
-			if is_instance_valid(explosion):
-				(explosion.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
+			var explosion_node: MeshInstance3D = explosion_ref.get_ref() as MeshInstance3D
+			if is_instance_valid(explosion_node):
+				(explosion_node.material_override as StandardMaterial3D).albedo_texture = frames[idx2]
 		).set_delay(frame_dur if fi > 0 else 0.0)
 	tw.parallel().tween_property(mat, "albedo_color:a", 0.0, BaseTroop.FIRE_BOMB_DURATION * 0.3).set_delay(BaseTroop.FIRE_BOMB_DURATION * 0.7)
-	tw.chain().tween_callback(explosion.queue_free)
+	tw.chain().tween_callback(func():
+		var explosion_node: MeshInstance3D = explosion_ref.get_ref() as MeshInstance3D
+		if is_instance_valid(explosion_node):
+			explosion_node.queue_free()
+	)
 
 
 # ── Tombstone Skeleton Guards ─────────────────────────────────

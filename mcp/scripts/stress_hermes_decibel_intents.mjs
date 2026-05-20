@@ -12,9 +12,12 @@ const cases = [
   ['prices for BTC and ETH', 'decibel_markets', ['decibel_get_markets']],
   ['show Decibel markets', 'decibel_markets', ['decibel_get_markets']],
   ['mark price SOL', 'decibel_markets', ['decibel_get_markets']],
+  ['mark price doge coin', 'decibel_markets', ['decibel_get_markets']],
+  ['mark price for dog token', 'decibel_markets', ['decibel_get_markets']],
   ['open long BTC with 10 USDC at 5x', 'decibel_place_order', ['decibel_place_order']],
   ['long ETH 25 dollars 3x', 'decibel_place_order', ['decibel_place_order']],
   ['short SOL with 12 USDC', 'decibel_place_order', ['decibel_place_order']],
+  ['open any safe trade with 10% balance', 'decibel_place_order', ['decibel_place_order']],
   ['buy APT notional 50', 'decibel_place_order', ['decibel_place_order']],
   ['sell BTC limit 80000 size 0.001', 'decibel_place_order', ['decibel_place_order']],
   ['open a trade', 'decibel_place_order', ['decibel_place_order']],
@@ -45,16 +48,27 @@ const cases = [
   ['BTC 杠杆 5x', 'decibel_leverage', ['decibel_get_positions', 'decibel_set_leverage']],
   ['set TP and SL for APT', 'decibel_tpsl', ['decibel_get_positions', 'decibel_set_tpsl']],
   ['what are your skills', 'skills', []],
-  ['collect resources', 'collect_resources', []],
-  ['attack a base', 'battle', []],
-  ['attack egor4042007', 'targeted_battle', []],
-  ['build my base', 'auto_build_base', []],
-  ['build order for my base', 'auto_build_base', []],
-  ['upgrade sawmill', 'upgrade', []],
-  ['load troops into ships', 'fleet', []],
+  ['collect resources', 'collect_resources', ['get_base_state', 'collect_resources']],
+  ['collect all res', 'collect_resources', ['get_base_state', 'collect_resources']],
+  ['attack a base', 'battle', ['get_base_state', 'execute_ai_attack_plan']],
+  ['attack egor4042007', 'targeted_battle', ['get_base_state', 'execute_ai_attack_plan']],
+  ['build my base', 'auto_build_base', ['get_base_state', 'auto_build_base']],
+  ['build my base balanced', 'auto_build_base', ['get_base_state', 'auto_build_base']],
+  ['build order for my base', 'auto_build_base', ['get_base_state', 'auto_build_base']],
+  ['upgrade sawmill', 'upgrade', ['get_base_state', 'upgrade_building']],
+  ['upgrade knight', 'upgrade', ['get_base_state', 'upgrade_troop']],
+  ['load troops into ships', 'fleet', ['get_base_state', 'load_ship_troop']],
   ['hello', 'general', []],
   ['thanks', 'general', []],
   ['show positions and then attack a base', 'decibel_account', ['decibel_get_account']],
+  ['show my Avantis account', 'avantis_account', ['avantis_get_account']],
+  ['open BTC long on Avantis with 5 dollars collateral and 2x', 'avantis_place_order', ['avantis_place_order']],
+  ['show my positions', 'avantis_account', ['avantis_get_account'], { dex: 'avantis' }],
+  ['open long BTC with 10 USDC at 5x', 'avantis_place_order', ['avantis_place_order'], { dex: 'avantis' }],
+  ['open any safe trade with 10% balance', 'avantis_place_order', ['avantis_place_order'], { dex: 'avantis' }],
+  ['close my BTC position', 'avantis_close_position', ['avantis_get_positions', 'avantis_close_position'], { dex: 'avantis' }],
+  ['cancel my BTC order', 'avantis_cancel_order', ['avantis_get_positions', 'avantis_cancel_order'], { dex: 'avantis' }],
+  ['set tp 90000 sl 78000 BTC', 'avantis_tpsl', ['avantis_get_positions', 'avantis_set_tpsl'], { dex: 'avantis' }],
 ];
 
 function includesExpectedTools(actual = [], expected = []) {
@@ -63,8 +77,8 @@ function includesExpectedTools(actual = [], expected = []) {
 
 const rows = [];
 const failures = [];
-for (const [message, expectedKind, expectedTools] of cases) {
-  const intent = classifyGameIntent(message);
+for (const [message, expectedKind, expectedTools, player] of cases) {
+  const intent = classifyGameIntent(message, player || {});
   const actualTools = Array.isArray(intent.expected_tools) ? intent.expected_tools : [];
   const ok = intent.kind === expectedKind && includesExpectedTools(actualTools, expectedTools);
   const row = {

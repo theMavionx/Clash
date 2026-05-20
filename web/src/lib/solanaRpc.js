@@ -10,6 +10,7 @@ const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_S
 const preferProxyRpc = allowProxyFallback
   && /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || ''));
 const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
+const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
 const defaultDirectBrowserRpc = ['https://solana-rpc', 'publicnode.com'].join('.');
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
@@ -83,7 +84,7 @@ const PROXY_SOLANA_RPC_URLS = [
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
-    SAME_ORIGIN_SOLANA_LEORPC_URL,
+    ...(includeLeoRpcProxy ? [SAME_ORIGIN_SOLANA_LEORPC_URL] : []),
   ] : []),
 ];
 

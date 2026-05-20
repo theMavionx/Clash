@@ -1045,7 +1045,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={styles.slide}
                   aria-hidden={activeShopTab !== 'resources'}
-                  inert={activeShopTab !== 'resources'}
+                  inert={activeShopTab !== 'resources' ? 'true' : undefined}
                 >
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
@@ -1079,7 +1079,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={styles.slide}
                   aria-hidden={activeShopTab !== 'nft'}
-                  inert={activeShopTab !== 'nft'}
+                  inert={activeShopTab !== 'nft' ? 'true' : undefined}
                 >
                   <div style={styles.topRow}>
                     <div style={styles.heroFrame}>
@@ -1196,7 +1196,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={{ ...styles.slide, position: 'relative' }}
                   aria-hidden={activeShopTab !== 'marketplace'}
-                  inert={activeShopTab !== 'marketplace'}
+                  inert={activeShopTab !== 'marketplace' ? 'true' : undefined}
                 >
                   <div style={styles.topRow}>
                     <div style={styles.heroFrame}>

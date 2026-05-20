@@ -92,9 +92,9 @@ Use `execute_ai_attack_plan` for battles. It finds an enemy, validates the compl
 
 The MCP server allows one AI battle per player per minute. If the tool returns a cooldown error, wait for the cooldown instead of retrying repeatedly.
 The MCP server requires at least 3 total loaded troops before a battle. `execute_ai_attack_plan` will try to restore template casualties and load the default attack loadout (`Mage`, `Mage`, `Knight`) first, then either launches or returns the exact blocker.
-For a named enemy request such as "attack egor4042007", pass `target_player_name` to `execute_ai_attack_plan`. The MCP server resolves the player by name, checks shields and attackability, then either starts the battle or returns a blocker. If the target is shielded, report the returned shield remaining hours to the player.
+For a named enemy request such as "attack egor4042007", pass `target_player_name` to `execute_ai_attack_plan`. The MCP server resolves the player by name, checks shields and attackability, then either starts the battle or returns a blocker. If the target is shielded, naturally say the target is under shield and include the returned shield remaining hours.
 Generic requests such as "attack a base", "attack a new base", "battle again", "find an enemy", or "attack random enemy" are not named attacks. Omit `target_player_name` for those. Never pass generic words such as `base`, `enemy`, `player`, `again`, `new`, `random`, or `another` as `target_player_name`.
-Blocked/error/need messages must be written in English exactly enough for the player to understand the blocker.
+Blocked/error/need messages should be natural player-facing replies in the same language when possible while preserving the exact blocker facts.
 Named/targeted attacks cost 2x the normal gold attack cost for the attacker's current Town Hall level. The tool returns both `normal_attack_cost_gold` and final `attack_cost_gold` when relevant.
 
 Default smart attack:
@@ -154,7 +154,28 @@ All Decibel write tools use Clash server-side signing and mandatory builder rout
 - `decibel_set_leverage({ symbol, leverage })`: configure cross-margin leverage for the market.
 - `decibel_set_tpsl({ symbol, take_profit?, stop_loss?, size? })`: attach or update TP/SL on an existing position.
 
+For write requests with a read step, the final write/action tool is mandatory: `decibel_get_positions` alone does not cancel orders, change leverage, or set TP/SL.
+
+For trade amounts, $/USD/USDC/dollars/бакс means `collateral_usd` by default; "notional 50" means `notional_usd`; "size 0.2" means `size_base`.
+
 Trading responses must be concise and factual: symbol, side, size/notional, leverage, close PnL in USD and percent when available, tx hash/order id, and any blocker. If `decibel_place_order` returns an error or `verified: false`, say the order was not opened and include the useful blocker. Never show raw Decibel chain units to the player; translate minimum-size blockers to approximate USDC collateral/notional. If the user says "show my positions" or "what trades are open", fetch data immediately. If the user says "open a trade" without symbol, side, or amount, ask one short clarification unless they explicitly say to choose for them; delegated trade defaults are a conservative market order, 2x leverage, normal slippage, and an affordable symbol/size. Treat "all my money", "all my balance", "max", "everything", and equivalent Ukrainian/Russian phrases as `collateral_pct: 100` when symbol and side are clear.
+
+## Avantis Trading Tools
+
+Avantis trading is available only when `get_base_state` shows `player.dex: "avantis"`.
+
+Avantis MCP read tools inspect the user's registered self-custody EVM wallet. Avantis MCP write tools prepare `browser_action` payloads only; the browser submits after local policy checks either through the user's wallet or through the Avantis Smart Wallet delegate enabled by the user. Funds remain in the user's EOA; the Smart Wallet/delegate needs Base ETH for gas. No Avantis private key is stored on the VPS.
+
+- `avantis_get_account({ include_orders? })`
+- `avantis_get_markets({ symbols?, limit? })`
+- `avantis_market_scan({ symbols?, limit?, chart_limit?, lookback_hours? })`
+- `avantis_get_positions({ include_orders? })`
+- `avantis_place_order({ symbol?, side?, order_type?, price?, collateral_usd?, collateral_pct?, notional_usd?, leverage?, use_max_leverage?, slippage_pct?, take_profit?, stop_loss?, auto_select? })`
+- `avantis_close_position({ symbol?, pair_index?, trade_index?, amount?, collateral_usd?, percent? })`
+- `avantis_cancel_order({ symbol?, pair_index?, trade_index? })`
+- `avantis_set_tpsl({ symbol?, pair_index?, trade_index?, take_profit?, stop_loss? })`
+
+Never claim an Avantis write executed from MCP alone. The MCP result means the browser action is prepared/opening; the frontend reports the transaction hash after browser submission. Browser policy blocks AI-prepared orders above `$100` collateral, `50x` leverage, `$1000` notional, or `5%` slippage unless the operator overrides caps for testing. For delegated-choice orders such as "open some trade", "якусь угоду", or "на твій розсуд", use `avantis_market_scan` and choose a ranked crypto/token candidate instead of asking for symbol/side; do not choose FX/equity/commodity markets unless explicitly named. For "maximum allowed leverage" Avantis orders, pass `use_max_leverage: true` unless market data returns a lower numeric cap; do not reuse old 20x blockers from chat history.
 
 ## Common User Requests
 

@@ -89,12 +89,10 @@ const tabBase = {
   justifyContent: 'center',
   transition: 'all 0.15s cubic-bezier(0.18, 0.89, 0.32, 1.28)',
   outline: 'none',
-  border: 'none',
-  borderBottom: 'none',
+  borderStyle: 'solid',
+  borderWidth: '4px 4px 0',
+  borderColor: 'transparent',
   borderRadius: '16px 16px 0 0',
-  borderLeft: '4px solid transparent',
-  borderRight: '4px solid transparent',
-  borderTop: '4px solid transparent',
 };
 
 const TAB_STYLE_ACTIVE = {

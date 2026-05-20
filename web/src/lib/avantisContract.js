@@ -15,6 +15,29 @@ import { parseUnits, stringToHex } from 'viem';
 export const BASE_CHAIN_ID = 8453;
 export const BASE_CHAIN_ID_HEX = '0x2105';
 
+function splitRpcUrls(value) {
+  return String(value || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+export const BASE_RPC_URLS = (() => {
+  const env = typeof import.meta !== 'undefined' ? import.meta.env || {} : {};
+  const override = splitRpcUrls(env.VITE_BASE_RPC_URLS || env.VITE_BASE_RPC_URL);
+  if (override.length) return override;
+  return [
+    'https://base-rpc.publicnode.com',
+    'https://base.public.blockpi.network/v1/rpc/public',
+    'https://base.drpc.org',
+    'https://rpcfree.com/base-rpc',
+    'https://1rpc.io/base',
+    'https://mainnet.base.org',
+  ];
+})();
+
+export const BASE_PRIMARY_RPC_URL = BASE_RPC_URLS[0] || 'https://mainnet.base.org';
+
 // ───── Contract addresses (Base mainnet) ───────────────────────────
 export const TRADING_ADDRESS         = '0x44914408af82bC9983bbb330e3578E1105e11d4e';
 // USDC approvals go here — NOT the Trading contract. This was a day-one
@@ -92,6 +115,21 @@ export const REFERRAL_ABI = [
 ];
 
 export const TRADING_ABI = [
+  { name: 'delegatedAction', type: 'function', stateMutability: 'payable',
+    inputs: [
+      { name: 'trader', type: 'address' },
+      { name: 'call_data', type: 'bytes' },
+    ],
+    outputs: [{ type: 'bytes' }] },
+  { name: 'delegations', type: 'function', stateMutability: 'view',
+    inputs: [{ name: 'trader', type: 'address' }],
+    outputs: [{ type: 'address' }] },
+  { name: 'setDelegate', type: 'function', stateMutability: 'nonpayable',
+    inputs: [{ name: 'delegate', type: 'address' }],
+    outputs: [] },
+  { name: 'removeDelegate', type: 'function', stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: [] },
   { name: 'openTrade', type: 'function', stateMutability: 'payable',
     inputs: [
       TRADE_INPUT_TUPLE,
@@ -213,38 +251,29 @@ export async function fetchPriceUpdateData(pairIndex) {
 // the current best estimate (baseFee + a default priority). viem's
 // `estimateFeesPerGas` gives richer data (maxFeePerGas). We prefer that
 // when available and fall back to getGasPrice.
-const FEE_FALLBACK_WEI = 350000000000000n;     // 0.00035 ETH — SDK default floor
+const FEE_FALLBACK_WEI = 350000000000000n;     // 0.00035 ETH - SDK outage fallback
 const FEE_MAX_WEI      = 5000000000000000n;    // 0.005 ETH  — hostile-RPC safety cap
 const L2_GAS_ESTIMATE  = 935000n;              // 850k × 1.1, matches avantis_trader_sdk
 const L1_CALLDATA_WEI  = 5000000000n;          // ≈ SDK's estimatedL1GasEth constant
-const SAFETY_BUFFER_NUM = 2n;
-const SAFETY_BUFFER_DEN = 1n;
-
+// Do not floor successful estimates to FEE_FALLBACK_WEI; the SDK only uses it
+// when gas estimation fails.
 export async function fetchExecutionFeeWei(publicClient) {
   if (!publicClient) return FEE_FALLBACK_WEI;
   try {
-    // Prefer EIP-1559 maxFeePerGas — on Base the keeper pays baseFee + priority.
-    // Fall back to legacy gasPrice on clients that don't expose estimateFeesPerGas.
+    // Match Avantis SDK's eth_gasPrice path before using EIP-1559 estimates.
     let gasPrice;
-    if (typeof publicClient.estimateFeesPerGas === 'function') {
-      try {
-        const fees = await publicClient.estimateFeesPerGas({ chain: undefined });
-        gasPrice = fees?.maxFeePerGas || fees?.gasPrice;
-      } catch { /* fall through to getGasPrice */ }
-    }
-    if (!gasPrice && typeof publicClient.getGasPrice === 'function') {
+    if (typeof publicClient.getGasPrice === 'function') {
       gasPrice = await publicClient.getGasPrice();
+    }
+    if (!gasPrice && typeof publicClient.estimateFeesPerGas === 'function') {
+      const fees = await publicClient.estimateFeesPerGas({ chain: undefined });
+      gasPrice = fees?.gasPrice || fees?.maxFeePerGas;
     }
     if (!gasPrice) return FEE_FALLBACK_WEI;
 
     const l2Cost = gasPrice * L2_GAS_ESTIMATE;
-    const raw = l2Cost + L1_CALLDATA_WEI;
-    const withBuffer = (raw * SAFETY_BUFFER_NUM) / SAFETY_BUFFER_DEN;
-
-    // FLOOR: never pay less than the SDK default. CEILING: never more
-    // than FEE_MAX_WEI (blocks a hostile RPC).
-    let fee = withBuffer;
-    if (fee < FEE_FALLBACK_WEI) fee = FEE_FALLBACK_WEI;
+    let fee = l2Cost + L1_CALLDATA_WEI;
+    if (fee <= 0n) return FEE_FALLBACK_WEI;
     if (fee > FEE_MAX_WEI) fee = FEE_MAX_WEI;
     return fee;
   } catch {
@@ -295,6 +324,21 @@ export async function fetchReferralCode(publicClient, trader) {
       args: [trader],
     });
     return code || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAvantisDelegate(publicClient, trader) {
+  if (!publicClient || !trader) return null;
+  try {
+    const delegate = await publicClient.readContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'delegations',
+      args: [trader],
+    });
+    return delegate || null;
   } catch {
     return null;
   }
@@ -387,7 +431,7 @@ export async function ensureBaseChain(provider) {
           chainId: BASE_CHAIN_ID_HEX,
           chainName: 'Base',
           nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-          rpcUrls: ['https://mainnet.base.org'],
+          rpcUrls: BASE_RPC_URLS,
           blockExplorerUrls: ['https://basescan.org'],
         }],
       });

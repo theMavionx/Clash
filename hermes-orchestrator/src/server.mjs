@@ -9,9 +9,11 @@ import clashSettings from './clash_agent_settings.cjs';
 
 const {
   CLASH_PROMPT_VERSION,
-  TOOL_INCLUDE,
-  CLASH_AGENT_PLAYBOOK,
   DECIBEL_TRADING_SKILL,
+  AVANTIS_TRADING_SKILL,
+  toolIncludeForDex,
+  playbookForDex,
+  composeRuntimeInstructions,
   buildRuntimeInstructions,
 } = clashPrompt;
 
@@ -72,6 +74,7 @@ const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_
 const START_PORT = Number(process.env.CLASH_HERMES_PLAYER_PORT_START || 8700);
 const state = { players: {}, nextPort: START_PORT };
 const processes = new Map();
+const playerLifecycleLocks = new Map();
 let saveStateChain = Promise.resolve();
 
 function nowIso() {
@@ -82,10 +85,11 @@ function publicPlayerState(playerId) {
   const row = state.players[playerId];
   if (!row) return null;
   const proc = processes.get(playerId);
-  const running = !!proc && !proc.killed;
+  const running = !!proc && !proc.killed && proc.exitCode == null;
   return {
     player_id: playerId,
     name: row.name || null,
+    dex: row.dex || null,
     port: row.port,
     model: row.model || PRIMARY_MODEL,
     fallback_model: FALLBACK_MODEL || null,
@@ -116,6 +120,21 @@ function safePlayerId(playerId) {
     return `p_${digest}`;
   }
   return id;
+}
+
+function withPlayerLifecycleLock(playerId, fn) {
+  const safeId = safePlayerId(playerId);
+  const previous = playerLifecycleLocks.get(safeId) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(() => fn());
+  const entry = current.finally(() => {
+    if (playerLifecycleLocks.get(safeId) === entry) {
+      playerLifecycleLocks.delete(safeId);
+    }
+  }).catch(() => {});
+  playerLifecycleLocks.set(safeId, entry);
+  return current;
 }
 
 function clampText(value, max) {
@@ -192,7 +211,7 @@ const GLOBAL_GAME_MEMORY = [
   '',
   'Common action mapping:',
   '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
-  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, report the shield remaining hours from the tool result in English.',
+  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, naturally say the target is under shield and include the shield remaining hours from the tool result.',
   '- Generic requests like "attack a base", "attack new base", "battle again", or "find an enemy" are NOT named attacks. Omit target_player_name and use normal matchmaking.',
   '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
   '- "build my base", "set up base", or "arrange everything" means use auto_build_base with balanced focus. Do not ask the player for grids or a building list.',
@@ -205,7 +224,7 @@ const GLOBAL_GAME_MEMORY = [
   '- Rally marker is optional. Use it only if it helps focus troops on a nearby useful objective.',
   '- Named/targeted attacks cost 2x the normal gold attack cost for the attacker Town Hall level.',
   '- Never pass generic words such as base, enemy, player, again, new, random, or another as target_player_name.',
-  '- Always write Blocked/Error/Need messages in English, even when the user speaks another language.',
+  '- For blockers/errors, answer naturally in the player language when possible and keep the exact blocker facts.',
   '- Respect the one MCP battle per minute cooldown. Do not spam retries during cooldown.',
   '',
   'Construction rules:',
@@ -221,6 +240,11 @@ const GLOBAL_GAME_MEMORY = [
   '- Read-only trading requests should call Decibel read tools immediately.',
   '- Write trading requests need clear symbol, side, and size/notional/collateral.',
   '',
+  'Avantis trading rules:',
+  '- Avantis trading is part of the Clash agent only for players whose account DEX is avantis.',
+  '- Use Clash MCP Avantis tools. Self-custody reads use the player wallet; MCP writes only prepare browser_action payloads for the browser wallet to sign.',
+  '- Do not claim an Avantis write is done from MCP alone. Say prepared / wallet confirmation opened; the frontend reports the actual tx after the browser signs.',
+  '',
 ].join('\n');
 
 function initialPlayerMemory(row) {
@@ -229,9 +253,10 @@ function initialPlayerMemory(row) {
     '',
     `Player: ${row.name || row.safe_id}`,
     `Player id: ${row.safe_id}`,
+    `Current DEX: ${row.dex || 'unknown'}`,
     '',
     'Preferences:',
-    '- Use concise player-facing replies in the same language as the user, but keep Blocked/Error/Need messages in English.',
+    '- Use concise player-facing replies in the same language as the user, including blockers/errors when possible.',
     '- Prefer useful autonomous decisions when the request is clear.',
     '- Keep battle, build, upgrade, and resource actions grounded in fresh MCP tool state.',
     '',
@@ -239,7 +264,7 @@ function initialPlayerMemory(row) {
 }
 
 function writePlayerConfig(playerId, row) {
-  const include = TOOL_INCLUDE.map((tool) => `        - ${tool}`).join('\n');
+  const include = toolIncludeForDex(row?.dex).map((tool) => `        - ${tool}`).join('\n');
   const providerOrderLines = PROVIDER_ORDER.length
     ? [
         '  order:',
@@ -357,13 +382,25 @@ async function writePlayerFiles(playerId, row) {
   }
   await fsp.writeFile(path.join(home, 'config.yaml'), writePlayerConfig(playerId, row), { mode: 0o600 });
   await fsp.writeFile(path.join(home, '.env'), writePlayerEnv(row), { mode: 0o600 });
-  const combinedPlaybook = `${CLASH_AGENT_PLAYBOOK}\n\n${DECIBEL_TRADING_SKILL}`;
+  const combinedPlaybook = composeRuntimeInstructions(row.dex);
   await fsp.writeFile(path.join(home, 'SOUL.md'), combinedPlaybook, { mode: 0o600 });
   await fsp.writeFile(path.join(home, 'HERMES.md'), combinedPlaybook, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'skills', 'clash-of-perps-ai-agent'), { recursive: true });
-  await fsp.writeFile(path.join(home, 'skills', 'clash-of-perps-ai-agent', 'SKILL.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
-  await fsp.mkdir(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true });
-  await fsp.writeFile(path.join(home, 'skills', 'clash-decibel-trading', 'SKILL.md'), DECIBEL_TRADING_SKILL, { mode: 0o600 });
+  await fsp.writeFile(path.join(home, 'skills', 'clash-of-perps-ai-agent', 'SKILL.md'), playbookForDex(row.dex), { mode: 0o600 });
+  await fsp.rm(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true, force: true });
+  await fsp.rm(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true, force: true });
+  if (row.dex === 'avantis') {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-avantis-trading', 'SKILL.md'), AVANTIS_TRADING_SKILL, { mode: 0o600 });
+  } else if (row.dex === 'decibel') {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-decibel-trading', 'SKILL.md'), DECIBEL_TRADING_SKILL, { mode: 0o600 });
+  } else {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-decibel-trading', 'SKILL.md'), DECIBEL_TRADING_SKILL, { mode: 0o600 });
+    await fsp.mkdir(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-avantis-trading', 'SKILL.md'), AVANTIS_TRADING_SKILL, { mode: 0o600 });
+  }
   await fsp.writeFile(versionFile, CLASH_PROMPT_VERSION, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'sessions'), { recursive: true });
   await fsp.mkdir(path.join(home, 'memory'), { recursive: true });
@@ -396,10 +433,12 @@ async function provisionPlayer(playerId, body) {
   const mcpKey = clampText(body?.mcp_key, 512);
   if (!mcpKey.startsWith('cop_ai_')) throw new Error('valid mcp_key is required');
   const existing = state.players[safeId] || {};
+  const requestedDex = String(body?.dex || body?.player?.dex || existing.dex || '').trim().toLowerCase();
   const row = {
     ...existing,
     safe_id: safeId,
     name: clampText(body?.name || existing.name || safeId, 80),
+    dex: requestedDex || null,
     mcp_key: mcpKey,
     api_key: existing.api_key || randomToken('hapi'),
     port: existing.port || await allocatePort(),
@@ -777,6 +816,20 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking Decibel positions before updating TP/SL';
     case 'decibel_leverage':
       return 'Checking Decibel market settings before leverage update';
+    case 'avantis_account':
+      return 'Reading your Avantis browser wallet';
+    case 'avantis_markets':
+      return 'Reading Avantis markets and prices';
+    case 'avantis_place_order':
+      return 'Preparing an Avantis browser-wallet order';
+    case 'avantis_close_position':
+      return 'Preparing an Avantis browser-wallet close';
+    case 'avantis_cancel_order':
+      return 'Preparing an Avantis browser-wallet cancel';
+    case 'avantis_tpsl':
+      return 'Preparing an Avantis browser-wallet TP/SL update';
+    case 'avantis_leverage':
+      return 'Checking Avantis positions and leverage rules';
     case 'gameplay':
       return 'Reading the game state and choosing the right game action';
     default:
@@ -887,7 +940,8 @@ async function callHermesResponses(row, payload, timeoutMs = HERMES_CHAT_TIMEOUT
 
 async function chatWithPlayer(playerId, body) {
   const safeId = safePlayerId(playerId);
-  if (!state.players[safeId]) throw new Error('player is not provisioned');
+  const row = state.players[safeId];
+  if (!row) throw new Error('player is not provisioned');
   const input = clampText(body?.input || body?.message, MAX_INPUT_CHARS).trim();
   if (!input) throw new Error('message required');
   const traceId = body?.metadata?.trace_id || body?.trace_id || body?.idempotency_key || crypto.randomUUID();
@@ -902,7 +956,7 @@ async function chatWithPlayer(playerId, body) {
     input_preview: previewForLog(input, 700),
   });
   timing.mark('instructions_build_start', { message: 'Building runtime instructions and loading memory' });
-  const baseInstructions = buildRuntimeInstructions(requestInstructions);
+  const baseInstructions = buildRuntimeInstructions(requestInstructions, row.dex);
   const memoryInstructions = await buildMemoryInstructions(safeId);
   const actionInstructions = isActionIntent(intent)
     ? [
@@ -914,9 +968,11 @@ async function chatWithPlayer(playerId, body) {
           ? `Expected tools: ${intent.expected_tools.join(' -> ')}.`
           : '',
         'You must use Clash MCP tools before the final answer unless a fresh tool result already proves the action is impossible.',
-        'For Decibel open/close trading requests with clear fields, use the single expected Decibel tool directly. Do not run separate account, market, or leverage preflight tools unless a required field is missing.',
+        'When Expected tools contains multiple tools, the last write/action tool is mandatory before any success answer. Do not stop after a read/status tool such as get_base_state, decibel_get_positions, or avantis_get_positions.',
+        'For Decibel or Avantis open/close trading requests with clear fields, use the expected trading tool directly. Do not run separate account, market, or leverage preflight tools unless a required field is missing.',
+        'For Avantis write tools, a successful MCP call means the browser_action was prepared, not that the on-chain transaction was submitted. Say the wallet confirmation is being opened; never say opened/closed/cancelled/updated until a browser tx result exists.',
         'After the required tool returns a clear success or blocker, stop using tools and answer immediately in 1-3 short player-facing sentences.',
-        'If the action is blocked or fails, write the Blocked/Error/Need message in English.',
+        'If the action is blocked or fails, answer naturally in the player language when possible and include the exact blocker.',
         'Never repeat an old quota, network, timeout, or runtime error from memory or chat context unless the current request produced that same fresh blocker.',
         'Do not do extra catalog/state checks after auto_build_base, collect_resources, or execute_ai_attack_plan returns.',
         'Do not respond with a generic capability list for this request.',
@@ -995,7 +1051,7 @@ async function chatWithPlayer(playerId, body) {
         total_models: requestModelChain.length,
         intent: intent.kind,
       });
-      activeRow = await ensureModelRunning(safeId, model);
+      activeRow = await withPlayerLifecycleLock(safeId, () => ensureModelRunning(safeId, model));
       ensureMs = Date.now() - ensureStartedAt;
       timing.mark('model_start_done', {
         message: 'Hermes model route is running',
@@ -1259,9 +1315,13 @@ async function resetPlayer(playerId, options = {}) {
   const safeId = safePlayerId(playerId);
   const row = state.players[safeId];
   if (!row) return { ok: true, existed: false };
-  stopPlayer(safeId);
+  await stopPlayerAndWait(safeId);
   if (options.delete_memory) {
     await fsp.rm(path.join(playerHome(safeId), 'memory'), { recursive: true, force: true });
+  } else if (options.delete_recent_memory) {
+    const recentMemoryPath = path.join(playerHome(safeId), 'memory', 'recent.md');
+    await fsp.mkdir(path.dirname(recentMemoryPath), { recursive: true });
+    await fsp.writeFile(recentMemoryPath, '# Recent Player Conversation\n\n', { mode: 0o600 });
   }
   await fsp.rm(path.join(playerHome(safeId), 'sessions'), { recursive: true, force: true });
   await fsp.mkdir(path.join(playerHome(safeId), 'sessions'), { recursive: true });
@@ -1315,7 +1375,7 @@ app.get('/players/:playerId/status', auth, (req, res) => {
 app.post('/players/:playerId/provision', auth, async (req, res) => {
   try {
     const safeId = safePlayerId(req.params.playerId);
-    const player = await provisionPlayer(safeId, req.body || {});
+    const player = await withPlayerLifecycleLock(safeId, () => provisionPlayer(safeId, req.body || {}));
     res.json({ ok: true, player });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
@@ -1342,16 +1402,21 @@ app.post('/players/:playerId/chat', auth, async (req, res) => {
 app.post('/players/:playerId/reset', auth, async (req, res) => {
   try {
     const safeId = safePlayerId(req.params.playerId);
-    const result = await resetPlayer(safeId, req.body || {});
+    const result = await withPlayerLifecycleLock(safeId, () => resetPlayer(safeId, req.body || {}));
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-app.post('/players/:playerId/stop', auth, (req, res) => {
-  const safeId = safePlayerId(req.params.playerId);
-  res.json({ ok: true, stopped: stopPlayer(safeId) });
+app.post('/players/:playerId/stop', auth, async (req, res) => {
+  try {
+    const safeId = safePlayerId(req.params.playerId);
+    const stopped = await withPlayerLifecycleLock(safeId, () => stopPlayer(safeId));
+    res.json({ ok: true, stopped });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 setInterval(() => {

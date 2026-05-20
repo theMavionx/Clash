@@ -389,15 +389,15 @@ const hlGateStyles = {
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    borderColor: '#1f6d34', color: '#fff',
+    border: '2px solid #1f6d34', color: '#fff',
   },
   stepBubble_error: {
-    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
   },
   stepText: {
     display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25,

@@ -4294,20 +4294,31 @@ router.delete('/players/ai-keys/:id', auth, (req, res) => {
 router.get('/ai-chat/status', auth, async (req, res) => {
   const startedAt = Date.now();
   const traceId = String(req.headers['x-request-id'] || crypto.randomUUID()).slice(0, 80);
+  const provisionParam = String(req.query?.provision || req.query?.start || '').trim().toLowerCase();
+  const shouldProvision = ['1', 'true', 'yes', 'start'].includes(provisionParam);
+  res.set('Cache-Control', 'no-store');
   try {
     const agent = db.getOrCreateHermesAgent(req.player.id);
-    if (agent.error) return res.status(400).json(agent);
     const quota = getAiMessageQuotaStatus(req.player.id);
+    if (agent.error) {
+      return res.json({ ok: false, error: agent.error, agent: null, quota, http_status: 400 });
+    }
     if (!hermesClient.configured()) {
       const state = db.markHermesAgentState(req.player.id, {
         status: 'unconfigured',
         error: 'Hermes orchestrator is not configured',
       });
-      return res.status(503).json({ ok: false, error: 'Hermes orchestrator is not configured', agent: state, quota });
+      return res.json({
+        ok: false,
+        error: 'Hermes orchestrator is not configured',
+        agent: state,
+        quota,
+        http_status: 503,
+      });
     }
     let status = await hermesClient.getStatus(req.player.id);
     const wasRunning = !!status?.player?.running;
-    if (!status?.player?.running) {
+    if (!status?.player?.running && shouldProvision) {
       logAiChatServer('status_provision_start', {
         trace_id: traceId,
         player_id: req.player.id,
@@ -4318,12 +4329,13 @@ router.get('/ai-chat/status', auth, async (req, res) => {
     const state = db.markHermesAgentState(req.player.id, {
       status: status?.player?.running ? 'running' : 'ready',
       orchestrator: status?.player || status,
-      provisioned: true,
+      provisioned: !!status?.player,
     });
     logAiChatServer('status_ok', {
       trace_id: traceId,
       player_id: req.player.id,
       duration_ms: Date.now() - startedAt,
+      provision_requested: shouldProvision,
       was_running: wasRunning,
       running: !!status?.player?.running,
       port: status?.player?.port || null,
@@ -4340,7 +4352,13 @@ router.get('/ai-chat/status', auth, async (req, res) => {
       status_code: err.status || 500,
       error: aiChatPreview(err.message, 700),
     });
-    res.status(err.status || 500).json({ ok: false, error: err.message, agent: state, quota: getAiMessageQuotaStatus(req.player.id) });
+    res.json({
+      ok: false,
+      error: err.message,
+      agent: state,
+      quota: getAiMessageQuotaStatus(req.player.id),
+      http_status: err.status || 500,
+    });
   }
 });
 
@@ -4359,6 +4377,53 @@ function normalizeAiChatHistory(history) {
     })
     .filter(Boolean)
     .slice(-4);
+}
+
+function normalizeAiTradeSettings(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (String(value.dex || '').toLowerCase() !== 'avantis') return null;
+  const mode = value.collateral_limit_mode === 'usdc' ? 'usdc' : 'percent';
+  const num = (key, min, max, fallback) => {
+    const n = Number(value[key]);
+    const safe = Number.isFinite(n) ? n : fallback;
+    return Math.max(min, Math.min(max, safe));
+  };
+  return {
+    dex: 'avantis',
+    collateral_limit_mode: mode,
+    max_balance_pct: Number(num('max_balance_pct', 1, 100, 100).toFixed(2)),
+    max_collateral_usd: Number(num('max_collateral_usd', 1, 1000, 100).toFixed(2)),
+    effective_max_collateral_usd: Number(num('effective_max_collateral_usd', 0.01, 1000, 100).toFixed(6)),
+    max_leverage: Number(num('max_leverage', 1, 1000, 50).toFixed(2)),
+    effective_max_leverage: Number(num('effective_max_leverage', 1, 1000, 50).toFixed(2)),
+    effective_max_notional_usd: Number(num('effective_max_notional_usd', 1, 100000, 1000).toFixed(6)),
+    max_slippage_pct: Number(num('max_slippage_pct', 0.1, 50, 5).toFixed(2)),
+    wallet_usdc: Number.isFinite(Number(value.wallet_usdc)) ? Number(Number(value.wallet_usdc).toFixed(6)) : null,
+  };
+}
+
+function buildAiTradeSettingsContext(settings) {
+  if (!settings || settings.dex !== 'avantis') return '';
+  const collateralRule = settings.collateral_limit_mode === 'percent'
+    ? `Use at most ${settings.max_balance_pct}% of the browser wallet USDC balance as collateral. Effective current cap: $${settings.effective_max_collateral_usd}.`
+    : `Use at most $${settings.max_collateral_usd} USDC collateral per AI trade. Effective current cap: $${settings.effective_max_collateral_usd}.`;
+  return [
+    '## Browser Avantis AI Trade Settings',
+    'The player configured these limits in the browser before allowing Smart Wallet / agent trading. Treat them as hard caps for Avantis MCP tool arguments.',
+    collateralRule,
+    `Max leverage: ${settings.effective_max_leverage}x. If the player asks for max leverage, use no more than this and no more than the market cap.`,
+    `Max notional from current settings: $${settings.effective_max_notional_usd}.`,
+    `Max slippage: ${settings.max_slippage_pct}%.`,
+    settings.wallet_usdc != null ? `Browser wallet USDC balance seen by the client: $${settings.wallet_usdc}.` : '',
+    'If the player writes a percentage of balance such as 50% of balance / 50% від балансу, pass that exact number as collateral_pct. Do not convert it to a stale dollar amount.',
+    'If the player writes a numeric leverage such as 50x / 50 плечем / з 50 плечем, pass that exact number as leverage if it is within these caps. Do not replace it with a lower conservative default.',
+    'If a minimum-notional blocker happened only because you used lower leverage than the player requested, retry with the requested leverage before answering.',
+    'If the player explicitly asks for all balance/max funds on Avantis, pass collateral_pct no higher than the configured percent cap, or collateral_usd no higher than the configured USDC cap.',
+  ].filter(Boolean).join('\n');
+}
+
+function combineAiInternalContext(...parts) {
+  return parts.map((part) => String(part || '').trim()).filter(Boolean).join('\n\n');
 }
 
 function maskAiLogText(value) {
@@ -4395,6 +4460,62 @@ function parseAiChatStoredJson(value) {
   }
 }
 
+function collectAiChatBrowserActions(playerId, mcpEventStartId) {
+  const rows = db.db.prepare(`
+    SELECT id, tool, output_json
+    FROM mcp_events
+    WHERE id > ?
+      AND player_id = ?
+      AND tool IN ('avantis_place_order', 'avantis_close_position', 'avantis_cancel_order', 'avantis_set_tpsl')
+      AND status = 'ok'
+    ORDER BY id ASC
+  `).all(mcpEventStartId, playerId);
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const payload = parseAiChatStoredJson(row.output_json) || {};
+    const candidates = [
+      payload.browser_action,
+      ...(Array.isArray(payload.browser_actions) ? payload.browser_actions : []),
+    ].filter(Boolean);
+    for (const action of candidates) {
+      if (!action || action.dex !== 'avantis' || !action.id) continue;
+      if (seen.has(action.id)) continue;
+      seen.add(action.id);
+      out.push({
+        ...action,
+        mcp_event_id: row.id,
+        mcp_tool: row.tool,
+      });
+    }
+  }
+  return out;
+}
+
+function browserActionSafeMessage(responseText, intent, browserActions = []) {
+  if (!browserActions.length) return responseText;
+  if (!hermesClient.responseClaimsActionSucceeded(responseText, intent)) return responseText;
+  const summary = browserActions[0]?.summary || 'Avantis action';
+  const suffix = browserActions.length > 1 ? ` and ${browserActions.length - 1} more action(s)` : '';
+  return `${summary}${suffix} prepared. Confirm it in your browser wallet to submit on-chain.`;
+}
+
+function isAvantisWrongDexToolBoundary(responseText, intent) {
+  if (!String(intent?.kind || '').startsWith('avantis_')) return false;
+  const text = String(responseText || '');
+  return /only provides Decibel trading tools|only has Decibel tools|Avantis order placement (?:isn'?t|is not) supported|switch to a Decibel/i.test(text);
+}
+
+function buildAvantisWrongDexRetryContext(responseText) {
+  return [
+    'The previous answer was wrong: this authenticated account is an Avantis account and Avantis MCP tools are available.',
+    'Do not say the server only provides Decibel tools.',
+    'For this request, use only Avantis tools. Call avantis_place_order when symbol, side, collateral, and leverage are clear.',
+    'The correct result of an Avantis write tool is a browser_action prepared for browser-wallet signature, not an already-open on-chain trade.',
+    `Previous wrong answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].join('\n');
+}
+
 function publicAiChatStoredEvent(row) {
   if (!row) return null;
   const output = parseAiChatStoredJson(row.output_json) || {};
@@ -4416,6 +4537,7 @@ function publicAiChatStoredEvent(row) {
     message,
     error: isOk ? null : (message || row.error || 'AI request failed'),
     quota: quota?.after || quota || null,
+    browser_actions: Array.isArray(output.browser_actions) ? output.browser_actions : [],
     created_at: row.created_at,
     duration_ms: row.duration_ms ?? null,
   };
@@ -4521,9 +4643,10 @@ function logHermesTimingEvents({ traceId, player, intent, events = [] }) {
 }
 
 function playerFacingAiError(err, intent) {
+  if (err?.playerMessage) return String(err.playerMessage);
   const text = String(err?.message || '');
   if (/quota|message limit/i.test(text)) return 'AI message limit reached. Need: open the AI shop or wait for the daily reset.';
-  if (/claimed success without calling required MCP tool/i.test(text)) {
+  if (/claimed success without calling required MCP tool|claimed success without completing terminal MCP tool/i.test(text)) {
     return 'The agent could not verify that the action actually happened. Need: try again.';
   }
   if (/Hermes orchestrator|fetch failed|ECONNREFUSED|ETIMEDOUT|AbortError|timeout|HTTP\s*5\d\d|OpenRouter|provider/i.test(text)) {
@@ -4538,6 +4661,386 @@ function playerFacingAiError(err, intent) {
   return 'The AI request failed. Need: try again.';
 }
 
+function observedTerminalToolsForIntent({ intent, playerId, mcpEventStartId, successfulOnly = false }) {
+  const terminalGroups = hermesClient.terminalToolGroupsForIntent(intent);
+  const terminalTools = [...new Set(terminalGroups.flat())];
+  if (!intent?.action_required || terminalGroups.length === 0 || terminalTools.length === 0) {
+    return { terminal_groups: terminalGroups, terminal_tools: terminalTools, rows: [], used_tools: [] };
+  }
+  const placeholders = terminalTools.map(() => '?').join(',');
+  const statusClause = successfulOnly
+    ? "AND status = 'ok' AND (error IS NULL OR error = '')"
+    : '';
+  const rows = db.db.prepare(`
+    SELECT id, tool, status, duration_ms, error
+    FROM mcp_events
+    WHERE id > ?
+      AND player_id = ?
+      AND tool IN (${placeholders})
+      ${statusClause}
+    ORDER BY id ASC
+  `).all(mcpEventStartId, playerId, ...terminalTools);
+  return {
+    terminal_groups: terminalGroups,
+    terminal_tools: terminalTools,
+    rows,
+    used_tools: rows.map((row) => row.tool),
+  };
+}
+
+function responseRequestsActionClarification(responseText) {
+  const text = String(responseText || '').trim();
+  if (!text) return false;
+  return /(?:which|what|please\s+(?:provide|specify|choose)|tell me|need\s+(?:the|a|an|your)?\s*(?:symbol|market|side|amount|collateral|size|target|player|order id|position)|missing\s+(?:symbol|market|side|amount|collateral|size|target))/i.test(text)
+    || /(?:уточни|вкажи|обери|який|яку|яке|скільки|потрібн[оа]\s+(?:символ|ринок|сторон|сум|розмір|collateral|ціль|кого)|укажи|выбери|какой|какую|сколько|нужн[оа]\s+(?:символ|рынок|сторон|сумм|размер|цель|кого))/iu.test(text);
+}
+
+function validateHermesActionAttempt({ intent, responseText, playerId, mcpEventStartId }) {
+  const observed = observedTerminalToolsForIntent({
+    intent,
+    playerId,
+    mcpEventStartId,
+    successfulOnly: false,
+  });
+  if (!intent?.action_required || observed.terminal_groups.length === 0) {
+    return { ok: true, ...observed };
+  }
+  if (observed.rows.length > 0) {
+    return { ok: true, ...observed };
+  }
+  if (responseRequestsActionClarification(responseText)) {
+    return { ok: true, clarification: true, ...observed };
+  }
+  return { ok: false, ...observed };
+}
+
+function validateHermesActionCompletion({ intent, responseText, playerId, mcpEventStartId }) {
+  const terminalGroups = hermesClient.terminalToolGroupsForIntent(intent);
+  const claimsSuccess = hermesClient.responseClaimsActionSucceeded(responseText, intent);
+  if (!intent?.action_required || !claimsSuccess || terminalGroups.length === 0) {
+    return { ok: true, claims_success: claimsSuccess, terminal_groups: terminalGroups, used_tools: [] };
+  }
+
+  const observed = observedTerminalToolsForIntent({
+    intent,
+    playerId,
+    mcpEventStartId,
+    successfulOnly: true,
+  });
+  const usedTools = observed.used_tools;
+  const ok = hermesClient.terminalToolGroupsSatisfied(usedTools, terminalGroups);
+  return {
+    ok,
+    claims_success: claimsSuccess,
+    terminal_groups: terminalGroups,
+    terminal_tools: observed.terminal_tools,
+    used_tools: usedTools,
+    events: observed.rows,
+  };
+}
+
+function terminalToolLabel(groups = []) {
+  return groups.map((group) => group.join(' or ')).join(' AND ');
+}
+
+function buildMissingTerminalToolError(completion, responseText) {
+  const expected = terminalToolLabel(completion.terminal_groups);
+  const err = new Error(`Agent response claimed success without completing terminal MCP tool (${expected}).`);
+  err.status = 502;
+  err.body = {
+    required_terminal_tools: completion.terminal_groups,
+    used_tools: completion.used_tools || [],
+    response_preview: aiChatPreview(responseText, 500),
+  };
+  return err;
+}
+
+function buildMissingTerminalToolAttemptError(attempt, responseText) {
+  const expected = terminalToolLabel(attempt.terminal_groups);
+  const err = new Error(`Agent response returned an action answer without calling required MCP tool (${expected}).`);
+  err.status = 502;
+  err.playerMessage = 'The agent did not call the required action tool. Need: try again in a new chat.';
+  err.body = {
+    required_terminal_tools: attempt.terminal_groups,
+    used_tools: attempt.used_tools || [],
+    response_preview: aiChatPreview(responseText, 500),
+  };
+  return err;
+}
+
+function buildTerminalToolAttemptRetryContext(attempt, responseText) {
+  return [
+    'The previous answer returned advice or a blocker, but no required terminal MCP tool was called.',
+    `Required terminal MCP tool for this action request: ${terminalToolLabel(attempt.terminal_groups)}.`,
+    'The player request is actionable. Do not answer from memory, old chat history, or model knowledge.',
+    'Call the required terminal action tool now. If the tool prepares a browser_action, answer that browser wallet confirmation is opening. If the tool blocks, report the exact tool blocker.',
+    'Do not repeat previous minimum-size, balance, network, or server-unreachable blockers unless the MCP tool returns them in this retry.',
+    `Previous answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].join('\n');
+}
+
+function buildTerminalToolRetryContext(completion, responseText) {
+  return [
+    'The previous answer claimed the action succeeded, but the required terminal MCP tool was not called.',
+    `Required terminal MCP tool before any success answer: ${terminalToolLabel(completion.terminal_groups)}.`,
+    `Tools successfully observed so far: ${(completion.used_tools || []).join(', ') || 'none'}.`,
+    'Continue the same player request now. Do not repeat only read/status tools. Call the required terminal action tool, then answer naturally from that tool result.',
+    'If the terminal tool blocks, answer with the exact blocker instead of claiming success.',
+    `Previous answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].join('\n');
+}
+
+function extractRequestedAiBalancePct(message) {
+  const raw = String(message || '').normalize('NFKC');
+  const explicitPct = raw.match(/(\d+(?:[.,]\d+)?)\s*%\s*(?:of|from|від|от)?\s*(?:(?:my|мого|моего|мій|мой|моїх|моих)\s+)?(?:balance|wallet|баланс|балансу|кошт|грош|средств)/iu);
+  if (explicitPct) {
+    const value = Number(String(explicitPct[1]).replace(',', '.'));
+    if (Number.isFinite(value) && value > 0) return Math.max(0.01, Math.min(100, value));
+  }
+  if (/\b(all|everything|full\s+balance|max(?:imum)?\s+(?:balance|funds|money))\b|на\s+(?:всі|усі)\s+гроші|на\s+весь\s+баланс|весь\s+баланс|усі\s+гроші|всі\s+гроші|все/iu.test(raw)) {
+    return 100;
+  }
+  return null;
+}
+
+function extractRequestedAiLeverage(message) {
+  const raw = String(message || '').normalize('NFKC');
+  const edge = '[^\\p{L}\\p{N}_]';
+  const num = '(\\d+(?:[.,]\\d+)?)';
+  const patterns = [
+    new RegExp(`(?:^|${edge})${num}\\s*(?:x|х)(?=$|${edge})`, 'iu'),
+    new RegExp(`(?:^|${edge})${num}\\s*(?:leverage|lev|плеч[\\p{L}\\p{M}]*|леверидж[\\p{L}\\p{M}]*)(?=$|${edge})`, 'iu'),
+    new RegExp(`(?:^|${edge})(?:leverage|lev|плеч[\\p{L}\\p{M}]*|леверидж[\\p{L}\\p{M}]*)\\s*(?:на|at|=|:)?\\s*${num}(?=$|${edge})`, 'iu'),
+  ];
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    const value = Number(String(match?.[1] || '').replace(',', '.'));
+    if (Number.isFinite(value) && value > 0) return Math.max(1, Math.min(1000, value));
+  }
+  return null;
+}
+
+function messageRequestsMaxLeverage(message) {
+  const raw = String(message || '').normalize('NFKC').toLocaleLowerCase();
+  return /\bmax(?:imum)?\s+(?:allowed\s+)?leverage\b|\bhighest\s+leverage\b/i.test(raw)
+    || /(?:макс(?:имальн[\p{L}\p{M}]*)?|найбільш[\p{L}\p{M}]*|сам(?:ое|ый|ая)[\p{L}\p{M}]*)[\s\S]{0,40}плеч/iu.test(raw)
+    || /плеч[\s\S]{0,40}(?:макс(?:имальн[\p{L}\p{M}]*)?|найбільш[\p{L}\p{M}]*|сам(?:ое|ый|ая)[\p{L}\p{M}]*)/iu.test(raw)
+    || /(?:до?зв|довз)олен[\p{L}\p{M}]*[\s\S]{0,24}плеч/iu.test(raw);
+}
+
+function latestRepairableAvantisMinNotional({ intent, playerId, mcpEventStartId, message, aiTradeSettings }) {
+  if (intent?.kind !== 'avantis_place_order') return null;
+  const rows = db.db.prepare(`
+    SELECT id, input_json, output_json, error
+    FROM mcp_events
+    WHERE id > ?
+      AND player_id = ?
+      AND tool = 'avantis_place_order'
+      AND status = 'error'
+    ORDER BY id DESC
+    LIMIT 8
+  `).all(mcpEventStartId, playerId);
+  const requestedLeverage = extractRequestedAiLeverage(message);
+  const requestedPct = extractRequestedAiBalancePct(message);
+  const wantsMaxLeverage = messageRequestsMaxLeverage(message);
+  const policyMaxLeverage = Number(aiTradeSettings?.effective_max_leverage || aiTradeSettings?.max_leverage || 50);
+  for (const row of rows) {
+    const input = parseAiChatStoredJson(row.input_json) || {};
+    const output = parseAiChatStoredJson(row.output_json) || {};
+    const minNotional = Number(output.minimum_notional_usd || 0);
+    const usedCollateral = Number(output.collateral_usd || input.collateral_usd || 0);
+    const usedLeverage = Number(output.leverage || input.leverage || 0);
+    const requiredLeverage = Number(output.required_leverage_for_collateral || 0);
+    if (!(minNotional > 0) || !(usedCollateral > 0) || !(requiredLeverage > 0)) continue;
+
+    const targetLeverage = requestedLeverage && requestedLeverage > usedLeverage
+      ? requestedLeverage
+      : wantsMaxLeverage && policyMaxLeverage > usedLeverage
+        ? policyMaxLeverage
+        : 0;
+    if (!(targetLeverage > usedLeverage)) continue;
+    if (targetLeverage + 1e-9 < requiredLeverage) continue;
+    if (targetLeverage > policyMaxLeverage + 1e-9) continue;
+
+    const fallbackPct = Number(input.collateral_pct || output.collateral_pct || 0);
+    const targetPct = requestedPct ?? (Number.isFinite(fallbackPct) && fallbackPct > 0 ? fallbackPct : null);
+    return {
+      event_id: row.id,
+      input,
+      output,
+      target_leverage: Number(targetLeverage.toFixed(4)),
+      target_collateral_pct: targetPct,
+      target_notional: Number((usedCollateral * targetLeverage).toFixed(6)),
+      policy_max_leverage: policyMaxLeverage,
+      requested_leverage: requestedLeverage,
+      requested_balance_pct: requestedPct,
+    };
+  }
+  return null;
+}
+
+function buildAvantisMinNotionalRepairContext(repair, responseText) {
+  const input = repair?.input || {};
+  const output = repair?.output || {};
+  const symbol = String(input.symbol || output.symbol || '').toUpperCase();
+  const side = String(input.side || output.side || '').toLowerCase();
+  const delegatedChoice = input.auto_select === true || input.choose_market === true;
+  const pctText = repair.target_collateral_pct != null
+    ? `Use collateral_pct: ${repair.target_collateral_pct}.`
+    : `Use the same collateral amount from the failed attempt: $${Number(output.collateral_usd || input.collateral_usd || 0).toFixed(6)}.`;
+  const targetToolArgs = delegatedChoice
+    ? `leverage: ${repair.target_leverage}, auto_select: true, choose_market: true${side ? `, side: ${side}` : ''}`
+    : `leverage: ${repair.target_leverage}${symbol ? `, symbol: ${symbol}` : ''}${side ? `, side: ${side}` : ''}`;
+  return [
+    'The previous Avantis place-order attempt failed only because the model used lower leverage than the player requested or allowed.',
+    `Previous failed tool used leverage ${output.leverage || input.leverage}x, but this request allows/requires ${repair.target_leverage}x and policy max is ${repair.policy_max_leverage}x.`,
+    `The repaired notional is about $${repair.target_notional}, above the Avantis minimum $${output.minimum_notional_usd || 100}.`,
+    pctText,
+    `Retry now with avantis_place_order using ${targetToolArgs}.`,
+    delegatedChoice ? 'Because this was a delegated-choice trade, you may rerun market selection; choose a market that can support the requested leverage instead of sticking to the previously failed symbol.' : '',
+    'Do not answer that leverage exceeds the wallet/policy unless the required leverage is actually above the policy max.',
+    `Previous answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].filter(Boolean).join('\n');
+}
+
+function responseLooksLikeAvantisMinNotionalBlocker(responseText) {
+  const text = String(responseText || '').normalize('NFKC');
+  if (!text) return false;
+  return /(?:minimum|min)\s+(?:notional|position|size|trade)|(?:notional|position|size)[\s\S]{0,80}(?:below|under|too low)|(?:below|under|too low)[\s\S]{0,80}(?:minimum|min|notional|position|size)|мінімальн|замал|недостатн|минимальн|слишком\s+мал|недостаточн/iu.test(text);
+}
+
+function expectedAvantisOrderMathFromRequest(message, aiTradeSettings) {
+  const settings = aiTradeSettings || {};
+  const walletUsdc = Number(settings.wallet_usdc);
+  if (!(walletUsdc > 0)) return null;
+
+  const requestedPct = extractRequestedAiBalancePct(message);
+  if (!(requestedPct > 0)) return null;
+
+  const requestedLeverage = extractRequestedAiLeverage(message);
+  const policyMaxLeverage = Number(settings.effective_max_leverage || settings.max_leverage || 50);
+  const leverage = requestedLeverage > 0
+    ? requestedLeverage
+    : messageRequestsMaxLeverage(message)
+      ? policyMaxLeverage
+      : 0;
+  if (!(leverage > 0)) return null;
+  if (policyMaxLeverage > 0 && leverage > policyMaxLeverage + 1e-9) return null;
+
+  const percentCap = settings.collateral_limit_mode === 'percent'
+    ? Number(settings.max_balance_pct || 100)
+    : 100;
+  const cappedPct = Math.max(0.01, Math.min(100, Math.min(requestedPct, percentCap > 0 ? percentCap : 100)));
+  let collateralUsd = walletUsdc * (cappedPct / 100);
+  const effectiveCollateralCap = Number(settings.effective_max_collateral_usd);
+  if (effectiveCollateralCap > 0) {
+    collateralUsd = Math.min(collateralUsd, effectiveCollateralCap);
+  }
+  const notionalUsd = collateralUsd * leverage;
+  const effectiveNotionalCap = Number(settings.effective_max_notional_usd);
+  if (effectiveNotionalCap > 0 && notionalUsd > effectiveNotionalCap + 1e-9) return null;
+
+  return {
+    wallet_usdc: Number(walletUsdc.toFixed(6)),
+    requested_pct: Number(requestedPct.toFixed(4)),
+    capped_pct: Number(cappedPct.toFixed(4)),
+    collateral_usd: Number(collateralUsd.toFixed(6)),
+    leverage: Number(leverage.toFixed(4)),
+    notional_usd: Number(notionalUsd.toFixed(6)),
+    policy_max_leverage: Number(policyMaxLeverage.toFixed(4)),
+    minimum_notional_usd: 100,
+  };
+}
+
+function buildAvantisInvalidMinNotionalMathRepair({ intent, playerId, mcpEventStartId, message, responseText, aiTradeSettings }) {
+  if (intent?.kind !== 'avantis_place_order') return null;
+  if (!responseLooksLikeAvantisMinNotionalBlocker(responseText)) return null;
+  if (collectAiChatBrowserActions(playerId, mcpEventStartId).length > 0) return null;
+
+  const math = expectedAvantisOrderMathFromRequest(message, aiTradeSettings);
+  if (!math || math.notional_usd + 1e-9 < math.minimum_notional_usd) return null;
+
+  return {
+    ...math,
+    delegated_choice: !!intent.delegated_choice,
+  };
+}
+
+function buildAvantisInvalidMinNotionalMathRepairContext(repair, responseText) {
+  const pctClause = repair.requested_pct === repair.capped_pct
+    ? `Use collateral_pct: ${repair.requested_pct}.`
+    : `The player requested collateral_pct ${repair.requested_pct}, but browser policy caps it at ${repair.capped_pct}; use collateral_pct: ${repair.capped_pct}.`;
+  return [
+    'The previous Avantis answer was mathematically wrong and must be retried through MCP.',
+    `Browser wallet USDC balance is $${repair.wallet_usdc}. ${pctClause}`,
+    `Requested leverage is ${repair.leverage}x and policy max is ${repair.policy_max_leverage}x.`,
+    `Expected collateral is about $${repair.collateral_usd}; expected notional is about $${repair.notional_usd}, which is above the Avantis minimum $${repair.minimum_notional_usd}.`,
+    repair.delegated_choice
+      ? `Call avantis_place_order now with collateral_pct: ${repair.capped_pct}, leverage: ${repair.leverage}, auto_select: true, choose_market: true. Choose only a crypto/token market whose max_leverage is at least ${repair.leverage}x. Do not choose DYM if it cannot support that leverage.`
+      : `Call avantis_place_order now with leverage: ${repair.leverage} and the requested collateral. Do not answer a minimum-notional blocker unless this exact MCP retry returns it.`,
+    'Do not answer from stale chat history or model memory. Report only the fresh MCP tool result.',
+    `Previous wrong answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].join('\n');
+}
+
+function avantisTerminalToolForIntent(intent = {}) {
+  switch (intent?.kind) {
+    case 'avantis_place_order': return 'avantis_place_order';
+    case 'avantis_close_position': return 'avantis_close_position';
+    case 'avantis_cancel_order': return 'avantis_cancel_order';
+    case 'avantis_tpsl': return 'avantis_set_tpsl';
+    default: return '';
+  }
+}
+
+function responseClaimsAvantisBrowserActionPrepared(responseText, intent = {}) {
+  if (!avantisTerminalToolForIntent(intent)) return false;
+  const text = String(responseText || '').normalize('NFKC');
+  if (!text) return false;
+  if (/blocked|error|failed|cannot|can't|can’t|could not|minimum|too low|insufficient|need|немож|не мож|помил|недостат|мінімальн|слишком|минимальн/iu.test(text)) {
+    return false;
+  }
+  return /prepared|ready|browser\s+wallet|wallet\s+confirmation|confirm\s+it|signature|sign|підготов|готов|гаманець|підпис|підтверд|кошел|подпис|подтверд/iu.test(text);
+}
+
+function latestAvantisWriteError({ intent, playerId, mcpEventStartId }) {
+  const tool = avantisTerminalToolForIntent(intent);
+  if (!tool) return null;
+  const row = db.db.prepare(`
+    SELECT id, tool, input_json, output_json, error
+    FROM mcp_events
+    WHERE id > ?
+      AND player_id = ?
+      AND tool = ?
+      AND status = 'error'
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(mcpEventStartId, playerId, tool);
+  if (!row) return null;
+  const input = parseAiChatStoredJson(row.input_json) || {};
+  const output = parseAiChatStoredJson(row.output_json) || {};
+  const error = String(output.error || row.error || 'Avantis action was blocked by the MCP tool.').trim();
+  return {
+    event_id: row.id,
+    tool: row.tool,
+    input,
+    output,
+    error,
+  };
+}
+
+function buildAvantisPreparedWithoutActionRetryContext(toolError, responseText) {
+  return [
+    'The previous answer was wrong: it said an Avantis browser action was prepared, but the MCP write tool returned an error and no browser_action exists.',
+    `MCP tool: ${toolError.tool}.`,
+    `Exact MCP blocker: ${toolError.error}`,
+    `Tool input: ${JSON.stringify(toolError.input || {})}`,
+    'Do not say prepared, ready, browser wallet, confirmation, signature, opened, or submitted.',
+    'Answer naturally with the exact blocker and the relevant math/policy details from the MCP result if present.',
+    `Previous wrong answer preview: ${aiChatPreview(responseText, 500)}`,
+  ].join('\n');
+}
+
 router.post('/ai-chat/message', auth, async (req, res) => {
   const startedAt = Date.now();
   const mcpEventStartId = Number(db.db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM mcp_events').get()?.id || 0);
@@ -4547,7 +5050,9 @@ router.post('/ai-chat/message', auth, async (req, res) => {
   if (!message) return res.status(400).json({ ok: false, error: 'message required' });
   if (message.length > 8000) return res.status(400).json({ ok: false, error: 'message too long' });
   const history = normalizeAiChatHistory(req.body?.history);
-  const intent = hermesClient.classifyGameIntent(message);
+  const aiTradeSettings = normalizeAiTradeSettings(req.body?.ai_trade_settings);
+  const aiTradeSettingsContext = buildAiTradeSettingsContext(aiTradeSettings);
+  const intent = hermesClient.classifyGameIntent(message, req.player);
   const quotaBefore = getAiMessageQuotaStatus(req.player.id);
   const logStage = createAiChatStageLogger({
     traceId,
@@ -4634,13 +5139,15 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       message: 'Dispatching request to Hermes orchestrator',
       idempotency_key: idempotencyKey,
     });
-    const result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+    let result = await hermesClient.chat(req.player, agent.mcp_key, message, {
       previous_response_id: req.body?.previous_response_id,
       idempotency_key: idempotencyKey,
       metadata: {
         ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
         trace_id: traceId,
+        ai_trade_settings: aiTradeSettings || undefined,
       },
+      internal_context: aiTradeSettingsContext,
       history,
     });
     logStage('hermes_dispatch_done', {
@@ -4649,36 +5156,299 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       fallback: !!result.fallback,
       response_chars: String(result.output_text || '').length,
     });
-    model = result.model || null;
-    const expectedTools = Array.isArray(intent.expected_tools) ? intent.expected_tools.filter(Boolean) : [];
-    const responseText = String(result.output_text || '').trim();
-    const responseClaimsSuccess = /^(?:Done|Success|Completed)\s*:/i.test(responseText);
-    if (intent.action_required && responseClaimsSuccess && expectedTools.length) {
-      const placeholders = expectedTools.map(() => '?').join(',');
-      const toolEvent = db.db.prepare(`
-        SELECT id, tool, status, duration_ms, error
-        FROM mcp_events
-        WHERE id > ?
-          AND player_id = ?
-          AND tool IN (${placeholders})
-          AND status = 'ok'
-          AND (error IS NULL OR error = '')
-        ORDER BY id DESC
-        LIMIT 1
-      `).get(mcpEventStartId, req.player.id, ...expectedTools);
-      if (!toolEvent) {
-        const err = new Error(`Agent response claimed success without calling required MCP tool (${expectedTools.join(' or ')}).`);
+    let responseText = String(result.output_text || '').trim();
+    if (isAvantisWrongDexToolBoundary(responseText, intent)) {
+      logStage('hermes_retry_wrong_avantis_boundary_start', {
+        status: 'retry',
+        message: 'Hermes answered with the Decibel-only blocker for an Avantis request; retrying with strict Avantis routing',
+        response_preview: aiChatPreview(responseText, 500),
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: null,
+        idempotency_key: `${idempotencyKey}:avantis-boundary-retry`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildAvantisWrongDexRetryContext(responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'wrong_avantis_tool_boundary',
+        },
+        history: [],
+      });
+      logStage('hermes_retry_wrong_avantis_boundary_done', {
+        message: 'Hermes strict Avantis retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      if (isAvantisWrongDexToolBoundary(responseText, intent)) {
+        const err = new Error('Avantis route loaded the wrong trading tool boundary.');
         err.status = 502;
-        err.body = {
-          expected_tools: expectedTools,
-          response_preview: aiChatPreview(responseText, 500),
-        };
+        err.playerMessage = 'Avantis route loaded the wrong tool set. Start a new chat and try again.';
         throw err;
       }
     }
+    let actionAttempt = validateHermesActionAttempt({
+      intent,
+      responseText,
+      playerId: req.player.id,
+      mcpEventStartId,
+    });
+    if (!actionAttempt.ok) {
+      logStage('hermes_retry_missing_terminal_tool_attempt_start', {
+        status: 'retry',
+        message: 'Hermes answered an action request without calling the terminal MCP tool; retrying once',
+        required_terminal_tools: actionAttempt.terminal_groups,
+        used_tools: actionAttempt.used_tools,
+        response_preview: aiChatPreview(responseText, 500),
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: null,
+        idempotency_key: `${idempotencyKey}:terminal-tool-attempt-retry`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildTerminalToolAttemptRetryContext(actionAttempt, responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'missing_terminal_mcp_tool_attempt',
+          required_terminal_tools: actionAttempt.terminal_groups,
+        },
+        history: [],
+      });
+      logStage('hermes_retry_missing_terminal_tool_attempt_done', {
+        message: 'Hermes terminal-tool-attempt retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      if (isAvantisWrongDexToolBoundary(responseText, intent)) {
+        const err = new Error('Avantis route loaded the wrong trading tool boundary.');
+        err.status = 502;
+        err.playerMessage = 'Avantis route loaded the wrong tool set. Start a new chat and try again.';
+        throw err;
+      }
+      actionAttempt = validateHermesActionAttempt({
+        intent,
+        responseText,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (!actionAttempt.ok) {
+        throw buildMissingTerminalToolAttemptError(actionAttempt, responseText);
+      }
+    }
+    const avantisMinRepair = latestRepairableAvantisMinNotional({
+      intent,
+      playerId: req.player.id,
+      mcpEventStartId,
+      message,
+      aiTradeSettings,
+    });
+    if (avantisMinRepair) {
+      logStage('hermes_retry_avantis_min_notional_repair_start', {
+        status: 'retry',
+        message: 'Hermes used too little Avantis leverage and hit minimum notional; retrying with parsed request leverage',
+        failed_event_id: avantisMinRepair.event_id,
+        target_leverage: avantisMinRepair.target_leverage,
+        target_collateral_pct: avantisMinRepair.target_collateral_pct,
+        target_notional: avantisMinRepair.target_notional,
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: null,
+        idempotency_key: `${idempotencyKey}:avantis-min-notional-repair`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildAvantisMinNotionalRepairContext(avantisMinRepair, responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'avantis_min_notional_repair',
+          target_leverage: avantisMinRepair.target_leverage,
+          target_collateral_pct: avantisMinRepair.target_collateral_pct,
+        },
+        history: [],
+      });
+      logStage('hermes_retry_avantis_min_notional_repair_done', {
+        message: 'Hermes Avantis minimum-notional repair retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      actionAttempt = validateHermesActionAttempt({
+        intent,
+        responseText,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (!actionAttempt.ok) {
+        throw buildMissingTerminalToolAttemptError(actionAttempt, responseText);
+      }
+    }
+    const avantisMathRepair = buildAvantisInvalidMinNotionalMathRepair({
+      intent,
+      playerId: req.player.id,
+      mcpEventStartId,
+      message,
+      responseText,
+      aiTradeSettings,
+    });
+    if (avantisMathRepair) {
+      logStage('hermes_retry_avantis_invalid_min_notional_math_start', {
+        status: 'retry',
+        message: 'Hermes answered an Avantis minimum-notional blocker, but requested balance percent and leverage pass the minimum math; retrying with exact parsed parameters',
+        wallet_usdc: avantisMathRepair.wallet_usdc,
+        requested_pct: avantisMathRepair.requested_pct,
+        capped_pct: avantisMathRepair.capped_pct,
+        target_leverage: avantisMathRepair.leverage,
+        target_notional: avantisMathRepair.notional_usd,
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: null,
+        idempotency_key: `${idempotencyKey}:avantis-invalid-min-notional-math-repair`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildAvantisInvalidMinNotionalMathRepairContext(avantisMathRepair, responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'avantis_invalid_min_notional_math_repair',
+          target_leverage: avantisMathRepair.leverage,
+          target_collateral_pct: avantisMathRepair.capped_pct,
+          target_notional: avantisMathRepair.notional_usd,
+        },
+        history: [],
+      });
+      logStage('hermes_retry_avantis_invalid_min_notional_math_done', {
+        message: 'Hermes Avantis invalid minimum-notional math retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      actionAttempt = validateHermesActionAttempt({
+        intent,
+        responseText,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (!actionAttempt.ok) {
+        throw buildMissingTerminalToolAttemptError(actionAttempt, responseText);
+      }
+    }
+    let avantisPreparedError = latestAvantisWriteError({
+      intent,
+      playerId: req.player.id,
+      mcpEventStartId,
+    });
+    if (
+      avantisPreparedError
+      && responseClaimsAvantisBrowserActionPrepared(responseText, intent)
+      && collectAiChatBrowserActions(req.player.id, mcpEventStartId).length === 0
+    ) {
+      logStage('hermes_retry_avantis_prepared_without_browser_action_start', {
+        status: 'retry',
+        message: 'Hermes claimed an Avantis browser action was prepared, but the write tool errored and no browser_action exists; retrying with exact MCP blocker',
+        failed_event_id: avantisPreparedError.event_id,
+        failed_tool: avantisPreparedError.tool,
+        error: aiChatPreview(avantisPreparedError.error, 500),
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: null,
+        idempotency_key: `${idempotencyKey}:avantis-prepared-without-browser-action-repair`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildAvantisPreparedWithoutActionRetryContext(avantisPreparedError, responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'avantis_prepared_without_browser_action',
+          failed_tool: avantisPreparedError.tool,
+          failed_event_id: avantisPreparedError.event_id,
+        },
+        history: [],
+      });
+      logStage('hermes_retry_avantis_prepared_without_browser_action_done', {
+        message: 'Hermes Avantis prepared-without-browser-action retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      actionAttempt = validateHermesActionAttempt({
+        intent,
+        responseText,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (!actionAttempt.ok) {
+        throw buildMissingTerminalToolAttemptError(actionAttempt, responseText);
+      }
+      avantisPreparedError = latestAvantisWriteError({
+        intent,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (
+        avantisPreparedError
+        && responseClaimsAvantisBrowserActionPrepared(responseText, intent)
+        && collectAiChatBrowserActions(req.player.id, mcpEventStartId).length === 0
+      ) {
+        responseText = avantisPreparedError.error;
+        result = { ...result, output_text: responseText };
+      }
+    }
+    let completion = validateHermesActionCompletion({
+      intent,
+      responseText,
+      playerId: req.player.id,
+      mcpEventStartId,
+    });
+    if (!completion.ok) {
+      logStage('hermes_retry_missing_terminal_tool_start', {
+        status: 'retry',
+        message: 'Hermes claimed success before the terminal MCP tool completed; retrying once',
+        required_terminal_tools: completion.terminal_groups,
+        used_tools: completion.used_tools,
+      });
+      result = await hermesClient.chat(req.player, agent.mcp_key, message, {
+        previous_response_id: result.response?.id || result.response_id || req.body?.previous_response_id,
+        idempotency_key: `${idempotencyKey}:terminal-tool-retry`,
+        internal_context: combineAiInternalContext(aiTradeSettingsContext, buildTerminalToolRetryContext(completion, responseText)),
+        metadata: {
+          ...(req.body?.metadata && typeof req.body.metadata === 'object' ? req.body.metadata : {}),
+          trace_id: traceId,
+          ai_trade_settings: aiTradeSettings || undefined,
+          retry_reason: 'missing_terminal_mcp_tool',
+          required_terminal_tools: completion.terminal_groups,
+        },
+        history: [
+          ...history,
+          { role: 'assistant', text: responseText },
+        ].slice(-4),
+      });
+      logStage('hermes_retry_missing_terminal_tool_done', {
+        message: 'Hermes retry returned a response',
+        model: result.model || null,
+        fallback: !!result.fallback,
+        response_chars: String(result.output_text || '').length,
+      });
+      responseText = String(result.output_text || '').trim();
+      completion = validateHermesActionCompletion({
+        intent,
+        responseText,
+        playerId: req.player.id,
+        mcpEventStartId,
+      });
+      if (!completion.ok) {
+        throw buildMissingTerminalToolError(completion, responseText);
+      }
+    }
+    model = result.model || null;
     const durationMs = Date.now() - startedAt;
     const quotaAfter = getAiMessageQuotaStatus(req.player.id);
     const resultSummary = summarizeHermesResult(result);
+    const browserActions = collectAiChatBrowserActions(req.player.id, mcpEventStartId);
+    const outputText = browserActionSafeMessage(String(result.output_text || '').trim(), intent, browserActions);
     logHermesTimingEvents({ traceId, player: req.player, intent, events: result.timing_events || result.timingEvents || [] });
     logStage('mark_agent_state_start', { message: 'Persisting Hermes agent state' });
     db.markHermesAgentState(req.player.id, {
@@ -4698,8 +5468,8 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       attempted_models: resultSummary.attempted_models,
       timings: resultSummary.timings,
       attempts: resultSummary.attempts,
-      response_chars: String(result.output_text || '').length,
-      response_preview: aiChatPreview(result.output_text, 900),
+      response_chars: String(outputText || '').length,
+      response_preview: aiChatPreview(outputText, 900),
       quota_after: quotaAfter,
     });
     logStage('message_persist_start', { message: 'Writing final AI chat event' });
@@ -4713,12 +5483,13 @@ router.post('/ai-chat/message', auth, async (req, res) => {
       durationMs,
       model,
       requestPreview: aiChatPreview(message),
-      responsePreview: aiChatPreview(result.output_text, 1200),
+      responsePreview: aiChatPreview(outputText, 1200),
       quota: { before: quotaBefore, after: quotaAfter, reservation },
       attempts: resultSummary.attempts,
       input: { trace_id: traceId, idempotency_key: idempotencyKey, message, history },
       output: {
-        output_text: result.output_text,
+        output_text: outputText,
+        browser_actions: browserActions,
         ...resultSummary,
         timing_events: result.timing_events || result.timingEvents || [],
       },
@@ -4731,9 +5502,10 @@ router.post('/ai-chat/message', auth, async (req, res) => {
     });
     res.json({
       ok: true,
-      message: result.output_text || '',
+      message: outputText || '',
       quota: getAiMessageQuotaStatus(req.player.id),
       trace_id: traceId,
+      browser_actions: browserActions,
     });
   } catch (err) {
     if (reservation) {
@@ -4816,6 +5588,7 @@ router.post('/ai-chat/reset', auth, async (req, res) => {
   try {
     const result = await hermesClient.reset(req.player.id, {
       delete_memory: !!req.body?.delete_memory,
+      delete_recent_memory: !!req.body?.delete_recent_memory,
       restart: req.body?.restart !== false,
     });
     const state = db.markHermesAgentState(req.player.id, {

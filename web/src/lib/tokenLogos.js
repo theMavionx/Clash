@@ -87,6 +87,14 @@ function fxPairDataUri(sym) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+function commodityCandidates(sym) {
+  const s = canonTokenSymbol(sym);
+  if (s === 'BRENT' || s === 'BRENTOIL' || s === 'WTI' || s === 'USOILSPOT') return ['CL'];
+  if (s === 'SILVER') return ['XAG', 'SILVER'];
+  if (s === 'GOLD') return ['XAU', 'GOLD'];
+  return localCandidates(s);
+}
+
 export function tokenFallbackColor(sym, fallback = '#a3906a') {
   const s = canonTokenSymbol(sym);
   return TOKEN_COLORS[s] || TOKEN_COLORS[(LOCAL_ALIASES[s] || [])[0]] || fallback;
@@ -96,13 +104,15 @@ export function tokenLogoSources(sym) {
   const s = canonTokenSymbol(sym);
   if (!s) return [];
   const srcs = [];
-  for (const candidate of localCandidates(s)) {
+  const fxBadge = fxPairDataUri(s);
+  if (fxBadge) return [fxBadge];
+  const localSyms = COMMODITY_SYMBOLS.has(s) ? commodityCandidates(s) : localCandidates(s);
+  for (const candidate of localSyms) {
     srcs.push(`/tokens/${candidate}.svg`, `/tokens/${candidate}.png`);
   }
-  const fxBadge = fxPairDataUri(s);
-  if (fxBadge) srcs.push(fxBadge);
+  if (COMMODITY_SYMBOLS.has(s)) return uniq(srcs);
   if (COINGECKO_LOGOS[s]) srcs.push(COINGECKO_LOGOS[s]);
-  if (STOCK_SYMBOLS.has(s) || COMMODITY_SYMBOLS.has(s) || FX_SYMBOLS.has(s)) {
+  if (STOCK_SYMBOLS.has(s)) {
     srcs.push(`https://assets.parqet.com/logos/symbol/${s}?format=png`);
   }
   srcs.push(

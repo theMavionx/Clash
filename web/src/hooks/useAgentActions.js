@@ -100,6 +100,8 @@ export function useAgentActions() {
 
     const pollPendingEvents = () => {
       if (cancelled) return;
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) return;
       fetch(`${GAME_API}/agent-events/pending`, { headers: { 'x-token': token } })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error('pending agent events failed'))))
         .then((data) => {
@@ -112,7 +114,7 @@ export function useAgentActions() {
     const startPendingPoll = () => {
       if (cancelled || pendingPollRef.current) return;
       pollPendingEvents();
-      pendingPollRef.current = setInterval(pollPendingEvents, 2000);
+      pendingPollRef.current = setInterval(pollPendingEvents, 10000);
     };
 
     const closeSocket = () => {

@@ -14,6 +14,90 @@ const risex = require('./risex');
 
 const router = express.Router();
 
+const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
+const PYTH_HISTORY_CACHE_TTL_MS = 60_000;
+const PYTH_HISTORY_STALE_MS = 15 * 60_000;
+const PYTH_HISTORY_MAX_BARS = 720;
+const pythHistoryCache = new Map();
+const pythHistoryInflight = new Map();
+
+function pythResolutionSeconds(resolution) {
+  const r = String(resolution || '').trim();
+  if (r === '1') return 60;
+  if (r === '5') return 5 * 60;
+  if (r === '15') return 15 * 60;
+  if (r === '60') return 60 * 60;
+  if (r === '240') return 4 * 60 * 60;
+  if (r === 'D' || r === '1D') return 24 * 60 * 60;
+  return 60;
+}
+
+function normalizePythHistoryQuery(query) {
+  const symbol = String(query.symbol || '').trim();
+  const resolution = String(query.resolution || '').trim();
+  const from = Math.floor(Number(query.from));
+  const to = Math.floor(Number(query.to));
+  if (!symbol || symbol.length > 96 || !/^[A-Za-z0-9._/-]+$/.test(symbol)) {
+    throw new Error('valid symbol required');
+  }
+  if (!/^(1|5|15|60|240|D|1D)$/.test(resolution)) {
+    throw new Error('valid resolution required');
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= from) {
+    throw new Error('valid from/to required');
+  }
+  const maxSpan = 370 * 24 * 60 * 60;
+  if (to - from > maxSpan) {
+    throw new Error('history window too large');
+  }
+  const bucket = pythResolutionSeconds(resolution);
+  let bucketedFrom = Math.floor(from / bucket) * bucket;
+  let bucketedTo = Math.floor(to / bucket) * bucket;
+  if (bucketedTo <= bucketedFrom) bucketedTo = bucketedFrom + bucket;
+  const maxBucketedSpan = bucket * PYTH_HISTORY_MAX_BARS;
+  if (bucketedTo - bucketedFrom > maxBucketedSpan) {
+    bucketedFrom = bucketedTo - maxBucketedSpan;
+  }
+  return {
+    symbol,
+    resolution,
+    from: bucketedFrom,
+    to: bucketedTo,
+  };
+}
+
+async function fetchPythHistory(query) {
+  const params = new URLSearchParams({
+    symbol: query.symbol,
+    resolution: query.resolution,
+    from: String(query.from),
+    to: String(query.to),
+  });
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 10_000);
+  try {
+    const upstream = await fetch(`${PYTH_BENCHMARKS}/history?${params.toString()}`, {
+      signal: ctrl.signal,
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'ClashOfPerps/1.0 pyth-history-proxy',
+      },
+    });
+    const text = await upstream.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch {}
+    if (!upstream.ok) {
+      const detail = data?.errmsg || data?.error || text || `HTTP ${upstream.status}`;
+      const err = new Error(`Pyth benchmarks ${upstream.status}: ${detail}`);
+      err.status = upstream.status;
+      throw err;
+    }
+    return data || { s: 'error', errmsg: 'empty Pyth response' };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
 const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
 // 10 bps = 0.1%. Must match web/src/lib/decibel.js BUILDER_FEE_BPS — the
@@ -658,6 +742,63 @@ router.get('/candles', async (req, res) => {
     res.json(candles);
   } catch (e) {
     res.status(500).json({ error: 'Failed to get candles' });
+  }
+});
+
+router.get('/pyth/history', async (req, res) => {
+  let query;
+  try {
+    query = normalizePythHistoryQuery(req.query);
+  } catch (e) {
+    return res.status(400).json({ s: 'error', error: e.message });
+  }
+
+  const key = `${query.symbol}|${query.resolution}|${query.from}|${query.to}`;
+  const now = Date.now();
+  const cached = pythHistoryCache.get(key);
+  if (cached && now - cached.at < PYTH_HISTORY_CACHE_TTL_MS) {
+    res.set('Cache-Control', 'public, max-age=15');
+    res.set('X-Pyth-Cache', 'hit');
+    return res.json(cached.data);
+  }
+
+  try {
+    let pending = pythHistoryInflight.get(key);
+    if (!pending) {
+      pending = fetchPythHistory(query).finally(() => {
+        pythHistoryInflight.delete(key);
+      });
+      pythHistoryInflight.set(key, pending);
+    }
+    const data = await pending;
+    pythHistoryCache.set(key, { at: now, data });
+    if (pythHistoryCache.size > 500) {
+      const cutoff = Date.now() - PYTH_HISTORY_STALE_MS;
+      for (const [cacheKey, value] of pythHistoryCache) {
+        if (value.at < cutoff) pythHistoryCache.delete(cacheKey);
+      }
+    }
+    res.set('Cache-Control', 'public, max-age=15');
+    res.set('X-Pyth-Cache', cached ? 'refresh' : 'miss');
+    return res.json(data);
+  } catch (e) {
+    if (cached && now - cached.at < PYTH_HISTORY_STALE_MS) {
+      console.warn('[pyth/history] upstream failed, serving stale:', e.message);
+      res.set('Cache-Control', 'public, max-age=5');
+      res.set('X-Pyth-Cache', 'stale');
+      return res.json(cached.data);
+    }
+    console.warn('[pyth/history] failed:', e.message);
+    const data = {
+      s: 'error',
+      error: 'Failed to load Pyth history',
+      errmsg: e.message,
+    };
+    pythHistoryCache.set(key, { at: now, data });
+    res.set('Cache-Control', 'public, max-age=10');
+    res.set('X-Pyth-Cache', 'error');
+    if (e.status === 429) res.set('Retry-After', '10');
+    return res.json(data);
   }
 });
 

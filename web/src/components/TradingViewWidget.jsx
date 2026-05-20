@@ -5,8 +5,9 @@ import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
-// every Pyth feed — which is Avantis's pricing source. No CORS restrictions.
-const PYTH_BENCHMARKS = 'https://benchmarks.pyth.network/v1/shims/tradingview';
+// every Pyth feed. Route through our futures backend so browser CORS / 429s
+// do not blank Avantis charts, and repeated requests can be cached server-side.
+const PYTH_HISTORY_API = '/api/futures/pyth/history';
 
 const INTERVALS = [
   { label: '1m', value: '1m', ms: 2 * 60 * 60 * 1000, pyth: '1' },
@@ -91,6 +92,48 @@ function benchmarksFallback(pythSymbol) {
   if (/^Commodities\.BRENT/i.test(s) || /UKOIL/i.test(s)) return 'Commodities.UKOILSPOT';
   if (/^Commodities\.WTI/i.test(s) || /USOIL/i.test(s)) return 'Commodities.USOILSPOT';
   return null;
+}
+
+function shouldWidenPythWindow(pythSymbol) {
+  return !String(pythSymbol || '').startsWith('Crypto.');
+}
+
+function pythWindowWidens(resolution) {
+  if (resolution === '1') return [12 * 60 * 60];
+  if (resolution === '5') return [3 * 86400];
+  if (resolution === '15') return [3 * 86400, 7 * 86400];
+  if (resolution === '60') return [14 * 86400, 30 * 86400];
+  if (resolution === '240') return [30 * 86400, 90 * 86400];
+  return [365 * 86400];
+}
+
+function candlesFromPythResponse(json) {
+  if (json?.s !== 'ok' || !Array.isArray(json.t)) return [];
+  return json.t.map((t, i) => ({
+    time: t,
+    open: parseFloat(json.o[i]),
+    high: parseFloat(json.h[i]),
+    low: parseFloat(json.l[i]),
+    close: parseFloat(json.c[i]),
+  })).filter(c => (
+    c.time &&
+    Number.isFinite(c.open) &&
+    Number.isFinite(c.high) &&
+    Number.isFinite(c.low) &&
+    Number.isFinite(c.close)
+  ));
+}
+
+function flatCandlesFromPrice(price, nowMs, tf) {
+  const value = Number(price);
+  if (!Number.isFinite(value) || value <= 0) return [];
+  const toSec = Math.floor(nowMs / 1000);
+  const spanMs = Math.min(tf?.ms || 60 * 60 * 1000, 60 * 60 * 1000);
+  const fromSec = Math.max(1, Math.floor((nowMs - spanMs) / 1000));
+  return [
+    { time: fromSec, open: value, high: value, low: value, close: value },
+    { time: toSec, open: value, high: value, low: value, close: value },
+  ];
 }
 
 function decibelMarketName(sym) {
@@ -214,14 +257,30 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
     if (!seriesRef.current) return;
     let cancelled = false;
     
-    // Clear old data and show loading spinner when symbol/interval changes
+    // Keep previous candles visible while the next range loads. Clearing here
+    // made transient Pyth rate limits look like a permanently broken chart.
     setLoading(true);
-    seriesRef.current.setData([]);
 
     async function fetchBenchmarks(sym, resolution, fromSec, toSec) {
-      const url = `${PYTH_BENCHMARKS}/history?symbol=${encodeURIComponent(sym)}&resolution=${resolution}&from=${fromSec}&to=${toSec}`;
-      const r = await fetch(url);
-      return r.json();
+      const params = new URLSearchParams({
+        symbol: sym,
+        resolution: String(resolution),
+        from: String(fromSec),
+        to: String(toSec),
+      });
+      try {
+        const r = await fetch(`${PYTH_HISTORY_API}?${params.toString()}`);
+        const json = await r.json().catch(() => null);
+        if (!r.ok) {
+          return {
+            s: 'error',
+            errmsg: json?.errmsg || json?.error || `Pyth history ${r.status}`,
+          };
+        }
+        return json || { s: 'error', errmsg: 'empty Pyth history response' };
+      } catch (e) {
+        return { s: 'error', errmsg: e?.message || 'Pyth history request failed' };
+      }
     }
 
     async function loadPythCandles(tf, now, start) {
@@ -235,8 +294,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         json = await fetchBenchmarks(fallback, tf.pyth, fromSec, toSec);
       }
 
-      const windowWidens = [3 * 86400, 14 * 86400, 30 * 86400];
-      for (const span of windowWidens) {
+      for (const span of pythWindowWidens(tf.pyth)) {
+        if (json.s !== 'ok' || !shouldWidenPythWindow(fallback || primary)) break;
         const bars = Array.isArray(json.t) ? json.t.length : 0;
         if (bars >= 2) break;
         fromSec = toSec - span;
@@ -244,14 +303,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         json = await fetchBenchmarks(sym, tf.pyth, fromSec, toSec);
       }
 
-      if (json.s !== 'ok' || !Array.isArray(json.t)) return [];
-      return json.t.map((t, i) => ({
-        time: t,
-        open: parseFloat(json.o[i]),
-        high: parseFloat(json.h[i]),
-        low: parseFloat(json.l[i]),
-        close: parseFloat(json.c[i]),
-      }));
+      return candlesFromPythResponse(json);
     }
 
     async function load() {
@@ -281,42 +333,10 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           }
           if (cancelled) return;
         } else if (dex === 'avantis' || dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex') {
-          // Avantis and GMX chart candles come from Pyth's
-          // benchmarks endpoint. Pacifica fetches its own REST kline.
-          // Prefer the Pyth symbol from market data (authoritative); fall
-          // back to heuristic mapping if parent didn't pass it.
-          const primary = pythSymbol || toPythSymbol(symbol);
-          const fallback = benchmarksFallback(primary);
-          const toSec = Math.floor(now / 1000);
-          let fromSec = Math.floor(start / 1000);
-
-          let json = await fetchBenchmarks(primary, tf.pyth, fromSec, toSec);
-          // Rolled-futures or missing symbol → retry on the spot equivalent.
-          if (json.s === 'error' && fallback && fallback !== primary) {
-            json = await fetchBenchmarks(fallback, tf.pyth, fromSec, toSec);
-          }
-          // Equities/FX/commodities close nights + weekends. When the requested
-          // window spans only closed hours Pyth returns status=ok with <2 bars
-          // — chart looks empty. Progressively widen the window so the user
-          // sees at least last-session history. 30d caps the broadening; we
-          // don't switch resolutions mid-flight (tf buttons stay truthful).
-          const windowWidens = [3 * 86400, 14 * 86400, 30 * 86400];
-          for (const span of windowWidens) {
-            const bars = Array.isArray(json.t) ? json.t.length : 0;
-            if (bars >= 2) break;
-            fromSec = toSec - span;
-            const sym = (fallback && json.s === 'error') ? fallback : primary;
-            json = await fetchBenchmarks(sym, tf.pyth, fromSec, toSec);
-          }
-
-          if (cancelled || json.s !== 'ok' || !Array.isArray(json.t)) return;
-          candles = json.t.map((t, i) => ({
-            time: t,
-            open: parseFloat(json.o[i]),
-            high: parseFloat(json.h[i]),
-            low: parseFloat(json.l[i]),
-            close: parseFloat(json.c[i]),
-          }));
+          // These DEXes use Pyth benchmarks for chart candles. The helper
+          // keeps retries bounded so rate limits do not cascade.
+          candles = await loadPythCandles(tf, now, start);
+          if (cancelled) return;
         } else {
           const res = await fetch(`${PACIFICA_API}/kline?symbol=${symbol}&interval=${interval}&start_time=${start}&end_time=${now}`);
           const json = await res.json();
@@ -330,6 +350,8 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           }));
         }
 
+        if (!candles.length) candles = flatCandlesFromPrice(currentPriceRef.current, now, tf);
+        if (!candles.length) return;
         seriesRef.current.setData(candles);
         if (chartRef.current) {
           chartRef.current.timeScale().fitContent();
