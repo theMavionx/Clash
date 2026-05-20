@@ -131,7 +131,9 @@ const rows = cases.map((test) => {
 const avantisRuntime = composeRuntimeInstructions('avantis');
 const ukSolShortMaxAll = '\u0432\u0456\u0434\u043a\u0440\u0438\u0439 \u043f\u043e \u0441\u043e\u043b\u0430\u043d\u0430 \u0448\u043e\u0440\u0442 \u043c\u0430\u043a\u0441\u0438\u043c\u0430\u043b\u044c\u043d\u043e \u0434\u043e\u0432\u0437\u043e\u043b\u0435\u043d\u0435 \u043f\u043b\u0435\u0447\u0435 \u0456 \u043d\u0430 \u0432\u0441\u0456 \u0433\u0440\u043e\u0448\u0456';
 const ukAnyTrade = '\u0432\u0456\u0434\u043a\u0440\u0438\u0439 \u044f\u043a\u0443\u0441\u044c \u0443\u0433\u043e\u0434\u0443 25 \u043f\u043b\u0435\u0447\u0435 \u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c \u043d\u0430 \u0432\u0441\u0456 \u0433\u0440\u043e\u0448\u0456';
+const ukTpProfit20 = '\u043f\u043e\u0441\u0442\u0430\u0432 \u0442\u043f \u043d\u0430 20% \u043f\u0440\u0438\u0431\u0443\u0442\u043a\u0443';
 const ukAnyTradeIntent = classifyGameIntent(ukAnyTrade, { dex: 'avantis' });
+const ukTpProfitIntent = classifyGameIntent(ukTpProfit20, { dex: 'avantis' });
 const volatileIntent = classifyGameIntent('open something more volatile than BTC on Avantis', { dex: 'avantis' });
 const compoundIntent = classifyGameIntent('close BTC and open something more volatile on Avantis', { dex: 'avantis' });
 const dexScopeRows = [
@@ -155,6 +157,11 @@ const dexScopeRows = [
       && ukAnyTradeIntent.delegated_choice === true
       && ukAnyTradeIntent.expected_tools?.[0] === 'avantis_market_scan'
       && ukAnyTradeIntent.expected_tools?.[1] === 'avantis_place_order',
+  },
+  {
+    name: 'ukrainian_cyrillic_tp_profit_routes_to_avantis_tpsl_not_build',
+    ok: ukTpProfitIntent.kind === 'avantis_tpsl'
+      && terminalToolGroupsForIntent(ukTpProfitIntent).some((group) => group.includes('avantis_set_tpsl')),
   },
   {
     name: 'avantis_volatile_trade_is_delegated_scan',

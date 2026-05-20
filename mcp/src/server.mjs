@@ -1889,6 +1889,36 @@ function finitePositive(value) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+function finitePositiveFromArgs(args = {}, names = []) {
+  for (const name of names) {
+    const value = finitePositive(args?.[name]);
+    if (value > 0) return value;
+  }
+  return 0;
+}
+
+function roundAvantisTriggerPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Number(n.toFixed(8));
+}
+
+function avantisTriggerPriceFromPnlPct(position, pnlPct, leg) {
+  const entry = finitePositive(position?.entry_price);
+  const leverage = finitePositive(position?.leverage) || 1;
+  const pct = finitePositive(pnlPct);
+  if (!entry || !pct) return 0;
+  const move = (pct / 100) / leverage;
+  const side = String(position?.side || '').toLowerCase();
+  if (leg === 'take_profit') {
+    return roundAvantisTriggerPrice(side === 'short' ? entry * (1 - move) : entry * (1 + move));
+  }
+  if (leg === 'stop_loss') {
+    return roundAvantisTriggerPrice(side === 'short' ? entry * (1 + move) : entry * (1 - move));
+  }
+  return 0;
+}
+
 function avantisMinNotionalError({ symbol, side, collateralUsd, collateralPct, leverage, notionalUsd, usdcBalance }) {
   const collateral = Number(collateralUsd || 0);
   const lev = Number(leverage || 1);
@@ -2320,7 +2350,25 @@ async function runAvantisSetTpslAction(session, agentKey, args = {}) {
   try {
     const account = requireAvantisSession(session);
     if (!account.ok) return { ok: false, error: account.error };
-    if (!finitePositive(args.take_profit ?? args.tp) && !finitePositive(args.stop_loss ?? args.sl)) {
+    const takeProfitPriceInput = finitePositive(args.take_profit ?? args.tp);
+    const stopLossPriceInput = finitePositive(args.stop_loss ?? args.sl);
+    const takeProfitPnlPct = finitePositiveFromArgs(args, [
+      'take_profit_pnl_pct',
+      'take_profit_profit_pct',
+      'take_profit_pct',
+      'tp_pnl_pct',
+      'tp_profit_pct',
+      'tp_pct',
+    ]);
+    const stopLossPnlPct = finitePositiveFromArgs(args, [
+      'stop_loss_pnl_pct',
+      'stop_loss_loss_pct',
+      'stop_loss_pct',
+      'sl_pnl_pct',
+      'sl_loss_pct',
+      'sl_pct',
+    ]);
+    if (!takeProfitPriceInput && !stopLossPriceInput && !takeProfitPnlPct && !stopLossPnlPct) {
       return { ok: false, error: 'Provide take_profit, stop_loss, or both.' };
     }
     const [{ indexMap }, positions] = await Promise.all([
@@ -2330,8 +2378,14 @@ async function runAvantisSetTpslAction(session, agentKey, args = {}) {
     const selected = findSingleAvantisRow(positions, args, indexMap, 'position');
     if (selected.error) return { ok: false, error: selected.error, available_positions: selected.available };
     const normalized = normalizeAvantisPosition(selected.row, indexMap);
-    const nextTakeProfit = finitePositive(args.take_profit ?? args.tp) || (finitePositive(normalized.take_profit) || null);
-    const nextStopLoss = finitePositive(args.stop_loss ?? args.sl) || (finitePositive(normalized.stop_loss) || null);
+    const computedTakeProfit = takeProfitPnlPct
+      ? avantisTriggerPriceFromPnlPct(normalized, takeProfitPnlPct, 'take_profit')
+      : 0;
+    const computedStopLoss = stopLossPnlPct
+      ? avantisTriggerPriceFromPnlPct(normalized, stopLossPnlPct, 'stop_loss')
+      : 0;
+    const nextTakeProfit = takeProfitPriceInput || computedTakeProfit || (finitePositive(normalized.take_profit) || null);
+    const nextStopLoss = stopLossPriceInput || computedStopLoss || (finitePositive(normalized.stop_loss) || null);
     const actionArgs = {
       symbol: normalized.symbol,
       side: normalized.side,
@@ -2339,6 +2393,9 @@ async function runAvantisSetTpslAction(session, agentKey, args = {}) {
       trade_index: normalized.trade_index,
       take_profit: nextTakeProfit,
       stop_loss: nextStopLoss,
+      take_profit_pnl_pct: takeProfitPnlPct || null,
+      stop_loss_pnl_pct: stopLossPnlPct || null,
+      tpsl_basis: takeProfitPnlPct || stopLossPnlPct ? 'pnl_pct' : 'price',
       position: normalized,
     };
     const output = avantisBrowserAction(
@@ -3814,6 +3871,18 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
         trade_index: z.number().int().min(0).optional(),
         take_profit: z.number().positive().optional(),
         stop_loss: z.number().positive().optional(),
+        take_profit_pnl_pct: z.number().positive().optional(),
+        take_profit_profit_pct: z.number().positive().optional(),
+        take_profit_pct: z.number().positive().optional(),
+        tp_pnl_pct: z.number().positive().optional(),
+        tp_profit_pct: z.number().positive().optional(),
+        tp_pct: z.number().positive().optional(),
+        stop_loss_pnl_pct: z.number().positive().optional(),
+        stop_loss_loss_pct: z.number().positive().optional(),
+        stop_loss_pct: z.number().positive().optional(),
+        sl_pnl_pct: z.number().positive().optional(),
+        sl_loss_pct: z.number().positive().optional(),
+        sl_pct: z.number().positive().optional(),
       },
     },
     async (args) => {

@@ -294,6 +294,13 @@ const DECIBEL_TRADING_WORD_RE = new RegExp([
   'balance', 'equity', 'pnl', 'profit', 'loss',
   'tp', 'sl', 'take profit', 'stop loss', 'close', 'cancel',
   'interesting', 'volatile', 'volatility', 'risky',
+  '\\u0442\\u043f',                 // TP typed with Cyrillic letters
+  '\\u0441\\u043b',                 // SL typed with Cyrillic letters
+  '\\u0442\\u0435\\u0439\\u043a',   // take
+  '\\u043f\\u0440\\u043e\\u0444',   // profit
+  '\\u043f\\u0440\\u0438\\u0431\\u0443\\u0442', // profit uk
+  '\\u0441\\u0442\\u043e\\u043f',   // stop
+  '\\u043b\\u043e\\u0441',          // loss
   '\\u043b\\u043e\\u043d\\u0433',        // long
   '\\u0448\\u043e\\u0440\\u0442',        // short
   '\\u043f\\u043e\\u0437\\u0438\\u0446', // position
@@ -317,7 +324,7 @@ const DECIBEL_ORDER_READ_RE = /(?:\b(?:open|active|pending|my|list|show|check|wh
 const DECIBEL_MARKET_RE = /(market|markets|price|prices|mark price|funding|\u0446\u0456\u043d|\u0446\u0435\u043d|\u043f\u0440\u0430\u0439\u0441|\u043a\u043e\u0442\u0438\u0440|\u0440\u0438\u043d\u043e\u043a|\u0440\u044b\u043d\u043e\u043a|\u4ef7\u683c|\u5e02\u573a|\u884c\u60c5)/iu;
 const DECIBEL_CLOSE_RE = /(close|reduce|\u0437\u0430\u043a\u0440|\u0437\u043c\u0435\u043d\u0448|\u0443\u043c\u0435\u043d\u044c\u0448|\u5e73\u4ed3|\u5173\u95ed|\u6e1b\u4ed3|\u51cf\u4ed3)/iu;
 const DECIBEL_CANCEL_RE = /(cancel|remove order|\u043e\u0442\u043c\u0435\u043d|\u0441\u043a\u0430\u0441\u0443|\u53d6\u6d88|\u64a4\u5355)/iu;
-const DECIBEL_TPSL_RE = /(take profit|stop loss|\btp\b|\bsl\b|\u0442\u0435\u0439\u043a|\u043f\u0440\u043e\u0444\u0456\u0442|\u043f\u0440\u043e\u0444\u0438\u0442|\u0441\u0442\u043e\u043f|\u043b\u043e\u0441|\u6b62\u76c8|\u6b62\u635f|\u6b62\u635f)/iu;
+const DECIBEL_TPSL_RE = /(take profit|stop loss|\btp\b|\bsl\b|(?:^|[^\p{L}\p{N}_])\u0442\u043f(?:$|[^\p{L}\p{N}_])|(?:^|[^\p{L}\p{N}_])\u0441\u043b(?:$|[^\p{L}\p{N}_])|\u0442\u0435\u0439\u043a|\u043f\u0440\u043e\u0444\u0456\u0442|\u043f\u0440\u043e\u0444\u0438\u0442|\u043f\u0440\u0438\u0431\u0443\u0442|\u0441\u0442\u043e\u043f|\u043b\u043e\u0441|\u0437\u0431\u0438\u0442|\u6b62\u76c8|\u6b62\u635f|\u6b62\u635f)/iu;
 const DECIBEL_LEVERAGE_RE = /(leverage|\d+\s*x\b|\u043f\u043b\u0435\u0447|\u043b\u0435\u0432\u0435\u0440|\u6760\u6746)/iu;
 const DECIBEL_PLACE_ORDER_RE = /(long|short|buy|sell|open\s+(?:a\s+)?(?:long|short|trade|position|order)|market order|limit order|\u043b\u043e\u043d\u0433|\u0448\u043e\u0440\u0442|\u043e\u0442\u043a\u0440|\u0432\u0456\u0434\u043a\u0440|\u043a\u0443\u043f|\u043f\u0440\u043e\u0434|\u5f00\u591a|\u5f00\u7a7a|\u4e70|\u5356|\u505a\u591a|\u505a\u7a7a)/iu;
 const DECIBEL_NON_TRADE_SHORT_LONG_RE = /\b(?:short|long)\s+(?:answer|reply|message|sentence|text|summary|response)\b/iu;
@@ -579,7 +586,7 @@ function classifyDecibelTradingIntent(message, normalizedText) {
   if (!autonomousOrder && !hasTradingWord && !(/decibel/i.test(raw) || (hasSymbol && (/\d/.test(raw) || DECIBEL_MARKET_RE.test(tradeText))))) {
     return null;
   }
-  if (!autonomousOrder && !hasSymbol && !/(decibel|avantis|\baccount\b|\bposition\b|\bpositions\b|\border\b|\borders\b|\bbalance\b|\bequity\b|\bpnl\b|\btrade\b|\btrading\b|\blong\b|\bshort\b|\bbuy\b|\bsell\b|\bclose\b|\bcancel\b|\bleverage\b|\btp\b|\bsl\b|\u043f\u043e\u0437\u0438\u0446|\u043e\u0440\u0434\u0435\u0440|\u0443\u0433\u043e\u0434|\u0431\u0430\u043b\u0430\u043d\u0441|\u043b\u043e\u043d\u0433|\u0448\u043e\u0440\u0442|\u043f\u043b\u0435\u0447|\u0437\u0430\u043a\u0440|\u0432\u0456\u0434\u043a\u0440|\u043e\u0442\u043a\u0440|\u4ed3|\u8ba2\u5355|\u6760\u6746|\u4ef7\u683c)/iu.test(tradeText)) {
+  if (!autonomousOrder && !hasSymbol && !/(decibel|avantis|\baccount\b|\bposition\b|\bpositions\b|\border\b|\borders\b|\bbalance\b|\bequity\b|\bpnl\b|\btrade\b|\btrading\b|\blong\b|\bshort\b|\bbuy\b|\bsell\b|\bclose\b|\bcancel\b|\bleverage\b|\btp\b|\bsl\b|\u0442\u043f|\u0441\u043b|\u0442\u0435\u0439\u043a|\u043f\u0440\u043e\u0444|\u043f\u0440\u0438\u0431\u0443\u0442|\u0441\u0442\u043e\u043f|\u043b\u043e\u0441|\u043f\u043e\u0437\u0438\u0446|\u043e\u0440\u0434\u0435\u0440|\u0443\u0433\u043e\u0434|\u0431\u0430\u043b\u0430\u043d\u0441|\u043b\u043e\u043d\u0433|\u0448\u043e\u0440\u0442|\u043f\u043b\u0435\u0447|\u0437\u0430\u043a\u0440|\u0432\u0456\u0434\u043a\u0440|\u043e\u0442\u043a\u0440|\u4ed3|\u8ba2\u5355|\u6760\u6746|\u4ef7\u683c)/iu.test(tradeText)) {
     return null;
   }
 
@@ -840,13 +847,28 @@ function extractRequestedLeverageHint(message) {
   return null;
 }
 
+function extractRequestedTpslPnlPctHint(message) {
+  const raw = String(message || '').normalize('NFKC');
+  const percentMatch = raw.match(/(\d+(?:[.,]\d+)?)\s*%/u);
+  const value = Number(String(percentMatch?.[1] || '').replace(',', '.'));
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const hasTakeProfit = /(take\s*profit|\btp\b|(?:^|[^\p{L}\p{N}_])\u0442\u043f(?:$|[^\p{L}\p{N}_])|\u0442\u0435\u0439\u043a|\u043f\u0440\u043e\u0444|\u043f\u0440\u0438\u0431\u0443\u0442|profit)/iu.test(raw);
+  const hasStopLoss = /(stop\s*loss|\bsl\b|(?:^|[^\p{L}\p{N}_])\u0441\u043b(?:$|[^\p{L}\p{N}_])|\u0441\u0442\u043e\u043f|\u043b\u043e\u0441|\u0437\u0431\u0438\u0442|loss)/iu.test(raw);
+  if (!hasTakeProfit && !hasStopLoss) return null;
+  const out = {};
+  if (hasTakeProfit) out.take_profit_pnl_pct = Math.max(0.01, Math.min(10000, value));
+  if (hasStopLoss && !hasTakeProfit) out.stop_loss_pnl_pct = Math.max(0.01, Math.min(10000, value));
+  return out;
+}
+
 function buildTradingPhraseHints(message, intent = {}) {
   const kind = String(intent?.kind || '');
   const isPlaceLike = kind === 'avantis_place_order'
     || kind === 'decibel_place_order'
     || kind === 'avantis_close_then_place_order'
     || kind === 'decibel_close_then_place_order';
-  if (!isPlaceLike) return '';
+  const isTpsl = kind === 'avantis_tpsl' || kind === 'decibel_tpsl';
+  if (!isPlaceLike && !isTpsl) return '';
   const raw = String(message || '').normalize('NFKC');
   const lower = raw.toLocaleLowerCase();
   const hints = [];
@@ -885,6 +907,17 @@ function buildTradingPhraseHints(message, intent = {}) {
       'Prefer crypto/token markets with higher volatility_hourly_pct and strong absolute signal_score; do not default to BTC for "interesting" or "volatile".',
     ].filter(Boolean).join(' '));
   }
+  if (isTpsl) {
+    const tpslPct = extractRequestedTpslPnlPctHint(raw);
+    if (tpslPct?.take_profit_pnl_pct && kind.startsWith('avantis_')) {
+      hints.push(`The current player message asks for take-profit at ${tpslPct.take_profit_pnl_pct}% profit on the position/collateral, not a ${tpslPct.take_profit_pnl_pct}% raw price move. For avantis_set_tpsl, pass take_profit_pnl_pct: ${tpslPct.take_profit_pnl_pct}; MCP will compute the exact TP price from the current position entry, side, and leverage.`);
+    } else if (tpslPct?.take_profit_pnl_pct) {
+      hints.push(`The current player message asks for take-profit at ${tpslPct.take_profit_pnl_pct}% profit on the position/collateral. Convert it from the current position entry and leverage before calling the TP/SL tool; do not treat it as a raw price-percent move.`);
+    }
+    if (tpslPct?.stop_loss_pnl_pct && kind.startsWith('avantis_')) {
+      hints.push(`The current player message asks for stop-loss at ${tpslPct.stop_loss_pnl_pct}% loss on the position/collateral. For avantis_set_tpsl, pass stop_loss_pnl_pct: ${tpslPct.stop_loss_pnl_pct}; MCP will compute the exact SL price from the current position entry, side, and leverage.`);
+    }
+  }
   return hints.length ? hints.join('\n') : '';
 }
 
@@ -918,6 +951,9 @@ function buildIntentInstructions(intent) {
   }
   if (intent.kind === 'avantis_leverage') {
     lines.push('For Avantis leverage-change requests, do not ask whether the player means a new position or an existing one. Call avantis_get_positions, then explain that Avantis leverage is chosen when opening a trade and cannot be changed account-wide after the fact.');
+  }
+  if (intent.kind === 'avantis_tpsl') {
+    lines.push('For TP/SL percentages like "TP at 20% profit" or Ukrainian/Russian equivalents, pass take_profit_pnl_pct or stop_loss_pnl_pct to avantis_set_tpsl. Do not turn 20% profit into a 20% raw price move; MCP computes the price using position entry, side, and leverage.');
   }
   if (String(intent.kind || '').startsWith('avantis_')) {
     lines.push('Avantis writes are browser-signed: the MCP write tool only prepares a browser_action. Final on-chain submission happens in the player browser via Smart Wallet auto-signing when enabled, or external wallet prompt otherwise. Answer naturally that the action is prepared and signing is starting; avoid rigid status templates, do not say "confirm the prompt", and do not say opened/closed/updated unless a browser result is explicitly present.');

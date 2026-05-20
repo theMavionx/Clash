@@ -120,6 +120,7 @@ const CASES = [
   { id: 'a33', message: 'open BTC long $2 60x Avantis', expect: 'tool_plan', tools: ['avantis_place_order'], args: { symbol: 'BTC', side: 'long', collateral_usd: 2, leverage: 60 }, policy: { wallet_usdc: 20, effective_max_leverage: 75, max_leverage: 75 } },
   { id: 'a34', message: 'постав TP 2500 SL 2100 для ETH Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_set_tpsl'], args: { symbol: 'ETH', take_profit: 2500, stop_loss: 2100 } },
   { id: 'a35', message: 'set only stop loss 2050 on my ETH position Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_set_tpsl'], args: { symbol: 'ETH', stop_loss: 2050 } },
+  { id: 'a35b', message: '\u043f\u043e\u0441\u0442\u0430\u0432 \u0442\u043f \u043d\u0430 20% \u043f\u0440\u0438\u0431\u0443\u0442\u043a\u0443', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_set_tpsl'], args: { take_profit_pnl_pct: 20 } },
   { id: 'a36', message: 'закрий ETH позицію на Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position'], args: { symbol: 'ETH' } },
   { id: 'a37', message: 'close 50% of my SOL Avantis position', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_close_position'], args: { symbol: 'SOL', percent: 50 } },
   { id: 'a38', message: 'cancel BTC order on Avantis', expect: 'tool_plan', tools: ['avantis_get_positions', 'avantis_cancel_order'], args: { symbol: 'BTC' } },

@@ -513,8 +513,14 @@ function describeAvantisBrowserAction(action) {
   }
   if (action?.type === 'set_tpsl') {
     const bits = [];
-    if (Number(args.take_profit) > 0) bits.push(`TP ${formatAiUsd(args.take_profit)}`);
-    if (Number(args.stop_loss) > 0) bits.push(`SL ${formatAiUsd(args.stop_loss)}`);
+    if (Number(args.take_profit) > 0) {
+      const pct = Number(args.take_profit_pnl_pct);
+      bits.push(`TP ${Number.isFinite(pct) && pct > 0 ? `${pct}% profit, ` : ''}${formatAiUsd(args.take_profit)}`);
+    }
+    if (Number(args.stop_loss) > 0) {
+      const pct = Number(args.stop_loss_pnl_pct);
+      bits.push(`SL ${Number.isFinite(pct) && pct > 0 ? `${pct}% loss, ` : ''}${formatAiUsd(args.stop_loss)}`);
+    }
     return `Set ${bits.join(' / ') || 'TP/SL'} on ${args.symbol || 'position'}`;
   }
   return action?.summary || 'Avantis browser action';

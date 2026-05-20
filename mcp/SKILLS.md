@@ -173,9 +173,11 @@ Avantis self-custody reads use the player's registered EVM wallet. Avantis MCP w
 - `avantis_place_order({ symbol?, side?, order_type?, price?, collateral_usd?, collateral_pct?, notional_usd?, leverage?, use_max_leverage?, slippage_pct?, take_profit?, stop_loss?, auto_select? })`: prepare a browser-signed Avantis order.
 - `avantis_close_position({ symbol?, pair_index?, trade_index?, amount?, collateral_usd?, percent? })`: prepare a browser-signed close/reduce action.
 - `avantis_cancel_order({ symbol?, pair_index?, trade_index? })`: prepare a browser-signed limit-order cancel.
-- `avantis_set_tpsl({ symbol?, pair_index?, trade_index?, take_profit?, stop_loss? })`: prepare a browser-signed TP/SL update.
+- `avantis_set_tpsl({ symbol?, pair_index?, trade_index?, take_profit?, stop_loss?, take_profit_pnl_pct?, stop_loss_pnl_pct? })`: prepare a browser-signed TP/SL update.
 
 For Avantis write requests, the final write/action tool is mandatory: `avantis_get_positions` alone does not close, cancel, or set TP/SL.
+
+For TP/SL percentages like "TP at 20% profit", pass `take_profit_pnl_pct` / `stop_loss_pnl_pct`; do not turn it into a raw 20% price move.
 
 Never claim an Avantis write executed from MCP alone. The MCP result means the browser action is prepared/opening; the frontend reports the transaction hash after browser submission. Browser policy blocks AI-prepared orders above `$100` collateral, `50x` leverage, `$1000` notional, or `5%` slippage unless the operator overrides caps for testing. For delegated-choice orders such as "open some trade", "якусь угоду", or "на твій розсуд", use `avantis_market_scan` and choose a ranked crypto/token candidate instead of asking for symbol/side; do not choose FX/equity/commodity markets unless explicitly named. For "maximum allowed leverage" Avantis orders, pass `use_max_leverage: true` unless market data returns a lower numeric cap; do not reuse old 20x blockers from chat history.
 
