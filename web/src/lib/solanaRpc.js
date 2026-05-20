@@ -9,11 +9,12 @@ const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SO
 const includeTatumRpcProxy = /^(1|true|yes)$/i.test(String(
   import.meta.env.VITE_SOLANA_ENABLE_TATUM_RPC || import.meta.env.VITE_SOLANA_ENABLE_TATUM || '',
 ));
+const includePublicRpcProxy = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC || '1'));
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
-export const SOLANA_RPC_PROBE_TIMEOUT_MS = 3_000;
+export const SOLANA_RPC_PROBE_TIMEOUT_MS = 2_000;
 
 function siteOrigin() {
   if (typeof window !== 'undefined' && window.location?.origin) {
@@ -81,6 +82,7 @@ try {
 }
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
+export const SAME_ORIGIN_SOLANA_PUBLIC_URL = sameOriginPath('/rpc/solana-public');
 export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
 export const SAME_ORIGIN_SOLANA_TATUM_URL = sameOriginPath('/rpc/solana-tatum');
 
@@ -92,11 +94,12 @@ const DIRECT_SOLANA_RPC_URLS = [
 ];
 
 const PROXY_SOLANA_RPC_URLS = [
+  ...(allowProxyFallback && includePublicRpcProxy ? [SAME_ORIGIN_SOLANA_PUBLIC_URL] : []),
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
-    ...(includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
     ...(includeLeoRpcProxy ? [SAME_ORIGIN_SOLANA_LEORPC_URL] : []),
+    ...(includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
   ] : []),
 ];
 
@@ -108,7 +111,17 @@ export const SOLANA_RPC_URLS = [
 export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_RPC_URL;
 
 export function solanaRpcHost(url) {
-  try { return new URL(url, siteOrigin()).host || null; } catch { return String(url || 'unknown'); }
+  try {
+    const parsed = new URL(url, siteOrigin());
+    const origin = new URL(siteOrigin());
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    if (parsed.origin === origin.origin && pathname.startsWith('/rpc/solana')) {
+      return `${parsed.host}${pathname}`;
+    }
+    return parsed.host || null;
+  } catch {
+    return String(url || 'unknown');
+  }
 }
 
 export function isHeliusSolanaRpcUrl(url) {
@@ -318,7 +331,8 @@ export function solanaWsUrl(httpUrl = DEFAULT_SOLANA_RPC_URL) {
   const raw = String(httpUrl || '');
   try {
     const url = new URL(raw, siteOrigin());
-    if (url.pathname.replace(/\/+$/, '') === '/rpc/solana') {
+    const pathname = url.pathname.replace(/\/+$/, '');
+    if (pathname === '/rpc/solana' || pathname === '/rpc/solana-public') {
       url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
       url.pathname = '/rpc/solana-ws';
       url.search = '';

@@ -130,6 +130,18 @@ export default defineConfig({
         },
         rewrite: () => '/',
       },
+      '^/rpc/solana-public$': {
+        target: 'https://api.mainnet-beta.solana.com',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => '/',
+      },
       '/rpc/solana-leorpc': {
         target: 'https://solana.leorpc.com',
         changeOrigin: true,

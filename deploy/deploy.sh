@@ -247,7 +247,8 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
-    ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" ""
+    ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "1"
+    ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "1"
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
     ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
@@ -657,6 +658,19 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+    }
+
+    location = /rpc/solana-public {
+        proxy_pass https://api.mainnet-beta.solana.com/;
+        proxy_http_version 1.1;
+        proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
     }
 
     location /rpc/solana-tatum {

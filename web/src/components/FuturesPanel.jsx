@@ -1420,9 +1420,9 @@ function FuturesPanel() {
       setReferralLinking(false);
     }
   }, [dex, oneTapTrading?.enabled, setOneTapTradingEnabled, linkOurReferrer, referralLinking]);
-  // Pending-tx state for LONG/SHORT buttons so the user sees "Signing…" then
-  // "Confirming…" instead of bare ellipsis.
-  const [tradePhase, setTradePhase] = useState(null); // 'signing' | 'confirming' | null
+  // Pending-tx state for LONG/SHORT buttons, including pre-wallet prep time.
+  const [tradePhase, setTradePhase] = useState(null); // 'preparing' | 'signing' | 'confirming' | null
+  const [tradeBusy, setTradeBusy] = useState(false);
   const [amountInUsdc, setAmountInUsdc] = useState(true);
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
@@ -1789,6 +1789,8 @@ function FuturesPanel() {
   const handleTrade = useCallback(async (side) => {
     if (tradeInFlight.current) return;
     tradeInFlight.current = true;
+    setTradeBusy(true);
+    setTradePhase('preparing');
     setLocalAlert(null);
     try {
       // Pacifica API: 3rd arg is qty in base token (0.0022 BTC).
@@ -1950,6 +1952,7 @@ function FuturesPanel() {
       }
     } finally {
       tradeInFlight.current = false;
+      setTradeBusy(false);
       setTradePhase(null);
     }
   }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, phoenixTakerFeeRate, positions]);
@@ -1966,6 +1969,12 @@ function FuturesPanel() {
   const vol24h = curPriceData ? parseFloat(curPriceData.volume_24h || 0) : 0;
   const oi = curPriceData ? parseFloat(curPriceData.open_interest || 0) : 0;
   const oracle = curPriceData ? parseFloat(curPriceData.oracle || 0) : 0;
+  const tradeButtonBusy = loading || tradeBusy || tradePhase != null;
+  const tradeButtonPendingLabel = tradePhase === 'confirming'
+    ? 'Confirming...'
+    : tradePhase === 'signing'
+      ? 'Signing...'
+      : 'Preparing...';
 
   const renderSymbolBar = () => (
     <>
@@ -2226,11 +2235,11 @@ function FuturesPanel() {
         )}
 
         <div style={S.row}>
-          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={loading}>
-            <span style={S.tradeBtnText}>{loading ? (tradePhase === 'confirming' ? 'Confirming…' : 'Signing…') : 'LONG'}</span>
+          <button style={{...cartoonBtn('#4CAF50','#2E7D32'), ...S.tradeBtn}} onClick={() => handleTrade('bid')} disabled={tradeButtonBusy}>
+            <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'LONG'}</span>
           </button>
-          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={loading}>
-            <span style={S.tradeBtnText}>{loading ? (tradePhase === 'confirming' ? 'Confirming…' : 'Signing…') : 'SHORT'}</span>
+          <button style={{...cartoonBtn('#E53935','#B71C1C'), ...S.tradeBtn}} onClick={() => handleTrade('ask')} disabled={tradeButtonBusy}>
+            <span style={S.tradeBtnText}>{tradeButtonBusy ? tradeButtonPendingLabel : 'SHORT'}</span>
           </button>
         </div>
       </div>

@@ -784,7 +784,7 @@ export function usePhoenix() {
       return buildAndSend(orderClient);
     };
     try {
-      return await runWithTransactionClient('initial', true);
+      return await runWithTransactionClient('initial', false);
     } catch (e) {
       if (!isPhoenixMetadataDriftError(e)) throw e;
       console.warn('[Phoenix] exchange metadata drift; rebuilding instruction once', {
