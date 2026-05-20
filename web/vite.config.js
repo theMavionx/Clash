@@ -18,6 +18,11 @@ const SOLANA_HELIUS_API_KEY = process.env.SOLANA_HELIUS_API_KEY
   || process.env.VITE_SOLANA_HELIUS_API_KEY
   || viteEnv.VITE_SOLANA_HELIUS_API_KEY
   || '';
+const SOLANA_TATUM_API_KEY = process.env.SOLANA_TATUM_API_KEY
+  || viteEnv.SOLANA_TATUM_API_KEY
+  || process.env.TATUM_API_KEY
+  || viteEnv.TATUM_API_KEY
+  || '';
 const SOLANA_RPC_PROXY_TARGET = SOLANA_HELIUS_API_KEY
   ? 'https://mainnet.helius-rpc.com'
   : 'https://api.mainnet-beta.solana.com';
@@ -136,6 +141,19 @@ export default defineConfig({
           });
         },
         rewrite: () => '/?api_key=FREE',
+      },
+      '/rpc/solana-tatum': {
+        target: 'https://solana-mainnet.gateway.tatum.io',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+            if (SOLANA_TATUM_API_KEY) proxyReq.setHeader('x-api-key', SOLANA_TATUM_API_KEY);
+          });
+        },
+        rewrite: () => '/',
       },
       '^/rpc/solana$': {
         target: SOLANA_RPC_PROXY_TARGET,

@@ -129,7 +129,7 @@ load_vite_env_for_build() {
     # start with VITE_. Release copies intentionally exclude .env files, so
     # production-only public config (Privy app id, Aptos/Arbitrum API keys)
     # must be lifted from /opt/clash/shared/.env before npm run build.
-    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY
+    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY VITE_SOLANA_TATUM_API_KEY VITE_TATUM_API_KEY
     [ -f "$ENV_FILE" ] || return 0
 
     local count=0
@@ -145,7 +145,7 @@ load_vite_env_for_build() {
         case "$key" in
             VITE_*)
                 case "$key" in
-                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY)
+                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY)
                         continue
                         ;;
                 esac
@@ -246,6 +246,8 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
+    ensure_env_default "SOLANA_TATUM_API_KEY" ""
+    ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" ""
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
     ensure_env_default "VITE_APTOS_GAS_STATION_API_KEY" ""
@@ -577,6 +579,7 @@ MCPTEMPCONF
         "HELIUS_API_KEY" \
         "VITE_HELIUS_API_KEY" \
         "VITE_SOLANA_HELIUS_API_KEY")"
+    SOLANA_TATUM_API_KEY="$(first_env_file_value "SOLANA_TATUM_API_KEY" "TATUM_API_KEY")"
 
     cat > /etc/nginx/sites-available/$DOMAIN << 'SSLCONF'
 server {
@@ -654,6 +657,20 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
+    }
+
+    location /rpc/solana-tatum {
+        proxy_pass https://solana-mainnet.gateway.tatum.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Host solana-mainnet.gateway.tatum.io;
+        proxy_set_header x-api-key "__SOLANA_TATUM_API_KEY__";
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
     }
 
     location /rpc/solana {
@@ -843,6 +860,15 @@ MCPCONF
     else
         sed -i 's|proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
+    fi
+
+    if [ -n "$SOLANA_TATUM_API_KEY" ]; then
+        sed -i "s|__SOLANA_TATUM_API_KEY__|$(sed_escape_replacement "$SOLANA_TATUM_API_KEY")|g" /etc/nginx/sites-available/$DOMAIN
+        log "SOLANA_TATUM_API_KEY is set; /rpc/solana-tatum will proxy to Tatum server-side."
+    else
+        sed -i 's|proxy_pass https://solana-mainnet.gateway.tatum.io/;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|        proxy_set_header x-api-key "__SOLANA_TATUM_API_KEY__";||g' /etc/nginx/sites-available/$DOMAIN
+        log "SOLANA_TATUM_API_KEY is not set; /rpc/solana-tatum will return 503."
     fi
 
     local solana_rpc_proxy_pass solana_rpc_host

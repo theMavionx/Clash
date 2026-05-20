@@ -13,6 +13,7 @@ import {
 
 const DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS = 25_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_COMPUTE_UNIT_LIMIT = null;
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 const ENABLE_PRE_SIGN_SIMULATION = !/^(0|false|no)$/i.test(
   String(import.meta.env.VITE_SOLANA_PRE_SIGN_SIMULATION || '1'),
@@ -980,6 +981,7 @@ export async function sendSolanaTransactionWithRetry({
   privySignTx = null,
   privyWalletObj = null,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  computeUnitLimit = DEFAULT_COMPUTE_UNIT_LIMIT,
   priorityFeeMicroLamports = DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS,
   skipPreflight = false,
   preferPrivySignAndSend = false,
@@ -1006,6 +1008,13 @@ export async function sendSolanaTransactionWithRetry({
       attemptConnection = selected.connection;
 
       const txInstructions = [];
+      const requestedComputeUnitLimit = Number(computeUnitLimit);
+      const appliedComputeUnitLimit = Number.isFinite(requestedComputeUnitLimit) && requestedComputeUnitLimit > 0
+        ? Math.min(1_400_000, Math.max(1, Math.floor(requestedComputeUnitLimit)))
+        : null;
+      if (appliedComputeUnitLimit) {
+        txInstructions.push(ComputeBudgetProgram.setComputeUnitLimit({ units: appliedComputeUnitLimit }));
+      }
       if (priorityFeeMicroLamports > 0) {
         txInstructions.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFeeMicroLamports }));
       }
@@ -1055,6 +1064,7 @@ export async function sendSolanaTransactionWithRetry({
         last_valid_block_height: lastValidBlockHeight,
         remaining_blocks: remainingBlocks,
         remaining_cluster_blocks: remainingClusterBlocks,
+        compute_unit_limit: appliedComputeUnitLimit,
         priority_fee_micro_lamports: priorityFeeMicroLamports,
         skip_preflight: !!skipPreflight,
         instruction_count: list.length,

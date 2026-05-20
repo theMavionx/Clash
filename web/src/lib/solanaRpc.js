@@ -6,6 +6,9 @@ const preferProxyRpc = allowProxyFallback
   && !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || '1'));
 const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
 const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
+const includeTatumRpcProxy = /^(1|true|yes)$/i.test(String(
+  import.meta.env.VITE_SOLANA_ENABLE_TATUM_RPC || import.meta.env.VITE_SOLANA_ENABLE_TATUM || '',
+));
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
@@ -43,16 +46,18 @@ function isSameOriginRpcUrl(url) {
   }
 }
 
-function isSameOriginPrimarySolanaRpcUrl(url) {
+function isSameOriginSerializedSolanaRpcUrl(url) {
   const raw = String(url || '').trim();
   if (!raw) return false;
   try {
     const parsed = new URL(raw, siteOrigin());
     const origin = new URL(siteOrigin());
+    const pathname = parsed.pathname.replace(/\/+$/, '');
     return parsed.origin === origin.origin
-      && parsed.pathname.replace(/\/+$/, '') === '/rpc/solana';
+      && (pathname === '/rpc/solana' || pathname === '/rpc/solana-tatum');
   } catch {
-    return raw.replace(/\/+$/, '') === '/rpc/solana';
+    const pathname = raw.replace(/\/+$/, '');
+    return pathname === '/rpc/solana' || pathname === '/rpc/solana-tatum';
   }
 }
 
@@ -77,6 +82,7 @@ try {
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
 export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
+export const SAME_ORIGIN_SOLANA_TATUM_URL = sameOriginPath('/rpc/solana-tatum');
 
 const DIRECT_SOLANA_RPC_URLS = [
   envDirectSolanaRpc,
@@ -89,6 +95,7 @@ const PROXY_SOLANA_RPC_URLS = [
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
+    ...(includeTatumRpcProxy ? [SAME_ORIGIN_SOLANA_TATUM_URL] : []),
     ...(includeLeoRpcProxy ? [SAME_ORIGIN_SOLANA_LEORPC_URL] : []),
   ] : []),
 ];
@@ -113,7 +120,7 @@ export function isHeliusSolanaRpcUrl(url) {
 }
 
 export function solanaRpcSupportsBatch(url) {
-  return !isHeliusSolanaRpcUrl(url) && !isSameOriginPrimarySolanaRpcUrl(url);
+  return !isHeliusSolanaRpcUrl(url) && !isSameOriginSerializedSolanaRpcUrl(url);
 }
 
 export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
@@ -122,7 +129,9 @@ export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
 
 export function solanaBatchSafeRpcUrl(preferredUrl, urls = SOLANA_RPC_URLS) {
   if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
-  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || DEFAULT_SOLANA_RPC_URL;
+  return (urls || []).find((url) => url && solanaRpcSupportsBatch(url))
+    || preferredUrl
+    || DEFAULT_SOLANA_RPC_URL;
 }
 
 function parseJsonRpcBody(body) {
@@ -183,7 +192,7 @@ async function heliusBatchSafeFetch(input, init = {}) {
 }
 
 export function solanaRpcFetchForUrl(url) {
-  return isHeliusSolanaRpcUrl(url) || isSameOriginPrimarySolanaRpcUrl(url)
+  return isHeliusSolanaRpcUrl(url) || isSameOriginSerializedSolanaRpcUrl(url)
     ? heliusBatchSafeFetch
     : undefined;
 }

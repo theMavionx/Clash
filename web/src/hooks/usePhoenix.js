@@ -29,6 +29,7 @@ const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
 const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
+const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
@@ -798,9 +799,10 @@ export function usePhoenix() {
     return p;
   }, []);
 
-  const sendIxs = useCallback((instructions, label = 'phoenix') => {
+  const sendIxs = useCallback((instructions, label = 'phoenix', options = {}) => {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
+    const computeUnitLimit = options?.computeUnitLimit || null;
     console.info('[Phoenix] send instructions', {
       label,
       owner: shortPhoenixAddress(ownerPk),
@@ -808,6 +810,7 @@ export function usePhoenix() {
       wallet_source: walletSource,
       rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
       flight_enabled: isPhoenixFlightEnabled(),
+      compute_unit_limit: computeUnitLimit,
       privy_active: !!privyActive,
     });
     return sendPhoenixInstructions({
@@ -821,6 +824,7 @@ export function usePhoenix() {
       privySignTx,
       privyWalletObj,
       label,
+      computeUnitLimit,
     });
   }, [ownerPk, walletAddr, walletSource, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
@@ -1440,7 +1444,7 @@ export function usePhoenix() {
             traderPdaIndex: 0,
             traderSubaccountIndex: 0,
           });
-          return sendIxs(ix, 'phoenix.market');
+          return sendIxs(ix, 'phoenix.market', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
         setTimeout(() => claimGold({ force: true }), 3000);
@@ -1495,7 +1499,7 @@ export function usePhoenix() {
             traderPdaIndex: 0,
             traderSubaccountIndex: 0,
           });
-          return sendIxs(ix, 'phoenix.limit');
+          return sendIxs(ix, 'phoenix.limit', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
         return { success: true, signature };
@@ -1589,7 +1593,7 @@ export function usePhoenix() {
             traderPdaIndex: 0,
             traderSubaccountIndex: subaccountIndex,
           });
-          return sendIxs(ix, 'phoenix.close');
+          return sendIxs(ix, 'phoenix.close', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
         setTimeout(() => claimGold({ force: true }), 3000);
@@ -1634,7 +1638,7 @@ export function usePhoenix() {
                 traderPdaIndex: 0,
                 traderSubaccountIndex: subaccountIndex,
               });
-          return sendIxs(ix, 'phoenix.cancel');
+          return sendIxs(ix, 'phoenix.cancel', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
         return { success: true, signature };
@@ -1748,7 +1752,7 @@ export function usePhoenix() {
             createdConditionalAccount: !!createConditionalIx,
             instructionCount: instructions.length,
           });
-          return sendIxs(instructions, 'phoenix.tpsl');
+          return sendIxs(instructions, 'phoenix.tpsl', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
         return { success: true, signature };

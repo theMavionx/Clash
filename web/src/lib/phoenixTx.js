@@ -94,6 +94,7 @@ export async function sendPhoenixInstructions({
   privySignTx = null,
   privyWalletObj = null,
   label = 'phoenix',
+  computeUnitLimit = null,
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
   console.info('[Phoenix] sendPhoenixInstructions input', {
@@ -118,6 +119,7 @@ export async function sendPhoenixInstructions({
     privySignTx,
     privyWalletObj,
     skipPreflight: false,
+    computeUnitLimit,
     preferPrivySignAndSend: true,
     preferWalletSendTransaction: true,
     label,
