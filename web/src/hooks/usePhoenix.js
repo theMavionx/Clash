@@ -12,6 +12,7 @@ import {
   getPhoenixClient,
   isPhoenixFlightEnabled,
   phoenixSymbol,
+  shouldBypassPhoenixFlightForAuthority,
 } from '../lib/phoenixClient';
 import { sendPhoenixInstructions } from '../lib/phoenixTx';
 import { solanaRpcHost } from '../lib/solanaRpc';
@@ -606,6 +607,7 @@ export function usePhoenix() {
   const accountRef = useRef(null);
   const txClientRef = useRef(null);
   const txClientEndpointRef = useRef(null);
+  const txClientFlightDisabledRef = useRef(false);
   const txClientReadyAtRef = useRef(0);
   const txClientInFlightRef = useRef(null);
 
@@ -628,6 +630,7 @@ export function usePhoenix() {
     disposePhoenixClient(txClientRef.current);
     txClientRef.current = null;
     txClientEndpointRef.current = null;
+    txClientFlightDisabledRef.current = false;
     txClientReadyAtRef.current = 0;
     txClientInFlightRef.current = null;
   }, []);
@@ -638,10 +641,12 @@ export function usePhoenix() {
 
   const getTransactionClient = useCallback(async (forceFresh = false) => {
     const endpoint = connection?.rpcEndpoint || null;
+    const disableFlight = shouldBypassPhoenixFlightForAuthority(walletAddr);
     const now = Date.now();
     const cached = txClientRef.current;
     const cacheFresh = cached
       && txClientEndpointRef.current === endpoint
+      && txClientFlightDisabledRef.current === disableFlight
       && now - txClientReadyAtRef.current < PHOENIX_TX_METADATA_TTL_MS;
 
     if (!forceFresh && cacheFresh) return cached;
@@ -652,18 +657,21 @@ export function usePhoenix() {
       console.info('[Phoenix] transaction client init', {
         rpc_host: solanaRpcHost(endpoint),
         force_fresh: !!forceFresh,
-        flight_enabled: isPhoenixFlightEnabled(),
+        flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
+        flight_self_bypass: disableFlight,
       });
-      const next = createPhoenixTransactionClient(endpoint);
+      const next = createPhoenixTransactionClient(endpoint, { disableFlight });
       try {
         await next.exchange?.ready?.();
         txClientRef.current = next;
         txClientEndpointRef.current = endpoint;
+        txClientFlightDisabledRef.current = disableFlight;
         txClientReadyAtRef.current = Date.now();
         console.info('[Phoenix] transaction client ready', {
           rpc_host: solanaRpcHost(endpoint),
           force_fresh: !!forceFresh,
-          flight_enabled: isPhoenixFlightEnabled(),
+          flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
+          flight_self_bypass: disableFlight,
           ready_ms: Math.max(0, Date.now() - now),
         });
         return next;
@@ -672,7 +680,8 @@ export function usePhoenix() {
         console.warn('[Phoenix] transaction client init failed', {
           rpc_host: solanaRpcHost(endpoint),
           force_fresh: !!forceFresh,
-          flight_enabled: isPhoenixFlightEnabled(),
+          flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
+          flight_self_bypass: disableFlight,
           message: e?.message || String(e || 'unknown error'),
         });
         throw e;
@@ -686,7 +695,7 @@ export function usePhoenix() {
         txClientInFlightRef.current = null;
       }
     }
-  }, [connection?.rpcEndpoint, disposeTransactionClient]);
+  }, [connection?.rpcEndpoint, disposeTransactionClient, walletAddr]);
 
   const buildCollateralIxs = useCallback(async (txClient, amount, direction, authority) => {
     await txClient.exchange?.ready?.();
@@ -768,7 +777,8 @@ export function usePhoenix() {
         cached: !forceFresh,
         cache_age_ms: Math.max(0, Date.now() - txClientReadyAtRef.current),
         rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
-        flight_enabled: isPhoenixFlightEnabled(),
+        flight_enabled: isPhoenixFlightEnabled() && !txClientFlightDisabledRef.current,
+        flight_self_bypass: txClientFlightDisabledRef.current,
         ...phoenixMetadataSummary(orderClient, phx),
       });
       return buildAndSend(orderClient);
@@ -809,7 +819,8 @@ export function usePhoenix() {
       wallet: shortPhoenixAddress(walletAddr),
       wallet_source: walletSource,
       rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
-      flight_enabled: isPhoenixFlightEnabled(),
+      flight_enabled: isPhoenixFlightEnabled() && !shouldBypassPhoenixFlightForAuthority(walletAddr),
+      flight_self_bypass: shouldBypassPhoenixFlightForAuthority(walletAddr),
       compute_unit_limit: computeUnitLimit,
       privy_active: !!privyActive,
     });

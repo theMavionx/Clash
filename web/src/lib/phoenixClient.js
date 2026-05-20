@@ -26,8 +26,13 @@ export function isPhoenixFlightEnabled() {
   return PHOENIX_FLIGHT_ENABLED && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
 }
 
-function phoenixFlightConfig() {
-  if (!isPhoenixFlightEnabled()) return undefined;
+export function shouldBypassPhoenixFlightForAuthority(authority) {
+  const wallet = String(authority || '').trim();
+  return !!wallet && isPhoenixFlightEnabled() && wallet === PHOENIX_FLIGHT_BUILDER_AUTHORITY;
+}
+
+function phoenixFlightConfig(options = {}) {
+  if (!isPhoenixFlightEnabled() || options.disableFlight) return undefined;
   return {
     builderAuthority: PHOENIX_FLIGHT_BUILDER_AUTHORITY,
     builderPdaIndex: Number.isFinite(PHOENIX_FLIGHT_BUILDER_PDA_INDEX)
@@ -39,13 +44,13 @@ function phoenixFlightConfig() {
   };
 }
 
-function createClient(rpcUrl) {
+function createClient(rpcUrl, options = {}) {
   const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
   return createPhoenixClient({
     apiUrl: PHOENIX_API_URL,
     rpcUrl: resolvedRpc,
     ws: false,
-    flight: phoenixFlightConfig(),
+    flight: phoenixFlightConfig(options),
     pdaCache: { maxEntries: 1024 },
     exchangeMetadata: {
       // The public API snapshot can lag on-chain state by many slots. Order
@@ -90,8 +95,8 @@ export function getFreshPhoenixClient(rpcUrl) {
   return getPhoenixClient(rpcUrl);
 }
 
-export function createPhoenixTransactionClient(rpcUrl) {
-  return createClient(rpcUrl);
+export function createPhoenixTransactionClient(rpcUrl, options = {}) {
+  return createClient(rpcUrl, options);
 }
 
 export function phoenixSymbol(symbol) {
