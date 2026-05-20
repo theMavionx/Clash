@@ -25,7 +25,7 @@
 //     we never want a domain lookup error to break login.
 
 import { Connection, PublicKey } from '@solana/web3.js';
-import { SOLANA_RPC_URLS } from './solanaRpc';
+import { SOLANA_RPC_URLS, createSolanaConnection } from './solanaRpc';
 
 const CACHE_KEY = 'clash_skr_name_cache_v1';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -41,7 +41,7 @@ async function getParser(rpcUrl) {
   if (parserPromise) return parserPromise;
   parserPromise = (async () => {
     const { TldParser } = await import('@onsol/tldparser');
-    const connection = new Connection(rpcUrl, { commitment: 'confirmed' });
+    const connection = createSolanaConnection(Connection, rpcUrl, { commitment: 'confirmed' });
     return new TldParser(connection);
   })();
   return parserPromise;

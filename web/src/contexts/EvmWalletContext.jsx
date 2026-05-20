@@ -12,7 +12,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import { createPublicClient, createWalletClient, http, custom, fallback } from 'viem';
 import { base, arbitrum, mainnet } from 'viem/chains';
-import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { BASE_CHAIN_ID, BASE_RPC_URLS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { HYPEREVM_CHAIN_ID, HYPEREVM_RPC_URLS, ensureHyperEvmChain, hyperEvmChain } from '../lib/hyperevmConfig';
@@ -44,7 +44,13 @@ import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 // the per-refresh request count from ~500 to ~10. We also keep `wait: 50`
 // so any code path that uses `readContract` (instead of `multicall`
 // directly) still gets auto-batched into multicall3 within the 50ms window.
-const publicClient = createPublicClient({ chain: base, transport: http() });
+const publicClient = createPublicClient({
+  chain: base,
+  transport: fallback(
+    BASE_RPC_URLS.map(u => http(u, { retryCount: 0, timeout: 10_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 const ethereumPublicClient = createPublicClient({ chain: mainnet, transport: http() });
 const arbitrumPublicClient = createPublicClient({
   chain: arbitrum,
@@ -154,6 +160,7 @@ const EvmWalletContext = createContext({
   isReady: false,
   error: null,
   source: null,
+  sendTransaction: null,
   setExternalProvider: () => {},
   reconnectStoredProvider: async () => false,
   disconnect: () => {},
@@ -355,7 +362,7 @@ export function EvmWalletProvider({ children }) {
   }, [externalAddress, reconnectStoredProvider]);
 
   // Privy embedded wallet is auto-picked when the user logs in via email.
-  const { authenticated, evmWallets: privyWallets } = useOptionalPrivy();
+  const { authenticated, evmWallets: privyWallets, evmSendTransaction } = useOptionalPrivy();
   const privyWallet = authenticated
     ? (privyWallets || []).find(w => w?.walletClientType === 'privy')
       || (privyWallets || [])[0]
@@ -469,6 +476,16 @@ export function EvmWalletProvider({ children }) {
     return PUBLIC_CLIENT_BY_ID[Number(targetChainId)] || publicClient;
   }, []);
 
+  const sendTransaction = useCallback(async (tx, options = {}) => {
+    if (source !== 'privy' || !privyAddress || typeof evmSendTransaction !== 'function') {
+      throw new Error('Privy embedded wallet transaction sender is not available');
+    }
+    return evmSendTransaction(tx, {
+      address: privyAddress,
+      ...options,
+    });
+  }, [source, privyAddress, evmSendTransaction]);
+
   // Disconnect for the custom modal path. Privy disconnect is managed by
   // Privy itself (logout button in RegisterPanel).
   const disconnect = useCallback(() => {
@@ -552,10 +569,11 @@ export function EvmWalletProvider({ children }) {
     getWalletClient,
     getPublicClient,
     source,
+    sendTransaction: source === 'privy' ? sendTransaction : null,
     setExternalProvider: setPersistedExternalProvider,
     reconnectStoredProvider,
     disconnect,
-  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, setPersistedExternalProvider, reconnectStoredProvider, disconnect]);
+  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, sendTransaction, setPersistedExternalProvider, reconnectStoredProvider, disconnect]);
 
   return <EvmWalletContext.Provider value={value}>{children}</EvmWalletContext.Provider>;
 }

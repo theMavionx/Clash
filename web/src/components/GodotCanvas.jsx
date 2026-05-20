@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import { addClientBreadcrumb } from '../lib/clientLogger';
+import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
 // Loading splash — served from `web/public/splash-bg.png` + splash-logo.png.
 // Layered so the logo can be hidden on narrow / portrait screens while the
 // background art still fills the viewport. Public-path reference means art
@@ -17,6 +17,9 @@ const CACHE_BUST = '?v=' + encodeURIComponent(GODOT_BUILD_TOKEN); // Force fresh
 const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
 const GODOT_CACHE_PREFIXES = ['clash-godot-', 'clash-godot-resource-icons-'];
 const GODOT_RUNTIME_RELOAD_KEY = `clash_godot_runtime_reloaded_${GODOT_BUILD_TOKEN}`;
+const GODOT_WEBGL_CONTEXT_RELOAD_KEY = `clash_godot_webgl_context_reloaded_at_${GODOT_BUILD_TOKEN}`;
+const GODOT_WEBGL_CONTEXT_RELOAD_COOLDOWN_MS = 15000;
+const GODOT_WEBGL_CONTEXT_RELOAD_DELAY_MS = 650;
 const APP_TITLE = 'Clash of Perps';
 
 function keepAppTitle() {
@@ -180,10 +183,12 @@ function isGodotWasmCacheMismatch(errorLike) {
     error?.stack,
   ].filter(Boolean).join('\n');
 
-  return /WebAssembly\.instantiate/i.test(text)
-    && /Import #0/i.test(text)
-    && /env/i.test(text)
-    && /module is not an object or function/i.test(text);
+  return (
+    /WebAssembly\.instantiate/i.test(text)
+      && /Import #0/i.test(text)
+      && /env/i.test(text)
+      && /module is not an object or function/i.test(text)
+  ) || /WebAssembly\.Module doesn't parse|Code function's size .* exceeds module's remaining size|wasm streaming compile failed|failed to asynchronously prepare wasm|\/godot\/Work\.(?:wasm|pck).*failed|Work\.(?:wasm|pck).*Failed to fetch/i.test(text);
 }
 
 function recoverOnceFromGodotCacheMismatch(errorLike) {
@@ -282,12 +287,26 @@ function GodotCanvas({ onEngineReady }) {
   const [isLoaded, setIsLoaded] = useState(false);
   const [stuck, setStuck] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [webglReloading, setWebglReloading] = useState(false);
   const lastProgressRef = useRef({ value: 0, time: 0 });
   const onEngineReadyRef = useRef(onEngineReady);
+  const isLoadedStateRef = useRef(false);
+  const stageStateRef = useRef(1);
+  const stageProgressStateRef = useRef(0);
+  const webglReloadStartedRef = useRef(false);
 
   useEffect(() => {
     onEngineReadyRef.current = onEngineReady;
   }, [onEngineReady]);
+
+  useEffect(() => {
+    isLoadedStateRef.current = isLoaded;
+  }, [isLoaded]);
+
+  useEffect(() => {
+    stageStateRef.current = stage;
+    stageProgressStateRef.current = stageProgress;
+  }, [stage, stageProgress]);
 
   // Detect if loading is stuck (same progress for 30s)
   useEffect(() => {
@@ -315,8 +334,70 @@ function GodotCanvas({ onEngineReady }) {
     let titleGuardId = null;
     let lastProgressBucket = -1;
     let restoreGodotFetch = null;
+    let contextCanvas = null;
     keepAppTitle();
     titleGuardId = window.setInterval(keepAppTitle, 500);
+
+    const getWebglContextPayload = (event) => ({
+      loaded: isLoadedStateRef.current,
+      stage: stageStateRef.current,
+      progress: stageProgressStateRef.current,
+      last_progress: lastProgressRef.current.value,
+      status_message: event?.statusMessage || null,
+      visibility_state: document.visibilityState || null,
+      canvas_width: canvasRef.current?.width || null,
+      canvas_height: canvasRef.current?.height || null,
+      pixel_ratio: getGodotPixelRatio(),
+    });
+
+    const handleWebglContextLost = (event) => {
+      event?.preventDefault?.();
+      if (disposed) return;
+
+      const payload = getWebglContextPayload(event);
+      addClientBreadcrumb('godot.webgl_context_lost', payload, 'error');
+      reportClientEvent('godot.webgl_context_lost', payload, {
+        level: 'error',
+        source: 'godot.webgl',
+        message: 'Godot WebGL context lost',
+      });
+
+      if (webglReloadStartedRef.current) return;
+      webglReloadStartedRef.current = true;
+      setErrorMsg(null);
+      setWebglReloading(true);
+
+      let shouldReload = true;
+      try {
+        const now = Date.now();
+        const previous = Number(window.sessionStorage?.getItem(GODOT_WEBGL_CONTEXT_RELOAD_KEY) || 0);
+        shouldReload = !previous || now - previous > GODOT_WEBGL_CONTEXT_RELOAD_COOLDOWN_MS;
+        if (shouldReload) {
+          window.sessionStorage?.setItem(GODOT_WEBGL_CONTEXT_RELOAD_KEY, String(now));
+        }
+      } catch {
+        // If storage is blocked, still attempt one recovery reload.
+      }
+
+      if (!shouldReload) {
+        setErrorMsg('WebGL context was lost again. Reload the page to recover graphics.');
+        return;
+      }
+
+      window.setTimeout(() => {
+        if (!disposed) window.location.reload();
+      }, GODOT_WEBGL_CONTEXT_RELOAD_DELAY_MS);
+    };
+
+    const handleWebglContextRestored = (event) => {
+      const payload = getWebglContextPayload(event);
+      addClientBreadcrumb('godot.webgl_context_restored', payload, 'warning');
+      if (!webglReloadStartedRef.current) setWebglReloading(false);
+    };
+
+    contextCanvas = canvasRef.current;
+    contextCanvas?.addEventListener('webglcontextlost', handleWebglContextLost, false);
+    contextCanvas?.addEventListener('webglcontextrestored', handleWebglContextRestored, false);
 
     // Catch unhandled errors for mobile debug
     const errHandler = (e) => {
@@ -508,6 +589,8 @@ function GodotCanvas({ onEngineReady }) {
       loadedRef.current = false;
       window.removeEventListener('error', errHandler);
       window.removeEventListener('unhandledrejection', rejectionHandler);
+      contextCanvas?.removeEventListener('webglcontextlost', handleWebglContextLost, false);
+      contextCanvas?.removeEventListener('webglcontextrestored', handleWebglContextRestored, false);
       if (resizeCanvas) window.removeEventListener('resize', resizeCanvas);
       if (stage2RafId) cancelAnimationFrame(stage2RafId);
       if (easeRafId) cancelAnimationFrame(easeRafId);
@@ -521,9 +604,15 @@ function GodotCanvas({ onEngineReady }) {
     };
   }, []);
 
+  const showLoadingOverlay = !isLoaded || webglReloading;
+  const displayedProgress = webglReloading ? 100 : stageProgress;
+  const progressLabel = webglReloading
+    ? 'RELOADING GAME'
+    : stage === 1 ? 'DOWNLOADING GAME' : 'LOADING WORLD';
+
   return (
     <>
-      {!isLoaded && (
+      {showLoadingOverlay && (
         <div style={overlayStyle} data-clash-godot-loading="true">
           <img src={splashBg} alt="" style={bgStyle} />
           <img src={splashLogo} alt="Clash of Perps" style={logoStyle} className="godot-splash-logo" />
@@ -556,16 +645,18 @@ function GodotCanvas({ onEngineReady }) {
               letterSpacing: '1px',
               textAlign: 'center',
             }}>
-              {stage === 1 ? 'DOWNLOADING GAME' : 'LOADING WORLD'}
+              {progressLabel}
             </div>
 
             {/* Progress bar */}
             <div style={barContainerStyle}>
               <div
                 style={{
-                  width: `${stageProgress}%`,
+                  width: `${displayedProgress}%`,
                   height: '100%',
-                  background: stage === 1
+                  background: webglReloading
+                    ? 'linear-gradient(to bottom, #8be3ff, #35a8e0)'
+                    : stage === 1
                     ? 'linear-gradient(to bottom, #ffe066, #e6b800)'
                     : 'linear-gradient(to bottom, #8be3ff, #35a8e0)',
                   borderRight: '2px solid #fff8dc',
@@ -586,7 +677,7 @@ function GodotCanvas({ onEngineReady }) {
               letterSpacing: '1px',
               textAlign: 'center',
             }}>
-              {stageProgress}%
+              {webglReloading ? 'Restoring graphics...' : `${stageProgress}%`}
             </div>
 
             {/* Stage indicators — 1 • 2 */}
@@ -607,7 +698,18 @@ function GodotCanvas({ onEngineReady }) {
             </div>
 
             {/* Substage hint (stage 2 only) */}
-            {stage === 2 && (
+            {webglReloading ? (
+              <div style={{
+                color: 'rgba(255,255,255,0.75)',
+                marginTop: '10px',
+                fontFamily: '"Inter", "Segoe UI", sans-serif',
+                fontSize: '13px',
+                fontWeight: 700,
+                textAlign: 'center',
+              }}>
+                Reloading after WebGL context loss...
+              </div>
+            ) : stage === 2 && (
               <div style={{
                 color: 'rgba(255,255,255,0.75)',
                 marginTop: '10px',
@@ -629,7 +731,7 @@ function GodotCanvas({ onEngineReady }) {
         ref={canvasRef}
         id="godot-canvas"
         tabIndex={0}
-        style={{ ...canvasStyle, visibility: isLoaded ? 'visible' : 'hidden' }}
+        style={{ ...canvasStyle, visibility: isLoaded && !webglReloading ? 'visible' : 'hidden' }}
       />
     </>
   );

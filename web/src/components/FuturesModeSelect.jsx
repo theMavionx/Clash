@@ -97,10 +97,10 @@ const S = {
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
   cardBasic: {
-    borderColor: '#6ab344',
+    border: '4px solid #6ab344',
   },
   cardPro: {
-    borderColor: '#0EA5E9',
+    border: '4px solid #0EA5E9',
   },
   cardBusy: {
     opacity: 0.7, cursor: 'wait', transform: 'scale(0.98)',

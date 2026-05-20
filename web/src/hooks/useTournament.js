@@ -73,6 +73,19 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     return { ok: res.ok, ...(data || {}) };
   }, [token, refresh]);
 
+  const updateRewardWallet = useCallback(async (tournamentId, rewardWalletEvm) => {
+    if (!token) return { ok: false, error: 'not authenticated' };
+    const res = await fetch(`/api/tournaments/${tournamentId}/reward-wallet`, {
+      method: 'POST',
+      headers: { 'x-token': token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reward_wallet_evm: rewardWalletEvm }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch {}
+    await refresh();
+    return { ok: res.ok, ...(data || {}) };
+  }, [token, refresh]);
+
   const leave = useCallback(async (tournamentId) => {
     if (!token) return false;
     const res = await fetch(`/api/tournaments/${tournamentId}/leave`, {
@@ -84,7 +97,7 @@ export function useTournament({ active = false, pollMs = 30000 } = {}) {
     return ok;
   }, [token, refresh]);
 
-  return { me, loading, loaded, error, refresh, join, leave };
+  return { me, loading, loaded, error, refresh, join, leave, updateRewardWallet };
 }
 
 // Public leaderboard fetcher — separate from the per-player state above

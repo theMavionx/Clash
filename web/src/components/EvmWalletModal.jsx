@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import { BASE_RPC_URLS } from '../lib/avantisContract';
 
 // Styled to match RegisterPanel + BuildingInfoPanel — parchment body, blue
 // header, yellow CTA. The previous dark cartoonPanel look stood out against
@@ -14,7 +15,7 @@ const NETWORKS = {
       chainId: '0x2105',
       chainName: 'Base',
       nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-      rpcUrls: ['https://mainnet.base.org'],
+      rpcUrls: BASE_RPC_URLS,
       blockExplorerUrls: ['https://basescan.org'],
     },
   },

@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,9 @@ const require = createRequire(import.meta.url);
 const game = require('../../server/db.js');
 const combat = require('../../server/combat_defs.js');
 const { verifyReplay } = require('../../server/combat_session.js');
+const futuresDb = require('../../server-futures/db.js');
+const avantis = require('../../server-futures/avantis.js');
+const decibel = require('../../server-futures/decibel.js');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,8 +25,17 @@ const SKILL_PATHS = [
   path.resolve(__dirname, '..', 'SKILL.md'),
   path.resolve(__dirname, '..', 'AGENT_SKILL.md'),
 ].filter(Boolean);
+const DECIBEL_SKILL_PATHS = [
+  process.env.CLASH_MCP_DECIBEL_SKILL_PATH,
+  path.resolve(__dirname, '..', 'DECIBEL_TRADING_SKILL.md'),
+  path.resolve(__dirname, '..', '..', '.agents', 'skills', 'clash-decibel-trading', 'SKILL.md'),
+].filter(Boolean);
+const AVANTIS_SKILL_PATHS = [
+  process.env.CLASH_MCP_AVANTIS_SKILL_PATH,
+  path.resolve(__dirname, '..', 'AVANTIS_TRADING_SKILL.md'),
+].filter(Boolean);
 const PORT = Number(process.env.CLASH_MCP_PORT || 4100);
-const HOST = process.env.CLASH_MCP_HOST || '127.0.0.1';
+const HOST = process.env.CLASH_MCP_HOST || '0.0.0.0';
 const PUBLIC_URL = (process.env.CLASH_MCP_PUBLIC_URL || 'https://mcp.clashofperps.fun').replace(/\/+$/, '');
 const GAME_API_URL = (process.env.CLASH_GAME_API_URL || 'http://127.0.0.1:4000/api').replace(/\/+$/, '');
 const DEFAULT_CORS_ORIGINS = [
@@ -51,6 +64,39 @@ const AI_AUTO_CANNON_MAX_SHOTS = 3;
 const AI_AUTO_RALLY_T_SEC = 5.0;
 const AI_AUTO_RALLY_FLIGHT_SEC = 0.8;
 const BATTLE_DEBUG_TRACE = process.env.CLASH_BATTLE_DEBUG_TRACE !== '0';
+const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
+const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
+function numericPolicyEnv(name, fallback, min, max) {
+  const value = Number(process.env[name]);
+  const next = Number.isFinite(value) && value > 0 ? value : fallback;
+  return Math.max(min, Math.min(max, next));
+}
+
+const AVANTIS_BROWSER_POLICY = Object.freeze({
+  max_collateral_usd: numericPolicyEnv('CLASH_AVANTIS_AI_MAX_COLLATERAL_USD', 100, 1, 1000),
+  max_leverage: numericPolicyEnv('CLASH_AVANTIS_AI_MAX_LEVERAGE', 50, 1, 1000),
+  max_notional_usd: numericPolicyEnv('CLASH_AVANTIS_AI_MAX_NOTIONAL_USD', 1000, 1, 100_000),
+  max_slippage_pct: numericPolicyEnv('CLASH_AVANTIS_AI_MAX_SLIPPAGE_PCT', 5, 0.01, 50),
+  expires_in_ms: 5 * 60 * 1000,
+});
+const AVANTIS_MIN_NOTIONAL_USD = 100;
+const PYTH_BENCHMARKS_URL = 'https://benchmarks.pyth.network/v1/shims/tradingview';
+const BINANCE_KLINES_URL = 'https://api.binance.com/api/v3/klines';
+const AVANTIS_MARKET_SCAN_CACHE_MS = 30_000;
+let avantisMarketScanCache = { key: '', ts: 0, data: null };
+const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 10;
+const DECIBEL_BUILDER_FEE_BPS_RAW = Number(process.env.DECIBEL_BUILDER_FEE_BPS || DEFAULT_DECIBEL_BUILDER_FEE_BPS);
+const DECIBEL_BUILDER_FEE_BPS = Number.isFinite(DECIBEL_BUILDER_FEE_BPS_RAW) && DECIBEL_BUILDER_FEE_BPS_RAW > 0
+  ? DECIBEL_BUILDER_FEE_BPS_RAW
+  : DEFAULT_DECIBEL_BUILDER_FEE_BPS;
+const DEFAULT_DECIBEL_BUILDER_SUBACCOUNT =
+  '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
+const DECIBEL_ALLOWED_BUILDER_ADDRS = new Set(
+  String(process.env.DECIBEL_ALLOWED_BUILDER_ADDRS || process.env.DECIBEL_BUILDER_SUBACCOUNT || DEFAULT_DECIBEL_BUILDER_SUBACCOUNT)
+    .split(',')
+    .map((s) => decibel.normalizeAptosAddress(s))
+    .filter(Boolean)
+);
 
 function parseDefaultAttackLoadout(value) {
   const parsed = String(value || '')
@@ -72,6 +118,20 @@ function cannonShotTime(shot, index) {
 
 function readSkill() {
   for (const skillPath of SKILL_PATHS) {
+    try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
+  }
+  return '';
+}
+
+function readDecibelSkill() {
+  for (const skillPath of DECIBEL_SKILL_PATHS) {
+    try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
+  }
+  return '';
+}
+
+function readAvantisSkill() {
+  for (const skillPath of AVANTIS_SKILL_PATHS) {
     try { return fs.readFileSync(skillPath, 'utf8'); } catch {}
   }
   return '';
@@ -215,6 +275,16 @@ function toolResultErrorMessage(result) {
   }
 }
 
+function toolResultLogPayload(result) {
+  const text = String(result?.content?.[0]?.text || '');
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { text: text.slice(0, 4000) };
+  }
+}
+
 function instrumentMcpTools(server, session, reqMeta = {}) {
   const rawRegisterTool = server.registerTool.bind(server);
   const keyInfo = session?.key || {};
@@ -223,8 +293,10 @@ function instrumentMcpTools(server, session, reqMeta = {}) {
     const startedAt = Date.now();
     let status = 'ok';
     let error = '';
+    let output = null;
     try {
       const result = await handler(args, extra);
+      output = toolResultLogPayload(result);
       if (result?.isError) {
         status = 'error';
         error = toolResultErrorMessage(result);
@@ -244,6 +316,7 @@ function instrumentMcpTools(server, session, reqMeta = {}) {
         durationMs: Date.now() - startedAt,
         error,
         input: args || {},
+        output,
         ip: reqMeta.ip || '',
         ua: reqMeta.ua || '',
       });
@@ -1240,6 +1313,1762 @@ function reinforceShips(playerId) {
   })();
 }
 
+const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+function normalizeEvmAddress(value) {
+  const text = String(value || '').trim();
+  return EVM_ADDRESS_RE.test(text) ? text.toLowerCase() : '';
+}
+
+function requireAvantisSession(session) {
+  if (session?.player?.dex !== 'avantis') {
+    return {
+      ok: false,
+      error: `Avantis trading is only available for accounts registered on Avantis. Current account DEX: ${session?.player?.dex || 'unknown'}.`,
+    };
+  }
+  const address = normalizeEvmAddress(session?.player?.wallet || '');
+  if (!address) {
+    return { ok: false, error: 'No EVM wallet is registered for this Avantis player.' };
+  }
+  return {
+    ok: true,
+    address,
+  };
+}
+
+function avantisScaledUsd(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > 10000 ? n / 1e6 : n;
+}
+
+function avantisScaledPrice(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n > 1e8 ? n / 1e10 : n;
+}
+
+function avantisScaledLeverage(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return n > 10000 ? n / 1e10 : n;
+}
+
+function avantisBool(value) {
+  if (value === true || value === 1 || value === '1') return true;
+  if (typeof value === 'string') return value.toLowerCase() === 'true';
+  return false;
+}
+
+function avantisPairIndex(row) {
+  const value = row?.pairIndex ?? row?.pair_index ?? row?.trade?.pairIndex ?? row?.order?.pairIndex;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function avantisTradeIndex(row) {
+  const value = row?.index ?? row?.trade_index ?? row?.trade?.index ?? row?.order?.index;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function avantisCollateralUsd(row) {
+  return avantisScaledUsd(
+    row?.margin
+    ?? row?.collateral
+    ?? row?.collateralUSDC
+    ?? row?.trade?.collateralUSDC
+    ?? row?.trade?.positionSizeUSDC
+    ?? row?.positionSizeUSDC
+    ?? row?.trade?.initialPosToken
+    ?? row?.initialPosToken
+    ?? row?.order?.initialPosToken
+  );
+}
+
+function avantisLeverage(row) {
+  return avantisScaledLeverage(row?.leverage ?? row?.trade?.leverage ?? row?.order?.leverage);
+}
+
+function avantisPositionSide(row) {
+  const explicit = String(row?.side || '').toLowerCase();
+  if (explicit === 'long' || explicit === 'short') return explicit;
+  return avantisBool(row?.buy ?? row?.trade?.buy ?? row?.order?.buy) ? 'long' : 'short';
+}
+
+function avantisPositionSymbol(row, indexMap = {}) {
+  const explicit = String(row?.symbol || row?.pair_symbol || '').trim();
+  if (explicit) return explicit.toUpperCase().replace(/\/USD$/, '');
+  const pairIndex = avantisPairIndex(row);
+  const pair = pairIndex != null ? indexMap[pairIndex] : null;
+  const from = String(pair?.from || pair?.symbol?.split('/')?.[0] || '').toUpperCase();
+  return from || `PAIR_${pairIndex ?? 'UNKNOWN'}`;
+}
+
+function normalizeAvantisPosition(row, indexMap = {}) {
+  const collateral = avantisCollateralUsd(row);
+  const leverage = avantisLeverage(row);
+  const entry = avantisScaledPrice(row?.openPrice ?? row?.trade?.openPrice);
+  const mark = Number(row?.mark_price ?? row?.current_price ?? row?.price ?? 0);
+  const pnl = Number(row?.pnl ?? row?.pnlUSD ?? row?.unrealised ?? 0);
+  return {
+    symbol: avantisPositionSymbol(row, indexMap),
+    side: avantisPositionSide(row),
+    pair_index: avantisPairIndex(row),
+    trade_index: avantisTradeIndex(row),
+    collateral_usd: collateral,
+    leverage,
+    notional_usd: Number((collateral * leverage).toFixed(6)),
+    entry_price: entry,
+    mark_price: Number.isFinite(mark) && mark > 0 ? mark : null,
+    pnl_usd: Number.isFinite(pnl) ? pnl : null,
+    take_profit: avantisScaledPrice(row?.tp ?? row?.trade?.tp),
+    stop_loss: avantisScaledPrice(row?.sl ?? row?.trade?.sl),
+    raw: row,
+  };
+}
+
+function normalizeAvantisOrder(row, indexMap = {}) {
+  const collateral = avantisCollateralUsd(row);
+  const leverage = avantisLeverage(row);
+  return {
+    symbol: avantisPositionSymbol(row, indexMap),
+    side: avantisPositionSide(row),
+    pair_index: avantisPairIndex(row),
+    trade_index: avantisTradeIndex(row),
+    collateral_usd: collateral,
+    leverage,
+    notional_usd: Number((collateral * leverage).toFixed(6)),
+    price: avantisScaledPrice(row?.price ?? row?.openPrice ?? row?.order?.price),
+    take_profit: avantisScaledPrice(row?.tp ?? row?.order?.tp),
+    stop_loss: avantisScaledPrice(row?.sl ?? row?.order?.sl),
+    raw: row,
+  };
+}
+
+async function avantisPairs() {
+  const pairs = await avantis.getPairsMap();
+  const indexMap = pairs?.indexMap || {};
+  return {
+    ...pairs,
+    indexMap,
+  };
+}
+
+async function normalizeAvantisMarkets(symbols = [], limit = 60) {
+  const [{ raw = [], indexMap = {} }, prices] = await Promise.all([
+    avantisPairs(),
+    avantis.getPrices().catch(() => ({})),
+  ]);
+  const wanted = (symbols || []).map((s) => String(s || '').trim().toUpperCase()).filter(Boolean);
+  const filtered = wanted.length
+    ? raw.filter((market) => wanted.some((symbol) => {
+        const compact = symbol.replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+        return String(market?.from || '').toUpperCase() === compact
+          || String(market?.symbol || '').toUpperCase() === symbol
+          || String(market?.symbol || '').replace(/[-_/ ]/g, '').toUpperCase() === symbol.replace(/[-_/ ]/g, '');
+      }))
+    : raw;
+  return filtered.slice(0, Math.max(1, Math.min(120, Number(limit) || 60))).map((market) => {
+    const symbol = String(market?.symbol || `${market?.from || ''}/${market?.to || 'USD'}`).toUpperCase();
+    const price = prices?.[symbol] || prices?.[String(market?.from || '').toUpperCase()] || null;
+    return {
+      symbol: String(market?.from || symbol.split('/')[0] || '').toUpperCase(),
+      pair_symbol: symbol,
+      pair_index: market?.index ?? indexMap?.[market?.index]?.index ?? null,
+      from: market?.from || null,
+      to: market?.to || null,
+      mark_price: Number(price?.mark || 0) > 0 ? Number(price.mark) : null,
+      yesterday_price: Number(price?.yesterday_price || 0) > 0 ? Number(price.yesterday_price) : null,
+      raw: market,
+    };
+  });
+}
+
+function avantisMarketMaxLeverage(market) {
+  const value = Number(
+    market?.raw?.leverages?.maxLeverage
+    ?? market?.raw?.maxLeverage
+    ?? market?.raw?.max_leverage
+    ?? market?.leverages?.maxLeverage
+    ?? market?.maxLeverage
+    ?? market?.max_leverage
+    ?? 0
+  );
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function avantisPythSymbol(market) {
+  return market?.raw?.feed?.attributes?.symbol
+    || market?.feed?.attributes?.symbol
+    || market?.raw?.pyth_symbol
+    || market?.pyth_symbol
+    || '';
+}
+
+function avantisMarketAssetClass(pythSymbol) {
+  const text = String(pythSymbol || '');
+  if (/^Crypto\./i.test(text)) return 'crypto';
+  if (/^FX\./i.test(text)) return 'forex';
+  if (/^Equity\./i.test(text)) return 'equity';
+  if (/^(Metal|Commodities)\./i.test(text)) return 'commodity';
+  if (/^Rates\./i.test(text)) return 'rates';
+  return 'unknown';
+}
+
+function pctChange(from, to) {
+  const a = Number(from);
+  const b = Number(to);
+  if (!(a > 0) || !(b > 0)) return null;
+  return ((b - a) / a) * 100;
+}
+
+function downsample(values = [], max = 12) {
+  const list = values.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (list.length <= max) return list.map((n) => Number(n.toFixed(6)));
+  const out = [];
+  for (let i = 0; i < max; i++) {
+    const idx = Math.round((i * (list.length - 1)) / (max - 1));
+    out.push(Number(list[idx].toFixed(6)));
+  }
+  return out;
+}
+
+function binanceKlineSymbol(symbol) {
+  const base = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!base || base.endsWith('USD') || base.endsWith('USDC') || base.endsWith('USDT')) return '';
+  return `${base}USDT`;
+}
+
+async function fetchBinanceHourlyCloses(symbol, lookbackHours = 24) {
+  const pair = binanceKlineSymbol(symbol);
+  if (!pair) return [];
+  const hours = Math.max(4, Math.min(168, Number(lookbackHours) || 24));
+  const url = `${BINANCE_KLINES_URL}?symbol=${encodeURIComponent(pair)}&interval=1h&limit=${Math.ceil(hours)}`;
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 6500);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((row) => Number(Array.isArray(row) ? row[4] : 0))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(-Math.ceil(hours));
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchAvantisBenchmarkCloses(pythSymbol, lookbackHours = 24) {
+  const symbol = String(pythSymbol || '').trim();
+  if (!symbol) return [];
+  const now = Math.floor(Date.now() / 1000);
+  const hours = Math.max(4, Math.min(168, Number(lookbackHours) || 24));
+  const from = now - Math.ceil(hours + 2) * 3600;
+  const url = `${PYTH_BENCHMARKS_URL}/history?symbol=${encodeURIComponent(symbol)}&resolution=60&from=${from}&to=${now}`;
+  const ctrl = new AbortController();
+  const timeoutId = setTimeout(() => ctrl.abort(), 6500);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data?.s !== 'ok' || !Array.isArray(data.c)) return [];
+    return data.c.map(Number).filter((n) => Number.isFinite(n) && n > 0).slice(-Math.ceil(hours));
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchAvantisChartCloses(row, lookbackHours = 24) {
+  const binanceCloses = await fetchBinanceHourlyCloses(row?.symbol, lookbackHours);
+  if (binanceCloses.length >= 4) {
+    return { source: 'binance_1h', closes: binanceCloses };
+  }
+  const pythCloses = await fetchAvantisBenchmarkCloses(row?.pyth_symbol, lookbackHours);
+  if (pythCloses.length >= 4) {
+    return { source: 'pyth_benchmarks_1h', closes: pythCloses };
+  }
+  return { source: null, closes: [] };
+}
+
+function analyzeAvantisMarket(market, closes = []) {
+  const mark = Number(market?.mark_price || 0);
+  const yesterday = Number(market?.yesterday_price || 0);
+  const closeList = closes.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  const last = closeList.length ? closeList[closeList.length - 1] : mark;
+  const change24h = pctChange(yesterday, mark || last);
+  const change4h = closeList.length >= 5 ? pctChange(closeList[closeList.length - 5], last) : null;
+  const change1h = closeList.length >= 2 ? pctChange(closeList[closeList.length - 2], last) : null;
+  const returns = [];
+  for (let i = 1; i < closeList.length; i++) {
+    const ch = pctChange(closeList[i - 1], closeList[i]);
+    if (ch != null) returns.push(ch);
+  }
+  const avg = returns.length ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+  const variance = returns.length
+    ? returns.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / returns.length
+    : 0;
+  const volatility = Math.sqrt(variance);
+  const momentum = (
+    (change4h ?? 0) * 0.55
+    + (change1h ?? 0) * 0.25
+    + (change24h ?? 0) * 0.20
+  );
+  const score = Number.isFinite(momentum) ? momentum : 0;
+  const side = score >= 0 ? 'long' : 'short';
+  return {
+    change_1h_pct: change1h == null ? null : Number(change1h.toFixed(3)),
+    change_4h_pct: change4h == null ? null : Number(change4h.toFixed(3)),
+    change_24h_pct: change24h == null ? null : Number(change24h.toFixed(3)),
+    volatility_hourly_pct: Number(volatility.toFixed(3)),
+    signal_score: Number(score.toFixed(3)),
+    suggested_side: side,
+    reason: side === 'long'
+      ? 'positive short-term momentum versus recent closes'
+      : 'negative short-term momentum versus recent closes',
+    sparkline_24h: downsample(closeList, 12),
+  };
+}
+
+async function buildAvantisMarketScan({ symbols = [], limit = 120, chart_limit = 32, lookback_hours = 24 } = {}) {
+  const cacheKey = JSON.stringify({
+    symbols: (symbols || []).map((s) => String(s || '').toUpperCase()).sort(),
+    limit: Number(limit) || 120,
+    chart_limit: Number(chart_limit) || 32,
+    lookback_hours: Number(lookback_hours) || 24,
+  });
+  if (avantisMarketScanCache.data && avantisMarketScanCache.key === cacheKey && Date.now() - avantisMarketScanCache.ts < AVANTIS_MARKET_SCAN_CACHE_MS) {
+    return avantisMarketScanCache.data;
+  }
+
+  const markets = await normalizeAvantisMarkets(symbols, limit);
+  const baseRows = markets.map((market) => {
+    const mark = Number(market.mark_price || 0);
+    const yesterday = Number(market.yesterday_price || 0);
+    const pythSymbol = avantisPythSymbol(market);
+    return {
+      symbol: market.symbol,
+      pair_symbol: market.pair_symbol,
+      pair_index: market.pair_index,
+      mark_price: mark > 0 ? mark : null,
+      yesterday_price: yesterday > 0 ? yesterday : null,
+      change_24h_pct: pctChange(yesterday, mark),
+      max_leverage: avantisMarketMaxLeverage(market),
+      pyth_symbol: pythSymbol,
+      asset_class: avantisMarketAssetClass(pythSymbol),
+      raw: market.raw,
+    };
+  });
+
+  const chartTargets = baseRows
+    .filter((row) => row.mark_price && row.pyth_symbol && row.asset_class === 'crypto')
+    .sort((a, b) => Math.abs(Number(b.change_24h_pct || 0)) - Math.abs(Number(a.change_24h_pct || 0)))
+    .slice(0, Math.max(1, Math.min(80, Number(chart_limit) || 32)));
+  const chartByPair = new Map();
+  let cursor = 0;
+  async function worker() {
+    while (cursor < chartTargets.length) {
+      const row = chartTargets[cursor++];
+      const chart = await fetchAvantisChartCloses(row, lookback_hours);
+      chartByPair.set(row.pair_index ?? row.pair_symbol ?? row.symbol, chart);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(8, chartTargets.length || 1) }, () => worker()));
+
+  const analyzed = baseRows.map((row) => {
+    const chartData = chartByPair.get(row.pair_index ?? row.pair_symbol ?? row.symbol) || {};
+    const closes = Array.isArray(chartData.closes) ? chartData.closes : [];
+    const analysis = analyzeAvantisMarket(row, closes);
+    return {
+      symbol: row.symbol,
+      pair_symbol: row.pair_symbol,
+      pair_index: row.pair_index,
+      mark_price: row.mark_price,
+      yesterday_price: row.yesterday_price,
+      change_24h_pct: row.change_24h_pct == null ? null : Number(row.change_24h_pct.toFixed(3)),
+      max_leverage: row.max_leverage,
+      pyth_symbol: row.pyth_symbol || null,
+      asset_class: row.asset_class,
+      chart: closes.length ? {
+        lookback_hours: Math.max(4, Math.min(168, Number(lookback_hours) || 24)),
+        resolution: '1h',
+        source: chartData.source || 'unknown_1h',
+        sparkline: analysis.sparkline_24h,
+      } : null,
+      suggested_side: analysis.suggested_side,
+      signal_score: analysis.signal_score,
+      signal: {
+        side: analysis.suggested_side,
+        suggested_side: analysis.suggested_side,
+        score: analysis.signal_score,
+        change_1h_pct: analysis.change_1h_pct,
+        change_4h_pct: analysis.change_4h_pct,
+        change_24h_pct: analysis.change_24h_pct,
+        volatility_hourly_pct: analysis.volatility_hourly_pct,
+        reason: analysis.reason,
+      },
+    };
+  });
+
+  const chartedCandidates = analyzed
+    .filter((row) => row.mark_price && row.chart?.sparkline?.length >= 4)
+    .sort((a, b) => Math.abs(b.signal.score) - Math.abs(a.signal.score))
+    .slice(0, 12);
+  const fallbackPool = analyzed.some((row) => row.mark_price && row.asset_class === 'crypto')
+    ? analyzed.filter((row) => row.asset_class === 'crypto')
+    : analyzed;
+  const fallbackCandidates = fallbackPool
+    .filter((row) => row.mark_price)
+    .sort((a, b) => Math.abs(b.signal.score || b.change_24h_pct || 0) - Math.abs(a.signal.score || a.change_24h_pct || 0))
+    .slice(0, 12);
+  const candidates = chartedCandidates.length ? chartedCandidates : fallbackCandidates;
+  const chartSources = analyzed.reduce((acc, row) => {
+    const source = row.chart?.source || 'none';
+    acc[source] = (acc[source] || 0) + 1;
+    return acc;
+  }, {});
+  const result = {
+    ok: true,
+    success: true,
+    dex: 'avantis',
+    markets: analyzed.map((row) => ({
+      symbol: row.symbol,
+      pair_symbol: row.pair_symbol,
+      pair_index: row.pair_index,
+      mark_price: row.mark_price,
+      change_24h_pct: row.change_24h_pct,
+      max_leverage: row.max_leverage,
+      asset_class: row.asset_class,
+      suggested_side: row.suggested_side,
+      signal_score: row.signal_score,
+      signal: row.signal,
+      chart: row.chart,
+    })),
+    ranked_candidates: candidates,
+    total_returned: analyzed.length,
+    charted_markets: analyzed.filter((row) => row.chart).length,
+    chart_sources: chartSources,
+    selection_rule: 'Rank candidates by absolute 1h/4h/24h momentum score. suggested_side follows the score sign.',
+  };
+  avantisMarketScanCache = { key: cacheKey, ts: Date.now(), data: result };
+  return result;
+}
+
+function chooseAvantisScanCandidate(scan, requestedSide = '', constraints = {}) {
+  const side = String(requestedSide || '').toLowerCase();
+  const normalizedSide = side === 'short' || side === 'sell' || side === 'ask' ? 'short'
+    : side === 'long' || side === 'buy' || side === 'bid' ? 'long'
+    : '';
+  const minMarketMaxLeverage = Number(constraints.min_market_max_leverage || 0);
+  const strictLeverage = constraints.strict_leverage === true && minMarketMaxLeverage > 0;
+  const cryptoOnly = constraints.crypto_only === true;
+  const preferVolatile = constraints.prefer_volatile === true;
+  const avoidSymbols = new Set((Array.isArray(constraints.avoid_symbols) ? constraints.avoid_symbols : [])
+    .map((symbol) => String(symbol || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, ''))
+    .filter(Boolean));
+  const rankValue = (row) => {
+    const signalScore = Math.abs(Number(row?.signal_score ?? row?.signal?.score ?? 0));
+    const change24h = Math.abs(Number(row?.change_24h_pct ?? row?.signal?.change_24h_pct ?? 0));
+    const hourlyVol = Math.abs(Number(row?.signal?.volatility_hourly_pct ?? row?.volatility_hourly_pct ?? 0));
+    return preferVolatile
+      ? (hourlyVol * 3) + signalScore + (change24h * 0.15)
+      : signalScore || change24h;
+  };
+  const rankedRows = Array.isArray(scan?.ranked_candidates) ? scan.ranked_candidates : [];
+  const marketRows = Array.isArray(scan?.markets) ? scan.markets : [];
+  const seen = new Set();
+  const rows = [...rankedRows, ...marketRows]
+    .filter((row) => {
+      const key = String(row?.pair_index ?? row?.pair_symbol ?? row?.symbol ?? '').toUpperCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .filter((row) => !avoidSymbols.has(String(row?.symbol || '').toUpperCase()))
+    .sort((a, b) => rankValue(b) - rankValue(a));
+  const sideMatches = (row) => !normalizedSide || row?.suggested_side === normalizedSide || row?.signal?.side === normalizedSide || row?.signal?.suggested_side === normalizedSide;
+  const assetFits = (row) => !cryptoOnly || row?.asset_class === 'crypto' || /^Crypto\./i.test(String(row?.pyth_symbol || ''));
+  const leverageFits = (row) => {
+    if (!(minMarketMaxLeverage > 0)) return true;
+    const maxLeverage = Number(row?.max_leverage || 0);
+    return maxLeverage > 0 && maxLeverage + 1e-9 >= minMarketMaxLeverage;
+  };
+  const leveragedCandidate = rows.find((row) => assetFits(row) && sideMatches(row) && leverageFits(row))
+    || rows.find((row) => assetFits(row) && leverageFits(row))
+    || rows.find((row) => sideMatches(row) && leverageFits(row));
+  if (leveragedCandidate || strictLeverage) return leveragedCandidate || null;
+  return rows.find((row) => assetFits(row) && sideMatches(row))
+    || rows[0]
+    || null;
+}
+
+function findSingleAvantisRow(rows, { symbol, pair_index, trade_index }, indexMap = {}, label = 'position') {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const wantedSymbol = String(symbol || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+  const wantedPair = pair_index == null ? null : Number(pair_index);
+  const wantedTrade = trade_index == null ? null : Number(trade_index);
+  let matches = sourceRows.filter((row) => {
+    const pair = avantisPairIndex(row);
+    const idx = avantisTradeIndex(row);
+    const rowSymbol = avantisPositionSymbol(row, indexMap);
+    return (
+      (wantedPair == null || pair === wantedPair)
+      && (wantedTrade == null || idx === wantedTrade)
+      && (!wantedSymbol || rowSymbol === wantedSymbol)
+    );
+  });
+  if (!matches.length && !wantedSymbol && wantedPair == null && wantedTrade == null && sourceRows.length === 1) {
+    matches = sourceRows;
+  }
+  if (!matches.length) {
+    return {
+      error: `No open Avantis ${label} found for the requested filters.`,
+      available: sourceRows.map((row) => normalizeAvantisPosition(row, indexMap)),
+    };
+  }
+  if (matches.length > 1 && wantedTrade == null) {
+    return {
+      error: `Multiple Avantis ${label}s match. Specify pair_index and trade_index.`,
+      available: matches.map((row) => normalizeAvantisPosition(row, indexMap)),
+    };
+  }
+  return { row: matches[0] };
+}
+
+function filterAvantisRows(rows, { symbol, pair_index, trade_index }, indexMap = {}) {
+  const sourceRows = Array.isArray(rows) ? rows : [];
+  const wantedSymbol = String(symbol || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+  const wantedPair = pair_index == null ? null : Number(pair_index);
+  const wantedTrade = trade_index == null ? null : Number(trade_index);
+  return sourceRows.filter((row) => {
+    const pair = avantisPairIndex(row);
+    const idx = avantisTradeIndex(row);
+    const rowSymbol = avantisPositionSymbol(row, indexMap);
+    return (
+      (wantedPair == null || pair === wantedPair)
+      && (wantedTrade == null || idx === wantedTrade)
+      && (!wantedSymbol || rowSymbol === wantedSymbol)
+    );
+  });
+}
+
+function isAvantisCloseAllRequest(args = {}) {
+  return args.all === true
+    || args.close_all === true
+    || args.all_positions === true
+    || args.close_all_positions === true
+    || String(args.scope || '').toLowerCase() === 'all';
+}
+
+function findDuplicateAvantisOpenPositionForOrder(actionArgs, positions, indexMap = {}) {
+  const symbol = String(actionArgs?.symbol || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+  const side = normalizeAvantisTradeSide(actionArgs?.side);
+  const leverage = Number(actionArgs?.leverage || 1);
+  const collateral = Number(actionArgs?.collateral_usd || 0);
+  if (!symbol || !side || !(leverage > 0) || !(collateral > 0)) return null;
+  for (const row of Array.isArray(positions) ? positions : []) {
+    const pos = normalizeAvantisPosition(row, indexMap);
+    if (pos.symbol !== symbol || pos.side !== side) continue;
+    if (Math.abs(Number(pos.leverage || 0) - leverage) > 0.05) continue;
+    const tolerance = Math.max(0.1, collateral * 0.08);
+    if (Math.abs(Number(pos.collateral_usd || 0) - collateral) > tolerance) continue;
+    return pos;
+  }
+  return null;
+}
+
+function finitePositive(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function finitePositiveFromArgs(args = {}, names = []) {
+  for (const name of names) {
+    const value = finitePositive(args?.[name]);
+    if (value > 0) return value;
+  }
+  return 0;
+}
+
+function roundAvantisTriggerPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Number(n.toFixed(8));
+}
+
+function avantisTriggerPriceFromPnlPct(position, pnlPct, leg) {
+  const entry = finitePositive(position?.entry_price);
+  const leverage = finitePositive(position?.leverage) || 1;
+  const pct = finitePositive(pnlPct);
+  if (!entry || !pct) return 0;
+  const move = (pct / 100) / leverage;
+  const side = String(position?.side || '').toLowerCase();
+  if (leg === 'take_profit') {
+    return roundAvantisTriggerPrice(side === 'short' ? entry * (1 - move) : entry * (1 + move));
+  }
+  if (leg === 'stop_loss') {
+    return roundAvantisTriggerPrice(side === 'short' ? entry * (1 + move) : entry * (1 - move));
+  }
+  return 0;
+}
+
+function avantisMinNotionalError({ symbol, side, collateralUsd, collateralPct, leverage, notionalUsd, usdcBalance }) {
+  const collateral = Number(collateralUsd || 0);
+  const lev = Number(leverage || 1);
+  const notional = Number(notionalUsd || collateral * lev || 0);
+  const minimum = AVANTIS_MIN_NOTIONAL_USD;
+  const missingNotional = Math.max(0, minimum - notional);
+  const neededCollateral = lev > 0 ? minimum / lev : minimum;
+  const extraCollateral = Math.max(0, neededCollateral - collateral);
+  const neededLeverage = collateral > 0 ? minimum / collateral : 0;
+  const balance = Number(usdcBalance || 0);
+  const fullWalletNotional = Number.isFinite(balance) && balance > collateral ? balance * lev : 0;
+  const fullWalletMissingNotional = fullWalletNotional > 0 ? Math.max(0, minimum - fullWalletNotional) : 0;
+  const neededLeverageWithFullWallet = Number.isFinite(balance) && balance > 0 ? minimum / balance : 0;
+  const balanceText = Number.isFinite(balance) && balance > 0
+    ? ` Wallet balance is about ${formatUsdApprox(balance)} USDC.`
+    : '';
+  const fullWalletText = fullWalletNotional > 0
+    ? fullWalletNotional >= minimum
+      ? ` Full wallet at ${lev}x would be ${formatUsdApprox(fullWalletNotional)} notional and would meet the minimum if the player allowed more collateral.`
+      : ` Full wallet at ${lev}x would be ${formatUsdApprox(fullWalletNotional)} notional, still short by ${formatUsdApprox(fullWalletMissingNotional)}; full wallet needs at least ${neededLeverageWithFullWallet.toFixed(2).replace(/\.?0+$/, '')}x.`
+    : '';
+  const pctText = Number(collateralPct) > 0
+    ? ` This used ${Math.min(100, Number(collateralPct)).toFixed(2).replace(/\.?0+$/, '')}% of balance as collateral.`
+    : '';
+  const leverageHint = neededLeverage > lev
+    ? ` With ${formatUsdApprox(collateral)} collateral, it needs at least ${neededLeverage.toFixed(2).replace(/\.?0+$/, '')}x leverage before policy/market caps. Policy max is ${AVANTIS_BROWSER_POLICY.max_leverage}x, so do not say leverage exceeds policy unless the required leverage is above ${AVANTIS_BROWSER_POLICY.max_leverage}x.`
+    : '';
+  return [
+    `Avantis minimum position size is about ${formatUsdApprox(minimum)} notional.`,
+    `Math for ${String(side || 'trade').toUpperCase()} ${String(symbol || '').toUpperCase()}: ${formatUsdApprox(collateral)} collateral × ${lev}x = ${formatUsdApprox(notional)} notional.`,
+    `Short by ${formatUsdApprox(missingNotional)} notional.`,
+    `At ${lev}x, required collateral is ${formatUsdApprox(neededCollateral)} (${formatUsdApprox(extraCollateral)} more).`,
+    leverageHint,
+    balanceText,
+    fullWalletText,
+    pctText,
+  ].filter(Boolean).join(' ');
+}
+
+function normalizeAvantisTradeSide(value) {
+  const side = String(value || '').trim().toLowerCase();
+  if (side === 'long' || side === 'buy' || side === 'bid') return 'long';
+  if (side === 'short' || side === 'sell' || side === 'ask') return 'short';
+  return '';
+}
+
+function avantisBrowserPolicy(overrides = {}) {
+  const now = Date.now();
+  return {
+    ...AVANTIS_BROWSER_POLICY,
+    ...(overrides && typeof overrides === 'object' ? overrides : {}),
+    created_at: new Date(now).toISOString(),
+    expires_at: new Date(now + AVANTIS_BROWSER_POLICY.expires_in_ms).toISOString(),
+  };
+}
+
+function avantisBrowserAction(type, account, args, summary, policyOverrides = {}) {
+  const policy = avantisBrowserPolicy(policyOverrides);
+  const action = {
+    id: `avantis:${type}:${crypto.randomUUID()}`,
+    dex: 'avantis',
+    type,
+    trading_mode: 'browser_signature',
+    wallet: account.address,
+    chain: 'base',
+    args,
+    policy,
+    summary,
+    requires_wallet_signature: true,
+  };
+  return {
+    ok: true,
+    success: false,
+    verified: false,
+    dex: 'avantis',
+    trading_mode: 'browser_signature',
+    browser_action_required: true,
+    browser_action: action,
+    message: 'Prepared an Avantis browser action. The frontend will route it to Avantis Smart Wallet auto-signing when enabled, otherwise to the external wallet prompt.',
+  };
+}
+
+async function runAvantisPlaceOrderAction(session, agentKey, args = {}) {
+  try {
+    const account = requireAvantisSession(session);
+    if (!account.ok) return { ok: false, error: account.error };
+    let symbol = String(args.symbol || args.market || '').trim().toUpperCase().replace(/\/USD$/, '');
+    let side = normalizeAvantisTradeSide(args.side);
+    const autoSelectMarket = args.auto_select === true || args.choose_market === true;
+    const orderType = String(args.order_type || args.orderType || (finitePositive(args.price) ? 'limit' : 'market')).toLowerCase() === 'limit'
+      ? 'limit'
+      : 'market';
+    const preferVolatile = args.prefer_volatile === true || args.preferVolatile === true || String(args.selection_strategy || args.strategy || '').toLowerCase() === 'volatile';
+    const avoidSymbols = (Array.isArray(args.avoid_symbols) ? args.avoid_symbols : String(args.avoid_symbols || '').split(/[,;\s]+/))
+      .map((item) => String(item || '').trim().toUpperCase().replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, ''))
+      .filter(Boolean);
+    const requestedMaxLeverage = args.use_max_leverage === true || args.max_leverage === true;
+    const explicitLeverage = finitePositive(args.leverage) || finitePositive(typeof args.max_leverage === 'number' ? args.max_leverage : 0);
+    let leverage = requestedMaxLeverage
+      ? AVANTIS_BROWSER_POLICY.max_leverage
+      : Math.max(1, Math.min(1000, explicitLeverage || 2));
+    const slippagePct = Math.max(0.1, Math.min(50, finitePositive(args.slippage_pct ?? args.slippagePct ?? args.slippage_percent) || 1));
+    const [usdcBalance, ethBalance] = await Promise.all([
+      avantis.getUsdcBalance(account.address).catch(() => 0),
+      avantis.getEthBalance(account.address).catch(() => 0),
+    ]);
+    const requestedCollateralUsd = finitePositive(args.collateral_usd ?? args.collateralUsd ?? args.amount_usd ?? args.amount);
+    const collateralPct = finitePositive(args.collateral_pct ?? args.collateralPct ?? args.balance_percent ?? args.balancePercent);
+    const notionalUsd = finitePositive(args.notional_usd ?? args.notionalUsd);
+    let estimatedCollateralUsd = requestedCollateralUsd || 0;
+    if (!estimatedCollateralUsd && collateralPct) {
+      estimatedCollateralUsd = usdcBalance * (Math.max(0.01, Math.min(100, collateralPct)) / 100);
+    }
+    if (!estimatedCollateralUsd && notionalUsd) estimatedCollateralUsd = notionalUsd / leverage;
+
+    let marketDecision = null;
+    let selectedMarketMaxLeverage = null;
+    const shouldAutoSelectMarket = autoSelectMarket || (preferVolatile && avoidSymbols.includes(symbol));
+    if (!symbol || !side || shouldAutoSelectMarket || preferVolatile) {
+      const scan = await buildAvantisMarketScan({
+        symbols: symbol && !shouldAutoSelectMarket ? [symbol] : [],
+        limit: symbol && !shouldAutoSelectMarket ? 20 : 120,
+        chart_limit: symbol && !shouldAutoSelectMarket ? 8 : 40,
+        lookback_hours: finitePositive(args.analysis_lookback_hours) || 24,
+      });
+      const minLeverageForMinNotional = estimatedCollateralUsd > 0 ? AVANTIS_MIN_NOTIONAL_USD / estimatedCollateralUsd : 0;
+      const requiredMarketMaxLeverage = requestedMaxLeverage
+        ? minLeverageForMinNotional
+        : Math.max(leverage, minLeverageForMinNotional);
+      const candidate = chooseAvantisScanCandidate(scan, side, {
+        min_market_max_leverage: requiredMarketMaxLeverage,
+        strict_leverage: requiredMarketMaxLeverage > 0,
+        crypto_only: !symbol || shouldAutoSelectMarket,
+        prefer_volatile: preferVolatile,
+        avoid_symbols: avoidSymbols,
+      });
+      if (!candidate && requiredMarketMaxLeverage > 0) {
+        const fittingMarkets = (Array.isArray(scan?.markets) ? scan.markets : [])
+          .filter((row) => Number(row?.max_leverage || 0) + 1e-9 >= requiredMarketMaxLeverage)
+          .filter((row) => !symbol || autoSelectMarket || String(row?.symbol || '').toUpperCase() === symbol)
+          .slice(0, 8)
+          .map((row) => ({
+            symbol: row.symbol,
+            max_leverage: row.max_leverage,
+            asset_class: row.asset_class,
+            suggested_side: row.suggested_side,
+          }));
+        return {
+          ok: false,
+          error: `No Avantis ${symbol || 'crypto'} market in the scan supports ${requiredMarketMaxLeverage.toFixed(2).replace(/\.?0+$/, '')}x leverage. Need: choose a lower leverage or a market with higher max leverage.`,
+          requested_leverage: leverage,
+          required_market_max_leverage: Number(requiredMarketMaxLeverage.toFixed(6)),
+          fitting_markets: fittingMarkets,
+        };
+      }
+      if (candidate) {
+        if (!symbol || shouldAutoSelectMarket) symbol = String(candidate.symbol || '').toUpperCase();
+        if (!side) side = normalizeAvantisTradeSide(candidate.suggested_side || candidate.signal?.side || candidate.signal?.suggested_side);
+        if (requestedMaxLeverage && Number(candidate.max_leverage) > 0) {
+          leverage = Math.min(leverage, Number(candidate.max_leverage));
+        }
+        selectedMarketMaxLeverage = Number(candidate.max_leverage || 0) || null;
+        marketDecision = {
+          selected_symbol: String(candidate.symbol || '').toUpperCase(),
+          selected_side: candidate.suggested_side || candidate.signal?.side || side,
+          pair_index: candidate.pair_index,
+          mark_price: candidate.mark_price,
+          max_leverage: selectedMarketMaxLeverage,
+          change_1h_pct: candidate.signal?.change_1h_pct ?? null,
+          change_4h_pct: candidate.signal?.change_4h_pct ?? null,
+          change_24h_pct: candidate.signal?.change_24h_pct ?? candidate.change_24h_pct ?? null,
+          signal_score: candidate.signal_score ?? candidate.signal?.score ?? null,
+          reason: candidate.signal?.reason || scan.selection_rule,
+          sparkline_24h: candidate.chart?.sparkline || [],
+          chart_source: candidate.chart?.source || null,
+          prefer_volatile: preferVolatile || null,
+          avoid_symbols: avoidSymbols.length ? avoidSymbols : null,
+          min_leverage_for_min_notional: minLeverageForMinNotional > 0 ? Number(minLeverageForMinNotional.toFixed(3)) : null,
+          required_market_max_leverage: requiredMarketMaxLeverage > 0 ? Number(requiredMarketMaxLeverage.toFixed(3)) : null,
+          scanned_markets: scan.total_returned,
+          charted_markets: scan.charted_markets,
+        };
+      }
+    }
+    if (!symbol) return { ok: false, error: 'Avantis market scan could not choose a tradable symbol. Try specifying SOL, BTC, ETH, or another market.' };
+    if (!side) return { ok: false, error: 'Avantis market scan could not choose long or short. Specify side or retry.' };
+    if (!selectedMarketMaxLeverage) {
+      const marketRows = await normalizeAvantisMarkets([symbol], 5);
+      const market = marketRows.find((row) => String(row?.symbol || '').toUpperCase() === symbol) || marketRows[0] || null;
+      selectedMarketMaxLeverage = avantisMarketMaxLeverage(market);
+    }
+    if (requestedMaxLeverage && Number(selectedMarketMaxLeverage) > 0) {
+      leverage = Math.min(leverage, Number(selectedMarketMaxLeverage));
+    }
+    if (Number(selectedMarketMaxLeverage) > 0 && leverage > Number(selectedMarketMaxLeverage) + 1e-9) {
+      return {
+        ok: false,
+        error: `Avantis ${symbol} supports max ${selectedMarketMaxLeverage}x leverage, but the prepared order used ${leverage}x. Need: choose a market that supports ${leverage}x or lower leverage for ${symbol}.`,
+        symbol,
+        requested_leverage: leverage,
+        market_max_leverage: selectedMarketMaxLeverage,
+      };
+    }
+    if (leverage > AVANTIS_BROWSER_POLICY.max_leverage) {
+      return { ok: false, error: `Browser AI policy blocks Avantis leverage above ${AVANTIS_BROWSER_POLICY.max_leverage}x.` };
+    }
+    if (slippagePct > AVANTIS_BROWSER_POLICY.max_slippage_pct) {
+      return { ok: false, error: `Browser AI policy blocks Avantis slippage above ${AVANTIS_BROWSER_POLICY.max_slippage_pct}%.` };
+    }
+
+    let collateralUsd = requestedCollateralUsd;
+    if (!collateralUsd && collateralPct) {
+      collateralUsd = usdcBalance * (Math.max(0.01, Math.min(100, collateralPct)) / 100);
+    }
+    if (!collateralUsd && notionalUsd) collateralUsd = notionalUsd / leverage;
+    if (!collateralUsd) {
+      const minCollateral = 100 / leverage;
+      const defaultCollateral = Math.min(Math.max(usdcBalance * 0.1, minCollateral), 50);
+      collateralUsd = defaultCollateral;
+    }
+    collateralUsd = Number(collateralUsd.toFixed(6));
+    const finalNotional = Number((collateralUsd * leverage).toFixed(6));
+    if (!(collateralUsd > 0)) return { ok: false, error: 'Avantis order needs collateral_usd or notional_usd.' };
+    if (finalNotional < AVANTIS_MIN_NOTIONAL_USD) {
+      return {
+        ok: false,
+        error: avantisMinNotionalError({
+          symbol,
+          side,
+          collateralUsd,
+          collateralPct,
+          leverage,
+          notionalUsd: finalNotional,
+          usdcBalance,
+        }),
+        minimum_notional_usd: AVANTIS_MIN_NOTIONAL_USD,
+        collateral_usd: collateralUsd,
+        collateral_pct: collateralPct || null,
+        leverage,
+        notional_usd: finalNotional,
+        balance_usdc: usdcBalance,
+        required_collateral_usd: Number((AVANTIS_MIN_NOTIONAL_USD / leverage).toFixed(6)),
+        required_leverage_for_collateral: collateralUsd > 0
+          ? Number((AVANTIS_MIN_NOTIONAL_USD / collateralUsd).toFixed(6))
+          : null,
+      };
+    }
+    if (collateralUsd > AVANTIS_BROWSER_POLICY.max_collateral_usd) {
+      return { ok: false, error: `Browser AI policy blocks Avantis collateral above $${AVANTIS_BROWSER_POLICY.max_collateral_usd}.` };
+    }
+    if (finalNotional > AVANTIS_BROWSER_POLICY.max_notional_usd) {
+      return { ok: false, error: `Browser AI policy blocks Avantis notional above $${AVANTIS_BROWSER_POLICY.max_notional_usd}.` };
+    }
+    if (orderType === 'limit' && !finitePositive(args.price)) {
+      return { ok: false, error: 'Limit orders need a positive price.' };
+    }
+
+    const actionArgs = {
+      symbol,
+      side,
+      order_type: orderType,
+      collateral_usd: collateralUsd,
+      leverage,
+      market_max_leverage: selectedMarketMaxLeverage,
+      slippage_pct: slippagePct,
+      notional_usd: finalNotional,
+      take_profit: finitePositive(args.take_profit ?? args.tp) || null,
+      stop_loss: finitePositive(args.stop_loss ?? args.sl) || null,
+      market_analysis: marketDecision,
+      ...(orderType === 'limit' ? { price: finitePositive(args.price) } : {}),
+    };
+    const [{ indexMap }, openPositions] = await Promise.all([
+      avantisPairs(),
+      avantis.getPositionsByAddress(account.address).catch(() => []),
+    ]);
+    const duplicatePosition = findDuplicateAvantisOpenPositionForOrder(actionArgs, openPositions, indexMap);
+    if (duplicatePosition) {
+      return {
+        ok: false,
+        error: `Duplicate Avantis order blocked: ${side.toUpperCase()} ${symbol} with about $${collateralUsd.toFixed(2)} collateral at ${leverage}x is already open. Close or change the existing position first.`,
+        duplicate_position: duplicatePosition,
+        requested_order: actionArgs,
+      };
+    }
+    if (usdcBalance + 1e-9 < collateralUsd) {
+      return {
+        ok: false,
+        error: `Registered browser wallet has insufficient USDC. Need ${collateralUsd.toFixed(2)} USDC, have ${Number(usdcBalance || 0).toFixed(2)}.`,
+        self_custody_address: account.address,
+        balance_usdc: usdcBalance,
+        balance_eth: ethBalance,
+      };
+    }
+    if (!(ethBalance >= 0.0002)) {
+      return {
+        ok: false,
+        error: `Registered browser wallet needs Base ETH for gas. Have ${Number(ethBalance || 0).toFixed(6)} ETH, need about 0.0002 ETH.`,
+        self_custody_address: account.address,
+        balance_usdc: usdcBalance,
+        balance_eth: ethBalance,
+      };
+    }
+    const output = avantisBrowserAction(
+      'place_order',
+      account,
+      actionArgs,
+      `${side.toUpperCase()} ${symbol} ${orderType} with $${collateralUsd.toFixed(2)} collateral at ${leverage}x`
+    );
+    await notifyAgentAction(agentKey, 'avantis_browser_action_prepared', output);
+    return output;
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function runAvantisClosePositionAction(session, agentKey, args = {}) {
+  try {
+    const account = requireAvantisSession(session);
+    if (!account.ok) return { ok: false, error: account.error };
+    const [{ indexMap }, positions] = await Promise.all([
+      avantisPairs(),
+      avantis.getPositionsByAddress(account.address),
+    ]);
+    const percent = finitePositive(args.percent ?? args.close_percent) || 100;
+    const closePercent = Number(Math.max(0.01, Math.min(100, percent)).toFixed(4));
+    if (isAvantisCloseAllRequest(args)) {
+      const matches = filterAvantisRows(positions, args, indexMap);
+      if (!matches.length) {
+        return {
+          ok: false,
+          error: 'No open Avantis positions found for the requested filters.',
+          available_positions: positions.map((row) => normalizeAvantisPosition(row, indexMap)),
+        };
+      }
+      const normalizedRows = matches.map((row) => normalizeAvantisPosition(row, indexMap));
+      const browserActions = normalizedRows.map((normalized) => {
+        const amount = normalized.collateral_usd * (closePercent / 100);
+        const actionArgs = {
+          symbol: normalized.symbol,
+          side: normalized.side,
+          pair_index: normalized.pair_index,
+          trade_index: normalized.trade_index,
+          collateral_usd: Number(amount.toFixed(6)),
+          percent: closePercent,
+          position: normalized,
+        };
+        return avantisBrowserAction(
+          'close_position',
+          account,
+          actionArgs,
+          `Close ${actionArgs.percent}% of ${normalized.symbol} ${normalized.side.toUpperCase()} #${normalized.trade_index}`
+        ).browser_action;
+      });
+      const output = {
+        ok: true,
+        success: false,
+        verified: false,
+        dex: 'avantis',
+        trading_mode: 'browser_signature',
+        browser_action_required: true,
+        browser_action: browserActions[0] || null,
+        browser_actions: browserActions,
+        count: browserActions.length,
+        positions: normalizedRows,
+        message: `Prepared ${browserActions.length} Avantis close action(s). The frontend will route each action to Smart Wallet auto-signing when enabled, otherwise to the external wallet prompt.`,
+      };
+      await notifyAgentAction(agentKey, 'avantis_browser_action_prepared', output);
+      return output;
+    }
+    const selected = findSingleAvantisRow(positions, args, indexMap, 'position');
+    if (selected.error) return { ok: false, error: selected.error, available_positions: selected.available };
+    const normalized = normalizeAvantisPosition(selected.row, indexMap);
+    const amount = finitePositive(args.amount ?? args.collateral_usd ?? args.collateralUsd)
+      || normalized.collateral_usd * (closePercent / 100);
+    const actionArgs = {
+      symbol: normalized.symbol,
+      side: normalized.side,
+      pair_index: normalized.pair_index,
+      trade_index: normalized.trade_index,
+      collateral_usd: Number(amount.toFixed(6)),
+      percent: closePercent,
+      position: normalized,
+    };
+    const output = avantisBrowserAction(
+      'close_position',
+      account,
+      actionArgs,
+      `Close ${actionArgs.percent}% of ${normalized.symbol} ${normalized.side.toUpperCase()}`
+    );
+    await notifyAgentAction(agentKey, 'avantis_browser_action_prepared', output);
+    return output;
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function runAvantisCancelOrderAction(session, agentKey, args = {}) {
+  try {
+    const account = requireAvantisSession(session);
+    if (!account.ok) return { ok: false, error: account.error };
+    const [{ indexMap }, orders] = await Promise.all([
+      avantisPairs(),
+      avantis.getOpenOrdersByAddress(account.address),
+    ]);
+    const selected = findSingleAvantisRow(orders, args, indexMap, 'order');
+    if (selected.error) return { ok: false, error: selected.error, available_orders: selected.available };
+    const normalized = normalizeAvantisOrder(selected.row, indexMap);
+    const actionArgs = {
+      symbol: normalized.symbol,
+      side: normalized.side,
+      pair_index: normalized.pair_index,
+      trade_index: normalized.trade_index,
+      order: normalized,
+    };
+    const output = avantisBrowserAction(
+      'cancel_order',
+      account,
+      actionArgs,
+      `Cancel ${normalized.symbol} ${normalized.side.toUpperCase()} limit order`
+    );
+    await notifyAgentAction(agentKey, 'avantis_browser_action_prepared', output);
+    return output;
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function runAvantisSetTpslAction(session, agentKey, args = {}) {
+  try {
+    const account = requireAvantisSession(session);
+    if (!account.ok) return { ok: false, error: account.error };
+    const takeProfitPriceInput = finitePositive(args.take_profit ?? args.tp);
+    const stopLossPriceInput = finitePositive(args.stop_loss ?? args.sl);
+    const takeProfitPnlPct = finitePositiveFromArgs(args, [
+      'take_profit_pnl_pct',
+      'take_profit_profit_pct',
+      'take_profit_pct',
+      'tp_pnl_pct',
+      'tp_profit_pct',
+      'tp_pct',
+    ]);
+    const stopLossPnlPct = finitePositiveFromArgs(args, [
+      'stop_loss_pnl_pct',
+      'stop_loss_loss_pct',
+      'stop_loss_pct',
+      'sl_pnl_pct',
+      'sl_loss_pct',
+      'sl_pct',
+    ]);
+    if (!takeProfitPriceInput && !stopLossPriceInput && !takeProfitPnlPct && !stopLossPnlPct) {
+      return { ok: false, error: 'Provide take_profit, stop_loss, or both.' };
+    }
+    const [{ indexMap }, positions] = await Promise.all([
+      avantisPairs(),
+      avantis.getPositionsByAddress(account.address),
+    ]);
+    const selected = findSingleAvantisRow(positions, args, indexMap, 'position');
+    if (selected.error) return { ok: false, error: selected.error, available_positions: selected.available };
+    const normalized = normalizeAvantisPosition(selected.row, indexMap);
+    const computedTakeProfit = takeProfitPnlPct
+      ? avantisTriggerPriceFromPnlPct(normalized, takeProfitPnlPct, 'take_profit')
+      : 0;
+    const computedStopLoss = stopLossPnlPct
+      ? avantisTriggerPriceFromPnlPct(normalized, stopLossPnlPct, 'stop_loss')
+      : 0;
+    const nextTakeProfit = takeProfitPriceInput || computedTakeProfit || (finitePositive(normalized.take_profit) || null);
+    const nextStopLoss = stopLossPriceInput || computedStopLoss || (finitePositive(normalized.stop_loss) || null);
+    const actionArgs = {
+      symbol: normalized.symbol,
+      side: normalized.side,
+      pair_index: normalized.pair_index,
+      trade_index: normalized.trade_index,
+      take_profit: nextTakeProfit,
+      stop_loss: nextStopLoss,
+      take_profit_pnl_pct: takeProfitPnlPct || null,
+      stop_loss_pnl_pct: stopLossPnlPct || null,
+      tpsl_basis: takeProfitPnlPct || stopLossPnlPct ? 'pnl_pct' : 'price',
+      position: normalized,
+    };
+    const output = avantisBrowserAction(
+      'set_tpsl',
+      account,
+      actionArgs,
+      `Set ${normalized.symbol} TP/SL in browser wallet`
+    );
+    await notifyAgentAction(agentKey, 'avantis_browser_action_prepared', output);
+    return output;
+  } catch (error) {
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+function decibelBuilderFields() {
+  const builderAddr = DECIBEL_ALLOWED_BUILDER_ADDRS.values().next().value || '';
+  if (!builderAddr) return null;
+  return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
+}
+
+function decibelMarketSymbol(market) {
+  const explicit = String(market?.symbol || '').trim();
+  if (explicit) return explicit.toUpperCase();
+  const name = String(market?.market_name || market?.marketName || market?.name || '').trim();
+  return (name.split(/[-/]/)[0] || name || 'UNKNOWN').toUpperCase();
+}
+
+function decibelMarketAddress(market) {
+  return String(market?.market_addr || market?.market || market?.marketAddr || '').trim();
+}
+
+function normalizeDecibelMarket(market, priceRow = null) {
+  const symbol = decibelMarketSymbol(market);
+  const mark = Number(priceRow?.mark_px ?? priceRow?.mark_price ?? market?.mark_price ?? market?.oracle_price ?? market?.price ?? 0);
+  return {
+    symbol,
+    market_name: String(market?.market_name || market?.marketName || market?.name || `${symbol}-USD`),
+    market_addr: decibelMarketAddress(market) || null,
+    px_decimals: Number(market?.px_decimals ?? market?.pxDecimals ?? 6),
+    sz_decimals: Number(market?.sz_decimals ?? market?.szDecimals ?? 6),
+    tick_size: String(market?.tick_size ?? market?.tickSize ?? '0'),
+    lot_size: String(market?.lot_size ?? market?.lotSize ?? '0'),
+    min_size: String(market?.min_size ?? market?.minSize ?? '0'),
+    mark_price: Number.isFinite(mark) && mark > 0 ? mark : null,
+  };
+}
+
+function marketMatchesSymbol(market, value) {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  const upper = raw.toUpperCase();
+  const compact = upper.replace(/[-_/ ]?(?:USD|USDC|PERP)$/i, '');
+  const addr = decibel.normalizeAptosAddress(raw);
+  const marketAddr = decibelMarketAddress(market);
+  const name = String(market?.market_name || market?.marketName || market?.name || '').toUpperCase();
+  const symbol = decibelMarketSymbol(market);
+  return (
+    (marketAddr && decibel.normalizeAptosAddress(marketAddr) === addr)
+    || name === upper
+    || name.replace(/[-_/ ]/g, '') === upper.replace(/[-_/ ]/g, '')
+    || symbol === upper
+    || symbol === compact
+  );
+}
+
+async function getDecibelMarket(symbolOrName) {
+  const markets = await decibel.fetchMarkets();
+  const market = markets.find((row) => marketMatchesSymbol(row, symbolOrName));
+  if (!market) {
+    throw new Error(`Unknown Decibel market: ${symbolOrName}`);
+  }
+  const prices = await decibel.fetchMarketPrices();
+  const marketAddr = decibelMarketAddress(market).toLowerCase();
+  const priceRow = prices.find((row) => String(row?.market || row?.market_addr || '').toLowerCase() === marketAddr) || null;
+  return normalizeDecibelMarket(market, priceRow);
+}
+
+async function getDecibelMarketsBySymbols(symbols = []) {
+  const wanted = symbols.map((symbol) => String(symbol || '').trim()).filter(Boolean);
+  const out = [];
+  for (const symbol of wanted) {
+    try {
+      out.push(await getDecibelMarket(symbol));
+    } catch {
+      // Some markets may not be listed on the current Decibel deployment.
+    }
+  }
+  return out;
+}
+
+function priceToDecibelChainUnits(human, market) {
+  const d = Number(market?.px_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel price decimals');
+  const n = Number(human);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Price must be greater than zero');
+  return Math.max(1, Math.round(n * Math.pow(10, d)));
+}
+
+function sizeToDecibelChainUnits(human, market) {
+  const d = Number(market?.sz_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel size decimals');
+  const n = Number(human);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Size must be greater than zero');
+  let raw = BigInt(Math.max(1, Math.round(n * Math.pow(10, d))));
+  const lot = market?.lot_size == null ? 0n : BigInt(Math.max(0, Math.round(Number(market.lot_size))));
+  if (lot > 0n) raw = (raw / lot) * lot;
+  const min = market?.min_size == null ? 0n : BigInt(Math.max(0, Math.round(Number(market.min_size))));
+  if (raw <= 0n) throw new Error('Order size is below this market lot size');
+  if (min > 0n && raw < min) throw new Error('Order size is below the Decibel minimum for this market');
+  return raw;
+}
+
+function decibelSizeDecimals(market) {
+  const d = Number(market?.sz_decimals ?? 6);
+  if (!Number.isFinite(d) || d < 0 || d > 18) throw new Error('Invalid Decibel size decimals');
+  return d;
+}
+
+function decibelMinSizeBase(market) {
+  const min = Number(market?.min_size ?? market?.minSize ?? 0);
+  if (!Number.isFinite(min) || min <= 0) return 0;
+  return min / Math.pow(10, decibelSizeDecimals(market));
+}
+
+function decibelMinOrderInfo(market, executionPrice, leverage = 1) {
+  const minSizeBase = decibelMinSizeBase(market);
+  const minNotionalUsd = minSizeBase > 0 ? minSizeBase * Number(executionPrice || 0) : 0;
+  const lev = Math.max(1, Number(leverage || 1));
+  return {
+    min_size_base: minSizeBase,
+    min_notional_usd: minNotionalUsd,
+    min_collateral_usd: minNotionalUsd > 0 ? minNotionalUsd / lev : 0,
+  };
+}
+
+function formatUsdApprox(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 'unknown';
+  return `$${n.toFixed(n >= 100 ? 2 : 4).replace(/\.?0+$/, '')}`;
+}
+
+function decibelTickSize(market) {
+  const tick = Number(market?.tick_size ?? 0);
+  return Number.isFinite(tick) && tick > 0 ? tick : 0;
+}
+
+function decibelSideIsBuy(side) {
+  const value = String(side || '').trim().toLowerCase();
+  if (['buy', 'long', 'bid'].includes(value)) return true;
+  if (['sell', 'short', 'ask'].includes(value)) return false;
+  throw new Error('side must be long/buy or short/sell');
+}
+
+function decibelPriceForOrder({ order_type, price, mark_price, side, slippage_pct }) {
+  const isMarket = String(order_type || 'market').toLowerCase() === 'market';
+  const base = Number(isMarket ? mark_price : price);
+  if (!Number.isFinite(base) || base <= 0) {
+    throw new Error(isMarket ? 'Decibel mark price unavailable' : 'Limit price is required');
+  }
+  if (!isMarket) return base;
+  const slip = Math.max(0.001, Math.min(50, Number(slippage_pct ?? 0.5))) / 100;
+  return decibelSideIsBuy(side) ? base * (1 + slip) : base * (1 - slip);
+}
+
+function decibelPositionSymbol(position) {
+  return decibel.symbolFromMarket(position);
+}
+
+function normalizeDecibelPosition(position) {
+  const symbol = decibelPositionSymbol(position);
+  const size = Number(position?.size ?? 0);
+  const entry = Number(position?.entry_price ?? position?.entryPrice ?? 0);
+  const mark = Number(position?.mark_price ?? position?.markPrice ?? position?.market_price ?? position?.marketPrice ?? 0);
+  const isLong = decibel.positionIsLong(position);
+  return {
+    symbol,
+    side: isLong ? 'long' : 'short',
+    size: Math.abs(size),
+    entry_price: Number.isFinite(entry) ? entry : null,
+    mark_price: mark > 0 ? mark : null,
+    leverage: decibel.positionLeverage(position),
+    notional_usd: decibel.positionNotionalUsd(position),
+    collateral_usd: decibel.positionCollateralUsd(position),
+    market_addr: String(position?.market || position?.market_addr || position?.marketAddr || ''),
+    market_name: position?.marketName || position?.market_name || null,
+    liquidation_price: position?.liquidation_price ?? position?.liq_price ?? position?.liquidationPrice ?? null,
+    unrealized_pnl: position?.unrealized_pnl ?? position?.pnl ?? position?.unrealizedPnl ?? null,
+    tp_order_id: position?.tp_order_id ?? position?.tpOrderId ?? null,
+    sl_order_id: position?.sl_order_id ?? position?.slOrderId ?? null,
+    raw: position,
+  };
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return null;
+}
+
+function decibelClosePnlPrice(placed, position) {
+  const fillPrice = firstPositiveNumber(
+    placed?.verification?.fill_price,
+    placed?.verification?.fillPrice,
+    placed?.verification?.price,
+    placed?.result?.fill_price,
+    placed?.result?.fillPrice,
+    placed?.result?.avg_fill_price,
+    placed?.result?.avgFillPrice,
+    placed?.order?.fill_price,
+    placed?.order?.fillPrice,
+  );
+  if (fillPrice) return { price: fillPrice, source: 'fill_price' };
+
+  const markPrice = firstPositiveNumber(
+    placed?.order?.mark_price,
+    placed?.order?.markPrice,
+    position?.mark_price,
+    position?.markPrice,
+  );
+  if (markPrice) return { price: markPrice, source: 'mark_price' };
+
+  const acceptablePrice = firstPositiveNumber(placed?.order?.execution_price, placed?.order?.executionPrice);
+  if (acceptablePrice) return { price: acceptablePrice, source: 'acceptable_execution_price' };
+
+  const entryPrice = firstPositiveNumber(position?.entry_price, position?.entryPrice);
+  return { price: entryPrice, source: entryPrice ? 'entry_price_fallback' : 'unavailable' };
+}
+
+function decibelCloseSettlementNote(closePnl) {
+  if (!closePnl) return 'Final PnL settlement is not available yet.';
+  if (closePnl.price_source === 'fill_price') {
+    return 'PnL is estimated from the reported fill price; final exchange settlement may update slightly.';
+  }
+  if (closePnl.price_source === 'mark_price') {
+    return 'PnL is estimated from mark price at close submission; final exchange settlement may update slightly.';
+  }
+  if (closePnl.price_source === 'acceptable_execution_price') {
+    return 'PnL is estimated from the reduce-only acceptable price because mark/fill price was unavailable; final exchange settlement may update.';
+  }
+  return 'PnL is estimated from available position data; final exchange settlement may update.';
+}
+
+function estimateDecibelClosePnl(position, closeSize, exitPrice, options = {}) {
+  const normalized = position?.symbol ? position : normalizeDecibelPosition(position);
+  const size = Number(closeSize);
+  const entry = Number(normalized.entry_price);
+  const exit = Number(exitPrice);
+  if (!(size > 0) || !(entry > 0) || !(exit > 0)) return null;
+
+  const direction = normalized.side === 'short' ? -1 : 1;
+  const pnlUsd = (exit - entry) * size * direction;
+  const closedEntryNotional = size * entry;
+  const closedExitNotional = size * exit;
+  const totalSize = Number(normalized.size);
+  const sizeRatio = totalSize > 0 ? Math.min(1, size / totalSize) : 1;
+  const collateral = Number(normalized.collateral_usd);
+  const closedCollateral = collateral > 0
+    ? collateral * sizeRatio
+    : closedEntryNotional / Math.max(1, Number(normalized.leverage || 1));
+  const pnlPct = closedCollateral > 0 ? (pnlUsd / closedCollateral) * 100 : null;
+  const priceMovePct = normalized.side === 'short'
+    ? ((entry - exit) / entry) * 100
+    : ((exit - entry) / entry) * 100;
+  const acceptableExecutionPrice = firstPositiveNumber(options.acceptableExecutionPrice);
+
+  return {
+    realized_pnl_usd_estimate: Number(pnlUsd.toFixed(6)),
+    realized_pnl_pct_estimate: pnlPct == null ? null : Number(pnlPct.toFixed(4)),
+    price_move_pct: Number(priceMovePct.toFixed(4)),
+    entry_price: entry,
+    exit_price: exit,
+    price_source: options.priceSource || 'unknown',
+    acceptable_execution_price: acceptableExecutionPrice == null ? null : Number(acceptableExecutionPrice.toFixed(6)),
+    closed_size_base: size,
+    closed_entry_notional_usd: Number(closedEntryNotional.toFixed(6)),
+    closed_exit_notional_usd: Number(closedExitNotional.toFixed(6)),
+    closed_collateral_usd: Number(closedCollateral.toFixed(6)),
+    method: options.priceSource === 'mark_price'
+      ? 'entry_mark_estimate'
+      : options.priceSource === 'fill_price'
+        ? 'entry_fill_estimate'
+        : 'entry_exit_estimate',
+  };
+}
+
+const decibelSessionCache = new Map();
+const DECIBEL_SESSION_CACHE_MS = 60_000;
+
+async function requireDecibelSession(session, requestedSubaccount = '') {
+  if (session?.player?.dex !== 'decibel') {
+    return {
+      ok: false,
+      error: `Decibel trading is only available for accounts registered on Decibel. Current account DEX: ${session?.player?.dex || 'unknown'}.`,
+    };
+  }
+  const owner = decibel.normalizeAptosAddress(session?.player?.wallet || '');
+  if (!owner || !String(owner).startsWith('0x')) {
+    return { ok: false, error: 'No Aptos wallet is registered for this Decibel player.' };
+  }
+  const cacheKey = owner.toLowerCase();
+  const cached = decibelSessionCache.get(cacheKey);
+  const requested = requestedSubaccount ? decibel.normalizeAptosAddress(requestedSubaccount) : '';
+  if (cached && Date.now() - cached.at < DECIBEL_SESSION_CACHE_MS) {
+    if (requested && requested !== cached.value.subaccount) {
+      return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
+    }
+    return cached.value;
+  }
+  const primary = decibel.normalizeAptosAddress(await decibel.getPrimarySubaccountAddr(owner));
+  if (requested && requested !== primary) {
+    return { ok: false, error: 'subaccountAddr must match the registered wallet primary Decibel subaccount.' };
+  }
+  const subaccounts = await decibel.fetchUserSubaccounts(owner);
+  const value = {
+    ok: true,
+    owner,
+    subaccount: primary,
+    subaccounts,
+  };
+  decibelSessionCache.set(cacheKey, { at: Date.now(), value });
+  return value;
+}
+
+function maybeRecordDecibelReward(playerId, orderPayload, result, verifiedSource = 'server') {
+  try {
+    const reward = decibel.rewardInfoFromPlaceOrder(orderPayload, result);
+    if (!reward.rewardable) return null;
+    const n = Number(reward.notional_usd);
+    if (!Number.isFinite(n) || n < DECIBEL_MIN_REWARD_NOTIONAL_USD || n > DECIBEL_MAX_REWARD_NOTIONAL_USD) {
+      console.log(`[mcp.decibel] reward skipped: notional ${Number.isFinite(n) ? n.toFixed(4) : String(n)} outside reward range`);
+      return null;
+    }
+    return futuresDb.addTrade(playerId, {
+      symbol: reward.symbol,
+      side: reward.side,
+      orderType: reward.orderType,
+      amount: String(reward.amount),
+      price: String(reward.price),
+      orderId: reward.txHash || result.orderId || null,
+      clientOrderId: reward.clientOrderId,
+      status: 'filled',
+      dex: 'decibel',
+      notional_usd: n,
+      verifiedSource,
+    });
+  } catch (error) {
+    console.warn('[mcp.decibel] reward row skipped:', error?.message || error);
+    return null;
+  }
+}
+
+async function placeDecibelOrderForAgent(session, playerId, args, options = {}) {
+  try {
+    const account = options.account || await requireDecibelSession(session, args?.subaccountAddr || args?.subaccount || '');
+    if (!account.ok) return { error: account.error };
+    const builder = decibelBuilderFields();
+    if (!builder) return { error: 'Decibel builder fee routing is not configured.' };
+
+    let market = await getDecibelMarket(args.symbol || args.market || args.marketName);
+    const orderType = String(args.order_type || args.orderType || 'market').toLowerCase();
+    const side = String(args.side || '').trim().toLowerCase();
+    const isBuy = decibelSideIsBuy(side);
+    let markPrice = Number(market.mark_price || await decibel.fetchMarketMarkUsd(market.market_addr));
+    let executionPrice = decibelPriceForOrder({
+      order_type: orderType,
+      price: args.price,
+      mark_price: markPrice,
+      side,
+      slippage_pct: args.slippage_pct ?? args.slippagePct,
+    });
+    const leverage = Math.max(1, Math.min(50, Number(args.leverage || args.rewardLeverage || 1)));
+    let collateralUsd = Number(args.collateral_usd ?? args.collateralUsd ?? args.amount_usd ?? args.amount ?? 0);
+    let collateralSource = null;
+    const collateralPct = Number(args.collateral_pct ?? args.collateralPct ?? args.balance_percent ?? args.balancePercent ?? 0);
+    let walletUsdcBalance = null;
+    if (!(collateralUsd > 0) && Number.isFinite(collateralPct) && collateralPct > 0) {
+      walletUsdcBalance = await decibel.fetchUsdcBalance(account.owner);
+      collateralUsd = walletUsdcBalance * (Math.max(0.01, Math.min(100, collateralPct)) / 100);
+      collateralSource = {
+        type: 'wallet_usdc_percent',
+        percent: Math.max(0.01, Math.min(100, collateralPct)),
+        wallet_usdc_balance: walletUsdcBalance,
+      };
+    }
+    let sizeBase = Number(args.size_base ?? args.size ?? 0) > 0
+      ? Number(args.size_base ?? args.size)
+      : Number(args.notional_usd ?? args.notionalUsd ?? 0) > 0
+        ? Number(args.notional_usd ?? args.notionalUsd) / executionPrice
+        : collateralUsd > 0
+          ? (collateralUsd * leverage) / executionPrice
+          : 0;
+    if (!(sizeBase > 0)) {
+      return { error: 'Order requires size, notional_usd, or collateral_usd.' };
+    }
+    const autonomousDefault = !!args.autonomous_default || !!args.autonomousDefault || !!args.auto_adjust_min_size || !!args.autoAdjustMinSize;
+    const explicitSize = Number(args.size_base ?? args.size ?? args.notional_usd ?? args.notionalUsd ?? args.collateral_usd ?? args.collateralUsd ?? args.amount_usd ?? args.amount ?? 0) > 0;
+    let autonomousAdjustment = null;
+
+    const ensureMinOrderSize = async () => {
+      const minInfo = decibelMinOrderInfo(market, executionPrice, leverage);
+      if (!(minInfo.min_size_base > 0) || sizeBase >= minInfo.min_size_base) return true;
+      if (!autonomousDefault || explicitSize) {
+        return {
+          error: `Decibel minimum for ${market.symbol} is about ${formatUsdApprox(minInfo.min_notional_usd)} notional (${formatUsdApprox(minInfo.min_collateral_usd)} collateral at ${leverage}x). Need: Specify a larger amount or percentage of your USDC balance.`,
+          minimum_order: {
+            symbol: market.symbol,
+            min_size_base: minInfo.min_size_base,
+            min_notional_usd: minInfo.min_notional_usd,
+            min_collateral_usd: minInfo.min_collateral_usd,
+            leverage,
+          },
+        };
+      }
+      if (walletUsdcBalance == null) walletUsdcBalance = await decibel.fetchUsdcBalance(account.owner);
+      if (walletUsdcBalance >= minInfo.min_collateral_usd) {
+        const oldSizeBase = sizeBase;
+        const oldCollateralUsd = collateralUsd;
+        sizeBase = minInfo.min_size_base;
+        collateralUsd = minInfo.min_collateral_usd;
+        collateralSource = {
+          ...(collateralSource || {}),
+          type: collateralSource?.type || 'autonomous_minimum_adjustment',
+          wallet_usdc_balance: walletUsdcBalance,
+          adjusted_to_decibel_minimum: true,
+          requested_size_base: oldSizeBase,
+          requested_collateral_usd: oldCollateralUsd,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+        };
+        autonomousAdjustment = {
+          reason: 'selected_minimum_valid_size',
+          symbol: market.symbol,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+        };
+        return true;
+      }
+
+      const alternatives = await getDecibelMarketsBySymbols(['DOGE', 'SOL', 'APT', 'ETH', 'BTC']);
+      let best = null;
+      for (const candidate of alternatives) {
+        const candidateMark = Number(candidate.mark_price || await decibel.fetchMarketMarkUsd(candidate.market_addr));
+        if (!(candidateMark > 0)) continue;
+        const candidateExecution = decibelPriceForOrder({
+          order_type: orderType,
+          price: args.price,
+          mark_price: candidateMark,
+          side,
+          slippage_pct: args.slippage_pct ?? args.slippagePct,
+        });
+        const candidateMin = decibelMinOrderInfo(candidate, candidateExecution, leverage);
+        if (!(candidateMin.min_collateral_usd > 0)) continue;
+        if (candidateMin.min_collateral_usd <= walletUsdcBalance && (!best || candidateMin.min_collateral_usd < best.min.min_collateral_usd)) {
+          best = { market: candidate, markPrice: candidateMark, executionPrice: candidateExecution, min: candidateMin };
+        }
+      }
+      if (best) {
+        const previousSymbol = market.symbol;
+        market = best.market;
+        markPrice = best.markPrice;
+        executionPrice = best.executionPrice;
+        sizeBase = best.min.min_size_base;
+        collateralUsd = best.min.min_collateral_usd;
+        collateralSource = {
+          type: 'autonomous_affordable_market_selection',
+          wallet_usdc_balance: walletUsdcBalance,
+          requested_symbol: previousSymbol,
+          selected_symbol: market.symbol,
+          min_notional_usd: best.min.min_notional_usd,
+          min_collateral_usd: best.min.min_collateral_usd,
+        };
+        autonomousAdjustment = {
+          reason: 'selected_affordable_market_minimum',
+          requested_symbol: previousSymbol,
+          symbol: market.symbol,
+          min_notional_usd: best.min.min_notional_usd,
+          min_collateral_usd: best.min.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+        };
+        return true;
+      }
+      return {
+        error: `Decibel minimum for ${market.symbol} is about ${formatUsdApprox(minInfo.min_notional_usd)} notional (${formatUsdApprox(minInfo.min_collateral_usd)} collateral at ${leverage}x), but available USDC is about ${formatUsdApprox(walletUsdcBalance)}. Need: Add more USDC or choose a smaller-minimum market.`,
+        minimum_order: {
+          symbol: market.symbol,
+          min_size_base: minInfo.min_size_base,
+          min_notional_usd: minInfo.min_notional_usd,
+          min_collateral_usd: minInfo.min_collateral_usd,
+          wallet_usdc_balance: walletUsdcBalance,
+          leverage,
+        },
+      };
+    };
+
+    const minCheck = await ensureMinOrderSize();
+    if (minCheck !== true) return minCheck;
+
+    const clientOrderId = decibel.normalizeClientOrderId(args.client_order_id || args.clientOrderId)
+      || decibel.newClientOrderId();
+    const isMarket = orderType === 'market';
+    const orderPayload = {
+      marketName: market.market_name,
+      price: priceToDecibelChainUnits(executionPrice, market),
+      size: sizeToDecibelChainUnits(sizeBase, market).toString(),
+      isBuy,
+      timeInForce: isMarket ? 'ioc' : 'gtc',
+      isReduceOnly: !!options.reduceOnly || !!args.reduce_only || !!args.reduceOnly,
+      clientOrderId,
+      subaccountAddr: account.subaccount,
+      tickSize: decibelTickSize(market),
+      pxDecimals: market.px_decimals,
+      szDecimals: market.sz_decimals,
+      rewardSymbol: market.symbol,
+      rewardOrderType: options.rewardOrderType || (isMarket ? 'market' : 'limit'),
+      rewardLeverage: leverage,
+      rewardNotionalUsd: sizeBase * executionPrice,
+      ...builder,
+    };
+    let leverageResult = null;
+    if (!orderPayload.isReduceOnly && Number(args.leverage || args.rewardLeverage || 0) > 0) {
+      leverageResult = await decibel.configureUserSettingsForMarket({
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        userLeverage: leverage,
+      });
+      if (leverageResult?.success === false) {
+        return { error: leverageResult.error || 'Decibel leverage update failed', leverageResult, orderPayload };
+      }
+    }
+    const result = await decibel.placeOrder(orderPayload);
+    if (result?.success === false) return { error: result.error || 'Decibel order failed', result, orderPayload };
+    const order = {
+      symbol: market.symbol,
+      market_name: market.market_name,
+      side: isBuy ? 'long' : 'short',
+      order_type: orderType,
+      reduce_only: orderPayload.isReduceOnly,
+      size_base: sizeBase,
+      execution_price: executionPrice,
+      mark_price: markPrice || null,
+      notional_usd: sizeBase * executionPrice,
+      collateral_usd: collateralUsd > 0 ? collateralUsd : (sizeBase * executionPrice) / leverage,
+      collateral_source: collateralSource,
+      autonomous_adjustment: autonomousAdjustment,
+      leverage,
+      builderAddr: builder.builderAddr,
+      builderFee: builder.builderFee,
+    };
+    const verification = orderPayload.isReduceOnly
+      ? { verified: true, effect: 'reduce_only_tx_confirmed' }
+      : await decibel.waitForPlacedOrderEffect({
+        subaccountAddr: account.subaccount,
+        marketName: market.market_name,
+        marketAddr: market.market_addr,
+        symbol: market.symbol,
+        side: order.side,
+        clientOrderId,
+        orderType,
+        reduceOnly: false,
+        txResult: result,
+        attempts: 6,
+        delayMs: 900,
+      });
+    if (!verification.verified) {
+      return {
+        error: verification.reason || 'Decibel order was submitted, but no matching position or open order was verified.',
+        result: { ...result, clientOrderId },
+        order,
+        verification,
+        orderPayload,
+      };
+    }
+    const reward = maybeRecordDecibelReward(playerId, orderPayload, result, 'server');
+    return {
+      success: true,
+      verified: true,
+      verification,
+      result: { ...result, clientOrderId },
+      order,
+      leverage_result: leverageResult,
+      reward,
+    };
+  } catch (error) {
+    return { error: error?.message || String(error || 'Decibel order failed') };
+  }
+}
+
+async function runDecibelPlaceOrderAction(session, playerId, agentKey, args) {
+  const placed = await placeDecibelOrderForAgent(session, playerId, args);
+  if (placed.error) return { ok: false, error: placed.error, ...placed };
+  await notifyAgentAction(agentKey, 'decibel_place_order', placed);
+  return { ok: true, ...placed };
+}
+
+async function runDecibelClosePositionAction(session, playerId, agentKey, args = {}) {
+  const account = await requireDecibelSession(session);
+  if (!account.ok) return { ok: false, error: account.error };
+  const symbol = String(args.symbol || '').trim();
+
+  const positions = await decibel.fetchAccountPositions(account.subaccount);
+  const openPositions = positions.filter((row) => Math.abs(Number(row?.size ?? 0)) > 0);
+  const position = symbol
+    ? openPositions.find((row) => decibelPositionSymbol(row) === symbol.toUpperCase())
+      || openPositions.find((row) => marketMatchesSymbol(row, symbol))
+    : openPositions.length === 1
+      ? openPositions[0]
+      : null;
+  if (!position) {
+    if (!symbol && openPositions.length > 1) {
+      const choices = openPositions
+        .map((row) => {
+          const p = normalizeDecibelPosition(row);
+          return `${p.symbol} ${p.side}`;
+        })
+        .join(', ');
+      return { ok: false, error: `Multiple open Decibel positions found: ${choices}. Need: Specify which symbol to close.` };
+    }
+    return { ok: false, error: symbol ? `No open Decibel position found for ${symbol}` : 'No open Decibel position found to close.' };
+  }
+
+  const normalized = normalizeDecibelPosition(position);
+  const closeSize = Number(args.size_base ?? args.size ?? 0) > 0
+    ? Number(args.size_base ?? args.size)
+    : normalized.size * (Math.max(1, Math.min(100, Number(args.percent || 100))) / 100);
+  if (!(closeSize > 0)) return { ok: false, error: 'Close size must be greater than zero' };
+
+  const closingLong = normalized.side === 'long';
+  const orderArgs = {
+    symbol: normalized.symbol,
+    side: closingLong ? 'sell' : 'buy',
+    order_type: 'market',
+    size_base: Math.min(closeSize, normalized.size),
+    slippage_pct: args.slippage_pct ?? 1,
+    client_order_id: args.client_order_id,
+    reduce_only: true,
+  };
+  const placed = await placeDecibelOrderForAgent(session, playerId, orderArgs, {
+    reduceOnly: true,
+    rewardOrderType: 'close',
+    account,
+  });
+  if (placed.error) return { ok: false, error: placed.error, ...placed, closed_position: normalized };
+  const closedSize = Math.min(closeSize, normalized.size);
+  const closePrice = decibelClosePnlPrice(placed, normalized);
+  const closePnl = estimateDecibelClosePnl(normalized, closedSize, closePrice.price, {
+    priceSource: closePrice.source,
+    acceptableExecutionPrice: placed?.order?.execution_price,
+  });
+  const remainingSize = Math.max(0, normalized.size - closedSize);
+  const remainingPrice = firstPositiveNumber(closePrice.price, placed?.order?.mark_price, normalized.entry_price, placed?.order?.execution_price) || 0;
+  const output = {
+    ok: true,
+    ...placed,
+    closed_position: normalized,
+    close_result: {
+      symbol: normalized.symbol,
+      side: normalized.side,
+      requested_percent: Math.max(1, Math.min(100, Number(args.percent || 100))),
+      closed_size_base: closedSize,
+      remaining_size_base: Number(remainingSize.toFixed(8)),
+      remaining_notional_usd: Number((remainingSize * remainingPrice).toFixed(6)),
+      ...closePnl,
+      settlement_note: decibelCloseSettlementNote(closePnl),
+    },
+  };
+  await notifyAgentAction(agentKey, 'decibel_close_position', output);
+  return output;
+}
+
 function registerTools(server, session, agentKey, reqMeta = {}) {
   instrumentMcpTools(server, session, reqMeta);
   const playerId = session.player.id;
@@ -1850,6 +3679,501 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       return jsonResult({ ...result, base: buildBaseState(playerId, false) });
     }
   );
+
+  server.registerTool(
+    'avantis_get_account',
+    {
+      title: 'Avantis Account',
+      description: 'Read Avantis account data for the authenticated player wallet. Avantis writes are prepared by MCP and submitted in the browser via wallet or Avantis Smart Wallet delegate; no server private key is stored.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+      },
+    },
+    async ({ include_orders = true }) => {
+      const account = requireAvantisSession(session);
+      if (!account.ok) return toolError(account.error);
+      const selfCustody = await avantis.getAccountInfoByAddress(account.address);
+      return jsonResult({
+        success: true,
+        dex: 'avantis',
+        trading_modes: {
+          self_custody: {
+            address: account.address,
+            can_read: true,
+            can_write_from_mcp: 'prepare_only',
+            signing: 'browser_or_avantis_smart_wallet',
+            reason: 'MCP prepares the Avantis action; the browser submits it after client-side policy checks through the connected wallet or an enabled Avantis Smart Wallet delegate.',
+          },
+        },
+        self_custody_account: selfCustody,
+        include_orders,
+      });
+    }
+  );
+
+  server.registerTool(
+    'avantis_get_markets',
+    {
+      title: 'Avantis Markets',
+      description: 'List Avantis markets and mark prices from the same Avantis/Pyth feeds used by the app.',
+      inputSchema: {
+        symbols: z.array(z.string()).optional(),
+        limit: z.number().int().min(1).max(120).optional(),
+      },
+    },
+    async ({ symbols = [], limit = 60 }) => {
+      const account = requireAvantisSession(session);
+      if (!account.ok) return toolError(account.error);
+      const markets = await normalizeAvantisMarkets(symbols, limit);
+      return jsonResult({
+        success: true,
+        dex: 'avantis',
+        markets,
+        total_returned: markets.length,
+      });
+    }
+  );
+
+  server.registerTool(
+    'avantis_market_scan',
+    {
+      title: 'Avantis Market Scan',
+      description: 'List Avantis markets plus compact chart/sparkline momentum signals so the agent can choose a trade when the player delegates symbol/side selection.',
+      inputSchema: {
+        symbols: z.array(z.string()).optional(),
+        limit: z.number().int().min(1).max(120).optional(),
+        chart_limit: z.number().int().min(1).max(80).optional(),
+        lookback_hours: z.number().int().min(4).max(168).optional(),
+      },
+    },
+    async ({ symbols = [], limit = 120, chart_limit = 40, lookback_hours = 24 }) => {
+      const account = requireAvantisSession(session);
+      if (!account.ok) return toolError(account.error);
+      const scan = await buildAvantisMarketScan({ symbols, limit, chart_limit, lookback_hours });
+      return jsonResult(scan);
+    }
+  );
+
+  server.registerTool(
+    'avantis_get_positions',
+    {
+      title: 'Avantis Positions',
+      description: 'Read Avantis open positions and open limit orders for the player browser wallet.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+      },
+    },
+    async ({ include_orders = true }) => {
+      const account = requireAvantisSession(session);
+      if (!account.ok) return toolError(account.error);
+      const { indexMap } = await avantisPairs();
+      const [positions, orders] = await Promise.all([
+        avantis.getPositionsByAddress(account.address),
+        include_orders ? avantis.getOpenOrdersByAddress(account.address) : Promise.resolve([]),
+      ]);
+      return jsonResult({
+        success: true,
+        dex: 'avantis',
+        self_custody_address: account.address,
+        positions: positions.map((row) => normalizeAvantisPosition(row, indexMap)),
+        open_orders: orders.map((row) => normalizeAvantisOrder(row, indexMap)),
+        signing: 'browser_or_avantis_smart_wallet',
+      });
+    }
+  );
+
+  server.registerTool(
+    'avantis_place_order',
+    {
+      title: 'Avantis Place Order',
+      description: 'Prepare an Avantis market/limit long or short. MCP never signs; the browser performs the final transaction after policy checks via wallet or Avantis Smart Wallet delegate.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        side: z.enum(['long', 'short', 'buy', 'sell', 'bid', 'ask']).optional(),
+        order_type: z.enum(['market', 'limit']).optional(),
+        price: z.number().positive().optional(),
+        collateral_usd: z.number().positive().optional(),
+        collateral_pct: z.number().positive().max(100).optional(),
+        notional_usd: z.number().positive().optional(),
+        leverage: z.number().positive().max(1000).optional(),
+        use_max_leverage: z.boolean().optional(),
+        max_leverage: z.union([z.boolean(), z.number().positive().max(1000)]).optional(),
+        slippage_pct: z.number().positive().max(50).optional(),
+        take_profit: z.number().positive().optional(),
+        stop_loss: z.number().positive().optional(),
+        auto_select: z.boolean().optional(),
+        choose_market: z.boolean().optional(),
+        prefer_volatile: z.boolean().optional(),
+        preferVolatile: z.boolean().optional(),
+        selection_strategy: z.enum(['volatile', 'momentum']).optional(),
+        avoid_symbols: z.union([z.array(z.string()), z.string()]).optional(),
+        analysis_lookback_hours: z.number().int().min(4).max(168).optional(),
+      },
+    },
+    async (args) => {
+      const placed = await runAvantisPlaceOrderAction(session, agentKey, args);
+      if (!placed.ok) return toolError(placed.error, placed);
+      return jsonResult(placed);
+    }
+  );
+
+  server.registerTool(
+    'avantis_close_position',
+    {
+      title: 'Avantis Close Position',
+      description: 'Prepare a browser-signed close/reduce action for the player Avantis position. If symbol is omitted, prepares the only open position or returns a blocker.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        pair_index: z.number().int().min(0).optional(),
+        trade_index: z.number().int().min(0).optional(),
+        amount: z.number().positive().optional(),
+        collateral_usd: z.number().positive().optional(),
+        percent: z.number().positive().max(100).optional(),
+        all: z.boolean().optional(),
+        close_all: z.boolean().optional(),
+        all_positions: z.boolean().optional(),
+        close_all_positions: z.boolean().optional(),
+      },
+    },
+    async (args) => {
+      const closed = await runAvantisClosePositionAction(session, agentKey, args);
+      if (!closed.ok) return toolError(closed.error, closed);
+      return jsonResult(closed);
+    }
+  );
+
+  server.registerTool(
+    'avantis_cancel_order',
+    {
+      title: 'Avantis Cancel Order',
+      description: 'Prepare a browser-signed cancel action for a player Avantis open limit order by pair/trade index or by unambiguous symbol.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        pair_index: z.number().int().min(0).optional(),
+        trade_index: z.number().int().min(0).optional(),
+      },
+    },
+    async (args) => {
+      const cancelled = await runAvantisCancelOrderAction(session, agentKey, args);
+      if (!cancelled.ok) return toolError(cancelled.error, cancelled);
+      return jsonResult(cancelled);
+    }
+  );
+
+  server.registerTool(
+    'avantis_set_tpsl',
+    {
+      title: 'Avantis Set TP/SL',
+      description: 'Prepare a browser-signed take-profit and/or stop-loss update on a player Avantis position.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        pair_index: z.number().int().min(0).optional(),
+        trade_index: z.number().int().min(0).optional(),
+        take_profit: z.number().positive().optional(),
+        stop_loss: z.number().positive().optional(),
+        take_profit_pnl_pct: z.number().positive().optional(),
+        take_profit_profit_pct: z.number().positive().optional(),
+        take_profit_pct: z.number().positive().optional(),
+        tp_pnl_pct: z.number().positive().optional(),
+        tp_profit_pct: z.number().positive().optional(),
+        tp_pct: z.number().positive().optional(),
+        stop_loss_pnl_pct: z.number().positive().optional(),
+        stop_loss_loss_pct: z.number().positive().optional(),
+        stop_loss_pct: z.number().positive().optional(),
+        sl_pnl_pct: z.number().positive().optional(),
+        sl_loss_pct: z.number().positive().optional(),
+        sl_pct: z.number().positive().optional(),
+      },
+    },
+    async (args) => {
+      const updated = await runAvantisSetTpslAction(session, agentKey, args);
+      if (!updated.ok) return toolError(updated.error, updated);
+      return jsonResult(updated);
+    }
+  );
+
+  server.registerTool(
+    'decibel_get_account',
+    {
+      title: 'Decibel Account',
+      description: 'Read the authenticated player Decibel account, primary subaccount, overview, positions, open orders, and builder routing. Use before trading or when the player asks for account/positions/balance.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+        include_history: z.boolean().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    async ({ include_orders = true, include_history = false, limit = 10 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [overview, positions, openOrders, orderHistory, tradeHistory, signer] = await Promise.all([
+        decibel.fetchAccountOverview(account.subaccount, { includePerformance: true }),
+        decibel.fetchAccountPositions(account.subaccount),
+        include_orders ? decibel.fetchOpenOrders(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchOrderHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchTradeHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        decibel.getServerSignerInfo().catch((error) => ({ error: error?.message || String(error) })),
+      ]);
+      return jsonResult({
+        success: true,
+        dex: 'decibel',
+        owner: account.owner,
+        primary_subaccount: account.subaccount,
+        subaccounts: account.subaccounts,
+        builder: decibelBuilderFields(),
+        signer,
+        overview,
+        positions: positions.map(normalizeDecibelPosition),
+        open_orders: openOrders,
+        order_history: orderHistory,
+        trade_history: tradeHistory,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_get_markets',
+    {
+      title: 'Decibel Markets',
+      description: 'List Decibel markets with mark prices and chain formatting metadata.',
+      inputSchema: {
+        symbols: z.array(z.string()).optional(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ symbols = [], limit = 40 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [markets, prices] = await Promise.all([decibel.fetchMarkets(), decibel.fetchMarketPrices()]);
+      const priceByMarket = new Map(prices.map((row) => [String(row?.market || row?.market_addr || '').toLowerCase(), row]));
+      const requested = (symbols || []).map((s) => String(s).trim()).filter(Boolean);
+      const filtered = requested.length
+        ? markets.filter((market) => requested.some((symbol) => marketMatchesSymbol(market, symbol)))
+        : markets;
+      return jsonResult({
+        success: true,
+        markets: filtered.slice(0, limit).map((market) => normalizeDecibelMarket(
+          market,
+          priceByMarket.get(decibelMarketAddress(market).toLowerCase()) || null
+        )),
+        total_markets: markets.length,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_get_positions',
+    {
+      title: 'Decibel Positions',
+      description: 'Read current Decibel open positions and optionally open orders/history.',
+      inputSchema: {
+        include_orders: z.boolean().optional(),
+        include_history: z.boolean().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+    },
+    async ({ include_orders = true, include_history = false, limit = 10 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const [positions, openOrders, orderHistory, tradeHistory] = await Promise.all([
+        decibel.fetchAccountPositions(account.subaccount),
+        include_orders ? decibel.fetchOpenOrders(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchOrderHistory(account.subaccount, { limit }) : Promise.resolve([]),
+        include_history ? decibel.fetchTradeHistory(account.subaccount, { limit }) : Promise.resolve([]),
+      ]);
+      return jsonResult({
+        success: true,
+        primary_subaccount: account.subaccount,
+        positions: positions.map(normalizeDecibelPosition),
+        open_orders: openOrders,
+        order_history: orderHistory,
+        trade_history: tradeHistory,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_place_order',
+    {
+      title: 'Decibel Place Order',
+      description: 'Open a Decibel market/limit long or short using the Clash server signer and mandatory builder fee routing. Requires clear symbol, side, and size/notional/collateral.',
+      inputSchema: {
+        symbol: z.string(),
+        side: z.enum(['long', 'short', 'buy', 'sell', 'bid', 'ask']),
+        order_type: z.enum(['market', 'limit']).optional(),
+        price: z.number().positive().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+        collateral_usd: z.number().positive().optional(),
+        collateral_pct: z.number().positive().max(100).optional(),
+        notional_usd: z.number().positive().optional(),
+        leverage: z.number().positive().max(50).optional(),
+        slippage_pct: z.number().positive().max(50).optional(),
+        client_order_id: z.string().optional(),
+      },
+    },
+    async (args) => {
+      const placed = await runDecibelPlaceOrderAction(session, playerId, agentKey, args);
+      if (!placed.ok) return toolError(placed.error, placed);
+      return jsonResult(placed);
+    }
+  );
+
+  server.registerTool(
+    'decibel_close_position',
+    {
+      title: 'Decibel Close Position',
+      description: 'Close or partially close one Decibel position with a reduce-only market order. If symbol is omitted, closes the only open position or returns a blocker listing open symbols.',
+      inputSchema: {
+        symbol: z.string().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+        percent: z.number().positive().max(100).optional(),
+        slippage_pct: z.number().positive().max(50).optional(),
+        client_order_id: z.string().optional(),
+      },
+    },
+    async ({ symbol, size, size_base, percent, slippage_pct, client_order_id }) => {
+      const placed = await runDecibelClosePositionAction(session, playerId, agentKey, {
+        symbol,
+        size,
+        size_base,
+        percent,
+        slippage_pct,
+        client_order_id,
+      });
+      if (!placed.ok) return toolError(placed.error, placed);
+      return jsonResult(placed);
+    }
+  );
+
+  server.registerTool(
+    'decibel_cancel_order',
+    {
+      title: 'Decibel Cancel Order',
+      description: 'Cancel a Decibel open order by order id and market symbol/name.',
+      inputSchema: {
+        symbol: z.string(),
+        order_id: z.string(),
+      },
+    },
+    async ({ symbol, order_id }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const market = await getDecibelMarket(symbol);
+      const result = await decibel.cancelOrder({
+        orderId: order_id,
+        marketName: market.market_name,
+        subaccountAddr: account.subaccount,
+      });
+      if (result?.success === false) return toolError(result.error || 'Decibel cancel failed', result);
+      await notifyAgentAction(agentKey, 'decibel_cancel_order', { result, symbol: market.symbol, order_id });
+      return jsonResult({ success: true, result, symbol: market.symbol, market_name: market.market_name, order_id });
+    }
+  );
+
+  server.registerTool(
+    'decibel_set_leverage',
+    {
+      title: 'Decibel Set Leverage',
+      description: 'Configure Decibel cross-margin leverage for a market before opening a position.',
+      inputSchema: {
+        symbol: z.string(),
+        leverage: z.number().positive().max(50),
+      },
+    },
+    async ({ symbol, leverage }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const market = await getDecibelMarket(symbol);
+      const result = await decibel.configureUserSettingsForMarket({
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        userLeverage: Math.max(1, Math.min(50, Number(leverage) || 1)),
+      });
+      if (result?.success === false) return toolError(result.error || 'Decibel leverage update failed', result);
+      await notifyAgentAction(agentKey, 'decibel_set_leverage', { result, symbol: market.symbol, leverage });
+      return jsonResult({ success: true, result, symbol: market.symbol, leverage });
+    }
+  );
+
+  server.registerTool(
+    'decibel_set_tpsl',
+    {
+      title: 'Decibel Set TP/SL',
+      description: 'Set or update take-profit and/or stop-loss orders for an existing Decibel position.',
+      inputSchema: {
+        symbol: z.string(),
+        take_profit: z.number().positive().optional(),
+        stop_loss: z.number().positive().optional(),
+        size: z.number().positive().optional(),
+        size_base: z.number().positive().optional(),
+      },
+    },
+    async ({ symbol, take_profit, stop_loss, size, size_base }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      if (!(Number(take_profit) > 0) && !(Number(stop_loss) > 0)) {
+        return toolError('Provide take_profit, stop_loss, or both.');
+      }
+      const market = await getDecibelMarket(symbol);
+      const positions = await decibel.fetchAccountPositions(account.subaccount);
+      const position = positions.find((row) => decibelPositionSymbol(row) === market.symbol)
+        || positions.find((row) => marketMatchesSymbol(row, symbol));
+      if (!position) return toolError(`No open Decibel position found for ${symbol}`);
+      const normalized = normalizeDecibelPosition(position);
+      const isLong = normalized.side === 'long';
+      const sizeHuman = Number(size_base ?? size ?? normalized.size);
+      const chainSize = sizeToDecibelChainUnits(Math.min(sizeHuman, normalized.size), market).toString();
+      const tick = decibelTickSize(market);
+      const leg = {};
+      if (Number(take_profit) > 0) {
+        const trigger = priceToDecibelChainUnits(take_profit, market);
+        const limit = Math.max(1, trigger + (isLong ? Math.max(1, tick) : -Math.max(1, tick)));
+        Object.assign(leg, {
+          tpOrderId: normalized.tp_order_id || undefined,
+          tpTriggerPrice: trigger,
+          tpLimitPrice: limit,
+          tpSize: chainSize,
+        });
+      }
+      if (Number(stop_loss) > 0) {
+        const trigger = priceToDecibelChainUnits(stop_loss, market);
+        const limit = Math.max(1, trigger + (isLong ? -Math.max(1, tick) : Math.max(1, tick)));
+        Object.assign(leg, {
+          slOrderId: normalized.sl_order_id || undefined,
+          slTriggerPrice: trigger,
+          slLimitPrice: limit,
+          slSize: chainSize,
+        });
+      }
+      const base = {
+        marketAddr: market.market_addr,
+        subaccountAddr: account.subaccount,
+        tickSize: tick,
+        ...leg,
+      };
+      const results = [];
+      if (base.tpTriggerPrice && base.tpOrderId) {
+        results.push({ leg: 'tp', ...(await decibel.updateTpOrderForPosition({ ...base, prevOrderId: base.tpOrderId })) });
+      }
+      if (base.slTriggerPrice && base.slOrderId) {
+        results.push({ leg: 'sl', ...(await decibel.updateSlOrderForPosition({ ...base, prevOrderId: base.slOrderId })) });
+      }
+      if ((base.tpTriggerPrice && !base.tpOrderId) || (base.slTriggerPrice && !base.slOrderId)) {
+        results.push({ leg: 'tp_sl', ...(await decibel.placeTpSlOrderForPosition({
+          ...base,
+          ...(base.tpOrderId ? { tpTriggerPrice: undefined, tpLimitPrice: undefined, tpSize: undefined } : {}),
+          ...(base.slOrderId ? { slTriggerPrice: undefined, slLimitPrice: undefined, slSize: undefined } : {}),
+        })) });
+      }
+      const failed = results.find((row) => row?.success === false);
+      if (failed) return toolError(failed.error || 'Decibel TP/SL failed', { results });
+      const payload = { success: true, symbol: market.symbol, position: normalized, results };
+      await notifyAgentAction(agentKey, 'decibel_set_tpsl', payload);
+      return jsonResult(payload);
+    }
+  );
 }
 
 function createServer(session, agentKey, reqMeta = {}) {
@@ -1880,6 +4204,8 @@ app.get('/health', (_req, res) => {
     transport: 'streamable-http',
     mcp_endpoint: `${PUBLIC_URL}/mcp`,
     skill: `${PUBLIC_URL}/skills.md`,
+    decibel_skill: `${PUBLIC_URL}/decibel-skills.md`,
+    avantis_skill: `${PUBLIC_URL}/avantis-skills.md`,
   });
 });
 
@@ -1891,8 +4217,81 @@ app.get('/skills.md', (_req, res) => {
   res.type('text/markdown').send(readSkill());
 });
 
+app.get('/decibel-skills.md', (_req, res) => {
+  res.type('text/markdown').send(readDecibelSkill());
+});
+
+app.get('/avantis-skills.md', (_req, res) => {
+  res.type('text/markdown').send(readAvantisSkill());
+});
+
 app.get('/.well-known/oauth-protected-resource', (req, res) => {
   res.json(protectedResourceMetadata(req));
+});
+
+async function handleFastDecibelAction(req, res, tool, runner) {
+  const startedAt = Date.now();
+  const input = req.body && typeof req.body === 'object' ? req.body : {};
+  const playerId = req.agentSession?.player?.id || null;
+  const aiKeyId = req.agentSession?.key?.id || null;
+  const aiKeyPrefix = req.agentSession?.key?.key_prefix || null;
+  try {
+    const output = await runner(input);
+    const status = output?.ok === false || output?.error ? 'error' : 'ok';
+    game.logMcpEvent({
+      playerId,
+      aiKeyId,
+      aiKeyPrefix,
+      tool,
+      status,
+      durationMs: Date.now() - startedAt,
+      error: output?.error || null,
+      input,
+      output,
+      metadata: { transport: 'fast-rest' },
+      ...requestLogMeta(req),
+    });
+    if (status !== 'ok') return res.status(400).json(output);
+    return res.json(output);
+  } catch (error) {
+    const output = { ok: false, error: error?.message || String(error || 'Decibel action failed') };
+    game.logMcpEvent({
+      playerId,
+      aiKeyId,
+      aiKeyPrefix,
+      tool,
+      status: 'error',
+      durationMs: Date.now() - startedAt,
+      error: output.error,
+      input,
+      output,
+      metadata: { transport: 'fast-rest' },
+      ...requestLogMeta(req),
+    });
+    return res.status(500).json(output);
+  }
+}
+
+app.post('/fast/decibel/place-order', rateLimit, agentAuth, async (req, res) => {
+  await handleFastDecibelAction(req, res, 'decibel_place_order', (input) => (
+    runDecibelPlaceOrderAction(
+      req.agentSession,
+      req.agentSession.player.id,
+      req.agentKey,
+      input
+    )
+  ));
+});
+
+app.post('/fast/decibel/close-position', rateLimit, agentAuth, async (req, res) => {
+  await handleFastDecibelAction(req, res, 'decibel_close_position', (input) => (
+    runDecibelClosePositionAction(
+      req.agentSession,
+      req.agentSession.player.id,
+      req.agentKey,
+      input
+    )
+  ));
 });
 
 app.all('/mcp', rateLimit, agentAuth, async (req, res) => {

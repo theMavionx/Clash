@@ -126,7 +126,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
             <div style={{
               ...hud.timerPill,
               color: battleTimer <= 30 ? '#E53935' : '#5C3A21',
-              borderColor: battleTimer <= 30 ? '#7f0000' : '#9f8759',
+              border: `2px solid ${battleTimer <= 30 ? '#7f0000' : '#9f8759'}`,
             }}>
               {Math.floor(battleTimer / 60)}:{String(battleTimer % 60).padStart(2, '0')}
             </div>
@@ -1046,12 +1046,12 @@ const hud = {
     boxShadow: '0 4px 12px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.5)',
   },
   cannonActive: {
-    borderColor: 'rgba(255,155,0,0.88)',
+    border: '3px solid rgba(255,155,0,0.88)',
     boxShadow: '0 0 22px rgba(255,155,0,0.5), inset 0 0 10px rgba(255,155,0,0.12)',
     filter: 'brightness(1.18)',
   },
   rallyActive: {
-    borderColor: 'rgba(255,55,40,0.95)',
+    border: '3px solid rgba(255,55,40,0.95)',
     boxShadow: '0 0 22px rgba(255,55,40,0.55), inset 0 0 10px rgba(255,55,40,0.18)',
     filter: 'brightness(1.18)',
   },

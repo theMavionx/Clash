@@ -11,7 +11,6 @@ import { farcasterDetectPromise } from '../hooks/useFarcaster';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import {
   forgetSelectedWallet,
-  isPhantomInAppBrowser,
   isUserDismissedWalletError,
 } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
@@ -19,6 +18,7 @@ import {
   DEFAULT_SOLANA_RPC_URL,
   SOLANA_RPC_URLS,
   selectFreshSolanaRpcUrl,
+  solanaConnectionConfig,
   solanaRpcHost,
 } from '../lib/solanaRpc';
 
@@ -166,9 +166,9 @@ export default function WalletProvider({ children }) {
   }, [smReady, isSolanaMobile]);
 
   const rpc = useBestRpc();
+  const rpcConfig = useMemo(() => solanaConnectionConfig(rpc, { commitment: 'confirmed' }), [rpc]);
   const { ready: fcReady, inFrame } = useFarcasterWalletReady();
   const localStorageKey = inFrame ? 'fcWalletName' : 'walletName';
-  const solanaAutoConnect = !isPhantomInAppBrowser();
 
   const handleWalletError = useCallback((error, adapter) => {
     if (isUserDismissedWalletError(error)) {
@@ -192,10 +192,10 @@ export default function WalletProvider({ children }) {
   if (!fcReady || !smReady) return null;
 
   return (
-    <ConnectionProvider endpoint={rpc}>
+    <ConnectionProvider endpoint={rpc} config={rpcConfig}>
       <SolWalletProvider
         wallets={wallets}
-        autoConnect={solanaAutoConnect}
+        autoConnect={true}
         localStorageKey={localStorageKey}
         onError={handleWalletError}
       >

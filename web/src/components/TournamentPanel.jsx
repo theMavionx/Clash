@@ -118,6 +118,7 @@ function TournamentPanel({ onClose }) {
     error: tournamentError,
     join,
     leave,
+    updateRewardWallet,
   } = useTournament({ active: tab === 'active' });
   const { items: history } = useTournamentHistory({ active: tab === 'history' });
   const player = usePlayer();
@@ -136,6 +137,9 @@ function TournamentPanel({ onClose }) {
 
   const joined = !!me?.joined;
   const myStats = isHistory ? (historyTournament?.me || null) : (me?.me || null);
+  const needsCopRewardWallet = !!t?.rewards_in_cop;
+  const hasRewardWallet = !!myStats?.reward_wallet_evm;
+  const canAddMissingRewardWallet = !isHistory && joined && needsCopRewardWallet && !hasRewardWallet;
   const phase = t?.phase || me?.phase || null;
   const preregistration = !isHistory && phase === 'preregistration';
   const live = !isHistory && phase === 'live';
@@ -176,6 +180,18 @@ function TournamentPanel({ onClose }) {
     if (!confirm(message)) return;
     setBusy(true);
     await leave(t.id);
+    setBusy(false);
+  };
+  const handleSaveRewardWallet = async () => {
+    if (!t || busy || !canAddMissingRewardWallet) return;
+    const rewardWallet = rewardWalletEvm.trim();
+    if (!EVM_WALLET_RE.test(rewardWallet)) {
+      alert('Enter a valid EVM address for COP rewards.');
+      return;
+    }
+    setBusy(true);
+    const result = await updateRewardWallet(t.id, rewardWallet);
+    if (result && result.ok === false) alert(result.error || 'Could not save COP reward address');
     setBusy(false);
   };
 
@@ -342,6 +358,23 @@ function TournamentPanel({ onClose }) {
                     {busy || tournamentLoading ? (preregistration ? 'REGISTERING...' : 'JOINING...') : (!canJoin ? 'REGISTRATION CLOSED' : preregistration ? 'PRE-REGISTER' : 'JOIN TOURNAMENT')}
                   </button>
                 </>
+              )}
+
+              {canAddMissingRewardWallet && (
+                <div style={S.rewardBox}>
+                  <div style={S.rewardLabel}>COP reward address</div>
+                  <input
+                    style={S.rewardInput}
+                    value={rewardWalletEvm}
+                    onChange={(e) => setRewardWalletEvm(e.target.value)}
+                    placeholder="0x..."
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                  <button style={S.rewardSaveBtn} onClick={handleSaveRewardWallet} disabled={busy}>
+                    {busy ? 'SAVING...' : 'SAVE ADDRESS'}
+                  </button>
+                </div>
               )}
 
               {isHistory && myStats && (
@@ -633,6 +666,13 @@ const S = {
     width: '100%', boxSizing: 'border-box', border: '2px solid #d4c8b0', borderRadius: 10,
     background: '#fdf8e7', color: '#5C3A21', fontSize: 12, fontWeight: 800,
     padding: '8px 10px', outline: 'none',
+  },
+  rewardSaveBtn: {
+    width: '100%', marginTop: 8, padding: '8px 12px', borderRadius: 10,
+    background: 'linear-gradient(180deg, #4CAF50 0%, #2E7D32 100%)',
+    border: '2px solid #2E7D32', color: '#fff', fontSize: 12, fontWeight: 900,
+    letterSpacing: 0.5, cursor: 'pointer', textTransform: 'uppercase',
+    textShadow: '0 1px 0 rgba(0,0,0,0.25)',
   },
 
   joinBtn: {

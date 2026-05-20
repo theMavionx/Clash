@@ -149,6 +149,17 @@ export const DEX_CONFIG = {
   },
 };
 
+export const DEX_ORDER = [
+  'phoenix',
+  'hyperliquid',
+  'risex',
+  'decibel',
+  'pacifica',
+  'avantis',
+  'gmx',
+  'monad',
+];
+
 export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobile = false } = {}) {
   if (!DEX_CONFIG[dexId]) return false;
   // Solana Saga / Seeker: show only Solana-native venues. The phone's Seed
@@ -173,7 +184,11 @@ export function isDexAvailableInContext(dexId, { isInFrame = false, isSolanaMobi
 }
 
 export function getAvailableDexConfigs({ isInFrame = false, isSolanaMobile = false } = {}) {
-  return Object.values(DEX_CONFIG).filter(cfg => (
+  const ordered = DEX_ORDER
+    .map(id => DEX_CONFIG[id])
+    .filter(Boolean);
+  const rest = Object.values(DEX_CONFIG).filter(cfg => !DEX_ORDER.includes(cfg.id));
+  return [...ordered, ...rest].filter(cfg => (
     isDexAvailableInContext(cfg.id, { isInFrame, isSolanaMobile })
   ));
 }

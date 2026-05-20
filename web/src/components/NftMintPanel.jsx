@@ -1045,7 +1045,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={styles.slide}
                   aria-hidden={activeShopTab !== 'resources'}
-                  inert={activeShopTab !== 'resources'}
+                  inert={activeShopTab !== 'resources' ? 'true' : undefined}
                 >
                   <div style={{ ...styles.topRow, ...styles.topRowResources }}>
                     <div style={styles.summary}>
@@ -1079,7 +1079,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={styles.slide}
                   aria-hidden={activeShopTab !== 'nft'}
-                  inert={activeShopTab !== 'nft'}
+                  inert={activeShopTab !== 'nft' ? 'true' : undefined}
                 >
                   <div style={styles.topRow}>
                     <div style={styles.heroFrame}>
@@ -1196,7 +1196,7 @@ function NftMintPanel({ onClose }) {
                   className="shop-scroll"
                   style={{ ...styles.slide, position: 'relative' }}
                   aria-hidden={activeShopTab !== 'marketplace'}
-                  inert={activeShopTab !== 'marketplace'}
+                  inert={activeShopTab !== 'marketplace' ? 'true' : undefined}
                 >
                   <div style={styles.topRow}>
                     <div style={styles.heroFrame}>
@@ -2533,8 +2533,8 @@ const styles = {
     boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
   },
   // Bridge entry button rendered inside the hero summary row — small pill
-  // with icon + "Bridge" label. Sits right under the "Genesis supply 500"
-  // chip so it's visually grouped with the NFT preview, not the modal chrome.
+  // with icon + "Bridge" label. Sits right under the dynamic supply chip
+  // so it's visually grouped with the NFT preview, not the modal chrome.
   heroBridgeBtn: {
     alignSelf: 'flex-start',
     display: 'inline-flex', alignItems: 'center', gap: 6,

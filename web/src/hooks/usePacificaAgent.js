@@ -11,7 +11,7 @@
 //
 // Bind request (signed by master):
 //   POST /agent/bind
-//   header  = { type: "bind_agent_wallet", timestamp, expiry_window: 5000 }
+//   header  = { type: "bind_agent_wallet", timestamp, expiry_window: 30000 }
 //   payload = { agent_wallet: <agent_pubkey_base58> }
 //   body    = {
 //     account: <master_pubkey>, agent_wallet: <agent_pubkey>,
@@ -19,7 +19,7 @@
 //   }
 //
 // Subsequent trades (signed by agent):
-//   header  = { type: "create_market_order", timestamp, expiry_window: 5000 }
+//   header  = { type: "create_market_order", timestamp, expiry_window: 30000 }
 //   payload = { ...trade fields }
 //   body    = {
 //     account: <master_pubkey>, agent_wallet: <agent_pubkey>,
@@ -41,6 +41,7 @@ const API = 'https://api.pacifica.fi/api/v1';
 // doesn't expire bound agents — this is a self-imposed safety window so
 // a long-abandoned session can't be revived from a stale key.
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 
 // localStorage key — namespaced per master wallet so multi-account
 // browsers don't crosstalk. The stored value is JSON:
@@ -54,7 +55,7 @@ function buildMessage(type, payload, timestamp = pacificaNow()) {
   // JSON, header-fields plus `data: payload`. Default timestamp goes through
   // pacificaNow() so the offset captured from `Date` headers in usePacifica
   // is applied here too.
-  const header = { type, timestamp, expiry_window: 5000 };
+  const header = { type, timestamp, expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS };
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
 
@@ -146,7 +147,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
         agent_wallet: agentPubkeyB58,
         signature,
         timestamp,
-        expiry_window: 5000,
+        expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
       };
 
       const res = await fetch(`${API}/agent/bind`, {
@@ -242,7 +243,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
       agent_wallet: cur.agentPubkey,
       signature,
       timestamp,
-      expiry_window: 5000,
+      expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
     };
   }, [walletAddr]);
 
@@ -277,7 +278,7 @@ export function usePacificaAgent({ walletAddr, masterSign }) {
         agent_wallet: cur.agentPubkey,
         signature: bs58.encode(sigBytes),
         timestamp,
-        expiry_window: 5000,
+        expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
       };
       await fetch(`${API}/agent/revoke`, {
         method: 'POST',

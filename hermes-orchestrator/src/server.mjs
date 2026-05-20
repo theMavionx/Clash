@@ -9,12 +9,15 @@ import clashSettings from './clash_agent_settings.cjs';
 
 const {
   CLASH_PROMPT_VERSION,
-  TOOL_INCLUDE,
-  CLASH_AGENT_PLAYBOOK,
+  DECIBEL_TRADING_SKILL,
+  AVANTIS_TRADING_SKILL,
+  toolIncludeForDex,
+  playbookForDex,
+  composeRuntimeInstructions,
   buildRuntimeInstructions,
 } = clashPrompt;
 
-const { resolveModelChain } = clashSettings;
+const { resolveModelChain, resolveProviderOrder } = clashSettings;
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -54,6 +57,7 @@ const MODEL_CHAIN = resolveModelChain(process.env);
 const PRIMARY_MODEL = MODEL_CHAIN[0];
 const FALLBACK_MODELS = MODEL_CHAIN.slice(1);
 const FALLBACK_MODEL = FALLBACK_MODELS[0] || '';
+const PROVIDER_ORDER = resolveProviderOrder(process.env);
 const FALLBACK_AFTER_RETRIES = Number(process.env.CLASH_HERMES_FALLBACK_AFTER_RETRIES || 3);
 const PRIMARY_MODEL_RETRIES = Number(process.env.CLASH_HERMES_PRIMARY_RETRIES || 3);
 const ACTION_PRIMARY_MODEL_RETRIES = Number(process.env.CLASH_HERMES_ACTION_PRIMARY_RETRIES || 1);
@@ -70,6 +74,8 @@ const MAX_INSTRUCTIONS_CHARS = Number(process.env.CLASH_HERMES_MAX_INSTRUCTIONS_
 const START_PORT = Number(process.env.CLASH_HERMES_PLAYER_PORT_START || 8700);
 const state = { players: {}, nextPort: START_PORT };
 const processes = new Map();
+const playerLifecycleLocks = new Map();
+let saveStateChain = Promise.resolve();
 
 function nowIso() {
   return new Date().toISOString();
@@ -79,21 +85,24 @@ function publicPlayerState(playerId) {
   const row = state.players[playerId];
   if (!row) return null;
   const proc = processes.get(playerId);
+  const running = !!proc && !proc.killed && proc.exitCode == null;
   return {
     player_id: playerId,
     name: row.name || null,
+    dex: row.dex || null,
     port: row.port,
     model: row.model || PRIMARY_MODEL,
     fallback_model: FALLBACK_MODEL || null,
     fallback_models: FALLBACK_MODELS,
     model_chain: MODEL_CHAIN,
-    running: !!proc && !proc.killed,
+    provider_order: PROVIDER_ORDER,
+    running,
     pid: proc?.pid || null,
     created_at: row.created_at || null,
     updated_at: row.updated_at || null,
     last_started_at: row.last_started_at || null,
     last_chat_at: row.last_chat_at || null,
-    last_error: row.last_error || null,
+    last_error: running ? null : row.last_error || null,
     last_progress: row.last_progress || null,
   };
 }
@@ -111,6 +120,21 @@ function safePlayerId(playerId) {
     return `p_${digest}`;
   }
   return id;
+}
+
+function withPlayerLifecycleLock(playerId, fn) {
+  const safeId = safePlayerId(playerId);
+  const previous = playerLifecycleLocks.get(safeId) || Promise.resolve();
+  const current = previous
+    .catch(() => {})
+    .then(() => fn());
+  const entry = current.finally(() => {
+    if (playerLifecycleLocks.get(safeId) === entry) {
+      playerLifecycleLocks.delete(safeId);
+    }
+  }).catch(() => {});
+  playerLifecycleLocks.set(safeId, entry);
+  return current;
 }
 
 function clampText(value, max) {
@@ -139,12 +163,20 @@ async function loadState() {
   }
 }
 
-async function saveState() {
+async function writeStateSnapshot(snapshot) {
   await ensureDirs();
-  const tmp = `${STATE_FILE}.tmp`;
-  await fsp.writeFile(tmp, JSON.stringify(state, null, 2));
+  const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  await fsp.writeFile(tmp, snapshot);
   await fsp.rename(tmp, STATE_FILE);
   await fsp.chmod(STATE_FILE, 0o600).catch(() => {});
+}
+
+async function saveState() {
+  const snapshot = JSON.stringify(state, null, 2);
+  saveStateChain = saveStateChain
+    .catch(() => {})
+    .then(() => writeStateSnapshot(snapshot));
+  return saveStateChain;
 }
 
 async function setPlayerProgress(playerId, progress) {
@@ -179,7 +211,7 @@ const GLOBAL_GAME_MEMORY = [
   '',
   'Common action mapping:',
   '- "attack", "атакуй", "напади", "find enemy" means inspect base, confirm loaded ships, then execute_ai_attack_plan with auto_tactics true.',
-  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, report the shield remaining hours from the tool result in English.',
+  '- "attack <player name>" means pass that exact name as target_player_name to execute_ai_attack_plan. If the target is shielded, naturally say the target is under shield and include the shield remaining hours from the tool result.',
   '- Generic requests like "attack a base", "attack new base", "battle again", or "find an enemy" are NOT named attacks. Omit target_player_name and use normal matchmaking.',
   '- "collect resources", "збери ресурси" means inspect base, then collect_resources.',
   '- "build my base", "set up base", or "arrange everything" means use auto_build_base with balanced focus. Do not ask the player for grids or a building list.',
@@ -192,7 +224,7 @@ const GLOBAL_GAME_MEMORY = [
   '- Rally marker is optional. Use it only if it helps focus troops on a nearby useful objective.',
   '- Named/targeted attacks cost 2x the normal gold attack cost for the attacker Town Hall level.',
   '- Never pass generic words such as base, enemy, player, again, new, random, or another as target_player_name.',
-  '- Always write Blocked/Error/Need messages in English, even when the user speaks another language.',
+  '- For blockers/errors, answer naturally in the player language when possible and keep the exact blocker facts.',
   '- Respect the one MCP battle per minute cooldown. Do not spam retries during cooldown.',
   '',
   'Construction rules:',
@@ -202,6 +234,17 @@ const GLOBAL_GAME_MEMORY = [
   '- grid_index 2 is attack/deployment space and is never used for base construction.',
   '- Use barn, not barracks.',
   '',
+  'Decibel trading rules:',
+  '- Decibel trading is part of the Clash agent only for players whose account DEX is decibel.',
+  '- Use only Clash MCP Decibel tools for trading; never bypass builder-aware routing.',
+  '- Read-only trading requests should call Decibel read tools immediately.',
+  '- Write trading requests need clear symbol, side, and size/notional/collateral.',
+  '',
+  'Avantis trading rules:',
+  '- Avantis trading is part of the Clash agent only for players whose account DEX is avantis.',
+  '- Use Clash MCP Avantis tools. Self-custody reads use the player wallet; MCP writes only prepare browser_action payloads for the browser wallet to sign.',
+  '- Do not claim an Avantis write is done from MCP alone. Answer naturally that the action is prepared and signing is starting; the frontend reports the actual tx after the browser signs.',
+  '',
 ].join('\n');
 
 function initialPlayerMemory(row) {
@@ -210,9 +253,10 @@ function initialPlayerMemory(row) {
     '',
     `Player: ${row.name || row.safe_id}`,
     `Player id: ${row.safe_id}`,
+    `Current DEX: ${row.dex || 'unknown'}`,
     '',
     'Preferences:',
-    '- Use concise player-facing replies in the same language as the user, but keep Blocked/Error/Need messages in English.',
+    '- Use concise player-facing replies in the same language as the user, including blockers/errors when possible.',
     '- Prefer useful autonomous decisions when the request is clear.',
     '- Keep battle, build, upgrade, and resource actions grounded in fresh MCP tool state.',
     '',
@@ -220,12 +264,19 @@ function initialPlayerMemory(row) {
 }
 
 function writePlayerConfig(playerId, row) {
-  const include = TOOL_INCLUDE.map((tool) => `        - ${tool}`).join('\n');
+  const include = toolIncludeForDex(row?.dex).map((tool) => `        - ${tool}`).join('\n');
+  const providerOrderLines = PROVIDER_ORDER.length
+    ? [
+        '  order:',
+        ...PROVIDER_ORDER.map((provider) => `    - ${provider}`),
+      ]
+    : [];
   return [
     '# Managed by clash-hermes-orchestrator. Do not edit by hand.',
     'provider: openrouter',
     'provider_routing:',
     '  sort: throughput',
+    ...providerOrderLines,
     'model:',
     `  default: ${yamlString(row.model || PRIMARY_MODEL)}`,
     `  context_length: ${MODEL_CONTEXT_LENGTH}`,
@@ -331,10 +382,25 @@ async function writePlayerFiles(playerId, row) {
   }
   await fsp.writeFile(path.join(home, 'config.yaml'), writePlayerConfig(playerId, row), { mode: 0o600 });
   await fsp.writeFile(path.join(home, '.env'), writePlayerEnv(row), { mode: 0o600 });
-  await fsp.writeFile(path.join(home, 'SOUL.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
-  await fsp.writeFile(path.join(home, 'HERMES.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
+  const combinedPlaybook = composeRuntimeInstructions(row.dex);
+  await fsp.writeFile(path.join(home, 'SOUL.md'), combinedPlaybook, { mode: 0o600 });
+  await fsp.writeFile(path.join(home, 'HERMES.md'), combinedPlaybook, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'skills', 'clash-of-perps-ai-agent'), { recursive: true });
-  await fsp.writeFile(path.join(home, 'skills', 'clash-of-perps-ai-agent', 'SKILL.md'), CLASH_AGENT_PLAYBOOK, { mode: 0o600 });
+  await fsp.writeFile(path.join(home, 'skills', 'clash-of-perps-ai-agent', 'SKILL.md'), playbookForDex(row.dex), { mode: 0o600 });
+  await fsp.rm(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true, force: true });
+  await fsp.rm(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true, force: true });
+  if (row.dex === 'avantis') {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-avantis-trading', 'SKILL.md'), AVANTIS_TRADING_SKILL, { mode: 0o600 });
+  } else if (row.dex === 'decibel') {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-decibel-trading', 'SKILL.md'), DECIBEL_TRADING_SKILL, { mode: 0o600 });
+  } else {
+    await fsp.mkdir(path.join(home, 'skills', 'clash-decibel-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-decibel-trading', 'SKILL.md'), DECIBEL_TRADING_SKILL, { mode: 0o600 });
+    await fsp.mkdir(path.join(home, 'skills', 'clash-avantis-trading'), { recursive: true });
+    await fsp.writeFile(path.join(home, 'skills', 'clash-avantis-trading', 'SKILL.md'), AVANTIS_TRADING_SKILL, { mode: 0o600 });
+  }
   await fsp.writeFile(versionFile, CLASH_PROMPT_VERSION, { mode: 0o600 });
   await fsp.mkdir(path.join(home, 'sessions'), { recursive: true });
   await fsp.mkdir(path.join(home, 'memory'), { recursive: true });
@@ -367,10 +433,12 @@ async function provisionPlayer(playerId, body) {
   const mcpKey = clampText(body?.mcp_key, 512);
   if (!mcpKey.startsWith('cop_ai_')) throw new Error('valid mcp_key is required');
   const existing = state.players[safeId] || {};
+  const requestedDex = String(body?.dex || body?.player?.dex || existing.dex || '').trim().toLowerCase();
   const row = {
     ...existing,
     safe_id: safeId,
     name: clampText(body?.name || existing.name || safeId, 80),
+    dex: requestedDex || null,
     mcp_key: mcpKey,
     api_key: existing.api_key || randomToken('hapi'),
     port: existing.port || await allocatePort(),
@@ -447,7 +515,7 @@ async function ensurePlayerRunning(playerId) {
   await writePlayerFiles(safeId, row);
   const out = fs.openSync(path.join(LOG_DIR, `${safeId}.out.log`), 'a');
   const err = fs.openSync(path.join(LOG_DIR, `${safeId}.err.log`), 'a');
-  const child = spawn(HERMES_BIN, ['gateway'], {
+  const child = spawn(HERMES_BIN, ['gateway', 'run', '--replace', '--accept-hooks'], {
     cwd: home,
     env: {
       ...process.env,
@@ -466,9 +534,10 @@ async function ensurePlayerRunning(playerId) {
     const fail = async (message) => {
       if (startupDone) return;
       startupDone = true;
-      if (processes.get(safeId) === child) processes.delete(safeId);
+      const isActiveChild = processes.get(safeId) === child;
+      if (isActiveChild) processes.delete(safeId);
       const latest = state.players[safeId];
-      if (latest) {
+      if (latest && isActiveChild) {
         latest.last_error = message;
         latest.updated_at = nowIso();
         await saveState().catch(() => {});
@@ -490,6 +559,7 @@ async function ensurePlayerRunning(playerId) {
   child.on('exit', async (code, signal) => {
     const active = processes.get(safeId);
     if (active === child) processes.delete(safeId);
+    if (active !== child) return;
     const latest = state.players[safeId];
     if (latest) {
       latest.last_error = code === 0 ? null : `Hermes exited code=${code} signal=${signal || ''}`.trim();
@@ -498,8 +568,16 @@ async function ensurePlayerRunning(playerId) {
     }
   });
   await Promise.race([
-    waitForHermes(row).then((ready) => {
+    waitForHermes(row).then(async (ready) => {
       startupDone = true;
+      row.last_error = null;
+      row.last_progress = {
+        phase: 'ready',
+        message: 'Hermes API is ready',
+        at: nowIso(),
+      };
+      row.updated_at = nowIso();
+      await saveState().catch(() => {});
       return ready;
     }),
     startupFailure,
@@ -584,6 +662,63 @@ function trimForMemory(value, max = 800) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+const TRANSIENT_AGENT_FAILURE_PATTERNS = [
+  /AI message limit reached/i,
+  /Open the AI shop/i,
+  /Hermes exited before becoming ready/i,
+  /Hermes orchestrator fetch failed/i,
+  /\bECONNREFUSED\b/i,
+  /\bGateway Timeout\b/i,
+  /\b504\b/i,
+  /AI request is still running/i,
+  /AI result is still pending/i,
+  /All routes failed/i,
+  /route did not start cleanly/i,
+  /Order executed at/i,
+  /execution price/i,
+  /Opened a .* leverage .* on/i,
+  /Closed .* position/i,
+  /reduced position/i,
+  /final PnL settlement/i,
+  /BTC long position/i,
+  /You have no open positions/i,
+  /Decibel positions/i,
+  /open orders/i,
+  /account is clean/i,
+  /ready for new trades/i,
+  /active orders on Decibel/i,
+  /^\s*(?:Done|Result|Next):\s/i,
+  /\|\s*Agent:\s*(?:Done|Result|Next):\s/i,
+];
+
+function isTransientAgentFailureText(value) {
+  const text = String(value || '').trim();
+  return !!text && TRANSIENT_AGENT_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function filterRecentMemoryText(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  const lines = text
+    .split(/\r?\n/)
+    .filter((line) => !isTransientAgentFailureText(line));
+  return lines.join('\n').trim();
+}
+
+function shouldPersistRecentMemory(input, output) {
+  if (isTransientAgentFailureText(output)) return false;
+  if (isTransientAgentFailureText(input) && !String(output || '').trim()) return false;
+  return true;
+}
+
+function currentPlayerMessageForMemory(input) {
+  const text = String(input || '');
+  const marker = '# Current Player Message\n';
+  const markerIndex = text.lastIndexOf(marker);
+  if (markerIndex >= 0) return text.slice(markerIndex + marker.length).trim();
+  return text.trim();
+}
+
 async function readTextIfExists(filePath, maxChars = 4000) {
   try {
     const text = await fsp.readFile(filePath, 'utf8');
@@ -599,7 +734,7 @@ async function buildMemoryInstructions(playerId) {
   const parts = [];
   const globalMemory = await readTextIfExists(path.join(memoryDir, 'global.md'), 5000);
   const playerMemory = await readTextIfExists(path.join(memoryDir, 'player.md'), 3000);
-  const recentMemory = await readTextIfExists(path.join(memoryDir, 'recent.md'), 2500);
+  const recentMemory = filterRecentMemoryText(await readTextIfExists(path.join(memoryDir, 'recent.md'), 2500));
   if (globalMemory) parts.push(globalMemory);
   if (playerMemory) parts.push(playerMemory);
   if (recentMemory) parts.push(recentMemory);
@@ -613,11 +748,13 @@ async function buildMemoryInstructions(playerId) {
 }
 
 async function appendRecentMemory(playerId, input, output) {
+  if (!shouldPersistRecentMemory(input, output)) return false;
   const memoryDir = path.join(playerHome(playerId), 'memory');
   await fsp.mkdir(memoryDir, { recursive: true });
   const filePath = path.join(memoryDir, 'recent.md');
   const stamp = nowIso();
-  const line = `- ${stamp} | User: ${trimForMemory(input, 500)} | Agent: ${trimForMemory(output, 500)}\n`;
+  const currentInput = currentPlayerMessageForMemory(input);
+  const line = `- ${stamp} | User: ${trimForMemory(currentInput, 500)} | Agent: ${trimForMemory(output, 500)}\n`;
   let current = await readTextIfExists(filePath, 12000);
   if (!current) current = '# Recent Player Conversation\n';
   const lines = `${current}\n${line}`
@@ -626,6 +763,7 @@ async function appendRecentMemory(playerId, input, output) {
   const header = lines.find((row) => row.startsWith('# ')) || '# Recent Player Conversation';
   const items = lines.filter((row) => row.startsWith('- ')).slice(-12);
   await fsp.writeFile(filePath, `${header}\n\n${items.join('\n')}\n`, { mode: 0o600 });
+  return true;
 }
 
 function metadataIntent(body) {
@@ -636,6 +774,9 @@ function metadataIntent(body) {
     action_required: !!intent.action_required,
     goal: String(intent.goal || '').slice(0, 500),
     required_loop: String(intent.required_loop || '').slice(0, 500),
+    expected_tools: Array.isArray(intent.expected_tools)
+      ? intent.expected_tools.map((tool) => String(tool || '').slice(0, 80)).filter(Boolean).slice(0, 10)
+      : [],
   };
 }
 
@@ -661,6 +802,34 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking upgrade targets and resource costs';
     case 'fleet':
       return 'Checking ships, troops, and reinforcements';
+    case 'decibel_account':
+      return 'Reading your Decibel account and positions';
+    case 'decibel_markets':
+      return 'Reading Decibel markets and prices';
+    case 'decibel_place_order':
+      return 'Checking Decibel account state and preparing the order route';
+    case 'decibel_close_position':
+      return 'Checking Decibel positions before closing';
+    case 'decibel_cancel_order':
+      return 'Checking Decibel open orders before cancelling';
+    case 'decibel_tpsl':
+      return 'Checking Decibel positions before updating TP/SL';
+    case 'decibel_leverage':
+      return 'Checking Decibel market settings before leverage update';
+    case 'avantis_account':
+      return 'Reading your Avantis browser wallet';
+    case 'avantis_markets':
+      return 'Reading Avantis markets and prices';
+    case 'avantis_place_order':
+      return 'Preparing an Avantis browser-wallet order';
+    case 'avantis_close_position':
+      return 'Preparing an Avantis browser-wallet close';
+    case 'avantis_cancel_order':
+      return 'Preparing an Avantis browser-wallet cancel';
+    case 'avantis_tpsl':
+      return 'Preparing an Avantis browser-wallet TP/SL update';
+    case 'avantis_leverage':
+      return 'Checking Avantis positions and leverage rules';
     case 'gameplay':
       return 'Reading the game state and choosing the right game action';
     default:
@@ -723,6 +892,33 @@ function logHermesAudit(event, payload = {}) {
   }
 }
 
+function createHermesTimingRecorder({ traceId, playerId, intent }) {
+  const startedAt = Date.now();
+  let lastAt = startedAt;
+  const events = [];
+  return {
+    events,
+    mark(stage, payload = {}) {
+      const now = Date.now();
+      const event = {
+        stage,
+        at: nowIso(),
+        elapsed_ms: Math.max(0, now - startedAt),
+        step_ms: Math.max(0, now - lastAt),
+        trace_id: traceId,
+        player_id: playerId,
+        intent: intent?.kind || 'general',
+        status: payload.status || 'ok',
+        ...payload,
+      };
+      lastAt = now;
+      events.push(event);
+      logHermesAudit('hermes_chat_stage', event);
+      return event;
+    },
+  };
+}
+
 async function callHermesResponses(row, payload, timeoutMs = HERMES_CHAT_TIMEOUT_MS) {
   return fetchJson(`${playerBaseUrl(row)}/v1/responses`, {
     method: 'POST',
@@ -744,13 +940,23 @@ async function callHermesResponses(row, payload, timeoutMs = HERMES_CHAT_TIMEOUT
 
 async function chatWithPlayer(playerId, body) {
   const safeId = safePlayerId(playerId);
-  if (!state.players[safeId]) throw new Error('player is not provisioned');
+  const row = state.players[safeId];
+  if (!row) throw new Error('player is not provisioned');
   const input = clampText(body?.input || body?.message, MAX_INPUT_CHARS).trim();
   if (!input) throw new Error('message required');
   const traceId = body?.metadata?.trace_id || body?.trace_id || body?.idempotency_key || crypto.randomUUID();
+  const overallStartedAt = Date.now();
   const requestInstructions = clampText(body?.instructions || '', MAX_INSTRUCTIONS_CHARS);
   const intent = metadataIntent(body);
-  const baseInstructions = buildRuntimeInstructions(requestInstructions);
+  const timing = createHermesTimingRecorder({ traceId, playerId: safeId, intent });
+  timing.mark('request_received', {
+    message: 'Hermes orchestrator received chat request',
+    action_request: isActionIntent(intent),
+    input_chars: input.length,
+    input_preview: previewForLog(input, 700),
+  });
+  timing.mark('instructions_build_start', { message: 'Building runtime instructions and loading memory' });
+  const baseInstructions = buildRuntimeInstructions(requestInstructions, row.dex);
   const memoryInstructions = await buildMemoryInstructions(safeId);
   const actionInstructions = isActionIntent(intent)
     ? [
@@ -758,9 +964,16 @@ async function chatWithPlayer(playerId, body) {
         `Intent: ${intent.kind}.`,
         intent.goal ? `Goal: ${intent.goal}` : '',
         intent.required_loop ? `Required loop: ${intent.required_loop}` : '',
+        Array.isArray(intent.expected_tools) && intent.expected_tools.length
+          ? `Expected tools: ${intent.expected_tools.join(' -> ')}.`
+          : '',
         'You must use Clash MCP tools before the final answer unless a fresh tool result already proves the action is impossible.',
+        'When Expected tools contains multiple tools, the last write/action tool is mandatory before any success answer. Do not stop after a read/status tool such as get_base_state, decibel_get_positions, or avantis_get_positions.',
+        'For Decibel or Avantis open/close trading requests with clear fields, use the expected trading tool directly. Do not run separate account, market, or leverage preflight tools unless a required field is missing.',
+        'For Avantis write tools, a successful MCP call means the browser_action was prepared, not that the on-chain transaction was submitted. Say the wallet confirmation is being opened; never say opened/closed/cancelled/updated until a browser tx result exists.',
         'After the required tool returns a clear success or blocker, stop using tools and answer immediately in 1-3 short player-facing sentences.',
-        'If the action is blocked or fails, write the Blocked/Error/Need message in English.',
+        'If the action is blocked or fails, answer naturally in the player language when possible and include the exact blocker.',
+        'Never repeat an old quota, network, timeout, or runtime error from memory or chat context unless the current request produced that same fresh blocker.',
         'Do not do extra catalog/state checks after auto_build_base, collect_resources, or execute_ai_attack_plan returns.',
         'Do not respond with a generic capability list for this request.',
       ].filter(Boolean).join('\n')
@@ -770,6 +983,11 @@ async function chatWithPlayer(playerId, body) {
     memoryInstructions,
     actionInstructions,
   ].filter(Boolean).join('\n\n');
+  timing.mark('instructions_build_done', {
+    message: 'Runtime instructions ready',
+    instruction_chars: instructions.length,
+    has_memory: !!memoryInstructions,
+  });
   const payload = {
     input,
     instructions,
@@ -778,8 +996,12 @@ async function chatWithPlayer(playerId, body) {
     idempotency_key: body?.idempotency_key || crypto.randomUUID(),
     store: body?.store !== false,
   };
+  timing.mark('payload_ready', {
+    message: 'Hermes response payload ready',
+    idempotency_key: payload.idempotency_key,
+    previous_response: !!payload.previous_response_id,
+  });
 
-  const overallStartedAt = Date.now();
   const attemptRecords = [];
   let lastError = null;
   const attemptedModels = [];
@@ -816,6 +1038,11 @@ async function chatWithPlayer(playerId, body) {
     let ensureMs = 0;
     try {
       const ensureStartedAt = Date.now();
+      timing.mark('model_start_begin', {
+        message: modelIndex === 0 ? 'Starting primary Hermes model route' : 'Starting fallback Hermes model route',
+        model,
+        model_index: modelIndex,
+      });
       await setPlayerProgress(safeId, {
         phase: modelIndex === 0 ? 'starting_model' : 'fallback_model',
         message: modelIndex === 0 ? 'Starting the primary agent route' : 'Switching to a backup route',
@@ -824,10 +1051,24 @@ async function chatWithPlayer(playerId, body) {
         total_models: requestModelChain.length,
         intent: intent.kind,
       });
-      activeRow = await ensureModelRunning(safeId, model);
+      activeRow = await withPlayerLifecycleLock(safeId, () => ensureModelRunning(safeId, model));
       ensureMs = Date.now() - ensureStartedAt;
+      timing.mark('model_start_done', {
+        message: 'Hermes model route is running',
+        model,
+        model_index: modelIndex,
+        ensure_ms: ensureMs,
+        port: activeRow.port,
+      });
     } catch (err) {
       lastError = err;
+      timing.mark('model_start_failed', {
+        status: 'error',
+        message: 'Hermes model route failed to start',
+        model,
+        model_index: modelIndex,
+        error: err.message,
+      });
       const latest = state.players[safeId];
       if (latest) {
         latest.last_error = `[${model}] ${err.message}`;
@@ -847,6 +1088,14 @@ async function chatWithPlayer(playerId, body) {
     for (let attempt = 1; attempt <= attemptsForModel; attempt += 1) {
       const attemptStartedAt = Date.now();
       try {
+        timing.mark('model_attempt_begin', {
+          message: 'Starting model response attempt',
+          model,
+          attempt,
+          max_attempts: attemptsForModel,
+          model_index: modelIndex,
+          timeout_ms: requestTimeoutMs,
+        });
         await setPlayerProgress(safeId, {
           phase: modelIndex === 0 ? 'thinking' : 'fallback_thinking',
           message: modelIndex === 0
@@ -858,8 +1107,23 @@ async function chatWithPlayer(playerId, body) {
           total_models: requestModelChain.length,
           intent: intent.kind,
         });
+        timing.mark('model_call_start', {
+          message: 'Calling Hermes Responses API',
+          model,
+          attempt,
+          model_index: modelIndex,
+          timeout_ms: requestTimeoutMs,
+        });
         const response = await callHermesResponses(activeRow, payload, requestTimeoutMs);
         const callMs = Date.now() - attemptStartedAt;
+        timing.mark('model_call_done', {
+          message: 'Hermes Responses API returned',
+          model,
+          attempt,
+          model_index: modelIndex,
+          call_ms: callMs,
+          response_id: response?.id || null,
+        });
         await setPlayerProgress(safeId, {
           phase: 'checking_answer',
           message: 'Checking the answer before sending it',
@@ -869,7 +1133,21 @@ async function chatWithPlayer(playerId, body) {
           total_models: requestModelChain.length,
           intent: intent.kind,
         });
+        timing.mark('answer_check_start', {
+          message: 'Validating model output before sending',
+          model,
+          attempt,
+          model_index: modelIndex,
+        });
         const outputText = assertUsableHermesResponse(response);
+        timing.mark('answer_check_done', {
+          message: 'Model output accepted',
+          model,
+          attempt,
+          model_index: modelIndex,
+          output_chars: outputText.length,
+          output_preview: previewForLog(outputText, 700),
+        });
         const totalMs = Date.now() - overallStartedAt;
         attemptRecords.push({
           model,
@@ -893,6 +1171,11 @@ async function chatWithPlayer(playerId, body) {
           intent: intent.kind,
           output_preview: previewForLog(outputText, 900),
         }));
+        timing.mark('memory_update_start', {
+          message: 'Appending recent conversation memory and saving state',
+          model,
+          attempt,
+        });
         activeRow.last_chat_at = nowIso();
         activeRow.last_error = null;
         activeRow.last_progress = {
@@ -907,6 +1190,11 @@ async function chatWithPlayer(playerId, body) {
         };
         await appendRecentMemory(safeId, input, outputText).catch(() => {});
         await saveState();
+        timing.mark('memory_update_done', {
+          message: 'Conversation memory and player state saved',
+          model,
+          attempt,
+        });
         logHermesAudit('hermes_chat_completed', {
           trace_id: traceId,
           player_id: safeId,
@@ -918,6 +1206,13 @@ async function chatWithPlayer(playerId, body) {
           attempts: attemptRecords,
           output_chars: outputText.length,
           output_preview: previewForLog(outputText, 1200),
+          timing_events: timing.events,
+        });
+        timing.mark('response_ready', {
+          message: 'Returning final response to game server',
+          model: activeRow.model || model,
+          attempt,
+          total_ms: totalMs,
         });
         return {
           ok: true,
@@ -931,12 +1226,23 @@ async function chatWithPlayer(playerId, body) {
             model_ensure_ms: ensureMs,
             model_call_ms: callMs,
           },
+          timing_events: timing.events,
           output_text: outputText,
           response,
         };
       } catch (err) {
         lastError = err;
         const failedMs = Date.now() - attemptStartedAt;
+        timing.mark('model_attempt_failed', {
+          status: 'error',
+          message: err.no_retry ? 'Model route rejected output' : 'Model route failed or timed out',
+          model,
+          attempt,
+          model_index: modelIndex,
+          error: err.message,
+          no_retry: !!err.no_retry,
+          failed_ms: failedMs,
+        });
         attemptRecords.push({
           model,
           attempt,
@@ -985,6 +1291,13 @@ async function chatWithPlayer(playerId, body) {
     total_models: requestModelChain.length,
     intent: intent.kind,
   });
+  timing.mark('request_failed', {
+    status: 'error',
+    message: 'All Hermes routes failed',
+    attempted_models: attemptedModels,
+    error: lastError?.message || 'Hermes chat failed',
+    total_ms: Date.now() - overallStartedAt,
+  });
   logHermesAudit('hermes_chat_failed', {
     trace_id: traceId,
     player_id: safeId,
@@ -992,6 +1305,7 @@ async function chatWithPlayer(playerId, body) {
     duration_ms: Date.now() - overallStartedAt,
     attempted_models: attemptedModels,
     attempts: attemptRecords,
+    timing_events: timing.events,
     error: lastError?.message || 'Hermes chat failed',
   });
   throw lastError || new Error('Hermes chat failed');
@@ -1001,9 +1315,13 @@ async function resetPlayer(playerId, options = {}) {
   const safeId = safePlayerId(playerId);
   const row = state.players[safeId];
   if (!row) return { ok: true, existed: false };
-  stopPlayer(safeId);
+  await stopPlayerAndWait(safeId);
   if (options.delete_memory) {
     await fsp.rm(path.join(playerHome(safeId), 'memory'), { recursive: true, force: true });
+  } else if (options.delete_recent_memory) {
+    const recentMemoryPath = path.join(playerHome(safeId), 'memory', 'recent.md');
+    await fsp.mkdir(path.dirname(recentMemoryPath), { recursive: true });
+    await fsp.writeFile(recentMemoryPath, '# Recent Player Conversation\n\n', { mode: 0o600 });
   }
   await fsp.rm(path.join(playerHome(safeId), 'sessions'), { recursive: true, force: true });
   await fsp.mkdir(path.join(playerHome(safeId), 'sessions'), { recursive: true });
@@ -1036,6 +1354,7 @@ app.get('/health', (_req, res) => {
     fallback_model: FALLBACK_MODEL || null,
     fallback_models: FALLBACK_MODELS,
     model_chain: MODEL_CHAIN,
+    provider_order: PROVIDER_ORDER,
     chat_timeout_ms: HERMES_CHAT_TIMEOUT_MS,
     action_chat_timeout_ms: HERMES_ACTION_CHAT_TIMEOUT_MS,
     primary_retries: PRIMARY_MODEL_RETRIES,
@@ -1056,7 +1375,7 @@ app.get('/players/:playerId/status', auth, (req, res) => {
 app.post('/players/:playerId/provision', auth, async (req, res) => {
   try {
     const safeId = safePlayerId(req.params.playerId);
-    const player = await provisionPlayer(safeId, req.body || {});
+    const player = await withPlayerLifecycleLock(safeId, () => provisionPlayer(safeId, req.body || {}));
     res.json({ ok: true, player });
   } catch (err) {
     res.status(400).json({ ok: false, error: err.message });
@@ -1083,16 +1402,21 @@ app.post('/players/:playerId/chat', auth, async (req, res) => {
 app.post('/players/:playerId/reset', auth, async (req, res) => {
   try {
     const safeId = safePlayerId(req.params.playerId);
-    const result = await resetPlayer(safeId, req.body || {});
+    const result = await withPlayerLifecycleLock(safeId, () => resetPlayer(safeId, req.body || {}));
     res.json(result);
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-app.post('/players/:playerId/stop', auth, (req, res) => {
-  const safeId = safePlayerId(req.params.playerId);
-  res.json({ ok: true, stopped: stopPlayer(safeId) });
+app.post('/players/:playerId/stop', auth, async (req, res) => {
+  try {
+    const safeId = safePlayerId(req.params.playerId);
+    const stopped = await withPlayerLifecycleLock(safeId, () => stopPlayer(safeId));
+    res.json({ ok: true, stopped });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 setInterval(() => {

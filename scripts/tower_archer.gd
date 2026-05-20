@@ -6,7 +6,7 @@ const ARROW_SCENE: String = "res://Model/Characters/Assets/arrow_bow.gltf"
 const BOW_SCENE: String = "res://Model/Characters/Assets/bow_withString.gltf"
 const ATTACK_ANIM: String = "Ranged_Bow_Release"
 const HIT_DIST_SQ: float = 0.05 * 0.05
-const POOL_SIZE: int = 6
+const POOL_SIZE: int = 12
 const TARGET_SEARCH_INTERVAL: float = 0.15
 
 const LEVEL_STATS = {
@@ -34,6 +34,7 @@ var _pool: Array[Dictionary] = []
 var _active: Array[Dictionary] = []
 var _pool_ready: bool = false
 var _arrow_res: Resource = null
+var _pool_exhausted_warned: bool = false
 
 ## Shared bow + arrow scenes — loaded once across all archer towers.
 static var _bow_scene_res: Resource = null
@@ -256,7 +257,9 @@ func _get_pooled() -> Dictionary:
 	for b in _pool:
 		if not b.active:
 			return b
-	push_warning("%s: arrow pool exhausted" % name)
+	if not _pool_exhausted_warned:
+		_pool_exhausted_warned = true
+		push_warning("%s: arrow pool exhausted (POOL_SIZE=%d)" % [name, POOL_SIZE])
 	return {}
 
 
@@ -359,6 +362,7 @@ func _return_to_pool(b: Dictionary) -> void:
 	b.active = false
 	b.target = null
 	b.node.visible = false
+	_pool_exhausted_warned = false
 
 
 func _exit_tree() -> void:

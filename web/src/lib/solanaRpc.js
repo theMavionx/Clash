@@ -10,6 +10,7 @@ const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_S
 const preferProxyRpc = allowProxyFallback
   && /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || ''));
 const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
+const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
 const defaultDirectBrowserRpc = ['https://solana-rpc', 'publicnode.com'].join('.');
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
@@ -83,7 +84,7 @@ const PROXY_SOLANA_RPC_URLS = [
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
-    SAME_ORIGIN_SOLANA_LEORPC_URL,
+    ...(includeLeoRpcProxy ? [SAME_ORIGIN_SOLANA_LEORPC_URL] : []),
   ] : []),
 ];
 
@@ -96,6 +97,104 @@ export const DEFAULT_SOLANA_RPC_URL = SOLANA_RPC_URLS[0] || SAME_ORIGIN_SOLANA_R
 
 export function solanaRpcHost(url) {
   try { return new URL(url, siteOrigin()).host || null; } catch { return String(url || 'unknown'); }
+}
+
+export function isHeliusSolanaRpcUrl(url) {
+  try {
+    return /(^|\.)helius-rpc\.com$/i.test(new URL(url, siteOrigin()).hostname);
+  } catch {
+    return /helius-rpc\.com/i.test(String(url || ''));
+  }
+}
+
+export function solanaRpcSupportsBatch(url) {
+  return !isHeliusSolanaRpcUrl(url);
+}
+
+export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
+  return (urls || []).filter((url) => url && !isHeliusSolanaRpcUrl(url));
+}
+
+export function solanaBatchSafeRpcUrl(preferredUrl, urls = SOLANA_RPC_URLS) {
+  if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
+  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || DEFAULT_SOLANA_RPC_URL;
+}
+
+function parseJsonRpcBody(body) {
+  if (typeof body === 'string') {
+    try { return JSON.parse(body); } catch { return null; }
+  }
+  if (body instanceof Uint8Array) {
+    try { return JSON.parse(new TextDecoder().decode(body)); } catch { return null; }
+  }
+  return null;
+}
+
+function jsonRpcErrorForRequest(request, code, message, data = undefined) {
+  return {
+    jsonrpc: '2.0',
+    id: request?.id ?? null,
+    error: {
+      code,
+      message,
+      ...(data === undefined ? {} : { data }),
+    },
+  };
+}
+
+async function readJsonRpcResponse(response, request) {
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch {}
+  if (payload && typeof payload === 'object') return payload;
+  return jsonRpcErrorForRequest(
+    request,
+    response.ok ? -32700 : response.status,
+    response.ok ? 'Invalid JSON-RPC response' : `HTTP ${response.status}`,
+    text ? text.slice(0, 500) : undefined,
+  );
+}
+
+async function heliusBatchSafeFetch(input, init = {}) {
+  const body = parseJsonRpcBody(init?.body);
+  if (!Array.isArray(body)) return fetch(input, init);
+  if (body.length === 0) {
+    return new Response('[]', {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  const rows = await Promise.all(body.map(async (request) => {
+    const response = await fetch(input, {
+      ...init,
+      body: JSON.stringify(request),
+    });
+    return readJsonRpcResponse(response, request);
+  }));
+  return new Response(JSON.stringify(rows), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+export function solanaRpcFetchForUrl(url) {
+  return isHeliusSolanaRpcUrl(url) ? heliusBatchSafeFetch : undefined;
+}
+
+export function solanaConnectionConfig(url, commitmentOrConfig = 'confirmed') {
+  const customFetch = solanaRpcFetchForUrl(url);
+  if (!customFetch) return commitmentOrConfig;
+  if (!commitmentOrConfig || typeof commitmentOrConfig === 'string') {
+    return { commitment: commitmentOrConfig || 'confirmed', fetch: customFetch };
+  }
+  return {
+    ...commitmentOrConfig,
+    fetch: commitmentOrConfig.fetch || customFetch,
+  };
+}
+
+export function createSolanaConnection(ConnectionCtor, url, commitmentOrConfig = 'confirmed') {
+  return new ConnectionCtor(url, solanaConnectionConfig(url, commitmentOrConfig));
 }
 
 function probeErrorMessage(error) {
@@ -142,8 +241,9 @@ function scoreSolanaRpcProbes(probes) {
 export async function probeSolanaRpcUrl(url, index = 0, timeoutMs = SOLANA_RPC_PROBE_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const rpcFetch = solanaRpcFetchForUrl(url) || fetch;
   try {
-    const res = await fetch(url, {
+    const res = await rpcFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify([

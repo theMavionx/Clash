@@ -1,6 +1,11 @@
 const DEFAULT_MODEL_CHAIN = [
+  'openai/gpt-oss-120b',
   'qwen/qwen3-30b-a3b-instruct-2507:nitro',
   'google/gemma-4-26b-a4b-it:nitro',
+];
+
+const DEFAULT_PROVIDER_ORDER = [
+  'cerebras',
 ];
 
 function parseModelChain(value) {
@@ -34,8 +39,16 @@ function resolveModelChain(env = process.env) {
   return DEFAULT_MODEL_CHAIN;
 }
 
+function resolveProviderOrder(env = process.env) {
+  const explicitOrder = parseModelChain(env.CLASH_HERMES_PROVIDER_ORDER);
+  if (explicitOrder.length) return unique(explicitOrder.map((item) => item.toLowerCase()));
+  return DEFAULT_PROVIDER_ORDER;
+}
+
 module.exports = {
   DEFAULT_MODEL_CHAIN,
+  DEFAULT_PROVIDER_ORDER,
   parseModelChain,
   resolveModelChain,
+  resolveProviderOrder,
 };

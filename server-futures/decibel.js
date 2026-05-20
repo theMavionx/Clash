@@ -118,6 +118,27 @@ async function fetchAptBalanceOcta(addr) {
   }
 }
 
+async function fetchFungibleBalanceRaw(addr, metadataAddr) {
+  if (!addr || !metadataAddr) return 0n;
+  try {
+    const j = await aptosView(
+      '0x1::primary_fungible_store::balance',
+      [normalizeAptosAddress(addr), normalizeAptosAddress(metadataAddr)],
+      ['0x1::fungible_asset::Metadata'],
+    );
+    const v = Array.isArray(j) ? j[0] : j;
+    return v != null ? BigInt(String(v)) : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
+async function fetchUsdcBalance(address) {
+  const dep = await getDeployment();
+  const raw = await fetchFungibleBalanceRaw(address, dep.usdc);
+  return Number(raw) / 1e6;
+}
+
 let aptosModule = null;
 let serverAccount = null;
 let aptosClient = null;
@@ -237,9 +258,19 @@ function normalizeClientOrderId(value) {
 }
 
 async function sendDecibelTx(payload) {
+  const startedAt = Date.now();
+  const timings = {};
+  const mark = (key, since) => {
+    timings[key] = Date.now() - since;
+    return Date.now();
+  };
+  let stepStarted = Date.now();
   const aptos = await getAptosClient();
+  stepStarted = mark('client_ms', stepStarted);
   const account = await getServerAccount();
+  stepStarted = mark('account_ms', stepStarted);
   const gas = await aptos.getGasPriceEstimation().catch(() => ({ gas_estimate: 100 }));
+  stepStarted = mark('gas_ms', stepStarted);
   const transaction = await aptos.transaction.build.simple({
     sender: account.accountAddress,
     data: payload,
@@ -249,9 +280,20 @@ async function sendDecibelTx(payload) {
       gasUnitPrice: Math.max(1, Number(gas?.gas_estimate || 100)),
     },
   });
+  stepStarted = mark('build_ms', stepStarted);
   const senderAuthenticator = aptos.transaction.sign({ signer: account, transaction });
+  stepStarted = mark('sign_ms', stepStarted);
   const pending = await aptos.transaction.submit.simple({ transaction, senderAuthenticator });
-  return aptos.waitForTransaction({ transactionHash: pending.hash });
+  stepStarted = mark('submit_ms', stepStarted);
+  const confirmed = await aptos.waitForTransaction({ transactionHash: pending.hash });
+  mark('wait_ms', stepStarted);
+  timings.total_ms = Date.now() - startedAt;
+  try {
+    Object.defineProperty(confirmed, '__clashTimings', { value: timings, enumerable: false });
+  } catch {
+    confirmed.__clashTimings = timings;
+  }
+  return confirmed;
 }
 
 function txHashFrom(response) {
@@ -280,6 +322,58 @@ function extractOrderIdFromTransaction(txResponse, subaccountAddr) {
   return null;
 }
 
+function optionVecValue(value) {
+  if (value && typeof value === 'object' && Array.isArray(value.vec)) {
+    return value.vec.length > 0 ? value.vec[0] : null;
+  }
+  return value ?? null;
+}
+
+function eventVariant(value) {
+  if (value && typeof value === 'object') {
+    return String(value.__variant__ || value.variant || value.type || '').toUpperCase() || null;
+  }
+  return value == null ? null : String(value).toUpperCase();
+}
+
+function extractOrderEventsFromTransaction(txResponse, subaccountAddr = '', clientOrderId = '') {
+  const out = [];
+  try {
+    const events = Array.isArray(txResponse?.events) ? txResponse.events : [];
+    const wantedUser = normalizeAptosAddress(subaccountAddr);
+    const wantedClientId = clientOrderId ? String(clientOrderId) : '';
+    for (const event of events) {
+      if (!/market_types::OrderEvent|async_matching_engine::TwapEvent/.test(String(event?.type || ''))) continue;
+      const data = event.data || {};
+      const eventUser = normalizeAptosAddress(data.user || data.account || '');
+      if (wantedUser && eventUser && eventUser !== wantedUser) continue;
+      const eventClientId = optionVecValue(data.client_order_id);
+      if (wantedClientId && eventClientId && String(eventClientId) !== wantedClientId) continue;
+      const orderId = data.order_id?.order_id ?? data.order_id;
+      out.push(jsonSafe({
+        type: event.type,
+        orderId: orderId == null ? null : String(orderId),
+        clientOrderId: eventClientId == null ? null : String(eventClientId),
+        user: eventUser || null,
+        market: data.market ? normalizeAptosAddress(data.market) : null,
+        isBid: data.is_bid == null ? null : !!data.is_bid,
+        isTaker: data.is_taker == null ? null : !!data.is_taker,
+        status: eventVariant(data.status),
+        timeInForce: eventVariant(data.time_in_force),
+        cancellationReason: optionVecValue(data.cancellation_reason),
+        details: data.details || '',
+        origSize: data.orig_size == null ? null : String(data.orig_size),
+        remainingSize: data.remaining_size == null ? null : String(data.remaining_size),
+        sizeDelta: data.size_delta == null ? null : String(data.size_delta),
+        price: data.price == null ? null : String(data.price),
+      }));
+    }
+  } catch {
+    return out;
+  }
+  return out;
+}
+
 function txResult(txResponse, label, extra = {}) {
   const hash = txHashFrom(txResponse);
   if (txResponse?.success === false) {
@@ -295,6 +389,7 @@ function txResult(txResponse, label, extra = {}) {
     success: true,
     transactionHash: hash,
     hash,
+    ...(txResponse?.__clashTimings ? { timings: txResponse.__clashTimings } : {}),
     ...extra,
   });
 }
@@ -488,6 +583,7 @@ async function placeOrder(args) {
     });
     return txResult(tx, 'Place order', {
       orderId: extractOrderIdFromTransaction(tx, order.subaccountAddr) || undefined,
+      orderEvents: extractOrderEventsFromTransaction(tx, order.subaccountAddr, order.clientOrderId),
     });
   });
 }
@@ -643,6 +739,8 @@ async function configureUserSettingsForMarket(args) {
 let marketsCache = null;
 let marketsCacheAt = 0;
 const MARKETS_CACHE_MS = 10 * 60 * 1000;
+const DECIBEL_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const decibelSleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fetchMarkets() {
   if (marketsCache && Date.now() - marketsCacheAt < MARKETS_CACHE_MS) return marketsCache;
@@ -660,6 +758,59 @@ async function fetchMarkets() {
   }
 }
 
+async function fetchDecibelRows(path, query = {}) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query || {})) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value));
+    }
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const url = `${DECIBEL_HTTP}/api/v1/${path}${suffix}`;
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const r = await fetch(url, { headers: authHeaders() });
+      if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        lastError = new Error(`Decibel ${path} failed: ${r.status} ${body || r.statusText}`);
+        if (attempt < 2 && DECIBEL_RETRY_STATUSES.has(r.status)) {
+          await decibelSleep(250 * (attempt + 1));
+          continue;
+        }
+        lastError.noRetry = true;
+        throw lastError;
+      }
+      const j = await r.json();
+      return Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+    } catch (err) {
+      lastError = err;
+      if (err?.noRetry) throw err;
+      if (attempt < 2) {
+        await decibelSleep(250 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error(`Decibel ${path} failed`);
+}
+
+let pricesCache = null;
+let pricesCacheAt = 0;
+const PRICES_CACHE_MS = 5_000;
+
+async function fetchMarketPrices() {
+  if (pricesCache && Date.now() - pricesCacheAt < PRICES_CACHE_MS) return pricesCache;
+  try {
+    pricesCache = await fetchDecibelRows('prices');
+    pricesCacheAt = Date.now();
+    return pricesCache;
+  } catch {
+    return pricesCache || [];
+  }
+}
+
 // Best-effort mark price for a market by address. Used by the rewards
 // worker to estimate realized PnL on a close-detection event (the close
 // itself isn't observable from /account_positions; we approximate as
@@ -668,6 +819,15 @@ async function fetchMarkets() {
 async function fetchMarketMarkUsd(marketAddr) {
   if (!marketAddr) return 0;
   try {
+    const prices = await fetchMarketPrices();
+    const priceRow = prices.find(r => String(r?.market || r?.market_addr || '').toLowerCase() === String(marketAddr).toLowerCase());
+    if (priceRow) {
+      const candidates = [priceRow.mark_px, priceRow.mark_price, priceRow.mid_px, priceRow.oracle_px, priceRow.index_price, priceRow.price];
+      for (const c of candidates) {
+        const n = Number(c);
+        if (Number.isFinite(n) && n > 0) return n;
+      }
+    }
     const list = await fetchMarkets();
     const target = String(marketAddr).toLowerCase();
     const m = list.find(r => String(r?.market_addr || r?.market || '').toLowerCase() === target);
@@ -726,6 +886,59 @@ async function fetchAccountPositions(subaccountAddr) {
   }
 }
 
+async function fetchAccountOverview(subaccountAddr, options = {}) {
+  if (!subaccountAddr) return null;
+  try {
+    const rows = await fetchDecibelRows('account_overviews', {
+      account: subaccountAddr,
+      volume_window: options.volumeWindow,
+      include_performance: options.includePerformance ? 'true' : undefined,
+    });
+    return rows[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchOpenOrders(subaccountAddr, options = {}) {
+  if (!subaccountAddr) return [];
+  try {
+    return await fetchDecibelRows('open_orders', {
+      account: subaccountAddr,
+      limit: options.limit,
+      offset: options.offset,
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchOrderHistory(subaccountAddr, options = {}) {
+  if (!subaccountAddr) return [];
+  try {
+    return await fetchDecibelRows('order_history', {
+      account: subaccountAddr,
+      limit: options.limit,
+      offset: options.offset,
+    });
+  } catch {
+    return [];
+  }
+}
+
+async function fetchTradeHistory(subaccountAddr, options = {}) {
+  if (!subaccountAddr) return [];
+  try {
+    return await fetchDecibelRows('trade_history', {
+      account: subaccountAddr,
+      limit: options.limit,
+      offset: options.offset,
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Builds the canonical (market, side) key we use to dedupe positions
 // across polling ticks. The market is identified by address, side by the
 // sign of `size` (positive = long, negative = short).
@@ -776,11 +989,279 @@ function symbolFromMarket(p) {
   return (name.split(/[-/]/)[0] || name).toUpperCase() || 'UNKNOWN';
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function rowClientOrderId(row) {
+  const direct = row?.client_order_id ?? row?.clientOrderId ?? row?.clientOrderID;
+  const vec = optionVecValue(row?.client_order_id);
+  const value = vec ?? direct;
+  return value == null ? '' : String(value);
+}
+
+function rowMarketAddr(row) {
+  const raw = row?.market || row?.market_addr || row?.marketAddr || row?.market_address || '';
+  const normalized = normalizeAptosAddress(raw);
+  return normalized && normalized.startsWith('0x') ? normalized : '';
+}
+
+function expectedMarketMatches(row, expected) {
+  const expectedAddr = normalizeAptosAddress(expected?.marketAddr || expected?.market_addr || '');
+  const rowAddr = rowMarketAddr(row);
+  if (expectedAddr && rowAddr && expectedAddr === rowAddr) return true;
+
+  const expectedSymbol = String(expected?.symbol || '').toUpperCase();
+  if (expectedSymbol && symbolFromMarket(row) === expectedSymbol) return true;
+
+  const expectedName = String(expected?.marketName || expected?.market_name || '').toUpperCase().replace(/[-_/ ]/g, '');
+  const rowName = String(row?.marketName || row?.market_name || row?.symbol || '').toUpperCase().replace(/[-_/ ]/g, '');
+  return Boolean(expectedName && rowName && expectedName === rowName);
+}
+
+function expectedSideMatches(row, expected) {
+  const side = String(expected?.side || '').toLowerCase();
+  if (!side) return true;
+  if (row?.is_bid != null || row?.isBid != null) {
+    const bid = !!(row?.is_bid ?? row?.isBid);
+    return side === (bid ? 'long' : 'short');
+  }
+  if (row?.side != null) {
+    const raw = String(row.side).toLowerCase();
+    if (['buy', 'bid', 'long'].includes(raw)) return side === 'long';
+    if (['sell', 'ask', 'short'].includes(raw)) return side === 'short';
+  }
+  if (row?.size != null) {
+    return side === (positionIsLong(row) ? 'long' : 'short');
+  }
+  return true;
+}
+
+function findMatchingPosition(positions, expected) {
+  return (Array.isArray(positions) ? positions : []).find((row) => (
+    expectedMarketMatches(row, expected)
+    && expectedSideMatches(row, expected)
+    && Math.abs(Number(row?.size ?? 0)) > 0
+  )) || null;
+}
+
+function findMatchingOpenOrder(openOrders, expected) {
+  const expectedClientId = String(expected?.clientOrderId || '');
+  return (Array.isArray(openOrders) ? openOrders : []).find((row) => {
+    const rowClientId = rowClientOrderId(row);
+    if (expectedClientId && rowClientId && rowClientId === expectedClientId) return true;
+    return expectedMarketMatches(row, expected) && expectedSideMatches(row, expected);
+  }) || null;
+}
+
+function summarizePosition(row) {
+  if (!row) return null;
+  return {
+    symbol: symbolFromMarket(row),
+    side: positionIsLong(row) ? 'long' : 'short',
+    size: Math.abs(Number(row?.size ?? 0)),
+    entry_price: Number(row?.entry_price ?? row?.entryPrice ?? 0) || null,
+    notional_usd: positionNotionalUsd(row),
+    market: rowMarketAddr(row) || null,
+  };
+}
+
+function summarizeOrder(row) {
+  if (!row) return null;
+  const rawSide = String(row?.side || '').toLowerCase();
+  const side = row?.is_bid != null || row?.isBid != null
+    ? ((row?.is_bid ?? row?.isBid) ? 'long' : 'short')
+    : ['buy', 'bid', 'long'].includes(rawSide)
+      ? 'long'
+      : ['sell', 'ask', 'short'].includes(rawSide)
+        ? 'short'
+        : null;
+  return {
+    order_id: row?.order_id ?? row?.orderId ?? row?.id ?? null,
+    client_order_id: rowClientOrderId(row) || null,
+    symbol: symbolFromMarket(row),
+    side,
+    size: row?.size ?? row?.remaining_size ?? row?.orig_size ?? null,
+    price: row?.price ?? row?.limit_price ?? null,
+    market: rowMarketAddr(row) || null,
+  };
+}
+
+function orderEventLooksUnfilledIoc(event) {
+  if (!event || String(event.timeInForce || '').toUpperCase() !== 'IOC') return false;
+  if (event.origSize == null || event.remainingSize == null) return false;
+  try {
+    return BigInt(String(event.origSize)) > 0n
+      && BigInt(String(event.origSize)) === BigInt(String(event.remainingSize));
+  } catch {
+    return false;
+  }
+}
+
+function orderEventMatchesExpected(event, expected = {}) {
+  if (!event) return false;
+  const expectedMarket = normalizeAptosAddress(expected.marketAddr || '');
+  if (expectedMarket && event.market && normalizeAptosAddress(event.market) !== expectedMarket) return false;
+  const side = String(expected.side || '').toLowerCase();
+  if (side && event.isBid != null) {
+    const eventSide = event.isBid ? 'long' : 'short';
+    if (eventSide !== side) return false;
+  }
+  const expectedClientId = expected.clientOrderId ? String(expected.clientOrderId) : '';
+  if (expectedClientId && event.clientOrderId && String(event.clientOrderId) !== expectedClientId) return false;
+  return true;
+}
+
+function orderEventHasFill(event) {
+  if (!event) return false;
+  try {
+    if (event.sizeDelta != null && BigInt(String(event.sizeDelta)) !== 0n) return true;
+  } catch {
+    // Keep checking other fields.
+  }
+  try {
+    if (event.origSize != null && event.remainingSize != null) {
+      const orig = BigInt(String(event.origSize));
+      const remaining = BigInt(String(event.remainingSize));
+      if (orig > 0n && remaining < orig) return true;
+    }
+  } catch {
+    // Keep checking status text.
+  }
+  const text = `${event.status || ''} ${event.details || ''}`.toLowerCase();
+  return /\b(fill|filled|match|matched|execute|executed|partial)\b/.test(text);
+}
+
+function orderEventLooksRejected(event) {
+  if (!event) return false;
+  if (orderEventHasFill(event)) return false;
+  const text = `${event.status || ''} ${event.cancellationReason || ''} ${event.details || ''}`.toLowerCase();
+  return /\b(cancel|cancelled|canceled|reject|rejected|abort|aborted|expire|expired|fail|failed)\b/.test(text);
+}
+
+function verifyPlacedOrderFromTxEvents(orderEvents = [], expected = {}, isMarket = false) {
+  const matching = orderEvents.filter((event) => orderEventMatchesExpected(event, expected));
+  if (!matching.length) return null;
+
+  const filled = matching.find(orderEventHasFill);
+  if (filled) {
+    return {
+      verified: true,
+      effect: isMarket ? 'tx_event_fill' : 'tx_event_fill_or_partial',
+      attempts: 0,
+      order_event: filled,
+    };
+  }
+
+  const unfilledIoc = matching.find(orderEventLooksUnfilledIoc);
+  if (unfilledIoc) {
+    return {
+      verified: false,
+      reason: 'Decibel acknowledged the IOC order transaction, but the order did not fill.',
+      attempts: 0,
+      order_events: matching,
+    };
+  }
+
+  if (!isMarket) {
+    const open = matching.find((event) => event.orderId != null && !orderEventLooksRejected(event));
+    if (open) {
+      return {
+        verified: true,
+        effect: 'tx_event_open_order',
+        attempts: 0,
+        order_event: open,
+      };
+    }
+  }
+
+  const rejected = matching.find(orderEventLooksRejected);
+  if (rejected) {
+    return {
+      verified: false,
+      reason: rejected.cancellationReason || rejected.status || 'Decibel rejected or cancelled the order.',
+      attempts: 0,
+      order_events: matching,
+    };
+  }
+
+  return null;
+}
+
+async function waitForPlacedOrderEffect(options = {}) {
+  const subaccountAddr = normalizeAptosAddress(options.subaccountAddr);
+  if (!subaccountAddr) {
+    return { verified: false, reason: 'No Decibel subaccount was provided for post-order verification.' };
+  }
+
+  const expected = {
+    marketName: options.marketName,
+    marketAddr: options.marketAddr,
+    symbol: options.symbol,
+    side: String(options.side || '').toLowerCase(),
+    clientOrderId: options.clientOrderId,
+  };
+  const isMarket = String(options.orderType || options.order_type || '').toLowerCase() === 'market';
+  const attempts = Math.max(1, Math.min(12, Number(options.attempts || 6)));
+  const delayMs = Math.max(100, Math.min(5000, Number(options.delayMs || 900)));
+  const orderEvents = Array.isArray(options.txResult?.orderEvents) ? options.txResult.orderEvents : [];
+  let lastPositions = [];
+  let lastOpenOrders = [];
+
+  const eventVerification = verifyPlacedOrderFromTxEvents(orderEvents, expected, isMarket);
+  if (eventVerification) return eventVerification;
+
+  for (let i = 0; i < attempts; i += 1) {
+    if (i > 0) await sleep(delayMs);
+    const [positions, openOrders] = await Promise.all([
+      fetchAccountPositions(subaccountAddr),
+      fetchOpenOrders(subaccountAddr, { limit: 25 }),
+    ]);
+    lastPositions = positions;
+    lastOpenOrders = openOrders;
+
+    const position = findMatchingPosition(positions, expected);
+    if (!options.reduceOnly && position) {
+      return {
+        verified: true,
+        effect: 'position',
+        attempts: i + 1,
+        position: summarizePosition(position),
+      };
+    }
+
+    const openOrder = findMatchingOpenOrder(openOrders, expected);
+    if (!isMarket && openOrder) {
+      return {
+        verified: true,
+        effect: 'open_order',
+        attempts: i + 1,
+        open_order: summarizeOrder(openOrder),
+      };
+    }
+  }
+
+  const unfilledIoc = orderEvents.some(orderEventLooksUnfilledIoc);
+  return {
+    verified: false,
+    reason: unfilledIoc
+      ? 'Decibel acknowledged the IOC order transaction, but the order did not fill and no matching position was found.'
+      : 'No matching Decibel position or open order was found after transaction confirmation.',
+    attempts,
+    order_events: orderEvents,
+    last_seen: {
+      positions: lastPositions.map(summarizePosition).slice(0, 10),
+      open_orders: lastOpenOrders.map(summarizeOrder).slice(0, 10),
+    },
+  };
+}
+
 module.exports = {
   normalizeAptosAddress,
   normalizeClientOrderId,
   newClientOrderId,
   getServerSignerInfo,
+  fetchUsdcBalance,
   getPrimarySubaccountAddr,
   placeOrder,
   cancelOrder,
@@ -790,9 +1271,15 @@ module.exports = {
   configureUserSettingsForMarket,
   rewardInfoFromPlaceOrder,
   fetchMarkets,
+  fetchMarketPrices,
   fetchMarketMarkUsd,
   fetchUserSubaccounts,
   fetchAccountPositions,
+  fetchAccountOverview,
+  fetchOpenOrders,
+  fetchOrderHistory,
+  fetchTradeHistory,
+  waitForPlacedOrderEffect,
   tradeKey,
   positionMarket,
   positionIsLong,

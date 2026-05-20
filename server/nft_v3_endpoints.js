@@ -17,6 +17,8 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const {
+  createSolanaConnection,
+  solanaNonHeliusRpcUrls,
   solanaRpcUrls,
   withSolanaRpcFallback,
 } = require('./solana_rpc');
@@ -76,7 +78,7 @@ function timeoutPromise(promise, ms, label) {
 }
 
 function solanaOwnedRpcUrls() {
-  return solanaRpcUrls();
+  return solanaNonHeliusRpcUrls(solanaRpcUrls());
 }
 
 const MPL_CORE_PROGRAM_ID = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
@@ -145,7 +147,7 @@ async function listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, collection) {
   let lastErr = null;
   for (const rpc of solanaOwnedRpcUrls()) {
     try {
-      const conn = new Connection(rpc, 'confirmed');
+      const conn = createSolanaConnection(Connection, rpc, 'confirmed');
       const signatures = await timeoutPromise(
         conn.getSignaturesForAddress(ownerPk, { limit: 15 }, 'confirmed'),
         6_000,
@@ -219,7 +221,7 @@ async function listOwnedSolanaToken2022Nfts(ownerRaw) {
   let lastErr = null;
   for (const rpc of solanaOwnedRpcUrls()) {
     try {
-      const conn = new Connection(rpc, 'confirmed');
+      const conn = createSolanaConnection(Connection, rpc, 'confirmed');
       const rows = await timeoutPromise(
         conn.getParsedTokenAccountsByOwner(ownerPk, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed'),
         8_000,
@@ -740,7 +742,7 @@ function mountNftV3Endpoints(router, ctx) {
               12_000,
               `Solana Core owner scan ${rpc}`,
             );
-          }, { label: 'Solana Core owner scan' });
+          }, { urls: solanaOwnedRpcUrls(), label: 'Solana Core owner scan' });
         } catch (err) {
           if (recentCoreBody) {
             _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
@@ -2126,7 +2128,7 @@ function mountNftV3Endpoints(router, ctx) {
       const { mintToken2022Nft } = require('./solana_token2022_nft');
       const { Connection } = require('@solana/web3.js');
       const connection = await withSolanaRpcFallback(async (rpc) => {
-        const candidate = new Connection(rpc, 'confirmed');
+        const candidate = createSolanaConnection(Connection, rpc, 'confirmed');
         await candidate.getLatestBlockhash('confirmed');
         return candidate;
       }, {
@@ -2216,7 +2218,7 @@ function mountNftV3Endpoints(router, ctx) {
       }
       throw lastErr;
     }, {
-      extraUrls: [solanaDeploy.rpcUrl],
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
       label: 'Solana bridge mint',
     });
   }
@@ -2232,7 +2234,7 @@ function mountNftV3Endpoints(router, ctx) {
       const umi = createUmi(rpc).use(mplCore());
       return fetchAssetsByCollection(umi, publicKey(solanaDeploy.collection));
     }, {
-      extraUrls: [solanaDeploy.rpcUrl],
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
       label: 'Solana bridge mint recovery',
     });
     const wanted = String(sourceRef || '').toLowerCase();

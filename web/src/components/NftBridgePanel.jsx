@@ -28,7 +28,7 @@ import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
-import { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl } from '../lib/solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -411,7 +411,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         }));
 
         const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-        const conn = new Connection(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+        const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
         const latest = await conn.getLatestBlockhash('confirmed');
         tx.feePayer = ownerPk;
         tx.recentBlockhash = latest.blockhash;
@@ -436,7 +436,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
       const { Connection, PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
 
       const coreRpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-      const coreRpcUrl = coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL;
+      const coreRpcUrl = solanaBatchSafeRpcUrl(coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL);
       const umi = createUmi(coreRpcUrl).use(mplCore());
       // We can't use a keypairIdentity here because the user wallet is a
       // browser extension — instead, use the wallet adapter's signer.
@@ -482,7 +482,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         const signature = extractSolanaSignatureFromError(err);
         if (signature && isSolanaExpiryError(err)) {
           const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-          const conn = new Connection(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
+          const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
           const landed = await waitForSolanaLateLanding(conn, signature, 'Solana Core burn');
           if (landed) return signature;
         }
@@ -1444,15 +1444,15 @@ const modalStyles = {
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    borderColor: '#1f6d34', color: '#fff',
+    border: '2px solid #1f6d34', color: '#fff',
   },
   stepBubble_error: {
-    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
   },
   stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
   stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },

@@ -1,13 +1,13 @@
-// Avantis is NON-CUSTODIAL: the user's own EVM wallet signs every trade. The
-// server is a read-only proxy for markets/prices/positions and a gold-reward
-// indexer that reads Avantis Core API by address. No custodial privkey lives
-// on the server for Avantis any more.
+// Avantis is NON-CUSTODIAL: funds stay in the user's own EVM wallet. The
+// user's wallet signs setup, then an optional browser-held delegate can sign
+// Avantis trades. The server is a read-only proxy for markets/prices/positions
+// and a gold-reward indexer. No custodial privkey lives on the server.
 //
 // The hook still exposes the same shape as usePacifica() so FuturesPanel can
 // branch on useDex() with minimal call-site changes.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { formatUnits, formatEther } from 'viem';
+import { encodeFunctionData, formatUnits, formatEther, parseEther } from 'viem';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
@@ -19,8 +19,15 @@ import {
   fetchLiveMarkPrice,
   applyReferralCode, fetchReferralCode,
   REFERRAL_CODE_BYTES32, REFERRAL_CODE_STRING,
-  PRICE_SOURCING,
+  PRICE_SOURCING, fetchAvantisDelegate,
 } from '../lib/avantisContract';
+import {
+  AVANTIS_SMART_WALLET_MIN_ETH,
+  createAvantisSmartWalletClient,
+  forgetAvantisSmartWalletDelegate,
+  getOrCreateAvantisSmartWalletDelegate,
+  readAvantisSmartWalletDelegate,
+} from '../lib/avantisSmartWallet';
 
 const FUTURES_API = '/api/futures';
 
@@ -29,6 +36,8 @@ const FUTURES_API = '/api/futures';
 // and typical keeper execution window; going higher just leaves the UI
 // spinner stuck if the tx was dropped from the mempool.
 const TX_TIMEOUT_MS = 90_000;
+const BALANCE_FETCH_MIN_INTERVAL_MS = 15_000;
+const AVANTIS_POLL_INTERVAL_MS = 10_000;
 
 // Unwraps viem revert errors to the most specific human-readable message
 // available. Traders care about reasons like "SLIPPAGE_EXCEEDED" or
@@ -60,6 +69,10 @@ function shortAddress(addr) {
   return s.length > 12 ? `${s.slice(0, 6)}...${s.slice(-4)}` : s;
 }
 
+function isZeroBytes32(value) {
+  return /^0x0{64}$/i.test(String(value || ''));
+}
+
 // Wraps waitForTransactionReceipt with a timeout so dropped txs don't leave
 // the UI spinner on forever. Throws a specific "pending too long" error the
 // caller can show with a retry hint.
@@ -81,6 +94,14 @@ async function waitForReceiptWithTimeout(publicClient, hash) {
 // FuturesPanel expects Pacifica-shape — we flatten both into the same keys
 // (symbol, side 'bid'|'ask', amount, entry_price, margin) so the UI doesn't
 // need to know which DEX it came from.
+function notifyTxStatus(options, phase, payload = {}) {
+  try {
+    if (typeof options?.onStatus === 'function') options.onStatus({ phase, ...payload });
+  } catch (e) {
+    console.warn('[avantis] tx status callback failed:', e?.message || e);
+  }
+}
+
 function pairIndexToSymbol(pairIdx, markets) {
   const hit = Array.isArray(markets)
     ? markets.find(m => Number(m.index) === Number(pairIdx) || Number(m.pair_index) === Number(pairIdx))
@@ -95,6 +116,26 @@ function asBool(v) {
   return false;
 }
 
+function contractPriceValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n / 1e10;
+  }
+  return 0;
+}
+
+function humanPriceValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === '') continue;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    return n;
+  }
+  return 0;
+}
+
 function normalizePosition(p, markets) {
   // Avantis Core API /user-data.positions shape (confirmed via live probe):
   //   { trader, pairIndex, index, buy, collateral, leverage, openPrice, sl, tp, ... }
@@ -104,7 +145,17 @@ function normalizePosition(p, markets) {
   const pairIdx = p.pairIndex ?? p.pair_index ?? p.trade?.pairIndex;
   const isBuy = asBool(p.buy ?? p.isLong ?? p.trade?.buy ?? false);
   const symbol = p.symbol || pairIndexToSymbol(pairIdx, markets);
-  const openPrice = Number(p.openPrice ?? p.trade?.openPrice ?? 0) / 1e10 || Number(p.entry_price ?? 0);
+  const openPrice = contractPriceValue(p.openPrice, p.trade?.openPrice) || humanPriceValue(p.entry_price);
+  const takeProfit = contractPriceValue(p.tp, p.trade?.tp) || humanPriceValue(p.takeProfit, p.take_profit);
+  const stopLoss = contractPriceValue(p.sl, p.trade?.sl) || humanPriceValue(p.stopLoss, p.stop_loss);
+  const liquidationPrice = contractPriceValue(
+    p.liquidationPrice,
+    p.trade?.liquidationPrice,
+    p.liqPrice,
+    p.trade?.liqPrice,
+  ) || humanPriceValue(
+    p.liquidation_price,
+  );
   // Collateral = USDC posted as margin. Flat field on current Core API.
   let collateral = 0;
   if (p.collateral !== undefined && p.collateral !== null) {
@@ -125,9 +176,13 @@ function normalizePosition(p, markets) {
     margin: String(collateral),
     leverage: String(leverage),
     pnl: String(pnl),
+    take_profit: takeProfit > 0 ? String(takeProfit) : '',
+    stop_loss: stopLoss > 0 ? String(stopLoss) : '',
+    liquidation_price: liquidationPrice > 0 ? String(liquidationPrice) : '',
     pair_index: Number(pairIdx),
     trade_index: Number(p.index ?? p.trade?.index ?? 0),
     is_isolated: true,
+    _raw: p,
   };
 }
 
@@ -138,7 +193,9 @@ function normalizeOrder(o, markets) {
   const pairIdx = o.pairIndex ?? o.pair_index ?? o.trade?.pairIndex;
   const isBuy = asBool(o.buy ?? o.trade?.buy ?? false);
   const symbol = o.symbol || pairIndexToSymbol(pairIdx, markets);
-  const openPrice = Number(o.openPrice ?? o.trade?.openPrice ?? 0) / 1e10 || Number(o.price ?? 0);
+  const openPrice = contractPriceValue(o.openPrice, o.trade?.openPrice) || humanPriceValue(o.price);
+  const takeProfit = contractPriceValue(o.tp, o.trade?.tp) || humanPriceValue(o.takeProfit, o.take_profit);
+  const stopLoss = contractPriceValue(o.sl, o.trade?.sl) || humanPriceValue(o.stopLoss, o.stop_loss);
   let collateral = 0;
   if (o.collateral !== undefined && o.collateral !== null) {
     collateral = Number(o.collateral) / 1e6;
@@ -156,8 +213,11 @@ function normalizeOrder(o, markets) {
     leverage: String(leverage),
     order_type: 'LIMIT',
     tif: 'GTC',
+    take_profit: takeProfit > 0 ? String(takeProfit) : '',
+    stop_loss: stopLoss > 0 ? String(stopLoss) : '',
     pair_index: Number(pairIdx),
     trade_index: Number(o.index ?? o.trade?.index ?? 0),
+    _raw: o,
   };
 }
 
@@ -284,7 +344,15 @@ function normalizePrices(raw) {
 // ───── Hook ────────────────────────────────────────────────────────
 
 export function useAvantis() {
-  const { address: walletAddr, walletClient, publicClient, isReady, ensureChain } = useEvmWallet();
+  const {
+    address: walletAddr,
+    walletClient,
+    publicClient,
+    isReady,
+    ensureChain,
+    source: walletSource,
+    sendTransaction: sendPrivyTransaction,
+  } = useEvmWallet();
   // Gate polling / on-chain reads on the active DEX. FuturesPanel
   // instantiates BOTH hooks (Pacifica + Avantis) so it can switch between
   // them at render time, but if the user is on Pacifica we shouldn't be
@@ -310,12 +378,16 @@ export function useAvantis() {
   // linked to our code, `false` if linked to someone else / no code, `null`
   // while the read is still in flight so the UI can show a neutral state.
   const [hasReferrer, setHasReferrer] = useState(null);
+  const [smartWallet, setSmartWallet] = useState(null);
   const marketsRef = useRef([]);
   // Ref-held reference to `claimGold` so early-declared callbacks
   // (placeMarketOrder etc.) can fire a claim after a successful trade
   // without forward-referencing the useCallback. The ref is updated at the
   // end of the hook body to the latest-render claimGold closure.
   const claimGoldRef = useRef(null);
+  const balanceInFlightRef = useRef(null);
+  const lastBalanceFetchAtRef = useRef(0);
+  const smartWalletRef = useRef(null);
 
   // Reactive player token — `window._playerToken` alone can be briefly null
   // during logout transitions or not-yet-set right after a Farcaster auto-
@@ -355,6 +427,115 @@ export function useAvantis() {
     walletGenRef.current += 1;
   }, [walletAddr]);
 
+  useEffect(() => {
+    smartWalletRef.current = smartWallet;
+  }, [smartWallet]);
+
+  useEffect(() => {
+    if (walletAddr) return;
+    setSmartWallet(null);
+    smartWalletRef.current = null;
+  }, [walletAddr]);
+
+  const refreshSmartWallet = useCallback(async () => {
+    if (!walletAddr || !publicClient) {
+      setSmartWallet(null);
+      smartWalletRef.current = null;
+      return null;
+    }
+    const local = readAvantisSmartWalletDelegate(walletAddr);
+    const onchain = await fetchAvantisDelegate(publicClient, walletAddr);
+    const onchainLower = String(onchain || '').toLowerCase();
+    let ethRaw = 0n;
+    if (local?.address) {
+      try {
+        ethRaw = await publicClient.getBalance({ address: local.address });
+      } catch {
+        ethRaw = 0n;
+      }
+    }
+    const next = local ? {
+      address: local.address,
+      validUntil: local.validUntil,
+      onchainDelegate: onchain || null,
+      active: onchainLower === String(local.address).toLowerCase(),
+      eth: Number(formatEther(ethRaw)),
+      ethRaw,
+      needsEth: ethRaw < AVANTIS_SMART_WALLET_MIN_ETH,
+    } : {
+      address: null,
+      validUntil: 0,
+      onchainDelegate: onchain || null,
+      active: false,
+      eth: 0,
+      ethRaw: 0n,
+      needsEth: true,
+    };
+    setSmartWallet(next);
+    smartWalletRef.current = next;
+    return next;
+  }, [walletAddr, publicClient]);
+
+  const sendContractTransaction = useCallback(async ({
+    address,
+    abi,
+    functionName,
+    args = [],
+    value,
+    silentPrivy = false,
+    smartWallet: useSmartWallet = false,
+    onStatus,
+  }) => {
+    if (!walletClient || !walletAddr) throw new Error('Wallet not connected');
+    const emitStatus = (phase, payload = {}) => notifyTxStatus({ onStatus }, phase, payload);
+    if (useSmartWallet) {
+      if (String(address).toLowerCase() !== String(TRADING_ADDRESS).toLowerCase()) {
+        throw new Error('Avantis Smart Wallet can only call the Avantis Trading contract');
+      }
+      const record = readAvantisSmartWalletDelegate(walletAddr);
+      const status = smartWalletRef.current;
+      if (!record || !status?.active) {
+        throw new Error('Avantis Smart Wallet is not enabled for this wallet');
+      }
+      if (BigInt(status?.ethRaw || 0n) < AVANTIS_SMART_WALLET_MIN_ETH) {
+        throw new Error(`Fund Avantis Smart Wallet ${shortAddress(record.address)} with Base ETH for gas before auto-trading`);
+      }
+      const delegateClient = createAvantisSmartWalletClient(record);
+      const callData = encodeFunctionData({ abi, functionName, args });
+      const request = {
+        address: TRADING_ADDRESS,
+        abi: TRADING_ABI,
+        functionName: 'delegatedAction',
+        args: [walletAddr, callData],
+      };
+      if (value !== undefined) request.value = value;
+      emitStatus('signing', { mode: 'smart_wallet', delegate: record.address });
+      const hash = await delegateClient.writeContract(request);
+      emitStatus('submitted', { mode: 'smart_wallet', hash });
+      return hash;
+    }
+    if (silentPrivy && walletSource === 'privy' && typeof sendPrivyTransaction === 'function') {
+      const input = {
+        to: address,
+        data: encodeFunctionData({ abi, functionName, args }),
+      };
+      if (value !== undefined) input.value = value;
+      emitStatus('signing', { mode: 'privy' });
+      const result = await sendPrivyTransaction(input, {
+        uiOptions: { showWalletUIs: false },
+      });
+      const hash = result?.hash || result?.txHash || result;
+      emitStatus('submitted', { mode: 'privy', hash });
+      return hash;
+    }
+    const request = { address, abi, functionName, args };
+    if (value !== undefined) request.value = value;
+    emitStatus('wallet_prompt', { mode: 'browser_wallet' });
+    const hash = await walletClient.writeContract(request);
+    emitStatus('submitted', { mode: 'browser_wallet', hash });
+    return hash;
+  }, [walletClient, walletAddr, walletSource, sendPrivyTransaction]);
+
   // In-flight guard for `ensureApproval`. A double-click on LONG otherwise
   // triggers two parallel approval promises → two MM popups → wasted gas.
   // The second caller awaits the first's result.
@@ -374,8 +555,15 @@ export function useAvantis() {
       const list = normalizeMarkets(j?.pairs || j?.data || j);
       setMarkets(list);
       marketsRef.current = list;
+      return list;
     } catch {}
+    return marketsRef.current || [];
   }, []);
+
+  const ensureMarketsReady = useCallback(async () => {
+    if (marketsRef.current?.length) return marketsRef.current;
+    return fetchMarkets();
+  }, [fetchMarkets]);
 
   const fetchPrices = useCallback(async () => {
     try {
@@ -436,7 +624,7 @@ export function useAvantis() {
     try {
       const storedCode = await fetchReferralCode(publicClient, walletAddr);
       const expected = String(REFERRAL_CODE_BYTES32).toLowerCase();
-      const actual = storedCode ? String(storedCode).toLowerCase() : null;
+      const actual = storedCode && !isZeroBytes32(storedCode) ? String(storedCode).toLowerCase() : null;
       const linked = actual === expected;
       setHasReferrer(linked);
       if (actual && actual !== expected) {
@@ -517,21 +705,34 @@ export function useAvantis() {
 
   // ───── Wallet balances — direct on-chain read ─────
   // USDC + ETH of the user's OWN wallet. No server round-trip.
-  const fetchBalance = useCallback(async () => {
+  const fetchBalance = useCallback(async (options = {}) => {
     if (!walletAddr || !publicClient) return;
-    try {
-      const [usdcRaw, ethRaw] = await Promise.all([
-        publicClient.readContract({
-          address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'balanceOf',
-          args: [walletAddr],
-        }),
-        publicClient.getBalance({ address: walletAddr }),
-      ]);
-      setWalletUsdc(Number(formatUnits(usdcRaw, 6)));
-      setWalletEth(Number(formatEther(ethRaw)));
-    } catch (e) {
-      console.warn('[avantis] fetchBalance failed:', e?.message || e);
+    const force = !!options?.force;
+    const now = Date.now();
+    if (!force && now - lastBalanceFetchAtRef.current < BALANCE_FETCH_MIN_INTERVAL_MS) {
+      return balanceInFlightRef.current || null;
     }
+    if (balanceInFlightRef.current) return balanceInFlightRef.current;
+    lastBalanceFetchAtRef.current = now;
+    balanceInFlightRef.current = (async () => {
+      try {
+        const [usdcRaw, ethRaw] = await Promise.all([
+          publicClient.readContract({
+            address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'balanceOf',
+            args: [walletAddr],
+          }),
+          publicClient.getBalance({ address: walletAddr }),
+        ]);
+        setWalletUsdc(Number(formatUnits(usdcRaw, 6)));
+        setWalletEth(Number(formatEther(ethRaw)));
+      } catch (e) {
+        console.warn('[avantis] fetchBalance failed:', e?.message || e);
+      } finally {
+        balanceInFlightRef.current = null;
+      }
+      return null;
+    })();
+    return balanceInFlightRef.current;
   }, [walletAddr, publicClient]);
 
   // ───── Report a trade to server for backwards-compatible telemetry ─────
@@ -572,14 +773,17 @@ export function useAvantis() {
 
   // ───── Client-side approval helper ─────
   //
-  // Approves MAX_UINT256 (standard DEX practice) so the user sees ONE wallet
-  // popup in their lifetime on this DEX, and never again. Previously we
+  // Manual trades and Avantis Smart Wallet setup approve MAX_UINT256 (standard
+  // DEX practice) so the user sees one wallet popup in their lifetime. Silent
+  // AI/Privy trades approve only the current collateral amount to keep hidden
+  // browser execution bounded.
+  // Previously we
   // approved `amountRaw + 1%`, which forced a fresh approval every time the
   // collateral grew — and, worse, triggered "ERC20: transfer amount exceeds
   // allowance" inside Farcaster's tx simulator when the approve receipt
   // hadn't propagated to FC's RPC cache before the openTrade simulation ran.
   // Max-approval eliminates both failure modes.
-  const ensureApproval = useCallback(async (amountRaw) => {
+  const ensureApproval = useCallback(async (amountRaw, options = {}) => {
     if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
     // Concurrency guard: if an approval is already in flight for this wallet,
     // await its result instead of firing a parallel approve tx. Second clicker
@@ -602,9 +806,11 @@ export function useAvantis() {
       // balance anyway, so "infinite" is bounded in practice by the user's
       // funds. Matches Uniswap / Aave / every major EVM DEX default.
       const MAX_UINT256 = (1n << 256n) - 1n;
-      const hash = await walletClient.writeContract({
+      const approvalAmount = options?.silentPrivy ? amountRaw : MAX_UINT256;
+      const hash = await sendContractTransaction({
         address: USDC_ADDRESS, abi: ERC20_ABI, functionName: 'approve',
-        args: [TRADING_STORAGE_ADDRESS, MAX_UINT256],
+        args: [TRADING_STORAGE_ADDRESS, approvalAmount],
+        silentPrivy: !!options?.silentPrivy,
       });
       await waitForReceiptWithTimeout(publicClient, hash);
       // Poll until the freshly-approved allowance is visible to the RPC we're
@@ -634,9 +840,66 @@ export function useAvantis() {
     } finally {
       approvalInFlightRef.current = null;
     }
-  }, [walletClient, walletAddr, publicClient]);
+  }, [walletClient, walletAddr, publicClient, sendContractTransaction]);
 
   // ───── Guards ─────
+  const enableSmartWallet = useCallback(async () => {
+    if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
+    await ensureChain();
+    const delegate = getOrCreateAvantisSmartWalletDelegate(walletAddr);
+    let hash = null;
+    const current = await fetchAvantisDelegate(publicClient, walletAddr);
+    if (String(current || '').toLowerCase() !== String(delegate.address).toLowerCase()) {
+      hash = await walletClient.writeContract({
+        address: TRADING_ADDRESS,
+        abi: TRADING_ABI,
+        functionName: 'setDelegate',
+        args: [delegate.address],
+      });
+      await waitForReceiptWithTimeout(publicClient, hash);
+    }
+
+    const MAX_UINT256 = (1n << 256n) - 1n;
+    await ensureApproval(MAX_UINT256);
+    const status = await refreshSmartWallet();
+    return {
+      tx_hash: hash,
+      address: delegate.address,
+      active: !!status?.active,
+      needs_eth: !!status?.needsEth,
+      eth: status?.eth ?? 0,
+      valid_until: delegate.validUntil,
+    };
+  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, refreshSmartWallet]);
+
+  const revokeSmartWallet = useCallback(async () => {
+    if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
+    await ensureChain();
+    const hash = await walletClient.writeContract({
+      address: TRADING_ADDRESS,
+      abi: TRADING_ABI,
+      functionName: 'removeDelegate',
+      args: [],
+    });
+    await waitForReceiptWithTimeout(publicClient, hash);
+    forgetAvantisSmartWalletDelegate(walletAddr);
+    await refreshSmartWallet();
+    return { tx_hash: hash, status: 'revoked' };
+  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet]);
+
+  const fundSmartWallet = useCallback(async (amountEth = '0.001') => {
+    if (!walletClient || !walletAddr || !publicClient) throw new Error('Wallet not connected');
+    await ensureChain();
+    const delegate = readAvantisSmartWalletDelegate(walletAddr);
+    const to = delegate?.address || smartWalletRef.current?.address;
+    if (!to) throw new Error('Create the Avantis Smart Wallet delegate first');
+    const value = parseEther(String(amountEth || '0.001'));
+    const hash = await walletClient.sendTransaction({ to, value });
+    await waitForReceiptWithTimeout(publicClient, hash);
+    const status = await refreshSmartWallet();
+    return { tx_hash: hash, status: 'funded', ...status };
+  }, [walletClient, walletAddr, publicClient, ensureChain, refreshSmartWallet]);
+
   const requireWallet = useCallback(() => {
     if (!isReady || !walletClient || !walletAddr) {
       throw new Error('Connect your Base wallet to trade on Avantis');
@@ -650,7 +913,7 @@ export function useAvantis() {
   }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet]);
 
   // ───── Place market order ─────
-  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage) => {
+  const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage, options = {}) => {
     setLoading(true);
     setError(null);
     // Capture wallet generation — if it changes during any await below, the
@@ -672,7 +935,8 @@ export function useAvantis() {
       if (!Number.isFinite(collateralUsdc) || collateralUsdc <= 0) throw new Error('Invalid amount');
       const levNum = Math.min(Math.max(Number(leverage) || 1, 1), 1000);
 
-      const market = marketsRef.current.find(m => m.symbol === symbol);
+      const marketList = await ensureMarketsReady(); checkGen();
+      const market = marketList.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
       const pairIndex = Number(market.pair_index);
 
@@ -700,7 +964,7 @@ export function useAvantis() {
       }
       checkGen();
 
-      await ensureApproval(positionSizeUSDC); checkGen();
+      await ensureApproval(positionSizeUSDC, { silentPrivy: !!options?.silentPrivy }); checkGen();
 
       const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex); checkGen();
       // Re-fetch execFee JUST before signing — if fetched earlier it could be
@@ -722,16 +986,20 @@ export function useAvantis() {
         openPrice: priceToContract(livePrice),
         buy: isBuy,
         leverage: leverageToContract(levNum),
-        tp: 0n,
-        sl: 0n,
+        tp: Number(options?.take_profit ?? options?.tp ?? 0) > 0 ? priceToContract(Number(options.take_profit ?? options.tp)) : 0n,
+        sl: Number(options?.stop_loss ?? options?.sl ?? 0) > 0 ? priceToContract(Number(options.stop_loss ?? options.sl)) : 0n,
         timestamp: 0n,
       };
 
-      const hash = await walletClient.writeContract({
+      const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'openTrade',
         args: [tradeInput, ORDER_TYPE.MARKET, slippageToContract(slippage)],
         value: execFee,
+        silentPrivy: !!options?.silentPrivy,
+        smartWallet: !!options?.smartWallet,
+        onStatus: options?.onStatus,
       });
+      notifyTxStatus(options, 'confirming', { hash });
       const receipt = await waitForReceiptWithTimeout(publicClient, hash);
       // Guard against reverted trades still nudging the server's reward flow.
       const ok = receipt.status === 'success';
@@ -739,9 +1007,11 @@ export function useAvantis() {
         // The tx mined but reverted. Refresh state so UI doesn't show a
         // non-existent position; don't claim gold for a failed trade.
         fetchPositions();
-        fetchBalance();
+        fetchBalance({ force: true });
+        notifyTxStatus(options, 'reverted', { hash });
         return { tx_hash: hash, status: 'failed', error: 'Trade reverted on-chain' };
       }
+      notifyTxStatus(options, 'confirmed', { hash });
 
       // Deterministic dedup_key: per (wallet, pair, tradeIndex). Prevents the
       // server-futures worker from inserting a duplicate row for this open.
@@ -757,9 +1027,9 @@ export function useAvantis() {
 
       fetchPositions();
       fetchAccount();
-      fetchBalance();
+      fetchBalance({ force: true });
       scheduleClaim();
-      return { tx_hash: hash, status: 'submitted' };
+      return { tx_hash: hash, status: 'submitted', pair_index: pairIndex, trade_index: tradeIndex, symbol, side: isBuy ? 'long' : 'short' };
     } catch (e) {
       const msg = decodeTradeError(e, 'Trade failed');
       setError(msg.slice(0, 300));
@@ -767,14 +1037,14 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, requireWallet, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim]);
+  }, [walletAddr, publicClient, ensureChain, ensureApproval, ensureMarketsReady, requireWallet, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, sendContractTransaction]);
 
   // ───── Place limit order ─────
   // `slippage` added as optional 7th arg (percent, e.g. 0.5). Defaults to 1%
   // to match previous hardcoded behaviour — callers that already pass 6
   // args continue to work unchanged. Clamped to [0.1%, 50%] inside
   // `slippageToContract`.
-  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage, slippage = 1) => {
+  const placeLimitOrder = useCallback(async (symbol, side, price, amount, tif, leverage, slippage = 1, options = {}) => {
     setLoading(true);
     setError(null);
     const gen = walletGenRef.current;
@@ -795,7 +1065,8 @@ export function useAvantis() {
       if (!Number.isFinite(priceNum) || priceNum <= 0) throw new Error('Invalid limit price');
       const levNum = Math.min(Math.max(Number(leverage) || 1, 1), 1000);
 
-      const market = marketsRef.current.find(m => m.symbol === symbol);
+      const marketList = await ensureMarketsReady(); checkGen();
+      const market = marketList.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
       const pairIndex = Number(market.pair_index);
 
@@ -839,7 +1110,7 @@ export function useAvantis() {
       }
       checkGen();
 
-      await ensureApproval(positionSizeUSDC); checkGen();
+      await ensureApproval(positionSizeUSDC, { silentPrivy: !!options?.silentPrivy }); checkGen();
 
       const tradeIndex = await fetchNextTradeIndex(walletAddr, pairIndex); checkGen();
       const execFee = await fetchExecutionFeeWei(publicClient); checkGen();
@@ -854,22 +1125,28 @@ export function useAvantis() {
         openPrice: priceToContract(priceNum),
         buy: isBuy,
         leverage: leverageToContract(levNum),
-        tp: 0n,
-        sl: 0n,
+        tp: Number(options?.take_profit ?? options?.tp ?? 0) > 0 ? priceToContract(Number(options.take_profit ?? options.tp)) : 0n,
+        sl: Number(options?.stop_loss ?? options?.sl ?? 0) > 0 ? priceToContract(Number(options.stop_loss ?? options.sl)) : 0n,
         timestamp: 0n,
       };
 
-      const hash = await walletClient.writeContract({
+      const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'openTrade',
         args: [tradeInput, ORDER_TYPE.LIMIT, slippageToContract(slippage)],
         value: execFee,
+        silentPrivy: !!options?.silentPrivy,
+        smartWallet: !!options?.smartWallet,
+        onStatus: options?.onStatus,
       });
+      notifyTxStatus(options, 'confirming', { hash });
       const receipt = await waitForReceiptWithTimeout(publicClient, hash);
       if (receipt.status !== 'success') {
         fetchOrders();
-        fetchBalance();
+        fetchBalance({ force: true });
+        notifyTxStatus(options, 'reverted', { hash });
         return { tx_hash: hash, status: 'failed', error: 'Limit order reverted on-chain' };
       }
+      notifyTxStatus(options, 'confirmed', { hash });
 
       const openDedup = `avantis:open:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
       await reportTrade({
@@ -880,9 +1157,9 @@ export function useAvantis() {
 
       fetchOrders();
       fetchAccount();
-      fetchBalance();
+      fetchBalance({ force: true });
       scheduleClaim();
-      return { tx_hash: hash, status: 'open' };
+      return { tx_hash: hash, status: 'open', pair_index: pairIndex, trade_index: tradeIndex, symbol, side: isBuy ? 'long' : 'short' };
     } catch (e) {
       const msg = decodeTradeError(e, 'Limit order failed');
       setError(msg.slice(0, 300));
@@ -890,10 +1167,10 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, ensureApproval, requireWallet, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim]);
+  }, [walletAddr, publicClient, ensureChain, ensureApproval, ensureMarketsReady, requireWallet, reportTrade, fetchOrders, fetchAccount, fetchBalance, scheduleClaim, sendContractTransaction]);
 
   // ───── Close position (full or partial) ─────
-  const closePosition = useCallback(async (symbol, side, amount, pairIndex, tradeIndex) => {
+  const closePosition = useCallback(async (symbol, side, amount, pairIndex, tradeIndex, options = {}) => {
     setLoading(true);
     setError(null);
     const gen = walletGenRef.current;
@@ -936,11 +1213,15 @@ export function useAvantis() {
 
       const execFee = await fetchExecutionFeeWei(publicClient); checkGen();
 
-      const hash = await walletClient.writeContract({
+      const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'closeTradeMarket',
         args: [BigInt(pairIndex), BigInt(tradeIndex), amountRaw],
         value: execFee,
+        silentPrivy: !!options?.silentPrivy,
+        smartWallet: !!options?.smartWallet,
+        onStatus: options?.onStatus,
       });
+      notifyTxStatus(options, 'confirming', { hash });
       const receipt = await waitForReceiptWithTimeout(publicClient, hash);
 
       // Refuse to credit rewards / fire reportTrade if the tx reverted.
@@ -948,9 +1229,11 @@ export function useAvantis() {
       // poisoned server-side state.
       if (receipt.status !== 'success') {
         fetchPositions();
-        fetchBalance();
+        fetchBalance({ force: true });
+        notifyTxStatus(options, 'reverted', { hash });
         return { tx_hash: hash, status: 'failed', error: 'Close reverted on-chain' };
       }
+      notifyTxStatus(options, 'confirmed', { hash });
 
       // Client-side trade report tagged with 'close_long'/'close_short' so
       // the task verifier's classifyTrade() treats it as independent volume.
@@ -965,12 +1248,44 @@ export function useAvantis() {
         dedup_key: dedupKey,
       });
 
+      let closeResult = null;
+      if (posMatch) {
+        const entry = Number(posMatch.entry_price);
+        const posMargin = Number(posMatch.margin) || 0;
+        const fullAmountBase = Number(posMatch.amount)
+          || (entry > 0 && posMargin > 0 ? (posMargin * closeLeverage) / entry : 0);
+        const closeFraction = posMargin > 0 ? Math.max(0, Math.min(1, amt / posMargin)) : 1;
+        const closeAmountBase = fullAmountBase * closeFraction;
+        let exit = 0;
+        try { exit = Number(await fetchLiveMarkPrice(Number(pairIndex))); } catch {}
+        if (entry > 0 && exit > 0 && closeAmountBase > 0) {
+          const direction = closedSideLabel === 'close_short' ? -1 : 1;
+          const pnlUsd = (exit - entry) * closeAmountBase * direction;
+          const closedCollateral = posMargin > 0 ? posMargin * closeFraction : amt;
+          const closedNotional = closedCollateral * closeLeverage;
+          const pnlPct = closedCollateral > 0 ? (pnlUsd / closedCollateral) * 100 : null;
+          closeResult = {
+            symbol,
+            side: closedSideLabel === 'close_short' ? 'short' : 'long',
+            closed_collateral_usd: Number(closedCollateral.toFixed(6)),
+            closed_notional_usd: Number(closedNotional.toFixed(6)),
+            leverage: closeLeverage,
+            entry_price: Number(entry.toFixed(8)),
+            exit_price: Number(exit.toFixed(8)),
+            close_mark_price: Number(exit.toFixed(8)),
+            realized_pnl_usd_estimate: Number(pnlUsd.toFixed(6)),
+            realized_pnl_pct_estimate: pnlPct == null ? null : Number(pnlPct.toFixed(4)),
+            price_source: 'live_mark_after_confirmation',
+          };
+        }
+      }
+
       fetchPositions();
       fetchAccount();
-      fetchBalance();
+      fetchBalance({ force: true });
       scheduleClaim(2500);
       scheduleClaim(8000);
-      return { tx_hash: hash, status: 'closed' };
+      return { tx_hash: hash, status: 'closed', close_result: closeResult };
     } catch (e) {
       const msg = decodeTradeError(e, 'Close failed');
       setError(msg.slice(0, 300));
@@ -978,19 +1293,24 @@ export function useAvantis() {
     } finally {
       setLoading(false);
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, requireWallet, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions]);
+  }, [walletAddr, publicClient, ensureChain, requireWallet, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, reportTrade, positions, sendContractTransaction]);
 
   // ───── Cancel limit order ─────
-  const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex) => {
+  const cancelOrder = useCallback(async (_symbol, _orderId, pairIndex, tradeIndex, options = {}) => {
     try {
       requireWallet();
       await ensureChain();
       if (pairIndex === undefined || tradeIndex === undefined) throw new Error('Missing pair/trade index');
-      const hash = await walletClient.writeContract({
+      const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'cancelOpenLimitOrder',
         args: [BigInt(pairIndex), BigInt(tradeIndex)],
+        silentPrivy: !!options?.silentPrivy,
+        smartWallet: !!options?.smartWallet,
+        onStatus: options?.onStatus,
       });
+      notifyTxStatus(options, 'confirming', { hash });
       await waitForReceiptWithTimeout(publicClient, hash);
+      notifyTxStatus(options, 'confirmed', { hash });
       fetchOrders();
       return { tx_hash: hash, status: 'cancelled' };
     } catch (e) {
@@ -998,10 +1318,10 @@ export function useAvantis() {
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     }
-  }, [walletClient, publicClient, ensureChain, requireWallet, fetchOrders]);
+  }, [publicClient, ensureChain, requireWallet, fetchOrders, sendContractTransaction]);
 
   // ───── Update TP/SL ─────
-  const setTpsl = useCallback(async (_symbol, _side, takeProfit, stopLoss, pairIndex, tradeIndex) => {
+  const setTpsl = useCallback(async (_symbol, _side, takeProfit, stopLoss, pairIndex, tradeIndex, options = {}) => {
     try {
       requireWallet();
       await ensureChain();
@@ -1022,12 +1342,17 @@ export function useAvantis() {
       // (avantis_trader_sdk/rpc/trade.py): updateTpAndSl(pair, trade,
       // stop_loss, take_profit, [price_update_data], sourcing). Keep
       // slContract AT POSITION 3 and tpContract AT POSITION 4.
-      const hash = await walletClient.writeContract({
+      const hash = await sendContractTransaction({
         address: TRADING_ADDRESS, abi: TRADING_ABI, functionName: 'updateTpAndSl',
         args: [BigInt(pairIndex), BigInt(tradeIndex), slContract, tpContract, [priceUpdateData], PRICE_SOURCING.HERMES],
         value: 1n,
+        silentPrivy: !!options?.silentPrivy,
+        smartWallet: !!options?.smartWallet,
+        onStatus: options?.onStatus,
       });
+      notifyTxStatus(options, 'confirming', { hash });
       await waitForReceiptWithTimeout(publicClient, hash);
+      notifyTxStatus(options, 'confirmed', { hash });
       fetchPositions();
       return { tx_hash: hash, status: 'updated' };
     } catch (e) {
@@ -1035,7 +1360,7 @@ export function useAvantis() {
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     }
-  }, [walletClient, publicClient, ensureChain, requireWallet, fetchPositions]);
+  }, [publicClient, ensureChain, requireWallet, fetchPositions, sendContractTransaction]);
 
   // Leverage + margin mode are per-trade on Avantis (no account-level API).
   // Silent no-ops keep the FuturesPanel interface uniform with Pacifica.
@@ -1102,11 +1427,12 @@ export function useAvantis() {
       fetchOrders();
       fetchPrices();
       fetchBalance();
+      refreshSmartWallet();
     };
     tick();
-    const iv = setInterval(tick, 5000);
+    const iv = setInterval(tick, AVANTIS_POLL_INTERVAL_MS);
     return () => clearInterval(iv);
-  }, [walletAddr, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance]);
+  }, [walletAddr, isActiveDex, fetchAccount, fetchPositions, fetchOrders, fetchPrices, fetchBalance, refreshSmartWallet]);
 
   // Referral linkage read — runs once per wallet (on-chain state, no polling).
   useEffect(() => {
@@ -1176,6 +1502,11 @@ export function useAvantis() {
     // banner until the user either signs the one-tx linkage or dismisses it.
     hasReferrer,          // true | false | null (loading)
     linkOurReferrer,      // async () => { tx_hash, status } | { error }
+    smartWallet,
+    enableSmartWallet,
+    revokeSmartWallet,
+    fundSmartWallet,
+    refreshSmartWallet,
     isReady,
   };
 }

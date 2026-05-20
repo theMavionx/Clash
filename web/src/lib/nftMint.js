@@ -1,5 +1,5 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
-import { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl } from './solanaRpc';
+import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from './solanaRpc';
 
 export const NFT_SHOP_ABI = [
   {
@@ -299,14 +299,14 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
   let assetAddress;
   let result;
   try {
-    const sendConnection = new Connection(rpcUrl, 'confirmed');
+    const sendConnection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
     const sent = await sendSignedSolanaTransactionWithRetry({
       connection: sendConnection,
       label: `nft.mint.${group}`,
       maxAttempts: 4,
       skipPreflight: false,
       buildSignedTransaction: async ({ connection: attemptConnection, blockhash, lastValidBlockHeight }) => {
-        const attemptUmi = createUmi(attemptConnection?.rpcEndpoint || rpcUrl)
+        const attemptUmi = createUmi(solanaBatchSafeRpcUrl(attemptConnection?.rpcEndpoint || rpcUrl))
           .use(mplCore())
           .use(mplCandyMachine())
           .use(signerIdentity(walletSigner, true));
@@ -360,7 +360,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
 }
 
 async function assertSolanaMintBalances({ Connection, Web3PublicKey, address, group, groupConfig, config, rpcUrl }) {
-  const connection = new Connection(rpcUrl, 'confirmed');
+  const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
   const owner = new Web3PublicKey(address);
   let solLamports = null;
 

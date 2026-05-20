@@ -48,6 +48,7 @@ const WS_URL = 'wss://ws.pacifica.fi/ws';
 const BUILDER_CODE = 'clashofperps';
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const ACTIVATION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const PACIFICA_SIGN_EXPIRY_WINDOW_MS = 30_000;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
 const AGENT_SIGNED_TYPES = new Set([
   'create_market_order',
@@ -133,7 +134,7 @@ function sortKeys(v) {
 }
 
 function buildMessage(type, payload) {
-  const header = { type, timestamp: pacificaNow(), expiry_window: 5000 };
+  const header = { type, timestamp: pacificaNow(), expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS };
   return JSON.stringify(sortKeys({ ...header, data: payload }));
 }
 
@@ -605,9 +606,10 @@ export function usePacifica() {
 
     const body = {
       account,
+      agent_wallet: null,
       signature,
       timestamp: JSON.parse(message).timestamp,
-      expiry_window: 5000,
+      expiry_window: PACIFICA_SIGN_EXPIRY_WINDOW_MS,
       ...payload,
     };
 

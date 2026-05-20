@@ -1,18 +1,24 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPublicClient, createWalletClient, custom, http } from 'viem';
+import { createPublicClient, createWalletClient, custom, http, verifyTypedData } from 'viem';
 import { arbitrum, base } from 'viem/chains';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { useAvantis } from '../hooks/useAvantis';
 import { useDex } from '../contexts/DexContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
 import EvmWalletModal from './EvmWalletModal';
-import { BASE_CHAIN_ID, ensureBaseChain } from '../lib/avantisContract';
+import { BASE_CHAIN_ID, TRADING_ADDRESS, ensureBaseChain } from '../lib/avantisContract';
 import { ARBITRUM_CHAIN_ID, ensureArbitrumChain } from '../lib/gmxConfig';
 import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
+import {
+  avantisPlaceOrderSignature,
+  duplicateAvantisPlaceOrderMessage,
+  findDuplicateAvantisPlaceOrder,
+} from '../lib/avantisDuplicateGuard';
 
 const CHAT_HISTORY_LIMIT = 40;
 const CONTEXT_MESSAGE_LIMIT = 4;
@@ -29,6 +35,543 @@ const AGENT_PROGRESS_MESSAGES = [
   'Waiting for the agent route...',
   'Finalizing the answer...',
 ];
+const AVANTIS_BROWSER_ACTION_STORAGE_KEY = 'clash_avantis_browser_actions_v1';
+const AVANTIS_AGENT_PERMISSION_STORAGE_KEY = 'clash_avantis_agent_permission_v2';
+const AVANTIS_AI_TRADE_SETTINGS_STORAGE_KEY = 'clash_avantis_ai_trade_settings_v1';
+const AVANTIS_AGENT_PERMISSION_TTL_MS = 30 * 60 * 1000;
+const AVANTIS_AGENT_SCOPE = 'avantis:place_order,close_position,cancel_order,set_tpsl';
+const AVANTIS_AGENT_PERMISSION_TYPES = {
+  AvantisAgentPermission: [
+    { name: 'wallet', type: 'address' },
+    { name: 'scope', type: 'string' },
+    { name: 'maxCollateralCents', type: 'uint256' },
+    { name: 'maxBalanceBps', type: 'uint256' },
+    { name: 'maxLeverage', type: 'uint256' },
+    { name: 'maxNotionalCents', type: 'uint256' },
+    { name: 'maxSlippageBps', type: 'uint256' },
+    { name: 'expiresAt', type: 'uint256' },
+  ],
+};
+const AVANTIS_BROWSER_POLICY_DEFAULTS = {
+  max_collateral_usd: 100,
+  max_leverage: Number(import.meta.env?.VITE_CLASH_AVANTIS_AI_MAX_LEVERAGE || 50),
+  max_notional_usd: 1000,
+  max_slippage_pct: 5,
+};
+const AVANTIS_AI_TRADE_SETTINGS_DEFAULTS = {
+  collateral_limit_mode: 'percent',
+  max_balance_pct: 100,
+  max_collateral_usd: 100,
+  max_leverage: Number(import.meta.env?.VITE_CLASH_AVANTIS_AI_MAX_LEVERAGE || 50),
+  max_slippage_pct: 5,
+};
+
+function clampNumber(value, min, max, fallback) {
+  const n = Number(value);
+  const safe = Number.isFinite(n) ? n : fallback;
+  return Math.max(min, Math.min(max, safe));
+}
+
+function policyNumber(policy, key) {
+  const value = Number(policy?.[key]);
+  const fallback = Number(AVANTIS_BROWSER_POLICY_DEFAULTS[key]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function normalizeAvantisAiTradeSettings(settings = {}, basePolicy = AVANTIS_BROWSER_POLICY_DEFAULTS) {
+  const maxPolicyCollateral = policyNumber(basePolicy, 'max_collateral_usd');
+  const maxPolicyLeverage = policyNumber(basePolicy, 'max_leverage');
+  const maxPolicySlippage = policyNumber(basePolicy, 'max_slippage_pct');
+  const collateralMode = settings?.collateral_limit_mode === 'usdc' ? 'usdc' : 'percent';
+  return {
+    collateral_limit_mode: collateralMode,
+    max_balance_pct: Number(clampNumber(settings?.max_balance_pct, 1, 100, AVANTIS_AI_TRADE_SETTINGS_DEFAULTS.max_balance_pct).toFixed(2)),
+    max_collateral_usd: Number(clampNumber(settings?.max_collateral_usd, 1, maxPolicyCollateral, Math.min(AVANTIS_AI_TRADE_SETTINGS_DEFAULTS.max_collateral_usd, maxPolicyCollateral)).toFixed(2)),
+    max_leverage: Number(clampNumber(settings?.max_leverage, 1, maxPolicyLeverage, Math.min(AVANTIS_AI_TRADE_SETTINGS_DEFAULTS.max_leverage, maxPolicyLeverage)).toFixed(1)),
+    max_slippage_pct: Number(clampNumber(settings?.max_slippage_pct, 0.1, maxPolicySlippage, Math.min(AVANTIS_AI_TRADE_SETTINGS_DEFAULTS.max_slippage_pct, maxPolicySlippage)).toFixed(2)),
+  };
+}
+
+function effectiveAvantisPolicy(basePolicy = AVANTIS_BROWSER_POLICY_DEFAULTS, settings = {}, walletUsdc = null) {
+  const normalized = normalizeAvantisAiTradeSettings(settings, basePolicy);
+  const baseCollateral = policyNumber(basePolicy, 'max_collateral_usd');
+  const walletBalance = Number(walletUsdc);
+  const percentCollateral = Number.isFinite(walletBalance) && walletBalance > 0
+    ? walletBalance * normalized.max_balance_pct / 100
+    : baseCollateral;
+  const maxCollateral = normalized.collateral_limit_mode === 'usdc'
+    ? normalized.max_collateral_usd
+    : Math.min(baseCollateral, percentCollateral);
+  const maxLeverage = Math.min(policyNumber(basePolicy, 'max_leverage'), normalized.max_leverage);
+  return {
+    ...basePolicy,
+    collateral_limit_mode: normalized.collateral_limit_mode,
+    max_balance_pct: normalized.max_balance_pct,
+    max_collateral_usd: Number(Math.max(0.01, Math.min(baseCollateral, maxCollateral)).toFixed(6)),
+    max_leverage: maxLeverage,
+    max_notional_usd: Number(Math.min(policyNumber(basePolicy, 'max_notional_usd'), maxCollateral * maxLeverage).toFixed(6)),
+    max_slippage_pct: Math.min(policyNumber(basePolicy, 'max_slippage_pct'), normalized.max_slippage_pct),
+  };
+}
+
+function loadAvantisAiTradeSettings(wallet, basePolicy = AVANTIS_BROWSER_POLICY_DEFAULTS) {
+  if (typeof window === 'undefined') return normalizeAvantisAiTradeSettings(AVANTIS_AI_TRADE_SETTINGS_DEFAULTS, basePolicy);
+  const key = String(wallet || 'default').toLowerCase();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AVANTIS_AI_TRADE_SETTINGS_STORAGE_KEY) || '{}');
+    return normalizeAvantisAiTradeSettings(parsed?.[key] || parsed?.default || AVANTIS_AI_TRADE_SETTINGS_DEFAULTS, basePolicy);
+  } catch {
+    return normalizeAvantisAiTradeSettings(AVANTIS_AI_TRADE_SETTINGS_DEFAULTS, basePolicy);
+  }
+}
+
+function saveAvantisAiTradeSettings(wallet, settings, basePolicy = AVANTIS_BROWSER_POLICY_DEFAULTS) {
+  const normalized = normalizeAvantisAiTradeSettings(settings, basePolicy);
+  if (typeof window === 'undefined') return normalized;
+  const key = String(wallet || 'default').toLowerCase();
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AVANTIS_AI_TRADE_SETTINGS_STORAGE_KEY) || '{}');
+    parsed[key] = normalized;
+    if (!parsed.default) parsed.default = normalized;
+    window.localStorage.setItem(AVANTIS_AI_TRADE_SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
+  } catch {}
+  return normalized;
+}
+
+function buildAvantisAiTradeSettingsPayload(settings, effectivePolicy, walletUsdc) {
+  return {
+    dex: 'avantis',
+    collateral_limit_mode: settings.collateral_limit_mode,
+    max_balance_pct: settings.max_balance_pct,
+    max_collateral_usd: settings.max_collateral_usd,
+    effective_max_collateral_usd: effectivePolicy.max_collateral_usd,
+    max_leverage: settings.max_leverage,
+    effective_max_leverage: effectivePolicy.max_leverage,
+    effective_max_notional_usd: effectivePolicy.max_notional_usd,
+    max_slippage_pct: settings.max_slippage_pct,
+    wallet_usdc: Number.isFinite(Number(walletUsdc)) ? Number(walletUsdc) : null,
+  };
+}
+
+function policyCents(value) {
+  const n = Number(value);
+  return BigInt(Math.max(0, Math.round((Number.isFinite(n) ? n : 0) * 100)));
+}
+
+function policyBps(value) {
+  const n = Number(value);
+  return BigInt(Math.max(0, Math.round((Number.isFinite(n) ? n : 0) * 100)));
+}
+
+function policyBalanceBps(value) {
+  const n = Number(value);
+  return BigInt(Math.max(0, Math.round((Number.isFinite(n) ? n : 0) * 100)));
+}
+
+function makeAvantisAgentPermissionDomain() {
+  return {
+    name: 'ClashHermes Avantis Agent',
+    version: '1',
+    chainId: BASE_CHAIN_ID,
+    verifyingContract: TRADING_ADDRESS,
+  };
+}
+
+function makeAvantisAgentPermissionMessage(wallet, policy, expiresAt) {
+  return {
+    wallet,
+    scope: AVANTIS_AGENT_SCOPE,
+    maxCollateralCents: policyCents(policy?.max_collateral_usd),
+    maxBalanceBps: policyBalanceBps(policy?.max_balance_pct ?? 100),
+    maxLeverage: BigInt(Math.round(policyNumber(policy, 'max_leverage'))),
+    maxNotionalCents: policyCents(policy?.max_notional_usd),
+    maxSlippageBps: policyBps(policy?.max_slippage_pct),
+    expiresAt: BigInt(Math.floor(Number(expiresAt || 0) / 1000)),
+  };
+}
+
+async function verifyAvantisAgentPermission(record) {
+  if (!record?.wallet || !record?.signature || !record?.policy) return false;
+  if (Date.now() > Number(record.expires_at || 0)) return false;
+  try {
+    return await verifyTypedData({
+      address: record.wallet,
+      domain: makeAvantisAgentPermissionDomain(),
+      types: AVANTIS_AGENT_PERMISSION_TYPES,
+      primaryType: 'AvantisAgentPermission',
+      message: makeAvantisAgentPermissionMessage(record.wallet, record.policy, record.expires_at),
+      signature: record.signature,
+    });
+  } catch {
+    return false;
+  }
+}
+
+function loadAvantisAgentPermission(wallet) {
+  if (typeof window === 'undefined' || !wallet) return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(AVANTIS_AGENT_PERMISSION_STORAGE_KEY) || '{}');
+    const record = parsed?.[String(wallet).toLowerCase()];
+    if (!record || record.scope !== AVANTIS_AGENT_SCOPE) return null;
+    if (String(record.wallet || '').toLowerCase() !== String(wallet).toLowerCase()) return null;
+    if (!record.signature || Date.now() > Number(record.expires_at || 0)) return null;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+function saveAvantisAgentPermission(record) {
+  if (typeof window === 'undefined' || !record?.wallet) return;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(AVANTIS_AGENT_PERMISSION_STORAGE_KEY) || '{}');
+    parsed[String(record.wallet).toLowerCase()] = record;
+    window.sessionStorage.setItem(AVANTIS_AGENT_PERMISSION_STORAGE_KEY, JSON.stringify(parsed));
+  } catch {}
+}
+
+function actionFitsAvantisAgentPermission(action, permission, options = {}) {
+  if (!action || !permission || Date.now() > Number(permission.expires_at || 0)) return false;
+  if (!['place_order', 'close_position', 'cancel_order', 'set_tpsl'].includes(action.type)) return false;
+  if (action.type !== 'place_order') return true;
+  const args = action.args || {};
+  const policy = permission.policy || {};
+  const effectivePolicy = effectiveAvantisPolicy(policy, {
+    collateral_limit_mode: policy.collateral_limit_mode || 'usdc',
+    max_balance_pct: policy.max_balance_pct ?? 100,
+    max_collateral_usd: policy.max_collateral_usd,
+    max_leverage: policy.max_leverage,
+    max_slippage_pct: policy.max_slippage_pct,
+  }, options.walletUsdc);
+  const collateral = Number(args.collateral_usd);
+  const leverage = Number(args.leverage || 1);
+  const slippage = Number(args.slippage_pct || 1);
+  const notional = collateral * leverage;
+  const marketMaxLeverage = Number(args.market_max_leverage ?? args.market_analysis?.max_leverage ?? 0);
+  return Number.isFinite(collateral)
+    && Number.isFinite(leverage)
+    && Number.isFinite(slippage)
+    && collateral > 0
+    && leverage > 0
+    && collateral <= Number(effectivePolicy.max_collateral_usd)
+    && leverage <= Number(effectivePolicy.max_leverage)
+    && (!(marketMaxLeverage > 0) || leverage <= marketMaxLeverage)
+    && notional <= Number(effectivePolicy.max_notional_usd)
+    && slippage <= Number(effectivePolicy.max_slippage_pct);
+}
+
+function avantisActionPolicyError(action, policy, walletUsdc = null) {
+  if (!action || action.type !== 'place_order') return '';
+  const args = action.args || {};
+  const collateral = Number(args.collateral_usd);
+  const leverage = Number(args.leverage || 1);
+  const slippage = Number(args.slippage_pct || 1);
+  const notional = collateral * leverage;
+  const marketMaxLeverage = Number(args.market_max_leverage ?? args.market_analysis?.max_leverage ?? 0);
+  const effectivePolicy = effectiveAvantisPolicy(policy, {
+    collateral_limit_mode: policy?.collateral_limit_mode || 'usdc',
+    max_balance_pct: policy?.max_balance_pct ?? 100,
+    max_collateral_usd: policy?.max_collateral_usd,
+    max_leverage: policy?.max_leverage,
+    max_slippage_pct: policy?.max_slippage_pct,
+  }, walletUsdc);
+  if (!Number.isFinite(collateral) || collateral <= 0) return 'Prepared order has invalid collateral.';
+  if (!Number.isFinite(leverage) || leverage <= 0) return 'Prepared order has invalid leverage.';
+  if (collateral > Number(effectivePolicy.max_collateral_usd) + 1e-9) {
+    return `AI policy blocks collateral above ${formatAiUsd(effectivePolicy.max_collateral_usd)}.`;
+  }
+  if (leverage > Number(effectivePolicy.max_leverage) + 1e-9) {
+    return `AI policy blocks leverage above ${effectivePolicy.max_leverage}x.`;
+  }
+  if (marketMaxLeverage > 0 && leverage > marketMaxLeverage + 1e-9) {
+    return `Avantis ${args.symbol || 'market'} supports max ${marketMaxLeverage}x leverage, but this action prepared ${leverage}x.`;
+  }
+  if (notional > Number(effectivePolicy.max_notional_usd) + 1e-9) {
+    return `AI policy blocks notional above ${formatAiUsd(effectivePolicy.max_notional_usd)}.`;
+  }
+  if (slippage > Number(effectivePolicy.max_slippage_pct) + 1e-9) {
+    return `AI policy blocks slippage above ${effectivePolicy.max_slippage_pct}%.`;
+  }
+  return '';
+}
+
+function formatAiUsd(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? `$${n.toFixed(n >= 100 ? 0 : 2)}` : '$0.00';
+}
+
+function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function cleanAiSignedZero(value) {
+  const n = Number(value || 0);
+  return Math.abs(n) < 0.005 ? 0 : n;
+}
+
+function formatSignedAiUsd(value) {
+  const n = cleanAiSignedZero(value);
+  return `${n >= 0 ? '+' : '-'}$${Math.abs(n).toFixed(2)}`;
+}
+
+function formatSignedAiPct(value) {
+  const n = cleanAiSignedZero(value);
+  return `${n >= 0 ? '+' : '-'}${Math.abs(n).toFixed(2)}%`;
+}
+
+function shortEvmAddress(addr, head = 6, tail = 4) {
+  const s = String(addr || '');
+  return s.length > head + tail + 3 ? `${s.slice(0, head)}...${s.slice(-tail)}` : s;
+}
+
+function shortTxHash(hash) {
+  const s = String(hash || '');
+  return s.length > 18 ? `${s.slice(0, 10)}...${s.slice(-6)}` : s;
+}
+
+function formatSmartWalletExpiry(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) return 'until expiry';
+  try {
+    return `until ${new Date(ms).toLocaleString([], {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`;
+  } catch {
+    return 'until expiry';
+  }
+}
+
+function normalizeAvantisPanelSide(side) {
+  const value = String(side || '').toLowerCase();
+  return value === 'short' || value === 'sell' || value === 'ask' ? 'ask' : 'bid';
+}
+
+function normalizeAvantisCloseSide(side) {
+  const value = String(side || '').toLowerCase();
+  return value === 'ask' || value === 'short' || value === 'sell' ? 'short' : 'long';
+}
+
+function normalizeAvantisCloseSnapshot(pos, prices = []) {
+  if (!pos) return null;
+  const symbol = String(pos.symbol || '').toUpperCase();
+  const side = normalizeAvantisCloseSide(pos.side);
+  const margin = finiteNumber(pos.collateral_usd ?? pos.margin);
+  const leverage = finiteNumber(pos.leverage) || 1;
+  const entry = finiteNumber(pos.entry_price);
+  const priceRow = symbol ? prices.find((p) => String(p.symbol || '').toUpperCase() === symbol) : null;
+  const mark = finiteNumber(pos.mark_price ?? pos.current_price ?? pos.price ?? priceRow?.mark ?? priceRow?.mark_price ?? priceRow?.price);
+  const amount = finiteNumber(pos.amount) || (entry && margin ? (margin * leverage) / entry : null);
+  const notional = finiteNumber(pos.notional_usd ?? pos.size_usd) || (margin ? margin * leverage : null);
+  const providedPnl = finiteNumber(pos.pnl_usd ?? pos.pnl);
+  const derivedPnl = entry && mark && amount
+    ? (mark - entry) * amount * (side === 'long' ? 1 : -1)
+    : null;
+  return {
+    symbol,
+    side,
+    margin,
+    leverage,
+    entry,
+    mark,
+    amount,
+    notional,
+    pnlUsd: derivedPnl ?? providedPnl,
+    pairIndex: finiteNumber(pos.pair_index),
+    tradeIndex: finiteNumber(pos.trade_index),
+  };
+}
+
+function findAvantisCloseSnapshot(action, positions = [], prices = []) {
+  const args = action?.args || {};
+  const wantedPair = finiteNumber(args.pair_index);
+  const wantedTrade = finiteNumber(args.trade_index);
+  const wantedSymbol = String(args.symbol || '').toUpperCase();
+  const wantedSide = args.side ? normalizeAvantisCloseSide(args.side) : '';
+  const live = (positions || []).find((pos) => {
+    const pairOk = wantedPair == null || Number(pos.pair_index) === wantedPair;
+    const tradeOk = wantedTrade == null || Number(pos.trade_index) === wantedTrade;
+    const symbolOk = !wantedSymbol || String(pos.symbol || '').toUpperCase() === wantedSymbol;
+    const sideOk = !wantedSide || normalizeAvantisCloseSide(pos.side) === wantedSide;
+    return pairOk && tradeOk && symbolOk && sideOk;
+  });
+  return normalizeAvantisCloseSnapshot(live, prices)
+    || normalizeAvantisCloseSnapshot(args.position, prices);
+}
+
+function describeAvantisCloseResult(action, positions = [], prices = [], result = {}) {
+  if (action?.type !== 'close_position') return '';
+  const closeResult = result?.close_result || result?.closeResult || null;
+  if (closeResult && typeof closeResult === 'object') {
+    const closedCollateral = finiteNumber(closeResult.closed_collateral_usd ?? closeResult.collateral_usd);
+    const symbol = String(closeResult.symbol || action.args?.symbol || 'position').toUpperCase();
+    const side = normalizeAvantisCloseSide(closeResult.side || action.args?.side).toUpperCase();
+    const pnlUsd = finiteNumber(closeResult.realized_pnl_usd_estimate ?? closeResult.pnl_usd);
+    const pnlPct = finiteNumber(closeResult.realized_pnl_pct_estimate ?? closeResult.pnl_pct);
+    const notional = finiteNumber(closeResult.closed_notional_usd ?? closeResult.notional_usd);
+    const entry = finiteNumber(closeResult.entry_price);
+    const exit = finiteNumber(closeResult.exit_price ?? closeResult.close_mark_price);
+    const bits = [
+      `I estimate the close at ${formatAiUsd(closedCollateral || 0)} collateral on ${side} ${symbol}`,
+    ];
+    if (notional) bits.push(`notional about ${formatAiUsd(notional)}`);
+    if (pnlUsd != null) bits.push(`PnL ${formatSignedAiUsd(pnlUsd)}${pnlPct != null ? ` (${formatSignedAiPct(pnlPct)})` : ''}`);
+    if (entry || exit) {
+      const priceBits = [];
+      if (entry) priceBits.push(`entry ${formatAiUsd(entry)}`);
+      if (exit) priceBits.push(`close mark ${formatAiUsd(exit)}`);
+      bits.push(priceBits.join(', '));
+    }
+    return `${bits.join('. ')}.`;
+  }
+  const args = action.args || {};
+  const snapshot = findAvantisCloseSnapshot(action, positions, prices);
+  if (!snapshot) return '';
+  const requestedPercent = Math.max(0.01, Math.min(100, finiteNumber(args.percent ?? args.close_percent) || 100));
+  const explicitCollateral = finiteNumber(args.collateral_usd ?? args.collateralUsd ?? args.amount);
+  const closeCollateral = explicitCollateral
+    ?? (snapshot.margin ? snapshot.margin * requestedPercent / 100 : null);
+  const closeFraction = snapshot.margin && closeCollateral
+    ? Math.max(0, Math.min(1, closeCollateral / snapshot.margin))
+    : requestedPercent / 100;
+  const pnlUsd = snapshot.pnlUsd == null ? null : cleanAiSignedZero(snapshot.pnlUsd * closeFraction);
+  const pnlPct = pnlUsd == null || !closeCollateral ? null : (pnlUsd / closeCollateral) * 100;
+  const bits = [
+    `I estimate the close at ${formatAiUsd(closeCollateral || 0)} collateral on ${snapshot.side.toUpperCase()} ${snapshot.symbol || 'position'}`,
+  ];
+  if (snapshot.notional && closeFraction) bits.push(`notional about ${formatAiUsd(snapshot.notional * closeFraction)}`);
+  if (pnlUsd != null) bits.push(`PnL ${formatSignedAiUsd(pnlUsd)}${pnlPct != null ? ` (${formatSignedAiPct(pnlPct)})` : ''}`);
+  if (snapshot.entry || snapshot.mark) {
+    const priceBits = [];
+    if (snapshot.entry) priceBits.push(`entry ${formatAiUsd(snapshot.entry)}`);
+    if (snapshot.mark) priceBits.push(`close mark ${formatAiUsd(snapshot.mark)}`);
+    bits.push(priceBits.join(', '));
+  }
+  return `${bits.join('. ')}.`;
+}
+
+function loadBrowserActionLedger() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(AVANTIS_BROWSER_ACTION_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveBrowserActionLedger(ledger) {
+  if (typeof window === 'undefined') return;
+  try {
+    const entries = Object.entries(ledger || {}).slice(-80);
+    window.localStorage.setItem(AVANTIS_BROWSER_ACTION_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {}
+}
+
+function markBrowserAction(actionId, status, result = {}) {
+  if (!actionId) return;
+  const ledger = loadBrowserActionLedger();
+  const previous = ledger[actionId] || {};
+  ledger[actionId] = {
+    ...previous,
+    status,
+    at: Date.now(),
+    tx_hash: result.tx_hash || result.hash || previous.tx_hash || null,
+    error: result.error || null,
+    signature: result.signature || previous.signature || null,
+    action: result.action || previous.action || null,
+    summary: result.summary || previous.summary || null,
+  };
+  saveBrowserActionLedger(ledger);
+}
+
+function browserActionAlreadySubmitted(actionId) {
+  const row = actionId ? loadBrowserActionLedger()[actionId] : null;
+  return row?.status === 'submitted'
+    || row?.status === 'confirmed'
+    || row?.status === 'done'
+    || row?.status === 'cancelled'
+    || row?.status === 'failed'
+    || row?.status === 'blocked_duplicate';
+}
+
+function describeAvantisBrowserAction(action) {
+  const args = action?.args || {};
+  if (action?.type === 'place_order') {
+    const side = String(args.side || 'long').toUpperCase();
+    const type = String(args.order_type || 'market').toUpperCase();
+    return `${side} ${args.symbol || 'BTC'} ${type}, ${formatAiUsd(args.collateral_usd)} collateral, ${Number(args.leverage || 1)}x`;
+  }
+  if (action?.type === 'close_position') {
+    return `Close ${Number(args.percent || 100).toFixed(0)}% of ${args.symbol || 'position'}`;
+  }
+  if (action?.type === 'cancel_order') {
+    return `Cancel ${args.symbol || 'Avantis'} order`;
+  }
+  if (action?.type === 'set_tpsl') {
+    const bits = [];
+    if (Number(args.take_profit) > 0) {
+      const pct = Number(args.take_profit_pnl_pct);
+      bits.push(`TP ${Number.isFinite(pct) && pct > 0 ? `${pct}% profit, ` : ''}${formatAiUsd(args.take_profit)}`);
+    }
+    if (Number(args.stop_loss) > 0) {
+      const pct = Number(args.stop_loss_pnl_pct);
+      bits.push(`SL ${Number.isFinite(pct) && pct > 0 ? `${pct}% loss, ` : ''}${formatAiUsd(args.stop_loss)}`);
+    }
+    return `Set ${bits.join(' / ') || 'TP/SL'} on ${args.symbol || 'position'}`;
+  }
+  return action?.summary || 'Avantis browser action';
+}
+
+function avantisBrowserActionStatusMessage(phase, {
+  useSmartWallet = false,
+  silentPrivy = false,
+  summary = 'Avantis action',
+  hash = '',
+  error = '',
+  closeResult = '',
+} = {}) {
+  const tx = hash ? ` Tx: ${shortTxHash(hash)}` : '';
+  if (phase === 'wallet_prompt') {
+    return `I have the Avantis transaction ready. Your wallet needs one signature for: ${summary}.`;
+  }
+  if (phase === 'signing') {
+    if (useSmartWallet) return `I am signing through your Avantis Smart Wallet now: ${summary}.`;
+    if (silentPrivy) return `I am signing through your Privy wallet now: ${summary}.`;
+    return `Waiting for your wallet signature now: ${summary}.`;
+  }
+  if (phase === 'submitted' || phase === 'confirming') {
+    const suffix = hash ? `: ${shortTxHash(hash)}` : '';
+    return `The transaction is on Base now; I am waiting for confirmation${suffix}.`;
+  }
+  if (phase === 'cancelled') {
+    return 'I stopped before submitting because the wallet confirmation was cancelled.';
+  }
+  if (phase === 'confirmed') {
+    return `Base confirmed it: ${summary}.${tx}${closeResult ? `\n${closeResult}` : ''}`;
+  }
+  if (phase === 'failed') {
+    return `I could not finish the Avantis action: ${error || 'unknown browser error'}`;
+  }
+  return `${summary}.`;
+}
+
+function aiBrowserActionsSatisfiedFollowUp(followUp, results = []) {
+  if (!followUp?.message) return false;
+  const requiredTypes = Array.isArray(followUp.after_action_types) ? followUp.after_action_types : [];
+  if (!requiredTypes.length) return true;
+  return requiredTypes.every((type) => results.some((row) => (
+    row?.action?.type === type
+    && row?.result
+    && !row.result.error
+    && !row.result.cancelled
+    && !row.result.skipped
+    && !row.result.duplicate
+  )));
+}
 
 const aiShopBasePublicClient = createPublicClient({ chain: base, transport: http() });
 const aiShopArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
@@ -382,6 +925,13 @@ function removePendingRequest(storageKey, traceId) {
   savePendingRequests(storageKey, loadPendingRequests(storageKey).filter((item) => item.traceId !== traceId));
 }
 
+function resetStoredChat(storageKey) {
+  const initial = INITIAL_MESSAGES.map((item) => ({ ...item }));
+  savePendingRequests(storageKey, []);
+  saveChatMessages(storageKey, initial);
+  return initial;
+}
+
 function appendStoredChatMessage(storageKey, row) {
   const rows = loadChatMessages(storageKey);
   const traceId = row?.traceId || '';
@@ -392,6 +942,13 @@ function appendStoredChatMessage(storageKey, row) {
   const next = normalizeMessages([...rows, row]);
   saveChatMessages(storageKey, next);
   return next;
+}
+
+function hasStoredChatMessage(storageKey, traceId, role = 'assistant') {
+  if (!traceId) return false;
+  return loadChatMessages(storageKey).some((item) => (
+    item?.traceId === traceId && item?.role === role
+  ));
 }
 
 function aiErrorMessage(err, fallback = 'AI request failed') {
@@ -539,6 +1096,7 @@ function saveDesktopLayout(layout) {
 function AiChatPanel({ onClose }) {
   const { isMobile } = useLayout();
   const { dex } = useDex();
+  const avantisTrading = useAvantis();
   const player = usePlayer();
   const tradingEvmWallet = useEvmWallet();
   const solWallet = useSolWallet();
@@ -548,11 +1106,16 @@ function AiChatPanel({ onClose }) {
   const storageKey = useMemo(() => getChatStorageKey(player, token), [player, token]);
   const skipNextPersist = useRef(true);
   const mountedRef = useRef(true);
+  const activeTraceRef = useRef('');
+  const sendingStartedAtRef = useRef(0);
+  const browserActionRunRef = useRef(new Set());
+  const browserActionSignatureRunRef = useRef(new Set());
   const [messages, setMessages] = useState(() => loadChatMessages(storageKey));
   const [input, setInput] = useState('');
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   const [progressText, setProgressText] = useState('');
+  const [resettingChat, setResettingChat] = useState(false);
   // Shop is now a separate modal layered on top of the chat panel —
   // earlier it was a tab inside the same chat body which duplicated the
   // header quota and crammed the buy flow into a narrow column. The
@@ -572,11 +1135,18 @@ function AiChatPanel({ onClose }) {
   //   status ∈ 'signing'|'confirming'|'crediting'|'success'|'error'
   const [topUpFlow, setTopUpFlow] = useState(null);
   const topUpTimers = useRef([]);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const confirmDialogResolveRef = useRef(null);
+  const [avantisSmartWalletSetup, setAvantisSmartWalletSetup] = useState(null);
+  const avantisSmartWalletSetupResolveRef = useRef(null);
   const [localEvmWalletState, setLocalEvmWalletState] = useState(null);
   const [evmModalOpen, setEvmModalOpen] = useState(false);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   // Heuristic step pacing: real wallet/network/server timing varies wildly,
@@ -606,9 +1176,44 @@ function AiChatPanel({ onClose }) {
     [localEvmWalletState?.provider, localEvmWalletState?.address],
   );
   const evmWallet = localEvmWallet || tradingEvmWallet;
+  const {
+    walletAddr: avantisWalletAddr,
+    walletUsdc: avantisWalletUsdc,
+    isReady: avantisReady,
+    walletMismatch: avantisWalletMismatch,
+    placeMarketOrder: avantisPlaceMarketOrder,
+    placeLimitOrder: avantisPlaceLimitOrder,
+    closePosition: avantisClosePosition,
+    cancelOrder: avantisCancelOrder,
+    setTpsl: avantisSetTpsl,
+    positions: avantisPositions,
+    prices: avantisPrices,
+    smartWallet: avantisSmartWallet,
+    enableSmartWallet: avantisEnableSmartWallet,
+    revokeSmartWallet: avantisRevokeSmartWallet,
+    fundSmartWallet: avantisFundSmartWallet,
+    refreshSmartWallet: avantisRefreshSmartWallet,
+  } = avantisTrading;
   const evmAddress = evmWallet?.address || null;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
   const aptosAddress = aptosWallet?.address || null;
+  const [avantisAiTradeSettings, setAvantisAiTradeSettings] = useState(() => (
+    loadAvantisAiTradeSettings('', AVANTIS_BROWSER_POLICY_DEFAULTS)
+  ));
+  useEffect(() => {
+    setAvantisAiTradeSettings(loadAvantisAiTradeSettings(avantisWalletAddr, AVANTIS_BROWSER_POLICY_DEFAULTS));
+  }, [avantisWalletAddr]);
+  const saveAvantisSettings = useCallback((nextSettings, basePolicy = AVANTIS_BROWSER_POLICY_DEFAULTS) => {
+    const saved = saveAvantisAiTradeSettings(avantisWalletAddr, nextSettings, basePolicy);
+    setAvantisAiTradeSettings(saved);
+    return saved;
+  }, [avantisWalletAddr]);
+  const activeAvantisPolicy = useMemo(() => (
+    effectiveAvantisPolicy(AVANTIS_BROWSER_POLICY_DEFAULTS, avantisAiTradeSettings, avantisWalletUsdc)
+  ), [avantisAiTradeSettings, avantisWalletUsdc]);
+  const activeAvantisSettingsPayload = useMemo(() => (
+    buildAvantisAiTradeSettingsPayload(avantisAiTradeSettings, activeAvantisPolicy, avantisWalletUsdc)
+  ), [avantisAiTradeSettings, activeAvantisPolicy, avantisWalletUsdc]);
 
   // Auto-size the message textarea: grows with content up to ~5 lines,
   // then scrolls inside its own box. Keeps the composer compact (single
@@ -758,6 +1363,8 @@ function AiChatPanel({ onClose }) {
     const pending = loadPendingRequests(storageKey);
     if (!pending.length) return undefined;
 
+    activeTraceRef.current = pending[pending.length - 1]?.traceId || '';
+    sendingStartedAtRef.current = pending[pending.length - 1]?.startedAt || Date.now();
     setStatus('sending');
     setProgressText('Finishing the previous game action...');
 
@@ -781,6 +1388,7 @@ function AiChatPanel({ onClose }) {
             traceId: `${item.traceId}:assistant`,
           });
           removePendingRequest(storageKey, item.traceId);
+          if (activeTraceRef.current === item.traceId) activeTraceRef.current = '';
         } catch (err) {
           if (!cancelled) setError(aiErrorMessage(err, 'AI request is still running. Reopen the chat in a moment to see the result.'));
         }
@@ -807,7 +1415,7 @@ function AiChatPanel({ onClose }) {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
-    fetch('/api/ai-chat/status', { headers: { 'x-token': token } })
+    fetch('/api/ai-chat/status?provision=0', { headers: { 'x-token': token }, cache: 'no-store' })
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
         if (!cancelled && data?.quota) setQuota(data.quota);
@@ -873,7 +1481,7 @@ function AiChatPanel({ onClose }) {
     const poll = async () => {
       if (!token) return;
       try {
-        const r = await fetch('/api/ai-chat/status', { headers: { 'x-token': token } });
+        const r = await fetch('/api/ai-chat/status?provision=0', { headers: { 'x-token': token }, cache: 'no-store' });
         const data = await r.json().catch(() => ({}));
         const next = describeAgentProgress(data?.hermes?.player?.last_progress);
         if (!cancelled && next) setProgressText(next);
@@ -890,6 +1498,644 @@ function AiChatPanel({ onClose }) {
     };
   }, [status, token]);
 
+  useEffect(() => {
+    if (status !== 'sending' || !token) return undefined;
+    let cancelled = false;
+
+    const checkStoredAnswer = async () => {
+      const pending = loadPendingRequests(storageKey);
+      if (!pending.length) return;
+
+      let changed = false;
+      for (const item of pending) {
+        try {
+          const data = await fetchAiChatStoredResult(item.traceId, token);
+          if (cancelled || !data) continue;
+          if (data?.quota) setQuota(data.quota);
+          const isBlocked = data?.status === 'quota_blocked' || data?.ok === false;
+          const text = isBlocked
+            ? (data?.error || 'AI request failed')
+            : (data?.message || 'Done.');
+          appendStoredChatMessage(storageKey, {
+            role: 'assistant',
+            text,
+            traceId: `${item.traceId}:assistant`,
+          });
+          removePendingRequest(storageKey, item.traceId);
+          if (activeTraceRef.current === item.traceId) activeTraceRef.current = '';
+          if (data?.status === 'quota_blocked') setShopOpen(true);
+          changed = true;
+        } catch {
+          // The main request/recovery path still owns visible errors.
+        }
+      }
+
+      if (!cancelled && changed && mountedRef.current) {
+        setMessages(loadChatMessages(storageKey));
+        if (!loadPendingRequests(storageKey).length) {
+          setStatus('idle');
+          setProgressText('');
+        }
+      }
+    };
+
+    checkStoredAnswer();
+    const timer = setInterval(checkStoredAnswer, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [status, storageKey, token]);
+
+  useEffect(() => {
+    if (status !== 'sending') return undefined;
+    let cancelled = false;
+
+    const settleIfStored = () => {
+      const activeTrace = activeTraceRef.current;
+      const pending = loadPendingRequests(storageKey);
+      const activeAnswerStored = activeTrace
+        ? hasStoredChatMessage(storageKey, `${activeTrace}:assistant`, 'assistant')
+        : false;
+      const staleWithoutPending = !pending.length
+        && sendingStartedAtRef.current > 0
+        && Date.now() - sendingStartedAtRef.current > 3000;
+
+      if (!cancelled && mountedRef.current && (activeAnswerStored || staleWithoutPending)) {
+        setMessages(loadChatMessages(storageKey));
+        setStatus('idle');
+        setProgressText('');
+        if (activeAnswerStored || !pending.length) activeTraceRef.current = '';
+      }
+    };
+
+    settleIfStored();
+    const timer = setInterval(settleIfStored, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [status, storageKey]);
+
+  const appendAssistantBrowserActionMessage = useCallback((text, traceId) => {
+    appendStoredChatMessage(storageKey, {
+      role: 'assistant',
+      text,
+      traceId: `${traceId || makeAiChatTraceId()}:browser-action:${Date.now().toString(36)}`,
+    });
+    if (mountedRef.current) setMessages(loadChatMessages(storageKey));
+  }, [storageKey]);
+
+  const requestConfirmDialog = useCallback((payload) => new Promise((resolve) => {
+    if (confirmDialogResolveRef.current) confirmDialogResolveRef.current(false);
+    confirmDialogResolveRef.current = resolve;
+    setConfirmDialog(payload);
+  }), []);
+
+  const resolveConfirmDialog = useCallback((accepted) => {
+    const resolve = confirmDialogResolveRef.current;
+    confirmDialogResolveRef.current = null;
+    setConfirmDialog(null);
+    if (resolve) resolve(!!accepted);
+  }, []);
+
+  const resolveAvantisSmartWalletSetup = useCallback((result) => {
+    const resolve = avantisSmartWalletSetupResolveRef.current;
+    avantisSmartWalletSetupResolveRef.current = null;
+    setAvantisSmartWalletSetup(null);
+    if (resolve) resolve(result || null);
+  }, []);
+
+  const requestAvantisSmartWalletSetup = useCallback((payload) => new Promise((resolve) => {
+    if (avantisSmartWalletSetupResolveRef.current) avantisSmartWalletSetupResolveRef.current(null);
+    avantisSmartWalletSetupResolveRef.current = resolve;
+    setAvantisSmartWalletSetup({
+      ...payload,
+      phase: payload?.status?.active ? 'needs_eth' : 'idle',
+      error: '',
+      status: payload?.status || null,
+    });
+  }), []);
+
+  const handleAvantisSmartWalletSettingsChange = useCallback((nextSettings) => {
+    setAvantisSmartWalletSetup((prev) => {
+      if (!prev) return prev;
+      const basePolicy = prev.base_policy || AVANTIS_BROWSER_POLICY_DEFAULTS;
+      const walletUsdc = prev.wallet_usdc ?? avantisWalletUsdc;
+      const saved = saveAvantisSettings(nextSettings, basePolicy);
+      return {
+        ...prev,
+        settings: saved,
+        policy: effectiveAvantisPolicy(basePolicy, saved, walletUsdc),
+      };
+    });
+  }, [avantisWalletUsdc, saveAvantisSettings]);
+
+  const handleAvantisSmartWalletSetup = useCallback(async () => {
+    if (!avantisSmartWalletSetup || typeof avantisEnableSmartWallet !== 'function') return;
+    if (avantisSmartWalletSetup.settings) {
+      saveAvantisSettings(avantisSmartWalletSetup.settings, avantisSmartWalletSetup.base_policy || AVANTIS_BROWSER_POLICY_DEFAULTS);
+    }
+    setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'delegating', error: '' } : prev);
+    try {
+      const result = await avantisEnableSmartWallet();
+      const status = typeof avantisRefreshSmartWallet === 'function'
+        ? await avantisRefreshSmartWallet().catch(() => null)
+        : null;
+      const merged = { ...(status || {}), ...(result || {}) };
+      if (!merged?.active) throw new Error('Avantis Smart Wallet delegation was not confirmed on-chain.');
+      if (merged?.needs_eth || merged?.needsEth) {
+        setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'needs_eth', status: merged, error: '' } : prev);
+        return;
+      }
+      resolveAvantisSmartWalletSetup({ mode: 'smart_wallet', ...merged, policy: avantisSmartWalletSetup.policy });
+    } catch (err) {
+      setAvantisSmartWalletSetup((prev) => prev ? {
+        ...prev,
+        phase: 'error',
+        error: err?.message || String(err),
+      } : prev);
+    }
+  }, [avantisSmartWalletSetup, avantisEnableSmartWallet, avantisRefreshSmartWallet, resolveAvantisSmartWalletSetup, saveAvantisSettings]);
+
+  const handleAvantisSmartWalletFund = useCallback(async () => {
+    if (!avantisSmartWalletSetup || typeof avantisFundSmartWallet !== 'function') return;
+    setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'funding', error: '' } : prev);
+    try {
+      const result = await avantisFundSmartWallet('0.001');
+      const merged = { ...(result || {}) };
+      if (merged?.active && !merged?.needsEth) {
+        resolveAvantisSmartWalletSetup({ mode: 'smart_wallet', ...merged, policy: avantisSmartWalletSetup.policy });
+        return;
+      }
+      setAvantisSmartWalletSetup((prev) => prev ? {
+        ...prev,
+        phase: merged?.active ? 'needs_eth' : 'idle',
+        status: merged,
+        error: merged?.active ? '' : 'Delegate is not active on-chain yet.',
+      } : prev);
+    } catch (err) {
+      setAvantisSmartWalletSetup((prev) => prev ? {
+        ...prev,
+        phase: 'error',
+        error: err?.message || String(err),
+      } : prev);
+    }
+  }, [avantisSmartWalletSetup, avantisFundSmartWallet, resolveAvantisSmartWalletSetup]);
+
+  const handleAvantisSmartWalletRecheck = useCallback(async () => {
+    if (!avantisSmartWalletSetup || typeof avantisRefreshSmartWallet !== 'function') return;
+    setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'checking', error: '' } : prev);
+    try {
+      const status = await avantisRefreshSmartWallet();
+      if (status?.active && !status?.needsEth) {
+        resolveAvantisSmartWalletSetup({ mode: 'smart_wallet', ...status, policy: avantisSmartWalletSetup.policy });
+        return;
+      }
+      setAvantisSmartWalletSetup((prev) => prev ? {
+        ...prev,
+        phase: status?.active ? 'needs_eth' : 'idle',
+        status,
+        error: status?.active ? '' : 'Delegate is not active on-chain yet.',
+      } : prev);
+    } catch (err) {
+      setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'error', error: err?.message || String(err) } : prev);
+    }
+  }, [avantisSmartWalletSetup, avantisRefreshSmartWallet, resolveAvantisSmartWalletSetup]);
+
+  const handleAvantisSmartWalletRevoke = useCallback(async () => {
+    if (!avantisSmartWalletSetup || typeof avantisRevokeSmartWallet !== 'function') return;
+    setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'revoking', error: '' } : prev);
+    try {
+      await avantisRevokeSmartWallet();
+      setAvantisSmartWalletSetup((prev) => prev ? {
+        ...prev,
+        phase: 'revoked',
+        status: null,
+        error: '',
+      } : prev);
+    } catch (err) {
+      setAvantisSmartWalletSetup((prev) => prev ? { ...prev, phase: 'error', error: err?.message || String(err) } : prev);
+    }
+  }, [avantisSmartWalletSetup, avantisRevokeSmartWallet]);
+
+  const ensureAvantisAgentPermission = useCallback(async (action, policy) => {
+    if (tradingEvmWallet?.source !== 'privy' || typeof tradingEvmWallet?.sendTransaction !== 'function') {
+      return null;
+    }
+    if (!avantisWalletAddr) return null;
+    const existing = loadAvantisAgentPermission(avantisWalletAddr);
+    if (
+      actionFitsAvantisAgentPermission(action, existing, { walletUsdc: avantisWalletUsdc })
+      && await verifyAvantisAgentPermission(existing)
+    ) {
+      return existing;
+    }
+
+    const walletClient = tradingEvmWallet.walletClient || tradingEvmWallet.getWalletClient?.(BASE_CHAIN_ID);
+    if (!walletClient?.signTypedData) return null;
+    const signedPolicy = {
+      collateral_limit_mode: policy.collateral_limit_mode || 'usdc',
+      max_balance_pct: Number(policy.max_balance_pct ?? 100),
+      max_collateral_usd: policyNumber(policy, 'max_collateral_usd'),
+      max_leverage: policyNumber(policy, 'max_leverage'),
+      max_notional_usd: policyNumber(policy, 'max_notional_usd'),
+      max_slippage_pct: policyNumber(policy, 'max_slippage_pct'),
+    };
+    const expiresAt = Date.now() + AVANTIS_AGENT_PERMISSION_TTL_MS;
+    const confirmed = await requestConfirmDialog({
+      title: 'Enable Avantis auto-signing',
+      body: 'This applies only to this Privy browser wallet and expires in 30 minutes.',
+      summary: `Limits: collateral <= ${formatAiUsd(signedPolicy.max_collateral_usd)}${signedPolicy.collateral_limit_mode === 'percent' ? ` or ${signedPolicy.max_balance_pct}% balance` : ''}, leverage <= ${signedPolicy.max_leverage}x, notional <= ${formatAiUsd(signedPolicy.max_notional_usd)}, slippage <= ${signedPolicy.max_slippage_pct}%.`,
+      confirmText: 'Enable',
+      cancelText: 'Not now',
+    });
+    if (!confirmed) return null;
+
+    await tradingEvmWallet.ensureChain?.(BASE_CHAIN_ID);
+    const message = makeAvantisAgentPermissionMessage(avantisWalletAddr, signedPolicy, expiresAt);
+    const signature = await walletClient.signTypedData({
+      account: avantisWalletAddr,
+      domain: makeAvantisAgentPermissionDomain(),
+      types: AVANTIS_AGENT_PERMISSION_TYPES,
+      primaryType: 'AvantisAgentPermission',
+      message,
+    });
+    const record = {
+      wallet: avantisWalletAddr,
+      scope: AVANTIS_AGENT_SCOPE,
+      policy: signedPolicy,
+      expires_at: expiresAt,
+      signature,
+      source: 'privy',
+      created_at: Date.now(),
+    };
+    saveAvantisAgentPermission(record);
+    return actionFitsAvantisAgentPermission(action, record, { walletUsdc: avantisWalletUsdc }) ? record : null;
+  }, [tradingEvmWallet, avantisWalletAddr, avantisWalletUsdc, requestConfirmDialog]);
+
+  const ensureAvantisSmartWalletRoute = useCallback(async (action, policy) => {
+    if (!avantisWalletAddr || typeof avantisEnableSmartWallet !== 'function') return null;
+    if (!actionFitsAvantisAgentPermission(action, {
+      expires_at: Date.now() + 60_000,
+      policy: {
+        collateral_limit_mode: policy.collateral_limit_mode || 'usdc',
+        max_balance_pct: Number(policy.max_balance_pct ?? 100),
+        max_collateral_usd: policyNumber(policy, 'max_collateral_usd'),
+        max_leverage: policyNumber(policy, 'max_leverage'),
+        max_notional_usd: policyNumber(policy, 'max_notional_usd'),
+        max_slippage_pct: policyNumber(policy, 'max_slippage_pct'),
+      },
+    }, { walletUsdc: avantisWalletUsdc })) {
+      return null;
+    }
+    let currentSmartWallet = avantisSmartWallet;
+    if (!(currentSmartWallet?.active && !currentSmartWallet?.needsEth) && typeof avantisRefreshSmartWallet === 'function') {
+      currentSmartWallet = await avantisRefreshSmartWallet().catch(() => avantisSmartWallet);
+    }
+    if (currentSmartWallet?.active && !currentSmartWallet?.needsEth) {
+      return { mode: 'smart_wallet', ...currentSmartWallet };
+    }
+
+    const setupResult = await requestAvantisSmartWalletSetup({
+      action,
+      policy: {
+        collateral_limit_mode: policy.collateral_limit_mode || 'usdc',
+        max_balance_pct: Number(policy.max_balance_pct ?? 100),
+        max_collateral_usd: policyNumber(policy, 'max_collateral_usd'),
+        max_leverage: policyNumber(policy, 'max_leverage'),
+        max_notional_usd: policyNumber(policy, 'max_notional_usd'),
+        max_slippage_pct: policyNumber(policy, 'max_slippage_pct'),
+      },
+      base_policy: { ...AVANTIS_BROWSER_POLICY_DEFAULTS, ...(action.policy || {}) },
+      settings: avantisAiTradeSettings,
+      wallet_usdc: Number.isFinite(Number(avantisWalletUsdc)) ? Number(avantisWalletUsdc) : null,
+      summary: describeAvantisBrowserAction(action),
+      status: currentSmartWallet,
+    });
+    if (!setupResult) {
+      const err = new Error('Avantis Smart Wallet setup was closed before the action was submitted.');
+      err.code = 'AVANTIS_SMART_WALLET_SETUP_CANCELLED';
+      throw err;
+    }
+    return setupResult;
+  }, [avantisWalletAddr, avantisEnableSmartWallet, avantisRefreshSmartWallet, avantisSmartWallet, requestAvantisSmartWalletSetup, avantisAiTradeSettings, avantisWalletUsdc]);
+
+  const executeAvantisBrowserAction = useCallback(async (action, traceId) => {
+    if (!action || action.dex !== 'avantis' || !action.id) return null;
+    if (browserActionRunRef.current.has(action.id) || browserActionAlreadySubmitted(action.id)) {
+      return { skipped: true };
+    }
+    const summary = describeAvantisBrowserAction(action);
+    const signature = avantisPlaceOrderSignature(action);
+    const duplicate = findDuplicateAvantisPlaceOrder(action, {
+      ledger: loadBrowserActionLedger(),
+      positions: avantisPositions,
+      locks: browserActionSignatureRunRef.current,
+    });
+    if (duplicate) {
+      markBrowserAction(action.id, 'blocked_duplicate', {
+        action,
+        signature,
+        summary,
+        error: duplicate.status || duplicate.type || 'duplicate',
+      });
+      appendAssistantBrowserActionMessage(duplicateAvantisPlaceOrderMessage(action, duplicate), traceId);
+      return { skipped: true, duplicate: true };
+    }
+    browserActionRunRef.current.add(action.id);
+    if (signature) browserActionSignatureRunRef.current.add(signature);
+    const args = action.args || {};
+    const basePolicy = { ...AVANTIS_BROWSER_POLICY_DEFAULTS, ...(action.policy || {}) };
+    const policy = effectiveAvantisPolicy(basePolicy, avantisAiTradeSettings, avantisWalletUsdc);
+    try {
+      if (dex !== 'avantis') throw new Error('Switch this game account to Avantis before signing the action.');
+      if (!avantisReady || !avantisWalletAddr) throw new Error('Connect your Base wallet before signing the Avantis action.');
+      if (avantisWalletMismatch) throw new Error('Connected Base wallet does not match this game account.');
+      if (action.wallet && String(action.wallet).toLowerCase() !== String(avantisWalletAddr).toLowerCase()) {
+        throw new Error('Prepared action is for a different Avantis wallet.');
+      }
+      const expiresAt = Date.parse(action.policy?.expires_at || '');
+      if (Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() > expiresAt) {
+        throw new Error('Prepared Avantis action expired. Ask Hermes again.');
+      }
+
+      if (action.type === 'place_order') {
+        const collateral = Number(args.collateral_usd);
+        const policyError = avantisActionPolicyError(action, policy, avantisWalletUsdc);
+        if (policyError) throw new Error(policyError);
+        const knownUsdc = Number(avantisWalletUsdc);
+        if (avantisWalletUsdc != null && Number.isFinite(knownUsdc) && collateral > knownUsdc + 1e-9) {
+          throw new Error(`Not enough USDC in browser wallet: need ${formatAiUsd(collateral)}, have ${formatAiUsd(avantisWalletUsdc)}.`);
+        }
+      }
+
+      const smartWalletRoute = await ensureAvantisSmartWalletRoute(action, policy).catch((err) => {
+        console.warn('[ai-chat] Avantis Smart Wallet route failed:', err?.message || err);
+        throw err;
+      });
+      const routePolicy = smartWalletRoute?.policy || policy;
+      const routePolicyError = avantisActionPolicyError(action, routePolicy, avantisWalletUsdc);
+      if (routePolicyError) throw new Error(routePolicyError);
+      const useSmartWallet = !!smartWalletRoute;
+      const agentPermission = useSmartWallet ? null : await ensureAvantisAgentPermission(action, policy).catch((err) => {
+        console.warn('[ai-chat] Avantis agent permission failed:', err?.message || err);
+        return null;
+      });
+      const silentPrivy = !!agentPermission && actionFitsAvantisAgentPermission(action, agentPermission);
+      const txStatusSeen = new Set();
+      const onTxStatus = (event = {}) => {
+        const phase = String(event.phase || '');
+        const hash = event.hash || event.tx_hash;
+        if (phase === 'wallet_prompt' && !txStatusSeen.has('wallet_prompt')) {
+          txStatusSeen.add('wallet_prompt');
+          markBrowserAction(action.id, 'wallet_prompt', { action, signature, summary });
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('wallet_prompt', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
+          return;
+        }
+        if (phase === 'signing' && !txStatusSeen.has('signing')) {
+          txStatusSeen.add('signing');
+          markBrowserAction(action.id, 'signing', { action, signature, summary });
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('signing', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
+          return;
+        }
+        if ((phase === 'submitted' || phase === 'confirming') && !txStatusSeen.has('submitted')) {
+          txStatusSeen.add('submitted');
+          markBrowserAction(action.id, 'confirming', { tx_hash: hash, action, signature, summary });
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('confirming', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+            hash,
+          }), traceId);
+        }
+      };
+      if (!useSmartWallet && !silentPrivy) {
+        const confirmed = await requestConfirmDialog({
+          title: 'Submit Avantis action',
+          body: 'ClashHermes prepared this transaction. Your wallet will show the final Base transaction.',
+          summary,
+          confirmText: 'Continue',
+          cancelText: 'Cancel',
+        });
+        if (!confirmed) {
+          markBrowserAction(action.id, 'cancelled', { error: 'User cancelled browser confirmation', action, signature, summary });
+          appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('cancelled', {
+            useSmartWallet,
+            silentPrivy,
+            summary,
+          }), traceId);
+          return { cancelled: true };
+        }
+      }
+
+      markBrowserAction(action.id, 'started', { action, signature, summary });
+      let result;
+      const actionOptions = { silentPrivy, smartWallet: useSmartWallet, onStatus: onTxStatus };
+      if (action.type === 'place_order') {
+        const side = normalizeAvantisPanelSide(args.side);
+        const orderOptions = {
+          take_profit: Number(args.take_profit) > 0 ? Number(args.take_profit) : undefined,
+          stop_loss: Number(args.stop_loss) > 0 ? Number(args.stop_loss) : undefined,
+          silentPrivy,
+          smartWallet: useSmartWallet,
+          onStatus: onTxStatus,
+        };
+        if (String(args.order_type || 'market').toLowerCase() === 'limit') {
+          result = await avantisPlaceLimitOrder(args.symbol, side, Number(args.price), String(args.collateral_usd), 'GTC', Number(args.leverage || 1), Number(args.slippage_pct || 1), orderOptions);
+        } else {
+          result = await avantisPlaceMarketOrder(args.symbol, side, String(args.collateral_usd), String(args.slippage_pct || 1), Number(args.leverage || 1), orderOptions);
+        }
+      } else if (action.type === 'close_position') {
+        result = await avantisClosePosition(args.symbol, normalizeAvantisPanelSide(args.side), String(args.collateral_usd), args.pair_index, args.trade_index, actionOptions);
+      } else if (action.type === 'cancel_order') {
+        result = await avantisCancelOrder(args.symbol, null, args.pair_index, args.trade_index, actionOptions);
+      } else if (action.type === 'set_tpsl') {
+        result = await avantisSetTpsl(args.symbol, normalizeAvantisPanelSide(args.side), args.take_profit || null, args.stop_loss || null, args.pair_index, args.trade_index, actionOptions);
+      } else {
+        throw new Error(`Unsupported Avantis browser action: ${action.type}`);
+      }
+
+      if (!result || result.error) throw new Error(result?.error || 'Avantis browser transaction failed.');
+      markBrowserAction(action.id, 'confirmed', { ...result, action, signature, summary });
+      const closeResult = describeAvantisCloseResult(action, avantisPositions, avantisPrices, result);
+      appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('confirmed', {
+        useSmartWallet,
+        silentPrivy,
+        summary,
+        hash: result.tx_hash,
+        closeResult,
+      }), traceId);
+      return result;
+    } catch (err) {
+      markBrowserAction(action.id, 'failed', { error: err?.message || String(err), action, signature, summary });
+      appendAssistantBrowserActionMessage(avantisBrowserActionStatusMessage('failed', {
+        summary,
+        error: err?.message || String(err),
+      }), traceId);
+      return { error: err?.message || String(err) };
+    } finally {
+      if (signature) browserActionSignatureRunRef.current.delete(signature);
+    }
+  }, [
+    dex,
+    avantisReady,
+    avantisWalletAddr,
+    avantisWalletMismatch,
+    avantisWalletUsdc,
+    avantisPlaceMarketOrder,
+    avantisPlaceLimitOrder,
+    avantisClosePosition,
+    avantisCancelOrder,
+    avantisSetTpsl,
+    avantisPositions,
+    avantisPrices,
+    avantisAiTradeSettings,
+    ensureAvantisSmartWalletRoute,
+    ensureAvantisAgentPermission,
+    requestConfirmDialog,
+    appendAssistantBrowserActionMessage,
+  ]);
+
+  const executeAiBrowserActions = useCallback(async (actions = [], traceId = '') => {
+    const list = Array.isArray(actions) ? actions.filter((action) => action?.dex === 'avantis') : [];
+    const results = [];
+    for (const action of list) {
+      const result = await executeAvantisBrowserAction(action, traceId);
+      results.push({ action, result });
+    }
+    return results;
+  }, [executeAvantisBrowserAction]);
+
+  const runFollowUpAfterBrowserActions = useCallback(async (followUp, parentTraceId, browserResults = []) => {
+    if (!token || !aiBrowserActionsSatisfiedFollowUp(followUp, browserResults)) return;
+    const text = String(followUp.message || '').trim();
+    if (!text) return;
+    const traceId = makeAiChatTraceId();
+    const idempotencyKey = `${traceId}:after-browser-actions`;
+    activeTraceRef.current = traceId;
+    sendingStartedAtRef.current = Date.now();
+    setProgressText('Continuing after Base confirmation...');
+    appendAssistantBrowserActionMessage(followUp.notice || 'Close confirmed. I am continuing the Avantis request now.', parentTraceId);
+    addPendingRequest(storageKey, {
+      traceId,
+      message: text,
+      startedAt: Date.now(),
+    });
+    try {
+      const history = buildContextHistory(loadChatMessages(storageKey));
+      const requestResult = fetch('/api/ai-chat/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({
+          message: text,
+          history,
+          trace_id: traceId,
+          idempotency_key: idempotencyKey,
+          ai_trade_settings: activeAvantisSettingsPayload,
+          metadata: {
+            continuation: followUp.kind || 'after_browser_actions',
+            parent_trace_id: parentTraceId,
+          },
+        }),
+      })
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            const err = new Error(data?.error || 'AI follow-up failed');
+            err.status = r.status;
+            err.data = data;
+            throw err;
+          }
+          return data;
+        })
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'request_error', err }));
+      const recoveryResult = waitForAiChatStoredResult(traceId, token)
+        .then((data) => ({ kind: 'data', data }))
+        .catch((err) => ({ kind: 'recovery_error', err }));
+      let result = await Promise.race([requestResult, recoveryResult]);
+      if (result.kind === 'request_error') {
+        if (result.err?.status && result.err.status < 500) throw result.err;
+        const recovered = await recoveryResult;
+        result = recovered.kind === 'data' ? recovered : result;
+      } else if (result.kind === 'recovery_error') {
+        const requested = await requestResult;
+        result = requested.kind === 'data' ? requested : requested;
+      }
+      if (result.kind !== 'data') throw result.err || new Error('AI follow-up failed');
+      const data = result.data || {};
+      if (data?.quota) setQuota(data.quota);
+      if (data?.ok === false) throw new Error(data?.error || 'AI follow-up failed');
+      appendStoredChatMessage(storageKey, {
+        role: 'assistant',
+        text: data?.message || 'Done.',
+        traceId: `${traceId}:assistant`,
+      });
+      const browserResults = await executeAiBrowserActions(data?.browser_actions, traceId);
+      await runFollowUpAfterBrowserActions(data?.follow_up_after_browser_actions, traceId, browserResults);
+      removePendingRequest(storageKey, traceId);
+    } catch (err) {
+      if (err?.data?.quota) setQuota(err.data.quota);
+      appendStoredChatMessage(storageKey, {
+        role: 'assistant',
+        text: aiErrorMessage(err),
+        traceId: `${traceId}:assistant`,
+      });
+      removePendingRequest(storageKey, traceId);
+    } finally {
+      if (activeTraceRef.current === traceId) activeTraceRef.current = '';
+      sendingStartedAtRef.current = 0;
+      if (mountedRef.current) setMessages(loadChatMessages(storageKey));
+    }
+  }, [
+    token,
+    storageKey,
+    activeAvantisSettingsPayload,
+    executeAiBrowserActions,
+    appendAssistantBrowserActionMessage,
+  ]);
+
+  const startNewChat = useCallback(async () => {
+    if (status === 'sending' || resettingChat || activeTraceRef.current || loadPendingRequests(storageKey).length) return;
+    const initial = resetStoredChat(storageKey);
+    activeTraceRef.current = '';
+    sendingStartedAtRef.current = 0;
+    browserActionRunRef.current.clear();
+    browserActionSignatureRunRef.current.clear();
+    setInput('');
+    setError('');
+    setProgressText('');
+    setStatus('idle');
+    setMessages(initial);
+    if (!token) return;
+    setResettingChat(true);
+    try {
+      const r = await fetch('/api/ai-chat/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify({
+          delete_recent_memory: true,
+          restart: true,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || 'Failed to reset AI chat');
+    } catch (err) {
+      setError(`New chat opened locally. Agent reset failed: ${err?.message || String(err)}`);
+    } finally {
+      if (mountedRef.current) setResettingChat(false);
+    }
+  }, [resettingChat, status, storageKey, token]);
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || status === 'sending') return;
@@ -904,6 +2150,8 @@ function AiChatPanel({ onClose }) {
     const history = buildContextHistory(messages);
     const traceId = makeAiChatTraceId();
     const idempotencyKey = traceId;
+    activeTraceRef.current = traceId;
+    sendingStartedAtRef.current = Date.now();
     appendStoredChatMessage(storageKey, {
       role: 'user',
       text,
@@ -924,6 +2172,7 @@ function AiChatPanel({ onClose }) {
           history,
           trace_id: traceId,
           idempotency_key: idempotencyKey,
+          ai_trade_settings: activeAvantisSettingsPayload,
         }),
       })
         .then(async (r) => {
@@ -971,7 +2220,9 @@ function AiChatPanel({ onClose }) {
         text: data?.message || 'Done.',
         traceId: `${traceId}:assistant`,
       });
+      await executeAiBrowserActions(data?.browser_actions, traceId);
       removePendingRequest(storageKey, traceId);
+      if (activeTraceRef.current === traceId) activeTraceRef.current = '';
       if (mountedRef.current) setMessages(loadChatMessages(storageKey));
     } catch (err) {
       if (err?.data?.quota) setQuota(err.data.quota);
@@ -984,7 +2235,10 @@ function AiChatPanel({ onClose }) {
           text: recovered.message || 'Done.',
           traceId: `${traceId}:assistant`,
         });
+        const browserResults = await executeAiBrowserActions(recovered?.browser_actions, traceId);
+        await runFollowUpAfterBrowserActions(recovered?.follow_up_after_browser_actions, traceId, browserResults);
         removePendingRequest(storageKey, traceId);
+        if (activeTraceRef.current === traceId) activeTraceRef.current = '';
         if (mountedRef.current) setMessages(loadChatMessages(storageKey));
         return;
       }
@@ -997,6 +2251,7 @@ function AiChatPanel({ onClose }) {
           traceId: `${traceId}:assistant`,
         });
         removePendingRequest(storageKey, traceId);
+        if (activeTraceRef.current === traceId) activeTraceRef.current = '';
         if (mountedRef.current) setMessages(loadChatMessages(storageKey));
       }
       if (mountedRef.current) setError(msg);
@@ -1005,8 +2260,9 @@ function AiChatPanel({ onClose }) {
         setStatus('idle');
         setProgressText('');
       }
+      sendingStartedAtRef.current = 0;
     }
-  }, [input, messages, status, storageKey, token]);
+  }, [input, messages, status, storageKey, token, executeAiBrowserActions, runFollowUpAfterBrowserActions, activeAvantisSettingsPayload]);
 
   const onKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1229,6 +2485,23 @@ function AiChatPanel({ onClose }) {
             <div data-nodrag style={styles.headerActions}>
               <button
                 type="button"
+                style={{
+                  ...styles.newChatToggle,
+                  ...((status === 'sending' || resettingChat) ? styles.headerButtonDisabled : null),
+                }}
+                className="hermes-new-chat-toggle"
+                onClick={startNewChat}
+                disabled={status === 'sending' || resettingChat}
+                title={(status === 'sending' || resettingChat) ? 'Wait for the current answer' : 'Start a new chat'}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4 }}>
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+                New chat
+              </button>
+              <button
+                type="button"
                 style={styles.shopToggle}
                 className="hermes-shop-toggle"
                 onClick={() => setShopOpen(true)}
@@ -1261,14 +2534,29 @@ function AiChatPanel({ onClose }) {
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              style={styles.shopToggle}
-              onClick={() => setShopOpen(true)}
-              title="Top up messages"
-            >
-              Top up
-            </button>
+            <div style={styles.mobileHeaderActions}>
+              <button
+                type="button"
+                style={{
+                  ...styles.newChatToggle,
+                  ...styles.newChatToggleMobile,
+                  ...((status === 'sending' || resettingChat) ? styles.headerButtonDisabled : null),
+                }}
+                onClick={startNewChat}
+                disabled={status === 'sending' || resettingChat}
+                title={(status === 'sending' || resettingChat) ? 'Wait for the current answer' : 'Start a new chat'}
+              >
+                New
+              </button>
+              <button
+                type="button"
+                style={styles.shopToggle}
+                onClick={() => setShopOpen(true)}
+                title="Top up messages"
+              >
+                Top up
+              </button>
+            </div>
           </div>
         )}
 
@@ -1424,6 +2712,27 @@ function AiChatPanel({ onClose }) {
             setTopUpFlow(null);
             if (p) handleBuyAiProduct(p);
           }}
+        />
+      )}
+
+      {confirmDialog && (
+        <AiConfirmDialog
+          dialog={confirmDialog}
+          onCancel={() => resolveConfirmDialog(false)}
+          onConfirm={() => resolveConfirmDialog(true)}
+        />
+      )}
+
+      {avantisSmartWalletSetup && (
+        <AvantisSmartWalletSetupModal
+          flow={avantisSmartWalletSetup}
+          walletUsdc={avantisWalletUsdc}
+          onSettingsChange={handleAvantisSmartWalletSettingsChange}
+          onSetup={handleAvantisSmartWalletSetup}
+          onFund={handleAvantisSmartWalletFund}
+          onRecheck={handleAvantisSmartWalletRecheck}
+          onRevoke={handleAvantisSmartWalletRevoke}
+          onClose={() => resolveAvantisSmartWalletSetup(null)}
         />
       )}
 
@@ -1622,6 +2931,359 @@ function AiTopUpStatusModal({ flow, paymentLabel, onClose, onRetry }) {
 // shoved every selector into one cramped column — bad UX. Now it's a
 // clean centered modal: one quota line in its own header, network
 // chip + payment selector + product list in the body, single close X.
+function AiConfirmDialog({ dialog, onCancel, onConfirm }) {
+  if (!dialog) return null;
+  return (
+    <div style={topUpStyles.overlay} role="dialog" aria-modal="true" onClick={onCancel}>
+      <div style={topUpStyles.panel} onClick={(e) => e.stopPropagation()}>
+        <div style={topUpStyles.header}>
+          <span style={topUpStyles.title}>{dialog.title || 'Confirm action'}</span>
+          <button type="button" onClick={onCancel} style={topUpStyles.closeBtn} aria-label="Close">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div style={topUpStyles.body}>
+          {dialog.body && <div style={topUpStyles.pendingBox}>{dialog.body}</div>}
+          {dialog.summary && (
+            <div style={topUpStyles.resultBox}>
+              <div style={topUpStyles.resultHeadline}>{dialog.summary}</div>
+            </div>
+          )}
+        </div>
+        <div style={topUpStyles.footer}>
+          <button type="button" onClick={onCancel} style={topUpStyles.secondaryBtn}>
+            {dialog.cancelText || 'Cancel'}
+          </button>
+          <button type="button" onClick={onConfirm} style={topUpStyles.primaryBtn}>
+            {dialog.confirmText || 'Continue'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AvantisAgentPolicyControls({
+  settings,
+  basePolicy,
+  effectivePolicy,
+  walletUsdc,
+  action,
+  disabled,
+  onChange,
+}) {
+  const maxPolicyLeverage = policyNumber(basePolicy, 'max_leverage');
+  const maxPolicyCollateral = policyNumber(basePolicy, 'max_collateral_usd');
+  const normalized = normalizeAvantisAiTradeSettings(settings, basePolicy);
+  const walletBalance = Number(walletUsdc);
+  const hasWalletBalance = Number.isFinite(walletBalance) && walletBalance >= 0;
+  const policyError = avantisActionPolicyError(action, effectivePolicy, walletUsdc);
+  const effectiveCollateral = effectivePolicy?.max_collateral_usd ?? 0;
+  const effectiveNotional = effectivePolicy?.max_notional_usd ?? 0;
+  const update = (patch) => {
+    if (disabled) return;
+    onChange?.({ ...normalized, ...patch });
+  };
+
+  return (
+    <div style={topUpStyles.policyBox}>
+      <div style={topUpStyles.policyHeader}>
+        <div>
+          <div style={topUpStyles.policyTitle}>Agent trade limits</div>
+          <div style={topUpStyles.policySub}>These caps are saved in this browser and checked before the delegate signs.</div>
+        </div>
+        <div style={topUpStyles.policyPill}>
+          max {formatAiUsd(effectiveCollateral)}
+        </div>
+      </div>
+
+      <label style={topUpStyles.fieldBlock}>
+        <span style={topUpStyles.fieldLabel}>Max leverage</span>
+        <div style={topUpStyles.fieldRow}>
+          <input
+            type="range"
+            min="1"
+            max={maxPolicyLeverage}
+            step="1"
+            value={normalized.max_leverage}
+            disabled={disabled}
+            onChange={(e) => update({ max_leverage: e.target.value })}
+            style={topUpStyles.range}
+          />
+          <input
+            type="number"
+            min="1"
+            max={maxPolicyLeverage}
+            step="1"
+            value={normalized.max_leverage}
+            disabled={disabled}
+            onChange={(e) => update({ max_leverage: e.target.value })}
+            style={topUpStyles.numberInput}
+          />
+          <span style={topUpStyles.unitText}>x</span>
+        </div>
+      </label>
+
+      <div style={topUpStyles.fieldBlock}>
+        <span style={topUpStyles.fieldLabel}>Max collateral per AI trade</span>
+        <div style={topUpStyles.segmented}>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => update({ collateral_limit_mode: 'percent' })}
+            style={{
+              ...topUpStyles.segmentButton,
+              ...(normalized.collateral_limit_mode === 'percent' ? topUpStyles.segmentButtonActive : null),
+            }}
+          >
+            % balance
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => update({ collateral_limit_mode: 'usdc' })}
+            style={{
+              ...topUpStyles.segmentButton,
+              ...(normalized.collateral_limit_mode === 'usdc' ? topUpStyles.segmentButtonActive : null),
+            }}
+          >
+            USDC cap
+          </button>
+        </div>
+
+        {normalized.collateral_limit_mode === 'percent' ? (
+          <div style={topUpStyles.fieldRow}>
+            <input
+              type="range"
+              min="1"
+              max="100"
+              step="1"
+              value={normalized.max_balance_pct}
+              disabled={disabled}
+              onChange={(e) => update({ max_balance_pct: e.target.value })}
+              style={topUpStyles.range}
+            />
+            <input
+              type="number"
+              min="1"
+              max="100"
+              step="1"
+              value={normalized.max_balance_pct}
+              disabled={disabled}
+              onChange={(e) => update({ max_balance_pct: e.target.value })}
+              style={topUpStyles.numberInput}
+            />
+            <span style={topUpStyles.unitText}>%</span>
+          </div>
+        ) : (
+          <div style={topUpStyles.fieldRow}>
+            <input
+              type="range"
+              min="1"
+              max={maxPolicyCollateral}
+              step="1"
+              value={normalized.max_collateral_usd}
+              disabled={disabled}
+              onChange={(e) => update({ max_collateral_usd: e.target.value })}
+              style={topUpStyles.range}
+            />
+            <input
+              type="number"
+              min="1"
+              max={maxPolicyCollateral}
+              step="1"
+              value={normalized.max_collateral_usd}
+              disabled={disabled}
+              onChange={(e) => update({ max_collateral_usd: e.target.value })}
+              style={topUpStyles.numberInput}
+            />
+            <span style={topUpStyles.unitText}>USDC</span>
+          </div>
+        )}
+      </div>
+
+      <div style={topUpStyles.policySummary}>
+        Wallet: {hasWalletBalance ? formatAiUsd(walletBalance) : 'unknown'} · Effective cap: {formatAiUsd(effectiveCollateral)} collateral · Notional cap: {formatAiUsd(effectiveNotional)}
+      </div>
+      {policyError && (
+        <div style={topUpStyles.errorBox}>
+          Current action does not fit these limits: {policyError}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AvantisSmartWalletSetupModal({ flow, walletUsdc, onSettingsChange, onSetup, onFund, onRecheck, onRevoke, onClose }) {
+  if (!flow) return null;
+  const status = flow.status || {};
+  const basePolicy = flow.base_policy || flow.policy || AVANTIS_BROWSER_POLICY_DEFAULTS;
+  const settings = normalizeAvantisAiTradeSettings(flow.settings || flow.policy || AVANTIS_AI_TRADE_SETTINGS_DEFAULTS, basePolicy);
+  const policy = effectiveAvantisPolicy(basePolicy, settings, walletUsdc ?? flow.wallet_usdc);
+  const phase = flow.phase || 'idle';
+  const busy = ['delegating', 'funding', 'checking', 'revoking'].includes(phase);
+  const address = status.address || status.onchainDelegate || '';
+  const active = !!status.active;
+  const needsEth = active && (status.needsEth ?? status.needs_eth) !== false;
+  const ready = active && !needsEth;
+  const eth = Number(status.eth || 0);
+  const expiryText = formatSmartWalletExpiry(status.validUntil || status.valid_until || flow.validUntil || flow.valid_until);
+  const policyError = avantisActionPolicyError(flow.action, policy, walletUsdc ?? flow.wallet_usdc);
+  const actionFitsPolicy = !policyError;
+
+  const stepState = (idx) => {
+    if (phase === 'error') return idx === 2 ? 'error' : (idx < 2 ? 'done' : 'pending');
+    if (phase === 'revoked') return 'pending';
+    if (ready) return 'done';
+    if (idx === 1) return address ? 'done' : (phase === 'idle' ? 'active' : 'pending');
+    if (idx === 2) return active ? 'done' : (phase === 'delegating' ? 'active' : 'pending');
+    if (idx === 3) return active ? 'done' : (phase === 'delegating' ? 'active' : 'pending');
+    if (idx === 4) {
+      if (active && !needsEth) return 'done';
+      if (active && needsEth) return phase === 'funding' || phase === 'checking' ? 'active' : 'error';
+      return 'pending';
+    }
+    return 'pending';
+  };
+
+  const steps = [
+    { idx: 1, label: 'Create delegate wallet', hint: `Saved in this browser ${expiryText}` },
+    { idx: 2, label: 'Enable Avantis delegate', hint: 'EOA signs setDelegate on Base' },
+    { idx: 3, label: 'Approve USDC trading', hint: 'EOA approves Avantis TradingStorage' },
+    { idx: 4, label: 'Fund gas wallet', hint: 'Delegate needs Base ETH for gas' },
+  ];
+
+  const copyAddress = async () => {
+    if (!address || typeof navigator === 'undefined') return;
+    try { await navigator.clipboard?.writeText(address); } catch { /* clipboard unavailable */ }
+  };
+
+  const title = ready
+    ? 'Avantis Smart Wallet ready'
+    : needsEth ? 'Fund Avantis Smart Wallet'
+    : phase === 'error' ? 'Smart Wallet setup needs attention'
+    : 'Set up Avantis Smart Wallet';
+
+  return (
+    <div style={topUpStyles.overlay} role="dialog" aria-modal="true" onClick={busy ? undefined : onClose}>
+      <div style={topUpStyles.panelWide} onClick={(e) => e.stopPropagation()}>
+        <div style={topUpStyles.header}>
+          <span style={topUpStyles.title}>{title}</span>
+          {!busy && (
+            <button type="button" onClick={onClose} style={topUpStyles.closeBtn} aria-label="Close">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
+        </div>
+        <div style={topUpStyles.body}>
+          <ol style={topUpStyles.stepList}>
+            {steps.map((step) => {
+              const st = stepState(step.idx);
+              return (
+                <li key={step.idx} style={topUpStyles.stepItem}>
+                  <span style={{ ...topUpStyles.stepBubble, ...topUpStyles[`stepBubble_${st}`] }}>
+                    {st === 'done' ? 'OK'
+                    : st === 'error' ? '!'
+                    : st === 'active' ? <span className="hermes-step-spinner" style={topUpStyles.spinner} />
+                    : step.idx}
+                  </span>
+                  <span style={topUpStyles.stepText}>
+                    <span style={{ ...topUpStyles.stepLabel, ...topUpStyles[`stepLabel_${st}`] }}>
+                      {step.label}
+                    </span>
+                    <span style={topUpStyles.stepHint}>{step.hint}</span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+
+          <AvantisAgentPolicyControls
+            settings={settings}
+            basePolicy={basePolicy}
+            effectivePolicy={policy}
+            walletUsdc={walletUsdc ?? flow.wallet_usdc}
+            action={flow.action}
+            disabled={busy}
+            onChange={onSettingsChange}
+          />
+
+          <div style={topUpStyles.infoGrid}>
+            <div style={topUpStyles.infoCard}>
+              <span style={topUpStyles.infoLabel}>Action</span>
+              <span style={topUpStyles.infoValue}>{flow.summary || 'Avantis action'}</span>
+            </div>
+            <div style={topUpStyles.infoCard}>
+              <span style={topUpStyles.infoLabel}>Policy</span>
+              <span style={topUpStyles.infoValue}>
+                {formatAiUsd(policy.max_collateral_usd)} collateral, {policy.max_leverage}x, {formatAiUsd(policy.max_notional_usd)} notional
+              </span>
+            </div>
+            <div style={topUpStyles.infoCard}>
+              <span style={topUpStyles.infoLabel}>Delegate wallet</span>
+              <span style={topUpStyles.monoRow}>
+                <span style={topUpStyles.resultMono}>{address ? shortEvmAddress(address, 8, 6) : 'created during setup'}</span>
+                {address && <button type="button" onClick={copyAddress} style={topUpStyles.miniBtn}>Copy</button>}
+              </span>
+            </div>
+            <div style={topUpStyles.infoCard}>
+              <span style={topUpStyles.infoLabel}>Gas balance</span>
+              <span style={topUpStyles.infoValue}>{eth.toFixed(6)} ETH on Base</span>
+            </div>
+          </div>
+
+          <div style={topUpStyles.pendingBox}>
+            Your USDC stays in your EOA wallet. The delegate key is saved in this browser profile {expiryText}, so reloads and new tabs keep auto-trading available. It is never sent to Clash servers. Use Revoke to disable it on-chain.
+          </div>
+
+          {needsEth && (
+            <div style={topUpStyles.errorBox}>
+              Send Base ETH to the delegate wallet before auto-trading. 0.001 ETH is enough for testing several Base transactions.
+            </div>
+          )}
+          {flow.error && <div style={topUpStyles.errorBox}>{flow.error}</div>}
+        </div>
+        <div style={topUpStyles.footer}>
+          <button type="button" onClick={onClose} disabled={busy} style={topUpStyles.secondaryBtn}>
+            Close
+          </button>
+          {active && (
+            <button type="button" onClick={onRevoke} disabled={busy} style={topUpStyles.secondaryBtn}>
+              Revoke
+            </button>
+          )}
+          {active && (
+            <button type="button" onClick={onRecheck} disabled={busy} style={topUpStyles.secondaryBtn}>
+              Recheck
+            </button>
+          )}
+          {active && needsEth && (
+            <button type="button" onClick={onFund} disabled={busy || !actionFitsPolicy} style={{ ...topUpStyles.primaryBtn, ...((busy || !actionFitsPolicy) ? topUpStyles.disabledBtn : null) }}>
+              Fund 0.001 ETH
+            </button>
+          )}
+          {!ready && !active && (
+            <button type="button" onClick={onSetup} disabled={busy || !actionFitsPolicy} style={{ ...topUpStyles.primaryBtn, ...((busy || !actionFitsPolicy) ? topUpStyles.disabledBtn : null) }}>
+              Enable delegate
+            </button>
+          )}
+          {ready && (
+            <button type="button" onClick={onRecheck} disabled={busy || !actionFitsPolicy} style={{ ...topUpStyles.primaryBtn, ...((busy || !actionFitsPolicy) ? topUpStyles.disabledBtn : null) }}>
+              Continue
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AiShopModal({
   products,
   quota,
@@ -2104,6 +3766,31 @@ const styles = {
   // ── Shop modal (separate overlay above the chat panel) ───────────
   // Centered modal with parchment palette + cream body. The chat
   // backdrop sits at zIndex 80 so this layer sits above it.
+  newChatToggle: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    border: '1.5px solid #9f8b66',
+    borderRadius: 10,
+    background: 'linear-gradient(180deg, #fffaf0 0%, #e2d4a8 100%)',
+    color: '#4b351c',
+    padding: '6px 10px 6px 8px',
+    fontSize: 11,
+    fontWeight: 900,
+    letterSpacing: 0.25,
+    textTransform: 'uppercase',
+    cursor: 'pointer',
+    boxShadow: '0 2px 4px rgba(95,58,33,0.16), inset 0 1px 0 rgba(255,255,255,0.55)',
+    transition: 'transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease',
+    whiteSpace: 'nowrap',
+  },
+  newChatToggleMobile: {
+    padding: '6px 9px',
+  },
+  headerButtonDisabled: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
+    boxShadow: 'none',
+  },
   shopBackdrop: {
     position: 'fixed', inset: 0,
     zIndex: 90,
@@ -2182,6 +3869,12 @@ const styles = {
     padding: '4px 12px 7px',
     borderBottom: '1px solid #e6dcc1',
     flex: '0 0 auto',
+  },
+  mobileHeaderActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
   },
   shopView: {
     flex: 1,
@@ -2610,7 +4303,9 @@ const styles = {
     transition: 'border-color 0.18s ease, box-shadow 0.18s ease',
   },
   inputWrapActive: {
-    borderColor: '#c2851b',
+    // Use the full `border` shorthand here so React doesn't warn about
+    // mixing shorthand (base) + longhand (active) during re-render.
+    border: '1.5px solid #c2851b',
     boxShadow:
       'inset 0 1px 2px rgba(95,58,33,0.06),' +
       ' 0 0 0 3px rgba(194,133,27,0.18)',
@@ -2657,7 +4352,9 @@ const styles = {
   },
   sendReady: {
     background: 'linear-gradient(180deg, #91df7d 0%, #2f8b3a 100%)',
-    borderColor: '#1f6d34',
+    // Full shorthand again — base has `border: '1.5px solid #1f6d34'`,
+    // mixing shorthand + longhand makes React warn on transitions.
+    border: '1.5px solid #1f6d34',
   },
 
   // ── Welcome / empty state ─────────────────────────────────────────
@@ -2815,6 +4512,14 @@ const topUpStyles = {
     display: 'flex', flexDirection: 'column',
     fontFamily: 'inherit', overflow: 'hidden',
   },
+  panelWide: {
+    width: 460, maxWidth: '100%', maxHeight: '88vh',
+    background: '#fdf8e7',
+    border: '5px solid #d4c8b0', borderRadius: 18,
+    boxShadow: '0 18px 50px rgba(0,0,0,0.45)',
+    display: 'flex', flexDirection: 'column',
+    fontFamily: 'inherit', overflow: 'hidden',
+  },
   header: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '12px 14px',
@@ -2847,15 +4552,15 @@ const topUpStyles = {
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    borderColor: '#1f6d34', color: '#fff',
+    border: '2px solid #1f6d34', color: '#fff',
   },
   stepBubble_error: {
-    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
   },
   stepText: { display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 },
   stepLabel: { fontSize: 13, fontWeight: 800, color: '#7a5a30' },
@@ -2897,10 +4602,160 @@ const topUpStyles = {
   },
   successSub: { fontSize: 12, fontWeight: 700, color: '#3a6320' },
 
+  resultBox: {
+    padding: '10px 12px', borderRadius: 12,
+    background: '#fff6dc', border: '2px solid #d4c8b0',
+    color: '#5C3A21',
+  },
+  resultHeadline: {
+    fontSize: 13, fontWeight: 900, color: '#5C3A21', lineHeight: 1.35,
+  },
+  resultMono: {
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    fontSize: 12, fontWeight: 800, color: '#3a2810',
+  },
+
+  pendingBox: {
+    padding: '9px 10px', borderRadius: 10,
+    background: '#fffaf0', border: '2px solid #d4c8b0',
+    color: '#6d4b23', fontSize: 12, fontWeight: 700, lineHeight: 1.35,
+  },
+
+  policyBox: {
+    padding: '11px 12px',
+    borderRadius: 12,
+    background: 'linear-gradient(180deg, #fffaf0 0%, #fff2cf 100%)',
+    border: '2px solid #d4c8b0',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+  policyHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  policyTitle: {
+    fontSize: 13,
+    fontWeight: 900,
+    color: '#5C3A21',
+  },
+  policySub: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: 700,
+    color: '#8b6b3f',
+    lineHeight: 1.35,
+  },
+  policyPill: {
+    padding: '4px 8px',
+    borderRadius: 999,
+    background: '#1B5E20',
+    color: '#fff7df',
+    fontSize: 10,
+    fontWeight: 900,
+    whiteSpace: 'nowrap',
+  },
+  fieldBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 6,
+  },
+  fieldLabel: {
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#c2851b',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  fieldRow: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) 76px auto',
+    alignItems: 'center',
+    gap: 8,
+  },
+  range: {
+    width: '100%',
+    accentColor: '#c2851b',
+  },
+  numberInput: {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: '2px solid #d4c8b0',
+    borderRadius: 8,
+    background: '#fffaf0',
+    color: '#3a2810',
+    padding: '6px 7px',
+    fontSize: 12,
+    fontWeight: 900,
+    outline: 'none',
+  },
+  unitText: {
+    fontSize: 11,
+    fontWeight: 900,
+    color: '#5C3A21',
+  },
+  segmented: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 6,
+  },
+  segmentButton: {
+    border: '2px solid #d4c8b0',
+    borderRadius: 9,
+    background: '#fffaf0',
+    color: '#7a5a30',
+    padding: '7px 8px',
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: 'pointer',
+  },
+  segmentButtonActive: {
+    border: '2px solid #c2851b',
+    background: 'linear-gradient(180deg, #fff2c2 0%, #ffd76a 100%)',
+    color: '#3a1f00',
+  },
+  policySummary: {
+    padding: '7px 9px',
+    borderRadius: 9,
+    background: 'rgba(255,250,240,0.72)',
+    border: '1px solid rgba(139,107,63,0.22)',
+    color: '#6d4b23',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.35,
+  },
+
   errorBox: {
     padding: '8px 10px', borderRadius: 10,
     background: '#fdecea', border: '2px solid #E53935', color: '#7a1f1c',
     fontSize: 12, fontWeight: 700,
+  },
+
+  infoGrid: {
+    display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8,
+  },
+  infoCard: {
+    padding: '9px 10px', borderRadius: 10,
+    background: '#fffaf0', border: '2px solid #d4c8b0',
+    display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
+  },
+  infoLabel: {
+    fontSize: 10, fontWeight: 900, color: '#c2851b',
+    letterSpacing: 0.5, textTransform: 'uppercase',
+  },
+  infoValue: {
+    fontSize: 12, fontWeight: 800, color: '#5C3A21',
+    lineHeight: 1.3, overflowWrap: 'anywhere',
+  },
+  monoRow: {
+    display: 'flex', alignItems: 'center', gap: 6, minWidth: 0,
+  },
+  miniBtn: {
+    padding: '4px 7px', borderRadius: 7, fontSize: 10, fontWeight: 900,
+    background: '#fff6dc', border: '2px solid #9f8759', color: '#5C3A21',
+    cursor: 'pointer', flexShrink: 0,
   },
 
   workingHint: {
@@ -2908,7 +4763,7 @@ const topUpStyles = {
   },
 
   footer: {
-    display: 'flex', gap: 8, justifyContent: 'flex-end',
+    display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap',
     padding: '10px 14px',
     borderTop: '3px solid #d4c8b0', background: '#f5ecd2',
   },
@@ -2918,6 +4773,11 @@ const topUpStyles = {
     border: '2px solid #1f6d34', color: '#fff',
     cursor: 'pointer',
     textShadow: '0 1px 1px rgba(0,0,0,0.35)',
+  },
+  disabledBtn: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
+    filter: 'grayscale(0.25)',
   },
   secondaryBtn: {
     padding: '9px 14px', borderRadius: 10, fontSize: 13, fontWeight: 800,

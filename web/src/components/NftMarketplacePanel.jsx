@@ -792,8 +792,8 @@ const s = {
     background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
     cursor: 'pointer', marginTop: 2,
   },
-  cardBuyBtnDisabled: { opacity: 0.5, cursor: 'not-allowed', background: '#e8dfc8', borderColor: '#9f8759', color: '#5C3A21' },
-  cardCancelBtn: { background: '#ffb347', borderColor: '#a86b1a', color: '#3a1f00' },
+  cardBuyBtnDisabled: { opacity: 0.5, cursor: 'not-allowed', background: '#e8dfc8', border: '2px solid #9f8759', color: '#5C3A21' },
+  cardCancelBtn: { background: '#ffb347', border: '2px solid #a86b1a', color: '#3a1f00' },
 
   pager: {
     display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12,

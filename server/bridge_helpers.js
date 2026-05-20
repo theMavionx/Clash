@@ -19,6 +19,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const {
+  createSolanaConnection,
+  solanaNonHeliusRpcUrls,
   solanaPrimaryRpcUrl,
   solanaRpcUrls,
   withSolanaRpcFallback,
@@ -295,14 +297,14 @@ function solanaConnection() {
   if (_solanaConnection) return _solanaConnection;
   const { Connection } = require('@solana/web3.js');
   const rpc = solanaPrimaryRpcUrl();
-  _solanaConnection = new Connection(rpc, 'confirmed');
+  _solanaConnection = createSolanaConnection(Connection, rpc, 'confirmed');
   return _solanaConnection;
 }
 
 function solanaConnections() {
   if (_solanaConnections) return _solanaConnections;
   const { Connection } = require('@solana/web3.js');
-  _solanaConnections = solanaRpcUrls().map((rpc) => new Connection(rpc, 'confirmed'));
+  _solanaConnections = solanaRpcUrls().map((rpc) => createSolanaConnection(Connection, rpc, 'confirmed'));
   return _solanaConnections;
 }
 
@@ -538,7 +540,7 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   const asset = await withSolanaRpcFallback(async (rpc) => {
     const umi = createUmi(rpc).use(mplCore());
     return fetchAsset(umi, publicKey(assetPubkey));
-  }, { label: 'Solana bridge source asset read' });
+  }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls()), label: 'Solana bridge source asset read' });
   const owner = solanaAssetOwner(asset);
   const collection = solanaAssetCollection(asset);
   if (String(collection) !== String(dep.collection)) {
@@ -617,7 +619,7 @@ async function verifySolanaBurnTx(txSig, opts = {}) {
   try {
     const { Connection } = require('@solana/web3.js');
     const { conn, parsed } = await withSolanaRpcFallback(async (rpc) => {
-      const connection = new Connection(rpc, 'confirmed');
+      const connection = createSolanaConnection(Connection, rpc, 'confirmed');
       const tx = await connection.getParsedTransaction(txSig, {
         maxSupportedTransactionVersion: 0, commitment: 'confirmed',
       });

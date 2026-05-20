@@ -50,6 +50,9 @@ const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
 const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
 const PACIFICA_FEE_BUFFER_RATE = 0.0001;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
+const PHOENIX_MARKET_SLIPPAGE_RATE = 0.02;
+const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
+const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 
 function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRate }) {
   const m = Number(margin);
@@ -66,6 +69,16 @@ function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRat
   const slippage = orderType === 'market' ? PACIFICA_MARKET_SLIPPAGE_RATE : 0;
   const feeRate = Math.max(Number(takerFeeRate) || 0, PACIFICA_DEFAULT_TAKER_FEE_RATE) + PACIFICA_FEE_BUFFER_RATE;
   return m / (p * (1 + slippage) * ((1 / lev) + feeRate));
+}
+
+function phoenixUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
+  const b = Number(balance);
+  const lev = Number(leverage);
+  if (!Number.isFinite(b) || !Number.isFinite(lev) || b <= 0 || lev <= 0) return 0;
+  const slippage = orderType === 'market' ? PHOENIX_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PHOENIX_DEFAULT_TAKER_FEE_RATE) + PHOENIX_FEE_BUFFER_RATE;
+  const reservedPerMargin = 1 + slippage + (lev * feeRate * (1 + slippage));
+  return Math.max(0, b / reservedPerMargin);
 }
 
 function humanizeTradeError(message) {
@@ -184,6 +197,36 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
     : (entryP && markP ? ((markP - entryP) / entryP * 100 * (pos.side === 'bid' ? 1 : -1) * (typeof setLev === 'number' ? setLev : 1)) : 0));
   const pnlColor = pnlVal >= 0 ? '#4CAF50' : '#E53935';
   return { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor };
+}
+
+function getPositionTpsl(pos) {
+  const tp = numOrNull(pos?.take_profit ?? pos?.takeProfit ?? pos?.tp);
+  const sl = numOrNull(pos?.stop_loss ?? pos?.stopLoss ?? pos?.sl);
+  return {
+    tp: tp && tp > 0 ? tp : 0,
+    sl: sl && sl > 0 ? sl : 0,
+  };
+}
+
+function formatTpslInputValue(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n >= 1 ? String(Number(n.toFixed(2))) : String(Number(n.toFixed(8)));
+}
+
+function PositionTpslRow({ pos }) {
+  const { tp, sl } = getPositionTpsl(pos);
+  if (!tp && !sl) return null;
+  return (
+    <div style={S.row}>
+      <span style={{ ...S.detail, color: tp ? '#4CAF50' : '#a3906a' }}>
+        TP: {tp ? `$${fmtPrice(tp)}` : '-'}
+      </span>
+      <span style={{ ...S.detail, color: sl ? '#E53935' : '#a3906a' }}>
+        SL: {sl ? `$${fmtPrice(sl)}` : '-'}
+      </span>
+    </div>
+  );
 }
 
 function timeMs(value) {
@@ -389,15 +432,15 @@ const hlGateStyles = {
   },
   stepBubble_pending: {},
   stepBubble_active: {
-    background: '#fff6dc', borderColor: '#c2851b', color: '#5C3A21',
+    background: '#fff6dc', border: '2px solid #c2851b', color: '#5C3A21',
     boxShadow: '0 0 0 3px rgba(255,217,122,0.4)',
   },
   stepBubble_done: {
     background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)',
-    borderColor: '#1f6d34', color: '#fff',
+    border: '2px solid #1f6d34', color: '#fff',
   },
   stepBubble_error: {
-    background: '#E53935', borderColor: '#7f0000', color: '#fff',
+    background: '#E53935', border: '2px solid #7f0000', color: '#fff',
   },
   stepText: {
     display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25,
@@ -874,13 +917,23 @@ const PositionsList = memo(function PositionsList({
                 {pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)} ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%)
               </span>
             </div>
+            <PositionTpslRow pos={pos} />
 
             {/* Action buttons. Basic mode hides TP/SL — risk management
                 features are deliberately stripped from the simplified UX. */}
             <div style={{display: 'flex', gap: 6, marginTop: 4}}>
               <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
               {!isBasic && (
-                <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                <button style={S.btnBlue} onClick={() => {
+                  if (expanded === 'tpsl') {
+                    setExpandedPos(null);
+                    return;
+                  }
+                  const { tp, sl } = getPositionTpsl(pos);
+                  setTpPrice(formatTpslInputValue(tp));
+                  setSlPrice(formatTpslInputValue(sl));
+                  setExpandedPos(`${posKey}:tpsl`);
+                }}>TP/SL</button>
               )}
             </div>
 
@@ -979,7 +1032,7 @@ const BottomPanel = memo(function BottomPanel({
               <thead><tr>
                 <th style={S.th}>Symbol</th><th style={S.th}>Side</th><th style={S.th}>Size</th>
                 <th style={S.th}>Entry</th><th style={S.th}>Mark</th><th style={S.th}>PnL</th>
-                <th style={S.th}>PnL %</th><th style={S.th}>Lev</th><th style={S.th}></th>
+                <th style={S.th}>PnL %</th><th style={S.th}>TP / SL</th><th style={S.th}>Lev</th><th style={S.th}></th>
               </tr></thead>
               <tbody>{filteredPositions.map((p, i) => {
                 const {
@@ -991,6 +1044,7 @@ const BottomPanel = memo(function BottomPanel({
                   pnlPct,
                   pnlColor,
                 } = getPositionMetrics(p, prices, leverageSettings);
+                const { tp, sl } = getPositionTpsl(p);
                 return (
                   <tr key={positionStableKey(p) || i} style={S.tr}>
                     <td style={S.td}>{p.symbol}</td>
@@ -1000,6 +1054,11 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>{markPrice ? `$${fmtPrice(markPrice)}` : '—'}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlVal >= 0 ? '+' : ''}${pnlVal.toFixed(2)}</td>
                     <td style={{...S.td, color: pnlColor, fontWeight: 900}}>{pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%</td>
+                    <td style={S.td}>
+                      <span style={{color: tp ? '#4CAF50' : '#a3906a', fontWeight: 800}}>TP {tp ? `$${fmtPrice(tp)}` : '-'}</span>
+                      <span style={{color: '#a3906a'}}> / </span>
+                      <span style={{color: sl ? '#E53935' : '#a3906a', fontWeight: 800}}>SL {sl ? `$${fmtPrice(sl)}` : '-'}</span>
+                    </td>
                     <td style={S.td}>{lev}x</td>
                     <td style={S.td}>
                       <button
@@ -1539,6 +1598,21 @@ function FuturesPanel() {
     const fee = Number(account?.taker_fee);
     return Number.isFinite(fee) && fee > 0 ? fee : PACIFICA_DEFAULT_TAKER_FEE_RATE;
   }, [account?.taker_fee]);
+  const phoenixTakerFeeRate = useMemo(() => {
+    const fee = Number(account?.taker_fee);
+    return Number.isFinite(fee) && fee > 0 ? fee : PHOENIX_DEFAULT_TAKER_FEE_RATE;
+  }, [account?.taker_fee]);
+  const phoenixMaxMargin = useMemo(() => (
+    dex === 'phoenix'
+      ? phoenixUsableMargin({
+          balance: pacBalance,
+          leverage,
+          orderType,
+          takerFeeRate: phoenixTakerFeeRate,
+        })
+      : pacBalance
+  ), [dex, pacBalance, leverage, orderType, phoenixTakerFeeRate]);
+  const sizePctMarginBase = dex === 'phoenix' ? phoenixMaxMargin : pacBalance;
 
   // UX semantics (updated 2026-04):
   //   amount (USDC mode) = MARGIN / collateral the user deposits per trade.
@@ -1585,7 +1659,7 @@ function FuturesPanel() {
   }, [amount, amountInUsdc, leverage, tokenAmount, currentPrice, orderSizingPrice, dex]);
 
   // Buying power = max possible position size = balance × leverage.
-  const maxUsdc = pacBalance * leverage;
+  const maxUsdc = sizePctMarginBase * leverage;
   const hasCurrentSymbolPosition = useMemo(
     () => positions.some(p => String(p.symbol || p.s || '').toUpperCase() === symbol.toUpperCase()),
     [positions, symbol]
@@ -1635,11 +1709,11 @@ function FuturesPanel() {
   const handleSizePct = useCallback((pct) => {
     clearTradeFeedback();
     setSizePct(pct);
-    if (pacBalance > 0 && currentPrice) {
+    if (sizePctMarginBase > 0 && currentPrice) {
       // Slider now sets MARGIN (a fraction of the wallet balance), not
       // notional. 100% = full balance committed as collateral, which gives
       // a position = balance × leverage (= old "buying power").
-      const marginVal = (pacBalance * pct / 100).toFixed(2);
+      const marginVal = (sizePctMarginBase * pct / 100).toFixed(2);
       if (amountInUsdc) {
         setAmount(marginVal);
       } else {
@@ -1656,7 +1730,7 @@ function FuturesPanel() {
         setAmount(String(qty.toFixed(6)));
       }
     }
-  }, [clearTradeFeedback, pacBalance, currentPrice, amountInUsdc, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
+  }, [clearTradeFeedback, sizePctMarginBase, currentPrice, amountInUsdc, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
@@ -1735,6 +1809,20 @@ function FuturesPanel() {
         const collateralUsdc = amountInUsdc
           ? parseFloat(amount)
           : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
+        if (dex === 'phoenix') {
+          const maxMargin = phoenixUsableMargin({
+            balance: pacBalance,
+            leverage,
+            orderType,
+            takerFeeRate: phoenixTakerFeeRate,
+          });
+          if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-6) {
+            setLocalAlert(
+              `Phoenix needs fee/slippage buffer at ${leverage}x. Use $${maxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
+            );
+            return;
+          }
+        }
         qty = String(collateralUsdc.toFixed(6));
       } else {
         qty = amountInUsdc ? tokenAmount : amount;
@@ -1826,7 +1914,7 @@ function FuturesPanel() {
       tradeInFlight.current = false;
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, positions]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, phoenixTakerFeeRate, positions]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -2029,7 +2117,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${pacBalance.toFixed(2)} balance
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {dex === 'phoenix' ? 'usable' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}
@@ -3766,6 +3854,7 @@ function FuturesPanel() {
                   </div>
                 );
               })()}
+              <PositionTpslRow pos={pos} />
 
               {/* Action buttons: Close + TP/SL + Share-icon. Share lives in
                   Pro too (per-user-request) — same icon as Basic for
@@ -3773,7 +3862,16 @@ function FuturesPanel() {
               <div style={{display: 'flex', gap: 6, marginTop: 4}}>
                 <button style={S.btnRed} onClick={() => { setClosePct(100); setExpandedPos(expanded === 'close' ? null : `${posKey}:close`); }}>Close</button>
                 {!isBasic && (
-                  <button style={S.btnBlue} onClick={() => setExpandedPos(expanded === 'tpsl' ? null : `${posKey}:tpsl`)}>TP/SL</button>
+                  <button style={S.btnBlue} onClick={() => {
+                    if (expanded === 'tpsl') {
+                      setExpandedPos(null);
+                      return;
+                    }
+                    const { tp, sl } = getPositionTpsl(pos);
+                    setTpPrice(formatTpslInputValue(tp));
+                    setSlPrice(formatTpslInputValue(sl));
+                    setExpandedPos(`${posKey}:tpsl`);
+                  }}>TP/SL</button>
                 )}
                 <button
                   style={{
