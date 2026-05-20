@@ -126,6 +126,27 @@ var building_defs: Dictionary = {
 			"offset_y": 0.3,
 		},
 	},
+	"mage_tower": {
+		"name": "Mage Tower",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
+		"height": 0.5,
+		"scene": "res://Model/MageTower/1.fbx",
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
+		"model_scale": 0.03,  # TARBO FBX scale (0.02 base +50%)
+		"model_rotation_y": 0.0,
+		"hp_levels": [700, 1300, 2200],
+		"cost": {"gold": 500, "ore": 800},
+		"hp_bar_height": 0.5,
+		# FBX ships no embedded texture (Unity .mat stripped) — applied at runtime
+		# via _apply_building_albedo. Violet palette + emission glow for the
+		# magic look (matches the DemonKing purple).
+		"albedo_texture": "res://Model/MageTower/mage_tower_albedo.png",
+		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
+		"test_only": true,  # only listed in the shop when test_mode is on
+		# Combat: tower_mage.gd is attached to the building node (like turret),
+		# casting magic orbs at troops within detect_range=1.0 (turret radius).
+	},
 	"tombstone": {
 		"name": "Tombstone",
 		"cells": Vector2i(3, 3),
@@ -389,6 +410,7 @@ var _cel_shader: Shader
 ## load() calls at transition time.
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
+static var _mage_tower_script_res: Script = null
 
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
@@ -1009,6 +1031,40 @@ func _apply_cel_shader(node: Node) -> void:
 	return
 
 
+## Applies a StandardMaterial3D albedo (+ optional emission) to every
+## MeshInstance3D in [param model] when [param def] declares "albedo_texture".
+## Used for FBX models that ship without embedded textures (e.g. the TARBO
+## MageTower). No-op for GLB buildings whose textures are baked in.
+func _apply_building_albedo(model: Node, def: Dictionary) -> void:
+	var albedo_path: String = def.get("albedo_texture", "")
+	if albedo_path == "" or model == null:
+		return
+	var albedo_tex: Texture2D = load(albedo_path)
+	if albedo_tex == null:
+		return
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = albedo_tex
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST  # polyart palette look
+	var emit_path: String = def.get("emission_texture", "")
+	if emit_path != "":
+		var emit_tex: Texture2D = load(emit_path)
+		if emit_tex:
+			mat.emission_enabled = true
+			mat.emission_texture = emit_tex
+			mat.emission_energy_multiplier = 1.2
+	_assign_albedo_recursive(model, mat)
+
+
+func _assign_albedo_recursive(node: Node, mat: Material) -> void:
+	if node is MeshInstance3D:
+		var mi: MeshInstance3D = node as MeshInstance3D
+		var count: int = mi.mesh.get_surface_count() if mi.mesh else 0
+		for i in count:
+			mi.set_surface_override_material(i, mat)
+	for child in node.get_children():
+		_assign_albedo_recursive(child, mat)
+
+
 func _create_fps_label() -> void:
 	if not canvas:
 		return
@@ -1217,6 +1273,10 @@ func _create_ui() -> void:
 	for id in building_defs:
 		var def = building_defs[id]
 		if def.get("no_shop", false):
+			continue
+		# test_only buildings (e.g. Mage Tower) appear in the shop only on the
+		# sandbox scene where test_mode is enabled.
+		if def.get("test_only", false) and not test_mode:
 			continue
 		var cost = def.get("cost", {})
 		var cost_parts: Array = []
@@ -1722,6 +1782,10 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 			if turret_script:
 				node.set_script(turret_script)
+		elif building_type == "mage_tower":
+			var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+			if mage_script:
+				node.set_script(mage_script)
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
@@ -1745,6 +1809,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 						model.set_script(mine_cart_script)
 				node.add_child(model)
 				_apply_cel_shader(model)
+				_apply_building_albedo(model, def)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -2058,6 +2123,7 @@ func _create_ghost() -> void:
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			ghost.add_child(model)
 			_apply_cel_shader(model)
+			_apply_building_albedo(model, def)
 	add_child(ghost)
 
 
@@ -2194,6 +2260,8 @@ func _preload_building_scenes() -> void:
 	# Pre-load turret script so set_script() at transition time is instant
 	if _turret_script_res == null:
 		_turret_script_res = load("res://scripts/turret.gd")
+	if _mage_tower_script_res == null:
+		_mage_tower_script_res = load("res://scripts/tower_mage.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2276,6 +2344,10 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
 		if turret_script:
 			node.set_script(turret_script)
+	elif current_building_id == "mage_tower":
+		var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+		if mage_script:
+			node.set_script(mage_script)
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
@@ -2289,6 +2361,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			model.position = def.get("model_offset", Vector3.ZERO)
 			node.add_child(model)
 			_apply_cel_shader(model)
+			_apply_building_albedo(model, def)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -2802,7 +2875,7 @@ func _select_building(b: Dictionary) -> void:
 
 	# Range indicator for defense buildings
 	_hide_range_indicator()
-	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower"]
+	var defense_ids = ["turret", "tombstone", "archtower", "archer_tower", "archertower", "mage_tower"]
 	if b.id in defense_ids and is_instance_valid(b.get("node", null)):
 		var bnode = b["node"]
 		var r: float = 1.0
@@ -3050,6 +3123,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			else:
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
+			_apply_building_albedo(new_model, def)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar

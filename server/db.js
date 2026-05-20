@@ -1516,6 +1516,16 @@ const BUILDING_DEFS = {
     cost: { gold: 400, wood: 1500, ore: 0 },
     max_count: 4,
   },
+  // Mage Tower — sandbox/test building. Client only lists it in the shop when
+  // test_mode is on (def.test_only), so production players can't place it via
+  // the UI; this def keeps the server data model consistent if it's ever
+  // promoted out of test. No attack yet.
+  mage_tower: {
+    size: [3, 3], max_level: 3,
+    hp_levels: [700, 1300, 2200],
+    cost: { gold: 500, wood: 0, ore: 800 },
+    max_count: 4,
+  },
 };
 
 // ---------- Troop Definitions ----------

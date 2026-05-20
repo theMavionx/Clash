@@ -394,5 +394,44 @@ func _do_attack(delta: float) -> void:
 	if not _hit_this_swing and attack_timer >= hit_at:
 		_hit_this_swing = true
 		_deal_target_damage()
+		_shake_camera()
 
 	_prev_swing_timer = attack_timer
+
+
+## Small camera kick on each landed hit — the DemonKing is a heavy boss, so
+## its swing connecting should feel weighty. CameraRig caps/accumulates trauma.
+var _camera_rig: Node = null
+
+func _shake_camera() -> void:
+	if _camera_rig == null or not is_instance_valid(_camera_rig):
+		_camera_rig = get_tree().current_scene.find_child("CameraRig", true, false)
+	if _camera_rig and _camera_rig.has_method("add_trauma"):
+		_camera_rig.add_trauma(0.5)
+
+
+## Death with the Die animation. base_troop.take_damage frees the unit
+## instantly (no death anim); we override to play "Die" first, then free.
+## Setting _is_dead makes base_troop._physics_process bail out, so combat
+## stops while the body falls.
+func take_damage(dmg: int) -> void:
+	if _is_dead:
+		return
+	hp -= dmg
+	if hp > 0:
+		return
+	_is_dead = true
+	_record_replay_telemetry("troop_death", {"damage": dmg})
+	if is_in_group("troops"):
+		remove_from_group("troops")
+	invalidate_combat_lists()
+	_report_death()
+	if _hp_bar and is_instance_valid(_hp_bar):
+		_hp_bar.visible = false
+	if anim_player and anim_player.has_animation("Die"):
+		anim_player.stop()
+		anim_player.play("Die")
+		var die_anim: Animation = anim_player.get_animation("Die")
+		var dur: float = die_anim.length if die_anim else 0.8
+		await get_tree().create_timer(dur).timeout
+	queue_free()
