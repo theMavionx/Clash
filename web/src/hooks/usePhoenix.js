@@ -5,15 +5,16 @@ import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as
 import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
-import { isFarcasterFrame } from './useFarcaster';
 import {
   asPhoenixArray,
   createPhoenixTransactionClient,
   disposePhoenixClient,
   getPhoenixClient,
+  isPhoenixFlightEnabled,
   phoenixSymbol,
 } from '../lib/phoenixClient';
 import { sendPhoenixInstructions } from '../lib/phoenixTx';
+import { solanaRpcHost } from '../lib/solanaRpc';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -532,9 +533,9 @@ export function usePhoenix() {
 
   const privyAddr = privyWalletObj?.address || null;
   const adapterAddr = publicKey?.toBase58() || null;
-  const inFarcasterFrame = isFarcasterFrame();
-  const privyActive = !!privyAddr && (!inFarcasterFrame || !adapterAddr);
-  const walletAddr = privyActive ? privyAddr : (adapterAddr || privyAddr || null);
+  const walletSource = adapterAddr ? 'adapter' : (privyAddr ? 'privy' : 'none');
+  const privyActive = walletSource === 'privy';
+  const walletAddr = adapterAddr || privyAddr || null;
   const ownerPk = useMemo(() => walletAddr ? new PublicKey(walletAddr) : null, [walletAddr]);
   const registeredWallet = typeof player?.wallet === 'string' ? player.wallet.trim() : '';
   const registeredSolanaWallet = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(registeredWallet) ? registeredWallet : null;
@@ -545,6 +546,19 @@ export function usePhoenix() {
     const registered = shortPhoenixAddress(registeredSolanaWallet) || 'registered wallet';
     return `Wrong Solana wallet: connected ${connected}, account uses ${registered}.`;
   }, [registeredSolanaWallet, walletAddr, walletMismatch]);
+
+  useEffect(() => {
+    if (!isActiveDex) return;
+    console.info('[Phoenix] wallet source selected', {
+      wallet_source: walletSource,
+      wallet: shortPhoenixAddress(walletAddr),
+      adapter_wallet: shortPhoenixAddress(adapterAddr),
+      privy_wallet: shortPhoenixAddress(privyAddr),
+      privy_wallet_client: privyWalletObj?.walletClientType || null,
+      registered_wallet: shortPhoenixAddress(registeredSolanaWallet),
+      wallet_mismatch: walletMismatch,
+    });
+  }, [adapterAddr, isActiveDex, privyAddr, privyWalletObj?.walletClientType, registeredSolanaWallet, walletAddr, walletMismatch, walletSource]);
 
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
@@ -614,15 +628,32 @@ export function usePhoenix() {
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
+      console.info('[Phoenix] transaction client init', {
+        rpc_host: solanaRpcHost(endpoint),
+        force_fresh: !!forceFresh,
+        flight_enabled: isPhoenixFlightEnabled(),
+      });
       const next = createPhoenixTransactionClient(endpoint);
       try {
         await next.exchange?.ready?.();
         txClientRef.current = next;
         txClientEndpointRef.current = endpoint;
         txClientReadyAtRef.current = Date.now();
+        console.info('[Phoenix] transaction client ready', {
+          rpc_host: solanaRpcHost(endpoint),
+          force_fresh: !!forceFresh,
+          flight_enabled: isPhoenixFlightEnabled(),
+          ready_ms: Math.max(0, Date.now() - now),
+        });
         return next;
       } catch (e) {
         disposePhoenixClient(next);
+        console.warn('[Phoenix] transaction client init failed', {
+          rpc_host: solanaRpcHost(endpoint),
+          force_fresh: !!forceFresh,
+          flight_enabled: isPhoenixFlightEnabled(),
+          message: e?.message || String(e || 'unknown error'),
+        });
         throw e;
       }
     })();
@@ -646,6 +677,8 @@ export function usePhoenix() {
         phase,
         cached: !forceFresh,
         cache_age_ms: Math.max(0, Date.now() - txClientReadyAtRef.current),
+        rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
+        flight_enabled: isPhoenixFlightEnabled(),
         ...phoenixMetadataSummary(orderClient, phx),
       });
       return buildAndSend(orderClient);
@@ -663,7 +696,7 @@ export function usePhoenix() {
       });
       return runWithTransactionClient('retry', true);
     }
-  }, [getTransactionClient]);
+  }, [connection?.rpcEndpoint, getTransactionClient]);
 
   const runOnce = useCallback((key, fn) => {
     const map = inFlightRef.current;
@@ -678,6 +711,15 @@ export function usePhoenix() {
   const sendIxs = useCallback((instructions, label = 'phoenix') => {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
+    console.info('[Phoenix] send instructions', {
+      label,
+      owner: shortPhoenixAddress(ownerPk),
+      wallet: shortPhoenixAddress(walletAddr),
+      wallet_source: walletSource,
+      rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
+      flight_enabled: isPhoenixFlightEnabled(),
+      privy_active: !!privyActive,
+    });
     return sendPhoenixInstructions({
       instructions,
       ownerPk,
@@ -690,7 +732,7 @@ export function usePhoenix() {
       privyWalletObj,
       label,
     });
-  }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
+  }, [ownerPk, walletAddr, walletSource, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
   const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');
@@ -1234,6 +1276,16 @@ export function usePhoenix() {
     const raw = (Number(margin) * Number(leverage || 1)) / mark;
     const rounded = roundDownToLot(raw, m?.lot_size || '0.0001');
     if (!Number.isFinite(rounded) || rounded <= 0) throw new Error('Order size is below this market lot size');
+    console.info('[Phoenix] margin to base units', {
+      symbol: phoenixSymbol(symbol),
+      margin,
+      leverage,
+      mark,
+      lot_size: m?.lot_size || '0.0001',
+      raw_base_units: raw,
+      rounded_base_units: rounded,
+      price_override: priceOverride != null,
+    });
     return String(rounded);
   }, []);
 
@@ -1279,6 +1331,13 @@ export function usePhoenix() {
             minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
             minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
           });
+          console.info('[Phoenix] market packet built', {
+            symbol: phx,
+            side: sideEnum === Side.Bid ? 'bid' : 'ask',
+            baseUnits,
+            priceLimitUsd,
+            flight_enabled: isPhoenixFlightEnabled(),
+          });
           const ix = await orderClient.ixs.placeMarketOrder({
             authority: walletAddr,
             symbol: phx,
@@ -1294,6 +1353,16 @@ export function usePhoenix() {
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix market order failed';
+        console.warn('[Phoenix] placeMarketOrder failed', {
+          symbol: phx,
+          side,
+          amount,
+          leverage,
+          message: msg,
+          code: phoenixSimulationCode(e),
+          failed_program_id: phoenixFailedProgramId(e),
+          logs: phoenixErrorLogs(e).slice(-10),
+        });
         setError(msg);
         return { error: msg };
       } finally {
@@ -1409,6 +1478,14 @@ export function usePhoenix() {
             selfTradeBehavior: SelfTradeBehavior.Abort,
             orderFlags: OrderFlags.ReduceOnly,
             cancelExisting: false,
+          });
+          console.info('[Phoenix] close packet built', {
+            symbol: phx,
+            closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
+            baseUnits,
+            priceLimitUsd,
+            subaccountIndex,
+            flight_enabled: isPhoenixFlightEnabled(),
           });
           const ix = await orderClient.ixs.placeMarketOrder({
             authority: walletAddr,

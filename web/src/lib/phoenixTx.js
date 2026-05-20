@@ -9,6 +9,11 @@ const ACCOUNT_ROLE = {
   WRITABLE_SIGNER: 3,
 };
 
+function shortAddress(address) {
+  const text = String(address || '');
+  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
+}
+
 function roleFlags(role) {
   if (typeof role === 'number') {
     return {
@@ -20,6 +25,28 @@ function roleFlags(role) {
   return {
     isWritable: text.includes('WRITABLE'),
     isSigner: text.includes('SIGNER'),
+  };
+}
+
+function instructionSummary(instructions) {
+  const list = Array.isArray(instructions) ? instructions : [instructions];
+  return {
+    instruction_count: list.length,
+    instructions: list.slice(0, 8).map((ix) => {
+      const accounts = ix?.accounts || ix?.keys || [];
+      const flags = accounts.map((account) => (
+        account.role !== undefined
+          ? roleFlags(account.role)
+          : { isWritable: !!account.isWritable, isSigner: !!account.isSigner }
+      ));
+      return {
+        program: shortAddress(ix?.programAddress || ix?.programId),
+        account_count: accounts.length,
+        writable_count: flags.filter(flag => flag.isWritable).length,
+        signer_count: flags.filter(flag => flag.isSigner).length,
+        data_bytes: ix?.data?.length || 0,
+      };
+    }),
   };
 }
 
@@ -59,6 +86,16 @@ export async function sendPhoenixInstructions({
   label = 'phoenix',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
+  console.info('[Phoenix] sendPhoenixInstructions input', {
+    label,
+    owner: shortAddress(ownerPk),
+    privy_active: !!privyActive,
+    has_adapter_send: !!sendTransaction,
+    has_adapter_sign: !!signTransaction,
+    has_privy_send: !!privySendTx,
+    has_privy_sign: !!privySignTx,
+    ...instructionSummary(list),
+  });
   const web3Instructions = list.map(kitInstructionToWeb3);
   return sendSolanaTransactionWithRetry({
     instructions: web3Instructions,

@@ -1,6 +1,6 @@
 const DEFAULT_SOLANA_RPC_URLS = Object.freeze([
-  'https://solana-rpc.publicnode.com',
   'https://api.mainnet-beta.solana.com',
+  'https://solana-rpc.publicnode.com',
 ]);
 
 function splitSolanaRpcUrls(raw) {
@@ -29,8 +29,8 @@ function solanaRpcUrls(extraUrls = [], env = process.env) {
     ...splitSolanaRpcUrls(env.SOLANA_RPC_URL),
     ...splitSolanaRpcUrls(env.VITE_SOLANA_RPC_URL),
     ...extras.flatMap(splitSolanaRpcUrls),
-    ...DEFAULT_SOLANA_RPC_URLS,
     heliusSolanaRpcUrl(env),
+    ...DEFAULT_SOLANA_RPC_URLS,
   ];
   return Array.from(new Set(urls.filter((url) => /^https?:\/\//i.test(String(url || '')))));
 }

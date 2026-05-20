@@ -584,6 +584,10 @@ async function readSignatureStateAny(connections, signature) {
     source: 'none',
     status: null,
     rpcHosts: states.map(state => state.rpcHost).filter(Boolean),
+    rpcErrors: states
+      .filter(state => state.rpcError)
+      .map(state => ({ host: state.rpcHost, error: state.rpcError }))
+      .slice(0, 5),
   };
 }
 
@@ -624,6 +628,8 @@ async function waitForLateLanding({ connection, statusConnections = null, signat
       found: state.found,
       confirmation_status: state.status?.confirmationStatus || null,
       slot: state.status?.slot || null,
+      rpc_hosts: state.rpcHosts || connections.map(rpcHost).slice(0, 5),
+      rpc_errors: state.rpcErrors || [],
     });
     await sleep(1_500);
   }
@@ -802,6 +808,7 @@ export async function sendSignedSolanaTransactionWithRetry({
         remaining_cluster_blocks: remainingClusterBlocks,
         skip_preflight: !!skipPreflight,
         pre_signed: true,
+        status_rpc_hosts: statusConnections.map(rpcHost).slice(0, 5),
       });
 
       const built = await buildSignedTransaction({
@@ -954,6 +961,7 @@ export async function sendSolanaTransactionWithRetry({
         instruction_count: list.length,
         wallet_path: walletPath,
         prefer_privy_sign_and_send: !!preferPrivySignAndSend,
+        status_rpc_hosts: statusConnections.map(rpcHost).slice(0, 5),
         ...transactionSummary(tx),
       });
 
@@ -1116,6 +1124,8 @@ async function waitForSignature({
         current_block_height: currentBlockHeight,
         last_valid_block_height: lastValidBlockHeight,
         remaining_blocks: Number.isFinite(currentBlockHeight) ? lastValidBlockHeight - currentBlockHeight : null,
+        rpc_hosts: state.rpcHosts || connections.map(rpcHost).slice(0, 5),
+        rpc_errors: state.rpcErrors || [],
       });
     }
 

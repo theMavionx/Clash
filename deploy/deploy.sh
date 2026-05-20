@@ -623,9 +623,9 @@ server {
     }
 
     location /rpc/solana {
-        proxy_pass https://solana-rpc.publicnode.com/;
+        proxy_pass https://api.mainnet-beta.solana.com/;
         proxy_http_version 1.1;
-        proxy_set_header Host solana-rpc.publicnode.com;
+        proxy_set_header Host api.mainnet-beta.solana.com;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;

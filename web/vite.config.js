@@ -9,6 +9,18 @@ function setPerplProxyOrigin(proxyReq) {
 const viteEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
 const API_PROXY_TARGET = process.env.VITE_API_PROXY || viteEnv.VITE_API_PROXY || '';
 const WS_PROXY_TARGET = process.env.VITE_WS_PROXY || viteEnv.VITE_WS_PROXY || '';
+const SOLANA_HELIUS_API_KEY = process.env.SOLANA_HELIUS_API_KEY
+  || viteEnv.SOLANA_HELIUS_API_KEY
+  || process.env.HELIUS_API_KEY
+  || viteEnv.HELIUS_API_KEY
+  || process.env.VITE_HELIUS_API_KEY
+  || viteEnv.VITE_HELIUS_API_KEY
+  || process.env.VITE_SOLANA_HELIUS_API_KEY
+  || viteEnv.VITE_SOLANA_HELIUS_API_KEY
+  || '';
+const SOLANA_RPC_PROXY_TARGET = SOLANA_HELIUS_API_KEY
+  ? 'https://mainnet.helius-rpc.com'
+  : 'https://api.mainnet-beta.solana.com';
 const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
@@ -126,7 +138,7 @@ export default defineConfig({
         rewrite: () => '/?api_key=FREE',
       },
       '^/rpc/solana$': {
-        target: 'https://solana-rpc.publicnode.com',
+        target: SOLANA_RPC_PROXY_TARGET,
         changeOrigin: true,
         secure: true,
         configure: (proxy) => {
@@ -135,7 +147,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => '/',
+        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/',
       },
       '/rpc/arb-alchemy': {
         target: 'https://arb-mainnet.g.alchemy.com',

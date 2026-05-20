@@ -72,13 +72,33 @@ function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRat
 }
 
 function phoenixUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
+  return phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }).usable_margin;
+}
+
+function phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }) {
   const b = Number(balance);
   const lev = Number(leverage);
-  if (!Number.isFinite(b) || !Number.isFinite(lev) || b <= 0 || lev <= 0) return 0;
+  if (!Number.isFinite(b) || !Number.isFinite(lev) || b <= 0 || lev <= 0) {
+    return {
+      free_balance: Number.isFinite(b) ? b : null,
+      leverage: Number.isFinite(lev) ? lev : null,
+      slippage_rate: 0,
+      fee_rate: 0,
+      reserved_per_margin: null,
+      usable_margin: 0,
+    };
+  }
   const slippage = orderType === 'market' ? PHOENIX_MARKET_SLIPPAGE_RATE : 0;
   const feeRate = Math.max(Number(takerFeeRate) || 0, PHOENIX_DEFAULT_TAKER_FEE_RATE) + PHOENIX_FEE_BUFFER_RATE;
   const reservedPerMargin = 1 + slippage + (lev * feeRate * (1 + slippage));
-  return Math.max(0, b / reservedPerMargin);
+  return {
+    free_balance: b,
+    leverage: lev,
+    slippage_rate: slippage,
+    fee_rate: feeRate,
+    reserved_per_margin: reservedPerMargin,
+    usable_margin: Math.max(0, b / reservedPerMargin),
+  };
 }
 
 function humanizeTradeError(message) {
@@ -1810,13 +1830,31 @@ function FuturesPanel() {
           ? parseFloat(amount)
           : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
         if (dex === 'phoenix') {
-          const maxMargin = phoenixUsableMargin({
+          const reserve = phoenixMarginReserveDetails({
             balance: pacBalance,
             leverage,
             orderType,
             takerFeeRate: phoenixTakerFeeRate,
           });
+          const maxMargin = reserve.usable_margin;
+          console.info('[Phoenix UI] margin reserve check', {
+            symbol,
+            orderType,
+            requested_side: side,
+            requested_margin: collateralUsdc,
+            position_usdc: Number.isFinite(positionUsdc) ? positionUsdc : null,
+            amount_mode: amountInUsdc ? 'usdc_margin' : 'token_size',
+            ...reserve,
+          });
           if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-6) {
+            console.warn('[Phoenix UI] margin blocked by fee/slippage buffer', {
+              symbol,
+              orderType,
+              requested_side: side,
+              requested_margin: collateralUsdc,
+              max_margin: maxMargin,
+              ...reserve,
+            });
             setLocalAlert(
               `Phoenix needs fee/slippage buffer at ${leverage}x. Use $${maxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
             );

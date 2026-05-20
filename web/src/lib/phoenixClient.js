@@ -8,6 +8,9 @@ const DEFAULT_PHOENIX_FLIGHT_BUILDER_AUTHORITY = 'Drvzmh5iRfHRuKHgmm6Q77CqxhqvsX
 export const PHOENIX_FLIGHT_BUILDER_AUTHORITY =
   import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY
   || DEFAULT_PHOENIX_FLIGHT_BUILDER_AUTHORITY;
+const PHOENIX_FLIGHT_ENABLED = /^(1|true|yes)$/i.test(
+  String(import.meta.env.VITE_PHOENIX_FLIGHT_ENABLED || ''),
+);
 export const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT =
   import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT
   || 'Czk948LDdK9iTWbRB8MEoV4ngX2EAxxHdXx8mfgZxuTA';
@@ -23,8 +26,7 @@ const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 const clients = new Map();
 
 export function isPhoenixFlightEnabled() {
-  return import.meta.env.VITE_PHOENIX_FLIGHT_ENABLED !== '0'
-    && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
+  return PHOENIX_FLIGHT_ENABLED && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
 }
 
 function phoenixFlightConfig() {
