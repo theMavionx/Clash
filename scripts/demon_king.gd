@@ -19,9 +19,9 @@ extends BaseTroop
 
 
 const LEVEL_STATS = {
-	1: {"hp": 560,  "damage": 78,  "atk_speed": 2.200},
-	2: {"hp": 735,  "damage": 102, "atk_speed": 2.050},
-	3: {"hp": 960,  "damage": 134, "atk_speed": 1.900},
+	1: {"hp": 660,  "damage": 70,  "atk_speed": 1.80},
+	2: {"hp": 880,  "damage": 92,  "atk_speed": 1.65},
+	3: {"hp": 1150, "damage": 120, "atk_speed": 1.50},
 }
 
 const DEMON_ANIM_FILES: Array = [

@@ -10,10 +10,10 @@ const POOL_SIZE: int = 6
 const TARGET_SEARCH_INTERVAL: float = 0.15
 
 const LEVEL_STATS = {
-	1: {"damage": 90, "fire_rate": 1.2, "detect_range": 1.0},
-	2: {"damage": 140, "fire_rate": 1.0, "detect_range": 1.2},
-	3: {"damage": 200, "fire_rate": 0.8, "detect_range": 1.4},
-	4: {"damage": 280, "fire_rate": 0.65, "detect_range": 1.6},
+	1: {"damage": 25, "fire_rate": 1.0, "detect_range": 1.0},
+	2: {"damage": 38, "fire_rate": 0.85, "detect_range": 1.1},
+	3: {"damage": 50, "fire_rate": 0.7, "detect_range": 1.2},
+	4: {"damage": 65, "fire_rate": 0.6, "detect_range": 1.3},  # unused (building max_level 3)
 }
 
 enum State { IDLE, ATTACKING, VICTORY }

@@ -133,7 +133,7 @@ var building_defs: Dictionary = {
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
 		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
-		"model_scale": 0.03,  # TARBO FBX scale (0.02 base +50%)
+		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
 		"hp_levels": [700, 1300, 2200],
 		"cost": {"gold": 500, "ore": 800},

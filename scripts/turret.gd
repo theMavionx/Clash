@@ -3,10 +3,10 @@ extends Node3D
 ## Uses object pooling to avoid per-shot allocations and first-fire lag.
 
 const LEVEL_STATS = {
-	1: {"damage": 80, "fire_rate": 0.5},
-	2: {"damage": 180, "fire_rate": 0.25},
-	3: {"damage": 320, "fire_rate": 0.166},
-	4: {"damage": 500, "fire_rate": 0.12},
+	1: {"damage": 35, "fire_rate": 0.70},
+	2: {"damage": 50, "fire_rate": 0.55},
+	3: {"damage": 60, "fire_rate": 0.45},
+	4: {"damage": 75, "fire_rate": 0.40},  # unused (building max_level 3) — kept scaled
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [
@@ -23,7 +23,7 @@ const TRAIL_EMISSION: float = 6.0
 const POOL_SIZE: int        = 6
 const POOL_BATCH: int       = 2   # build this many per frame to avoid spike
 
-@export var detect_range: float = 1.0
+@export var detect_range: float = 0.95   # just below Archer range (1.0): kiting needs positioning, not free
 @export var bullet_speed: float = 4.0
 
 var level: int = 1
