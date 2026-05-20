@@ -78,13 +78,15 @@ function phoenixFailedProgramId(error) {
 }
 
 function isPhoenixMetadataDriftError(error) {
-  if (isLighthouseAssertionError(error)) return false;
   const code = phoenixSimulationCode(error);
+  const lighthouse = isLighthouseAssertionError(error);
+  if (lighthouse) return !code || code === '0x1900' || code === '0x1902';
   if (code !== '0x1900' && code !== '0x1902') return false;
   const failedProgram = phoenixFailedProgramId(error);
   if (failedProgram && failedProgram !== PHOENIX_PROGRAM_ID) return false;
   // Phoenix exchange/orderbook snapshot mismatches surface as 0x1900/0x1902.
   // Some RPCs omit simulation logs, so the code itself is enough to rebuild.
+  // The same drift can fail inside Lighthouse before the Phoenix instruction.
   return true;
 }
 
@@ -684,7 +686,7 @@ export function usePhoenix() {
       return buildAndSend(orderClient);
     };
     try {
-      return await runWithTransactionClient('initial');
+      return await runWithTransactionClient('initial', true);
     } catch (e) {
       if (!isPhoenixMetadataDriftError(e)) throw e;
       console.warn('[Phoenix] exchange metadata drift; rebuilding instruction once', {
@@ -692,6 +694,7 @@ export function usePhoenix() {
         symbol: phx,
         code: phoenixSimulationCode(e),
         failed_program_id: phoenixFailedProgramId(e),
+        lighthouse_assertion: isLighthouseAssertionError(e),
         logs: phoenixErrorLogs(e).slice(-6),
       });
       return runWithTransactionClient('retry', true);
@@ -1155,7 +1158,8 @@ export function usePhoenix() {
               throw new Error('Phoenix access code required');
             }
           }
-          const ix = await client.ixs.buildRegisterTrader({
+          const registerClient = await getTransactionClient(true);
+          const ix = await registerClient.ixs.buildRegisterTrader({
             authority: walletAddr,
             marginType: MarginType.Cross || 'cross',
           });
@@ -1184,7 +1188,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [checkInviteStatus, client, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [checkInviteStatus, client, getTransactionClient, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;
@@ -1194,21 +1198,6 @@ export function usePhoenix() {
     })();
     return () => { cancelled = true; };
   }, [checkInviteStatus, isActiveDex, traderRegistered, walletAddr, walletMismatch]);
-
-  useEffect(() => {
-    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      if (cancelled) return;
-      getTransactionClient().catch(e => {
-        console.warn('[Phoenix] transaction metadata prewarm failed', e?.message || e);
-      });
-    }, 1_500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [getTransactionClient, isActiveDex, walletAddr, walletMismatch]);
 
   const depositToPacifica = useCallback(async (amountUsdc) => {
     if (!walletAddr) {
@@ -1227,7 +1216,8 @@ export function usePhoenix() {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
         const amount = toRawUsdc(amountUsdc);
-        const built = await client.ixs.buildDepositIxs({ authority: walletAddr, amount });
+        const txClient = await getTransactionClient(true);
+        const built = await txClient.ixs.buildDepositIxs({ authority: walletAddr, amount });
         const signature = await sendIxs(built.instructions, 'phoenix.deposit');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         claimGold();
@@ -1240,7 +1230,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, claimGold, client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activate, claimGold, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const withdraw = useCallback(async (amountUsdc) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -1254,7 +1244,8 @@ export function usePhoenix() {
       setError(null);
       try {
         const amount = toRawUsdc(amountUsdc);
-        const built = await client.ixs.buildWithdrawIxs({ authority: walletAddr, amount });
+        const txClient = await getTransactionClient(true);
+        const built = await txClient.ixs.buildWithdrawIxs({ authority: walletAddr, amount });
         const signature = await sendIxs(built.instructions, 'phoenix.withdraw');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         return { success: true, signature };
@@ -1266,7 +1257,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [client, fetchWalletUsdc, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
 
   const buildBaseUnitsFromMargin = useCallback((symbol, margin, leverage, priceOverride = null) => {
     const priceRow = pricesRef.current.find(p => p.symbol === phoenixSymbol(symbol));
