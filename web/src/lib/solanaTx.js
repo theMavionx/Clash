@@ -983,6 +983,7 @@ export async function sendSolanaTransactionWithRetry({
   priorityFeeMicroLamports = DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS,
   skipPreflight = false,
   preferPrivySignAndSend = false,
+  preferWalletSendTransaction = false,
   forceVersionedTransaction = false,
   walletPathOverride = null,
   label = 'transaction',
@@ -1036,9 +1037,10 @@ export async function sendSolanaTransactionWithRetry({
         throw staleError;
       }
       const preferPrivySendPath = !!(privyActive && preferPrivySignAndSend && privySendTx && privyWalletObj);
+      const preferAdapterSendPath = !!(!privyActive && preferWalletSendTransaction && sendTransaction);
       const walletPath = walletPathOverride || (privyActive
         ? (preferPrivySendPath ? 'privy_sign_and_send' : (privySignTx ? 'privy_sign_raw' : 'privy_sign_and_send'))
-        : (signTransaction ? 'adapter_sign_raw' : 'adapter_send_transaction'));
+        : (preferAdapterSendPath ? 'adapter_send_transaction' : (signTransaction ? 'adapter_sign_raw' : 'adapter_send_transaction')));
       logTx(label, 'attempt_start', {
         attempt,
         max_attempts: maxAttempts,
@@ -1058,6 +1060,7 @@ export async function sendSolanaTransactionWithRetry({
         instruction_count: list.length,
         wallet_path: walletPath,
         prefer_privy_sign_and_send: !!preferPrivySignAndSend,
+        prefer_wallet_send_transaction: !!preferWalletSendTransaction,
         status_rpc_hosts: statusConnections.map(rpcHost).slice(0, 5),
         ...transactionSummary(tx),
       });
@@ -1072,7 +1075,9 @@ export async function sendSolanaTransactionWithRetry({
 
       let sig = null;
       let rawTransaction = null;
-      if (!privyActive && signTransaction) {
+      if (preferAdapterSendPath) {
+        sig = await sendTransaction(tx, attemptConnection, sendOptions);
+      } else if (!privyActive && signTransaction) {
         const signed = await signTransaction(tx);
         rawTransaction = signed.serialize();
         const signatureBytes = firstTransactionSignature(signed);
