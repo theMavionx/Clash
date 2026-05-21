@@ -145,7 +145,7 @@ load_vite_env_for_build() {
         case "$key" in
             VITE_*)
                 case "$key" in
-                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY|VITE_SOLANA_ALCHEMY_API_KEY|VITE_ALCHEMY_SOLANA_API_KEY)
+                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY|VITE_SOLANA_ALCHEMY_API_KEY|VITE_ALCHEMY_SOLANA_API_KEY|VITE_SOLANA_PRE_SIGN_SIMULATION)
                         continue
                         ;;
                 esac
@@ -250,7 +250,6 @@ prepare_shared_runtime() {
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
     ensure_env_default "VITE_SOLANA_ENABLE_ALCHEMY_RPC" "1"
     ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "0"
-    ensure_env_default "VITE_SOLANA_PRE_SIGN_SIMULATION" "0"
     ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "1"
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""

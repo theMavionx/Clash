@@ -2,6 +2,8 @@ import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { sendSolanaTransactionWithRetry } from './solanaTx';
 
+const PHOENIX_DEBUG_LOGS = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_PHOENIX_DEBUG_LOGS || ''));
+
 const ACCOUNT_ROLE = {
   READONLY: 0,
   WRITABLE: 1,
@@ -97,16 +99,18 @@ export async function sendPhoenixInstructions({
   computeUnitLimit = null,
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
-  console.info('[Phoenix] sendPhoenixInstructions input', {
-    label,
-    owner: shortAddress(ownerPk),
-    privy_active: !!privyActive,
-    has_adapter_send: !!sendTransaction,
-    has_adapter_sign: !!signTransaction,
-    has_privy_send: !!privySendTx,
-    has_privy_sign: !!privySignTx,
-    ...instructionSummary(list),
-  });
+  if (PHOENIX_DEBUG_LOGS) {
+    console.info('[Phoenix] sendPhoenixInstructions input', {
+      label,
+      owner: shortAddress(ownerPk),
+      privy_active: !!privyActive,
+      has_adapter_send: !!sendTransaction,
+      has_adapter_sign: !!signTransaction,
+      has_privy_send: !!privySendTx,
+      has_privy_sign: !!privySignTx,
+      ...instructionSummary(list),
+    });
+  }
   const web3Instructions = list.map(kitInstructionToWeb3);
   return sendSolanaTransactionWithRetry({
     instructions: web3Instructions,

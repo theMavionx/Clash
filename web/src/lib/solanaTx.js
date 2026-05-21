@@ -15,9 +15,6 @@ const DEFAULT_PRIORITY_FEE_MICRO_LAMPORTS = 25_000;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_COMPUTE_UNIT_LIMIT = null;
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
-const ENABLE_PRE_SIGN_SIMULATION = !/^(0|false|no)$/i.test(
-  String(import.meta.env.VITE_SOLANA_PRE_SIGN_SIMULATION || '0'),
-);
 
 const SEND_OPTIONS = {
   preflightCommitment: 'confirmed',
@@ -95,6 +92,7 @@ function failedProgramId(error) {
 }
 
 function logTx(label, type, data = {}, level = 'info') {
+  if (level === 'info') return;
   const payload = { label, ...data };
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
   try {
@@ -468,106 +466,6 @@ async function describeSolanaError(error, connection) {
   return details;
 }
 
-async function simulateRawTransactionForLogs(connection, rawTransaction) {
-  if (!connection?.rpcEndpoint || !rawTransaction || typeof fetch !== 'function') return null;
-  const encodedTransaction = Buffer.from(rawTransaction).toString('base64');
-  const response = await fetch(connection.rpcEndpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: `sim-${Date.now()}`,
-      method: 'simulateTransaction',
-      params: [
-        encodedTransaction,
-        {
-          encoding: 'base64',
-          commitment: 'confirmed',
-          sigVerify: false,
-          replaceRecentBlockhash: false,
-          innerInstructions: true,
-        },
-      ],
-    }),
-  });
-  const json = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(`simulateTransaction HTTP ${response.status}`);
-  if (json?.error) throw new Error(json.error.message || 'simulateTransaction RPC error');
-  const value = json?.result?.value || null;
-  if (!value) return null;
-  return {
-    err: value.err || null,
-    logs: Array.isArray(value.logs) ? value.logs : [],
-    unitsConsumed: value.unitsConsumed ?? null,
-  };
-}
-
-async function preSignSimulateTransaction({ connection, tx, label, attempt }) {
-  if (!ENABLE_PRE_SIGN_SIMULATION) return;
-  const rawTransaction = serializeTransactionForSimulation(tx);
-  if (!rawTransaction?.length) {
-    logTx(label, 'pre_sign_simulation_unavailable', {
-      attempt,
-      rpc_host: rpcHost(connection),
-      reason: 'serialize_failed',
-      ...transactionSummary(tx),
-    }, 'warn');
-    return;
-  }
-
-  try {
-    const simulation = await simulateRawTransactionForLogs(connection, rawTransaction);
-    if (!simulation) {
-      logTx(label, 'pre_sign_simulation_unavailable', {
-        attempt,
-        rpc_host: rpcHost(connection),
-        reason: 'empty_rpc_result',
-        ...transactionSummary(tx),
-      }, 'warn');
-      return;
-    }
-    const payload = {
-      attempt,
-      rpc_host: rpcHost(connection),
-      err: simulation.err || null,
-      units_consumed: simulation.unitsConsumed,
-      logs: simulation.logs.slice(-12),
-      ...transactionSummary(tx),
-    };
-    logTx(label, 'pre_sign_simulation', payload, simulation.err ? 'warn' : 'info');
-    if (simulation.err) {
-      const error = new Error(`Pre-sign simulation failed: ${JSON.stringify(simulation.err)}`);
-      error.name = 'SolanaPreSignSimulationError';
-      error.simulationErr = simulation.err;
-      error.simulationLogs = simulation.logs || [];
-      error.simulationUnitsConsumed = simulation.unitsConsumed;
-      throw error;
-    }
-  } catch (error) {
-    if (error?.name === 'SolanaPreSignSimulationError') throw error;
-    logTx(label, 'pre_sign_simulation_unavailable', {
-      attempt,
-      rpc_host: rpcHost(connection),
-      reason: error?.message || String(error || 'simulateTransaction failed'),
-      ...transactionSummary(tx),
-    }, 'warn');
-  }
-}
-
-async function attachSimulationLogs(error, connection, rawTransaction) {
-  if (!rawTransaction || errorLogs(error).length) return error;
-  try {
-    const simulation = await simulateRawTransactionForLogs(connection, rawTransaction);
-    if (!simulation) return error;
-    error.simulationErr = simulation.err || null;
-    error.simulationLogs = simulation.logs || [];
-    error.simulationUnitsConsumed = simulation.unitsConsumed;
-  } catch (simulationError) {
-    error.simulationLogsError = simulationError?.message || String(simulationError);
-  }
-  return error;
-}
-
 async function readConfirmedTransaction(connection, signature) {
   return connection.getTransaction(signature, {
     commitment: 'confirmed',
@@ -775,7 +673,7 @@ async function sendRawTransactionWithFallback({
       }, 'warn');
     }
   }
-  throw await attachSimulationLogs(lastSendError, primaryConnection, rawTransaction);
+  throw lastSendError;
 }
 
 export function isBlockhashExpiredError(error) {
@@ -1076,13 +974,6 @@ export async function sendSolanaTransactionWithRetry({
       });
 
       const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
-      await preSignSimulateTransaction({
-        connection: attemptConnection,
-        tx,
-        label,
-        attempt,
-      });
-
       let sig = null;
       let rawTransaction = null;
       if (preferAdapterSendPath) {

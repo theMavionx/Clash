@@ -35,9 +35,14 @@ const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
+const PHOENIX_DEBUG_LOGS = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_PHOENIX_DEBUG_LOGS || ''));
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function phoenixDebug(...args) {
+  if (PHOENIX_DEBUG_LOGS) console.info(...args);
 }
 
 function phoenixSimulationCode(error) {
@@ -563,7 +568,7 @@ export function usePhoenix() {
 
   useEffect(() => {
     if (!isActiveDex) return;
-    console.info('[Phoenix] wallet source selected', {
+    phoenixDebug('[Phoenix] wallet source selected', {
       wallet_source: walletSource,
       wallet: shortPhoenixAddress(walletAddr),
       adapter_wallet: shortPhoenixAddress(adapterAddr),
@@ -654,7 +659,7 @@ export function usePhoenix() {
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
-      console.info('[Phoenix] transaction client init', {
+      phoenixDebug('[Phoenix] transaction client init', {
         rpc_host: solanaRpcHost(endpoint),
         force_fresh: !!forceFresh,
         flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
@@ -667,7 +672,7 @@ export function usePhoenix() {
         txClientEndpointRef.current = endpoint;
         txClientFlightDisabledRef.current = disableFlight;
         txClientReadyAtRef.current = Date.now();
-        console.info('[Phoenix] transaction client ready', {
+        phoenixDebug('[Phoenix] transaction client ready', {
           rpc_host: solanaRpcHost(endpoint),
           force_fresh: !!forceFresh,
           flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
@@ -677,7 +682,7 @@ export function usePhoenix() {
         return next;
       } catch (e) {
         disposePhoenixClient(next);
-        console.warn('[Phoenix] transaction client init failed', {
+        phoenixDebug('[Phoenix] transaction client init failed', {
           rpc_host: solanaRpcHost(endpoint),
           force_fresh: !!forceFresh,
           flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
@@ -696,24 +701,6 @@ export function usePhoenix() {
       }
     }
   }, [connection?.rpcEndpoint, disposeTransactionClient, walletAddr]);
-
-  useEffect(() => {
-    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      if (cancelled) return;
-      getTransactionClient(false).catch((e) => {
-        console.warn('[Phoenix] transaction client warmup failed', {
-          rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
-          message: e?.message || String(e || 'unknown error'),
-        });
-      });
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [connection?.rpcEndpoint, getTransactionClient, isActiveDex, walletAddr, walletMismatch]);
 
   const buildCollateralIxs = useCallback(async (txClient, amount, direction, authority) => {
     await txClient.exchange?.ready?.();
@@ -770,7 +757,7 @@ export function usePhoenix() {
       },
       amount,
     };
-    console.info('[Phoenix] collateral tx resolved', {
+    phoenixDebug('[Phoenix] collateral tx resolved', {
       direction,
       canonical_mint: shortPhoenixAddress(exchangeSnapshot.canonicalMint),
       wallet_usdc_mint: shortPhoenixAddress(USDC_MINT_ADDRESS),
@@ -788,7 +775,7 @@ export function usePhoenix() {
     const phx = phoenixSymbol(symbol);
     const runWithTransactionClient = async (phase, forceFresh = false) => {
       const orderClient = await getTransactionClient(forceFresh);
-      console.info('[Phoenix] transaction metadata ready', {
+      phoenixDebug('[Phoenix] transaction metadata ready', {
         label,
         symbol: phx,
         phase,
@@ -831,7 +818,7 @@ export function usePhoenix() {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
     const computeUnitLimit = options?.computeUnitLimit || null;
-    console.info('[Phoenix] send instructions', {
+    phoenixDebug('[Phoenix] send instructions', {
       label,
       owner: shortPhoenixAddress(ownerPk),
       wallet: shortPhoenixAddress(walletAddr),
@@ -897,7 +884,7 @@ export function usePhoenix() {
           });
           const importData = await importRes.json().catch(() => ({}));
           if (importRes.ok) {
-            console.log('[Phoenix rewards] import-fills', importData);
+            phoenixDebug('[Phoenix rewards] import-fills', importData);
           } else {
             console.warn('[Phoenix rewards] import-fills failed', importRes.status, importData);
           }
@@ -923,7 +910,7 @@ export function usePhoenix() {
         }
       }
       if (res.ok) {
-        console.log('[Phoenix rewards] claim-gold', data);
+        phoenixDebug('[Phoenix rewards] claim-gold', data);
       } else {
         console.warn('[Phoenix rewards] claim-gold failed', res.status, data);
       }
@@ -1404,7 +1391,7 @@ export function usePhoenix() {
     const raw = (Number(margin) * Number(leverage || 1)) / mark;
     const rounded = roundDownToLot(raw, m?.lot_size || '0.0001');
     if (!Number.isFinite(rounded) || rounded <= 0) throw new Error('Order size is below this market lot size');
-    console.info('[Phoenix] margin to base units', {
+    phoenixDebug('[Phoenix] margin to base units', {
       symbol: phoenixSymbol(symbol),
       margin,
       leverage,
@@ -1437,7 +1424,7 @@ export function usePhoenix() {
         const sideEnum = sideToPhoenix(side);
         const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
         const priceLimitUsd = marketOrderPriceLimitUsd(sideEnum, mark);
-        console.log('[Phoenix] placeMarketOrder', {
+        phoenixDebug('[Phoenix] placeMarketOrder', {
           symbol: phx,
           requestedSide: side,
           side: sideEnum === Side.Bid ? 'bid' : 'ask',
@@ -1459,7 +1446,7 @@ export function usePhoenix() {
             minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
             minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
           });
-          console.info('[Phoenix] market packet built', {
+          phoenixDebug('[Phoenix] market packet built', {
             symbol: phx,
             side: sideEnum === Side.Bid ? 'bid' : 'ask',
             baseUnits,
@@ -1574,7 +1561,7 @@ export function usePhoenix() {
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
         const mark = Number(existing?.mark_price || pricesRef.current.find(p => p.symbol === phx)?.mark || 0);
         const priceLimitUsd = marketOrderPriceLimitUsd(closeSide, mark);
-        console.log('[Phoenix] closePosition', {
+        phoenixDebug('[Phoenix] closePosition', {
           symbol: phx,
           uiSide: side,
           positionSide,
@@ -1607,7 +1594,7 @@ export function usePhoenix() {
             orderFlags: OrderFlags.ReduceOnly,
             cancelExisting: false,
           });
-          console.info('[Phoenix] close packet built', {
+          phoenixDebug('[Phoenix] close packet built', {
             symbol: phx,
             closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
             baseUnits,
@@ -1753,7 +1740,7 @@ export function usePhoenix() {
           else lessTriggerOrder = trigger;
         }
 
-        console.log('[Phoenix] setTpsl', {
+        phoenixDebug('[Phoenix] setTpsl', {
           symbol: phx,
           requestedSide: side,
           positionSide: position.side,
@@ -1776,7 +1763,7 @@ export function usePhoenix() {
             traderSubaccountIndex: subaccountIndex,
           });
           const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
-          console.log('[Phoenix] setTpsl instructions', {
+          phoenixDebug('[Phoenix] setTpsl instructions', {
             symbol: phx,
             createdConditionalAccount: !!createConditionalIx,
             instructionCount: instructions.length,
