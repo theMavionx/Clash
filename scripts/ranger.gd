@@ -23,9 +23,9 @@ var _shot_this_cycle: bool = false
 
 
 const LEVEL_STATS = {
-	1: {"hp": 227, "damage": 37, "atk_speed": 1.0},
-	2: {"hp": 300, "damage": 49, "atk_speed": 0.909},
-	3: {"hp": 383, "damage": 64, "atk_speed": 0.833},
+	1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
+	2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
+	3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
@@ -33,7 +33,7 @@ const LEVEL_STATS = {
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.55
-	attack_range = 0.95
+	attack_range = 0.85   # shorter than Archer — trades reach for mobility + survivability
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed

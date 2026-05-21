@@ -22,9 +22,9 @@ var _pool_ready: bool = false
 
 
 const LEVEL_STATS = {
-	1: {"hp": 193, "damage": 43, "atk_speed": 1.111},
-	2: {"hp": 253, "damage": 58, "atk_speed": 1.0},
-	3: {"hp": 323, "damage": 76, "atk_speed": 0.909},
+	1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
+	2: {"hp": 280, "damage": 54, "atk_speed": 0.95},
+	3: {"hp": 365, "damage": 71, "atk_speed": 0.85},
 }
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
@@ -32,7 +32,7 @@ const LEVEL_STATS = {
 func _init_stats() -> void:
 	var s = LEVEL_STATS[level]
 	move_speed = 0.45
-	attack_range = 0.95
+	attack_range = 1.0   # longest troop range — can snipe Turrets (detect 0.9) from outside
 	hp = s.hp
 	damage = s.damage
 	atk_speed = s.atk_speed

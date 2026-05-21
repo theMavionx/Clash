@@ -5878,9 +5878,22 @@ const TROOP_NAME_MAP = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  demonking: 'DemonKing',
+  demon_king: 'DemonKing',
 };
 function _normalizeTroopName(name) {
   return TROOP_NAME_MAP[String(name || '').toLowerCase()] || String(name || '');
+}
+function _isSlotFiller(name) {
+  return String(name || '') === '_SLOT_FILLER_';
+}
+function _troopSlotCost(name) {
+  return _normalizeTroopName(name) === 'DemonKing' ? 2 : 1;
+}
+function _appendTroopSlots(shipTroops, troopName) {
+  const normalized = _normalizeTroopName(troopName);
+  shipTroops.push(normalized);
+  for (let i = 1; i < _troopSlotCost(normalized); i++) shipTroops.push('_SLOT_FILLER_');
 }
 function _applyCasualties(playerId, casualties) {
   if (!casualties || typeof casualties !== 'object') return;
@@ -5892,6 +5905,7 @@ function _applyCasualties(playerId, casualties) {
   for (const port of ports) {
     const troops = JSON.parse(port.ship_troops || '[]');
     for (const t of troops) {
+      if (_isSlotFiller(t)) continue;
       const name = _normalizeTroopName(t);
       deployed[name] = (deployed[name] || 0) + 1;
     }
@@ -5912,10 +5926,17 @@ function _applyCasualties(playerId, casualties) {
   for (const port of ports) {
     const troops = JSON.parse(port.ship_troops || '[]');
     const filtered = [];
+    let skipNextFiller = false;
     for (const t of troops) {
+      if (skipNextFiller && _isSlotFiller(t)) {
+        skipNextFiller = false;
+        continue;
+      }
+      skipNextFiller = false;
       const name = _normalizeTroopName(t);
       if (remaining[name] && remaining[name] > 0) {
         remaining[name]--;
+        if (_troopSlotCost(name) > 1) skipNextFiller = true;
       } else {
         filtered.push(t);
       }
@@ -5999,7 +6020,9 @@ router.post('/attack/result', auth, (req, res) => {
   for (const row of troopLevelRows) serverTroopLevels[row.troop_type] = row.level;
   for (const act of gameActions) {
     if (act.type === 'place_ship' && act.troopType && act.troopLevel) {
-      const serverLvl = serverTroopLevels[act.troopType] || 1;
+      const normalizedTroop = _normalizeTroopName(act.troopType);
+      const serverKey = normalizedTroop === 'DemonKing' ? 'demon_king' : String(normalizedTroop || '').toLowerCase();
+      const serverLvl = serverTroopLevels[serverKey] || 1;
       act.troopLevel = Math.min(act.troopLevel, serverLvl);
     }
   }
@@ -6231,30 +6254,42 @@ router.get('/battle-log', auth, (req, res) => {
 // ==================== TROOPS ====================
 
 // Buy a troop (deduct gold, server-validated)
-const TROOP_BUY_COST = 100;
+const TROOP_BUY_COSTS = {
+  Knight: 100,
+  Mage: 100,
+  Barbarian: 100,
+  Archer: 100,
+  Ranger: 100,
+  DemonKing: 500,
+};
+const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
+function _troopBuyCost(name) {
+  return TROOP_BUY_COSTS[_normalizeTroopName(name)] || 100;
+}
 router.post('/troops/buy', auth, (req, res) => {
   const { troop_name } = req.body;
   if (!troop_name) return res.status(400).json({ error: 'troop_name required' });
-  const validTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
-  if (!validTroops.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
-  if (!db.canAfford(req.player.id, TROOP_BUY_COST, 0, 0)) {
-    return res.status(400).json({ error: 'Not enough gold', cost: TROOP_BUY_COST });
+  const normalizedTroop = _normalizeTroopName(troop_name);
+  if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
+  const cost = _troopBuyCost(normalizedTroop);
+  if (!db.canAfford(req.player.id, cost, 0, 0)) {
+    return res.status(400).json({ error: 'Not enough gold', cost });
   }
-  db.subtractResources(req.player.id, TROOP_BUY_COST, 0, 0);
-  res.json({ success: true, troop_name, cost: TROOP_BUY_COST, resources: db.getResources(req.player.id) });
+  db.subtractResources(req.player.id, cost, 0, 0);
+  res.json({ success: true, troop_name: normalizedTroop, cost, resources: db.getResources(req.player.id) });
 });
 
 // Load troop onto a ship at a port
 const TROOP_COST = 100;
 const REINFORCE_COST = 50;
-const VALID_TROOPS = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 
 // Load a troop into a ship slot (costs 100 gold). Also saves template.
 router.post('/buildings/:id/load-troop', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { troop_name } = req.body;
-  if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop type' });
+  const normalizedTroop = _normalizeTroopName(troop_name);
+  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
 
   const txn = db.db.transaction(() => {
     const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
@@ -6263,13 +6298,15 @@ router.post('/buildings/:id/load-troop', auth, (req, res) => {
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
     const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
-    if (shipTroops.length >= capacity) throw { status: 400, error: 'Ship is full' };
+    const slotCost = _troopSlotCost(normalizedTroop);
+    if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    if (player.gold < TROOP_COST) throw { status: 400, error: 'Not enough gold' };
+    const troopCost = _troopBuyCost(normalizedTroop);
+    if (player.gold < troopCost) throw { status: 400, error: 'Not enough gold' };
 
-    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
-    shipTroops.push(troop_name);
+    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(troopCost, req.player.id);
+    _appendTroopSlots(shipTroops, normalizedTroop);
     const troopsJson = JSON.stringify(shipTroops);
     // Save both current troops and template (what player chose)
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
@@ -6291,7 +6328,8 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { slot, troop_name } = req.body;
-  if (!Number.isInteger(slot) || !troop_name || !VALID_TROOPS.includes(troop_name)) {
+  const normalizedTroop = _normalizeTroopName(troop_name);
+  if (!Number.isInteger(slot) || !troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
   }
 
@@ -6302,12 +6340,22 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
     if (slot < 0 || slot >= shipTroops.length) throw { status: 400, error: 'Invalid slot' };
+    if (_isSlotFiller(shipTroops[slot])) throw { status: 400, error: 'Cannot replace a reserved heavy-unit slot' };
+    let slotsToReplace = 1;
+    while (slot + slotsToReplace < shipTroops.length && _isSlotFiller(shipTroops[slot + slotsToReplace])) {
+      slotsToReplace++;
+    }
+    const replacement = [];
+    _appendTroopSlots(replacement, normalizedTroop);
+    const nextLength = shipTroops.length - slotsToReplace + replacement.length;
+    const capacity = building.level * 3;
+    if (nextLength > capacity) throw { status: 400, error: 'Not enough ship capacity for this troop' };
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
     if (player.gold < TROOP_COST) throw { status: 400, error: 'Not enough gold' };
 
     db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
-    shipTroops[slot] = troop_name;
+    shipTroops.splice(slot, slotsToReplace, ...replacement);
     const troopsJson = JSON.stringify(shipTroops);
     // Update ship_troops only — template stays as the last full loadout so /reinforce
     // can still restore the original slot count after casualties.
@@ -6366,18 +6414,20 @@ router.post('/troop-died', auth, (req, res) => {
   if (!_allowTroopDied(req.player.id)) return res.status(429).json({ error: 'Too fast' });
 
   const { troop_name } = req.body;
-  if (!troop_name || !VALID_TROOPS.includes(troop_name)) return res.status(400).json({ error: 'Invalid troop' });
+  const normalizedTroop = _normalizeTroopName(troop_name);
+  if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
 
   // Find first port that has this troop and remove one instance (atomic)
   const result = db.db.transaction(() => {
     const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
     for (const port of ports) {
       const troops = JSON.parse(port.ship_troops || '[]');
-      const idx = troops.indexOf(troop_name);
+      const idx = troops.findIndex((t) => _normalizeTroopName(t) === normalizedTroop);
       if (idx !== -1) {
-        troops.splice(idx, 1);
+        const removeCount = Math.min(_troopSlotCost(normalizedTroop), troops.length - idx);
+        troops.splice(idx, removeCount);
         db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(troops), port.id);
-        return { removed: troop_name, port_id: port.id };
+        return { removed: normalizedTroop, port_id: port.id };
       }
     }
     return { removed: null };
@@ -6396,12 +6446,18 @@ router.get('/casualties', auth, (req, res) => {
     const template = JSON.parse(port.ship_troops_template || '[]');
     // Count how many of each troop type are missing
     const currentCounts = {};
-    for (const t of current) currentCounts[t] = (currentCounts[t] || 0) + 1;
+    for (const t of current) {
+      if (_isSlotFiller(t)) continue;
+      const normalized = _normalizeTroopName(t);
+      currentCounts[normalized] = (currentCounts[normalized] || 0) + 1;
+    }
     for (const t of template) {
-      if (currentCounts[t] && currentCounts[t] > 0) {
-        currentCounts[t]--;
+      if (_isSlotFiller(t)) continue;
+      const normalized = _normalizeTroopName(t);
+      if (currentCounts[normalized] && currentCounts[normalized] > 0) {
+        currentCounts[normalized]--;
       } else {
-        casualties[t] = (casualties[t] || 0) + 1;
+        casualties[normalized] = (casualties[normalized] || 0) + 1;
         totalMissing++;
       }
     }

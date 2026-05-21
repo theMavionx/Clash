@@ -29,19 +29,31 @@ const TROOP_STATS = {
     2: { hp: 300, damage: 49,  atkSpeed: 0.909, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
     3: { hp: 383, damage: 64,  atkSpeed: 0.833, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
+  demon_king: {
+    1: { hp: 660,  damage: 70,  atkSpeed: 1.8,  moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    2: { hp: 880,  damage: 92,  atkSpeed: 1.65, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    3: { hp: 1150, damage: 120, atkSpeed: 1.5,  moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+  },
 };
 
 // Defense building stats — turrets fire bullets, archer towers fire arrows
 const DEFENSE_STATS = {
   turret: {
-    1: { damage: 80,  fireRate: 0.5,   detectRange: 1.0, projSpeed: 4.0 },
-    2: { damage: 180, fireRate: 0.25,  detectRange: 1.0, projSpeed: 4.0 },
-    3: { damage: 320, fireRate: 0.166, detectRange: 1.0, projSpeed: 4.0 },
+    1: { damage: 35, fireRate: 0.70, detectRange: 0.95, projSpeed: 4.0 },
+    2: { damage: 50, fireRate: 0.55, detectRange: 0.95, projSpeed: 4.0 },
+    3: { damage: 60, fireRate: 0.45, detectRange: 0.95, projSpeed: 4.0 },
+    4: { damage: 75, fireRate: 0.40, detectRange: 0.95, projSpeed: 4.0 },
   },
   archer_tower: {
-    1: { damage: 90,  fireRate: 1.2, detectRange: 1.0, projSpeed: 2.5 },
-    2: { damage: 140, fireRate: 1.0, detectRange: 1.2, projSpeed: 2.5 },
-    3: { damage: 200, fireRate: 0.8, detectRange: 1.4, projSpeed: 2.5 },
+    1: { damage: 25, fireRate: 1.0,  detectRange: 1.0, projSpeed: 2.5 },
+    2: { damage: 38, fireRate: 0.85, detectRange: 1.1, projSpeed: 2.5 },
+    3: { damage: 50, fireRate: 0.7,  detectRange: 1.2, projSpeed: 2.5 },
+    4: { damage: 65, fireRate: 0.6,  detectRange: 1.3, projSpeed: 2.5 },
+  },
+  mage_tower: {
+    1: { damage: 22, fireRate: 1.5, detectRange: 1.0, projSpeed: 1.6 },
+    2: { damage: 35, fireRate: 1.3, detectRange: 1.0, projSpeed: 1.6 },
+    3: { damage: 52, fireRate: 1.1, detectRange: 1.0, projSpeed: 1.6 },
   },
 };
 
@@ -79,7 +91,7 @@ const CANNON_TARGET_Y = 0.05;
 function cannonShotCost(shotNumber) { return shotNumber; }
 
 // Valid troop types (order matches attack_system.gd SHIP_TROOPS)
-const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
+const VALID_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger', 'demon_king'];
 
 // Canonical world-space grid config from scenes/Main.tscn. Browser clients
 // submit their live scene values, but headless agents need deterministic

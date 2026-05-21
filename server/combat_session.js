@@ -51,7 +51,18 @@ const TROOP_NAMES = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  demon_king: 'DemonKing',
 };
+
+const TROOP_TYPE_ALIASES = {
+  demonking: 'demon_king',
+  demon_king: 'demon_king',
+};
+
+function normalizeTroopTypeName(name) {
+  const raw = String(name || '').toLowerCase();
+  return TROOP_TYPE_ALIASES[raw] || raw;
+}
 
 // ---------- Helpers ----------
 
@@ -740,6 +751,17 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         _searchTimer: 0,
       });
     }
+    if (b.type === 'mage_tower') {
+      const s = DEFENSE_STATS.mage_tower[b.level] || DEFENSE_STATS.mage_tower[1];
+      defenses.push({
+        buildingId: b.id, type: 'mage_tower',
+        damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,
+        projSpeed: s.projSpeed,
+        x: b.x, z: b.z,
+        timer: 0, isAttacking: false, targetId: null,
+        _searchTimer: 0,
+      });
+    }
     if (b.type === 'tombstone') {
       const guardCount = b.level || 1;
       for (let i = 0; i < guardCount; i++) {
@@ -793,7 +815,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         const troopSpawns = Array.isArray(act.troop_spawns) ? act.troop_spawns : [];
         for (let ti = 0; ti < shipTroops.length; ti++) {
           const rawName = shipTroops[ti];
-          const troopType = rawName.toLowerCase();
+          if (String(rawName || '') === '_SLOT_FILLER_') continue;
+          const troopType = normalizeTroopTypeName(rawName);
           if (!VALID_TROOP_TYPES.includes(troopType)) continue;
           const level = (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType])) || act.troopLevel || 1;
           const troopSpawn = troopSpawns[ti] || {};

@@ -54,6 +54,7 @@ const TROOP_DEFS: Dictionary = {
 	"Barbarian": {"model": "res://Model/Characters/Model/Barbarian.glb",   "script": "res://scripts/barbarian.gd"},
 	"Archer":    {"model": "res://Model/Characters/Model/Ranger.glb",      "script": "res://scripts/archer.gd"},
 	"Ranger":    {"model": "res://Model/Characters/Model/Rogue_Hooded.glb","script": "res://scripts/ranger.gd"},
+	"DemonKing": {"model": "res://Model/Characters/Model/DemonKing_Body.fbx",   "script": "res://scripts/demon_king.gd"},
 }
 
 ## Legacy constant kept for replay compatibility
@@ -912,9 +913,10 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 static func _script_to_troop_key(script_path: String) -> String:
 	var file: String = script_path.get_file().get_basename()
 	match file:
-		"knight":    return "Knight"
-		"mage":      return "Mage"
-		"barbarian": return "Barbarian"
-		"archer":    return "Archer"
-		"ranger":    return "Ranger"
+		"knight":     return "Knight"
+		"mage":       return "Mage"
+		"barbarian":  return "Barbarian"
+		"archer":     return "Archer"
+		"ranger":     return "Ranger"
+		"demon_king": return "DemonKing"
 	return file.capitalize()

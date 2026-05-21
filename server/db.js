@@ -794,8 +794,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [6, 11, 18], max: [200, 400, 800] },    // per minute
-  sawmill: { resource: 'wood', rate: [8, 15, 24], max: [250, 500, 1000] },
+  mine:    { resource: 'ore',  rate: [6, 11, 18, 27], max: [200, 400, 800, 1600] },    // per minute
+  sawmill: { resource: 'wood', rate: [8, 15, 24, 36], max: [250, 500, 1000, 2000] },
 };
 
 // ---------- Prepared Statements ----------
@@ -1449,36 +1449,42 @@ const TH_UNLOCK = {
   turret:    3,  // unlocked at TH3
 };
 
-// Max count per building type PER TH level: { type: [th1, th2, th3] }
+// Max count per building type PER TH level: { type: [th1, th2, th3, th4] }
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3],
-  sawmill:      [1, 2, 3],
-  barn:         [1, 1, 2],
-  port:         [1, 2, 5],
-  archer_tower: [1, 2, 3],
-  tombstone:    [0, 1, 3],  // unlocked at TH2
-  turret:       [0, 0, 3],  // unlocked at TH3
-  storage:      [0, 1, 2],  // unlocked at TH2
-  town_hall:    [1, 1, 1],
+  mine:         [1, 2, 3, 4],
+  sawmill:      [1, 2, 3, 4],
+  barn:         [1, 1, 2, 3],
+  port:         [1, 2, 5, 6],
+  archer_tower: [1, 2, 3, 4],
+  tombstone:    [0, 1, 3, 4],  // unlocked at TH2
+  turret:       [0, 0, 3, 4],  // unlocked at TH3
+  storage:      [0, 1, 2, 3],  // unlocked at TH2
+  town_hall:    [1, 1, 1, 1],
 };
 
 // Required buildings to upgrade Town Hall (all must be at TH's current level)
 const TH_UPGRADE_REQUIRES = {
   1: ['mine', 'sawmill', 'barn', 'port'],
   2: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower'],
+  3: ['mine', 'sawmill', 'barn', 'port', 'storage', 'tombstone', 'archer_tower', 'turret'],
 };
 
 const BUILDING_DEFS = {
   town_hall: {
-    size: [4, 4], max_level: 3,
-    hp_levels: [3500, 6000, 10000],
+    size: [4, 4], max_level: 5,
+    hp_levels: [3500, 6000, 10000, 17000, 28000],
     cost: { gold: 0, wood: 0, ore: 0 },
-    upgrade_cost: { 2: { gold: 2000, wood: 6000, ore: 5000 }, 3: { gold: 5000, wood: 20000, ore: 18000 } },
+    upgrade_cost: {
+      2: { gold: 2000, wood: 6000, ore: 5000 },
+      3: { gold: 5000, wood: 20000, ore: 18000 },
+      4: { gold: 12000, wood: 55000, ore: 50000 },
+      5: { gold: 30000, wood: 130000, ore: 120000 },
+    },
     max_count: 1,
   },
   mine: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [1200, 2200, 3800],
+    size: [3, 3], max_level: 4,
+    hp_levels: [1200, 2200, 3800, 6000],
     cost: { gold: 200, wood: 500, ore: 0 },
     max_count: 4,
   },
@@ -1495,33 +1501,43 @@ const BUILDING_DEFS = {
     max_count: 2,
   },
   sawmill: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [1200, 2200, 3800],
+    size: [3, 3], max_level: 4,
+    hp_levels: [1200, 2200, 3800, 6000],
     cost: { gold: 200, wood: 0, ore: 500 },
     max_count: 4,
   },
   turret: {
-    size: [2, 2], max_level: 3,
-    hp_levels: [900, 1600, 2800],
+    size: [2, 2], max_level: 4,
+    hp_levels: [900, 1600, 2800, 4500],
     cost: { gold: 400, wood: 1500, ore: 1200 },
     max_count: 6,
   },
   tombstone: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [1000, 1500, 2000],
+    size: [3, 3], max_level: 4,
+    hp_levels: [1000, 1500, 2000, 2700],
     cost: { gold: 200, wood: 0, ore: 800 },
     max_count: 4,
   },
   storage: {
-    size: [4, 5], max_level: 3,
-    hp_levels: [1400, 2500, 4200],
+    size: [4, 5], max_level: 4,
+    hp_levels: [1400, 2500, 4200, 6500],
     cost: { gold: 300, wood: 1200, ore: 0 },
     max_count: 3,
   },
   archer_tower: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [800, 1500, 2500],
+    size: [3, 3], max_level: 4,
+    hp_levels: [800, 1500, 2500, 3800],
     cost: { gold: 400, wood: 1500, ore: 0 },
+    max_count: 4,
+  },
+  // Mage Tower — sandbox/test building. Client only lists it in the shop when
+  // test_mode is on (def.test_only), so production players can't place it via
+  // the UI; this def keeps the server data model consistent if it's ever
+  // promoted out of test. No attack yet.
+  mage_tower: {
+    size: [3, 3], max_level: 3,
+    hp_levels: [700, 1300, 2200],
+    cost: { gold: 500, wood: 0, ore: 800 },
     max_count: 4,
   },
 };
@@ -1534,6 +1550,7 @@ const TROOP_DEFS = {
   barbarian: { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 150 }, { gold: 350, wood: 0, ore: 350 },  { gold: 700, wood: 0, ore: 700 }] },
   archer:    { max_level: 3, cost: [{ gold: 150, wood: 150, ore: 0 }, { gold: 350, wood: 350, ore: 0 },  { gold: 700, wood: 700, ore: 0 }] },
   ranger:    { max_level: 3, cost: [{ gold: 120, wood: 120, ore: 0 }, { gold: 250, wood: 250, ore: 0 },  { gold: 500, wood: 500, ore: 0 }] },
+  demon_king: { max_level: 3, cost: [{ gold: 500, wood: 0, ore: 0 }, { gold: 1200, wood: 0, ore: 5 }, { gold: 2500, wood: 0, ore: 15 }] },
 };
 
 const GRID_SPECS = {
@@ -1549,15 +1566,15 @@ const TROPHY_WIN = 30;
 const TROPHY_LOSS = 15;  // defender loses this on defeat
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250],
-  mine:      [10, 25, 50],
+  town_hall: [50, 120, 250, 450, 750],
+  mine:      [10, 25, 50, 90],
   barn:      [10, 25, 50],
   port:      [15, 35, 70],
-  sawmill:   [10, 25, 50],
-  turret:    [20, 45, 90],
-  tombstone: [5, 10, 20],
-  storage:      [10, 25, 50],
-  archer_tower: [15, 35, 70],
+  sawmill:   [10, 25, 50, 90],
+  turret:    [20, 45, 90, 160],
+  tombstone: [5, 10, 20, 40],
+  storage:      [10, 25, 50, 90],
+  archer_tower: [15, 35, 70, 125],
 };
 
 // ---------- Helper Functions ----------
@@ -1906,6 +1923,8 @@ const TH_BASE_CAPACITY = {
   1: { gold: 10000, wood: 10000, ore: 10000 },
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 40000, wood: 40000, ore: 40000 },
+  4: { gold: 70000, wood: 70000, ore: 70000 },
+  5: { gold: 110000, wood: 110000, ore: 110000 },
 };
 
 // Additional capacity per Storage building per level
@@ -1913,6 +1932,7 @@ const STORAGE_CAPACITY = {
   1: { gold: 15000, wood: 15000, ore: 15000 },
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 30000, wood: 30000, ore: 30000 },
+  4: { gold: 50000, wood: 50000, ore: 50000 },
 };
 
 function getResourceCaps(playerId) {

@@ -303,8 +303,14 @@ func get_troops() -> Array:
 		return response
 	return []
 
+func _server_troop_type(troop_type: String) -> String:
+	match troop_type:
+		"DemonKing":
+			return "demon_king"
+	return troop_type.to_lower()
+
 func upgrade_troop(troop_type: String) -> Dictionary:
-	return await _http_post("/troops/%s/upgrade" % troop_type.to_lower(), {})
+	return await _http_post("/troops/%s/upgrade" % _server_troop_type(troop_type), {})
 
 # ── Matchmaking ───────────────────────────────────────────────
 

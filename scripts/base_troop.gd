@@ -1011,6 +1011,7 @@ func _get_troop_name() -> String:
 		"barbarian": return "Barbarian"
 		"archer": return "Archer"
 		"ranger": return "Ranger"
+		"demon_king": return "DemonKing"
 	return ""
 
 
@@ -1033,7 +1034,12 @@ func _record_replay_telemetry(kind: String, data: Dictionary = {}) -> void:
 			return
 
 
-func _target_payload_from_refs(target_ref: Dictionary = {}, guard_ref: Node3D = null) -> Dictionary:
+## `guard_ref` is intentionally untyped: callers may pass a Node3D that was
+## freed earlier this frame (e.g. when a SkeletonGuard dies under our attack
+## and combat telemetry runs in the same frame). A typed `Node3D` parameter
+## would reject the freed instance at the argument-binding stage before the
+## `is_instance_valid` guard below ever runs.
+func _target_payload_from_refs(target_ref: Dictionary = {}, guard_ref = null) -> Dictionary:
 	var payload: Dictionary = {}
 	if guard_ref != null and is_instance_valid(guard_ref):
 		payload["target_kind"] = "guard"
