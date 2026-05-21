@@ -20,6 +20,132 @@ const PYTH_HISTORY_STALE_MS = 15 * 60_000;
 const PYTH_HISTORY_MAX_BARS = 720;
 const pythHistoryCache = new Map();
 const pythHistoryInflight = new Map();
+const PHOENIX_API_BASE = process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
+const PHOENIX_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_PROXY_TIMEOUT_MS || 4500)));
+const PHOENIX_PROXY_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_PROXY_STALE_MS || 2 * 60_000)));
+const phoenixProxyCache = new Map();
+const phoenixProxyInflight = new Map();
+
+function normalizePhoenixProxyPath(rawPath) {
+  const pathname = String(rawPath || '').split('?')[0];
+  if (!pathname.startsWith('/') || pathname.includes('..') || pathname.includes('\\')) {
+    throw new Error('invalid Phoenix API path');
+  }
+  if (!/^\/(?:exchange|v1|trader|invite)(?:\/|$)/.test(pathname)) {
+    throw new Error('Phoenix API path is not allowed');
+  }
+  if (!/^\/[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/.test(rawPath)) {
+    throw new Error('invalid Phoenix API characters');
+  }
+  return rawPath;
+}
+
+function phoenixProxyCacheTtl(pathname, method) {
+  if (method !== 'GET') return 0;
+  if (/^\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/exchange(?:\/|$)/.test(pathname)) return 5 * 60_000;
+  if (/^\/v1\/view\/orderbook\//.test(pathname)) return 1200;
+  if (/^\/v1\/candles\//.test(pathname)) return 15_000;
+  if (/^\/v1\/funding\/overview(?:\?|$)/.test(pathname)) return 15_000;
+  if (/^\/trader\/[^/]+\/(?:trades-history|funding-history)(?:\?|$)/.test(pathname)) return 20_000;
+  if (/^\/trader\/[^/]+\/state(?:\?|$)/.test(pathname) || /^\/v1\/trader\/state\//.test(pathname)) return 3500;
+  return 5000;
+}
+
+async function fetchPhoenixProxy(pathWithQuery, options = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  const body = options.body;
+  const headers = {
+    accept: 'application/json',
+    'user-agent': 'ClashOfPerps/1.0 phoenix-proxy',
+  };
+  if (method !== 'GET' && body !== undefined) headers['content-type'] = 'application/json';
+
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), PHOENIX_PROXY_TIMEOUT_MS);
+  try {
+    const upstream = await fetch(`${PHOENIX_API_BASE}${pathWithQuery}`, {
+      method,
+      signal: ctrl.signal,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await upstream.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!upstream.ok) {
+      const detail = typeof data === 'string' ? data : (data?.error || data?.message || text);
+      const err = new Error(`Phoenix API ${upstream.status}: ${detail || 'request failed'}`);
+      err.status = upstream.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function handlePhoenixApiProxy(req, res, pathWithQuery) {
+  let cleanPath;
+  try {
+    cleanPath = normalizePhoenixProxyPath(pathWithQuery);
+  } catch (e) {
+    return res.status(400).json({ error: e.message });
+  }
+
+  const method = String(req.method || 'GET').toUpperCase();
+  if (!['GET', 'POST'].includes(method)) {
+    return res.status(405).json({ error: 'method not allowed' });
+  }
+
+  const ttl = phoenixProxyCacheTtl(cleanPath, method);
+  const cacheKey = `${method}:${cleanPath}:${method === 'GET' ? '' : JSON.stringify(req.body || {})}`;
+  const now = Date.now();
+  const cached = ttl > 0 ? phoenixProxyCache.get(cacheKey) : null;
+  if (cached && now - cached.at < ttl) {
+    res.set('Cache-Control', `public, max-age=${Math.max(1, Math.floor(ttl / 1000))}`);
+    res.set('X-Phoenix-Proxy-Cache', 'hit');
+    return res.json(cached.data);
+  }
+
+  try {
+    let pending = phoenixProxyInflight.get(cacheKey);
+    if (!pending) {
+      pending = fetchPhoenixProxy(cleanPath, { method, body: req.body }).finally(() => {
+        phoenixProxyInflight.delete(cacheKey);
+      });
+      phoenixProxyInflight.set(cacheKey, pending);
+    }
+    const data = await pending;
+    if (ttl > 0) {
+      phoenixProxyCache.set(cacheKey, { at: now, data });
+      if (phoenixProxyCache.size > 750) {
+        const cutoff = Date.now() - PHOENIX_PROXY_STALE_MS;
+        for (const [key, value] of phoenixProxyCache) {
+          if (value.at < cutoff) phoenixProxyCache.delete(key);
+        }
+      }
+    }
+    res.set('Cache-Control', ttl > 0 ? `public, max-age=${Math.max(1, Math.floor(ttl / 1000))}` : 'no-store');
+    res.set('X-Phoenix-Proxy-Cache', cached ? 'refresh' : 'miss');
+    return res.json(data);
+  } catch (e) {
+    if (cached && now - cached.at < PHOENIX_PROXY_STALE_MS) {
+      console.warn('[phoenix/proxy] upstream failed, serving stale:', e.message);
+      res.set('Cache-Control', 'public, max-age=3');
+      res.set('X-Phoenix-Proxy-Cache', 'stale');
+      return res.json(cached.data);
+    }
+    const status = e.name === 'AbortError' ? 504 : (e.status === 429 ? 429 : 502);
+    console.warn('[phoenix/proxy] failed:', cleanPath, e.message);
+    res.set('Cache-Control', ttl > 0 ? 'public, max-age=3' : 'no-store');
+    res.set('X-Phoenix-Proxy-Cache', 'error');
+    return res.status(status).json({
+      error: status === 504 ? 'Phoenix API timeout' : 'Phoenix API request failed',
+      detail: e.message,
+    });
+  }
+}
 
 function pythResolutionSeconds(resolution) {
   const r = String(resolution || '').trim();
@@ -802,6 +928,12 @@ router.get('/pyth/history', async (req, res) => {
   }
 });
 
+router.all(/^\/phoenix\/api\/(.+)$/, async (req, res) => {
+  const suffix = req.params?.[0] || '';
+  const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  return handlePhoenixApiProxy(req, res, `/${suffix}${query}`);
+});
+
 router.get('/trades', async (req, res) => {
   const { symbol } = req.query;
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
@@ -1241,11 +1373,51 @@ function avantisBool(v) {
   return false;
 }
 
+function avantisOpenedAt(row) {
+  const n = Number(row?.openedAt ?? row?.opened_at ?? row?.trade?.openedAt ?? row?.trade?.opened_at ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function avantisLifecycleTradeKey(kind, address, pairIdx, tradeIdx, openedAt, fallback = '') {
+  const base = `avantis:${kind}:${address}:${pairIdx}:${tradeIdx}`;
+  if (openedAt) return `${base}:${openedAt}`;
+  const suffix = String(fallback || '')
+    .toLowerCase()
+    .replace(/^0x/, '')
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 32);
+  return suffix ? `${base}:${suffix}` : base;
+}
+
+function avantisCreatedAtSeconds(createdAt) {
+  if (!createdAt) return 0;
+  const ms = Date.parse(`${String(createdAt).replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+function avantisLegacyOpenRecordedForLifecycle(playerId, legacyKey, openedAt) {
+  if (!openedAt) return false;
+  try {
+    const row = db.db.prepare(
+      `SELECT created_at
+         FROM trade_history
+        WHERE player_id = ?
+          AND dex = 'avantis'
+          AND client_order_id = ?
+        LIMIT 1`
+    ).get(playerId, legacyKey);
+    const created = avantisCreatedAtSeconds(row?.created_at);
+    return created > 0 && created >= openedAt - 300;
+  } catch {
+    return false;
+  }
+}
+
 async function recordVerifiedAvantisOpen(req, body) {
   const orderType = String(body.order_type || 'market').toLowerCase();
   if (orderType !== 'market') return false;
   const dedup = String(body.dedup_key || '').trim();
-  const m = dedup.match(/^avantis:open:(0x[0-9a-fA-F]{40}):(\d+):(\d+)$/);
+  const m = dedup.match(/^avantis:open:(0x[0-9a-fA-F]{40}):(\d+):(\d+)(?::([A-Za-z0-9_.-]+))?$/);
   if (!m) return false;
   const address = String(body.address || '').trim().toLowerCase();
   const dedupAddress = m[1].toLowerCase();
@@ -1267,6 +1439,12 @@ async function recordVerifiedAvantisOpen(req, body) {
   const notional = collateral * lev;
   if (!Number.isFinite(notional) || notional < 50 || notional > 10_000_000) return false;
   const side = avantisBool(hit.buy ?? hit.trade?.buy) ? 'long' : 'short';
+  const openedAt = avantisOpenedAt(hit);
+  const legacyKey = avantisLifecycleTradeKey('open', address, pairIdx, tradeIdx, 0);
+  const recordKey = avantisLifecycleTradeKey('open', address, pairIdx, tradeIdx, openedAt, body.tx_hash || m[4] || dedup);
+  if (avantisLegacyOpenRecordedForLifecycle(req.playerId, legacyKey, openedAt)) {
+    return true;
+  }
   let symbol = String(body.symbol || '').toUpperCase();
   try {
     const { indexMap } = await avantis.getPairsMap();
@@ -1282,8 +1460,8 @@ async function recordVerifiedAvantisOpen(req, body) {
     side,
     orderType: 'market',
     amount: String(collateral),
-    orderId: dedup,
-    clientOrderId: dedup,
+    orderId: recordKey,
+    clientOrderId: recordKey,
     status: 'filled',
     dex: 'avantis',
     notional_usd: notional,
@@ -1355,7 +1533,11 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
       return res.status(409).json({ error: 'wallet does not match player account' });
     }
 
-    const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, { limit: 100 });
+    const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
+      limit: 100,
+      timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,
+      cacheTtlMs: 20_000,
+    });
     if (result.imported > 0) {
       console.log(`[phoenix] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${wallet.slice(0, 8)}...`);
     }

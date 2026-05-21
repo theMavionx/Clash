@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
 import { getReadClient } from '../lib/decibel';
-import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
+import { phoenixCandlesRoute, phoenixFetch } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
@@ -313,9 +313,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       try {
         let candles = [];
         if (dex === 'phoenix') {
-          const res = await fetch(`${PHOENIX_API_URL}/v1/candles/${encodeURIComponent(phoenixSymbol(symbol))}?timeframe=${encodeURIComponent(interval)}&limit=500`);
-          if (!res.ok) throw new Error(`Phoenix candles ${res.status}`);
-          const json = await res.json();
+          const json = await phoenixFetch(phoenixCandlesRoute(symbol, { timeframe: interval, limit: 500 }));
           const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.value) ? json.value : [];
           if (cancelled) return;
           candles = rows.map(c => ({

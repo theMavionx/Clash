@@ -40,7 +40,21 @@
     <div id="root"></div>
     <script>
       if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch(function(){});
+        (function(){
+          var key = 'clash_sw_controller_reload';
+          navigator.serviceWorker.addEventListener('controllerchange', function() {
+            try {
+              if (sessionStorage.getItem(key) === '1') return;
+              sessionStorage.setItem(key, '1');
+            } catch(e) {}
+            location.reload();
+          });
+          navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+            .then(function(registration) {
+              if (registration && registration.update) registration.update().catch(function(){});
+            })
+            .catch(function(){});
+        })();
       }
     </script>
     <script>

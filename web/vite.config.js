@@ -34,6 +34,13 @@ const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
   || viteEnv.VITE_ARBITRUM_ALCHEMY_KEY
   || '';
+const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
+  || viteEnv.BASE_ALCHEMY_KEY
+  || process.env.ALCHEMY_BASE_API_KEY
+  || viteEnv.ALCHEMY_BASE_API_KEY
+  || process.env.VITE_BASE_ALCHEMY_KEY
+  || viteEnv.VITE_BASE_ALCHEMY_KEY
+  || '';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
   || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
@@ -199,6 +206,30 @@ export default defineConfig({
         target: 'https://arb-mainnet.g.alchemy.com',
         changeOrigin: true, secure: true,
         rewrite: () => ARBITRUM_ALCHEMY_KEY ? `/v2/${ARBITRUM_ALCHEMY_KEY}` : '/v2/',
+      },
+      '/rpc/base-alchemy': {
+        target: 'https://base-mainnet.g.alchemy.com',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => BASE_ALCHEMY_KEY ? `/v2/${BASE_ALCHEMY_KEY}` : '/v2/',
+      },
+      '/rpc/base': {
+        target: 'https://mainnet.base.org',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => '/',
       },
       // Anonymous Arbitrum RPC pool — used only when env override is unset.
       // PRIMARY = Pocket Network public node (arb-pokt.nodies.app) — most

@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplFills } from '../lib/perplClient';
-import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
+import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const HYPERLIQUID_API = import.meta.env.VITE_HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz';
@@ -248,11 +248,9 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           return;
         }
         if (dex === 'phoenix') {
-          const r = await fetch(`${PHOENIX_API_URL}/trader/${encodeURIComponent(addr)}/trades-history?limit=100`, {
+          const d = await phoenixFetch(`/trader/${encodeURIComponent(addr)}/trades-history?limit=100`, {
             signal: controller.signal,
           });
-          if (!r.ok) throw new Error(`Phoenix history error ${r.status}`);
-          const d = await r.json();
           const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : [];
           if (!cancelled) setTrades(rows.map(t => normalizePhoenixTrade(t, markets)).filter(Boolean));
           return;

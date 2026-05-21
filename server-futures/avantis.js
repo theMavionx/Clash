@@ -13,10 +13,15 @@ const USDC_ADDRESS    = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID        = 8453; // Base mainnet
 function splitList(value) {
   return String(value || '')
-    .split(',')
+    .split(/[,\s]+/)
     .map(s => s.trim())
     .filter(Boolean);
 }
+
+const BASE_ALCHEMY_KEY = String(process.env.BASE_ALCHEMY_KEY || process.env.ALCHEMY_BASE_API_KEY || '').trim();
+const BASE_ALCHEMY_RPC = BASE_ALCHEMY_KEY
+  ? `https://base-mainnet.g.alchemy.com/v2/${encodeURIComponent(BASE_ALCHEMY_KEY)}`
+  : '';
 
 const BASE_RPC_URLS = splitList(
   process.env.BASE_RPC_URLS ||
@@ -26,11 +31,7 @@ const BASE_RPC_URLS = splitList(
 );
 if (BASE_RPC_URLS.length === 0) {
   BASE_RPC_URLS.push(
-    'https://base-rpc.publicnode.com',
-    'https://base.public.blockpi.network/v1/rpc/public',
-    'https://base.drpc.org',
-    'https://rpcfree.com/base-rpc',
-    'https://1rpc.io/base',
+    ...(BASE_ALCHEMY_RPC ? [BASE_ALCHEMY_RPC] : []),
     'https://mainnet.base.org',
   );
 }

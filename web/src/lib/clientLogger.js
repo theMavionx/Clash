@@ -520,17 +520,97 @@ export function lazyWithClientReload(importer, chunkName) {
   });
 }
 
-function loadServiceWorkerVersion() {
+const SW_VERSION_STORAGE_KEY = 'clash_sw_version';
+let swReloadInProgress = false;
+
+function parseServiceWorkerVersion(text) {
+  const m = String(text || '').match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
+  return m?.[1] || null;
+}
+
+function writeStorage(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* storage disabled */ }
+}
+
+function clearOldRuntimeCaches(currentVersion) {
+  if (!window.caches?.keys) return Promise.resolve();
+  return window.caches.keys()
+    .then((names) => Promise.all(
+      names
+        .filter((name) => /^clash-runtime-/.test(name) && name !== currentVersion)
+        .map((name) => window.caches.delete(name))
+    ))
+    .catch(() => {});
+}
+
+function reloadForFreshServiceWorker(version, reason) {
+  if (swReloadInProgress) return;
+  swReloadInProgress = true;
+  try {
+    const key = `clash_sw_reload_${String(version || reason || 'unknown').replace(/[^a-z0-9_-]+/gi, '_')}`;
+    if (sessionStorage.getItem(key) === '1') return;
+    sessionStorage.setItem(key, '1');
+  } catch { /* storage disabled */ }
+  addBreadcrumbInternal('service_worker.reload', { version, reason }, 'warn');
+  clearOldRuntimeCaches(version).finally(() => {
+    setTimeout(() => location.reload(), 180);
+  });
+}
+
+function handleServiceWorkerVersion(version, reason) {
+  if (!version) return;
+  const previous = readStorage(SW_VERSION_STORAGE_KEY);
+  runtimeContext.sw_version = version;
+  writeStorage(SW_VERSION_STORAGE_KEY, version);
+  if (previous && previous !== version && navigator.serviceWorker?.controller) {
+    reloadForFreshServiceWorker(version, reason);
+  }
+}
+
+function loadServiceWorkerVersion(reason = 'fetch') {
   if (!('serviceWorker' in navigator)) return;
   const fetchImpl = original.fetch || window.fetch?.bind(window);
   if (!fetchImpl) return;
   fetchImpl(`/sw.js?client_log=${Date.now()}`, { cache: 'no-store' })
     .then(r => r.ok ? r.text() : '')
     .then(text => {
-      const m = text.match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
-      if (m?.[1]) runtimeContext.sw_version = m[1];
+      handleServiceWorkerVersion(parseServiceWorkerVersion(text), reason);
     })
     .catch(() => {});
+}
+
+function installServiceWorkerFreshnessGuard() {
+  if (!('serviceWorker' in navigator)) return;
+  let hadController = !!navigator.serviceWorker.controller;
+
+  const ensureRegistration = () => navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+    .catch(() => null);
+
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    if (event?.data?.type !== 'CLASH_SW_ACTIVATED') return;
+    handleServiceWorkerVersion(event.data.version, 'activated_message');
+  });
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) {
+      hadController = true;
+      return;
+    }
+    const knownVersion = runtimeContext.sw_version || readStorage(SW_VERSION_STORAGE_KEY);
+    reloadForFreshServiceWorker(knownVersion, 'controllerchange');
+  });
+
+  const requestUpdate = () => {
+    ensureRegistration()
+      .then((registration) => registration?.update?.())
+      .catch(() => {});
+    loadServiceWorkerVersion('poll');
+  };
+  requestUpdate();
+  window.addEventListener('focus', requestUpdate);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) requestUpdate();
+  });
 }
 
 export function installClientLogger() {
@@ -542,6 +622,7 @@ export function installClientLogger() {
   patchFetch();
   patchHistory();
   loadServiceWorkerVersion();
+  installServiceWorkerFreshnessGuard();
 
   window.__clashLogBreadcrumb = addClientBreadcrumb;
   window.__clashSetLogContext = setClientLogContext;

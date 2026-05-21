@@ -17,25 +17,63 @@ export const BASE_CHAIN_ID_HEX = '0x2105';
 
 function splitRpcUrls(value) {
   return String(value || '')
-    .split(',')
+    .split(/[,\s]+/)
     .map(s => s.trim())
     .filter(Boolean);
 }
 
+function siteOrigin() {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+  return 'https://clashofperps.fun';
+}
+
+function sameOriginRpcUrl(path) {
+  const raw = String(path || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `${siteOrigin()}${raw.startsWith('/') ? raw : `/${raw}`}`;
+}
+
+function normalizeBaseRpcUrl(rawUrl) {
+  const raw = String(rawUrl || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('/')) return sameOriginRpcUrl(raw);
+  try {
+    const url = new URL(raw, siteOrigin());
+    const host = url.hostname.toLowerCase();
+    const origin = new URL(siteOrigin()).origin;
+    if (url.origin === origin && url.pathname.startsWith('/rpc/base')) return url.href;
+    if (host.startsWith('base-mainnet.') && host.includes('alchemy')) return sameOriginRpcUrl('/rpc/base-alchemy');
+    if (host === ['mainnet', 'base', 'org'].join('.')) return sameOriginRpcUrl('/rpc/base');
+    if (
+      (host.includes('publicnode') && host.includes('base'))
+      || (host.includes('blockpi') && host.includes('base'))
+      || (host.endsWith('drpc.org') && host.startsWith('base.'))
+      || (host === 'rpcfree.com' && url.pathname.includes('base'))
+      || (host === '1rpc.io' && url.pathname.includes('base'))
+      || (host.includes('developer-access') && host.includes('base'))
+    ) {
+      return '';
+    }
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
 export const BASE_RPC_URLS = (() => {
   const override = splitRpcUrls(import.meta.env.VITE_BASE_RPC_URLS || import.meta.env.VITE_BASE_RPC_URL);
-  if (override.length) return override;
+  const normalizedOverride = override.map(normalizeBaseRpcUrl).filter(Boolean);
+  if (normalizedOverride.length) return normalizedOverride;
   return [
-    'https://base-rpc.publicnode.com',
-    'https://base.public.blockpi.network/v1/rpc/public',
-    'https://base.drpc.org',
-    'https://rpcfree.com/base-rpc',
-    'https://1rpc.io/base',
-    'https://mainnet.base.org',
+    sameOriginRpcUrl('/rpc/base-alchemy'),
+    sameOriginRpcUrl('/rpc/base'),
   ];
 })();
 
-export const BASE_PRIMARY_RPC_URL = BASE_RPC_URLS[0] || 'https://mainnet.base.org';
+export const BASE_PRIMARY_RPC_URL = BASE_RPC_URLS[0] || sameOriginRpcUrl('/rpc/base');
 
 // ───── Contract addresses (Base mainnet) ───────────────────────────
 export const TRADING_ADDRESS         = '0x44914408af82bC9983bbb330e3578E1105e11d4e';

@@ -5,8 +5,10 @@ const GODOT_RUNTIME_ASSETS = [
   '/godot/Work.wasm',
   '/godot/Work.js',
 ];
+let reloadClientsOnActivate = false;
 
 self.addEventListener('install', () => {
+  reloadClientsOnActivate = !!self.registration.active;
   self.skipWaiting();
 });
 
@@ -19,6 +21,15 @@ self.addEventListener('activate', (event) => {
           .map((name) => caches.delete(name))
       ))
       .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+      .then((clients) => {
+        for (const client of clients) {
+          client.postMessage({ type: 'CLASH_SW_ACTIVATED', version: CACHE_NAME });
+          if (reloadClientsOnActivate && client.url) {
+            client.navigate(client.url).catch(() => {});
+          }
+        }
+      })
   );
 });
 

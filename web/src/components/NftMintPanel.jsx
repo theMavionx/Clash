@@ -333,6 +333,23 @@ function shopChainForDex(dex) {
   return DEX_TO_SHOP_CHAIN[dex] || 'base';
 }
 
+const SHOP_CHAIN_STORAGE_KEY = 'clash_shop_chain';
+
+function readStoredShopChain(fallback) {
+  if (typeof localStorage === 'undefined') return fallback;
+  try {
+    const stored = localStorage.getItem(SHOP_CHAIN_STORAGE_KEY);
+    return SHOP_PAYMENTS_BY_CHAIN[stored] ? stored : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredShopChain(chain) {
+  if (typeof localStorage === 'undefined') return;
+  try { localStorage.setItem(SHOP_CHAIN_STORAGE_KEY, chain); } catch { /* storage disabled */ }
+}
+
 const DEX_TO_MARKETPLACE_CHAIN = {
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
@@ -366,6 +383,8 @@ function NftMintPanel({ onClose }) {
   const [step, setStep] = useState('payment');
   const [selectedChain, setSelectedChain] = useState(() => recommendedChain(dex));
   const [selectedPayment, setSelectedPayment] = useState(() => defaultPaymentForChain(recommendedChain(dex)));
+  const [shopChain, setShopChain] = useState(() => readStoredShopChain(shopChainForDex(dex)));
+  const [chainPickerOpen, setChainPickerOpen] = useState(false);
   // Top-level view inside the shop modal. 'shop' shows the NFT/Resources
   // tabs; 'bridge' replaces the body with the cross-chain bridge UI.
   const [view, setView] = useState('shop');
@@ -412,11 +431,8 @@ function NftMintPanel({ onClose }) {
   const gameProducts = (gameShopConfig?.products || []).filter((product) => (
     product.kind !== 'ai_messages' && product.kind !== 'ai_subscription'
   ));
-  // Shop chain is derived from the player's DEX choice — no manual
-  // selector. Every DEX maps 1:1 to a chain (see DEX_TO_SHOP_CHAIN). Per-
-  // chain readiness gates the buy button when the operator hasn't funded
-  // that chain's treasury yet.
-  const shopChain = shopChainForDex(dex);
+  // Game resource purchases use their own chain selector. The player's DEX
+  // only seeds the first choice; after that, the shop chain is independent.
   const shopEvmChainId = EVM_CHAIN_ID_BY_NFT_CHAIN[shopChain] || null;
   const evmOnShopChain = !!shopEvmChainId && evmChainId === shopEvmChainId;
   const marketplaceChain = marketplaceChainForDex(dex);
@@ -595,6 +611,28 @@ function NftMintPanel({ onClose }) {
     setNotice(null);
     addClientBreadcrumb('nft.chain_selected', { chain, dex });
   }, [dex]);
+
+  const handleSelectShopChain = useCallback((chain) => {
+    if (!SHOP_PAYMENTS_BY_CHAIN[chain]) return;
+    setShopChain(chain);
+    writeStoredShopChain(chain);
+    setChainPickerOpen(false);
+    setNotice(null);
+    addClientBreadcrumb('shop.chain_selected', { chain, dex, source: 'manual' });
+  }, [dex]);
+
+  const handleSwitchPanelChain = useCallback((chain) => {
+    if (activeShopTab === 'resources') {
+      handleSelectShopChain(chain);
+      return;
+    }
+    if (activeShopTab === 'nft') {
+      handleSelectChain(chain);
+      setChainPickerOpen(false);
+      return;
+    }
+    setChainPickerOpen(false);
+  }, [activeShopTab, handleSelectChain, handleSelectShopChain]);
 
   const handleSelectCop = useCallback(() => {
     setSelectedChain('base');
@@ -933,6 +971,19 @@ function NftMintPanel({ onClose }) {
   const evmModalTargetLabel = SHOP_CHAIN_LABEL[evmModalTargetEvmChain] || 'Base';
 
   const contextLine = getContextLine(dex);
+  const canSwitchPaymentChain = activeShopTab === 'resources' || activeShopTab === 'nft';
+  const activePaymentChain = activeShopTab === 'resources'
+    ? shopChain
+    : activeShopTab === 'marketplace'
+      ? marketplaceChain
+      : selectedChain;
+  const activePaymentChainLabel = SHOP_CHAIN_LABEL[activePaymentChain] || 'Base';
+  const chainSwitchReadiness = activeShopTab === 'resources'
+    ? shopReadiness
+    : SHOP_CHAIN_CHOICES.reduce((acc, chain) => {
+        acc[chain.id] = NFT_MINT_SUPPORTED.has(chain.id);
+        return acc;
+      }, {});
 
   const handleDismissSuccess = useCallback(() => {
     setMintStatus('idle');
@@ -945,12 +996,12 @@ function NftMintPanel({ onClose }) {
     if (usingLocalEvmWallet) {
       setNftEvmWallet(null);
       setEvmChainId(null);
-      setNotice('Base payment wallet disconnected.');
+      setNotice('EVM payment wallet disconnected.');
       addClientBreadcrumb('nft.disconnect_evm', { dex, scope: 'shop' });
       return;
     }
     setEvmModalOpen(true);
-    setNotice('Choose a Base wallet for this shop purchase.');
+    setNotice('Choose an EVM wallet for this shop purchase.');
     addClientBreadcrumb('nft.change_evm_wallet', { dex, scope: 'shop' });
   }, [dex, usingLocalEvmWallet]);
 
@@ -1017,7 +1068,7 @@ function NftMintPanel({ onClose }) {
                   <button
                     key={tab.id}
                     type="button"
-                    onClick={() => { setActiveShopTab(tab.id); setNotice(null); }}
+                    onClick={() => { setActiveShopTab(tab.id); setChainPickerOpen(false); setNotice(null); }}
                     style={{
                       ...styles.shopTabBtn,
                       ...(active ? styles.shopTabBtnActive : null),
@@ -1033,6 +1084,38 @@ function NftMintPanel({ onClose }) {
                 viewport clips overflow so only the active tab is visible;
                 each slide owns its own vertical scroll so the panel size
                 stays stable across tabs. */}
+            <div style={styles.shopActionRow}>
+              {canSwitchPaymentChain && (
+                <button
+                  type="button"
+                  onClick={() => setChainPickerOpen((open) => !open)}
+                  style={styles.switchChainBtn}
+                  title="Switch payment chain"
+                >
+                  <span>{activePaymentChainLabel}</span>
+                  <span style={styles.switchChainArrow}>{chainPickerOpen ? '^' : 'v'}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => { setView('bridge'); setNotice(null); }}
+                style={styles.bridgeMiniBtn}
+                title="Bridge NFT between chains"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M7 7h12l-3-3" />
+                  <path d="M17 17H5l3 3" />
+                </svg>
+                <span>Bridge</span>
+              </button>
+            </div>
+            {chainPickerOpen && (
+              <ShopChainSwitcher
+                activeChain={activePaymentChain}
+                readiness={chainSwitchReadiness}
+                onSelect={handleSwitchPanelChain}
+              />
+            )}
             <div style={styles.sliderViewport}>
               <div
                 style={{
@@ -1313,6 +1396,14 @@ const SHOP_CHAIN_LABEL = {
   aptos:    'Aptos',
 };
 
+const SHOP_CHAIN_CHOICES = [
+  { id: 'base', title: 'Base', subtitle: 'USDC / ETH / CoP', badge: 'EVM' },
+  { id: 'arbitrum', title: 'Arbitrum', subtitle: 'USDC / ETH', badge: 'EVM' },
+  { id: 'monad', title: 'Monad', subtitle: 'USDC / MON', badge: 'EVM' },
+  { id: 'solana', title: 'Solana', subtitle: 'USDC / SOL / SKR', badge: 'SOL' },
+  { id: 'aptos', title: 'Aptos', subtitle: 'USDC / APT', badge: 'APT' },
+];
+
 function getShopPaymentOption(chain, payment) {
   const id = String(payment || '').toLowerCase();
   return (SHOP_PAYMENTS_BY_CHAIN[chain] || []).find((option) => option.id === id) || null;
@@ -1330,6 +1421,35 @@ function getShopPurchaseExplorer(chain, tx) {
   if (chain === 'solana') return `https://solscan.io/tx/${tx}`;
   if (chain === 'aptos') return `https://explorer.aptoslabs.com/txn/${tx}`;
   return null;
+}
+
+function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
+  return (
+    <div style={styles.chainSwitchPanel}>
+      {SHOP_CHAIN_CHOICES.map((chain) => {
+        const active = chain.id === activeChain;
+        const ready = readiness?.[chain.id] !== false;
+        return (
+          <button
+            key={chain.id}
+            type="button"
+            onClick={() => onSelect?.(chain.id)}
+            style={{
+              ...styles.chainSwitchBtn,
+              ...(active ? styles.chainSwitchBtnActive : null),
+              ...(!ready ? styles.chainSwitchBtnDisabled : null),
+            }}
+          >
+            <span style={styles.chainSwitchBadge}>{chain.badge}</span>
+            <span style={styles.chainSwitchMain}>
+              <span style={styles.chainSwitchName}>{chain.title}</span>
+              <span style={styles.chainSwitchSub}>{ready ? chain.subtitle : 'Not live yet'}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function GameResourcesTab({
@@ -2543,6 +2663,121 @@ const styles = {
     border: '2px solid #9f8759', color: '#5C3A21',
     cursor: 'pointer', fontSize: 12, fontWeight: 700,
     boxShadow: '0 1px 2px rgba(0,0,0,0.12)',
+  },
+  shopActionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  switchChainBtn: {
+    flex: '1 1 auto',
+    minHeight: 34,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    border: '2px solid #8c6a3c',
+    borderRadius: 11,
+    background: 'linear-gradient(180deg, #fff8df 0%, #dfc996 100%)',
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(0,0,0,0.16)',
+  },
+  switchChainArrow: {
+    fontSize: 10,
+    color: '#876033',
+    lineHeight: 1,
+  },
+  bridgeMiniBtn: {
+    flex: '0 0 auto',
+    minHeight: 34,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '0 12px',
+    border: '2px solid #9f8759',
+    borderRadius: 11,
+    background: '#fffaf0',
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  chainSwitchPanel: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 8,
+    marginBottom: 8,
+    padding: 8,
+    border: '2px solid #d4c8b0',
+    borderRadius: 12,
+    background: '#fff8df',
+  },
+  chainSwitchBtn: {
+    minHeight: 48,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    border: '2px solid #d4c8b0',
+    borderRadius: 10,
+    background: '#fffdf4',
+    color: '#5C3A21',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    padding: '6px 8px',
+    minWidth: 0,
+  },
+  chainSwitchBtnActive: {
+    border: '2px solid #1d6fe0',
+    background: 'linear-gradient(180deg, #e8f1ff 0%, #c5dbff 100%)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 4px rgba(0,0,0,0.12)',
+  },
+  chainSwitchBtnDisabled: {
+    opacity: 0.55,
+  },
+  chainSwitchBadge: {
+    flex: '0 0 auto',
+    minWidth: 28,
+    height: 24,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 7,
+    background: '#5C3A21',
+    color: '#fff6dc',
+    fontSize: 9,
+    fontWeight: 900,
+    letterSpacing: 0.4,
+  },
+  chainSwitchMain: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    lineHeight: 1.15,
+  },
+  chainSwitchName: {
+    fontSize: 12,
+    fontWeight: 900,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: '100%',
+  },
+  chainSwitchSub: {
+    fontSize: 10,
+    fontWeight: 800,
+    color: '#8b6b3f',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    maxWidth: '100%',
   },
   body: {
     flex: 1, minHeight: 0,

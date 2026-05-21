@@ -202,7 +202,7 @@ export default function EvmWalletModal({ open, onClose, onConnected, targetChain
         </div>
         <div style={M.body}>
           <div style={M.subtitle}>
-            {target.cta} required for {target.label} trading
+            Connect or switch to the {target.cta}
           </div>
           <div style={{...M.subtitle, display: 'none'}}>
             Base (EVM) network · required for Avantis perps

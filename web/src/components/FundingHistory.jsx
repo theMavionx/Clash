@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { getReadClient } from '../lib/decibel';
 import { fetchPerplPositionHistory } from '../lib/perplClient';
-import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
+import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 const READ_TIMEOUT_MS = 8000;
@@ -149,11 +149,9 @@ function FundingHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [
         }
         if (dex === 'phoenix') {
           const qs = new URLSearchParams({ traderPdaIndex: '0', limit: '100' });
-          const r = await fetch(`${PHOENIX_API_URL}/trader/${encodeURIComponent(addr)}/funding-history?${qs}`, {
+          const d = await phoenixFetch(`/trader/${encodeURIComponent(addr)}/funding-history?${qs}`, {
             signal: controller.signal,
           });
-          if (!r.ok) throw new Error(`Phoenix funding history error ${r.status}`);
-          const d = await r.json();
           const rows = Array.isArray(d?.events) ? d.events
             : Array.isArray(d?.data) ? d.data
             : Array.isArray(d) ? d

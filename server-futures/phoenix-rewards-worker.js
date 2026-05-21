@@ -13,26 +13,83 @@ const db = require('./db');
 const PHOENIX_API = process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 const POLL_MS = Number(process.env.PHOENIX_REWARDS_POLL_MS || 2 * 60 * 1000);
 const LOOKBACK_MS = Number(process.env.PHOENIX_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
+const PHOENIX_API_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_API_TIMEOUT_MS || 4500)));
+const PHOENIX_API_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_API_STALE_MS || 2 * 60_000)));
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 
 let marketCache = null;
 let marketCacheAt = 0;
+const apiCache = new Map();
+const apiInflight = new Map();
 
 function isSolanaWallet(addr) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(addr || ''));
 }
 
-async function fetchJson(pathname) {
-  const res = await fetch(`${PHOENIX_API}${pathname}`);
-  if (!res.ok) throw new Error(`Phoenix API ${res.status} ${pathname}`);
-  return res.json();
+async function fetchJson(pathname, opts = {}) {
+  const timeoutMs = Math.max(1000, Math.min(10_000, Number(opts.timeoutMs || PHOENIX_API_TIMEOUT_MS)));
+  const cacheTtlMs = Math.max(0, Number(opts.cacheTtlMs || 0));
+  const cacheKey = `GET:${pathname}`;
+  const now = Date.now();
+  const cached = cacheTtlMs > 0 ? apiCache.get(cacheKey) : null;
+  if (cached && now - cached.at < cacheTtlMs) return cached.data;
+
+  let pending = apiInflight.get(cacheKey);
+  if (!pending) {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), timeoutMs);
+    pending = fetch(`${PHOENIX_API}${pathname}`, {
+      signal: ctrl.signal,
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'ClashOfPerps/1.0 phoenix-rewards-worker',
+      },
+    })
+      .then(async (res) => {
+        const text = await res.text();
+        let data = null;
+        try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+        if (!res.ok) {
+          const detail = typeof data === 'string' ? data : (data?.error || data?.message || text);
+          const err = new Error(`Phoenix API ${res.status} ${pathname}: ${detail || 'request failed'}`);
+          err.status = res.status;
+          throw err;
+        }
+        return data;
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        apiInflight.delete(cacheKey);
+      });
+    apiInflight.set(cacheKey, pending);
+  }
+
+  try {
+    const data = await pending;
+    if (cacheTtlMs > 0) {
+      apiCache.set(cacheKey, { at: Date.now(), data });
+      if (apiCache.size > 500) {
+        const cutoff = Date.now() - PHOENIX_API_STALE_MS;
+        for (const [key, value] of apiCache) {
+          if (value.at < cutoff) apiCache.delete(key);
+        }
+      }
+    }
+    return data;
+  } catch (e) {
+    if (cached && now - cached.at < PHOENIX_API_STALE_MS) {
+      console.warn('[phoenix-rewards-worker] serving stale Phoenix API cache:', pathname, e.message);
+      return cached.data;
+    }
+    throw e;
+  }
 }
 
 async function getMarketMap() {
   const now = Date.now();
   if (marketCache && now - marketCacheAt < 10 * 60 * 1000) return marketCache;
-  const rows = await fetchJson('/exchange/markets');
+  const rows = await fetchJson('/exchange/markets', { cacheTtlMs: 10 * 60 * 1000 });
   const list = Array.isArray(rows) ? rows : Array.isArray(rows?.data) ? rows.data : Array.isArray(rows?.value) ? rows.value : [];
   marketCache = Object.fromEntries(list.map(m => [
     String(m.symbol || '').toUpperCase(),
@@ -139,7 +196,10 @@ async function importFillsForPlayer(playerId, wallet, opts = {}) {
   let payload;
   try {
     const limit = Math.max(1, Math.min(200, Number(opts.limit || 100)));
-    payload = await fetchJson(`/trader/${encodeURIComponent(cleanWallet)}/trades-history?limit=${limit}`);
+    payload = await fetchJson(`/trader/${encodeURIComponent(cleanWallet)}/trades-history?limit=${limit}`, {
+      timeoutMs: opts.timeoutMs,
+      cacheTtlMs: opts.cacheTtlMs == null ? 20_000 : opts.cacheTtlMs,
+    });
   } catch (e) {
     if (String(e.message || '').includes('404')) {
       return { ok: true, imported: 0, skipped: 0, total: 0, reason: 'no_trader_history' };

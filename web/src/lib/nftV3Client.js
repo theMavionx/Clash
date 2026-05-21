@@ -50,9 +50,8 @@ const EVM_OWNED_CONFIG = {
     contract: '0x404807F93E47AF3eaAec0E983f18DCB35E966FEC',
     rpcEnv: ['VITE_BASE_RPC_URL'],
     rpcUrls: [
-      'https://base-rpc.publicnode.com',
-      'https://base.drpc.org',
-      'https://developer-access-mainnet.base.org',
+      '/rpc/base-alchemy',
+      '/rpc/base',
     ],
   },
   arbitrum: {
@@ -335,9 +334,35 @@ function normalizeRpcUrl(url) {
   return raw;
 }
 
+function normalizeEvmRpcUrl(chain, url) {
+  const normalized = normalizeRpcUrl(url);
+  if (chain !== 'base' || !normalized) return normalized;
+  try {
+    const parsed = new URL(normalized, siteOrigin());
+    const origin = new URL(siteOrigin()).origin;
+    const host = parsed.hostname.toLowerCase();
+    if (parsed.origin === origin && parsed.pathname.startsWith('/rpc/base')) return parsed.href;
+    if (host.startsWith('base-mainnet.') && host.includes('alchemy')) return `${siteOrigin()}/rpc/base-alchemy`;
+    if (host === ['mainnet', 'base', 'org'].join('.')) return `${siteOrigin()}/rpc/base`;
+    if (
+      (host.includes('publicnode') && host.includes('base'))
+      || (host.endsWith('drpc.org') && host.startsWith('base.'))
+      || (host.includes('developer-access') && host.includes('base'))
+      || (host.includes('blockpi') && host.includes('base'))
+      || (host === 'rpcfree.com' && parsed.pathname.includes('base'))
+      || (host === '1rpc.io' && parsed.pathname.includes('base'))
+    ) {
+      return '';
+    }
+  } catch {}
+  return normalized;
+}
+
 function envValue(name) {
   try {
     switch (name) {
+      case 'VITE_BASE_RPC_URL':
+        return String(import.meta.env.VITE_BASE_RPC_URL || '').trim();
       case 'VITE_SOLANA_DAS_RPC_URL':
         return String(import.meta.env.VITE_SOLANA_DAS_RPC_URL || '').trim();
       case 'VITE_SOLANA_CORE_RPC_URL':
@@ -480,7 +505,7 @@ function evmRpcUrls(chain) {
   const config = EVM_OWNED_CONFIG[chain];
   if (!config) return [];
   const envUrls = config.rpcEnv.map(envValue).filter(Boolean);
-  return uniqueValues([...envUrls, ...config.rpcUrls]);
+  return uniqueValues([...envUrls, ...config.rpcUrls].map((url) => normalizeEvmRpcUrl(chain, url)));
 }
 
 function evmChainDefinition(chain, defineChain, viemChains) {

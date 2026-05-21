@@ -3,9 +3,13 @@ const RISEX_BRIDGE_API = String(process.env.RISEX_BRIDGE_API_URL || 'https://www
 const RISEX_FILL_LOOKBACK_LIMIT = Math.max(10, Math.min(250, Number(process.env.RISEX_FILL_LOOKBACK_LIMIT || 100)));
 const RISEX_RISE_CHAIN_ID = 4153;
 const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
+const BASE_ALCHEMY_KEY = String(process.env.BASE_ALCHEMY_KEY || process.env.ALCHEMY_BASE_API_KEY || '').trim();
+const BASE_ALCHEMY_RPC = BASE_ALCHEMY_KEY
+  ? `https://base-mainnet.g.alchemy.com/v2/${encodeURIComponent(BASE_ALCHEMY_KEY)}`
+  : '';
 const RISEX_DEFAULT_RPC_URLS = Object.freeze({
   1: ['https://ethereum-rpc.publicnode.com', 'https://rpc.ankr.com/eth'],
-  8453: ['https://mainnet.base.org', 'https://base-rpc.publicnode.com'],
+  8453: [...(BASE_ALCHEMY_RPC ? [BASE_ALCHEMY_RPC] : []), 'https://mainnet.base.org'],
   42161: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum-one-rpc.publicnode.com'],
   [RISEX_RISE_CHAIN_ID]: ['https://rpc.risechain.com'],
 });
@@ -51,7 +55,7 @@ function normalizeAddress(addr) {
 
 function splitList(value) {
   return String(value || '')
-    .split(',')
+    .split(/[,\s]+/)
     .map(s => s.trim())
     .filter(Boolean);
 }

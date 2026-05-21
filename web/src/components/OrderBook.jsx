@@ -1,5 +1,5 @@
 import { memo, useState, useEffect, useRef } from 'react';
-import { PHOENIX_API_URL, phoenixSymbol } from '../lib/phoenixClient';
+import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
 
 function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
   const [book, setBook] = useState({ bids: [], asks: [] });
@@ -11,9 +11,7 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
       let timer = null;
       async function load() {
         try {
-          const r = await fetch(`${PHOENIX_API_URL}/v1/view/orderbook/${encodeURIComponent(phoenixSymbol(symbol))}`);
-          if (!r.ok) throw new Error(`Phoenix orderbook ${r.status}`);
-          const d = await r.json();
+          const d = await phoenixFetch(`/v1/view/orderbook/${encodeURIComponent(phoenixSymbol(symbol))}`);
           if (cancelled) return;
           setBook({
             bids: (d?.bids || []).slice(0, 12).map((b, i) => ({ price: Number(b[0]), amount: Number(b[1]), count: b[2] ?? i + 1 })),

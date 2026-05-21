@@ -593,7 +593,8 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
 export function usePhoenix() {
   const { dex } = useDex();
   const isActiveDex = dex === 'phoenix';
-  const { publicKey, sendTransaction, signTransaction } = useWallet();
+  const solWallet = useWallet();
+  const { publicKey, sendTransaction, signTransaction } = solWallet;
   const { connection } = useConnection();
   const player = usePlayer();
 
@@ -874,6 +875,7 @@ export function usePhoenix() {
       connection,
       sendTransaction,
       signTransaction,
+      solWallet,
       privyActive,
       privySendTx,
       privySignTx,
@@ -881,7 +883,7 @@ export function usePhoenix() {
       label,
       computeUnitLimit,
     });
-  }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
+  }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, solWallet, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
   const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');

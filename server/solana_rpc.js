@@ -78,8 +78,16 @@ function isHeliusSolanaRpcUrl(url) {
   }
 }
 
+function isTatumSolanaRpcUrl(url) {
+  try {
+    return new URL(url).hostname === 'solana-mainnet.gateway.tatum.io';
+  } catch {
+    return /solana-mainnet\.gateway\.tatum\.io/i.test(String(url || ''));
+  }
+}
+
 function solanaRpcSupportsBatch(url) {
-  return !isHeliusSolanaRpcUrl(url);
+  return !isHeliusSolanaRpcUrl(url) && !isTatumSolanaRpcUrl(url);
 }
 
 function solanaNonHeliusRpcUrls(urls = solanaRpcUrls()) {
@@ -88,7 +96,9 @@ function solanaNonHeliusRpcUrls(urls = solanaRpcUrls()) {
 
 function solanaBatchSafeRpcUrl(preferredUrl, urls = solanaRpcUrls()) {
   if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
-  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || (urls || []).find(Boolean) || '';
+  return (urls || []).find((url) => url && solanaRpcSupportsBatch(url))
+    || alchemySolanaRpcUrl()
+    || '';
 }
 
 function parseJsonRpcBody(body) {
@@ -126,7 +136,7 @@ async function readJsonRpcResponse(response, request) {
   );
 }
 
-async function heliusBatchSafeFetch(input, init = {}) {
+async function jsonRpcBatchSafeFetch(input, init = {}) {
   const body = parseJsonRpcBody(init?.body);
   if (!Array.isArray(body)) return fetch(input, init);
   if (body.length === 0) {
@@ -149,16 +159,14 @@ async function heliusBatchSafeFetch(input, init = {}) {
 }
 
 function solanaRpcFetchForUrl(url) {
-  if (isHeliusSolanaRpcUrl(url)) return heliusBatchSafeFetch;
-  try {
-    if (new URL(url).hostname === 'solana-mainnet.gateway.tatum.io') {
-      return (input, init = {}) => {
-        const headers = new Headers(init.headers || {});
-        headers.set('x-api-key', process.env.SOLANA_TATUM_API_KEY || process.env.TATUM_API_KEY || '');
-        return fetch(input, { ...init, headers });
-      };
-    }
-  } catch {}
+  if (isTatumSolanaRpcUrl(url)) {
+    return (input, init = {}) => {
+      const headers = new Headers(init.headers || {});
+      headers.set('x-api-key', process.env.SOLANA_TATUM_API_KEY || process.env.TATUM_API_KEY || '');
+      return jsonRpcBatchSafeFetch(input, { ...init, headers });
+    };
+  }
+  if (!solanaRpcSupportsBatch(url)) return jsonRpcBatchSafeFetch;
   return undefined;
 }
 
@@ -212,6 +220,7 @@ module.exports = {
   heliusSolanaRpcUrl,
   isPublicSolanaRpcUrl,
   isHeliusSolanaRpcUrl,
+  isTatumSolanaRpcUrl,
   solanaBatchSafeRpcUrl,
   solanaConnectionConfig,
   solanaRpcFetchForUrl,

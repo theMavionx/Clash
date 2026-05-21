@@ -46,16 +46,20 @@ function isSameOriginRpcUrl(url) {
 }
 
 function isSameOriginSerializedSolanaRpcUrl(url) {
+  return sameOriginSolanaRpcPath(url) === '/rpc/solana';
+}
+
+function sameOriginSolanaRpcPath(url) {
   const raw = String(url || '').trim();
-  if (!raw) return false;
+  if (!raw) return '';
   try {
     const parsed = new URL(raw, siteOrigin());
     const origin = new URL(siteOrigin());
     const pathname = parsed.pathname.replace(/\/+$/, '');
-    return parsed.origin === origin.origin && pathname === '/rpc/solana';
+    return parsed.origin === origin.origin && pathname.startsWith('/rpc/solana') ? pathname : '';
   } catch {
     const pathname = raw.replace(/\/+$/, '');
-    return pathname === '/rpc/solana';
+    return pathname.startsWith('/rpc/solana') ? pathname : '';
   }
 }
 
@@ -128,8 +132,19 @@ export function isHeliusSolanaRpcUrl(url) {
   }
 }
 
+export function isTatumSolanaRpcUrl(url) {
+  if (sameOriginSolanaRpcPath(url) === '/rpc/solana-tatum') return true;
+  try {
+    return new URL(url, siteOrigin()).hostname === 'solana-mainnet.gateway.tatum.io';
+  } catch {
+    return /solana-mainnet\.gateway\.tatum\.io/i.test(String(url || ''));
+  }
+}
+
 export function solanaRpcSupportsBatch(url) {
-  return !isHeliusSolanaRpcUrl(url) && !isSameOriginSerializedSolanaRpcUrl(url);
+  return !isHeliusSolanaRpcUrl(url)
+    && !isSameOriginSerializedSolanaRpcUrl(url)
+    && !isTatumSolanaRpcUrl(url);
 }
 
 export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
@@ -139,8 +154,8 @@ export function solanaNonHeliusRpcUrls(urls = SOLANA_RPC_URLS) {
 export function solanaBatchSafeRpcUrl(preferredUrl, urls = SOLANA_RPC_URLS) {
   if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
   return (urls || []).find((url) => url && solanaRpcSupportsBatch(url))
-    || preferredUrl
-    || DEFAULT_SOLANA_RPC_URL;
+    || SOLANA_RPC_URLS.find((url) => url && solanaRpcSupportsBatch(url))
+    || SAME_ORIGIN_SOLANA_ALCHEMY_URL;
 }
 
 function parseJsonRpcBody(body) {
@@ -178,7 +193,7 @@ async function readJsonRpcResponse(response, request) {
   );
 }
 
-async function heliusBatchSafeFetch(input, init = {}) {
+async function jsonRpcBatchSafeFetch(input, init = {}) {
   const body = parseJsonRpcBody(init?.body);
   if (!Array.isArray(body)) return fetch(input, init);
   if (body.length === 0) {
@@ -201,8 +216,8 @@ async function heliusBatchSafeFetch(input, init = {}) {
 }
 
 export function solanaRpcFetchForUrl(url) {
-  return isHeliusSolanaRpcUrl(url) || isSameOriginSerializedSolanaRpcUrl(url)
-    ? heliusBatchSafeFetch
+  return !solanaRpcSupportsBatch(url)
+    ? jsonRpcBatchSafeFetch
     : undefined;
 }
 

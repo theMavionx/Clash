@@ -1354,7 +1354,7 @@ function FuturesPanel() {
   // can stay false after a partial activation. Keep the banner for
   // Avantis only.
   const showReferralBanner =
-    (dex === 'avantis' || dex === 'hyperliquid')
+    dex === 'hyperliquid'
     && !!walletAddr && hasReferrer === false && !referralDismissed;
   const handleEvmConnected = useCallback(({ address, walletName, provider, rdns }) => {
     setEvmModalOpen(false);
@@ -2761,6 +2761,109 @@ function FuturesPanel() {
           onConnected={handleEvmConnected}
           targetChain={evmConnectChain}
         />
+      </>
+    );
+  }
+
+  // ==================== AVANTIS BUILDER-CODE GATE ====================
+  if (dex === 'avantis' && hasWallet && hasReferrer !== true) {
+    const isRunning = referralLinking || loading;
+    const isChecking = hasReferrer === null && !isRunning;
+    const codeState = isRunning ? 'active' : 'pending';
+
+    return (
+      <>
+        <style>{animCSS}</style>
+        <style>{`@keyframes act-spin{to{transform:rotate(360deg)}}@keyframes act-pulse{0%,100%{opacity:.7}50%{opacity:1}}`}</style>
+        <div ref={panelRef} className={fullscreen ? "futures-fullscreen" : ""} style={{
+          ...(fullscreen ? S.containerFull : S.container),
+          ...((!fullscreen && isMobile) ? { right: 8, left: 8, top: 8, bottom: 80, width: 'auto', borderRadius: 16, border: '4px solid #d4c8b0' } : {}),
+          transform: (fullscreen || isMobile) ? undefined : `translate(${posRef.current.x}px, ${posRef.current.y}px)`,
+          transition: isDragging ? 'none' : 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+        }}>
+          <div style={S.header} onPointerDown={handlePointerDown}>
+            <span style={S.headerTitle}>{isRunning ? 'Linking Avantis...' : 'Avantis setup'}</span>
+            {!isRunning && (
+              <button data-nodrag onClick={handleClose} style={S.closeBtn}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            )}
+          </div>
+          <div style={{
+            ...S.body,
+            alignItems: 'stretch',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 0,
+            background: '#fdf8e7',
+          }}>
+            <div style={hlGateStyles.frame}>
+              <div style={hlGateStyles.titleBlock}>
+                <span style={hlGateStyles.kicker}>{isChecking ? 'CHECKING' : isRunning ? 'APPROVING' : 'ACTION REQUIRED'}</span>
+                <span style={hlGateStyles.title}>{isRunning ? 'Approve in your wallet' : 'Link Clash builder code'}</span>
+                <span style={hlGateStyles.subtitle}>
+                  Avantis trading opens after this Base wallet is linked to the Clash code. This keeps gold rewards and quests attached to your game account.
+                </span>
+              </div>
+
+              <ol style={hlGateStyles.stepList}>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_done }}>1</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_done }}>Wallet connected</span>
+                    <span style={hlGateStyles.stepHint}>{walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)} is the Avantis wallet for this account.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles[`stepBubble_${codeState}`] }}>
+                    {isRunning ? <span style={hlGateStyles.spinner} /> : 2}
+                  </span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles[`stepLabel_${codeState}`] }}>Approve builder code</span>
+                    <span style={hlGateStyles.stepHint}>One wallet signature links the Clash code on Avantis before orders unlock.</span>
+                  </span>
+                </li>
+                <li style={hlGateStyles.stepItem}>
+                  <span style={{ ...hlGateStyles.stepBubble, ...hlGateStyles.stepBubble_pending }}>3</span>
+                  <span style={hlGateStyles.stepText}>
+                    <span style={{ ...hlGateStyles.stepLabel, ...hlGateStyles.stepLabel_pending }}>Trade and earn gold</span>
+                    <span style={hlGateStyles.stepHint}>New Avantis trades count toward gold and repeatable BTC tasks after this setup.</span>
+                  </span>
+                </li>
+              </ol>
+
+              {isRunning ? (
+                <div style={hlGateStyles.workingHint}>
+                  Keep this panel open and approve the Base wallet request.
+                </div>
+              ) : (
+                <button
+                  style={{ ...hlGateStyles.primaryBtn, ...(loading ? hlGateStyles.primaryBtnBusy : null) }}
+                  disabled={loading}
+                  onClick={async () => {
+                    if (!activate) return;
+                    setReferralLinking(true);
+                    try {
+                      const res = await activate();
+                      if (res === false) setLocalAlert('Avantis builder-code approval failed. Please approve it from your wallet and retry.');
+                      else if (res?.error) setLocalAlert(res.error);
+                    } finally {
+                      setReferralLinking(false);
+                    }
+                  }}
+                >
+                  {isChecking ? 'Verify or approve builder code ->' : 'Approve builder code ->'}
+                </button>
+              )}
+
+              {(error || localAlert) && (
+                <div style={hlGateStyles.errorBox}>
+                  {humanizeTradeError(error || localAlert)}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </>
     );
   }

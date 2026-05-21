@@ -46,6 +46,40 @@ function tradeKey(p) {
   return `${pi}:${ti}`;
 }
 
+function positionOpenedAt(p) {
+  const n = Number(p?.openedAt ?? p?.opened_at ?? p?.trade?.openedAt ?? p?.trade?.opened_at ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+function lifecycleTradeKey(kind, addr, pairIdx, tradeIdx, openedAt) {
+  const base = `avantis:${kind}:${addr}:${pairIdx}:${tradeIdx}`;
+  return openedAt ? `${base}:${openedAt}` : base;
+}
+
+function createdAtSeconds(createdAt) {
+  if (!createdAt) return 0;
+  const ms = Date.parse(`${String(createdAt).replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+function legacyOpenRecordedForLifecycle(playerId, legacyKey, openedAt) {
+  if (!openedAt) return false;
+  try {
+    const row = db.db.prepare(
+      `SELECT created_at
+         FROM trade_history
+        WHERE player_id = ?
+          AND dex = 'avantis'
+          AND client_order_id = ?
+        LIMIT 1`
+    ).get(playerId, legacyKey);
+    const created = createdAtSeconds(row?.created_at);
+    return created > 0 && created >= openedAt - 300;
+  } catch {
+    return false;
+  }
+}
+
 function coreBool(v) {
   if (v === true || v === 1 || v === '1') return true;
   if (typeof v === 'string') return v.toLowerCase() === 'true';
@@ -105,10 +139,17 @@ async function pollOnce(mainDb) {
       if (!symbol) symbol = `#${pairIdx}`;
       const side = coreBool(p.buy ?? p.trade?.buy) ? 'long' : 'short';
       const notional = collateral * leverage;
-      const openKey = `avantis:open:${addr}:${pairIdx}:${Number(p.index ?? p.trade?.index ?? 0)}`;
-      if (Number.isFinite(notional) && notional >= 50) {
+      const tradeIdx = Number(p.index ?? p.trade?.index ?? 0);
+      const openedAt = positionOpenedAt(p);
+      const legacyOpenKey = lifecycleTradeKey('open', addr, pairIdx, tradeIdx, 0);
+      const openKey = lifecycleTradeKey('open', addr, pairIdx, tradeIdx, openedAt);
+      if (
+        Number.isFinite(notional)
+        && notional >= 50
+        && !legacyOpenRecordedForLifecycle(row.id, legacyOpenKey, openedAt)
+      ) {
         try {
-          db.addTrade(row.id, {
+          const r = db.addTrade(row.id, {
             symbol,
             side,
             orderType: 'market',
@@ -120,7 +161,7 @@ async function pollOnce(mainDb) {
             notional_usd: notional,
             verifiedSource: 'worker',
           });
-          creditsQueued++;
+          if (r?.id) creditsQueued++;
         } catch (e) {
           if (!String(e.message).includes('UNIQUE')) {
             console.error('[rewards-worker] add open trade failed:', e.message);
@@ -130,8 +171,9 @@ async function pollOnce(mainDb) {
       richPrev.set(k, {
         collateral, leverage, notional: collateral * leverage, symbol, side,
         pair_index: pairIdx,
-        trade_index: Number(p.index ?? p.trade?.index ?? 0),
-        opened_at: Date.now(),
+        trade_index: tradeIdx,
+        opened_at_chain: openedAt,
+        opened_at: openedAt ? openedAt * 1000 : Date.now(),
       });
     }
     // Remove closed entries and record them.
@@ -146,12 +188,18 @@ async function pollOnce(mainDb) {
       // The UNIQUE partial index on trade_history.client_order_id makes
       // whichever source writes first win; the second INSERT OR IGNOREs.
       // Prevents the previous "client + worker both recorded" double-credit.
-      const closeKey = `avantis:close:${addr}:${info.pair_index}:${info.trade_index}`;
+      const closeKey = lifecycleTradeKey(
+        'close',
+        addr,
+        info.pair_index,
+        info.trade_index,
+        info.opened_at_chain || 0
+      );
       // side label distinct from the open so the task verifier counts
       // open + close as separate volume events.
       const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
       try {
-        db.addTrade(row.id, {
+        const r = db.addTrade(row.id, {
           symbol: info.symbol,
           side: closeSide,
           orderType: 'close',
@@ -163,7 +211,7 @@ async function pollOnce(mainDb) {
           notional_usd: info.notional,
           verifiedSource: 'worker',
         });
-        creditsQueued++;
+        if (r?.id) creditsQueued++;
       } catch (e) {
         // UNIQUE violation = already recorded; ignore.
         if (!String(e.message).includes('UNIQUE')) {
@@ -190,7 +238,7 @@ function start() {
   const tick = async () => {
     try {
       const n = await pollOnce(mainDb);
-      if (n > 0) console.log(`[rewards-worker] Recorded ${n} closed Avantis trade(s)`);
+      if (n > 0) console.log(`[rewards-worker] Recorded ${n} Avantis trade(s)`);
     } catch (e) {
       console.error('[rewards-worker] tick failed:', e?.message || e);
     }

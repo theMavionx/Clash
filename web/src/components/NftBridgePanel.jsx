@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { createPublicClient, createWalletClient, custom, http, encodeFunctionData, getAddress } from 'viem';
+import { createPublicClient, createWalletClient, custom, fallback, http, encodeFunctionData, getAddress } from 'viem';
 import { base, arbitrum } from 'viem/chains';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -69,6 +69,21 @@ const MONAD_VIEM_CHAIN = {
 function viemChain(chainKey) {
   if (chainKey === 'monad') return MONAD_VIEM_CHAIN;
   return EVM_VIEM_CHAINS[chainKey];
+}
+
+function siteOrigin() {
+  if (typeof window !== 'undefined' && window.location?.origin) return window.location.origin;
+  return 'https://clashofperps.fun';
+}
+
+function bridgeReadTransport(chainKey) {
+  if (chainKey === 'base') {
+    return fallback([
+      http(`${siteOrigin()}/rpc/base-alchemy`),
+      http(`${siteOrigin()}/rpc/base`),
+    ]);
+  }
+  return http();
 }
 
 // Minimum ABI for the V3 contract's bridgeBurn call. The full ABI lives
@@ -326,7 +341,8 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         args: [tokenId, destChainId],
         value: bridgeFeeValue,
       });
-      const publicClient = createPublicClient({ chain: viemChain(sourceChain), transport: http() });
+      const publicClient = tradingEvmWallet.getPublicClient?.(EVM_CHAIN_IDS[sourceChain])
+        || createPublicClient({ chain: viemChain(sourceChain), transport: bridgeReadTransport(sourceChain) });
       await publicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
       return hash;
     }
@@ -519,7 +535,8 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
         args: [to, Number(level), sourceRef, BigInt(deadline), signature],
       });
       const hash = await walletClient.sendTransaction({ to: getAddress(confirmRes.destContract), data });
-      const publicClient = createPublicClient({ chain: viemChain(destKey), transport: http() });
+      const publicClient = tradingEvmWallet.getPublicClient?.(EVM_CHAIN_IDS[destKey])
+        || createPublicClient({ chain: viemChain(destKey), transport: bridgeReadTransport(destKey) });
       await publicClient.waitForTransactionReceipt({ hash, confirmations: 2 });
       return { hash };
     }

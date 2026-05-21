@@ -6589,6 +6589,305 @@ function volumeGoldForDex(dex, usdVolume) {
   return Math.floor(volume * rate);
 }
 
+const NFT_GOLD_BOOST_CONTRACT_RAW =
+  process.env.NFT_GOLD_BOOST_CONTRACT || '0x145B4eA581924882e854F34630a2544b4c2Fe4bD';
+const NFT_GOLD_BOOST_BONUS_PERCENT = 20;
+const NFT_GOLD_BOOST_MULTIPLIER = 1 + (NFT_GOLD_BOOST_BONUS_PERCENT / 100);
+const NFT_GOLD_BOOST_CACHE_MS = 60_000;
+const NFT_GOLD_BOOST_MESSAGE_TITLE = 'Clash of Perps NFT gold boost';
+const NFT_GOLD_BOOST_ERC721_ABI = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }],
+    outputs: [{ type: 'uint256' }],
+  },
+];
+const NFT_GOLD_BOOST_ERC1155_ABI = [
+  {
+    name: 'balanceOf',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'owner', type: 'address' }, { name: 'id', type: 'uint256' }],
+    outputs: [{ type: 'uint256' }],
+  },
+];
+const NFT_GOLD_BOOST_ERC165_ABI = [
+  {
+    name: 'supportsInterface',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'interfaceId', type: 'bytes4' }],
+    outputs: [{ type: 'bool' }],
+  },
+];
+const nftGoldBoostCache = new Map();
+let nftGoldBoostViemPromise = null;
+
+function nftBoostRpcUrls() {
+  const override = String(
+    process.env.NFT_GOLD_BOOST_RPC_URLS
+    || process.env.NFT_GOLD_BOOST_RPC_URL
+    || process.env.NFT_BASE_RPC_URL
+    || process.env.BASE_RPC_URL
+    || process.env.VITE_BASE_RPC_URL
+    || '',
+  )
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (override.length) return override;
+  return [
+    'https://base-rpc.publicnode.com',
+    'https://base.public.blockpi.network/v1/rpc/public',
+    'https://base.drpc.org',
+    'https://mainnet.base.org',
+  ];
+}
+
+async function nftGoldBoostViem() {
+  if (!nftGoldBoostViemPromise) {
+    nftGoldBoostViemPromise = Promise.all([
+      import('viem'),
+      import('viem/chains'),
+    ]).then(([viem, chains]) => {
+      const transport = viem.fallback(
+        nftBoostRpcUrls().map((url) => viem.http(url, { retryCount: 0, timeout: 10_000 })),
+        { rank: false, retryCount: 0 },
+      );
+      return {
+        getAddress: viem.getAddress,
+        verifyMessage: viem.verifyMessage,
+        contract: viem.getAddress(NFT_GOLD_BOOST_CONTRACT_RAW),
+        publicClient: viem.createPublicClient({ chain: chains.base, transport }),
+      };
+    }).catch((e) => {
+      nftGoldBoostViemPromise = null;
+      throw e;
+    });
+  }
+  return nftGoldBoostViemPromise;
+}
+
+async function normalizeNftGoldBoostAddress(value) {
+  try {
+    const { getAddress } = await nftGoldBoostViem();
+    return getAddress(String(value || '').trim());
+  } catch {
+    return null;
+  }
+}
+
+async function buildNftGoldBoostMessage({ playerId, wallet, timestamp }) {
+  const { getAddress, contract } = await nftGoldBoostViem();
+  return [
+    NFT_GOLD_BOOST_MESSAGE_TITLE,
+    `Player: ${playerId}`,
+    `Wallet: ${getAddress(wallet)}`,
+    `Contract: ${contract}`,
+    `Timestamp: ${Number(timestamp)}`,
+  ].join('\n');
+}
+
+async function readNftGoldBoostBalance(wallet) {
+  const ownership = await readNftGoldBoostOwnership(wallet);
+  return ownership.balance || 0n;
+}
+
+function nftGoldBoostTokenIds() {
+  const configured = String(process.env.NFT_GOLD_BOOST_TOKEN_IDS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      try { return BigInt(s); } catch { return null; }
+    })
+    .filter((v) => v != null && v >= 0n);
+  if (configured.length) return Array.from(new Set(configured.map(String))).map(BigInt);
+  // Contract 0x145... is ERC-1155; token id 24 is the Neon Pickaxe that
+  // carries the Clash of Perps +20% gold boost in its metadata.
+  return [24n];
+}
+
+async function supportsNftGoldBoostInterface(interfaceId) {
+  const { publicClient, contract } = await nftGoldBoostViem();
+  try {
+    return !!(await publicClient.readContract({
+      address: contract,
+      abi: NFT_GOLD_BOOST_ERC165_ABI,
+      functionName: 'supportsInterface',
+      args: [interfaceId],
+    }));
+  } catch {
+    return false;
+  }
+}
+
+async function readErc1155GoldBoostOwnership(wallet) {
+  const { publicClient, contract, getAddress } = await nftGoldBoostViem();
+  const owner = getAddress(wallet);
+  const ids = nftGoldBoostTokenIds();
+
+  if (typeof publicClient.multicall === 'function') {
+    for (let i = 0; i < ids.length; i += 75) {
+      const chunk = ids.slice(i, i + 75);
+      try {
+        const results = await publicClient.multicall({
+          allowFailure: true,
+          contracts: chunk.map((id) => ({
+            address: contract,
+            abi: NFT_GOLD_BOOST_ERC1155_ABI,
+            functionName: 'balanceOf',
+            args: [owner, id],
+          })),
+        });
+        for (let j = 0; j < results.length; j += 1) {
+          if (results[j]?.status !== 'success') continue;
+          const balance = BigInt(results[j].result || 0);
+          if (balance > 0n) {
+            return { owns: true, balance, token_id: String(chunk[j]), standard: 'ERC1155' };
+          }
+        }
+      } catch {
+        // Fall back to direct reads below.
+      }
+    }
+  }
+
+  for (const id of ids) {
+    try {
+      const balance = await publicClient.readContract({
+        address: contract,
+        abi: NFT_GOLD_BOOST_ERC1155_ABI,
+        functionName: 'balanceOf',
+        args: [owner, id],
+      });
+      if (BigInt(balance || 0) > 0n) {
+        return { owns: true, balance: BigInt(balance), token_id: String(id), standard: 'ERC1155' };
+      }
+    } catch {
+      // Some ERC-1155 implementations revert for unknown ids. Keep scanning.
+    }
+  }
+  return { owns: false, balance: 0n, standard: 'ERC1155' };
+}
+
+async function readErc721GoldBoostOwnership(wallet) {
+  const { publicClient, contract, getAddress } = await nftGoldBoostViem();
+  try {
+    const balance = await publicClient.readContract({
+      address: contract,
+      abi: NFT_GOLD_BOOST_ERC721_ABI,
+      functionName: 'balanceOf',
+      args: [getAddress(wallet)],
+    });
+    return {
+      owns: BigInt(balance || 0) > 0n,
+      balance: BigInt(balance || 0),
+      standard: 'ERC721',
+    };
+  } catch {
+    return { owns: false, balance: 0n, standard: 'ERC721' };
+  }
+}
+
+async function readNftGoldBoostOwnership(wallet) {
+  const isErc1155 = await supportsNftGoldBoostInterface('0xd9b67a26');
+  if (isErc1155) {
+    const erc1155 = await readErc1155GoldBoostOwnership(wallet);
+    if (erc1155.owns) return erc1155;
+    return erc1155;
+  }
+
+  const erc721 = await readErc721GoldBoostOwnership(wallet);
+  if (erc721.owns) return erc721;
+
+  // If ERC-165 is missing or blocked, still try ERC-1155 as a fallback.
+  const erc1155 = await readErc1155GoldBoostOwnership(wallet);
+  if (erc1155.owns) return erc1155;
+  return erc721;
+}
+
+function nftGoldBoostPayload(result) {
+  return {
+    eligible: !!result?.eligible,
+    bonus_percent: NFT_GOLD_BOOST_BONUS_PERCENT,
+    multiplier: NFT_GOLD_BOOST_MULTIPLIER,
+    contract: result?.contract || null,
+    wallet: result?.wallet || null,
+    token_id: result?.token_id || null,
+    standard: result?.standard || null,
+    verified_at: result?.verified_at || null,
+  };
+}
+
+function clearNftGoldBoost(playerId) {
+  db.db.prepare(`
+    UPDATE players
+    SET nft_gold_boost_wallet = NULL,
+        nft_gold_boost_contract = NULL,
+        nft_gold_boost_verified_at = NULL
+    WHERE id = ?
+  `).run(playerId);
+  nftGoldBoostCache.delete(playerId);
+}
+
+async function getPlayerNftGoldBoost(player, { force = false, clearIfMissing = false } = {}) {
+  const playerId = player?.id;
+  if (!playerId) return { eligible: false };
+  const cached = nftGoldBoostCache.get(playerId);
+  if (!force && cached && Date.now() - cached.at < NFT_GOLD_BOOST_CACHE_MS) {
+    return cached.result;
+  }
+
+  const row = db.db.prepare(`
+    SELECT nft_gold_boost_wallet, nft_gold_boost_contract, nft_gold_boost_verified_at
+    FROM players
+    WHERE id = ?
+  `).get(playerId);
+  const { contract, getAddress } = await nftGoldBoostViem();
+  const wallet = await normalizeNftGoldBoostAddress(row?.nft_gold_boost_wallet);
+  const storedContract = row?.nft_gold_boost_contract
+    ? (() => { try { return getAddress(row.nft_gold_boost_contract); } catch { return null; } })()
+    : null;
+
+  if (!wallet || !storedContract || storedContract.toLowerCase() !== contract.toLowerCase()) {
+    const result = { eligible: false, contract };
+    nftGoldBoostCache.set(playerId, { at: Date.now(), result });
+    return result;
+  }
+
+  const ownership = await readNftGoldBoostOwnership(wallet);
+  if (!ownership.owns) {
+    if (clearIfMissing) clearNftGoldBoost(playerId);
+    const result = { eligible: false, contract };
+    nftGoldBoostCache.set(playerId, { at: Date.now(), result });
+    return result;
+  }
+
+  const result = {
+    eligible: true,
+    wallet,
+    contract,
+    token_id: ownership.token_id || null,
+    standard: ownership.standard || null,
+    verified_at: row.nft_gold_boost_verified_at || null,
+  };
+  nftGoldBoostCache.set(playerId, { at: Date.now(), result });
+  return result;
+}
+
+function applyNftGoldBoostAmount(baseGold, boost, reasons) {
+  const amount = Number(baseGold) || 0;
+  if (amount <= 0 || !boost?.eligible) return amount;
+  const boosted = Math.round(amount * NFT_GOLD_BOOST_MULTIPLIER);
+  if (boosted > amount && Array.isArray(reasons)) {
+    reasons.push(`Base NFT +${NFT_GOLD_BOOST_BONUS_PERCENT}%`);
+  }
+  return boosted;
+}
+
 // Trading rewards table
 try {
   db.db.exec(`
@@ -6929,7 +7228,81 @@ router.post('/pacifica/builder-approved', auth, (req, res) => {
 });
 
 // Claim gold — server verifies trades via Pacifica API
-// Lazy-open server-futures DB (read-only) so this endpoint can credit gold
+// Base NFT gold boost verification endpoints.
+router.get('/nft-gold-boost/status', auth, async (req, res) => {
+  try {
+    const boost = await getPlayerNftGoldBoost(req.player, { force: true, clearIfMissing: true });
+    res.json(nftGoldBoostPayload(boost));
+  } catch (e) {
+    console.warn(`[nft-gold-boost/status] player=${req.player.name} failed:`, e.message);
+    res.status(503).json({
+      eligible: false,
+      bonus_percent: NFT_GOLD_BOOST_BONUS_PERCENT,
+      error: 'Unable to verify NFT ownership right now',
+    });
+  }
+});
+
+router.post('/nft-gold-boost/verify', auth, async (req, res) => {
+  try {
+    const wallet = await normalizeNftGoldBoostAddress(req.body?.wallet);
+    const signature = String(req.body?.signature || '').trim();
+    const timestamp = Number(req.body?.timestamp);
+    if (!wallet) return res.status(400).json({ ok: false, error: 'Valid EVM wallet required' });
+    if (!signature || !/^0x[0-9a-fA-F]+$/.test(signature)) {
+      return res.status(400).json({ ok: false, error: 'Signature required' });
+    }
+    if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 10 * 60 * 1000) {
+      return res.status(400).json({ ok: false, error: 'Verification signature expired; try again' });
+    }
+
+    const { verifyMessage, contract } = await nftGoldBoostViem();
+    const message = await buildNftGoldBoostMessage({
+      playerId: req.player.id,
+      wallet,
+      timestamp,
+    });
+    const signedByWallet = await verifyMessage({ address: wallet, message, signature });
+    if (!signedByWallet) return res.status(401).json({ ok: false, error: 'Wallet signature did not match' });
+
+    const ownership = await readNftGoldBoostOwnership(wallet);
+    if (!ownership.owns) {
+      return res.json({
+        ok: true,
+        eligible: false,
+        bonus_percent: NFT_GOLD_BOOST_BONUS_PERCENT,
+        contract,
+        wallet,
+        error: 'This wallet does not hold the required Base NFT',
+      });
+    }
+
+    const verifiedAt = new Date().toISOString();
+    db.db.prepare(`
+      UPDATE players
+      SET nft_gold_boost_wallet = ?,
+          nft_gold_boost_contract = ?,
+          nft_gold_boost_verified_at = ?
+      WHERE id = ?
+    `).run(wallet, contract, verifiedAt, req.player.id);
+    const result = {
+      eligible: true,
+      wallet,
+      contract,
+      token_id: ownership.token_id || null,
+      standard: ownership.standard || null,
+      verified_at: verifiedAt,
+    };
+    nftGoldBoostCache.set(req.player.id, { at: Date.now(), result });
+    console.log(`[nft-gold-boost] player=${req.player.name} wallet=${wallet.slice(0, 10)} -> verified +${NFT_GOLD_BOOST_BONUS_PERCENT}% gold`);
+    res.json({ ok: true, ...nftGoldBoostPayload(result) });
+  } catch (e) {
+    console.warn(`[nft-gold-boost/verify] player=${req.player.name} failed:`, e.message);
+    res.status(503).json({ ok: false, error: 'Unable to verify NFT ownership right now' });
+  }
+});
+
+// Lazy-open server-futures DB (read-only) so claim-gold can credit gold
 // for Avantis trades recorded by the futures service. Guarded so the main
 // server still works on hosts where server-futures isn't deployed.
 let _futuresDb = null;
@@ -7234,6 +7607,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     if (!reward.first_trade && !alreadyPaidFirstTrade && creditedOpens > 0) { totalGold += GOLD_FIRST_TRADE; reasons.push('First trade!'); }
     const today = new Date().toISOString().split('T')[0];
     if (reward.last_daily !== today && creditedTrades > 0) { totalGold += GOLD_DAILY_TRADE; reasons.push('Daily bonus'); }
+    let nftGoldBoost = { eligible: false };
+    try {
+      nftGoldBoost = await getPlayerNftGoldBoost(req.player, { clearIfMissing: true });
+    } catch (e) {
+      console.warn(`[claim-gold ${dex}] NFT gold boost skipped:`, e.message);
+    }
+    const boostedTotalGold = applyNftGoldBoostAmount(totalGold, nftGoldBoost, reasons);
 
     // All writes wrapped in a transaction so two concurrent /claim-gold
     // requests from the same player can't both read the same last_trade_id
@@ -7258,7 +7638,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // amount is recorded in tournament_participants.gold). Outside any
       // tournament this returns the original number — same as the legacy
       // behaviour.
-      const paidGold = totalGold > 0 ? db.applyGoldReward(req.player.id, totalGold) : 0;
+      const paidGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
@@ -7299,8 +7679,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       return res.json({ gold: 0, reason: 'Already claimed by parallel request', dex });
     }
     if (txnResult.paid > 0) {
-      console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
-      return res.json({ gold: txnResult.paid, reason: reasons.join(' + ') || 'Trading reward', dex });
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> PAID gold=${txnResult.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} pnl=$${newPnl.toFixed(2)} credited_trades=${creditedTrades} reasons="${reasons.join(' + ')}"`);
+      return res.json({
+        gold: txnResult.paid,
+        reason: reasons.join(' + ') || 'Trading reward',
+        dex,
+        nft_boost: nftGoldBoostPayload(nftGoldBoost),
+      });
     }
     console.log(`[claim-gold ${dex}] player=${req.player.name} -> ZERO PAID (had ${newTrades.length} raw trades, all clamped/below threshold)`);
     return res.json({
@@ -7415,6 +7800,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       totalGold += GOLD_DAILY_TRADE;
       reasons.push('Daily bonus');
     }
+    let nftGoldBoost = { eligible: false };
+    try {
+      nftGoldBoost = await getPlayerNftGoldBoost(req.player, { clearIfMissing: true });
+    } catch (e) {
+      console.warn('[claim-gold pacifica] NFT gold boost skipped:', e.message);
+    }
+    const boostedTotalGold = applyNftGoldBoostAmount(totalGold, nftGoldBoost, reasons);
 
     // Atomic write: guard against two concurrent /claim-gold requests both
     // reading the same last_trade_id and crediting overlapping trades.
@@ -7435,7 +7827,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       // Tournament boost: gold credit is multiplied by gold_boost when the
       // player is in an active Pacifica tournament. The boosted amount
       // also lands in tournament_participants.gold for the leaderboard.
-      const paidGold = totalGold > 0 ? db.applyGoldReward(req.player.id, totalGold) : 0;
+      const paidGold = boostedTotalGold > 0 ? db.applyGoldReward(req.player.id, boostedTotalGold) : 0;
       db.db.prepare(`
         UPDATE trading_rewards SET
           last_trade_id = ?, total_volume = total_volume + ?, total_gold = total_gold + ?,
@@ -7472,12 +7864,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.log(`[claim-gold pacifica] player=${req.player.name} -> RACED (parallel claim)`);
       return res.json({ gold: 0, reason: 'Already claimed by parallel request' });
     }
-    console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.paid > 0 ? 'PAID' : 'ZERO'} gold=${txnResPac.paid} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
+    console.log(`[claim-gold pacifica] player=${req.player.name} -> ${txnResPac.paid > 0 ? 'PAID' : 'ZERO'} gold=${txnResPac.paid} base_gold=${totalGold} nft_boosted_gold=${boostedTotalGold} new_volume=$${newVolume.toFixed(2)} unique_trades=${uniqueTradeCount} unique_opens=${uniqueOpenTradeCount} reasons="${reasons.join(' + ')}" maxId=${maxTradeId}`);
 
     res.json({
       gold: Math.floor(txnResPac.paid),
       reason: reasons.join(' + ') || 'No new rewards',
       total_gold_earned: (reward.total_gold || 0) + txnResPac.paid,
+      nft_boost: nftGoldBoostPayload(nftGoldBoost),
     });
   } catch (e) {
     console.error(`[claim-gold pacifica] player=${req.player.name} ERROR:`, e.message, e.stack);

@@ -89,6 +89,11 @@ try { db.exec(`ALTER TABLE players ADD COLUMN is_seeker INTEGER NOT NULL DEFAULT
 try { db.exec(`ALTER TABLE players ADD COLUMN seeker_id TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN seeker_source TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN seeker_detected_at TEXT`); } catch {}
+// Base NFT gold boost. Verified server-side by wallet signature + ERC-721
+// balance check, then read by the trading reward claim path.
+try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_wallet TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_contract TEXT`); } catch {}
+try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_verified_at TEXT`); } catch {}
 
 // Marketplace indexer state. The indexer reads V3 marketplace events
 // (Listed / Cancelled / Sold) from Base and writes them into the two tables

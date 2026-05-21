@@ -246,6 +246,7 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
+    ensure_env_default "BASE_ALCHEMY_KEY" ""
     ensure_env_default "SOLANA_ALCHEMY_API_KEY" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
@@ -635,6 +636,7 @@ MCPTEMPCONF
     fi
 
     ARBITRUM_ALCHEMY_KEY="$(env_file_value "ARBITRUM_ALCHEMY_KEY")"
+    BASE_ALCHEMY_KEY="$(first_env_file_value "BASE_ALCHEMY_KEY" "ALCHEMY_BASE_API_KEY")"
     SOLANA_ALCHEMY_API_KEY="$(first_env_file_value "SOLANA_ALCHEMY_API_KEY" "ALCHEMY_SOLANA_API_KEY")"
     SOLANA_HELIUS_API_KEY="$(first_env_file_value \
         "SOLANA_HELIUS_API_KEY" \
@@ -798,6 +800,30 @@ server {
         proxy_set_header Accept-Encoding "";
         gzip off;
     }
+    location = /rpc/base-alchemy {
+        proxy_pass https://base-mainnet.g.alchemy.com/v2/__BASE_ALCHEMY_KEY__;
+        proxy_http_version 1.1;
+        proxy_set_header Host base-mainnet.g.alchemy.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+    location = /rpc/base {
+        proxy_pass https://mainnet.base.org/;
+        proxy_http_version 1.1;
+        proxy_set_header Host mainnet.base.org;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
     location /rpc/arb-pokt {
         proxy_pass https://arb-pokt.nodies.app/;
         proxy_http_version 1.1;
@@ -950,6 +976,14 @@ MCPCONF
     else
         sed -i 's|proxy_pass https://arb-mainnet.g.alchemy.com/v2/__ARBITRUM_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
         log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
+    fi
+
+    if [ -n "$BASE_ALCHEMY_KEY" ]; then
+        sed -i "s|__BASE_ALCHEMY_KEY__|$(sed_escape_replacement "$BASE_ALCHEMY_KEY")|g" /etc/nginx/sites-available/$DOMAIN
+        log "BASE_ALCHEMY_KEY is set; /rpc/base-alchemy will proxy to Alchemy server-side."
+    else
+        sed -i 's|proxy_pass https://base-mainnet.g.alchemy.com/v2/__BASE_ALCHEMY_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        log "BASE_ALCHEMY_KEY is not set; /rpc/base-alchemy will return 503 and clients should use /rpc/base fallback."
     fi
 
     if [ -n "$SOLANA_ALCHEMY_API_KEY" ]; then

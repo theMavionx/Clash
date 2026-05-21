@@ -1,8 +1,16 @@
 import { createPhoenixClient } from '@ellipsis-labs/rise';
 import { DEFAULT_SOLANA_RPC_URL } from './solanaRpc';
 
+function defaultPhoenixApiUrl() {
+  const path = '/api/futures/phoenix/api';
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
 export const PHOENIX_API_URL =
-  import.meta.env.VITE_PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
+  import.meta.env.VITE_PHOENIX_BROWSER_API_URL || defaultPhoenixApiUrl();
 
 export const PHOENIX_FLIGHT_BUILDER_AUTHORITY =
   import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY || '';

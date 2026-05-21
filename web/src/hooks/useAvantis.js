@@ -38,6 +38,25 @@ const FUTURES_API = '/api/futures';
 const TX_TIMEOUT_MS = 90_000;
 const BALANCE_FETCH_MIN_INTERVAL_MS = 15_000;
 const AVANTIS_POLL_INTERVAL_MS = 10_000;
+const AVANTIS_REFERRAL_CACHE_PREFIX = 'clash_avantis_ref_verified:';
+const AVANTIS_REFERRAL_GAS_BLOCK_MS = 90_000;
+const AVANTIS_REFERRAL_GAS_MESSAGE =
+  'Add a little ETH on Base for gas, then accept the Avantis builder code again.';
+
+function errorTextChain(e) {
+  const chain = [e, e?.cause, e?.cause?.cause, e?.cause?.cause?.cause].filter(Boolean);
+  return chain.map(err => [
+    err?.message,
+    err?.shortMessage,
+    err?.details,
+    err?.reason,
+  ].filter(Boolean).join(' ')).join(' ');
+}
+
+function isGasBalanceErrorMessage(value) {
+  return /(insufficient funds|insufficient.*gas|gas.*exceeds.*balance|total cost.*exceeds.*balance|exceeds the balance of the account)/i
+    .test(String(value || ''));
+}
 
 // Unwraps viem revert errors to the most specific human-readable message
 // available. Traders care about reasons like "SLIPPAGE_EXCEEDED" or
@@ -45,6 +64,9 @@ const AVANTIS_POLL_INTERVAL_MS = 10_000;
 // "execution reverted" and hides the real cause in `.cause.cause.data`.
 function decodeTradeError(e, fallback) {
   if (!e) return fallback || 'Trade failed';
+  if (isGasBalanceErrorMessage(errorTextChain(e))) {
+    return 'Insufficient ETH on Base for gas + execution fee';
+  }
   // Dig into viem's nested cause chain (max 3 hops — openTrade reverts can be
   // wrapped in Simulate + Contract + Revert error classes).
   const chain = [e, e.cause, e.cause?.cause, e.cause?.cause?.cause].filter(Boolean);
@@ -71,6 +93,29 @@ function shortAddress(addr) {
 
 function isZeroBytes32(value) {
   return /^0x0{64}$/i.test(String(value || ''));
+}
+
+function avantisReferralCacheKey(addr) {
+  const wallet = String(addr || '').trim().toLowerCase();
+  return /^0x[0-9a-f]{40}$/.test(wallet) ? `${AVANTIS_REFERRAL_CACHE_PREFIX}${wallet}` : null;
+}
+
+function readAvantisReferralCache(addr) {
+  const key = avantisReferralCacheKey(addr);
+  if (!key || typeof localStorage === 'undefined') return false;
+  try { return localStorage.getItem(key) === '1'; } catch { return false; }
+}
+
+function writeAvantisReferralCache(addr) {
+  const key = avantisReferralCacheKey(addr);
+  if (!key || typeof localStorage === 'undefined') return;
+  try { localStorage.setItem(key, '1'); } catch { /* storage disabled */ }
+}
+
+function clearAvantisReferralCache(addr) {
+  const key = avantisReferralCacheKey(addr);
+  if (!key || typeof localStorage === 'undefined') return;
+  try { localStorage.removeItem(key); } catch { /* storage disabled */ }
 }
 
 // Wraps waitForTransactionReceipt with a timeout so dropped txs don't leave
@@ -358,8 +403,7 @@ export function useAvantis() {
   // them at render time, but if the user is on Pacifica we shouldn't be
   // hammering Base RPC for an Avantis account they aren't trading. Without
   // this guard, every Pacifica user with a Privy-created EVM embedded
-  // wallet would burn their Base RPC quota (mainnet.base.org returns 429
-  // after ~10 requests/sec) just by sitting on the FuturesPanel.
+  // wallet would burn Base RPC quota just by sitting on the FuturesPanel.
   const { dex } = useDex();
   const isActiveDex = dex === 'avantis';
 
@@ -377,7 +421,9 @@ export function useAvantis() {
   // Referral linkage. `hasReferrer` is `true` once we confirm the wallet is
   // linked to our code, `false` if linked to someone else / no code, `null`
   // while the read is still in flight so the UI can show a neutral state.
-  const [hasReferrer, setHasReferrer] = useState(null);
+  const [hasReferrer, setHasReferrer] = useState(() => (
+    readAvantisReferralCache(walletAddr) ? true : null
+  ));
   const [smartWallet, setSmartWallet] = useState(null);
   const marketsRef = useRef([]);
   // Ref-held reference to `claimGold` so early-declared callbacks
@@ -388,6 +434,7 @@ export function useAvantis() {
   const balanceInFlightRef = useRef(null);
   const lastBalanceFetchAtRef = useRef(0);
   const smartWalletRef = useRef(null);
+  const referralGasBlockedRef = useRef(null);
 
   // Reactive player token — `window._playerToken` alone can be briefly null
   // during logout transitions or not-yet-set right after a Farcaster auto-
@@ -435,6 +482,14 @@ export function useAvantis() {
     if (walletAddr) return;
     setSmartWallet(null);
     smartWalletRef.current = null;
+  }, [walletAddr]);
+
+  useEffect(() => {
+    if (!walletAddr) {
+      setHasReferrer(null);
+      return;
+    }
+    setHasReferrer(readAvantisReferralCache(walletAddr) ? true : null);
   }, [walletAddr]);
 
   const refreshSmartWallet = useCallback(async () => {
@@ -627,6 +682,8 @@ export function useAvantis() {
       const actual = storedCode && !isZeroBytes32(storedCode) ? String(storedCode).toLowerCase() : null;
       const linked = actual === expected;
       setHasReferrer(linked);
+      if (linked) writeAvantisReferralCache(walletAddr);
+      else clearAvantisReferralCache(walletAddr);
       if (actual && actual !== expected) {
         // User is linked to SOMETHING, but not our code. Could be a prior
         // referral from another dApp, or a stale state. Log so we can
@@ -636,7 +693,7 @@ export function useAvantis() {
       return actual;
     } catch (e) {
       console.warn('[avantis] fetchReferralStatus failed:', e?.message || e);
-      setHasReferrer(null);
+      setHasReferrer(readAvantisReferralCache(walletAddr) ? true : null);
       return null;
     }
   }, [walletAddr, publicClient]);
@@ -654,6 +711,18 @@ export function useAvantis() {
     setError(null);
     try {
       if (!walletClient || !walletAddr) throw new Error('Wallet not connected');
+      const walletKey = String(walletAddr).toLowerCase();
+      const blocked = referralGasBlockedRef.current;
+      const gasStillEmpty = walletEth == null || Number(walletEth) < 0.00001;
+      if (
+        blocked?.wallet === walletKey
+        && Date.now() - blocked.at < AVANTIS_REFERRAL_GAS_BLOCK_MS
+        && gasStillEmpty
+      ) {
+        setError(blocked.message);
+        return { error: blocked.message, code: 'AVANTIS_REFERRER_NEEDS_BASE_ETH', retryable: false };
+      }
+      if (blocked?.wallet === walletKey && !gasStillEmpty) referralGasBlockedRef.current = null;
       await ensureChain();
       // Precheck: if our code isn't registered on-chain, the contract will
       // revert with "Invalid params" — surface that BEFORE MetaMask prompts
@@ -697,11 +766,22 @@ export function useAvantis() {
         setError('Network error verifying referral — try again in a moment');
         return { error: msg, code: 'REFERRAL_PRECHECK_RPC_FAILED' };
       }
+      if (isGasBalanceErrorMessage(errorTextChain(e)) || isGasBalanceErrorMessage(msg)) {
+        const gasMsg = AVANTIS_REFERRAL_GAS_MESSAGE;
+        referralGasBlockedRef.current = {
+          wallet: String(walletAddr || '').toLowerCase(),
+          at: Date.now(),
+          message: gasMsg,
+        };
+        console.warn('[avantis] linkOurReferrer needs Base ETH for gas:', msg);
+        setError(gasMsg);
+        return { error: gasMsg, code: 'AVANTIS_REFERRER_NEEDS_BASE_ETH', retryable: false };
+      }
       console.warn('[avantis] linkOurReferrer error:', msg);
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     }
-  }, [walletClient, walletAddr, publicClient, ensureChain, fetchReferralStatus]);
+  }, [walletClient, walletAddr, walletEth, publicClient, ensureChain, fetchReferralStatus]);
 
   // ───── Wallet balances — direct on-chain read ─────
   // USDC + ETH of the user's OWN wallet. No server round-trip.
@@ -910,7 +990,12 @@ export function useAvantis() {
         'Switch wallet or log in with the connected wallet first.'
       );
     }
-  }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet]);
+    if (hasReferrer !== true) {
+      throw new Error(hasReferrer === null
+        ? 'Checking Avantis builder code. Try again in a moment.'
+        : 'Approve the Clash builder code before trading on Avantis.');
+    }
+  }, [isReady, walletClient, walletAddr, walletMismatch, registeredEvmWallet, hasReferrer]);
 
   // ───── Place market order ─────
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage, leverage, options = {}) => {
@@ -1372,7 +1457,10 @@ export function useAvantis() {
   // during the transition.
   const depositToPacifica = useCallback(async () => ({ ok: true }), []);
   const withdraw = useCallback(async () => ({ error: 'N/A in non-custodial mode' }), []);
-  const activate = useCallback(async () => ({ success: true }), []);
+  const activate = useCallback(async () => {
+    const res = await linkOurReferrer();
+    return res?.error ? res : { success: true, ...res };
+  }, [linkOurReferrer]);
 
   // Server-verified gold rewards. Server reads on-chain trades for this
   // address and credits notional-based gold. Still uses the main /api/trading

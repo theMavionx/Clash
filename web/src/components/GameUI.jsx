@@ -11,6 +11,7 @@ import FpsTracker from './FpsTracker';
 import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
 import TutorialOverlay from './TutorialOverlay';
+import NftGoldBoostButton from './NftGoldBoostButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
 import { useLayout } from '../hooks/useIsMobile';
@@ -166,6 +167,9 @@ export default function GameUI() {
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
+      {(!enemyMode?.active || enemyMode?.is_replay) && (
+        <NftGoldBoostButton placement={enemyMode?.is_replay ? 'replay' : 'side'} />
+      )}
       {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
         // SHOP / TRADE columns regardless of which phone the player has.

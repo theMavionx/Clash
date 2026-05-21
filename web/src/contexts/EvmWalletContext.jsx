@@ -157,12 +157,14 @@ const EvmWalletContext = createContext({
   walletClient: null,
   publicClient,
   provider: null,
+  chainId: null,
   isReady: false,
   error: null,
   source: null,
   sendTransaction: null,
   setExternalProvider: () => {},
   reconnectStoredProvider: async () => false,
+  switchChain: async () => {},
   disconnect: () => {},
 });
 
@@ -176,6 +178,7 @@ export function EvmWalletProvider({ children }) {
   // EIP-6963), 'farcaster' (sdk.wallet.getEthereumProvider), etc.
   const [externalSource, setExternalSource] = useState(null);
   const [error, setError] = useState(null);
+  const [chainId, setChainId] = useState(null);
 
   const { isInFrame, loading: fcLoading } = useFarcaster();
 
@@ -401,6 +404,34 @@ export function EvmWalletProvider({ children }) {
   const source = externalAddress ? (externalSource || 'external') : (privyAddress ? 'privy' : null);
   const isReady = !!provider && !!address;
 
+  useEffect(() => {
+    if (!provider?.request) {
+      setChainId(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const syncChain = async () => {
+      try {
+        const next = await readProviderChainId(provider);
+        if (!cancelled) setChainId(next);
+      } catch {
+        if (!cancelled) setChainId(null);
+      }
+    };
+    const onChainChanged = (value) => {
+      setChainId(normalizeProviderChainId(value));
+      setError(null);
+    };
+    syncChain();
+    if (typeof provider.on === 'function') provider.on('chainChanged', onChainChanged);
+    return () => {
+      cancelled = true;
+      if (typeof provider.removeListener === 'function') {
+        provider.removeListener('chainChanged', onChainChanged);
+      }
+    };
+  }, [provider]);
+
   // viem walletClient bound to the selected provider. Recreated whenever the
   // provider swaps. Caller uses walletClient.writeContract({...}).
   const walletClient = useMemo(() => {
@@ -456,6 +487,7 @@ export function EvmWalletProvider({ children }) {
       err.targetChainId = id;
       throw err;
     }
+    setChainId(currentId);
   }, [provider]);
 
   // Build a viem walletClient bound to a SPECIFIC chain. GMX needs Arbitrum
@@ -513,16 +545,10 @@ export function EvmWalletProvider({ children }) {
         }
       }
     };
-    const onChainChanged = () => {
-      // Trigger re-render; walletClient memo re-creates automatically.
-      setError(null);
-    };
     provider.on('accountsChanged', onAccountsChanged);
-    provider.on('chainChanged', onChainChanged);
     return () => {
       if (typeof provider.removeListener === 'function') {
         provider.removeListener('accountsChanged', onAccountsChanged);
-        provider.removeListener('chainChanged', onChainChanged);
       }
     };
   }, [provider, externalAddress, disconnect]);
@@ -562,8 +588,9 @@ export function EvmWalletProvider({ children }) {
     provider,
     isReady,
     error,
-    chainId: BASE_CHAIN_ID,
+    chainId,
     ensureChain,
+    switchChain: ensureChain,
     // Chain-specific factories — GMX (Arbitrum) and any future EVM DEX
     // grab their own chain-bound clients without disturbing Avantis.
     getWalletClient,
@@ -573,7 +600,7 @@ export function EvmWalletProvider({ children }) {
     setExternalProvider: setPersistedExternalProvider,
     reconnectStoredProvider,
     disconnect,
-  }), [address, walletClient, provider, isReady, error, source, ensureChain, getWalletClient, getPublicClient, sendTransaction, setPersistedExternalProvider, reconnectStoredProvider, disconnect]);
+  }), [address, walletClient, provider, isReady, error, chainId, source, ensureChain, getWalletClient, getPublicClient, sendTransaction, setPersistedExternalProvider, reconnectStoredProvider, disconnect]);
 
   return <EvmWalletContext.Provider value={value}>{children}</EvmWalletContext.Provider>;
 }

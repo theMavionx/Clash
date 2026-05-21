@@ -12,8 +12,14 @@ const FALLBACK_MODEL = MODEL_CHAIN[1] || '';
 const REQUEST_TIMEOUT_MS = Number(process.env.CLASH_HERMES_BACKEND_TIMEOUT_MS || 300_000);
 const DETAILED_LOGS = process.env.CLASH_AI_CHAT_DETAILED_LOGS !== '0';
 const AVANTIS_AI_MAX_LEVERAGE_HINT = Math.max(1, Math.min(1000, Number(process.env.CLASH_AVANTIS_AI_MAX_LEVERAGE || 50) || 50));
+const ORCHESTRATOR_NETWORK_RETRIES = Math.max(0, Math.min(5, Number(process.env.CLASH_HERMES_FETCH_RETRIES ?? 2) || 0));
+const ORCHESTRATOR_NETWORK_RETRY_DELAY_MS = Math.max(50, Math.min(5000, Number(process.env.CLASH_HERMES_FETCH_RETRY_DELAY_MS || 350) || 350));
 let cachedWslOrchestratorUrl = '';
 const unhealthyBaseUrlUntil = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function logHermesClient(event, payload = {}) {
   if (!DETAILED_LOGS) return;
@@ -1027,51 +1033,74 @@ async function request(path, options = {}) {
     const baseUrls = orchestratorBaseUrls();
     for (const baseUrl of baseUrls) {
       url = `${baseUrl}${path}`;
-      try {
-        const res = await fetch(url, {
-          method,
-          headers: {
-            Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
-            'Content-Type': 'application/json',
-            ...(options.headers || {}),
-          },
-          body: options.body == null ? undefined : JSON.stringify(options.body),
-          signal: controller.signal,
-        });
-        const text = await res.text();
-        let json = null;
-        try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
-        if (baseUrl !== ORCHESTRATOR_URL) {
-          logHermesClient('request_wsl_endpoint_ok', { method, path, base_url: baseUrl });
-        }
-        if (!res.ok && shouldTryNextOrchestrator(baseUrl, res.status, json, text)) {
-          markBaseUrlUnhealthy(baseUrl, json?.error || json?.message || text || `HTTP ${res.status}`);
-          logHermesClient('request_try_next_endpoint', {
+      const attempts = ORCHESTRATOR_NETWORK_RETRIES + 1;
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+          const res = await fetch(url, {
+            method,
+            headers: {
+              Authorization: `Bearer ${ORCHESTRATOR_TOKEN}`,
+              'Content-Type': 'application/json',
+              ...(options.headers || {}),
+            },
+            body: options.body == null ? undefined : JSON.stringify(options.body),
+            signal: controller.signal,
+          });
+          const text = await res.text();
+          let json = null;
+          try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text }; }
+          if (baseUrl !== ORCHESTRATOR_URL) {
+            logHermesClient('request_wsl_endpoint_ok', { method, path, base_url: baseUrl });
+          }
+          if (!res.ok && shouldTryNextOrchestrator(baseUrl, res.status, json, text)) {
+            markBaseUrlUnhealthy(baseUrl, json?.error || json?.message || text || `HTTP ${res.status}`);
+            logHermesClient('request_try_next_endpoint', {
+              method,
+              path,
+              base_url: baseUrl,
+              status: res.status,
+              error: String(json?.error || json?.message || text || '').slice(0, 300),
+            });
+            continue;
+          }
+          finalRes = res;
+          finalJson = json;
+          finalText = text;
+          break;
+        } catch (err) {
+          lastNetworkError = err;
+          const cause = err?.cause || {};
+          const detail = cause?.code
+            ? `${cause.code}${cause.address ? ` ${cause.address}` : ''}${cause.port ? `:${cause.port}` : ''}`
+            : err?.name || 'network error';
+          logHermesClient('request_network_error', {
             method,
             path,
             base_url: baseUrl,
-            status: res.status,
-            error: String(json?.error || json?.message || text || '').slice(0, 300),
+            attempt,
+            attempts,
+            duration_ms: Date.now() - startedAt,
+            error: detail,
           });
-          continue;
+          if (attempt < attempts && err?.name !== 'AbortError' && !controller.signal.aborted) {
+            const retryDelay = Math.min(5000, ORCHESTRATOR_NETWORK_RETRY_DELAY_MS * attempt);
+            logHermesClient('request_network_retry', {
+              method,
+              path,
+              base_url: baseUrl,
+              next_attempt: attempt + 1,
+              attempts,
+              retry_delay_ms: retryDelay,
+              error: detail,
+            });
+            await sleep(retryDelay);
+            continue;
+          }
         }
-        finalRes = res;
-        finalJson = json;
-        finalText = text;
         break;
-      } catch (err) {
-        lastNetworkError = err;
-        const cause = err?.cause || {};
-        const detail = cause?.code
-          ? `${cause.code}${cause.address ? ` ${cause.address}` : ''}${cause.port ? `:${cause.port}` : ''}`
-          : err?.name || 'network error';
-        logHermesClient('request_network_error', {
-          method,
-          path,
-          base_url: baseUrl,
-          duration_ms: Date.now() - startedAt,
-          error: detail,
-        });
+      }
+      if (finalRes) {
+        break;
       }
     }
     if (!finalRes) {
