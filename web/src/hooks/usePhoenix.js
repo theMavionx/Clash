@@ -29,6 +29,9 @@ const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
+const PHOENIX_ACCESS_CACHE_PREFIX = 'clash:phoenix:access:v1';
+const PHOENIX_SETUP_CACHE_PREFIX = 'clash:phoenix:setup:v1';
+const PHOENIX_ACCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
@@ -94,6 +97,93 @@ function isPhoenixMetadataDriftError(error) {
 function shortPhoenixAddress(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
+}
+
+function phoenixCacheWallet(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function phoenixCacheKey(prefix, wallet) {
+  const normalized = phoenixCacheWallet(wallet);
+  return normalized ? `${prefix}:${normalized}` : null;
+}
+
+function readPhoenixCache(prefix, wallet) {
+  const key = phoenixCacheKey(prefix, wallet);
+  if (!key || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage?.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const savedAt = Number(parsed?.savedAt || 0);
+    if (!savedAt || Date.now() - savedAt > PHOENIX_ACCESS_CACHE_TTL_MS) {
+      window.localStorage?.removeItem(key);
+      return null;
+    }
+    return parsed;
+  } catch {
+    try { window.localStorage?.removeItem(key); } catch {}
+    return null;
+  }
+}
+
+function writePhoenixCache(prefix, wallet, data = {}) {
+  const key = phoenixCacheKey(prefix, wallet);
+  if (!key || typeof window === 'undefined') return;
+  try {
+    window.localStorage?.setItem(key, JSON.stringify({
+      ...data,
+      wallet: phoenixCacheWallet(wallet),
+      savedAt: Date.now(),
+    }));
+  } catch {}
+}
+
+function clearPhoenixCache(prefix, wallet) {
+  const key = phoenixCacheKey(prefix, wallet);
+  if (!key || typeof window === 'undefined') return;
+  try { window.localStorage?.removeItem(key); } catch {}
+}
+
+function cachedPhoenixAccess(wallet) {
+  return readPhoenixCache(PHOENIX_ACCESS_CACHE_PREFIX, wallet);
+}
+
+function cachedPhoenixSetup(wallet) {
+  return readPhoenixCache(PHOENIX_SETUP_CACHE_PREFIX, wallet);
+}
+
+function cachePhoenixAccess(wallet, data = {}) {
+  writePhoenixCache(PHOENIX_ACCESS_CACHE_PREFIX, wallet, data);
+}
+
+function cachePhoenixSetup(wallet, data = {}) {
+  writePhoenixCache(PHOENIX_SETUP_CACHE_PREFIX, wallet, data);
+  cachePhoenixAccess(wallet, data);
+}
+
+function clearPhoenixSetup(wallet) {
+  clearPhoenixCache(PHOENIX_SETUP_CACHE_PREFIX, wallet);
+}
+
+function clearPhoenixAccess(wallet) {
+  clearPhoenixCache(PHOENIX_ACCESS_CACHE_PREFIX, wallet);
+}
+
+function phoenixEmptyAccount(wallet, market = {}) {
+  return {
+    authority: wallet,
+    balance: '0',
+    account_equity: '0',
+    available_to_spend: '0',
+    available_to_withdraw: '0',
+    total_margin_used: '0',
+    positions_count: 0,
+    orders_count: 0,
+    maker_fee: market?.maker_fee ?? 0.00005,
+    taker_fee: market?.taker_fee ?? 0.00035,
+    fee_level: '0',
+  };
 }
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
@@ -574,6 +664,7 @@ export function usePhoenix() {
   const txClientFlightDisabledRef = useRef(false);
   const txClientReadyAtRef = useRef(0);
   const txClientInFlightRef = useRef(null);
+  const sessionKeyRef = useRef(null);
 
   useEffect(() => {
     tokenRef.current = player?.token || null;
@@ -589,6 +680,46 @@ export function usePhoenix() {
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    const sessionKey = `${walletAddr || ''}:${walletMismatch ? 'mismatch' : 'ok'}`;
+    if (sessionKeyRef.current === sessionKey) return;
+    sessionKeyRef.current = sessionKey;
+    traderRegisteredRef.current = false;
+    refreshTraderStateInFlightRef.current = null;
+    refreshTraderStateCachedAtRef.current = 0;
+    refreshTraderStateLastResultRef.current = undefined;
+    refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
+    subaccountsRef.current = [];
+    setTraderRegistered(false);
+    setAccountReady(false);
+    setDataReady(false);
+    setPositions([]);
+    setOrders([]);
+    setPhoenixAccount(null);
+    setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
+  }, [setPhoenixAccount, walletAddr, walletMismatch]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || walletMismatch) return;
+    const setupCache = cachedPhoenixSetup(walletAddr);
+    const accessCache = setupCache || cachedPhoenixAccess(walletAddr);
+    if (accessCache) {
+      setInviteStatus({
+        checking: false,
+        whitelisted: true,
+        codeUsed: accessCache.codeUsed || accessCache.code || null,
+        cached: true,
+      });
+    }
+    if (setupCache) {
+      traderRegisteredRef.current = true;
+      setTraderRegistered(true);
+      setAccountReady(true);
+      setDataReady(true);
+      setPhoenixAccount(prev => prev || phoenixEmptyAccount(walletAddr, marketsRef.current[0] || {}));
+    }
+  }, [isActiveDex, setPhoenixAccount, walletAddr, walletMismatch]);
 
   const disposeTransactionClient = useCallback(() => {
     disposePhoenixClient(txClientRef.current);
@@ -967,6 +1098,7 @@ export function usePhoenix() {
       ]);
       traderRegisteredRef.current = true;
       setTraderRegistered(true);
+      cachePhoenixSetup(walletAddr, { source: 'trader_state' });
       const subaccounts = Array.isArray(state?.snapshot?.subaccounts) ? state.snapshot.subaccounts : [];
       subaccountsRef.current = subaccounts;
       const cross = subaccounts.find(s => Number(s.subaccountIndex) === 0) || subaccounts[0] || null;
@@ -1044,24 +1176,22 @@ export function usePhoenix() {
     } catch (e) {
       const msg = String(e?.message || e || '');
       const looksUnregistered = /404|not found|no trader|not registered|does not exist/i.test(msg);
+      if (!looksUnregistered && (traderRegisteredRef.current || cachedPhoenixSetup(walletAddr))) {
+        traderRegisteredRef.current = true;
+        setTraderRegistered(true);
+        setAccountReady(true);
+        setDataReady(true);
+        refreshTraderStateCachedAtRef.current = Date.now();
+        refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_ERROR_RETRY_MS;
+        return refreshTraderStateLastResultRef.current || null;
+      }
+      clearPhoenixSetup(walletAddr);
       traderRegisteredRef.current = false;
       setTraderRegistered(false);
       subaccountsRef.current = [];
       setPositions([]);
       setOrders([]);
-      setPhoenixAccount({
-        authority: walletAddr,
-        balance: '0',
-        account_equity: '0',
-        available_to_spend: '0',
-        available_to_withdraw: '0',
-        total_margin_used: '0',
-        positions_count: 0,
-        orders_count: 0,
-        maker_fee: 0.00005,
-        taker_fee: 0.00035,
-        fee_level: '0',
-      });
+      setPhoenixAccount(phoenixEmptyAccount(walletAddr, marketsRef.current[0] || {}));
       setAccountReady(true);
       setDataReady(true);
       refreshTraderStateLastResultRef.current = null;
@@ -1107,13 +1237,32 @@ export function usePhoenix() {
       setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
       return null;
     }
-    setInviteStatus(prev => ({ ...prev, checking: true }));
+    const accessCache = cachedPhoenixAccess(walletAddr);
+    if (accessCache) {
+      setInviteStatus({
+        checking: false,
+        whitelisted: true,
+        codeUsed: accessCache.codeUsed || accessCache.code || null,
+        cached: true,
+      });
+    } else {
+      setInviteStatus(prev => ({ ...prev, checking: true }));
+    }
     try {
       const check = await client.api.invite().checkWallet(walletAddr);
+      if (check?.whitelisted) {
+        cachePhoenixAccess(walletAddr, {
+          source: 'invite_check',
+          codeUsed: check?.invite_code_used || null,
+        });
+      } else if (!accessCache) {
+        clearPhoenixAccess(walletAddr);
+      }
       const next = {
         checking: false,
-        whitelisted: !!check?.whitelisted,
+        whitelisted: accessCache ? true : !!check?.whitelisted,
         codeUsed: check?.invite_code_used || null,
+        cached: !!accessCache && !check?.whitelisted,
       };
       setInviteStatus(next);
       return check;
@@ -1157,17 +1306,23 @@ export function usePhoenix() {
               } else {
                 await client.api.invite().activateInvite({ authority: walletAddr, code: inviteCode });
               }
+              cachePhoenixAccess(walletAddr, { source: 'activate_invite', codeUsed: inviteCode, inviteKind });
               setInviteStatus({ checking: false, whitelisted: true, codeUsed: inviteCode });
             } else if (PHOENIX_ACCESS_CODE) {
               await client.api.invite().activateInvite({ authority: walletAddr, code: PHOENIX_ACCESS_CODE });
+              cachePhoenixAccess(walletAddr, { source: 'env_access_code', codeUsed: PHOENIX_ACCESS_CODE, inviteKind: 'access' });
               setInviteStatus({ checking: false, whitelisted: true, codeUsed: PHOENIX_ACCESS_CODE });
             } else if (PHOENIX_REFERRAL_CODE) {
               await client.api.invite().activateInviteWithReferral({ authority: walletAddr, referral_code: PHOENIX_REFERRAL_CODE });
+              cachePhoenixAccess(walletAddr, { source: 'env_referral_code', codeUsed: PHOENIX_REFERRAL_CODE, inviteKind: 'referral' });
               setInviteStatus({ checking: false, whitelisted: true, codeUsed: PHOENIX_REFERRAL_CODE });
             } else if (check) {
+              clearPhoenixAccess(walletAddr);
               setInviteStatus(prev => ({ ...prev, whitelisted: false }));
               throw new Error('Phoenix access code required');
             }
+          } else {
+            cachePhoenixAccess(walletAddr, { source: 'activate_check', codeUsed: check?.invite_code_used || null });
           }
           const registerClient = await getTransactionClient(false);
           const ix = await registerClient.ixs.buildRegisterTrader({
@@ -1177,15 +1332,18 @@ export function usePhoenix() {
           await sendIxs(ix, 'phoenix.register');
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
+          cachePhoenixSetup(walletAddr, { source: 'register' });
         }
         const state = await waitForTraderState();
         if (!state) throw new Error('Phoenix account is not visible on RPC yet; retry in a few seconds');
+        cachePhoenixSetup(walletAddr, { source: 'activate_verified' });
         return true;
       } catch (e) {
         const text = e?.message || 'Phoenix activation failed';
         if (/already|exists|initialized/i.test(text)) {
           traderRegisteredRef.current = true;
           setTraderRegistered(true);
+          cachePhoenixSetup(walletAddr, { source: 'register_already_exists' });
           const state = await waitForTraderState(6);
           if (!state) {
             setError('Phoenix account is not visible on RPC yet; retry in a few seconds');
@@ -1630,6 +1788,25 @@ export function usePhoenix() {
     return () => { cancelled = true; clearInterval(iv); };
   }, [fetchMarkets, fetchPrices, fetchWalletUsdc, isActiveDex, refreshTraderState, walletAddr, walletMismatch]);
 
+  const renderSetupCache = isActiveDex && walletAddr && !walletMismatch
+    ? cachedPhoenixSetup(walletAddr)
+    : null;
+  const renderAccessCache = isActiveDex && walletAddr && !walletMismatch
+    ? (renderSetupCache || cachedPhoenixAccess(walletAddr))
+    : null;
+  const effectiveTraderRegistered = traderRegistered || !!renderSetupCache;
+  const effectiveAccountReady = accountReady || !!renderSetupCache;
+  const effectiveDataReady = dataReady || !!renderSetupCache;
+  const effectiveInviteStatus = renderAccessCache && inviteStatus?.whitelisted !== true
+    ? {
+      ...inviteStatus,
+      checking: false,
+      whitelisted: true,
+      codeUsed: renderAccessCache.codeUsed || renderAccessCache.code || inviteStatus?.codeUsed || null,
+      cached: true,
+    }
+    : inviteStatus;
+
   return {
     connected: !!walletAddr,
     walletAddr,
@@ -1641,11 +1818,11 @@ export function usePhoenix() {
     walletUsdc,
     leverageSettings: {},
     marginModes: {},
-    dataReady,
-    accountReady,
-    isReady: !!walletAddr && traderRegistered,
-    setupVerified: walletAddr ? (accountReady ? traderRegistered : null) : false,
-    inviteStatus,
+    dataReady: effectiveDataReady,
+    accountReady: effectiveAccountReady,
+    isReady: !!walletAddr && effectiveTraderRegistered,
+    setupVerified: walletAddr ? (effectiveAccountReady ? effectiveTraderRegistered : null) : false,
+    inviteStatus: effectiveInviteStatus,
     loading,
     error,
     clearError,
