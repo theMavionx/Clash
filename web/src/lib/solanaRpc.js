@@ -9,7 +9,7 @@ const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SO
 const includeTatumRpcProxy = /^(1|true|yes)$/i.test(String(
   import.meta.env.VITE_SOLANA_ENABLE_TATUM_RPC || import.meta.env.VITE_SOLANA_ENABLE_TATUM || '',
 ));
-const includePublicRpcProxy = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC || '1'));
+const includePublicBrowserRpc = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC || '1'));
 const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
@@ -82,11 +82,11 @@ try {
 }
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
-export const SAME_ORIGIN_SOLANA_PUBLIC_URL = sameOriginPath('/rpc/solana-public');
 export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
 export const SAME_ORIGIN_SOLANA_TATUM_URL = sameOriginPath('/rpc/solana-tatum');
 
 const DIRECT_SOLANA_RPC_URLS = [
+  ...(includePublicBrowserRpc ? [officialDirectBrowserRpc] : []),
   envDirectSolanaRpc,
   ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
@@ -94,7 +94,6 @@ const DIRECT_SOLANA_RPC_URLS = [
 ];
 
 const PROXY_SOLANA_RPC_URLS = [
-  ...(allowProxyFallback && includePublicRpcProxy ? [SAME_ORIGIN_SOLANA_PUBLIC_URL] : []),
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
@@ -104,6 +103,7 @@ const PROXY_SOLANA_RPC_URLS = [
 ];
 
 export const SOLANA_RPC_URLS = [
+  ...(includePublicBrowserRpc ? [officialDirectBrowserRpc] : []),
   ...(preferProxyRpc ? PROXY_SOLANA_RPC_URLS : DIRECT_SOLANA_RPC_URLS),
   ...(preferProxyRpc ? DIRECT_SOLANA_RPC_URLS : PROXY_SOLANA_RPC_URLS),
 ].filter((url, index, all) => url && all.indexOf(url) === index);
@@ -332,7 +332,7 @@ export function solanaWsUrl(httpUrl = DEFAULT_SOLANA_RPC_URL) {
   try {
     const url = new URL(raw, siteOrigin());
     const pathname = url.pathname.replace(/\/+$/, '');
-    if (pathname === '/rpc/solana' || pathname === '/rpc/solana-public') {
+    if (pathname === '/rpc/solana') {
       url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
       url.pathname = '/rpc/solana-ws';
       url.search = '';

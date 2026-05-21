@@ -660,19 +660,6 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location = /rpc/solana-public {
-        proxy_pass https://api.mainnet-beta.solana.com/;
-        proxy_http_version 1.1;
-        proxy_set_header Host api.mainnet-beta.solana.com;
-        proxy_set_header Origin "";
-        proxy_set_header Referer "";
-        proxy_ssl_server_name on;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header Accept-Encoding "";
-        gzip off;
-    }
-
     location /rpc/solana-tatum {
         proxy_pass https://solana-mainnet.gateway.tatum.io/;
         proxy_http_version 1.1;
