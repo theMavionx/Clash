@@ -6626,6 +6626,7 @@ const nftGoldBoostCache = new Map();
 let nftGoldBoostViemPromise = null;
 
 function nftBoostRpcUrls() {
+  const baseAlchemyKey = String(process.env.BASE_ALCHEMY_KEY || process.env.ALCHEMY_BASE_API_KEY || '').trim();
   const override = String(
     process.env.NFT_GOLD_BOOST_RPC_URLS
     || process.env.NFT_GOLD_BOOST_RPC_URL
@@ -6639,11 +6640,12 @@ function nftBoostRpcUrls() {
     .filter(Boolean);
   if (override.length) return override;
   return [
+    baseAlchemyKey ? `https://base-mainnet.g.alchemy.com/v2/${baseAlchemyKey}` : '',
     'https://base-rpc.publicnode.com',
     'https://base.public.blockpi.network/v1/rpc/public',
     'https://base.drpc.org',
     'https://mainnet.base.org',
-  ];
+  ].filter(Boolean);
 }
 
 async function nftGoldBoostViem() {
