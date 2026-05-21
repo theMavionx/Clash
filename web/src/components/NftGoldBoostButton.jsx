@@ -207,7 +207,7 @@ export default function NftGoldBoostButton({ placement = 'side' }) {
           .nft-gold-boost-button--side {
             left: 34px;
             top: auto;
-            bottom: calc(env(safe-area-inset-bottom, 0px) + 186px);
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 232px);
           }
           .nft-gold-boost-button--replay {
             right: 10px;
