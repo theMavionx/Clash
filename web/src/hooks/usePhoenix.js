@@ -25,7 +25,7 @@ const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
 const USDC_DECIMALS = 6;
 const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
-const PHOENIX_TX_METADATA_TTL_MS = 12_000;
+const PHOENIX_TX_METADATA_TTL_MS = 5 * 60_000;
 const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
 const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
@@ -697,6 +697,24 @@ export function usePhoenix() {
     }
   }, [connection?.rpcEndpoint, disposeTransactionClient, walletAddr]);
 
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      getTransactionClient(false).catch((e) => {
+        console.warn('[Phoenix] transaction client warmup failed', {
+          rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
+          message: e?.message || String(e || 'unknown error'),
+        });
+      });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [connection?.rpcEndpoint, getTransactionClient, isActiveDex, walletAddr, walletMismatch]);
+
   const buildCollateralIxs = useCallback(async (txClient, amount, direction, authority) => {
     await txClient.exchange?.ready?.();
     const snapshot = txClient.exchange?.snapshot?.();
@@ -1260,7 +1278,7 @@ export function usePhoenix() {
               throw new Error('Phoenix access code required');
             }
           }
-          const registerClient = await getTransactionClient(true);
+          const registerClient = await getTransactionClient(false);
           const ix = await registerClient.ixs.buildRegisterTrader({
             authority: walletAddr,
             marginType: MarginType.Cross || 'cross',
@@ -1324,7 +1342,7 @@ export function usePhoenix() {
           throw new Error(`Not enough Solana USDC: need ${formatUsdcAmount(requested)}, wallet has ${formatUsdcAmount(walletBalance)}.`);
         }
         const amount = toRawUsdc(amountUsdc);
-        const txClient = await getTransactionClient(true);
+        const txClient = await getTransactionClient(false);
         const built = await buildCollateralIxs(txClient, amount, 'deposit', walletAddr);
         const signature = await sendIxs(built.instructions, 'phoenix.deposit');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
@@ -1363,7 +1381,7 @@ export function usePhoenix() {
           throw new Error(`Phoenix withdrawable collateral is ${formatUsdcAmount(availableForWithdraw)} USDC. Withdraw less, or close positions/cancel orders first.`);
         }
         const amount = toRawUsdc(amountUsdc);
-        const txClient = await getTransactionClient(true);
+        const txClient = await getTransactionClient(false);
         const built = await buildCollateralIxs(txClient, amount, 'withdraw', walletAddr);
         const signature = await sendIxs(built.instructions, 'phoenix.withdraw');
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
