@@ -481,9 +481,23 @@ func _try_place_ship(hit: Vector3) -> bool:
 		# server troops appear offshore and the TH survives in the sim.
 		var stop_pos_for_log: Vector3 = _ship_stop_positions[-1]
 		var spawn_pos_for_log: Vector3 = _base_troop_spawn_pos(stop_pos_for_log)
+		var troop_names_for_log: Array = ship_data.get("troops", [])
+		var troop_offsets_for_log: Array = []
+		var troop_spawns_for_log: Array = []
+		var lat_dir_for_log: Vector3 = _get_lateral_dir()
+		for i in troop_names_for_log.size():
+			var troop_name_for_spawn: String = str(troop_names_for_log[i])
+			var troop_key_for_spawn: String = _normalize_troop_entry(troop_name_for_spawn)
+			var offset_for_spawn := Vector3.ZERO
+			if not TROOP_DEFS.get(troop_key_for_spawn, {}).is_empty():
+				offset_for_spawn = lat_dir_for_log * (randf_range(-0.5, 0.5)) * 0.15
+			troop_offsets_for_log.append(offset_for_spawn)
+			var exact_spawn_for_log: Vector3 = BaseTroop._clamp_to_island(spawn_pos_for_log + offset_for_spawn)
+			troop_spawns_for_log.append({"x": exact_spawn_for_log.x, "z": exact_spawn_for_log.z})
+		ship_data["_precomputed_troop_offsets"] = troop_offsets_for_log
 		var troop_levels_for_log: Dictionary = {}
 		if "troop_levels" in bs:
-			for troop_name in ship_data.get("troops", []):
+			for troop_name in troop_names_for_log:
 				var troop_key_for_log: String = _normalize_troop_entry(troop_name)
 				var troop_level_for_log: int = _troop_entry_level(troop_name, bs.troop_levels.get(troop_key_for_log, 1))
 				troop_levels_for_log[troop_name] = troop_level_for_log
@@ -492,7 +506,8 @@ func _try_place_ship(hit: Vector3) -> bool:
 			"t": t, "type": "place_ship",
 			"x": spawn_pos_for_log.x, "z": spawn_pos_for_log.z,
 			"shipLevel": ship_data.get("level", 1),
-			"troops": ship_data.get("troops", []),
+			"troops": troop_names_for_log,
+			"troop_spawns": troop_spawns_for_log,
 			"troopLevels": troop_levels_for_log,
 		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
@@ -844,6 +859,7 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 			spawn_pos.y = ship_pos.y
 	var exact_spawn: bool = ship_data.get("_replay_exact_spawn", false) == true
 	var exact_spawns: Array = ship_data.get("_replay_troop_spawns", [])
+	var precomputed_offsets: Array = ship_data.get("_precomputed_troop_offsets", [])
 
 	# Get building Y and troop levels — reuse BaseTroop's per-frame cache
 	# instead of a fresh scene-tree scan on every ship arrival.
@@ -890,7 +906,10 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 		var spawn_generation: int = _combat_generation
 		var offset := Vector3.ZERO
 		if not exact_spawn:
-			offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
+			if i < precomputed_offsets.size() and precomputed_offsets[i] is Vector3:
+				offset = precomputed_offsets[i]
+			else:
+				offset = lat_dir * (randf_range(-0.5, 0.5)) * 0.15
 		_spawn_troop_after_delay(troop_spawn_delay * i, spawn_generation, m_res, s_res, troop_node_name, ship_idx * 100 + i, lvl, troop_spawn_pos, offset, building_y, bs_ref)
 
 

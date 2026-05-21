@@ -1,5 +1,6 @@
 // V3 NFT client helpers — paired with server/nft_v3_endpoints.js.
 //
+import { formatUnits } from 'viem';
 import { SOLANA_RPC_URLS, createSolanaConnection, solanaNonHeliusRpcUrls } from './solanaRpc';
 
 // Public API:
@@ -142,6 +143,13 @@ const EVM_OWNED_ABI = [
     inputs: [{ name: 'tokenId', type: 'uint256' }],
     outputs: [{ type: 'uint8' }],
   },
+  {
+    type: 'function',
+    name: 'paused',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ type: 'bool' }],
+  },
 ];
 
 // Minimum ABI we need — must match DemonKingBaseV3 exactly.
@@ -164,6 +172,8 @@ const V3_UPGRADE_ABI = [
 ];
 
 const ERC20_ALLOWANCE_ABI = [
+  { type: 'function', name: 'balanceOf', stateMutability: 'view',
+    inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'allowance', stateMutability: 'view',
     inputs: [{ type: 'address' }, { type: 'address' }], outputs: [{ type: 'uint256' }] },
   { type: 'function', name: 'approve', stateMutability: 'nonpayable',
@@ -176,21 +186,82 @@ function isNativeToken(addr) {
   return !addr || /^0x0{40}$/i.test(addr);
 }
 
+function compactFormattedUnits(value) {
+  const text = String(value || '0');
+  if (!text.includes('.')) return text;
+  const [head, tail] = text.split('.');
+  const trimmed = tail.replace(/0+$/, '');
+  if (!trimmed) return head;
+  return `${head}.${trimmed.slice(0, 8)}`;
+}
+
+function quotePaymentDecimals(quoteResponse, isNative) {
+  const direct = Number(quoteResponse?.decimals);
+  if (Number.isFinite(direct) && direct >= 0) return direct;
+  if (isNative) return 18;
+  const payment = String(quoteResponse?.payment || '').toLowerCase();
+  if (payment === 'usdc') return 6;
+  return 18;
+}
+
+function quotePaymentSymbol(chainKey, quoteResponse, isNative) {
+  if (quoteResponse?.priceSymbol) return String(quoteResponse.priceSymbol);
+  const payment = String(quoteResponse?.payment || '').toLowerCase();
+  if (isNative || payment === 'native') return chainKey === 'monad' ? 'MON' : 'ETH';
+  if (payment === 'cop') return 'CoP';
+  if (payment === 'usdc') return 'USDC';
+  return payment ? payment.toUpperCase() : 'token';
+}
+
+function insufficientBalanceError({ symbol, decimals, balance, required, native = false }) {
+  const have = compactFormattedUnits(formatUnits(BigInt(balance), decimals));
+  const need = compactFormattedUnits(formatUnits(BigInt(required), decimals));
+  const suffix = native ? ' plus gas' : '';
+  const message = `Insufficient ${symbol} balance. Need ${need} ${symbol}${suffix}, wallet has ${have} ${symbol}.`;
+  const err = new Error(message);
+  err.code = 'INSUFFICIENT_BALANCE';
+  err.shortMessage = message;
+  err.required = required.toString();
+  err.balance = balance.toString();
+  err.symbol = symbol;
+  return err;
+}
+
 /**
- * Get aggregate state for a token from the server:
+ * Get token state. EVM chains read owner/level directly from browser RPC first;
+ * the server endpoint is only a fallback when the browser RPC path is unavailable.
  *   { chain, chainId, contract, tokenId, owner, level, levelLabel,
  *     starCount, upgradeable, nextLevel, upgradePriceUsdE6,
  *     usdc, cop, paused, imageUrl, wins, nextLevelRequiredWins }
  */
-export async function fetchNftState(chain, tokenId) {
+export async function fetchNftState(chain, tokenId, options = {}) {
+  const chainKey = String(chain || '').toLowerCase();
+  let rpcError = null;
+  if (EVM_OWNED_CONFIG[chainKey]) {
+    try {
+      return await fetchNftStateBrowserEvm({
+        chain: chainKey,
+        tokenId,
+        evmWallet: options?.evmWallet,
+        signal: options?.signal,
+      });
+    } catch (err) {
+      rpcError = err;
+    }
+  }
+
   const headers = {};
   if (typeof window !== 'undefined' && window._playerToken) headers['x-token'] = window._playerToken;
-  const r = await fetch(`/api/nft/state/${chain}/${tokenId}`, { cache: 'no-store', headers });
+  const r = await fetch(`/api/nft/state/${chainKey || chain}/${tokenId}`, { cache: 'no-store', headers });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j?.error || `state read failed (${r.status})`), { status: r.status, body: j });
+  if (!r.ok) {
+    const message = j?.error || rpcError?.message || `state read failed (${r.status})`;
+    throw Object.assign(new Error(message), { status: r.status, body: j, rpcError });
+  }
   return {
     ...j,
     imageUrl: normalizeNftImageUrl(j?.imageUrl, j?.level, j?.tokenId || tokenId),
+    source: 'server',
   };
 }
 
@@ -253,6 +324,27 @@ export async function executeUpgrade({ evmWallet, chainKey, quoteResponse }) {
   const tokenIdBig = BigInt(tokenId);
   const deadlineBig = BigInt(deadline);
   const isNative = isNativeToken(paymentToken);
+
+  if (priceUnitsBig > 0n) {
+    const decimals = quotePaymentDecimals(quoteResponse, isNative);
+    const symbol = quotePaymentSymbol(chainKey, quoteResponse, isNative);
+    if (isNative) {
+      const balance = await publicClient.getBalance({ address: owner });
+      if (balance < priceUnitsBig) {
+        throw insufficientBalanceError({ symbol, decimals, balance, required: priceUnitsBig, native: true });
+      }
+    } else {
+      const balance = await publicClient.readContract({
+        address: paymentToken,
+        abi: ERC20_ALLOWANCE_ABI,
+        functionName: 'balanceOf',
+        args: [owner],
+      });
+      if (balance < priceUnitsBig) {
+        throw insufficientBalanceError({ symbol, decimals, balance, required: priceUnitsBig });
+      }
+    }
+  }
 
   // ERC-20 path: approve marketplace contract to pull our tokens. The V3
   // contract itself is the spender for upgradeToken (it calls transferFrom
@@ -403,6 +495,10 @@ function envValue(name) {
     switch (name) {
       case 'VITE_BASE_RPC_URL':
         return String(import.meta.env.VITE_BASE_RPC_URL || '').trim();
+      case 'VITE_ARBITRUM_RPC_URL':
+        return String(import.meta.env.VITE_ARBITRUM_RPC_URL || '').trim();
+      case 'VITE_MONAD_RPC_URL':
+        return String(import.meta.env.VITE_MONAD_RPC_URL || '').trim();
       case 'VITE_SOLANA_DAS_RPC_URL':
         return String(import.meta.env.VITE_SOLANA_DAS_RPC_URL || '').trim();
       case 'VITE_SOLANA_CORE_RPC_URL':
@@ -699,6 +795,66 @@ function evmOwnedToken(chain, id, level) {
     level: normalizeNftLevel(level),
     imageUrl: nftLevelImageUrl(level, id),
     chain,
+  };
+}
+
+async function fetchNftStateBrowserEvm({ chain, tokenId, evmWallet, signal }) {
+  const config = EVM_OWNED_CONFIG[chain];
+  if (!config) throw new Error(`Unsupported EVM chain: ${chain}`);
+  const { getAddress } = await import('viem');
+  const tokenIdText = String(tokenId || '').trim();
+  if (!/^\d+$/.test(tokenIdText)) {
+    const err = new Error('Token ID must be numeric');
+    err.status = 400;
+    throw err;
+  }
+
+  const tokenIdBig = BigInt(tokenIdText);
+  const client = evmWallet?.getPublicClient?.(config.chainId) || await createOwnedEvmClient(chain);
+  const contract = getAddress(config.contract);
+  const [owner, level, paused] = await Promise.all([
+    withTimeout(client.readContract({
+      address: contract,
+      abi: EVM_OWNED_ABI,
+      functionName: 'ownerOf',
+      args: [tokenIdBig],
+    }), OWNED_EVM_RPC_TIMEOUT_MS, `${chain} ownerOf(${tokenIdText})`, signal),
+    withTimeout(client.readContract({
+      address: contract,
+      abi: EVM_OWNED_ABI,
+      functionName: 'tokenLevel',
+      args: [tokenIdBig],
+    }), OWNED_EVM_RPC_TIMEOUT_MS, `${chain} tokenLevel(${tokenIdText})`, signal),
+    withTimeout(client.readContract({
+      address: contract,
+      abi: EVM_OWNED_ABI,
+      functionName: 'paused',
+    }).catch(() => false), OWNED_EVM_RPC_TIMEOUT_MS, `${chain} paused`, signal),
+  ]).catch((err) => {
+    if (isAbortError(err)) throw err;
+    const wrapped = new Error(err?.shortMessage || err?.message || 'Token does not exist');
+    wrapped.status = /does not exist|invalid token/i.test(wrapped.message) ? 404 : undefined;
+    wrapped.cause = err;
+    throw wrapped;
+  });
+
+  const normalizedLevel = normalizeNftLevel(Number(level));
+  const upgradeable = normalizedLevel < 3 && !paused;
+  return {
+    chain,
+    chainId: config.chainId,
+    contract,
+    tokenId: tokenIdText,
+    owner: getAddress(owner),
+    level: normalizedLevel,
+    levelLabel: `Level ${normalizedLevel}`,
+    starCount: normalizedLevel,
+    maxLevel: 3,
+    upgradeable,
+    nextLevel: upgradeable ? normalizedLevel + 1 : null,
+    paused: !!paused,
+    imageUrl: nftLevelImageUrl(normalizedLevel, tokenIdText),
+    source: 'rpc',
   };
 }
 

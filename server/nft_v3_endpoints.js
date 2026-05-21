@@ -738,10 +738,12 @@ function mountNftV3Endpoints(router, ctx) {
       let priceUnits = 0n;
       let decimals = 18;
       let priceSource = 'usd-fixed';
+      let priceSymbol = 'ETH';
 
       if (payment === 'eth' || payment === 'native') {
         paymentToken = zeroAddress;
         decimals = 18;
+        priceSymbol = chainKey === 'monad' ? 'MON' : 'ETH';
         const ethUsd = await ctx.fetchNftUsdPrice('eth');
         // (usd * 1e18) / ethUsd ; ethUsd is e6
         priceUnits = (usdPriceE6 * 10n ** 18n) / ethUsd;
@@ -749,6 +751,7 @@ function mountNftV3Endpoints(router, ctx) {
       } else if (payment === 'usdc') {
         paymentToken = getAddress(deployment.usdcToken);
         decimals = 6;
+        priceSymbol = 'USDC';
         priceUnits = usdPriceE6;     // USDC has 6 decimals; usdPriceE6 IS the unit count
       } else if (payment === 'cop') {
         const cop = deployment.copToken;
@@ -757,6 +760,7 @@ function mountNftV3Endpoints(router, ctx) {
         }
         paymentToken = getAddress(cop);
         decimals = Number(process.env.NFT_COP_DECIMALS || 18);
+        priceSymbol = 'CoP';
         const copUsd = await ctx.fetchClashUsdPrice({ clashToken: cop });
         priceUnits = (usdPriceE6 * 10n ** BigInt(decimals)) / BigInt(copUsd.price);
         priceSource = `CoP/USD ${copUsd.price}`;
@@ -801,6 +805,8 @@ function mountNftV3Endpoints(router, ctx) {
         paymentToken,
         priceUnits: priceUnits.toString(),
         priceFormatted: formatUnits(priceUnits, decimals),
+        decimals,
+        priceSymbol,
         usdPriceE6: usdPriceE6.toString(),
         priceSource,
         nonce,

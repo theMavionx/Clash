@@ -26,6 +26,8 @@ var _submit_complete: bool = false
 ## The Node3D that owns this helper (a BuildingSystem instance).
 var bs: Node3D
 
+const MAX_REPLAY_SHIPS: int = 6
+
 ## Initialise with the owning BuildingSystem node.
 ## Returns self so the caller can chain: BSBattle.new().init(self)
 func init(building_system: Node3D) -> BSBattle:
@@ -1368,7 +1370,7 @@ func _replay_fleet_from_actions(actions: Array) -> Array:
 			"troops": troops,
 			"troop_levels": recorded_levels,
 		})
-		if fleet.size() >= 5:
+		if fleet.size() >= MAX_REPLAY_SHIPS:
 			break
 	return fleet
 
@@ -1781,7 +1783,7 @@ func check_defeat(delta: float) -> void:
 	if not _had_troops:
 		return  # battle hasn't started yet
 
-	var fleet_size: int = mini(_saved_fleet.size(), 5)  # cap to max_ships
+	var fleet_size: int = mini(_saved_fleet.size(), MAX_REPLAY_SHIPS)
 	var total_launched: int = 0
 	if attack_system:
 		total_launched = attack_system._total_ships_launched
