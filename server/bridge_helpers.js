@@ -297,6 +297,7 @@ function solanaConnection() {
   if (_solanaConnection) return _solanaConnection;
   const { Connection } = require('@solana/web3.js');
   const rpc = solanaPrimaryRpcUrl();
+  if (!rpc) throw new Error('Solana RPC endpoint is not configured');
   _solanaConnection = createSolanaConnection(Connection, rpc, 'confirmed');
   return _solanaConnection;
 }

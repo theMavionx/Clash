@@ -1470,7 +1470,8 @@ function solanaRpcUrls(extraUrls = []) {
 function getSolanaConnection() {
   if (_solanaConnectionCache) return _solanaConnectionCache;
   const { Connection } = require('@solana/web3.js');
-  const rpcUrl = solanaRpcUrls()[0] || 'https://solana-rpc.publicnode.com';
+  const rpcUrl = solanaRpcUrls()[0];
+  if (!rpcUrl) throw new Error('Solana RPC endpoint is not configured');
   _solanaConnectionCache = createSolanaConnection(Connection, rpcUrl, 'confirmed');
   return _solanaConnectionCache;
 }

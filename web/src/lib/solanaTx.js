@@ -16,7 +16,7 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_COMPUTE_UNIT_LIMIT = null;
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 const ENABLE_PRE_SIGN_SIMULATION = !/^(0|false|no)$/i.test(
-  String(import.meta.env.VITE_SOLANA_PRE_SIGN_SIMULATION || '1'),
+  String(import.meta.env.VITE_SOLANA_PRE_SIGN_SIMULATION || '0'),
 );
 
 const SEND_OPTIONS = {

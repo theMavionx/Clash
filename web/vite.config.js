@@ -23,9 +23,12 @@ const SOLANA_TATUM_API_KEY = process.env.SOLANA_TATUM_API_KEY
   || process.env.TATUM_API_KEY
   || viteEnv.TATUM_API_KEY
   || '';
-const SOLANA_RPC_PROXY_TARGET = SOLANA_HELIUS_API_KEY
-  ? 'https://mainnet.helius-rpc.com'
-  : 'https://api.mainnet-beta.solana.com';
+const SOLANA_ALCHEMY_API_KEY = process.env.SOLANA_ALCHEMY_API_KEY
+  || viteEnv.SOLANA_ALCHEMY_API_KEY
+  || process.env.ALCHEMY_SOLANA_API_KEY
+  || viteEnv.ALCHEMY_SOLANA_API_KEY
+  || '';
+const SOLANA_RPC_PROXY_TARGET = 'https://mainnet.helius-rpc.com';
 const ARBITRUM_ALCHEMY_KEY = process.env.ARBITRUM_ALCHEMY_KEY
   || viteEnv.ARBITRUM_ALCHEMY_KEY
   || process.env.VITE_ARBITRUM_ALCHEMY_KEY
@@ -117,8 +120,8 @@ export default defineConfig({
       // PRIMARY (when configured): Alchemy paid endpoint, server-side proxy
       // so the API key NEVER ships in the browser bundle. Set
       // ARBITRUM_ALCHEMY_KEY locally; do not commit provider keys here.
-      '/rpc/solana-ws': {
-        target: 'wss://api.mainnet-beta.solana.com',
+      '/rpc/solana-alchemy-ws': {
+        target: 'wss://solana-mainnet.g.alchemy.com',
         ws: true,
         changeOrigin: true,
         secure: true,
@@ -128,7 +131,32 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => '/',
+        rewrite: () => SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/v2/',
+      },
+      '/rpc/solana-ws': {
+        target: 'wss://mainnet.helius-rpc.com',
+        ws: true,
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReqWs', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=',
+      },
+      '/rpc/solana-alchemy': {
+        target: 'https://solana-mainnet.g.alchemy.com',
+        changeOrigin: true,
+        secure: true,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('referer');
+          });
+        },
+        rewrite: () => SOLANA_ALCHEMY_API_KEY ? `/v2/${SOLANA_ALCHEMY_API_KEY}` : '/v2/',
       },
       '/rpc/solana-leorpc': {
         target: 'https://solana.leorpc.com',
@@ -165,7 +193,7 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/',
+        rewrite: () => SOLANA_HELIUS_API_KEY ? `/?api-key=${SOLANA_HELIUS_API_KEY}` : '/?api-key=',
       },
       '/rpc/arb-alchemy': {
         target: 'https://arb-mainnet.g.alchemy.com',

@@ -129,7 +129,7 @@ load_vite_env_for_build() {
     # start with VITE_. Release copies intentionally exclude .env files, so
     # production-only public config (Privy app id, Aptos/Arbitrum API keys)
     # must be lifted from /opt/clash/shared/.env before npm run build.
-    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY VITE_SOLANA_TATUM_API_KEY VITE_TATUM_API_KEY
+    unset VITE_HELIUS_API_KEY VITE_SOLANA_HELIUS_API_KEY VITE_SOLANA_TATUM_API_KEY VITE_TATUM_API_KEY VITE_SOLANA_ALCHEMY_API_KEY VITE_ALCHEMY_SOLANA_API_KEY
     [ -f "$ENV_FILE" ] || return 0
 
     local count=0
@@ -145,7 +145,7 @@ load_vite_env_for_build() {
         case "$key" in
             VITE_*)
                 case "$key" in
-                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY)
+                    VITE_HELIUS_API_KEY|VITE_SOLANA_HELIUS_API_KEY|VITE_SOLANA_TATUM_API_KEY|VITE_TATUM_API_KEY|VITE_SOLANA_ALCHEMY_API_KEY|VITE_ALCHEMY_SOLANA_API_KEY)
                         continue
                         ;;
                 esac
@@ -245,9 +245,12 @@ prepare_shared_runtime() {
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
     ensure_env_default "VITE_ARBITRUM_RPC_URL" ""
     ensure_env_default "VITE_SOLANA_RPC_URL" ""
+    ensure_env_default "SOLANA_ALCHEMY_API_KEY" ""
     ensure_env_default "SOLANA_HELIUS_API_KEY" ""
     ensure_env_default "SOLANA_TATUM_API_KEY" ""
-    ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "1"
+    ensure_env_default "VITE_SOLANA_ENABLE_ALCHEMY_RPC" "1"
+    ensure_env_default "VITE_SOLANA_ENABLE_PUBLIC_RPC" "0"
+    ensure_env_default "VITE_SOLANA_PRE_SIGN_SIMULATION" "0"
     ensure_env_default "VITE_SOLANA_ENABLE_TATUM_RPC" "1"
     ensure_env_default "VITE_PHOENIX_ACCESS_CODE" ""
     ensure_env_default "VITE_PHOENIX_REFERRAL_CODE" ""
@@ -575,6 +578,7 @@ MCPTEMPCONF
     fi
 
     ARBITRUM_ALCHEMY_KEY="$(env_file_value "ARBITRUM_ALCHEMY_KEY")"
+    SOLANA_ALCHEMY_API_KEY="$(first_env_file_value "SOLANA_ALCHEMY_API_KEY" "ALCHEMY_SOLANA_API_KEY")"
     SOLANA_HELIUS_API_KEY="$(first_env_file_value \
         "SOLANA_HELIUS_API_KEY" \
         "HELIUS_API_KEY" \
@@ -645,12 +649,12 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /rpc/solana-ws {
-        proxy_pass https://api.mainnet-beta.solana.com/;
+    location = /rpc/solana-ws {
+        proxy_pass __SOLANA_RPC_WS_PROXY_PASS__;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host api.mainnet-beta.solana.com;
+        proxy_set_header Host __SOLANA_RPC_WS_HOST__;
         proxy_set_header Origin "";
         proxy_set_header Referer "";
         proxy_ssl_server_name on;
@@ -660,7 +664,35 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    location /rpc/solana-tatum {
+    location = /rpc/solana-alchemy {
+        proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;
+        proxy_http_version 1.1;
+        proxy_set_header Host solana-mainnet.g.alchemy.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Accept-Encoding "";
+        gzip off;
+    }
+
+    location = /rpc/solana-alchemy-ws {
+        proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host solana-mainnet.g.alchemy.com;
+        proxy_set_header Origin "";
+        proxy_set_header Referer "";
+        proxy_ssl_server_name on;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location = /rpc/solana-tatum {
         proxy_pass https://solana-mainnet.gateway.tatum.io/;
         proxy_http_version 1.1;
         proxy_set_header Host solana-mainnet.gateway.tatum.io;
@@ -674,7 +706,7 @@ server {
         gzip off;
     }
 
-    location /rpc/solana {
+    location = /rpc/solana {
         proxy_pass __SOLANA_RPC_PROXY_PASS__;
         proxy_http_version 1.1;
         proxy_set_header Host __SOLANA_RPC_HOST__;
@@ -687,7 +719,7 @@ server {
         gzip off;
     }
 
-    location /rpc/solana-leorpc {
+    location = /rpc/solana-leorpc {
         proxy_pass https://solana.leorpc.com/?api_key=FREE;
         proxy_http_version 1.1;
         proxy_set_header Host solana.leorpc.com;
@@ -863,6 +895,14 @@ MCPCONF
         log "ARBITRUM_ALCHEMY_KEY is not set; /rpc/arb-alchemy will return 503 and clients should use fallback RPCs."
     fi
 
+    if [ -n "$SOLANA_ALCHEMY_API_KEY" ]; then
+        sed -i "s|__SOLANA_ALCHEMY_API_KEY__|$(sed_escape_replacement "$SOLANA_ALCHEMY_API_KEY")|g" /etc/nginx/sites-available/$DOMAIN
+        log "SOLANA_ALCHEMY_API_KEY is set; /rpc/solana-alchemy will proxy to Alchemy server-side."
+    else
+        sed -i 's|proxy_pass https://solana-mainnet.g.alchemy.com/v2/__SOLANA_ALCHEMY_API_KEY__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        log "SOLANA_ALCHEMY_API_KEY is not set; /rpc/solana-alchemy will return 503."
+    fi
+
     if [ -n "$SOLANA_TATUM_API_KEY" ]; then
         sed -i "s|__SOLANA_TATUM_API_KEY__|$(sed_escape_replacement "$SOLANA_TATUM_API_KEY")|g" /etc/nginx/sites-available/$DOMAIN
         log "SOLANA_TATUM_API_KEY is set; /rpc/solana-tatum will proxy to Tatum server-side."
@@ -872,18 +912,24 @@ MCPCONF
         log "SOLANA_TATUM_API_KEY is not set; /rpc/solana-tatum will return 503."
     fi
 
-    local solana_rpc_proxy_pass solana_rpc_host
+    local solana_rpc_proxy_pass solana_rpc_host solana_rpc_ws_proxy_pass solana_rpc_ws_host
     if [ -n "$SOLANA_HELIUS_API_KEY" ]; then
         solana_rpc_proxy_pass="https://mainnet.helius-rpc.com/?api-key=$SOLANA_HELIUS_API_KEY"
         solana_rpc_host="mainnet.helius-rpc.com"
+        solana_rpc_ws_proxy_pass="https://mainnet.helius-rpc.com/?api-key=$SOLANA_HELIUS_API_KEY"
+        solana_rpc_ws_host="mainnet.helius-rpc.com"
+        sed -i "s|__SOLANA_RPC_PROXY_PASS__|$(sed_escape_replacement "$solana_rpc_proxy_pass")|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|__SOLANA_RPC_HOST__|$(sed_escape_replacement "$solana_rpc_host")|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|__SOLANA_RPC_WS_PROXY_PASS__|$(sed_escape_replacement "$solana_rpc_ws_proxy_pass")|g" /etc/nginx/sites-available/$DOMAIN
+        sed -i "s|__SOLANA_RPC_WS_HOST__|$(sed_escape_replacement "$solana_rpc_ws_host")|g" /etc/nginx/sites-available/$DOMAIN
         log "SOLANA_HELIUS_API_KEY is set; /rpc/solana will proxy to Helius server-side."
     else
-        solana_rpc_proxy_pass="https://api.mainnet-beta.solana.com/"
-        solana_rpc_host="api.mainnet-beta.solana.com"
-        log "SOLANA_HELIUS_API_KEY is not set; /rpc/solana will use the official public endpoint."
+        sed -i 's|proxy_pass __SOLANA_RPC_PROXY_PASS__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|        proxy_set_header Host __SOLANA_RPC_HOST__;||g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|proxy_pass __SOLANA_RPC_WS_PROXY_PASS__;|return 503;|g' /etc/nginx/sites-available/$DOMAIN
+        sed -i 's|        proxy_set_header Host __SOLANA_RPC_WS_HOST__;||g' /etc/nginx/sites-available/$DOMAIN
+        log "SOLANA_HELIUS_API_KEY is not set; /rpc/solana and /rpc/solana-ws will return 503."
     fi
-    sed -i "s|__SOLANA_RPC_PROXY_PASS__|$(sed_escape_replacement "$solana_rpc_proxy_pass")|g" /etc/nginx/sites-available/$DOMAIN
-    sed -i "s|__SOLANA_RPC_HOST__|$(sed_escape_replacement "$solana_rpc_host")|g" /etc/nginx/sites-available/$DOMAIN
 
     ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
     ln -sf /etc/nginx/sites-available/$MCP_DOMAIN /etc/nginx/sites-enabled/

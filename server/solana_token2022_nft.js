@@ -31,7 +31,9 @@ const DEFAULT_COLLECTION_ID = 'demon-king-token2022-v1';
 const DEFAULT_PUBLIC_BASE_URL = 'https://clashofperps.fun';
 
 function solanaRpcUrl() {
-  return solanaPrimaryRpcUrl();
+  const rpcUrl = solanaPrimaryRpcUrl();
+  if (!rpcUrl) throw new Error('Solana RPC endpoint is not configured');
+  return rpcUrl;
 }
 
 function solanaToken2022Symbol() {

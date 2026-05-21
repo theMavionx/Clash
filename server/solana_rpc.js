@@ -1,6 +1,7 @@
-const DEFAULT_SOLANA_RPC_URLS = Object.freeze([
-  'https://api.mainnet-beta.solana.com',
-  'https://solana-rpc.publicnode.com',
+const DEFAULT_SOLANA_RPC_URLS = Object.freeze([]);
+const PUBLIC_SOLANA_RPC_HOSTS = new Set([
+  'api.mainnet-beta.solana.com',
+  'solana-rpc.publicnode.com',
 ]);
 
 function splitSolanaRpcUrls(raw) {
@@ -22,21 +23,51 @@ function heliusSolanaRpcUrl(env = process.env) {
   return key ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(key)}` : '';
 }
 
+function alchemySolanaRpcUrl(env = process.env) {
+  const key = String(
+    env.SOLANA_ALCHEMY_API_KEY
+    || env.ALCHEMY_SOLANA_API_KEY
+    || '',
+  ).trim();
+  return key ? `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(key)}` : '';
+}
+
+function tatumSolanaRpcUrl(env = process.env) {
+  const key = String(
+    env.SOLANA_TATUM_API_KEY
+    || env.TATUM_API_KEY
+    || '',
+  ).trim();
+  return key ? 'https://solana-mainnet.gateway.tatum.io/' : '';
+}
+
+function isPublicSolanaRpcUrl(url) {
+  try {
+    return PUBLIC_SOLANA_RPC_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function solanaRpcUrls(extraUrls = [], env = process.env) {
   const extras = Array.isArray(extraUrls) ? extraUrls : [extraUrls];
   const urls = [
+    alchemySolanaRpcUrl(env),
+    heliusSolanaRpcUrl(env),
     ...splitSolanaRpcUrls(env.NFT_SOLANA_RPC_URL),
     ...splitSolanaRpcUrls(env.SOLANA_RPC_URL),
     ...splitSolanaRpcUrls(env.VITE_SOLANA_RPC_URL),
     ...extras.flatMap(splitSolanaRpcUrls),
-    heliusSolanaRpcUrl(env),
+    tatumSolanaRpcUrl(env),
     ...DEFAULT_SOLANA_RPC_URLS,
   ];
-  return Array.from(new Set(urls.filter((url) => /^https?:\/\//i.test(String(url || '')))));
+  return Array.from(new Set(urls.filter((url) => (
+    /^https?:\/\//i.test(String(url || '')) && !isPublicSolanaRpcUrl(url)
+  ))));
 }
 
 function solanaPrimaryRpcUrl(extraUrls = [], env = process.env) {
-  return solanaRpcUrls(extraUrls, env)[0] || DEFAULT_SOLANA_RPC_URLS[0];
+  return solanaRpcUrls(extraUrls, env)[0] || '';
 }
 
 function isHeliusSolanaRpcUrl(url) {
@@ -57,7 +88,7 @@ function solanaNonHeliusRpcUrls(urls = solanaRpcUrls()) {
 
 function solanaBatchSafeRpcUrl(preferredUrl, urls = solanaRpcUrls()) {
   if (preferredUrl && solanaRpcSupportsBatch(preferredUrl)) return preferredUrl;
-  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || DEFAULT_SOLANA_RPC_URLS[0];
+  return solanaNonHeliusRpcUrls(urls)[0] || preferredUrl || (urls || []).find(Boolean) || '';
 }
 
 function parseJsonRpcBody(body) {
@@ -118,7 +149,17 @@ async function heliusBatchSafeFetch(input, init = {}) {
 }
 
 function solanaRpcFetchForUrl(url) {
-  return isHeliusSolanaRpcUrl(url) ? heliusBatchSafeFetch : undefined;
+  if (isHeliusSolanaRpcUrl(url)) return heliusBatchSafeFetch;
+  try {
+    if (new URL(url).hostname === 'solana-mainnet.gateway.tatum.io') {
+      return (input, init = {}) => {
+        const headers = new Headers(init.headers || {});
+        headers.set('x-api-key', process.env.SOLANA_TATUM_API_KEY || process.env.TATUM_API_KEY || '');
+        return fetch(input, { ...init, headers });
+      };
+    }
+  } catch {}
+  return undefined;
 }
 
 function solanaConnectionConfig(url, commitmentOrConfig = 'confirmed') {
@@ -144,6 +185,9 @@ async function withSolanaRpcFallback(task, {
   onError = null,
 } = {}) {
   const rpcUrls = urls || solanaRpcUrls(extraUrls);
+  if (rpcUrls.length === 0) {
+    throw new Error(`${label} failed: no Solana RPC endpoint is configured`);
+  }
   let lastError = null;
   for (const rpcUrl of rpcUrls) {
     try {
@@ -163,8 +207,10 @@ async function withSolanaRpcFallback(task, {
 
 module.exports = {
   DEFAULT_SOLANA_RPC_URLS,
+  alchemySolanaRpcUrl,
   createSolanaConnection,
   heliusSolanaRpcUrl,
+  isPublicSolanaRpcUrl,
   isHeliusSolanaRpcUrl,
   solanaBatchSafeRpcUrl,
   solanaConnectionConfig,

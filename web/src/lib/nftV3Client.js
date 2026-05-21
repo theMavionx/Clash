@@ -593,7 +593,6 @@ function solanaCoreRpcUrls() {
     envValue('VITE_SOLANA_CORE_RPC_URL'),
     envValue('VITE_SOLANA_RPC_URL'),
     ...SOLANA_RPC_URLS,
-    'https://solana-rpc.publicnode.com',
   ]).map(normalizeRpcUrl));
 }
 

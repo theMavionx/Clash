@@ -4,13 +4,11 @@ const rawBrowserSolanaRpcUrls = (import.meta.env.VITE_SOLANA_BROWSER_RPC_URLS ||
 const allowProxyFallback = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PROXY_RPC || '1'));
 const preferProxyRpc = allowProxyFallback
   && !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_PREFER_PROXY_RPC || '1'));
-const includeOfficialDirectRpc = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_OFFICIAL_RPC || ''));
 const includeLeoRpcProxy = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_LEORPC || ''));
+const includeAlchemyRpcProxy = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_ALCHEMY_RPC || '1'));
 const includeTatumRpcProxy = /^(1|true|yes)$/i.test(String(
   import.meta.env.VITE_SOLANA_ENABLE_TATUM_RPC || import.meta.env.VITE_SOLANA_ENABLE_TATUM || '',
 ));
-const includePublicBrowserRpc = !/^(0|false|no)$/i.test(String(import.meta.env.VITE_SOLANA_ENABLE_PUBLIC_RPC || '1'));
-const officialDirectBrowserRpc = 'https://api.mainnet-beta.solana.com';
 
 export const SOLANA_RPC_MIN_BLOCKHASH_REMAINING_BLOCKS = 50;
 export const SOLANA_RPC_MAX_BLOCK_HEIGHT_LAG = 40;
@@ -54,11 +52,10 @@ function isSameOriginSerializedSolanaRpcUrl(url) {
     const parsed = new URL(raw, siteOrigin());
     const origin = new URL(siteOrigin());
     const pathname = parsed.pathname.replace(/\/+$/, '');
-    return parsed.origin === origin.origin
-      && (pathname === '/rpc/solana' || pathname === '/rpc/solana-tatum');
+    return parsed.origin === origin.origin && pathname === '/rpc/solana';
   } catch {
     const pathname = raw.replace(/\/+$/, '');
-    return pathname === '/rpc/solana' || pathname === '/rpc/solana-tatum';
+    return pathname === '/rpc/solana';
   }
 }
 
@@ -82,18 +79,18 @@ try {
 }
 
 export const SAME_ORIGIN_SOLANA_RPC_URL = sameOriginPath('/rpc/solana');
+export const SAME_ORIGIN_SOLANA_ALCHEMY_URL = sameOriginPath('/rpc/solana-alchemy');
 export const SAME_ORIGIN_SOLANA_LEORPC_URL = sameOriginPath('/rpc/solana-leorpc');
 export const SAME_ORIGIN_SOLANA_TATUM_URL = sameOriginPath('/rpc/solana-tatum');
 
 const DIRECT_SOLANA_RPC_URLS = [
-  ...(includePublicBrowserRpc ? [officialDirectBrowserRpc] : []),
   envDirectSolanaRpc,
   ...splitRpcUrls(rawBrowserSolanaRpcUrls).filter((url) => !isSameOriginRpcUrl(url)).map(normalizeRpcUrl),
   rawDirectSolanaRpc ? normalizeRpcUrl(rawDirectSolanaRpc) : '',
-  ...(includeOfficialDirectRpc ? [officialDirectBrowserRpc] : []),
 ];
 
 const PROXY_SOLANA_RPC_URLS = [
+  ...(allowProxyFallback && includeAlchemyRpcProxy ? [SAME_ORIGIN_SOLANA_ALCHEMY_URL] : []),
   envProxySolanaRpc,
   ...(allowProxyFallback ? [
     SAME_ORIGIN_SOLANA_RPC_URL,
@@ -103,7 +100,6 @@ const PROXY_SOLANA_RPC_URLS = [
 ];
 
 export const SOLANA_RPC_URLS = [
-  ...(includePublicBrowserRpc ? [officialDirectBrowserRpc] : []),
   ...(preferProxyRpc ? PROXY_SOLANA_RPC_URLS : DIRECT_SOLANA_RPC_URLS),
   ...(preferProxyRpc ? DIRECT_SOLANA_RPC_URLS : PROXY_SOLANA_RPC_URLS),
 ].filter((url, index, all) => url && all.indexOf(url) === index);
@@ -335,6 +331,13 @@ export function solanaWsUrl(httpUrl = DEFAULT_SOLANA_RPC_URL) {
     if (pathname === '/rpc/solana') {
       url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
       url.pathname = '/rpc/solana-ws';
+      url.search = '';
+      url.hash = '';
+      return url.toString();
+    }
+    if (pathname === '/rpc/solana-alchemy') {
+      url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
+      url.pathname = '/rpc/solana-alchemy-ws';
       url.search = '';
       url.hash = '';
       return url.toString();

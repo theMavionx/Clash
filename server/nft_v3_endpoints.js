@@ -2159,8 +2159,8 @@ function mountNftV3Endpoints(router, ctx) {
     if (!rawKey) throw new Error('Solana authority key missing (SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY)');
     const secretBytes = parseSolanaSecretKey(rawKey);
 
-    // Resilient submission. Public RPC (solana-rpc.publicnode.com) often
-    // returns "block height exceeded" on `sendAndConfirm` under load, so we:
+    // Resilient submission. Shared Solana RPC providers can return
+    // "block height exceeded" on `sendAndConfirm` under load, so we:
     //   - send with skipPreflight + processed commitment for speed
     //   - retry the WHOLE build-and-send up to 3 times with a fresh blockhash
     //   - confirm via repeated getSignatureStatuses (not the bundled poll)

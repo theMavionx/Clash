@@ -11,7 +11,30 @@ const { keypairFromSecret } = require('./pacifica');
 
 // ---------- Constants ----------
 
-const RPC_URL = 'https://solana-rpc.publicnode.com';
+function configuredSolanaRpcUrl() {
+  const alchemyKey = String(process.env.SOLANA_ALCHEMY_API_KEY || process.env.ALCHEMY_SOLANA_API_KEY || '').trim();
+  if (alchemyKey) return `https://solana-mainnet.g.alchemy.com/v2/${encodeURIComponent(alchemyKey)}`;
+
+  const heliusKey = String(
+    process.env.SOLANA_HELIUS_API_KEY
+    || process.env.HELIUS_API_KEY
+    || process.env.NFT_SOLANA_HELIUS_API_KEY
+    || '',
+  ).trim();
+  if (heliusKey) return `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusKey)}`;
+
+  const rpcUrl = String(process.env.SOLANA_RPC_URL || process.env.NFT_SOLANA_RPC_URL || '').trim();
+  if (/^https?:\/\//i.test(rpcUrl)) {
+    try {
+      const host = new URL(rpcUrl).hostname;
+      if (host !== 'api.mainnet-beta.solana.com' && host !== 'solana-rpc.publicnode.com') return rpcUrl;
+    } catch {}
+  }
+
+  throw new Error('Solana RPC endpoint is not configured');
+}
+
+const RPC_URL = configuredSolanaRpcUrl();
 const connection = new Connection(RPC_URL, 'confirmed');
 
 const PACIFICA_PROGRAM_ID = new PublicKey('PCFA5iYgmqK6MqPhWNKg7Yv7auX7VZ4Cx7T1eJyrAMH');
