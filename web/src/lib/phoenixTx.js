@@ -2,19 +2,12 @@ import { PublicKey, TransactionInstruction } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 import { sendSolanaTransactionWithRetry } from './solanaTx';
 
-const PHOENIX_DEBUG_LOGS = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_PHOENIX_DEBUG_LOGS || ''));
-
 const ACCOUNT_ROLE = {
   READONLY: 0,
   WRITABLE: 1,
   READONLY_SIGNER: 2,
   WRITABLE_SIGNER: 3,
 };
-
-function shortAddress(address) {
-  const text = String(address || '');
-  return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
-}
 
 function roleFlags(role) {
   if (typeof role === 'number') {
@@ -27,38 +20,6 @@ function roleFlags(role) {
   return {
     isWritable: text.includes('WRITABLE'),
     isSigner: text.includes('SIGNER'),
-  };
-}
-
-function instructionSummary(instructions) {
-  const list = Array.isArray(instructions) ? instructions : [instructions];
-  return {
-    instruction_count: list.length,
-    instructions: list.slice(0, 8).map((ix) => {
-      const accounts = ix?.accounts || ix?.keys || [];
-      const flags = accounts.map((account) => (
-        account.role !== undefined
-          ? roleFlags(account.role)
-          : { isWritable: !!account.isWritable, isSigner: !!account.isSigner }
-      ));
-      return {
-        program: shortAddress(ix?.programAddress || ix?.programId),
-        program_id: String(ix?.programAddress || ix?.programId || ''),
-        account_count: accounts.length,
-        writable_count: flags.filter(flag => flag.isWritable).length,
-        signer_count: flags.filter(flag => flag.isSigner).length,
-        data_bytes: ix?.data?.length || 0,
-        account_roles: accounts.slice(0, 10).map((account, index) => {
-          const flag = flags[index] || {};
-          return {
-            index,
-            address: shortAddress(account.address || account.pubkey),
-            writable: !!flag.isWritable,
-            signer: !!flag.isSigner,
-          };
-        }),
-      };
-    }),
   };
 }
 
@@ -99,18 +60,6 @@ export async function sendPhoenixInstructions({
   computeUnitLimit = null,
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
-  if (PHOENIX_DEBUG_LOGS) {
-    console.info('[Phoenix] sendPhoenixInstructions input', {
-      label,
-      owner: shortAddress(ownerPk),
-      privy_active: !!privyActive,
-      has_adapter_send: !!sendTransaction,
-      has_adapter_sign: !!signTransaction,
-      has_privy_send: !!privySendTx,
-      has_privy_sign: !!privySignTx,
-      ...instructionSummary(list),
-    });
-  }
   const web3Instructions = list.map(kitInstructionToWeb3);
   return sendSolanaTransactionWithRetry({
     instructions: web3Instructions,

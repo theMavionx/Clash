@@ -10,12 +10,10 @@ import {
   createPhoenixTransactionClient,
   disposePhoenixClient,
   getPhoenixClient,
-  isPhoenixFlightEnabled,
   phoenixSymbol,
   shouldBypassPhoenixFlightForAuthority,
 } from '../lib/phoenixClient';
 import { sendPhoenixInstructions } from '../lib/phoenixTx';
-import { solanaRpcHost } from '../lib/solanaRpc';
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -35,14 +33,9 @@ const PHOENIX_ACCESS_CODE = import.meta.env.VITE_PHOENIX_ACCESS_CODE || '';
 const PHOENIX_REFERRAL_CODE = import.meta.env.VITE_PHOENIX_REFERRAL_CODE || '';
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
-const PHOENIX_DEBUG_LOGS = /^(1|true|yes)$/i.test(String(import.meta.env.VITE_PHOENIX_DEBUG_LOGS || ''));
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function phoenixDebug(...args) {
-  if (PHOENIX_DEBUG_LOGS) console.info(...args);
 }
 
 function phoenixSimulationCode(error) {
@@ -101,27 +94,6 @@ function isPhoenixMetadataDriftError(error) {
 function shortPhoenixAddress(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
-}
-
-function phoenixMetadataSummary(orderClient, symbol) {
-  try {
-    const source = orderClient?.exchange?.source?.();
-    const snapshot = orderClient?.exchange?.snapshot?.();
-    const context = orderClient?.exchange?.instructionContext?.(symbol);
-    return {
-      metadata_source: source?.active || null,
-      metadata_priority: source?.priority || null,
-      metadata_slot: snapshot?.slot != null ? String(snapshot.slot) : null,
-      metadata_slot_index: snapshot?.slotIndex ?? null,
-      market_pubkey: shortPhoenixAddress(context?.market?.marketPubkey),
-      spline_pubkey: shortPhoenixAddress(context?.market?.splinePubkey),
-      active_trader_buffer: Array.isArray(context?.exchange?.activeTraderBuffer)
-        ? context.exchange.activeTraderBuffer.map(shortPhoenixAddress).filter(Boolean)
-        : [],
-    };
-  } catch {
-    return {};
-  }
 }
 
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
@@ -566,19 +538,6 @@ export function usePhoenix() {
     return `Wrong Solana wallet: connected ${connected}, account uses ${registered}.`;
   }, [registeredSolanaWallet, walletAddr, walletMismatch]);
 
-  useEffect(() => {
-    if (!isActiveDex) return;
-    phoenixDebug('[Phoenix] wallet source selected', {
-      wallet_source: walletSource,
-      wallet: shortPhoenixAddress(walletAddr),
-      adapter_wallet: shortPhoenixAddress(adapterAddr),
-      privy_wallet: shortPhoenixAddress(privyAddr),
-      privy_wallet_client: privyWalletObj?.walletClientType || null,
-      registered_wallet: shortPhoenixAddress(registeredSolanaWallet),
-      wallet_mismatch: walletMismatch,
-    });
-  }, [adapterAddr, isActiveDex, privyAddr, privyWalletObj?.walletClientType, registeredSolanaWallet, walletAddr, walletMismatch, walletSource]);
-
   const [account, setAccount] = useState(null);
   const [positions, setPositions] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -659,12 +618,6 @@ export function usePhoenix() {
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
-      phoenixDebug('[Phoenix] transaction client init', {
-        rpc_host: solanaRpcHost(endpoint),
-        force_fresh: !!forceFresh,
-        flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
-        flight_self_bypass: disableFlight,
-      });
       const next = createPhoenixTransactionClient(endpoint, { disableFlight });
       try {
         await next.exchange?.ready?.();
@@ -672,23 +625,9 @@ export function usePhoenix() {
         txClientEndpointRef.current = endpoint;
         txClientFlightDisabledRef.current = disableFlight;
         txClientReadyAtRef.current = Date.now();
-        phoenixDebug('[Phoenix] transaction client ready', {
-          rpc_host: solanaRpcHost(endpoint),
-          force_fresh: !!forceFresh,
-          flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
-          flight_self_bypass: disableFlight,
-          ready_ms: Math.max(0, Date.now() - now),
-        });
         return next;
       } catch (e) {
         disposePhoenixClient(next);
-        phoenixDebug('[Phoenix] transaction client init failed', {
-          rpc_host: solanaRpcHost(endpoint),
-          force_fresh: !!forceFresh,
-          flight_enabled: isPhoenixFlightEnabled() && !disableFlight,
-          flight_self_bypass: disableFlight,
-          message: e?.message || String(e || 'unknown error'),
-        });
         throw e;
       }
     })();
@@ -757,15 +696,6 @@ export function usePhoenix() {
       },
       amount,
     };
-    phoenixDebug('[Phoenix] collateral tx resolved', {
-      direction,
-      canonical_mint: shortPhoenixAddress(exchangeSnapshot.canonicalMint),
-      wallet_usdc_mint: shortPhoenixAddress(USDC_MINT_ADDRESS),
-      sdk_usdc_mint: shortPhoenixAddress(exchangeSnapshot.usdcMint),
-      trader_account: shortPhoenixAddress(traderAccount),
-      usdc_token_account: shortPhoenixAddress(usdcTokenAccount),
-      phoenix_token_account: shortPhoenixAddress(phoenixTokenAccount),
-    });
     return direction === 'withdraw'
       ? buildWithdrawIxsResolved(resolved)
       : buildDepositIxsResolved(resolved);
@@ -773,23 +703,12 @@ export function usePhoenix() {
 
   const withFreshPhoenixMetadataRetry = useCallback(async (label, symbol, buildAndSend) => {
     const phx = phoenixSymbol(symbol);
-    const runWithTransactionClient = async (phase, forceFresh = false) => {
+    const runWithTransactionClient = async (forceFresh = false) => {
       const orderClient = await getTransactionClient(forceFresh);
-      phoenixDebug('[Phoenix] transaction metadata ready', {
-        label,
-        symbol: phx,
-        phase,
-        cached: !forceFresh,
-        cache_age_ms: Math.max(0, Date.now() - txClientReadyAtRef.current),
-        rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
-        flight_enabled: isPhoenixFlightEnabled() && !txClientFlightDisabledRef.current,
-        flight_self_bypass: txClientFlightDisabledRef.current,
-        ...phoenixMetadataSummary(orderClient, phx),
-      });
       return buildAndSend(orderClient);
     };
     try {
-      return await runWithTransactionClient('initial', false);
+      return await runWithTransactionClient(false);
     } catch (e) {
       if (!isPhoenixMetadataDriftError(e)) throw e;
       console.warn('[Phoenix] exchange metadata drift; rebuilding instruction once', {
@@ -800,9 +719,9 @@ export function usePhoenix() {
         lighthouse_assertion: isLighthouseAssertionError(e),
         logs: phoenixErrorLogs(e).slice(-6),
       });
-      return runWithTransactionClient('retry', true);
+      return runWithTransactionClient(true);
     }
-  }, [connection?.rpcEndpoint, getTransactionClient]);
+  }, [getTransactionClient]);
 
   const runOnce = useCallback((key, fn) => {
     const map = inFlightRef.current;
@@ -818,17 +737,6 @@ export function usePhoenix() {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
     const computeUnitLimit = options?.computeUnitLimit || null;
-    phoenixDebug('[Phoenix] send instructions', {
-      label,
-      owner: shortPhoenixAddress(ownerPk),
-      wallet: shortPhoenixAddress(walletAddr),
-      wallet_source: walletSource,
-      rpc_host: solanaRpcHost(connection?.rpcEndpoint || null),
-      flight_enabled: isPhoenixFlightEnabled() && !shouldBypassPhoenixFlightForAuthority(walletAddr),
-      flight_self_bypass: shouldBypassPhoenixFlightForAuthority(walletAddr),
-      compute_unit_limit: computeUnitLimit,
-      privy_active: !!privyActive,
-    });
     return sendPhoenixInstructions({
       instructions,
       ownerPk,
@@ -842,7 +750,7 @@ export function usePhoenix() {
       label,
       computeUnitLimit,
     });
-  }, [ownerPk, walletAddr, walletSource, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
+  }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
   const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');
@@ -883,9 +791,7 @@ export function usePhoenix() {
             body: JSON.stringify({ wallet: walletAddr }),
           });
           const importData = await importRes.json().catch(() => ({}));
-          if (importRes.ok) {
-            phoenixDebug('[Phoenix rewards] import-fills', importData);
-          } else {
+          if (!importRes.ok) {
             console.warn('[Phoenix rewards] import-fills failed', importRes.status, importData);
           }
         } catch (e) {
@@ -909,9 +815,7 @@ export function usePhoenix() {
           window.onGodotMessage({ action: 'resources_add', data: { gold: data.gold, wood: 0, ore: 0 } });
         }
       }
-      if (res.ok) {
-        phoenixDebug('[Phoenix rewards] claim-gold', data);
-      } else {
+      if (!res.ok) {
         console.warn('[Phoenix rewards] claim-gold failed', res.status, data);
       }
       return data;
@@ -1391,16 +1295,6 @@ export function usePhoenix() {
     const raw = (Number(margin) * Number(leverage || 1)) / mark;
     const rounded = roundDownToLot(raw, m?.lot_size || '0.0001');
     if (!Number.isFinite(rounded) || rounded <= 0) throw new Error('Order size is below this market lot size');
-    phoenixDebug('[Phoenix] margin to base units', {
-      symbol: phoenixSymbol(symbol),
-      margin,
-      leverage,
-      mark,
-      lot_size: m?.lot_size || '0.0001',
-      raw_base_units: raw,
-      rounded_base_units: rounded,
-      price_override: priceOverride != null,
-    });
     return String(rounded);
   }, []);
 
@@ -1424,19 +1318,6 @@ export function usePhoenix() {
         const sideEnum = sideToPhoenix(side);
         const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
         const priceLimitUsd = marketOrderPriceLimitUsd(sideEnum, mark);
-        phoenixDebug('[Phoenix] placeMarketOrder', {
-          symbol: phx,
-          requestedSide: side,
-          side: sideEnum === Side.Bid ? 'bid' : 'ask',
-          amount,
-          leverage,
-          mark,
-          baseUnits,
-          flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
-          priceLimitUsd,
-          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
-          minQuoteLotsToFill: '0',
-        });
         const signature = await withFreshPhoenixMetadataRetry('phoenix.market', phx, async (orderClient) => {
           const packet = await orderClient.orderPackets.buildMarketOrderPacket({
             symbol: phx,
@@ -1445,13 +1326,6 @@ export function usePhoenix() {
             priceLimitUsd,
             minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
             minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
-          });
-          phoenixDebug('[Phoenix] market packet built', {
-            symbol: phx,
-            side: sideEnum === Side.Bid ? 'bid' : 'ask',
-            baseUnits,
-            priceLimitUsd,
-            flight_enabled: isPhoenixFlightEnabled(),
           });
           const ix = await orderClient.ixs.placeMarketOrder({
             authority: walletAddr,
@@ -1561,27 +1435,6 @@ export function usePhoenix() {
         if (!(Number(baseUnits) > 0)) throw new Error('Phoenix close amount is below this market lot size');
         const mark = Number(existing?.mark_price || pricesRef.current.find(p => p.symbol === phx)?.mark || 0);
         const priceLimitUsd = marketOrderPriceLimitUsd(closeSide, mark);
-        phoenixDebug('[Phoenix] closePosition', {
-          symbol: phx,
-          uiSide: side,
-          positionSide,
-          closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
-          requested,
-          openAmount,
-          rawFullCloseAmount,
-          baseUnits,
-          fullClose: !!fullClose,
-          subaccountIndex,
-          flow: 'client.orderPackets.buildMarketOrderPacket + client.ixs.placeMarketOrder',
-          reduceOnly: true,
-          selfTradeBehavior: 'Abort',
-          cancelExisting: false,
-          mark,
-          priceLimitUsd,
-          minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
-          minQuoteLotsToFill: '0',
-          positionRaw: existing?._raw || null,
-        });
         const signature = await withFreshPhoenixMetadataRetry('phoenix.close', phx, async (orderClient) => {
           const packet = await orderClient.orderPackets.buildMarketOrderPacket({
             symbol: phx,
@@ -1593,14 +1446,6 @@ export function usePhoenix() {
             selfTradeBehavior: SelfTradeBehavior.Abort,
             orderFlags: OrderFlags.ReduceOnly,
             cancelExisting: false,
-          });
-          phoenixDebug('[Phoenix] close packet built', {
-            symbol: phx,
-            closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
-            baseUnits,
-            priceLimitUsd,
-            subaccountIndex,
-            flight_enabled: isPhoenixFlightEnabled(),
           });
           const ix = await orderClient.ixs.placeMarketOrder({
             authority: walletAddr,
@@ -1740,17 +1585,6 @@ export function usePhoenix() {
           else lessTriggerOrder = trigger;
         }
 
-        phoenixDebug('[Phoenix] setTpsl', {
-          symbol: phx,
-          requestedSide: side,
-          positionSide: position.side,
-          closeSide: closeSide === Side.Bid ? 'bid' : 'ask',
-          subaccountIndex,
-          mark,
-          takeProfit: tp,
-          stopLoss: sl,
-        });
-
         const signature = await withFreshPhoenixMetadataRetry('phoenix.tpsl', phx, async (orderClient) => {
           const createConditionalIx = await ensureConditionalOrdersAccountIx(subaccountIndex, orderClient);
           const placeConditionalIx = await orderClient.ixs.buildPlacePositionConditionalOrder({
@@ -1763,11 +1597,6 @@ export function usePhoenix() {
             traderSubaccountIndex: subaccountIndex,
           });
           const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
-          phoenixDebug('[Phoenix] setTpsl instructions', {
-            symbol: phx,
-            createdConditionalAccount: !!createConditionalIx,
-            instructionCount: instructions.length,
-          });
           return sendIxs(instructions, 'phoenix.tpsl', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();

@@ -129,58 +129,6 @@ function transactionProgramSummary(tx) {
   }
 }
 
-function compiledMessageSummary(tx) {
-  try {
-    const message = tx?.message || tx?.compileMessage?.();
-    const header = message?.header;
-    const accountKeys = message?.staticAccountKeys || message?.accountKeys || [];
-    if (!header) return {};
-    const requiredSigners = Number(header.numRequiredSignatures || 0);
-    const readonlySigned = Number(header.numReadonlySignedAccounts || 0);
-    const readonlyUnsigned = Number(header.numReadonlyUnsignedAccounts || 0);
-    const accountCount = accountKeys.length;
-    const writableSigned = Math.max(0, requiredSigners - readonlySigned);
-    const unsignedCount = Math.max(0, accountCount - requiredSigners);
-    const writableUnsigned = Math.max(0, unsignedCount - readonlyUnsigned);
-    return {
-      tx_account_count: accountCount,
-      tx_required_signatures: requiredSigners,
-      tx_readonly_signed_accounts: readonlySigned,
-      tx_readonly_unsigned_accounts: readonlyUnsigned,
-      tx_writable_accounts: writableSigned + writableUnsigned,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function serializeTransactionForSimulation(tx) {
-  if (!tx || typeof tx.serialize !== 'function') return null;
-  try {
-    return tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-  } catch {
-    try {
-      return tx.serialize();
-    } catch {
-      return null;
-    }
-  }
-}
-
-function transactionSummary(tx) {
-  const programs = transactionProgramSummary(tx);
-  const raw = serializeTransactionForSimulation(tx);
-  return {
-    tx_version: tx?.version === 0 || tx?.message?.version === 0 ? 'v0' : 'legacy',
-    tx_instruction_count: programs.length,
-    tx_instruction_programs: programs.slice(0, 12).map(shortAddress),
-    tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
-    tx_unsigned_bytes: raw?.length || null,
-    tx_near_solana_size_limit: raw?.length ? raw.length >= 1100 : null,
-    ...compiledMessageSummary(tx),
-  };
-}
-
 function extractPrivySignature(result) {
   const value = result?.signature
     || result?.hash
@@ -970,7 +918,6 @@ export async function sendSolanaTransactionWithRetry({
         prefer_privy_sign_and_send: !!preferPrivySignAndSend,
         prefer_wallet_send_transaction: !!preferWalletSendTransaction,
         status_rpc_hosts: statusConnections.map(rpcHost).slice(0, 5),
-        ...transactionSummary(tx),
       });
 
       const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
@@ -1006,7 +953,6 @@ export async function sendSolanaTransactionWithRetry({
           signature_short: shortSig(sig),
           signed_fee_payer: shortAddress(transactionFeePayer(decoded)),
           signed_blockhash: String(transactionBlockhash(decoded)).slice(0, 8),
-          ...transactionSummary(decoded),
         }, transactionProgramSummary(decoded).includes(LIGHTHOUSE_PROGRAM_ID) ? 'warn' : 'info');
       } else if (sendTransaction && !privyActive) {
         sig = await sendTransaction(tx, attemptConnection, sendOptions);
