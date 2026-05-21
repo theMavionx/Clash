@@ -258,8 +258,13 @@ export default function NftGoldBoostButton({ placement = 'side' }) {
                 </div>
               )}
               {isReady && address ? (
-                <button type="button" style={S.verifyButton} onClick={verifyOwnership} disabled={busy}>
-                  {busy ? 'VERIFYING...' : status.eligible ? 'VERIFY AGAIN' : 'VERIFY'}
+                <button
+                  type="button"
+                  style={status.eligible ? S.verifiedButton : S.verifyButton}
+                  onClick={verifyOwnership}
+                  disabled={busy || status.eligible}
+                >
+                  {busy ? 'VERIFYING...' : status.eligible ? 'VERIFICATION PASSED' : 'VERIFY'}
                 </button>
               ) : (
                 <button type="button" style={S.verifyButton} onClick={() => setWalletModalOpen(true)}>
@@ -410,5 +415,18 @@ const S = {
     letterSpacing: 0,
     cursor: 'pointer',
     boxShadow: '0 4px 0 #8a5a1d, 0 7px 12px rgba(0,0,0,0.22)',
+  },
+  verifiedButton: {
+    width: '100%',
+    height: 44,
+    borderRadius: 8,
+    border: '3px solid #3c6b2c',
+    background: 'linear-gradient(180deg, #a9ef8f, #55b84d)',
+    color: '#102d13',
+    fontSize: 15,
+    fontWeight: 900,
+    letterSpacing: 0,
+    cursor: 'default',
+    boxShadow: '0 4px 0 #2e702c, 0 7px 12px rgba(0,0,0,0.18)',
   },
 };
