@@ -151,6 +151,10 @@ export async function sendPhoenixInstructions({
   privyWalletObj = null,
   label = 'phoenix',
   computeUnitLimit = null,
+  skipPreflight = false,
+  preferWalletSendTransaction = true,
+  fastBlockhash = false,
+  maxAttempts,
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
   const web3Instructions = list.map(kitInstructionToWeb3);
@@ -176,11 +180,13 @@ export async function sendPhoenixInstructions({
     privySendTx,
     privySignTx,
     privyWalletObj,
-    skipPreflight: false,
+    skipPreflight,
     computeUnitLimit,
+    maxAttempts,
     preferPrivySignAndSend: true,
-    preferWalletSendTransaction: true,
+    preferWalletSendTransaction,
     forceVersionedTransaction: mobileWalletAdapter,
+    fastBlockhash,
     walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
     label,
   });

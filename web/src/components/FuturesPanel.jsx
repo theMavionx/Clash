@@ -4234,10 +4234,10 @@ function FuturesPanel() {
       if (risexSourceBalanceState === 'error') return 'unavailable';
       return '$--';
     })();
-    const risexDepositBusy = dex === 'risex'
-      && ['preparing', 'switching', 'signing', 'confirming', 'bridging', 'depositing'].includes(String(depositStatus?.status || ''));
-    const risexDepositButtonLabel = (() => {
-      if (dex !== 'risex') return loading ? '...' : 'Deposit';
+    const depositActionBusy = ['preparing', 'switching', 'signing', 'confirming', 'bridging', 'depositing']
+      .includes(String(depositStatus?.status || ''));
+    const risexDepositBusy = dex === 'risex' && depositActionBusy;
+    const depositButtonLabel = (() => {
       if (depositStatus?.status === 'preparing') return 'Preparing...';
       if (depositStatus?.status === 'switching') return 'Switching...';
       if (depositStatus?.status === 'signing') return 'Sign...';
@@ -4582,8 +4582,8 @@ function FuturesPanel() {
                   setDepositAmt('');
                   if (r?.info) setLocalAlert(r.info);
                 }
-              }} disabled={loading || risexDepositBusy}>
-                {risexDepositButtonLabel}
+              }} disabled={loading || depositActionBusy}>
+                {depositButtonLabel}
               </button>
             </div>
             <span style={{fontSize: 10, color: '#a3906a', fontWeight: 700}}>

@@ -365,6 +365,34 @@ async function selectFreshTransactionConnection(candidates, { label, attempt, fo
   return selected;
 }
 
+async function selectFastTransactionConnection(candidates) {
+  const primary = candidates[0] || null;
+  if (!primary?.connection) throw new Error('Solana RPC connection is not configured');
+  const latest = await withTimeout(
+    primary.connection.getLatestBlockhash('confirmed'),
+    SOLANA_RPC_PROBE_TIMEOUT_MS,
+    'Solana latest blockhash timeout',
+  );
+  const lastValidBlockHeight = Number(latest?.lastValidBlockHeight);
+  if (!latest?.blockhash || !Number.isFinite(lastValidBlockHeight)) {
+    throw new Error('Solana RPC did not return a valid latest blockhash');
+  }
+  return {
+    ...primary,
+    ok: true,
+    blockhash: latest.blockhash,
+    currentBlockHeight: null,
+    currentSlot: null,
+    lastValidBlockHeight,
+    remainingBlocks: null,
+    clusterBlockHeight: null,
+    lagBlocks: null,
+    remainingClusterBlocks: null,
+    usable: true,
+    probeMode: 'primary_blockhash',
+  };
+}
+
 async function describeSolanaError(error, connection) {
   const details = {
     name: error?.name || null,
@@ -833,6 +861,7 @@ export async function sendSolanaTransactionWithRetry({
   preferPrivySignAndSend = false,
   preferWalletSendTransaction = false,
   forceVersionedTransaction = false,
+  fastBlockhash = false,
   walletPathOverride = null,
   label = 'transaction',
 }) {
@@ -846,11 +875,13 @@ export async function sendSolanaTransactionWithRetry({
     let attemptConnection = connection;
 
     try {
-      const selected = await selectFreshTransactionConnection(candidates, {
-        label,
-        attempt,
-        forceFullProbe: forceFullRpcProbe,
-      });
+      const selected = fastBlockhash && !forceFullRpcProbe
+        ? await selectFastTransactionConnection(candidates)
+        : await selectFreshTransactionConnection(candidates, {
+            label,
+            attempt,
+            forceFullProbe: forceFullRpcProbe,
+          });
       attemptConnection = selected.connection;
 
       const txInstructions = [];
@@ -913,6 +944,7 @@ export async function sendSolanaTransactionWithRetry({
         compute_unit_limit: appliedComputeUnitLimit,
         priority_fee_micro_lamports: priorityFeeMicroLamports,
         skip_preflight: !!skipPreflight,
+        fast_blockhash: !!fastBlockhash,
         instruction_count: list.length,
         wallet_path: walletPath,
         prefer_privy_sign_and_send: !!preferPrivySignAndSend,

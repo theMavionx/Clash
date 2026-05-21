@@ -640,6 +640,7 @@ export function usePhoenix() {
   const [traderRegistered, setTraderRegistered] = useState(false);
   const [inviteStatus, setInviteStatus] = useState({ checking: false, whitelisted: null, codeUsed: null });
   const [loading, setLoading] = useState(false);
+  const [depositStatus, setDepositStatus] = useState(null);
   const [error, setError] = useState(null);
   const [goldEarned, setGoldEarned] = useState(null);
 
@@ -698,6 +699,7 @@ export function usePhoenix() {
     setPositions([]);
     setOrders([]);
     setPhoenixAccount(null);
+    setDepositStatus(null);
     setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
   }, [setPhoenixAccount, walletAddr, walletMismatch]);
 
@@ -869,6 +871,10 @@ export function usePhoenix() {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
     const computeUnitLimit = options?.computeUnitLimit || null;
+    const maxAttemptsRaw = Number(options?.maxAttempts);
+    const maxAttempts = Number.isFinite(maxAttemptsRaw) && maxAttemptsRaw > 0
+      ? Math.floor(maxAttemptsRaw)
+      : undefined;
     return sendPhoenixInstructions({
       instructions,
       ownerPk,
@@ -882,6 +888,12 @@ export function usePhoenix() {
       privyWalletObj,
       label,
       computeUnitLimit,
+      skipPreflight: !!options?.skipPreflight,
+      preferWalletSendTransaction: options?.preferWalletSendTransaction !== undefined
+        ? !!options.preferWalletSendTransaction
+        : true,
+      fastBlockhash: !!options?.fastBlockhash,
+      maxAttempts,
     });
   }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, solWallet, privyActive, privySendTx, privySignTx, privyWalletObj]);
 
@@ -1381,21 +1393,38 @@ export function usePhoenix() {
       return { error: msg };
     }
     return runOnce(`deposit:${walletAddr}:${amountUsdc}`, async () => {
+      const amountLabel = String(amountUsdc ?? '');
       setLoading(true);
+      setDepositStatus({ status: 'preparing', amount: amountLabel });
       setError(null);
       try {
-        const ok = await activate();
-        if (!ok) throw new Error('Phoenix account is not ready');
+        const setupCache = cachedPhoenixSetup(walletAddr);
+        if (setupCache && !traderRegisteredRef.current) {
+          traderRegisteredRef.current = true;
+          setTraderRegistered(true);
+        }
+        if (!traderRegisteredRef.current && !traderRegistered && !accountReady) {
+          const ok = await activate();
+          if (!ok) throw new Error('Phoenix account is not ready');
+          setDepositStatus({ status: 'preparing', amount: amountLabel });
+        }
         const requested = Number(amountUsdc);
         if (!Number.isFinite(requested) || requested <= 0) throw new Error('Enter a positive USDC amount');
-        const walletBalance = await fetchWalletUsdc();
+        let walletBalance = Number(walletUsdc);
+        if (!Number.isFinite(walletBalance)) walletBalance = await fetchWalletUsdc();
+        if (requested > walletBalance + 0.000001) walletBalance = await fetchWalletUsdc();
         if (requested > walletBalance + 0.000001) {
           throw new Error(`Not enough Solana USDC: need ${formatUsdcAmount(requested)}, wallet has ${formatUsdcAmount(walletBalance)}.`);
         }
         const amount = toRawUsdc(amountUsdc);
         const txClient = await getTransactionClient(false);
         const built = await buildCollateralIxs(txClient, amount, 'deposit', walletAddr);
-        const signature = await sendIxs(built.instructions, 'phoenix.deposit');
+        setDepositStatus({ status: 'depositing', amount: amountLabel });
+        const signature = await sendIxs(built.instructions, 'phoenix.deposit', {
+          skipPreflight: true,
+          fastBlockhash: true,
+          maxAttempts: 2,
+        });
         await Promise.all([refreshTraderState({ force: true }), fetchWalletUsdc()]);
         claimGold();
         return { success: true, signature };
@@ -1405,9 +1434,10 @@ export function usePhoenix() {
         return { error: msg };
       } finally {
         setLoading(false);
+        setDepositStatus(null);
       }
     });
-  }, [activate, buildCollateralIxs, claimGold, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [accountReady, activate, buildCollateralIxs, claimGold, fetchWalletUsdc, getTransactionClient, refreshTraderState, runOnce, sendIxs, traderRegistered, walletAddr, walletMismatch, walletMismatchMessage, walletUsdc]);
 
   const withdraw = useCallback(async (amountUsdc) => {
     if (!walletAddr) return { error: 'Wallet not connected' };
@@ -1790,6 +1820,15 @@ export function usePhoenix() {
     return () => { cancelled = true; clearInterval(iv); };
   }, [fetchMarkets, fetchPrices, fetchWalletUsdc, isActiveDex, refreshTraderState, walletAddr, walletMismatch]);
 
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
+    if (!traderRegisteredRef.current && !traderRegistered && !cachedPhoenixSetup(walletAddr)) return undefined;
+    const timer = setTimeout(() => {
+      getTransactionClient(false).catch(() => {});
+    }, 750);
+    return () => clearTimeout(timer);
+  }, [getTransactionClient, isActiveDex, traderRegistered, walletAddr, walletMismatch]);
+
   const renderSetupCache = isActiveDex && walletAddr && !walletMismatch
     ? cachedPhoenixSetup(walletAddr)
     : null;
@@ -1826,6 +1865,7 @@ export function usePhoenix() {
     setupVerified: walletAddr ? (effectiveAccountReady ? effectiveTraderRegistered : null) : false,
     inviteStatus: effectiveInviteStatus,
     loading,
+    depositStatus,
     error,
     clearError,
     goldEarned,
