@@ -26,6 +26,8 @@ var anim_files: Array = []
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
+const TROOP_MESH_CULL_MARGIN: float = 0.75
+const TROOP_MESH_LOD_BIAS: float = 4.0
 
 ## Cached troop list — shared across all BaseTroop instances via static
 static var _cached_troops: Array = []
@@ -451,6 +453,7 @@ func _ready() -> void:
 	max_hp = hp
 	_setup_animations()
 	_setup_weapons()
+	_stabilize_render_meshes()
 	# Keep combat replay deterministic and aligned with the server simulator.
 	_sep_counter = 0
 	_slot_eval_timer = 0.0
@@ -481,6 +484,7 @@ func activate() -> void:
 	if state != State.INACTIVE:
 		return
 	visible = true
+	_stabilize_render_meshes()
 	state = State.IDLE
 	add_to_group("troops")
 	_create_hp_bar()
@@ -1582,6 +1586,21 @@ func _hide_meshes(node: Node) -> void:
 		node.visible = false
 	for child in node.get_children():
 		_hide_meshes(child)
+
+
+func _stabilize_render_meshes() -> void:
+	_stabilize_render_meshes_recursive(self)
+
+
+func _stabilize_render_meshes_recursive(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mesh_instance: MeshInstance3D = node as MeshInstance3D
+		mesh_instance.visible = true
+		mesh_instance.extra_cull_margin = maxf(mesh_instance.extra_cull_margin, TROOP_MESH_CULL_MARGIN)
+		mesh_instance.ignore_occlusion_culling = true
+		mesh_instance.lod_bias = maxf(mesh_instance.lod_bias, TROOP_MESH_LOD_BIAS)
+	for child in node.get_children():
+		_stabilize_render_meshes_recursive(child)
 
 
 func _find_anim_player(node: Node) -> AnimationPlayer:

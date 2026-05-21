@@ -167,8 +167,8 @@ export default function GameUI() {
     <div style={styles.overlay}>
       {!enemyMode?.active && <ResourceBar />}
       {!enemyMode?.active && <PlayerInfo onOpenProfile={() => setShowProfile(true)} onOpenLeaderboard={() => setShowLeaderboard(true)} />}
-      {(!enemyMode?.active || enemyMode?.is_replay) && (
-        <NftGoldBoostButton placement={enemyMode?.is_replay ? 'replay' : 'side'} />
+      {!enemyMode?.active && (
+        <NftGoldBoostButton placement="side" />
       )}
       {canShowAiChatButton && (() => {
         // Mirror ActionButtons sizing so we land cleanly between the
