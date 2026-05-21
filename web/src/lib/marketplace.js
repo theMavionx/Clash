@@ -17,6 +17,7 @@
 
 import { createPublicClient, getAddress, http } from 'viem';
 import { arbitrum, base } from 'viem/chains';
+import { BASE_PRIMARY_RPC_URL } from './avantisContract';
 
 export const BASE_CHAIN_ID = 8453;
 export const ARBITRUM_CHAIN_ID = 42161;
@@ -230,7 +231,7 @@ function readClient(chain = 'base') {
   if (cachedReadClients.has(chainKey)) return cachedReadClients.get(chainKey);
   const client = createPublicClient({
     chain: VIEM_CHAIN_BY_MARKETPLACE_CHAIN[chainKey] || base,
-    transport: http(),
+    transport: chainKey === 'base' ? http(BASE_PRIMARY_RPC_URL) : http(),
   });
   cachedReadClients.set(chainKey, client);
   return client;

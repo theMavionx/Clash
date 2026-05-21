@@ -816,6 +816,8 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking Decibel positions before updating TP/SL';
     case 'decibel_leverage':
       return 'Checking Decibel market settings before leverage update';
+    case 'scheduled_decibel_job':
+      return 'Scanning Decibel markets for the scheduled job';
     case 'avantis_account':
       return 'Reading your Avantis browser wallet';
     case 'avantis_markets':

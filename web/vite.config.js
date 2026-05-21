@@ -41,6 +41,9 @@ const BASE_ALCHEMY_KEY = process.env.BASE_ALCHEMY_KEY
   || process.env.VITE_BASE_ALCHEMY_KEY
   || viteEnv.VITE_BASE_ALCHEMY_KEY
   || '';
+const BASE_RPC_PROXY_TARGET = BASE_ALCHEMY_KEY
+  ? 'https://base-mainnet.g.alchemy.com'
+  : 'https://mainnet.base.org';
 const FUTURES_PROXY_TARGET = process.env.VITE_FUTURES_PROXY
   || viteEnv.VITE_FUTURES_PROXY
   || (API_PROXY_TARGET && !/^https?:\/\/(?:localhost|127\.0\.0\.1):4000\b/i.test(API_PROXY_TARGET)
@@ -220,7 +223,7 @@ export default defineConfig({
         rewrite: () => BASE_ALCHEMY_KEY ? `/v2/${BASE_ALCHEMY_KEY}` : '/v2/',
       },
       '/rpc/base': {
-        target: 'https://mainnet.base.org',
+        target: BASE_RPC_PROXY_TARGET,
         changeOrigin: true,
         secure: true,
         configure: (proxy) => {
@@ -229,18 +232,13 @@ export default defineConfig({
             proxyReq.removeHeader('referer');
           });
         },
-        rewrite: () => '/',
+        rewrite: () => BASE_ALCHEMY_KEY ? `/v2/${BASE_ALCHEMY_KEY}` : '/',
       },
-      // Anonymous Arbitrum RPC pool — used only when env override is unset.
-      // PRIMARY = Pocket Network public node (arb-pokt.nodies.app) — most
-      // generous anonymous endpoint under multicall load. publicnode +
-      // onfinality + tenderly round out the pool so a transient ration
-      // on one rotates to the next via viem `fallback()`. 1rpc.io is the
-      // only one with a strict 250-req/IP/day cap so it's last.
-      // For production stability the right answer is the Alchemy proxy
-      // above; this rotation is a stop-gap for dev without a key.
+      // Public Arbitrum RPC pool. `/rpc/arb-pokt` remains as a compatibility
+      // path for older hot-loaded modules, but routes to publicnode now because
+      // the old Pocket endpoint can return 403.
       '/rpc/arb-pokt': {
-        target: 'https://arb-pokt.nodies.app',
+        target: 'https://arbitrum-one.publicnode.com',
         changeOrigin: true, secure: true,
         rewrite: () => '/',
       },

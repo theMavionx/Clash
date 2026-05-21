@@ -10,7 +10,7 @@ const output = path.join(root, 'scenes', 'export_manifest.tscn');
 // packs just because their .tres/.tscn files reference each other.
 const scanRoots = ['scripts', 'scenes', 'shaders'];
 const scanExts = new Set(['.gd', '.tscn', '.tres', '.gdshader']);
-const sceneExts = new Set(['.glb', '.gltf']);
+const sceneExts = new Set(['.glb', '.gltf', '.fbx']);
 const textureExts = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const sourceRefPattern = /["'](res:\/\/[^"']+)["']/g;
 // Roots where every script must be force-included regardless of whether the

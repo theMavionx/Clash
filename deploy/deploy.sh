@@ -586,6 +586,7 @@ sync_legacy_databases_before_switch() {
 
     log "Stopping old services briefly for one-time DB migration..."
     pm2 stop clash-api 2>/dev/null || true
+    pm2 stop clash-hermes-jobs 2>/dev/null || true
     pm2 stop clash-futures 2>/dev/null || true
     pm2 stop clash-mcp 2>/dev/null || true
     copy_db_family "$DEPLOY_ROOT/server" "$SHARED_SERVER_DIR" "clash.db" || true
@@ -1045,6 +1046,13 @@ restart_services() {
         --env production \
         --node-args="--env-file=$ENV_FILE"
 
+    pm2 delete clash-hermes-jobs 2>/dev/null || true
+    pm2 start "$CURRENT_LINK/server/hermes_jobs_worker.js" \
+        --name clash-hermes-jobs \
+        --cwd "$CURRENT_LINK/server" \
+        --env production \
+        --node-args="--env-file=$ENV_FILE"
+
     if [ -d "$CURRENT_LINK/server-futures" ]; then
         pm2 delete clash-futures 2>/dev/null || true
         pm2 start "$CURRENT_LINK/server-futures/index.js" \
@@ -1109,6 +1117,7 @@ main() {
     echo ""
     echo "Useful commands:"
     echo "  pm2 logs clash-api"
+    echo "  pm2 logs clash-hermes-jobs"
     echo "  pm2 logs clash-futures"
     echo "  pm2 logs clash-mcp"
     echo "  bash $DEPLOY_ROOT/deploy/update.sh"

@@ -15,6 +15,7 @@ import imgTurret from '../assets/buildings/turret.png';
 import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
+import imgMageTower from '../assets/buildings/magetower.png';
 
 const TABS = [
   { id: 'Economy', label: 'Economy' },
@@ -33,6 +34,7 @@ const DESC_MAP = {
   archtower: 'Ranged defense',
   archer_tower: 'Ranged defense',
   archertower: 'Ranged defense',
+  mage_tower: 'Casts splash magic at enemies',
 };
 
 const CATEGORY_MAP = {
@@ -44,6 +46,7 @@ const CATEGORY_MAP = {
   archtower: 'Defense',
   archer_tower: 'Defense',
   archertower: 'Defense',
+  mage_tower: 'Defense',
   port: 'Military',
   town_hall: 'Economy',
 };
@@ -59,6 +62,7 @@ const THUMBNAIL_MAP = {
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
+  mage_tower: imgMageTower,
   storage: imgStorage,
 };
 
@@ -68,6 +72,7 @@ const THUMBNAIL_SCALE_MAP = {
   archtower: 1.4,
   archer_tower: 1.4,
   archertower: 1.4,
+  mage_tower: 1.2,
 };
 
 const getCategory = (id) => CATEGORY_MAP[id] || 'Economy';

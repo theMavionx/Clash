@@ -916,7 +916,7 @@ const PositionsList = memo(function PositionsList({
                 {(() => {
                   const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
                   return (
-                    <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, border: '1px solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
+                    <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
                       {isIso ? 'ISO' : 'CROSS'}
                     </span>
                   );
@@ -3963,7 +3963,7 @@ function FuturesPanel() {
                   {(() => {
                     const isIso = pos.is_isolated ?? marginModes?.[pos.symbol];
                     return (
-                      <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, border: '1px solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
+                      <span style={{fontSize: 10, fontWeight: 800, padding: '2px 6px', borderRadius: 5, borderWidth: 1, borderStyle: 'solid', borderColor: isIso ? '#FF9800' : '#4CAF50', color: isIso ? '#FF9800' : '#4CAF50', background: 'rgba(255,255,255,0.4)'}}>
                         {isIso ? 'ISO' : 'CROSS'}
                       </span>
                     );

@@ -197,6 +197,11 @@ export function GodotProvider({ children }) {
         case 'troop_levels':
           setTroopLevels(data);
           break;
+        case 'demon_king_upgrade_required':
+          window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+            detail: { view: 'upgrade', request: data || {} },
+          }));
+          break;
         case 'building_selected':
           setSelectedBuilding(data);
           break;
@@ -229,8 +234,11 @@ export function GodotProvider({ children }) {
         case 'battle_result':
           setBattleResult(data);
           setBattleTimer(null);
-          if (data.casualties && Object.values(data.casualties).some(c => c > 0)) {
-            setPendingCasualties(data.casualties);
+          if (data.casualties) {
+            const paidCasualties = Object.fromEntries(
+              Object.entries(data.casualties).filter(([name, count]) => name !== 'DemonKing' && count > 0),
+            );
+            if (Object.values(paidCasualties).some(c => c > 0)) setPendingCasualties(paidCasualties);
           }
           break;
         case 'replay_telemetry':
@@ -248,6 +256,7 @@ export function GodotProvider({ children }) {
           });
           break;
         case 'troop_died':
+          if (data.troop_name === 'DemonKing') break;
           setPendingCasualties(prev => {
             const c = { ...(prev || {}) };
             c[data.troop_name] = (c[data.troop_name] || 0) + 1;

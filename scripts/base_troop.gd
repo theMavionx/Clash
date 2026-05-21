@@ -531,7 +531,7 @@ func _setup_animations() -> void:
 	else:
 		lib = AnimationLibrary.new()
 		for file_path in anim_files:
-			var res: Resource = load(file_path)
+			var res: Resource = ResourceLoader.load(file_path, "PackedScene")
 			if res == null:
 				continue
 			var instance: Node3D = Node3D.new()
@@ -586,7 +586,7 @@ static func prewarm_anim_library(anim_files_list: Array) -> void:
 		return
 	var lib := AnimationLibrary.new()
 	for file_path in anim_files_list:
-		var res: Resource = load(file_path)
+		var res: Resource = ResourceLoader.load(file_path, "PackedScene")
 		if res == null:
 			continue
 		var inst: Node = res.instantiate()
@@ -1567,7 +1567,7 @@ func _attach_to_bone(bone_name: String, attachment_name: String, scene_path: Str
 	ba.bone_name = bone_name
 	ba.bone_idx = bone_idx
 	sk.add_child(ba)
-	var scene_res = load(scene_path)
+	var scene_res = ResourceLoader.load(scene_path, "PackedScene")
 	if scene_res:
 		var instance = scene_res.instantiate()
 		instance.name = node_name

@@ -1,6 +1,6 @@
 ---
 name: clash-decibel-trading
-description: Use when a Clash of Perps player asks the AI agent to inspect Decibel account state, view positions or orders, open or close trades, cancel orders, set leverage, or manage TP/SL through Hermes and Clash MCP tools.
+description: Use when a Clash of Perps player asks the AI agent to inspect Decibel account state, view positions or orders, scan markets with RSI/MACD/volume, open or close trades, cancel orders, set leverage, manage TP/SL, or run scheduled Decibel jobs through Hermes and Clash MCP tools.
 ---
 
 # Clash Decibel Trading Skill
@@ -18,13 +18,18 @@ Use this skill only for Decibel trading requests from the authenticated Clash of
 - Treat "all my money", "all my balance", "max", "everything", and equivalent Ukrainian/Russian phrases as `collateral_pct: 100` when symbol and side are clear.
 - If a write request is ambiguous, ask one concise clarification. Exception: for "surprise me / pick one / сам придумай" requests, use a conservative market order, 2x leverage, normal slippage, and an affordable symbol/size.
 - For delegated trade requests, if the first order is below the Decibel minimum, use the smallest affordable valid order/market instead of surfacing raw chain-unit errors.
+- For RSI/MACD/volume or scheduled monitoring, call `decibel_market_scan` first. Never invent technical indicators from memory.
+- For monitor-only scheduled jobs, never place orders. For ask-before-trade jobs, summarize the trade idea but do not place it. For auto-trade jobs, obey the Internal Server Context job policy as hard caps.
 - Never invent order ids. Read them from `decibel_get_account` or `decibel_get_positions` first.
 
 ## Tool Routing
 
+- Scheduled jobs/watchers: use `hermes_job_list`, `hermes_job_create_draft`, `hermes_job_update`, `hermes_job_pause`, `hermes_job_resume`, `hermes_job_delete`, `hermes_job_run_now`, and `hermes_job_get_runs`.
+- Create trade-enabled jobs as drafts unless the player clearly asks to activate and all risk policy fields are clear. The UI activation review is preferred for auto-trade jobs.
 - Account, balance, equity, PnL: `decibel_get_account({ include_orders: true })`.
 - Positions and open orders: `decibel_get_positions({ include_orders: true })`.
 - Markets or prices: `decibel_get_markets({ symbols?: [...] })`.
+- Technical scan: `decibel_market_scan({ symbols: [...], interval?: "1h", lookback?: 160 })` returns RSI, MACD, volume ratio, ATR, stale-data blockers, and mark price.
 - Open long/short with clear symbol, side, and amount: call `decibel_place_order` directly with `leverage` included. Do not run account, market, or leverage preflight unless a required field is missing or the tool blocks.
 - Amount parsing: $/USD/USDC/dollars/бакс means `collateral_usd` by default; "notional 50" means `notional_usd`; "size 0.2" means `size_base`. Do not ask for confirmation for these normal forms.
 - Close/reduce: `decibel_close_position` directly when the request is clear. If the user says "close the position" without a symbol, call `decibel_close_position({})`; MCP closes the only open position or returns a blocker if multiple positions exist.

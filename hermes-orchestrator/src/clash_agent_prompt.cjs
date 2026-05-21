@@ -1,4 +1,4 @@
-const CLASH_PROMPT_VERSION = 'clash-game-agent-v20-avantis-market-scan';
+const CLASH_PROMPT_VERSION = 'clash-game-agent-v21-scheduled-decibel-jobs';
 
 const BASE_TOOL_INCLUDE = [
   'get_base_state',
@@ -21,8 +21,17 @@ const BASE_TOOL_INCLUDE = [
 ];
 
 const DECIBEL_TOOL_INCLUDE = [
+  'hermes_job_list',
+  'hermes_job_create_draft',
+  'hermes_job_update',
+  'hermes_job_pause',
+  'hermes_job_resume',
+  'hermes_job_delete',
+  'hermes_job_run_now',
+  'hermes_job_get_runs',
   'decibel_get_account',
   'decibel_get_markets',
+  'decibel_market_scan',
   'decibel_get_positions',
   'decibel_place_order',
   'decibel_close_position',
@@ -120,7 +129,9 @@ const CLASH_AGENT_PLAYBOOK = [
   'build/place one building -> get_base_state -> find_build_slots -> place_building -> summarize.',
   'upgrade -> get_base_state -> choose exact building/troop -> upgrade_building or upgrade_troop -> summarize.',
   'ships/troops/reinforce -> get_base_state -> relevant ship or troop tool -> summarize.',
+  'Decibel scheduled jobs/list/watchers -> use hermes_job_list, hermes_job_create_draft, hermes_job_update, hermes_job_pause/resume/delete/run_now/get_runs as appropriate. Create trading jobs as drafts unless the current tool/request explicitly says active and the policy is clear.',
   'Decibel account/positions/balance -> decibel_get_account or decibel_get_positions -> summarize positions, open orders, equity/balance if available.',
+  'Decibel technical-analysis/scheduled-monitor/delegated strategy requests -> decibel_market_scan with the relevant symbols/timeframe -> if the saved job policy or user instruction allows a write and conditions are met, call the matching Decibel write tool; otherwise answer no-action with RSI, MACD, volume, and blocker facts.',
   'Decibel trade/open long/open short -> if symbol, side, and size/notional/collateral are clear: call decibel_place_order directly with leverage included -> summarize tx, symbol, side, size/notional only if the tool returns success and verified=true. Do not run account, market, or leverage preflight unless a required field is missing or the tool blocks. If the user explicitly delegates the choice ("surprise me", "pick one", "open any trade", or Ukrainian/Russian equivalents like "choose by your logic"), choose a conservative default instead of asking: market order, 2x leverage, normal slippage, and an affordable symbol/size. If Decibel blocks with a minimum-size error, do not repeat raw chain units; retry once with the smallest affordable valid order when the user delegated the choice, otherwise explain the approximate required USDC collateral. If any of symbol/side/size is missing and the user did not delegate the choice, ask exactly one concise clarification.',
   'Decibel close/cancel/TP/SL -> decibel_get_positions -> matching decibel_close_position, decibel_cancel_order, or decibel_set_tpsl -> summarize result. decibel_get_positions alone never completes cancel, leverage, or TP/SL changes. If the user asks to close "the position" without a symbol, use the most recent position symbol from the conversation when obvious; otherwise call decibel_close_position({}) and let MCP close the only open position or return a multi-position blocker. For close results, include close_result.realized_pnl_usd_estimate and close_result.realized_pnl_pct_estimate when returned; call them estimated close PnL, not final realized PnL, and do not say PnL is pending if those fields exist. Never invent order ids.',
   'Avantis account/positions/balance -> avantis_get_account or avantis_get_positions -> summarize the self-custody browser wallet.',
@@ -146,6 +157,8 @@ const CLASH_AGENT_PLAYBOOK = [
   'Trading is available only when the authenticated player account DEX is decibel.',
   'All Decibel order placement must go through MCP Decibel tools. They enforce Clash builder fee routing; never bypass builder routing or suggest direct Decibel MCP trading.',
   'Do not rely on deterministic backend trade scripts. Read the user request, call Decibel MCP tools directly, and repair one blocked tool call when a safe repair is obvious.',
+  'For scheduled jobs or technical-analysis conditions such as RSI/MACD/volume, call decibel_market_scan first. Treat stale scan data or scan blockers as no-trade blockers. Do not invent RSI, MACD, volume, or candle data from memory.',
+  'For scheduled monitor-only jobs, never place orders; summarize the scan and decision. For ask-before-trade jobs, do not place the order; summarize what you would do and why. For auto-trade jobs, obey the job policy in Internal Server Context as hard caps.',
   'Read-only Decibel tools do not complete write requests. For leverage, TP/SL, and cancel, call the final write tool after reading positions/orders.',
   'Opening a trade requires explicit symbol, side, and size/notional/collateral unless the player explicitly delegates the choice. For delegated "surprise me / pick one / choose by your logic" orders, use a conservative market order, 2x leverage, normal slippage, and an affordable symbol/size. Prefer the minimum valid order that Decibel accepts instead of asking the player.',
   'For market orders, use normal slippage unless the user specifies otherwise. For limit orders, require a limit price.',

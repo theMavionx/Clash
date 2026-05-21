@@ -811,6 +811,75 @@ async function fetchMarketPrices() {
   }
 }
 
+function intervalToMs(interval) {
+  switch (String(interval || '').toLowerCase()) {
+    case '1m': return 60_000;
+    case '5m': return 5 * 60_000;
+    case '15m': return 15 * 60_000;
+    case '30m': return 30 * 60_000;
+    case '1h': return 60 * 60_000;
+    case '2h': return 2 * 60 * 60_000;
+    case '4h': return 4 * 60 * 60_000;
+    case '8h': return 8 * 60 * 60_000;
+    case '12h': return 12 * 60 * 60_000;
+    case '1d': return 24 * 60 * 60_000;
+    default: return 60 * 60_000;
+  }
+}
+
+function normalizeCandle(row) {
+  const time = Number(row?.t ?? row?.time ?? row?.timestamp ?? 0);
+  const closeTime = Number(row?.T ?? row?.close_time ?? row?.closeTime ?? 0);
+  const toSeconds = (value) => {
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    if (value > 1e12) return Math.floor(value / 1000);
+    if (value > 1e9) return Math.floor(value);
+    return Math.floor(value / 1000);
+  };
+  const out = {
+    time: toSeconds(time),
+    open: Number(row?.o ?? row?.open),
+    high: Number(row?.h ?? row?.high),
+    low: Number(row?.l ?? row?.low),
+    close: Number(row?.c ?? row?.close),
+    volume: Number(row?.v ?? row?.volume ?? 0),
+  };
+  if (!out.time && closeTime > 0) out.time = toSeconds(closeTime);
+  return out;
+}
+
+async function fetchCandlesticks(options = {}) {
+  const marketAddr = normalizeAptosAddress(options.market_addr || options.marketAddr || options.market || '');
+  if (!marketAddr) throw new Error('market address is required for Decibel candles');
+  const interval = String(options.interval || '1h').toLowerCase();
+  const limit = Math.max(20, Math.min(500, Math.floor(Number(options.limit || options.lookback || 160))));
+  const endTime = Number(options.endTime || Date.now());
+  const startTime = Number(options.startTime || (endTime - intervalToMs(interval) * (limit + 5)));
+  const params = new URLSearchParams({
+    market: marketAddr,
+    interval,
+    startTime: String(Math.floor(startTime)),
+    endTime: String(Math.floor(endTime)),
+  });
+  if (options.hideOutliers !== false) {
+    params.set('filterWicks', 'true');
+    params.set('nSigma', '3.0');
+  }
+  const url = `${DECIBEL_HTTP}/api/v1/candlesticks?${params.toString()}`;
+  const r = await fetch(url, { headers: authHeaders() });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(`Decibel candlesticks failed: ${r.status} ${body || r.statusText}`);
+  }
+  const j = await r.json();
+  const rows = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+  return rows
+    .map(normalizeCandle)
+    .filter((c) => c.time && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))
+    .sort((a, b) => a.time - b.time)
+    .slice(-limit);
+}
+
 // Best-effort mark price for a market by address. Used by the rewards
 // worker to estimate realized PnL on a close-detection event (the close
 // itself isn't observable from /account_positions; we approximate as
@@ -1273,6 +1342,7 @@ module.exports = {
   fetchMarkets,
   fetchMarketPrices,
   fetchMarketMarkUsd,
+  fetchCandlesticks,
   fetchUserSubaccounts,
   fetchAccountPositions,
   fetchAccountOverview,

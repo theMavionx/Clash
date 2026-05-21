@@ -16,6 +16,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const gameDb = require('./db');
 const {
   createSolanaConnection,
   solanaNonHeliusRpcUrls,
@@ -58,8 +59,39 @@ function normalizeNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
+function upgradeUsdPriceE6(chainKey, payment, deployment = {}) {
+  const envPrefix = `NFT_${String(chainKey || '').toUpperCase()}`;
+  if (payment === 'cop') {
+    return BigInt(
+      process.env.NFT_UPGRADE_COP_USD_PRICE_E6
+      || process.env[`${envPrefix}_CLASH_USD_PRICE_E6`]
+      || process.env.NFT_BASE_CLASH_USD_PRICE_E6
+      || deployment.clashUsdPriceE6
+      || '5000000'
+    );
+  }
+  return BigInt(
+    process.env.NFT_UPGRADE_USD_PRICE_E6
+    || process.env[`${envPrefix}_USD_PRICE_E6`]
+    || deployment.baseUsdPriceE6
+    || '8900000'
+  );
+}
+
+function playerFromUpgradeRequest(req) {
+  const token = String(
+    req.get?.('x-token')
+    || req.get?.('x-player-token')
+    || req.body?.playerToken
+    || req.body?.token
+    || ''
+  ).trim();
+  if (!token) return null;
+  try { return gameDb.stmts.getPlayerByToken.get(token) || null; } catch { return null; }
+}
+
 function nftLevelImageUrl(level, id = null) {
-  const base = String(process.env.NFT_IMAGE_BASE_URL || 'https://cdn.clashofperps.fun/nft').replace(/\/+$/, '');
+  const base = String(process.env.NFT_IMAGE_BASE_URL || '/cdn/nft').replace(/\/+$/, '');
   const lvl = normalizeNftLevel(level);
   if (process.env.NFT_USE_TOKEN_IMAGE_PATHS === '1' && id != null && id !== '') {
     return `${base}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
@@ -321,6 +353,150 @@ function evmRpc(chainKey, env) {
     || spec.defaultRpc;
 }
 
+const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_SYNC_DB_TTL_MS = Math.max(
+  30_000,
+  Number(process.env.NFT_DEMON_KING_SYNC_TTL_MS || 15 * 60_000)
+);
+const DEMON_KING_OWNED_MEMORY_TTL_MS = Math.max(
+  15_000,
+  Number(process.env.NFT_DEMON_KING_OWNED_MEMORY_TTL_MS || 2 * 60_000)
+);
+const _demonKingSyncInflight = new Map();
+
+function normalizeDemonKingSyncChains(value) {
+  const rows = Array.isArray(value) ? value : String(value || '').split(',');
+  const chains = rows
+    .map((chain) => String(chain || '').trim().toLowerCase())
+    .filter((chain) => DEMON_KING_EVM_CHAINS.includes(chain));
+  return [...new Set(chains.length ? chains : DEMON_KING_EVM_CHAINS)];
+}
+
+function sqliteTimeMs(value) {
+  if (!value) return 0;
+  const normalized = String(value).includes('T') ? String(value) : `${value}Z`.replace(' ', 'T');
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function walletCheckCovers(check, requestedChains) {
+  if (!check?.checkedAt) return false;
+  if (Date.now() - sqliteTimeMs(check.checkedAt) > DEMON_KING_SYNC_DB_TTL_MS) return false;
+  const checkedChains = new Set(Array.isArray(check.chains) ? check.chains : []);
+  return requestedChains.every((chain) => checkedChains.has(chain));
+}
+
+function playerLinkedEvmWallets(player, getAddress) {
+  return [
+    player?.wallet,
+    player?.nft_gold_boost_wallet,
+  ].filter((wallet) => /^0x[0-9a-fA-F]{40}$/.test(String(wallet || '')))
+    .map((wallet) => {
+      try { return getAddress(wallet); } catch { return null; }
+    })
+    .filter(Boolean);
+}
+
+async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
+  if (!SUPPORTED_EVM_CHAINS[chainKey]) throw new Error(`Unsupported EVM NFT chain: ${chainKey}`);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(ownerRaw || ''))) {
+    const err = new Error('EVM address malformed');
+    err.status = 400;
+    throw err;
+  }
+
+  const { createPublicClient, getAddress, http, defineChain } = await import('viem');
+  const viemChains = await import('viem/chains');
+  const monad = defineChain({
+    id: 143,
+    name: 'Monad',
+    nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
+    contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
+  });
+  const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chainKey];
+  const deployment = v3Deployment(chainKey);
+  if (!deployment?.proxy) {
+    const err = new Error(`${chainKey} V3 not deployed`);
+    err.status = 503;
+    throw err;
+  }
+
+  const owner = getAddress(ownerRaw);
+  const proxy = getAddress(deployment.proxy);
+  const cacheKey = `evm:${chainKey}:${owner.toLowerCase()}`;
+  const cached = _ownedNftCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
+    return cached.body;
+  }
+
+  const envRpc1 = process.env[`NFT_${chainKey.toUpperCase()}_RPC_URL`];
+  const envRpc2 = process.env[`${chainKey.toUpperCase()}_RPC_URL`];
+  const publicAlts = {
+    base: ['https://mainnet.base.org', 'https://base.llamarpc.com', 'https://base-rpc.publicnode.com'],
+    arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com', 'https://arbitrum-one.publicnode.com'],
+    monad: ['https://rpc.monad.xyz'],
+  }[chainKey] || [];
+  const rpcs = [envRpc1, envRpc2, ...publicAlts].filter(Boolean);
+
+  async function tryRpcs(fn) {
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (const rpc of rpcs) {
+        try {
+          const client = createPublicClient({ chain: chainViem, transport: http(rpc) });
+          return await timeoutPromise(fn(client), 12_000, `${chainKey} owned NFT scan`);
+        } catch (e) { lastErr = e; }
+      }
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    }
+    throw lastErr || new Error(`${chainKey} RPC unavailable`);
+  }
+
+  const totalMinted = await tryRpcs((client) => client.readContract({
+    address: proxy,
+    abi: [{ name: 'totalMinted', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] }],
+    functionName: 'totalMinted',
+  }));
+  const total = Math.max(0, Number(totalMinted) || 0);
+  const ids = Array.from({ length: total }, (_, i) => BigInt(i + 1));
+  const ownerAbi = [{ name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] }];
+  const levelAbi = [{ name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }];
+  const ownerResults = [];
+  const chunkSize = 80;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const contracts = ids.slice(i, i + chunkSize)
+      .map((id) => ({ address: proxy, abi: ownerAbi, functionName: 'ownerOf', args: [id] }));
+    ownerResults.push(...await tryRpcs((client) => client.multicall({ contracts, allowFailure: true })));
+  }
+
+  const mine = [];
+  for (let i = 0; i < total; i++) {
+    const r = ownerResults[i];
+    if (r?.status === 'success' && r.result && getAddress(r.result) === owner) {
+      mine.push(BigInt(i + 1));
+    }
+  }
+
+  const levels = [];
+  for (let i = 0; i < mine.length; i += chunkSize) {
+    const contracts = mine.slice(i, i + chunkSize)
+      .map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
+    const levelResults = await tryRpcs((client) => client.multicall({ contracts, allowFailure: true }));
+    levels.push(...levelResults.map((r) => (r?.status === 'success' ? Number(r.result) : 1)));
+  }
+
+  const tokens = mine.map((id, i) => ({
+    chain: chainKey,
+    tokenId: id.toString(),
+    level: normalizeNftLevel(levels[i]),
+    imageUrl: nftLevelImageUrl(levels[i], id.toString()),
+  }));
+  const body = { chain: chainKey, owner, contract: proxy, total: tokens.length, tokens, source: 'server-evm-demon-king' };
+  _ownedNftCache.set(cacheKey, { at: Date.now(), body });
+  return body;
+}
+
 /**
  * Mount V3 endpoints on the supplied Express router.
  *
@@ -339,6 +515,131 @@ function mountNftV3Endpoints(router, ctx) {
   const upgradeLimit  = makeRateLimiter(10);
   const bridgeLimit   = makeRateLimiter(5);
   const readLimit     = makeRateLimiter(60);
+
+  router.post('/nft/demon-king/sync', async (req, res) => {
+    try {
+      const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+      const rl = readLimit(ip);
+      if (!rl.ok) return res.status(429).json({ error: 'rate limited' });
+
+      const player = playerFromUpgradeRequest(req);
+      if (!player?.id) return res.status(401).json({ error: 'Game account token required' });
+
+      const walletRaw = String(req.body?.wallet || req.query?.wallet || '').trim();
+      if (!/^0x[0-9a-fA-F]{40}$/.test(walletRaw)) {
+        return res.status(400).json({ error: 'EVM wallet required' });
+      }
+
+      const { getAddress } = await import('viem');
+      const wallet = getAddress(walletRaw);
+      const linkedWallets = playerLinkedEvmWallets(player, getAddress);
+      if (!linkedWallets.some((linked) => linked === wallet)) {
+        return res.status(403).json({ error: 'Connect or verify this EVM wallet on the game account first' });
+      }
+      const requestedChains = normalizeDemonKingSyncChains(req.body?.chains ?? req.query?.chains);
+      const force = req.body?.force === true || String(req.body?.force || req.query?.force || '') === '1';
+      const cachedTokens = gameDb.listPlayerDemonKingNfts(player.id, wallet)
+        .filter((token) => requestedChains.includes(token.chain));
+      const check = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
+
+      if (!force && walletCheckCovers(check, requestedChains)) {
+        res.set('Cache-Control', 'private, no-store');
+        return res.json({
+          ok: true,
+          cached: true,
+          stale: false,
+          wallet,
+          chains: requestedChains,
+          checkedAt: check.checkedAt,
+          total: cachedTokens.length,
+          tokens: cachedTokens,
+        });
+      }
+
+      const inflightKey = `${player.id}:${wallet.toLowerCase()}:${requestedChains.join(',')}:${force ? 'force' : 'normal'}`;
+      if (_demonKingSyncInflight.has(inflightKey)) {
+        const body = await _demonKingSyncInflight.get(inflightKey);
+        res.set('Cache-Control', 'private, no-store');
+        return res.json({ ...body, deduped: true });
+      }
+
+      const job = (async () => {
+        const tokens = [];
+        const errors = [];
+        const successfulChains = [];
+        for (const chain of requestedChains) {
+          try {
+            const body = await listOwnedEvmDemonKingNfts(chain, wallet, { force });
+            successfulChains.push(chain);
+            for (const token of body.tokens || []) {
+              tokens.push({
+                ...token,
+                chain,
+                tokenId: String(token.tokenId || token.id || ''),
+                level: normalizeNftLevel(token.level),
+                imageUrl: token.imageUrl || nftLevelImageUrl(token.level || 1, token.tokenId || token.id || ''),
+              });
+            }
+          } catch (err) {
+            errors.push({ chain, error: (err?.message || String(err)).slice(0, 180) });
+          }
+        }
+
+        if (!successfulChains.length) {
+          if (cachedTokens.length) {
+            return {
+              ok: true,
+              cached: true,
+              stale: true,
+              wallet,
+              chains: requestedChains,
+              checkedAt: check?.checkedAt || null,
+              total: cachedTokens.length,
+              tokens: cachedTokens,
+              errors,
+            };
+          }
+          const err = new Error(errors[0]?.error || 'Demon King ownership sync failed');
+          err.status = 502;
+          err.errors = errors;
+          throw err;
+        }
+
+        const boundTokens = gameDb.replacePlayerDemonKingNfts(player.id, wallet, tokens, {
+          chains: successfulChains,
+          source: force ? 'force-sync' : 'sync',
+        }).filter((token) => requestedChains.includes(token.chain));
+        const nextCheck = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
+        return {
+          ok: true,
+          cached: false,
+          stale: false,
+          partial: errors.length > 0,
+          wallet,
+          chains: requestedChains,
+          checkedAt: nextCheck?.checkedAt || null,
+          total: boundTokens.length,
+          tokens: boundTokens,
+          errors,
+        };
+      })();
+
+      _demonKingSyncInflight.set(inflightKey, job);
+      try {
+        const body = await job;
+        res.set('Cache-Control', 'private, no-store');
+        return res.json(body);
+      } finally {
+        _demonKingSyncInflight.delete(inflightKey);
+      }
+    } catch (err) {
+      ctx.logError?.('nft-demon-king-sync', err);
+      res.status(err?.status || 500).json({
+        error: (err?.message || 'Demon King ownership sync failed').slice(0, 200),
+        errors: Array.isArray(err?.errors) ? err.errors : undefined,
+      });
+    }
+  });
 
   // ─── POST /nft/upgrade/quote ──────────────────────────────────
   router.post('/nft/upgrade/quote', async (req, res) => {
@@ -361,12 +662,23 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(503).json({ error: `${chainKey} V3 not deployed yet` });
       }
 
-      const owner = getAddress(String(req.body?.owner || ''));
+      let owner;
+      try {
+        owner = getAddress(String(req.body?.owner || ''));
+      } catch {
+        return res.status(400).json({ error: 'owner must be a valid EVM address' });
+      }
       const tokenIdRaw = req.body?.tokenId;
       if (tokenIdRaw === undefined || tokenIdRaw === null || tokenIdRaw === '') {
         return res.status(400).json({ error: 'tokenId required' });
       }
-      const tokenId = BigInt(tokenIdRaw);
+      let tokenId;
+      try {
+        tokenId = BigInt(tokenIdRaw);
+      } catch {
+        return res.status(400).json({ error: 'tokenId must be a valid integer' });
+      }
+      if (tokenId <= 0n) return res.status(400).json({ error: 'tokenId must be positive' });
       const newLevel = Number(req.body?.newLevel || 0);
       if (![2, 3].includes(newLevel)) {
         return res.status(400).json({ error: 'newLevel must be 2 or 3' });
@@ -380,8 +692,15 @@ function mountNftV3Endpoints(router, ctx) {
       const rpcUrl = evmRpc(chainKey, process.env);
       const publicClient = createPublicClient({ transport: http(rpcUrl) });
       const proxyAddr = getAddress(deployment.proxy);
-      const [chainOwner, currentLevel, paused] = await Promise.all([
-        publicClient.readContract({ address: proxyAddr, abi: NFT_V3_ABI, functionName: 'ownerOf', args: [tokenId] }),
+      const chainOwner = await publicClient.readContract({
+        address: proxyAddr,
+        abi: NFT_V3_ABI,
+        functionName: 'ownerOf',
+        args: [tokenId],
+      }).catch(() => null);
+      if (!chainOwner) return res.status(404).json({ error: 'Token does not exist' });
+
+      const [currentLevel, paused] = await Promise.all([
         publicClient.readContract({ address: proxyAddr, abi: NFT_V3_ABI, functionName: 'tokenLevel', args: [tokenId] }),
         publicClient.readContract({ address: proxyAddr, abi: NFT_V3_ABI, functionName: 'paused' }),
       ]);
@@ -398,7 +717,23 @@ function mountNftV3Endpoints(router, ctx) {
       // if (wins < winThreshold(newLevel)) return res.status(403).json({ error: 'Not enough wins' });
 
       // ── Price ──
-      const usdPriceE6 = BigInt(process.env.NFT_UPGRADE_USD_PRICE_E6 || '8900000');
+      const player = playerFromUpgradeRequest(req);
+      if (!player) {
+        return res.status(401).json({ error: 'Log in to upgrade Demon King' });
+      }
+      const requiredWins = gameDb.demonKingRequiredWins(newLevel);
+      const battleWins = gameDb.getBattleWins(player.id);
+      if (requiredWins != null && battleWins < requiredWins) {
+        return res.status(403).json({
+          error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
+          code: 'DEMON_KING_WINS_REQUIRED',
+          battle_wins: battleWins,
+          required_wins: requiredWins,
+          next_level: newLevel,
+        });
+      }
+
+      const usdPriceE6 = upgradeUsdPriceE6(chainKey, payment, deployment);
       let paymentToken = zeroAddress;
       let priceUnits = 0n;
       let decimals = 18;
@@ -514,10 +849,13 @@ function mountNftV3Endpoints(router, ctx) {
 
       if (!chainOwner) return res.status(404).json({ error: 'Token does not exist' });
 
-      const usdPriceE6 = process.env.NFT_UPGRADE_USD_PRICE_E6 || '8900000';
       const upgradeable = Number(level) < 3 && !paused;
+      const nextLevel = upgradeable ? Number(level) + 1 : null;
+      const requiredWins = nextLevel ? gameDb.demonKingRequiredWins(nextLevel) : null;
+      const player = playerFromUpgradeRequest(req);
+      const battleWins = player ? gameDb.getBattleWins(player.id) : null;
 
-      res.set('Cache-Control', 'public, max-age=15');
+      res.set('Cache-Control', player ? 'private, no-store' : 'public, max-age=15');
       res.json({
         chain: chainKey,
         chainId: spec.chainId,
@@ -529,15 +867,14 @@ function mountNftV3Endpoints(router, ctx) {
         starCount: Number(level),
         maxLevel: 3,
         upgradeable,
-        nextLevel: upgradeable ? Number(level) + 1 : null,
-        upgradePriceUsdE6: usdPriceE6,
+        nextLevel,
+        upgradePriceUsdE6: upgradeUsdPriceE6(chainKey, 'usdc', deployment).toString(),
         usdc: deployment.usdcToken,
         cop: deployment.copToken || null,
         paused,
         imageUrl: nftLevelImageUrl(level, tokenId.toString()),
-        // Phase B: wins-related fields. Phase 1 returns nulls.
-        wins: null,
-        nextLevelRequiredWins: null,
+        wins: battleWins,
+        nextLevelRequiredWins: requiredWins,
       });
     } catch (err) {
       ctx.logError?.('nft-v3-state', err);

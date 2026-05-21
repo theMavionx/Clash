@@ -60,8 +60,13 @@ const TROOP_TYPE_ALIASES = {
 };
 
 function normalizeTroopTypeName(name) {
-  const raw = String(name || '').toLowerCase();
+  const raw = String(name || '').split(':')[0].toLowerCase();
   return TROOP_TYPE_ALIASES[raw] || raw;
+}
+
+function troopEntryLevel(name) {
+  const match = String(name || '').match(/:L([1-3])$/i);
+  return match ? Number(match[1]) : null;
 }
 
 // ---------- Helpers ----------
@@ -818,7 +823,10 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           if (String(rawName || '') === '_SLOT_FILLER_') continue;
           const troopType = normalizeTroopTypeName(rawName);
           if (!VALID_TROOP_TYPES.includes(troopType)) continue;
-          const level = (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType])) || act.troopLevel || 1;
+          const level = troopEntryLevel(rawName)
+            || (serverTroopLevels && (serverTroopLevels[rawName] || serverTroopLevels[troopType]))
+            || act.troopLevel
+            || 1;
           const troopSpawn = troopSpawns[ti] || {};
           pendingSpawns.push({
             time: act.t + SAIL_DELAY_SEC + ti * TROOP_SPAWN_DELAY,

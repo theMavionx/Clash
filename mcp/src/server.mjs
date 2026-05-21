@@ -11,6 +11,7 @@ import { z } from 'zod';
 
 const require = createRequire(import.meta.url);
 const game = require('../../server/db.js');
+const hermesJobs = require('../../server/hermes_jobs.js');
 const combat = require('../../server/combat_defs.js');
 const { verifyReplay } = require('../../server/combat_session.js');
 const futuresDb = require('../../server-futures/db.js');
@@ -2532,6 +2533,169 @@ function decibelMinOrderInfo(market, executionPrice, leverage = 1) {
   };
 }
 
+function decibelIntervalSeconds(interval) {
+  switch (String(interval || '').toLowerCase()) {
+    case '1m': return 60;
+    case '5m': return 5 * 60;
+    case '15m': return 15 * 60;
+    case '30m': return 30 * 60;
+    case '1h': return 60 * 60;
+    case '4h': return 4 * 60 * 60;
+    case '1d': return 24 * 60 * 60;
+    default: return 60 * 60;
+  }
+}
+
+function roundIndicator(value, digits = 4) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(digits)) : null;
+}
+
+function emaSeries(values, period) {
+  const p = Math.max(1, Math.floor(Number(period) || 1));
+  const k = 2 / (p + 1);
+  const out = [];
+  let ema = null;
+  for (let i = 0; i < values.length; i += 1) {
+    const value = Number(values[i]);
+    if (!Number.isFinite(value)) {
+      out.push(null);
+      continue;
+    }
+    if (ema == null) ema = value;
+    else ema = value * k + ema * (1 - k);
+    out.push(ema);
+  }
+  return out;
+}
+
+function computeRsi(closes, period = 14) {
+  if (!Array.isArray(closes) || closes.length <= period) return null;
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= period; i += 1) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / period;
+  let avgLoss = losses / period;
+  let rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  for (let i = period + 1; i < closes.length; i += 1) {
+    const diff = closes[i] - closes[i - 1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = ((avgGain * (period - 1)) + gain) / period;
+    avgLoss = ((avgLoss * (period - 1)) + loss) / period;
+    rsi = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+  }
+  return rsi;
+}
+
+function computeMacd(closes, fast = 12, slow = 26, signalPeriod = 9) {
+  if (!Array.isArray(closes) || closes.length < slow + signalPeriod) return null;
+  const fastEma = emaSeries(closes, fast);
+  const slowEma = emaSeries(closes, slow);
+  const macd = closes.map((_, i) => (
+    fastEma[i] == null || slowEma[i] == null ? null : fastEma[i] - slowEma[i]
+  ));
+  const signal = emaSeries(macd.map((v) => (v == null ? 0 : v)), signalPeriod);
+  const last = macd.length - 1;
+  const prev = Math.max(0, last - 1);
+  const line = macd[last];
+  const prevLine = macd[prev];
+  const sig = signal[last];
+  const prevSig = signal[prev];
+  const histogram = line - sig;
+  return {
+    line,
+    signal: sig,
+    histogram,
+    previous_line: prevLine,
+    previous_signal: prevSig,
+    crossed_signal_up: prevLine <= prevSig && line > sig,
+    crossed_signal_down: prevLine >= prevSig && line < sig,
+    crossed_zero_up: prevLine <= 0 && line > 0,
+    crossed_zero_down: prevLine >= 0 && line < 0,
+  };
+}
+
+function computeAtr(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length <= period) return null;
+  const trs = [];
+  for (let i = 1; i < candles.length; i += 1) {
+    const high = Number(candles[i].high);
+    const low = Number(candles[i].low);
+    const prevClose = Number(candles[i - 1].close);
+    if (![high, low, prevClose].every(Number.isFinite)) continue;
+    trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+  if (trs.length < period) return null;
+  const window = trs.slice(-period);
+  return window.reduce((sum, v) => sum + v, 0) / window.length;
+}
+
+function average(values) {
+  const nums = values.map(Number).filter(Number.isFinite);
+  if (!nums.length) return null;
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+}
+
+function decibelScanFromCandles({ market, candles, interval }) {
+  const closes = candles.map((c) => Number(c.close)).filter(Number.isFinite);
+  const last = candles[candles.length - 1] || null;
+  const prev = candles[candles.length - 2] || null;
+  const rsi = computeRsi(closes, 14);
+  const macd = computeMacd(closes, 12, 26, 9);
+  const atr = computeAtr(candles, 14);
+  const volumes = candles.map((c) => Number(c.volume)).filter(Number.isFinite);
+  const lastVolume = volumes[volumes.length - 1] || 0;
+  const avgVolume20 = average(volumes.slice(-21, -1)) || average(volumes.slice(-20)) || 0;
+  const volumeRatio = avgVolume20 > 0 ? lastVolume / avgVolume20 : null;
+  const intervalSec = decibelIntervalSeconds(interval);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const lastSec = Number(last?.time || 0);
+  const stale = !lastSec || nowSec - lastSec > intervalSec * 3;
+  const close = Number(last?.close || market.mark_price || 0);
+  const previousClose = Number(prev?.close || 0);
+  const changePct = previousClose > 0 ? ((close - previousClose) / previousClose) * 100 : null;
+  return {
+    symbol: market.symbol,
+    market_name: market.market_name,
+    market_addr: market.market_addr,
+    interval,
+    candles: candles.length,
+    stale,
+    stale_seconds: lastSec ? nowSec - lastSec : null,
+    mark_price: roundIndicator(market.mark_price || close, 8),
+    last_close: roundIndicator(close, 8),
+    previous_close: roundIndicator(previousClose, 8),
+    last_change_pct: roundIndicator(changePct, 4),
+    rsi_14: roundIndicator(rsi, 2),
+    macd: macd ? {
+      line: roundIndicator(macd.line, 8),
+      signal: roundIndicator(macd.signal, 8),
+      histogram: roundIndicator(macd.histogram, 8),
+      crossed_signal_up: !!macd.crossed_signal_up,
+      crossed_signal_down: !!macd.crossed_signal_down,
+      crossed_zero_up: !!macd.crossed_zero_up,
+      crossed_zero_down: !!macd.crossed_zero_down,
+    } : null,
+    volume: {
+      last: roundIndicator(lastVolume, 4),
+      avg_20: roundIndicator(avgVolume20, 4),
+      ratio_to_avg_20: roundIndicator(volumeRatio, 4),
+      good: Number.isFinite(volumeRatio) ? volumeRatio >= 1.15 : false,
+    },
+    atr_14: roundIndicator(atr, 8),
+    atr_pct: close > 0 && atr != null ? roundIndicator((atr / close) * 100, 4) : null,
+    blockers: [
+      stale ? 'Market data is stale; do not trade from this scan.' : '',
+      candles.length < 50 ? 'Not enough candles for reliable RSI/MACD.' : '',
+    ].filter(Boolean),
+  };
+}
+
 function formatUsdApprox(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 'unknown';
@@ -3893,6 +4057,159 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
   );
 
   server.registerTool(
+    'hermes_job_list',
+    {
+      title: 'Hermes Job List',
+      description: 'List the authenticated player scheduled Hermes jobs and their latest status.',
+      inputSchema: {},
+    },
+    async () => jsonResult({
+      success: true,
+      jobs: hermesJobs.listJobs(playerId),
+    })
+  );
+
+  server.registerTool(
+    'hermes_job_create_draft',
+    {
+      title: 'Create Hermes Job Draft',
+      description: 'Create a draft scheduled Decibel monitoring job. Drafts do not run until the player activates them in the UI or updates status to active.',
+      inputSchema: {
+        name: z.string().optional(),
+        instruction: z.string(),
+        mode: z.enum(['monitor_only', 'ask_before_trade', 'auto_trade']).optional(),
+        symbols: z.array(z.string()).optional(),
+        interval_minutes: z.number().int().min(15).max(1440).optional(),
+        max_runs_per_day: z.number().int().min(1).max(96).optional(),
+        expires_at: z.string().optional(),
+        policy: z.object({
+          scan_timeframe: z.enum(['1m', '5m', '15m', '1h', '4h', '1d']).optional(),
+          lookback_candles: z.number().int().min(50).max(500).optional(),
+          max_collateral_usd: z.number().positive().max(1000).optional(),
+          max_balance_pct: z.number().positive().max(100).optional(),
+          max_leverage: z.number().positive().max(50).optional(),
+          max_slippage_pct: z.number().positive().max(25).optional(),
+          max_trades_per_day: z.number().int().min(0).max(24).optional(),
+          cooldown_minutes: z.number().int().min(5).max(1440).optional(),
+          max_open_positions: z.number().int().min(0).max(20).optional(),
+          allow_open: z.boolean().optional(),
+          allow_close: z.boolean().optional(),
+          allow_tpsl: z.boolean().optional(),
+          allow_cancel: z.boolean().optional(),
+        }).optional(),
+      },
+    },
+    async (args) => {
+      if (session.player.dex !== 'decibel') return toolError('Scheduled Decibel jobs are available only for Decibel accounts.');
+      const result = hermesJobs.createJob(playerId, { ...args, status: 'draft' });
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_update',
+    {
+      title: 'Update Hermes Job',
+      description: 'Update a scheduled Hermes job. Use for changing interval, mode, symbols, or risk policy.',
+      inputSchema: {
+        job_id: z.string(),
+        status: z.enum(['draft', 'active', 'paused']).optional(),
+        name: z.string().optional(),
+        instruction: z.string().optional(),
+        mode: z.enum(['monitor_only', 'ask_before_trade', 'auto_trade']).optional(),
+        symbols: z.array(z.string()).optional(),
+        interval_minutes: z.number().int().min(15).max(1440).optional(),
+        max_runs_per_day: z.number().int().min(1).max(96).optional(),
+        expires_at: z.string().optional(),
+        policy: z.record(z.any()).optional(),
+      },
+    },
+    async ({ job_id, ...patch }) => {
+      const result = hermesJobs.updateJob(playerId, job_id, patch);
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_pause',
+    {
+      title: 'Pause Hermes Job',
+      description: 'Pause a scheduled Hermes job.',
+      inputSchema: { job_id: z.string() },
+    },
+    async ({ job_id }) => {
+      const job = hermesJobs.getJob(playerId, job_id);
+      if (!job) return toolError('Job not found.');
+      const result = hermesJobs.updateJob(playerId, job_id, { ...job, status: 'paused' });
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_resume',
+    {
+      title: 'Resume Hermes Job',
+      description: 'Resume an existing scheduled Hermes job.',
+      inputSchema: { job_id: z.string() },
+    },
+    async ({ job_id }) => {
+      const job = hermesJobs.getJob(playerId, job_id);
+      if (!job) return toolError('Job not found.');
+      const result = hermesJobs.updateJob(playerId, job_id, { ...job, status: 'active' });
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_delete',
+    {
+      title: 'Delete Hermes Job',
+      description: 'Delete a scheduled Hermes job and its future runs.',
+      inputSchema: { job_id: z.string() },
+    },
+    async ({ job_id }) => {
+      const result = hermesJobs.deleteJob(playerId, job_id);
+      if (!result.ok) return toolError('Job not found.');
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_run_now',
+    {
+      title: 'Run Hermes Job Now',
+      description: 'Queue a scheduled Hermes job to run immediately. The worker will charge one AI message when it executes.',
+      inputSchema: { job_id: z.string() },
+    },
+    async ({ job_id }) => {
+      const result = hermesJobs.runNow(playerId, job_id);
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
+    'hermes_job_get_runs',
+    {
+      title: 'Hermes Job Run History',
+      description: 'Read recent scheduled Hermes job runs with tools and results.',
+      inputSchema: {
+        job_id: z.string(),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async ({ job_id, limit = 20 }) => {
+      const result = hermesJobs.listRuns(playerId, job_id, limit);
+      if (!result.ok) return toolError(result.error, result);
+      return jsonResult(result);
+    }
+  );
+
+  server.registerTool(
     'decibel_get_account',
     {
       title: 'Decibel Account',
@@ -3957,6 +4274,55 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
           priceByMarket.get(decibelMarketAddress(market).toLowerCase()) || null
         )),
         total_markets: markets.length,
+      });
+    }
+  );
+
+  server.registerTool(
+    'decibel_market_scan',
+    {
+      title: 'Decibel Market Scan',
+      description: 'Read Decibel candles and return server-calculated RSI, MACD, volume ratio, ATR, stale-data blockers, and mark price. Use this before scheduled or delegated technical-analysis trading decisions.',
+      inputSchema: {
+        symbols: z.array(z.string()).min(1).max(10),
+        interval: z.enum(['1m', '5m', '15m', '30m', '1h', '4h', '1d']).optional(),
+        lookback: z.number().int().min(50).max(500).optional(),
+      },
+    },
+    async ({ symbols, interval = '1h', lookback = 160 }) => {
+      const account = await requireDecibelSession(session);
+      if (!account.ok) return toolError(account.error);
+      const requested = (symbols || []).map((s) => String(s || '').trim()).filter(Boolean).slice(0, 10);
+      const scans = [];
+      for (const symbol of requested) {
+        try {
+          const market = await getDecibelMarket(symbol);
+          if (!market.market_addr) throw new Error(`No market address for ${symbol}`);
+          const candles = await decibel.fetchCandlesticks({
+            market_addr: market.market_addr,
+            interval,
+            limit: lookback,
+            hideOutliers: true,
+          });
+          scans.push(decibelScanFromCandles({ market, candles, interval }));
+        } catch (error) {
+          scans.push({
+            symbol: String(symbol || '').toUpperCase(),
+            error: error?.message || String(error || 'market scan failed'),
+            blockers: ['Market scan failed; do not trade this symbol from this scan.'],
+          });
+        }
+      }
+      return jsonResult({
+        success: true,
+        dex: 'decibel',
+        interval,
+        lookback,
+        scans,
+        account: {
+          owner: account.owner,
+          primary_subaccount: account.subaccount,
+        },
       });
     }
   );

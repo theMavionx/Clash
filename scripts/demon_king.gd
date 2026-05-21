@@ -199,7 +199,7 @@ func _use_embedded_anim_player_and_merge() -> void:
 	# Merge sibling FBX animations with bone-track retargeting + per-clip
 	# loop mode (one-shot for attack/die/hit, cyclic for run/walk/idle).
 	for file_path in DEMON_ANIM_FILES:
-		var res: Resource = load(file_path)
+		var res: Resource = ResourceLoader.load(file_path, "PackedScene")
 		if res == null:
 			continue
 		var temp_root: Node = res.instantiate()
@@ -258,20 +258,10 @@ func _use_embedded_anim_player_and_merge() -> void:
 			run_dup.loop_mode = Animation.LOOP_LINEAR
 			lib.add_animation("Running_A", run_dup)
 
-	# Pre-cache the attack anim length NOW (lib is finalised). Without this,
-	# the FIRST swing falls through to the atk_speed*0.35 fallback in
-	# _do_attack and lands at a different time than every subsequent swing.
-	# Cache once → consistent damage timing from swing #1 onward.
-	if anim_player.has_animation(attack_anim):
-		var attack_anim_res: Animation = anim_player.get_animation(attack_anim)
-		if attack_anim_res:
-			_attack_anim_length = attack_anim_res.length
-	else:
-		# Alias never resolved (no clip matched "Attack01"). _do_attack still
-		# deals damage via the atk_speed*0.35 fallback, but warn so it's visible.
-		push_warning("DemonKing: '%s' alias missing — attack will use atk_speed fallback timing" % attack_anim)
+	if not anim_player.has_animation(attack_anim):
+		push_warning("DemonKing: '%s' alias missing — attack animation will not play" % attack_anim)
 
-	print("[DemonKing] lib anims: ", anim_player.get_animation_list(), " | attack_anim_length=", _attack_anim_length)
+	print("[DemonKing] lib anims: ", anim_player.get_animation_list())
 
 
 ## Decide loop mode by clip name. Cyclic motion AND post-battle cheering loop
@@ -354,34 +344,20 @@ static func _assign_material_recursive(node: Node, mat: Material) -> void:
 		_assign_material_recursive(child, mat)
 
 
-## Damage timed to HALF of the (trimmed) attack animation duration — the
-## visual peak of the swing. The animation is pre-trimmed to 70% of source
-## length in _use_embedded_anim_player_and_merge (Unity's FBX export leaves
-## a jittery "return-to-rest" tail), and its length is pre-cached so
-## (length / 2) lands cleanly on the impact frame from the FIRST swing
-## onward — without the cache, swing #1 would fall through to a different
-## fallback timing than swing #2+.
+## Match Knight/server melee timing: damage lands 40% through the attack
+## cycle, independent of the visual FBX clip length. Replays are verified by
+## the server's fixed 60 Hz simulator, so combat timing must be based on
+## atk_speed rather than animation metadata.
+@export var hit_anim_threshold: float = 0.4
 var _hit_this_swing: bool = false
-var _attack_anim_length: float = -1.0
-var _prev_swing_timer: float = 999.0
 
 
 func _do_attack(delta: float) -> void:
 	if _resume_chase_if_target_far():
 		_hit_this_swing = false
-		_prev_swing_timer = 999.0
 		return
 
 	_face_current_target()
-
-	# A backwards jump in attack_timer means a new swing began: either
-	# base_troop zeroed it on a fresh RUNNING→ATTACKING entry, or our cycle
-	# below subtracted atk_speed. Reset the hit flag so the first swing after
-	# re-entry isn't silently skipped (stale _hit_this_swing from the last
-	# attack session would otherwise block _deal_target_damage).
-	if attack_timer < _prev_swing_timer - 0.0001:
-		_hit_this_swing = false
-
 	attack_timer += delta
 	if attack_timer >= atk_speed:
 		attack_timer -= atk_speed
@@ -390,13 +366,10 @@ func _do_attack(delta: float) -> void:
 			anim_player.stop()
 			anim_player.play(attack_anim)
 
-	var hit_at: float = _attack_anim_length * 0.5 if _attack_anim_length > 0.0 else atk_speed * 0.35
-	if not _hit_this_swing and attack_timer >= hit_at:
+	if not _hit_this_swing and attack_timer >= atk_speed * hit_anim_threshold:
 		_hit_this_swing = true
 		_deal_target_damage()
 		_shake_camera()
-
-	_prev_swing_timer = attack_timer
 
 
 ## Small camera kick on each landed hit — the DemonKing is a heavy boss, so

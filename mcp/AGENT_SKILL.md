@@ -144,8 +144,10 @@ Decibel trading is available only when `get_base_state` shows `player.dex: "deci
 
 All Decibel write tools use Clash server-side signing and mandatory builder routing (`builderAddr` + `builderFee`). Never bypass this with the upstream Decibel MCP directly; it does not preserve Clash builder attribution.
 
+- Scheduled jobs/watchers: `hermes_job_list`, `hermes_job_create_draft`, `hermes_job_update`, `hermes_job_pause`, `hermes_job_resume`, `hermes_job_delete`, `hermes_job_run_now`, `hermes_job_get_runs`. Prefer creating auto-trade jobs as drafts so the player can review risk settings in the UI before activation.
 - `decibel_get_account({ include_orders?, include_history?, limit? })`: read owner, primary subaccount, account overview, positions, open orders, order/trade history, signer status, and builder routing.
 - `decibel_get_markets({ symbols?, limit? })`: read market metadata, mark prices, decimals, tick size, lot size, and minimum size.
+- `decibel_market_scan({ symbols, interval?, lookback? })`: read Decibel candles and server-calculated RSI, MACD, volume ratio, ATR, stale-data blockers, and mark price. Use before scheduled jobs or technical-analysis requests.
 - `decibel_get_positions({ include_orders?, include_history?, limit? })`: read current positions and optional open orders/history.
 - `decibel_place_order({ symbol, side, order_type?, price?, size?, size_base?, collateral_usd?, notional_usd?, leverage?, slippage_pct? })`: open a long/short market or limit order. Requires explicit symbol, side, and size/notional/collateral. For limit orders, require `price`. Treat the order as opened only when the result has `success: true` and `verified: true`; a transaction hash alone is not enough.
 - `decibel_close_position({ symbol?, size?, size_base?, percent?, slippage_pct? })`: close or partially close a position with a reduce-only market order. If `symbol` is omitted, MCP closes the only open position or returns a blocker listing open symbols.
@@ -155,6 +157,8 @@ All Decibel write tools use Clash server-side signing and mandatory builder rout
 - `decibel_set_tpsl({ symbol, take_profit?, stop_loss?, size? })`: attach or update TP/SL on an existing position.
 
 For write requests with a read step, the final write/action tool is mandatory: `decibel_get_positions` alone does not cancel orders, change leverage, or set TP/SL.
+
+For scheduled Decibel jobs and conditions like "RSI hits 25 / MACD crosses / volume is good", use `decibel_market_scan` first. If scan data is stale or blocked, do not trade. Monitor-only jobs must never place orders; ask-before-trade jobs summarize the intended action without placing it; auto-trade jobs must obey the Internal Server Context policy as hard caps.
 
 For trade amounts, $/USD/USDC/dollars/бакс means `collateral_usd` by default; "notional 50" means `notional_usd`; "size 0.2" means `size_base`.
 

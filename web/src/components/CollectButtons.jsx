@@ -61,7 +61,12 @@ const styles = {
     alignItems: 'center',
     gap: 2,
     background: 'rgba(0, 0, 0, 0.7)',
-    border: '2px solid #FFD700',
+    // Longhand border so the per-resource `borderColor` override on the
+    // button doesn't mix shorthand + longhand (React warns about that
+    // when the color changes between renders).
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#FFD700',
     borderRadius: 14,
     padding: '6px 10px',
     cursor: 'pointer',

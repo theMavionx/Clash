@@ -6,8 +6,6 @@ extends Node3D
 
 const LEVEL_STATS := {
 	1: {"damage": 22, "fire_rate": 1.5},   # slow area-denier, not a burst killer
-	2: {"damage": 35, "fire_rate": 1.3},
-	3: {"damage": 52, "fire_rate": 1.1},
 }
 
 @export var detect_range: float = 1.0   # same radius as turret/cannon

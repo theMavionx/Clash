@@ -6,6 +6,7 @@ const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
 const hermesClient = require('./hermes_client');
+const hermesJobs = require('./hermes_jobs');
 const tasks = require('./tasks');
 const elfa = require('./elfa');
 const diag = require('./diag');
@@ -772,6 +773,195 @@ function evmNftChainConfig(chainKey) {
 
 // Global NFT supply tracker — single source of truth aggregating per-chain
 // mint counts, with 10s cache + RPC fallbacks. Defined below at ~line 1109.
+
+async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
+  const chainKey = String(proof?.chain || '').toLowerCase();
+  const cfg = evmNftChainConfig(chainKey);
+  const spec = NFT_EVM_CHAIN_SPECS[chainKey];
+  if (!cfg || !spec || !cfg.nft) {
+    return { error: 'Demon King NFT upgrades are available on Base, Arbitrum, and Monad only.', status: 400 };
+  }
+  const tokenIdRaw = proof?.tokenId ?? proof?.token_id;
+  if (tokenIdRaw === undefined || tokenIdRaw === null || tokenIdRaw === '') {
+    return { error: 'Demon King NFT tokenId required', status: 400 };
+  }
+  try {
+    const { createPublicClient, getAddress, http } = await import('viem');
+    const ownerHint = proof?.owner ? getAddress(String(proof.owner)) : null;
+    const client = createPublicClient({ transport: http(spec.rpc()) });
+    const tokenId = BigInt(tokenIdRaw);
+    const nftAddress = getAddress(cfg.nft);
+    const abi = [
+      { name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] },
+      { name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] },
+      { name: 'paused', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
+    ];
+    const [chainOwner, tokenLevel, paused] = await Promise.all([
+      client.readContract({ address: nftAddress, abi, functionName: 'ownerOf', args: [tokenId] }),
+      client.readContract({ address: nftAddress, abi, functionName: 'tokenLevel', args: [tokenId] }),
+      client.readContract({ address: nftAddress, abi, functionName: 'paused' }).catch(() => false),
+    ]);
+    const onchainOwner = getAddress(chainOwner);
+    if (paused) return { error: 'Demon King NFT contract is paused', status: 423 };
+    if (ownerHint && ownerHint !== onchainOwner) {
+      return { error: 'Demon King NFT owner mismatch', status: 403 };
+    }
+    const linkedWallets = [
+      player?.wallet,
+      player?.nft_gold_boost_wallet,
+    ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
+    const linkedMatch = linkedWallets.some((wallet) => getAddress(wallet) === onchainOwner);
+    if (!linkedMatch) {
+      return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
+    }
+    const level = Number(tokenLevel || 1);
+    if (level < Number(nextLevel)) {
+      return {
+        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
+        status: 403,
+        nft_level: level,
+        next_level: nextLevel,
+      };
+    }
+    gameDb.bindPlayerDemonKingNft(player.id, onchainOwner, {
+      chain: chainKey,
+      tokenId: String(tokenIdRaw),
+      level,
+    }, {
+      source: 'upgrade',
+      txHash: proof?.txHash || proof?.tx_hash || null,
+    });
+    return {
+      nftVerified: true,
+      nftLevel: level,
+      nftChain: chainKey,
+      nftTokenId: String(tokenIdRaw),
+      nftOwner: onchainOwner,
+      txHash: proof?.txHash || proof?.tx_hash || null,
+    };
+  } catch (err) {
+    return {
+      error: err?.shortMessage || err?.message || 'Failed to verify Demon King NFT upgrade',
+      status: 400,
+    };
+  }
+}
+
+const DEMON_KING_BOUND_NFT_TTL_MS = Math.max(
+  30_000,
+  Number(process.env.NFT_DEMON_KING_BOUND_TTL_MS || 30 * 60_000)
+);
+
+function sqliteDateMs(value) {
+  if (!value) return 0;
+  const normalized = String(value).includes('T') ? String(value) : `${String(value).replace(' ', 'T')}Z`;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function freshDemonKingBinding(row) {
+  if (!row?.verifiedAt) return false;
+  return Date.now() - sqliteDateMs(row.verifiedAt) <= DEMON_KING_BOUND_NFT_TTL_MS;
+}
+
+function parseDemonKingTroopEntry(entry) {
+  const raw = String(entry || '').trim();
+  const parts = raw.split(':');
+  if (parts.length < 3 || parts[0] !== 'DemonKing') {
+    return { error: 'Demon King requires an owned NFT token' };
+  }
+  const chainKey = String(parts[1] || '').toLowerCase();
+  const tokenIdRaw = String(parts[2] || '').trim();
+  if (!evmNftChainConfig(chainKey) || !NFT_EVM_CHAIN_SPECS[chainKey]) {
+    return { error: 'Demon King NFTs are supported on Base, Arbitrum, and Monad only' };
+  }
+  if (!/^\d+$/.test(tokenIdRaw)) {
+    return { error: 'Demon King NFT tokenId is invalid' };
+  }
+  let encodedLevel = 1;
+  const levelPart = String(parts[3] || '').trim();
+  const levelMatch = /^L([1-3])$/i.exec(levelPart);
+  if (levelMatch) encodedLevel = Number(levelMatch[1]);
+  return { chainKey, tokenIdRaw, encodedLevel };
+}
+
+async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
+  const parsed = parseDemonKingTroopEntry(entry);
+  if (parsed.error) return { error: parsed.error, status: 400 };
+  const { chainKey, tokenIdRaw } = parsed;
+  const cfg = evmNftChainConfig(chainKey);
+  const spec = NFT_EVM_CHAIN_SPECS[chainKey];
+  try {
+    const { createPublicClient, getAddress, http } = await import('viem');
+    const ownerHint = ownerHintRaw ? getAddress(String(ownerHintRaw)) : null;
+    const linkedWallets = [
+      player?.wallet,
+      player?.nft_gold_boost_wallet,
+    ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
+    const cached = gameDb.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
+    if (cached && freshDemonKingBinding(cached)) {
+      const cachedOwner = getAddress(cached.wallet);
+      const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);
+      if (cachedLinked && (!ownerHint || ownerHint === cachedOwner)) {
+        const level = normalizeNftLevel(cached.level);
+        return {
+          nftVerified: true,
+          nftLevel: level,
+          nftChain: chainKey,
+          nftTokenId: String(tokenIdRaw),
+          nftOwner: cachedOwner,
+          troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+          cached: true,
+        };
+      }
+    }
+
+    const client = createPublicClient({ transport: http(spec.rpc()) });
+    const tokenId = BigInt(tokenIdRaw);
+    const nftAddress = getAddress(cfg.nft);
+    const abi = [
+      { name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] },
+      { name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] },
+      { name: 'paused', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'bool' }] },
+    ];
+    const [chainOwner, tokenLevel, paused] = await Promise.all([
+      client.readContract({ address: nftAddress, abi, functionName: 'ownerOf', args: [tokenId] }),
+      client.readContract({ address: nftAddress, abi, functionName: 'tokenLevel', args: [tokenId] }),
+      client.readContract({ address: nftAddress, abi, functionName: 'paused' }).catch(() => false),
+    ]);
+    if (paused) return { error: 'Demon King NFT contract is paused', status: 423 };
+
+    const onchainOwner = getAddress(chainOwner);
+    if (ownerHint && ownerHint !== onchainOwner) {
+      return { error: 'Demon King NFT owner mismatch', status: 403 };
+    }
+
+    const linkedMatch = linkedWallets.some((wallet) => getAddress(wallet) === onchainOwner);
+    if (!linkedMatch) {
+      return { error: 'Connect or verify the EVM wallet that owns this Demon King NFT first', status: 403 };
+    }
+
+    const level = normalizeNftLevel(tokenLevel);
+    gameDb.bindPlayerDemonKingNft(player.id, onchainOwner, {
+      chain: chainKey,
+      tokenId: String(tokenIdRaw),
+      level,
+    }, { source: 'load' });
+    return {
+      nftVerified: true,
+      nftLevel: level,
+      nftChain: chainKey,
+      nftTokenId: String(tokenIdRaw),
+      nftOwner: onchainOwner,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+    };
+  } catch (err) {
+    return {
+      error: err?.shortMessage || err?.message || 'Failed to verify Demon King NFT ownership',
+      status: 400,
+    };
+  }
+}
 
 function gameShopDeployment() {
   return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'game-shop-base-mainnet.json')) || {};
@@ -4368,6 +4558,62 @@ router.get('/ai-chat/quota', auth, (req, res) => {
   res.json({ ok: true, quota: getAiMessageQuotaStatus(req.player.id) });
 });
 
+router.get('/ai-jobs', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    jobs: hermesJobs.listJobs(req.player.id),
+    quota: getAiMessageQuotaStatus(req.player.id),
+  });
+});
+
+router.post('/ai-jobs', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = hermesJobs.createJob(req.player.id, req.body || {});
+  if (!result.ok) return res.status(400).json(result);
+  res.json({
+    ...result,
+    jobs: hermesJobs.listJobs(req.player.id),
+    quota: getAiMessageQuotaStatus(req.player.id),
+  });
+});
+
+router.patch('/ai-jobs/:id', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = hermesJobs.updateJob(req.player.id, req.params.id, req.body || {});
+  if (!result.ok) return res.status(404).json(result);
+  res.json({
+    ...result,
+    jobs: hermesJobs.listJobs(req.player.id),
+    quota: getAiMessageQuotaStatus(req.player.id),
+  });
+});
+
+router.delete('/ai-jobs/:id', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = hermesJobs.deleteJob(req.player.id, req.params.id);
+  if (!result.ok) return res.status(404).json({ ok: false, error: 'Job not found.' });
+  res.json({ ok: true, jobs: hermesJobs.listJobs(req.player.id) });
+});
+
+router.post('/ai-jobs/:id/run-now', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = hermesJobs.runNow(req.player.id, req.params.id);
+  if (!result.ok) return res.status(400).json(result);
+  res.json({
+    ...result,
+    jobs: hermesJobs.listJobs(req.player.id),
+    quota: getAiMessageQuotaStatus(req.player.id),
+  });
+});
+
+router.get('/ai-jobs/:id/runs', auth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = hermesJobs.listRuns(req.player.id, req.params.id, req.query?.limit);
+  if (!result.ok) return res.status(404).json(result);
+  res.json(result);
+});
+
 function normalizeAiChatHistory(history) {
   if (!Array.isArray(history)) return [];
   return history
@@ -5881,18 +6127,35 @@ const TROOP_NAME_MAP = {
   demonking: 'DemonKing',
   demon_king: 'DemonKing',
 };
+function _troopBaseKey(name) {
+  return String(name || '').split(':')[0].toLowerCase();
+}
 function _normalizeTroopName(name) {
-  return TROOP_NAME_MAP[String(name || '').toLowerCase()] || String(name || '');
+  return TROOP_NAME_MAP[_troopBaseKey(name)] || String(name || '');
 }
 function _isSlotFiller(name) {
   return String(name || '') === '_SLOT_FILLER_';
 }
+function _isDemonKing(name) {
+  return _normalizeTroopName(name) === 'DemonKing';
+}
+function _canonicalTroopEntry(name) {
+  const normalized = _normalizeTroopName(name);
+  if (normalized !== 'DemonKing') return normalized;
+  const raw = String(name || '').trim();
+  return raw.startsWith('DemonKing:') ? raw : 'DemonKing';
+}
+function _demonKingEntryKey(name) {
+  const parsed = parseDemonKingTroopEntry(name);
+  if (parsed.error) return String(name || '');
+  return `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+}
 function _troopSlotCost(name) {
-  return _normalizeTroopName(name) === 'DemonKing' ? 2 : 1;
+  return _isDemonKing(name) ? 2 : 1;
 }
 function _appendTroopSlots(shipTroops, troopName) {
   const normalized = _normalizeTroopName(troopName);
-  shipTroops.push(normalized);
+  shipTroops.push(_canonicalTroopEntry(troopName));
   for (let i = 1; i < _troopSlotCost(normalized); i++) shipTroops.push('_SLOT_FILLER_');
 }
 function _applyCasualties(playerId, casualties) {
@@ -5916,6 +6179,10 @@ function _applyCasualties(playerId, casualties) {
   for (const [name, count] of Object.entries(casualties)) {
     if (typeof count !== 'number' || count <= 0) continue;
     const normalized = _normalizeTroopName(name);
+    // Demon King is NFT-backed and reusable. It can die in combat, but it
+    // should not be removed from the saved ship loadout or appear as a paid
+    // reinforcement casualty.
+    if (normalized === 'DemonKing') continue;
     validCasualties[normalized] = Math.min(
       (validCasualties[normalized] || 0) + count,
       deployed[normalized] || 0
@@ -5952,6 +6219,16 @@ function _applyCasualties(playerId, casualties) {
   if (leftover.length > 0) {
     console.log(`[CASUALTIES] Player ${playerId} had ${leftover.length} casualty types not applied (already removed or desync):`, leftover);
   }
+}
+
+function _paidCasualties(casualties) {
+  const out = {};
+  for (const [name, count] of Object.entries(casualties || {})) {
+    const normalized = _normalizeTroopName(name);
+    if (normalized === 'DemonKing') continue;
+    if (typeof count === 'number' && count > 0) out[normalized] = (out[normalized] || 0) + count;
+  }
+  return out;
 }
 
 // Returns current ship_troops for all ports as [{id, level, ship_troops, ship_troops_template}].
@@ -6103,7 +6380,7 @@ router.post('/attack/result', auth, (req, res) => {
     // the current ship state, so the final submit is idempotent.
     _applyCasualties(req.player.id, verification.casualties);
     // Return authoritative post-casualty ship state so client can sync immediately
-    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id), casualties: verification.casualties || {} });
+    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id), casualties: _paidCasualties(verification.casualties) });
   }
 
   // Defeat — attacker loses trophies, defender gains
@@ -6118,7 +6395,7 @@ router.post('/attack/result', auth, (req, res) => {
     loot: { gold: 0, wood: 0, ore: 0 },
     trophies: defeatResult.attackerTrophies,
     ships: _getShipsPayload(req.player.id),
-    casualties: verification.casualties || {},
+    casualties: _paidCasualties(verification.casualties),
   });
 });
 
@@ -6129,11 +6406,29 @@ router.get('/troops', auth, (req, res) => {
   res.json(db.getTroopLevels(req.player.id));
 });
 
+router.get('/troops/demon_king/upgrade-status', auth, (req, res) => {
+  res.json(db.getDemonKingUpgradeStatus(req.player.id));
+});
+
 // Upgrade a troop
-router.post('/troops/:type/upgrade', auth, (req, res) => {
+router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const { type } = req.params;
-  const result = db.upgradeTroop(req.player.id, type);
-  if (result.error) return res.status(400).json(result);
+  let upgradeOptions = {};
+  if (type === 'demon_king') {
+    const status = db.getDemonKingUpgradeStatus(req.player.id);
+    const nextLevel = status.next_level;
+    if (nextLevel && status.wins_ready && (req.body?.chain || req.body?.nft?.chain)) {
+      const proof = {
+        ...(req.body?.nft || {}),
+        ...req.body,
+      };
+      const verified = await verifyDemonKingNftUpgradeProof(req.player, proof, nextLevel);
+      if (verified.error) return res.status(verified.status || 400).json({ ...status, ...verified });
+      upgradeOptions = verified;
+    }
+  }
+  const result = db.upgradeTroop(req.player.id, type, upgradeOptions);
+  if (result.error) return res.status(result.status || 400).json(result);
   logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
   res.json(result);
 });
@@ -6260,7 +6555,7 @@ const TROOP_BUY_COSTS = {
   Barbarian: 100,
   Archer: 100,
   Ranger: 100,
-  DemonKing: 500,
+  DemonKing: 0,
 };
 const VALID_TROOPS = Object.keys(TROOP_BUY_COSTS);
 function _troopBuyCost(name) {
@@ -6272,6 +6567,9 @@ router.post('/troops/buy', auth, (req, res) => {
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
   const cost = _troopBuyCost(normalizedTroop);
+  if (normalizedTroop === 'DemonKing') {
+    return res.json({ success: true, troop_name: normalizedTroop, cost: 0, resources: db.getResources(req.player.id), nft_backed: true });
+  }
   if (!db.canAfford(req.player.id, cost, 0, 0)) {
     return res.status(400).json({ error: 'Not enough gold', cost });
   }
@@ -6284,12 +6582,17 @@ const TROOP_COST = 100;
 const REINFORCE_COST = 50;
 
 // Load a troop into a ship slot (costs 100 gold). Also saves template.
-router.post('/buildings/:id/load-troop', auth, (req, res) => {
+router.post('/buildings/:id/load-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop type' });
+  let verifiedDemonKing = null;
+  if (normalizedTroop === 'DemonKing') {
+    verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
+    if (verifiedDemonKing.error) return res.status(verifiedDemonKing.status || 400).json(verifiedDemonKing);
+  }
 
   const txn = db.db.transaction(() => {
     const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
@@ -6297,16 +6600,20 @@ router.post('/buildings/:id/load-troop', auth, (req, res) => {
     if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
     const shipTroops = JSON.parse(building.ship_troops || '[]');
-    const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9
+    const capacity = building.level * 3;  // 3x capacity: Lv1=3, Lv2=6, Lv3=9, Lv4=12
     const slotCost = _troopSlotCost(normalizedTroop);
     if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
+    const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
+    if (normalizedTroop === 'DemonKing' && shipTroops.some((row) => _demonKingEntryKey(row) === _demonKingEntryKey(troopEntry))) {
+      throw { status: 400, error: 'This Demon King NFT is already loaded' };
+    }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
     const troopCost = _troopBuyCost(normalizedTroop);
     if (player.gold < troopCost) throw { status: 400, error: 'Not enough gold' };
 
-    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(troopCost, req.player.id);
-    _appendTroopSlots(shipTroops, normalizedTroop);
+    if (troopCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(troopCost, req.player.id);
+    _appendTroopSlots(shipTroops, troopEntry);
     const troopsJson = JSON.stringify(shipTroops);
     // Save both current troops and template (what player chose)
     db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
@@ -6324,13 +6631,18 @@ router.post('/buildings/:id/load-troop', auth, (req, res) => {
 });
 
 // Swap a troop in a specific slot (costs 100 gold). Does NOT update template.
-router.post('/buildings/:id/swap-troop', auth, (req, res) => {
+router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
   const buildingId = parseInt(req.params.id, 10);
   if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
   const { slot, troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!Number.isInteger(slot) || !troop_name || !VALID_TROOPS.includes(normalizedTroop)) {
     return res.status(400).json({ error: 'Valid integer slot and troop_name required' });
+  }
+  let verifiedDemonKing = null;
+  if (normalizedTroop === 'DemonKing') {
+    verifiedDemonKing = await verifyDemonKingNftLoadToken(req.player, troop_name, req.body?.owner || req.body?.nft_owner || req.body?.wallet);
+    if (verifiedDemonKing.error) return res.status(verifiedDemonKing.status || 400).json(verifiedDemonKing);
   }
 
   const txn = db.db.transaction(() => {
@@ -6346,15 +6658,23 @@ router.post('/buildings/:id/swap-troop', auth, (req, res) => {
       slotsToReplace++;
     }
     const replacement = [];
-    _appendTroopSlots(replacement, normalizedTroop);
+    const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
+    _appendTroopSlots(replacement, troopEntry);
     const nextLength = shipTroops.length - slotsToReplace + replacement.length;
     const capacity = building.level * 3;
     if (nextLength > capacity) throw { status: 400, error: 'Not enough ship capacity for this troop' };
+    if (normalizedTroop === 'DemonKing') {
+      const keptTroops = shipTroops.filter((_, index) => index < slot || index >= slot + slotsToReplace);
+      if (keptTroops.some((row) => _demonKingEntryKey(row) === _demonKingEntryKey(troopEntry))) {
+        throw { status: 400, error: 'This Demon King NFT is already loaded' };
+      }
+    }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
-    if (player.gold < TROOP_COST) throw { status: 400, error: 'Not enough gold' };
+    const swapCost = normalizedTroop === 'DemonKing' ? 0 : TROOP_COST;
+    if (player.gold < swapCost) throw { status: 400, error: 'Not enough gold' };
 
-    db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(TROOP_COST, req.player.id);
+    if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
     shipTroops.splice(slot, slotsToReplace, ...replacement);
     const troopsJson = JSON.stringify(shipTroops);
     // Update ship_troops only — template stays as the last full loadout so /reinforce
@@ -6416,6 +6736,9 @@ router.post('/troop-died', auth, (req, res) => {
   const { troop_name } = req.body;
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
+  if (normalizedTroop === 'DemonKing') {
+    return res.json({ success: true, removed: null, persistent: true, troop_name: 'DemonKing' });
+  }
 
   // Find first port that has this troop and remove one instance (atomic)
   const result = db.db.transaction(() => {
@@ -6454,6 +6777,7 @@ router.get('/casualties', auth, (req, res) => {
     for (const t of template) {
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
+      if (normalized === 'DemonKing') continue;
       if (currentCounts[normalized] && currentCounts[normalized] > 0) {
         currentCounts[normalized]--;
       } else {
@@ -6484,17 +6808,24 @@ router.post('/reinforce', auth, (req, res) => {
       if (template.length === 0) continue;
       // Count missing troops by type (template - current)
       const currentCounts = {};
-      for (const t of current) currentCounts[t] = (currentCounts[t] || 0) + 1;
+      for (const t of current) {
+        if (_isSlotFiller(t)) continue;
+        const normalized = _normalizeTroopName(t);
+        currentCounts[normalized] = (currentCounts[normalized] || 0) + 1;
+      }
       const toAdd = [];
       for (const t of template) {
-        if (currentCounts[t] && currentCounts[t] > 0) {
-          currentCounts[t]--;
+        if (_isSlotFiller(t)) continue;
+        const normalized = _normalizeTroopName(t);
+        if (normalized === 'DemonKing') continue;
+        if (currentCounts[normalized] && currentCounts[normalized] > 0) {
+          currentCounts[normalized]--;
         } else {
-          toAdd.push(t);
+          _appendTroopSlots(toAdd, normalized);
+          totalToRestore += 1;
         }
       }
       if (toAdd.length > 0) {
-        totalToRestore += toAdd.length;
         shipsToRestore.push({ port, current, toAdd });
       }
     }

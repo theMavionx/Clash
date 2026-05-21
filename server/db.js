@@ -94,6 +94,50 @@ try { db.exec(`ALTER TABLE players ADD COLUMN seeker_detected_at TEXT`); } catch
 try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_wallet TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_contract TEXT`); } catch {}
 try { db.exec(`ALTER TABLE players ADD COLUMN nft_gold_boost_verified_at TEXT`); } catch {}
+// PvP win counter. Used by Demon King NFT-backed progression gates.
+try { db.exec(`ALTER TABLE players ADD COLUMN battle_wins INTEGER NOT NULL DEFAULT 0`); } catch {}
+
+// Player-bound NFT cache. Demon King ownership is verified from chain once,
+// persisted here, then reused by load/upgrade flows so the UI does not scan
+// ownerOf repeatedly across every panel mount.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS player_nfts (
+      player_id    TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      collection   TEXT NOT NULL DEFAULT 'demon_king',
+      chain        TEXT NOT NULL,
+      token_id     TEXT NOT NULL,
+      wallet       TEXT NOT NULL,
+      level        INTEGER NOT NULL DEFAULT 1,
+      image_url    TEXT,
+      active       INTEGER NOT NULL DEFAULT 1,
+      source       TEXT,
+      tx_hash      TEXT,
+      verified_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (player_id, collection, chain, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_nfts_player_active
+      ON player_nfts(player_id, collection, active, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_player_nfts_wallet
+      ON player_nfts(collection, wallet, chain, active);
+    CREATE INDEX IF NOT EXISTS idx_player_nfts_token
+      ON player_nfts(collection, chain, token_id, active);
+
+    CREATE TABLE IF NOT EXISTS player_nft_wallet_checks (
+      player_id    TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      collection   TEXT NOT NULL DEFAULT 'demon_king',
+      wallet       TEXT NOT NULL,
+      chains       TEXT NOT NULL DEFAULT '[]',
+      result_count INTEGER NOT NULL DEFAULT 0,
+      checked_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (player_id, collection, wallet)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_nft_wallet_checks_recent
+      ON player_nft_wallet_checks(collection, wallet, checked_at DESC);
+  `);
+} catch (e) { console.warn('[db] player_nfts migration:', e.message); }
 
 // Marketplace indexer state. The indexer reads V3 marketplace events
 // (Listed / Cancelled / Sold) from Base and writes them into the two tables
@@ -310,6 +354,72 @@ try { db.exec(`ALTER TABLE hermes_chat_events ADD COLUMN attempts_json TEXT`); }
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_trace ON hermes_chat_events(trace_id)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_type_recent ON hermes_chat_events(event_type, created_at DESC)`); } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_hermes_chat_events_intent_recent ON hermes_chat_events(intent, created_at DESC)`); } catch {}
+
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hermes_jobs (
+      id                  TEXT PRIMARY KEY,
+      player_id           TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      dex                 TEXT NOT NULL DEFAULT 'decibel',
+      status              TEXT NOT NULL DEFAULT 'draft',
+      mode                TEXT NOT NULL DEFAULT 'monitor_only',
+      name                TEXT NOT NULL,
+      instruction         TEXT NOT NULL,
+      interval_minutes    INTEGER NOT NULL DEFAULT 60,
+      max_runs_per_day    INTEGER NOT NULL DEFAULT 6,
+      max_messages_total  INTEGER NOT NULL DEFAULT 0,
+      timezone            TEXT NOT NULL DEFAULT 'UTC',
+      active_hours_json   TEXT,
+      symbols_json        TEXT NOT NULL DEFAULT '[]',
+      policy_json         TEXT NOT NULL DEFAULT '{}',
+      notifications_json  TEXT NOT NULL DEFAULT '{}',
+      scoped_ai_key_id    TEXT,
+      runs_count          INTEGER NOT NULL DEFAULT 0,
+      messages_used       INTEGER NOT NULL DEFAULT 0,
+      trade_count         INTEGER NOT NULL DEFAULT 0,
+      starts_at           TEXT,
+      expires_at          TEXT,
+      next_run_at         TEXT,
+      last_run_at         TEXT,
+      last_run_status     TEXT,
+      last_summary        TEXT,
+      last_error          TEXT,
+      locked_until        TEXT,
+      locked_by           TEXT,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      activated_at        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_hermes_jobs_player ON hermes_jobs(player_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hermes_jobs_due ON hermes_jobs(status, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_hermes_jobs_lock ON hermes_jobs(locked_until);
+
+    CREATE TABLE IF NOT EXISTS hermes_job_runs (
+      id                  TEXT PRIMARY KEY,
+      job_id              TEXT NOT NULL REFERENCES hermes_jobs(id) ON DELETE CASCADE,
+      player_id           TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      trace_id            TEXT,
+      idempotency_key     TEXT NOT NULL UNIQUE,
+      scheduled_for       TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'started',
+      quota_bucket        TEXT,
+      quota_json          TEXT,
+      model               TEXT,
+      duration_ms         INTEGER,
+      response_text       TEXT,
+      tools_json          TEXT,
+      actions_json        TEXT,
+      mcp_event_start_id  INTEGER,
+      mcp_event_end_id    INTEGER,
+      error               TEXT,
+      started_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_hermes_job_runs_job ON hermes_job_runs(job_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hermes_job_runs_player ON hermes_job_runs(player_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hermes_job_runs_status ON hermes_job_runs(status, started_at DESC);
+  `);
+} catch (e) { console.warn('[db] hermes scheduled jobs migration:', e.message); }
 
 try {
   db.exec(`
@@ -686,6 +796,19 @@ try {
   `);
 } catch {}
 try { db.exec(`ALTER TABLE battle_replays ADD COLUMN sim_debug TEXT`); } catch {}
+try {
+  db.exec(`
+    UPDATE players
+    SET battle_wins = (
+      SELECT COUNT(*)
+      FROM battle_replays r
+      WHERE r.attacker_id = players.id
+        AND lower(COALESCE(r.claimed_result, '')) = 'victory'
+        AND lower(COALESCE(r.verified_result, '')) IN ('accepted', 'victory')
+    )
+    WHERE COALESCE(battle_wins, 0) = 0
+  `);
+} catch {}
 
 // Battle matchmaking reservations. /find-enemy creates a short-lived session
 // so two attackers cannot be handed the same unshielded defender, play the
@@ -1020,6 +1143,85 @@ const stmts = {
   // Trophies
   updateTrophies: db.prepare(`UPDATE players SET trophies = ? WHERE id = ?`),
   getTrophies: db.prepare(`SELECT trophies FROM players WHERE id = ?`),
+  incrementBattleWins: db.prepare(`UPDATE players SET battle_wins = COALESCE(battle_wins, 0) + 1 WHERE id = ?`),
+  getBattleWins: db.prepare(`SELECT COALESCE(battle_wins, 0) AS battle_wins FROM players WHERE id = ?`),
+  listPlayerDemonKingNfts: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at
+      FROM player_nfts
+     WHERE player_id = ? AND collection = 'demon_king' AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  listPlayerDemonKingNftsByWallet: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = 'demon_king'
+       AND lower(wallet) = lower(?)
+       AND active = 1
+     ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
+  `),
+  getPlayerDemonKingNft: db.prepare(`
+    SELECT player_id, collection, chain, token_id, wallet, level, image_url,
+           active, source, tx_hash, verified_at, last_seen_at, updated_at
+      FROM player_nfts
+     WHERE player_id = ?
+       AND collection = 'demon_king'
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+     LIMIT 1
+  `),
+  deactivatePlayerDemonKingWalletChain: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE player_id = ?
+       AND collection = 'demon_king'
+       AND lower(wallet) = lower(?)
+       AND chain = ?
+       AND active = 1
+  `),
+  deactivateDemonKingTokenEverywhere: db.prepare(`
+    UPDATE player_nfts
+       SET active = 0, updated_at = datetime('now')
+     WHERE collection = 'demon_king'
+       AND chain = ?
+       AND token_id = ?
+       AND active = 1
+       AND (player_id != ? OR lower(wallet) != lower(?))
+  `),
+  upsertPlayerDemonKingNft: db.prepare(`
+    INSERT INTO player_nfts
+      (player_id, collection, chain, token_id, wallet, level, image_url,
+       active, source, tx_hash, verified_at, last_seen_at, updated_at)
+    VALUES (?, 'demon_king', ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+    ON CONFLICT(player_id, collection, chain, token_id) DO UPDATE SET
+      wallet = excluded.wallet,
+      level = excluded.level,
+      image_url = COALESCE(excluded.image_url, player_nfts.image_url),
+      active = 1,
+      source = COALESCE(excluded.source, player_nfts.source),
+      tx_hash = COALESCE(excluded.tx_hash, player_nfts.tx_hash),
+      verified_at = datetime('now'),
+      last_seen_at = datetime('now'),
+      updated_at = datetime('now')
+  `),
+  getDemonKingNftWalletCheck: db.prepare(`
+    SELECT player_id, collection, wallet, chains, result_count, checked_at
+      FROM player_nft_wallet_checks
+     WHERE player_id = ? AND collection = 'demon_king' AND lower(wallet) = lower(?)
+     LIMIT 1
+  `),
+  upsertDemonKingNftWalletCheck: db.prepare(`
+    INSERT INTO player_nft_wallet_checks
+      (player_id, collection, wallet, chains, result_count, checked_at)
+    VALUES (?, 'demon_king', ?, ?, ?, datetime('now'))
+    ON CONFLICT(player_id, collection, wallet) DO UPDATE SET
+      chains = excluded.chains,
+      result_count = excluded.result_count,
+      checked_at = datetime('now')
+  `),
 
   // Production
   updateLastCollected: db.prepare(`UPDATE buildings SET last_collected_at = ? WHERE id = ? AND player_id = ?`),
@@ -1447,18 +1649,20 @@ const TH_UNLOCK = {
   storage:   2,  // unlocked at TH2
   tombstone: 2,  // unlocked at TH2
   turret:    3,  // unlocked at TH3
+  mage_tower: 4, // unlocked at TH4
 };
 
 // Max count per building type PER TH level: { type: [th1, th2, th3, th4] }
 const TH_MAX_COUNT = {
-  mine:         [1, 2, 3, 4],
-  sawmill:      [1, 2, 3, 4],
-  barn:         [1, 1, 2, 3],
+  mine:         [1, 2, 3, 3],
+  sawmill:      [1, 2, 3, 3],
+  barn:         [1, 1, 1, 1],
   port:         [1, 2, 5, 6],
-  archer_tower: [1, 2, 3, 4],
-  tombstone:    [0, 1, 3, 4],  // unlocked at TH2
-  turret:       [0, 0, 3, 4],  // unlocked at TH3
+  archer_tower: [1, 2, 3, 3],
+  tombstone:    [0, 1, 3, 3],  // unlocked at TH2
+  turret:       [0, 0, 3, 3],  // unlocked at TH3
   storage:      [0, 1, 2, 3],  // unlocked at TH2
+  mage_tower:   [0, 0, 0, 2],  // unlocked at TH4
   town_hall:    [1, 1, 1, 1],
 };
 
@@ -1471,14 +1675,13 @@ const TH_UPGRADE_REQUIRES = {
 
 const BUILDING_DEFS = {
   town_hall: {
-    size: [4, 4], max_level: 5,
-    hp_levels: [3500, 6000, 10000, 17000, 28000],
+    size: [4, 4], max_level: 4,
+    hp_levels: [3500, 6000, 10000, 17000],
     cost: { gold: 0, wood: 0, ore: 0 },
     upgrade_cost: {
       2: { gold: 2000, wood: 6000, ore: 5000 },
       3: { gold: 5000, wood: 20000, ore: 18000 },
       4: { gold: 12000, wood: 55000, ore: 50000 },
-      5: { gold: 30000, wood: 130000, ore: 120000 },
     },
     max_count: 1,
   },
@@ -1489,14 +1692,14 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   barn: {
-    size: [4, 3], max_level: 3,
-    hp_levels: [2000, 3500, 6000],
+    size: [4, 3], max_level: 4,
+    hp_levels: [2000, 3500, 6000, 9500],
     cost: { gold: 300, wood: 800, ore: 600 },
-    max_count: 2,
+    max_count: 1,
   },
   port: {
-    size: [4, 3], max_level: 3,
-    hp_levels: [1800, 3200, 5500],
+    size: [4, 3], max_level: 4,
+    hp_levels: [1800, 3200, 5500, 8500],
     cost: { gold: 500, wood: 1200, ore: 1000 },
     max_count: 2,
   },
@@ -1530,28 +1733,33 @@ const BUILDING_DEFS = {
     cost: { gold: 400, wood: 1500, ore: 0 },
     max_count: 4,
   },
-  // Mage Tower — sandbox/test building. Client only lists it in the shop when
-  // test_mode is on (def.test_only), so production players can't place it via
-  // the UI; this def keeps the server data model consistent if it's ever
-  // promoted out of test. No attack yet.
   mage_tower: {
-    size: [3, 3], max_level: 3,
-    hp_levels: [700, 1300, 2200],
+    size: [3, 3], max_level: 1,
+    hp_levels: [700],
     cost: { gold: 500, wood: 0, ore: 800 },
-    max_count: 4,
+    max_count: 2,
   },
 };
 
 // ---------- Troop Definitions ----------
 
 const TROOP_DEFS = {
-  knight:    { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 100 },  { gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 }] },
-  mage:      { max_level: 3, cost: [{ gold: 200, wood: 0, ore: 200 }, { gold: 500, wood: 0, ore: 500 },  { gold: 1000, wood: 0, ore: 1000 }] },
-  barbarian: { max_level: 3, cost: [{ gold: 150, wood: 0, ore: 150 }, { gold: 350, wood: 0, ore: 350 },  { gold: 700, wood: 0, ore: 700 }] },
-  archer:    { max_level: 3, cost: [{ gold: 150, wood: 150, ore: 0 }, { gold: 350, wood: 350, ore: 0 },  { gold: 700, wood: 700, ore: 0 }] },
-  ranger:    { max_level: 3, cost: [{ gold: 120, wood: 120, ore: 0 }, { gold: 250, wood: 250, ore: 0 },  { gold: 500, wood: 500, ore: 0 }] },
-  demon_king: { max_level: 3, cost: [{ gold: 500, wood: 0, ore: 0 }, { gold: 1200, wood: 0, ore: 5 }, { gold: 2500, wood: 0, ore: 15 }] },
+  knight:    { max_level: 4, cost: [{ gold: 300, wood: 0, ore: 250 },  { gold: 600, wood: 0, ore: 500 },  { gold: 1200, wood: 0, ore: 1000 }] },
+  mage:      { max_level: 4, cost: [{ gold: 500, wood: 0, ore: 500 }, { gold: 1000, wood: 0, ore: 1000 }, { gold: 2000, wood: 0, ore: 2000 }] },
+  barbarian: { max_level: 4, cost: [{ gold: 350, wood: 0, ore: 350 }, { gold: 700, wood: 0, ore: 700 }, { gold: 1400, wood: 0, ore: 1400 }] },
+  archer:    { max_level: 4, cost: [{ gold: 350, wood: 350, ore: 0 }, { gold: 700, wood: 700, ore: 0 }, { gold: 1400, wood: 1400, ore: 0 }] },
+  ranger:    { max_level: 4, cost: [{ gold: 250, wood: 250, ore: 0 }, { gold: 500, wood: 500, ore: 0 }, { gold: 1000, wood: 1000, ore: 0 }] },
+  demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
+
+const DEMON_KING_UPGRADE_WINS = {
+  2: 1000,
+  3: 10000,
+};
+
+function demonKingRequiredWins(level) {
+  return DEMON_KING_UPGRADE_WINS[Number(level)] || null;
+}
 
 const GRID_SPECS = {
   0: { width: 27, height: 27, label: 'main island', allowed: null, blocked: ['port'] },
@@ -1566,15 +1774,16 @@ const TROPHY_WIN = 30;
 const TROPHY_LOSS = 15;  // defender loses this on defeat
 
 const TROPHY_TABLE = {
-  town_hall: [50, 120, 250, 450, 750],
+  town_hall: [50, 120, 250, 450],
   mine:      [10, 25, 50, 90],
-  barn:      [10, 25, 50],
-  port:      [15, 35, 70],
+  barn:      [10, 25, 50, 90],
+  port:      [15, 35, 70, 125],
   sawmill:   [10, 25, 50, 90],
   turret:    [20, 45, 90, 160],
   tombstone: [5, 10, 20, 40],
   storage:      [10, 25, 50, 90],
   archer_tower: [15, 35, 70, 125],
+  mage_tower:   [20],
 };
 
 // ---------- Helper Functions ----------
@@ -1916,6 +2125,161 @@ function authenticatePlayer(token) {
   return stmts.getPlayerByToken.get(token);
 }
 
+function normalizeDemonKingNftLevel(level) {
+  const n = Number(level);
+  return [1, 2, 3].includes(n) ? n : 1;
+}
+
+function normalizeDemonKingNftRow(row) {
+  if (!row) return null;
+  return {
+    playerId: row.player_id,
+    collection: row.collection || 'demon_king',
+    chain: String(row.chain || '').toLowerCase(),
+    tokenId: String(row.token_id || ''),
+    wallet: row.wallet || '',
+    level: normalizeDemonKingNftLevel(row.level),
+    imageUrl: row.image_url || null,
+    active: !!row.active,
+    source: row.source || null,
+    txHash: row.tx_hash || null,
+    verifiedAt: row.verified_at || null,
+    lastSeenAt: row.last_seen_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+function normalizeDemonKingNftInput(token = {}) {
+  const chain = String(token.chain || '').trim().toLowerCase();
+  const tokenId = String(token.tokenId ?? token.token_id ?? token.id ?? '').trim();
+  if (!chain || !tokenId) return null;
+  return {
+    chain,
+    tokenId,
+    level: normalizeDemonKingNftLevel(token.level),
+    imageUrl: token.imageUrl || token.image_url || null,
+  };
+}
+
+function normalizeDemonKingChains(chains, tokens = []) {
+  const set = new Set();
+  if (Array.isArray(chains)) {
+    for (const chain of chains) {
+      const key = String(chain || '').trim().toLowerCase();
+      if (key) set.add(key);
+    }
+  }
+  for (const token of tokens) {
+    const key = String(token?.chain || '').trim().toLowerCase();
+    if (key) set.add(key);
+  }
+  return [...set].filter(Boolean);
+}
+
+function listPlayerDemonKingNfts(playerId, wallet = null) {
+  if (!playerId) return [];
+  const rows = wallet
+    ? stmts.listPlayerDemonKingNftsByWallet.all(playerId, String(wallet).trim())
+    : stmts.listPlayerDemonKingNfts.all(playerId);
+  return rows.map(normalizeDemonKingNftRow).filter(Boolean);
+}
+
+function getPlayerDemonKingNft(playerId, chain, tokenId) {
+  if (!playerId || !chain || tokenId == null) return null;
+  return normalizeDemonKingNftRow(stmts.getPlayerDemonKingNft.get(
+    playerId,
+    String(chain).trim().toLowerCase(),
+    String(tokenId).trim()
+  ));
+}
+
+const _replacePlayerDemonKingNftsTxn = db.transaction((playerId, wallet, tokens, options = {}) => {
+  const owner = String(wallet || '').trim();
+  const chains = normalizeDemonKingChains(options.chains, tokens);
+  for (const chain of chains) {
+    stmts.deactivatePlayerDemonKingWalletChain.run(playerId, owner, chain);
+  }
+
+  for (const rawToken of tokens) {
+    const token = normalizeDemonKingNftInput(rawToken);
+    if (!token) continue;
+    stmts.deactivateDemonKingTokenEverywhere.run(token.chain, token.tokenId, playerId, owner);
+    stmts.upsertPlayerDemonKingNft.run(
+      playerId,
+      token.chain,
+      token.tokenId,
+      owner,
+      token.level,
+      token.imageUrl,
+      options.source || rawToken.source || 'sync',
+      options.txHash || rawToken.txHash || rawToken.tx_hash || null
+    );
+  }
+
+  stmts.upsertDemonKingNftWalletCheck.run(
+    playerId,
+    owner,
+    JSON.stringify(chains),
+    tokens.length
+  );
+});
+
+function replacePlayerDemonKingNfts(playerId, wallet, tokens = [], options = {}) {
+  const owner = String(wallet || '').trim();
+  if (!playerId || !owner) return [];
+  const normalized = Array.isArray(tokens)
+    ? tokens.map(normalizeDemonKingNftInput).filter(Boolean)
+    : [];
+  _replacePlayerDemonKingNftsTxn(playerId, owner, normalized, options);
+  return listPlayerDemonKingNfts(playerId, owner);
+}
+
+function bindPlayerDemonKingNft(playerId, wallet, token = {}, options = {}) {
+  const owner = String(wallet || '').trim();
+  const normalized = normalizeDemonKingNftInput(token);
+  if (!playerId || !owner || !normalized) return null;
+  stmts.deactivateDemonKingTokenEverywhere.run(normalized.chain, normalized.tokenId, playerId, owner);
+  stmts.upsertPlayerDemonKingNft.run(
+    playerId,
+    normalized.chain,
+    normalized.tokenId,
+    owner,
+    normalized.level,
+    normalized.imageUrl,
+    options.source || token.source || 'verified',
+    options.txHash || token.txHash || token.tx_hash || null
+  );
+  return getPlayerDemonKingNft(playerId, normalized.chain, normalized.tokenId);
+}
+
+function getDemonKingNftWalletCheck(playerId, wallet) {
+  if (!playerId || !wallet) return null;
+  const row = stmts.getDemonKingNftWalletCheck.get(playerId, String(wallet).trim());
+  if (!row) return null;
+  let chains = [];
+  try { chains = JSON.parse(row.chains || '[]'); } catch { chains = []; }
+  return {
+    playerId: row.player_id,
+    collection: row.collection || 'demon_king',
+    wallet: row.wallet,
+    chains: Array.isArray(chains) ? chains.map((c) => String(c).toLowerCase()) : [],
+    resultCount: Number(row.result_count) || 0,
+    checkedAt: row.checked_at || null,
+  };
+}
+
+function markDemonKingNftWalletChecked(playerId, wallet, chains = [], resultCount = 0) {
+  if (!playerId || !wallet) return null;
+  const chainList = normalizeDemonKingChains(chains);
+  stmts.upsertDemonKingNftWalletCheck.run(
+    playerId,
+    String(wallet).trim(),
+    JSON.stringify(chainList),
+    Math.max(0, Number(resultCount) || 0)
+  );
+  return getDemonKingNftWalletCheck(playerId, wallet);
+}
+
 // ---------- Resource Storage Capacity (CoC-style) ----------
 
 // Base capacity from Town Hall (without any Storage buildings)
@@ -1924,7 +2288,6 @@ const TH_BASE_CAPACITY = {
   2: { gold: 20000, wood: 20000, ore: 20000 },
   3: { gold: 40000, wood: 40000, ore: 40000 },
   4: { gold: 70000, wood: 70000, ore: 70000 },
-  5: { gold: 110000, wood: 110000, ore: 110000 },
 };
 
 // Additional capacity per Storage building per level
@@ -1942,7 +2305,7 @@ function getResourceCaps(playerId) {
   for (const b of buildings) {
     if (b.type === 'town_hall') thLevel = b.level;
   }
-  const base = TH_BASE_CAPACITY[thLevel] || TH_BASE_CAPACITY[1];
+  const base = TH_BASE_CAPACITY[Math.min(thLevel, 4)] || TH_BASE_CAPACITY[1];
   let maxGold = base.gold;
   let maxWood = base.wood;
   let maxOre = base.ore;
@@ -2151,7 +2514,32 @@ function getPlayerBuildings(playerId) {
   return decorateBuildingsWithProduction(stmts.getBuildings.all(playerId));
 }
 
-function upgradeTroop(playerId, troopType) {
+function getBattleWins(playerId) {
+  return Math.max(0, Number(stmts.getBattleWins.get(playerId)?.battle_wins || 0) || 0);
+}
+
+function getDemonKingUpgradeStatus(playerId) {
+  const def = TROOP_DEFS.demon_king;
+  const levels = stmts.getTroopLevels.all(playerId);
+  const current = levels.find(t => t.troop_type === 'demon_king');
+  const currentLevel = current ? current.level : 1;
+  const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
+  const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
+  const battleWins = getBattleWins(playerId);
+  return {
+    troop_type: 'demon_king',
+    current_level: currentLevel,
+    max_level: def.max_level,
+    next_level: nextLevel,
+    battle_wins: battleWins,
+    required_wins: requiredWins,
+    wins_ready: requiredWins == null || battleWins >= requiredWins,
+    requires_nft_upgrade: nextLevel != null,
+    nft_upgrade_price: 'same_as_purchase',
+  };
+}
+
+function upgradeTroop(playerId, troopType, options = {}) {
   const def = TROOP_DEFS[troopType];
   if (!def) return { error: `Unknown troop type: ${troopType}` };
 
@@ -2161,6 +2549,50 @@ function upgradeTroop(playerId, troopType) {
 
   if (currentLevel >= def.max_level) {
     return { error: 'Already at max level' };
+  }
+
+  if (troopType === 'demon_king') {
+    const newLevel = currentLevel + 1;
+    const requiredWins = demonKingRequiredWins(newLevel);
+    const battleWins = getBattleWins(playerId);
+    const status = {
+      ...getDemonKingUpgradeStatus(playerId),
+      next_level: newLevel,
+      required_wins: requiredWins,
+      battle_wins: battleWins,
+      wins_ready: requiredWins == null || battleWins >= requiredWins,
+    };
+    if (requiredWins != null && battleWins < requiredWins) {
+      return {
+        ...status,
+        error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
+        code: 'DEMON_KING_WINS_REQUIRED',
+      };
+    }
+    if (!options.nftVerified || Number(options.nftLevel || 0) < newLevel) {
+      return {
+        ...status,
+        error: `Upgrade your Demon King NFT to level ${newLevel} first`,
+        code: 'DEMON_KING_NFT_UPGRADE_REQUIRED',
+        requires_nft_upgrade: true,
+      };
+    }
+    stmts.upsertTroopLevel.run(playerId, troopType, newLevel);
+    return {
+      troop_type: troopType,
+      level: newLevel,
+      current_level: newLevel,
+      cost: { gold: 0, wood: 0, ore: 0 },
+      battle_wins: battleWins,
+      required_wins: requiredWins,
+      nft: {
+        chain: options.nftChain || null,
+        token_id: options.nftTokenId || null,
+        owner: options.nftOwner || null,
+        level: Number(options.nftLevel || newLevel),
+      },
+      resources: getResources(playerId),
+    };
   }
 
   const cost = def.cost[currentLevel - 1]; // cost to upgrade FROM current level
@@ -2287,13 +2719,14 @@ function getBaseStrength(playerId) {
     const limits = TH_MAX_COUNT[type];
     const maxAtTh = limits[Math.min(thLevel - 1, limits.length - 1)] || 0;
     if (maxAtTh <= 0) continue;
+    const maxLevelForType = Math.min(thLevel, BUILDING_DEFS[type]?.max_level || thLevel);
     for (let s = 0; s < maxAtTh; s++) {
-      for (let l = 1; l <= thLevel; l++) total++;
+      for (let l = 1; l <= maxLevelForType; l++) total++;
     }
     const placed = buildings.filter(b => b.type === type).map(b => b.level).sort((a, b) => b - a);
     for (let s = 0; s < maxAtTh; s++) {
       const blvl = s < placed.length ? placed[s] : 0;
-      for (let l = 1; l <= thLevel; l++) {
+      for (let l = 1; l <= maxLevelForType; l++) {
         if (blvl >= l) done++;
       }
     }
@@ -2788,6 +3221,7 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   // delta) to their tournament_participants row instead.
   applyTrophyDelta(attackerId,  TROPHY_WIN);
   applyTrophyDelta(defenderId, -TROPHY_LOSS);
+  stmts.incrementBattleWins.run(attackerId);
   finishBattleSession(battleSessionId, attackerId, defenderId, 'completed');
 
   return {
@@ -2938,6 +3372,12 @@ module.exports = {
   markHermesAgentState,
   logHermesChatEvent,
   logMcpEvent,
+  listPlayerDemonKingNfts,
+  getPlayerDemonKingNft,
+  replacePlayerDemonKingNfts,
+  bindPlayerDemonKingNft,
+  getDemonKingNftWalletCheck,
+  markDemonKingNftWalletChecked,
   getResources,
   addResources,
   canAfford,
@@ -2958,6 +3398,9 @@ module.exports = {
   getProductionStatus,
   recalculateTrophies,
   getTrophies,
+  getBattleWins,
+  getDemonKingUpgradeStatus,
+  demonKingRequiredWins,
   getFullPlayerState,
   buyShip,
   battleVictory,

@@ -10,11 +10,14 @@ const TROOP_LABELS = {
   barbarian: 'Barbarian',
   archer: 'Archer',
   ranger: 'Ranger',
+  demonking: 'Demon King',
+  demon_king: 'Demon King',
 };
 
 function normalizeTroopName(name) {
-  const raw = String(name || '').trim();
+  const raw = String(name || '').split(':')[0].trim();
   if (!raw || raw === 'undefined' || raw === 'null') return null;
+  if (raw === '_SLOT_FILLER_') return null;
   return TROOP_LABELS[raw.toLowerCase()] || raw;
 }
 

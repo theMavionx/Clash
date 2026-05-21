@@ -7,7 +7,7 @@ extends Node3D
 @export var sail_duration: float = 3.0
 @export var spawn_distance: float = 4.0
 @export var water_node_path: NodePath = "../Water"
-@export var max_ships: int = 5
+@export var max_ships: int = 6
 @export var troop_spawn_delay: float = 0.2
 @export var troop_scale: float = 0.1
 
@@ -37,7 +37,7 @@ const SHIP_PUSH_RADIUS: float = 0.12
 # ---------------------------------------------------------------------------
 # Preloaded resources — loaded once at startup, never at runtime
 # ---------------------------------------------------------------------------
-var _flag_scene_res: Resource = load("res://Model/flag/pirate_flag_animated.glb")
+var _flag_scene_res: Resource = null
 
 ## Ship models by level (1-indexed: level 1 = small, 2 = medium, 3 = large)
 const SHIP_MODELS: Array[String] = [
@@ -75,6 +75,22 @@ static var _ship_model_cache: Array[Resource] = []
 static var _troop_res_cache: Dictionary = {}  # troop_name → {model, script}
 static var _combat_preload_done: bool = false
 
+
+static func _load_packed_scene_resource(path: String) -> PackedScene:
+	if path == "":
+		return null
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return null
+	return ResourceLoader.load(path, "PackedScene") as PackedScene
+
+
+static func _load_script_resource(path: String) -> Script:
+	if path == "":
+		return null
+	if not ResourceLoader.exists(path, "Script"):
+		return null
+	return ResourceLoader.load(path, "Script") as Script
+
 ## Preloads every ship model and troop (model + script) used in combat.
 ## Safe to call multiple times; only runs once. Called from `_ready()`,
 ## but also defensively re-callable from a loading screen if needed.
@@ -83,12 +99,12 @@ static func _preload_combat_resources() -> void:
 		return
 	_combat_preload_done = true
 	for path in SHIP_MODELS:
-		_ship_model_cache.append(load(path))
+		_ship_model_cache.append(_load_packed_scene_resource(path))
 	for troop_name in TROOP_DEFS.keys():
 		var tdef: Dictionary = TROOP_DEFS[troop_name]
 		_troop_res_cache[troop_name] = {
-			"model": load(tdef.model),
-			"script": load(tdef.script),
+			"model": _load_packed_scene_resource(tdef.model),
+			"script": _load_script_resource(tdef.script),
 		}
 
 # ---------------------------------------------------------------------------
@@ -158,6 +174,8 @@ func _ready() -> void:
 	# Preload all combat GLBs and scripts before the player can trigger an attack.
 	# Running at _ready() means this cost is paid during the loading screen, not
 	# during the first ship placement or first troop deploy.
+	if _flag_scene_res == null:
+		_flag_scene_res = _load_packed_scene_resource("res://Model/flag/pirate_flag_animated.glb")
 	_preload_combat_resources()
 	ship_plane = get_node_or_null(grid_plane_path)
 	if ship_plane == null:
@@ -466,7 +484,10 @@ func _try_place_ship(hit: Vector3) -> bool:
 		var troop_levels_for_log: Dictionary = {}
 		if "troop_levels" in bs:
 			for troop_name in ship_data.get("troops", []):
-				troop_levels_for_log[troop_name] = bs.troop_levels.get(troop_name, 1)
+				var troop_key_for_log: String = _normalize_troop_entry(troop_name)
+				var troop_level_for_log: int = _troop_entry_level(troop_name, bs.troop_levels.get(troop_key_for_log, 1))
+				troop_levels_for_log[troop_name] = troop_level_for_log
+				troop_levels_for_log[troop_key_for_log] = troop_level_for_log
 		bs._battle_replay.append({
 			"t": t, "type": "place_ship",
 			"x": spawn_pos_for_log.x, "z": spawn_pos_for_log.z,
@@ -836,22 +857,26 @@ func _deploy_troops_from_ship(ship_pos: Vector3, sail_dir: Vector3, ship_idx: in
 
 	for i in troop_names.size():
 		var troop_name: String = troop_names[i]
-		var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
+		var troop_key: String = _normalize_troop_entry(troop_name)
+		var tdef: Dictionary = TROOP_DEFS.get(troop_key, {})
 		if tdef.is_empty():
 			continue
 		# Pull from cache populated in _ready() — zero I/O in combat.
-		var cached: Dictionary = _troop_res_cache.get(troop_name, {})
+		var cached: Dictionary = _troop_res_cache.get(troop_key, {})
 		var model_res: Resource = cached.get("model", null)
 		var script_res: Resource = cached.get("script", null)
 		if model_res == null or script_res == null:
 			continue
 		var troop_level: int = 1
-		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_name):
-			troop_level = bs_ref.troop_levels[troop_name]
+		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_key):
+			troop_level = bs_ref.troop_levels[troop_key]
 		if recorded_levels.has(troop_name):
 			troop_level = int(recorded_levels[troop_name])
+		elif recorded_levels.has(troop_key):
+			troop_level = int(recorded_levels[troop_key])
 		elif recorded_levels.has(troop_name.to_lower()):
 			troop_level = int(recorded_levels[troop_name.to_lower()])
+		troop_level = _troop_entry_level(troop_name, troop_level)
 		var lvl: int = troop_level
 		var m_res: Resource = model_res
 		var s_res: Resource = script_res
@@ -885,21 +910,25 @@ func _spawn_troops_at_pos(troop_names: Array, recorded_levels: Dictionary, spawn
 
 	for i in troop_names.size():
 		var troop_name: String = troop_names[i]
-		var tdef: Dictionary = TROOP_DEFS.get(troop_name, {})
+		var troop_key: String = _normalize_troop_entry(troop_name)
+		var tdef: Dictionary = TROOP_DEFS.get(troop_key, {})
 		if tdef.is_empty():
 			continue
-		var cached: Dictionary = _troop_res_cache.get(troop_name, {})
+		var cached: Dictionary = _troop_res_cache.get(troop_key, {})
 		var model_res: Resource = cached.get("model", null)
 		var script_res: Resource = cached.get("script", null)
 		if model_res == null or script_res == null:
 			continue
 		var troop_level: int = 1
-		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_name):
-			troop_level = bs_ref.troop_levels[troop_name]
+		if bs_ref and "troop_levels" in bs_ref and bs_ref.troop_levels.has(troop_key):
+			troop_level = bs_ref.troop_levels[troop_key]
 		if recorded_levels.has(troop_name):
 			troop_level = int(recorded_levels[troop_name])
+		elif recorded_levels.has(troop_key):
+			troop_level = int(recorded_levels[troop_key])
 		elif recorded_levels.has(troop_name.to_lower()):
 			troop_level = int(recorded_levels[troop_name.to_lower()])
+		troop_level = _troop_entry_level(troop_name, troop_level)
 		var lvl: int = troop_level
 		var m_res: Resource = model_res
 		var s_res: Resource = script_res
@@ -920,3 +949,32 @@ static func _script_to_troop_key(script_path: String) -> String:
 		"ranger":     return "Ranger"
 		"demon_king": return "DemonKing"
 	return file.capitalize()
+
+
+static func _normalize_troop_entry(troop_name: String) -> String:
+	var base: String = str(troop_name).split(":")[0]
+	match base.to_lower():
+		"knight":
+			return "Knight"
+		"mage":
+			return "Mage"
+		"barbarian":
+			return "Barbarian"
+		"archer":
+			return "Archer"
+		"ranger":
+			return "Ranger"
+		"demonking", "demon_king":
+			return "DemonKing"
+	return base
+
+
+static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> int:
+	var parts: PackedStringArray = str(troop_name).split(":")
+	for part in parts:
+		var text: String = String(part).strip_edges()
+		if text.length() >= 2 and text.substr(0, 1).to_lower() == "l":
+			var parsed: int = int(text.substr(1))
+			if parsed >= 1 and parsed <= 3:
+				return parsed
+	return fallback_level

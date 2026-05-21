@@ -157,21 +157,16 @@ export const MAX_UINT256 = (1n << 256n) - 1n;
 // Infura / QuickNode key under your domain to skip the rotation entirely.
 export const ARBITRUM_RPC_URLS = (() => {
   const envOverride = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ARBITRUM_RPC_URL) || '';
-  if (envOverride) return [envOverride];
-  // Order = priority. arb-pokt (Pocket Network public) is the most
-  // generous anonymous endpoint we found — it shoulders multicall load
-  // without 429 where tenderly/1rpc both ration. Onfinality / publicnode
-  // / tenderly fill the rotation so a transient throttle rolls over via
-  // viem fallback(). 1rpc.io kept last (250 req/IP/day cap → backup
-  // only). For production set VITE_ARBITRUM_RPC_URL to a paid Alchemy /
-  // Infura key — the rotation here is a stop-gap.
-  return [
-    '/rpc/arb-pokt',         // Pocket Network public (most generous)
-    '/rpc/arb-onfinality',   // OnFinality public
+  // Public/free endpoints first. The configured paid same-origin proxy is
+  // appended only as fallback so normal reads do not burn paid quota first.
+  const urls = [
     '/rpc/arb-public',       // publicnode
     '/rpc/arb-tenderly',     // tenderly gateway public
     '/rpc/arb',              // 1rpc.io (low daily cap; last)
+    '/rpc/arb-onfinality',   // OnFinality public
   ];
+  if (envOverride) urls.push(envOverride);
+  return Array.from(new Set(urls));
 })();
 // Back-compat single-URL export for code paths that haven't migrated to
 // the rotation yet (e.g. server-futures/gmx.js direct RPC reads — those

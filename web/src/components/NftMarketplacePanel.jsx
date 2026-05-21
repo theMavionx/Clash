@@ -21,7 +21,6 @@ import {
   buyMarketplaceListing,
   cancelMarketplaceListing,
   fetchMarketplaceListings,
-  fetchOwnedMarketplaceNfts,
   fetchTokenLevels,
   formatPriceWei,
   isEthPayment,
@@ -35,6 +34,7 @@ import {
   paymentTokenMeta,
 } from '../lib/marketplace';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import { syncDemonKingNfts } from '../lib/nftV3Client';
 
 const LISTINGS_PAGE_SIZE = 50;
 
@@ -173,7 +173,8 @@ export default function NftMarketplacePanel({
     setOwnedLoading(true);
     setOwnedError(null);
     try {
-      const tokens = await fetchOwnedMarketplaceNfts({ ownerAddress: evmAddress, chain: chainKey });
+      const ownedJson = await syncDemonKingNfts({ wallet: evmAddress, chains: [chainKey] });
+      const tokens = Array.isArray(ownedJson?.tokens) ? ownedJson.tokens : [];
       setOwnedNfts(tokens);
       if (tokens.length === 1 && !pickTokenId) setPickTokenId(tokens[0].tokenId);
     } catch (err) {
@@ -217,6 +218,13 @@ export default function NftMarketplacePanel({
       setLastTxHash(hash);
       setNotice('✓ Purchase confirmed. NFT will appear in your wallet shortly.');
       addClientBreadcrumb('marketplace.buy.success', { chain: chainKey, tokenId: buyTarget.tokenId, hash });
+      void syncDemonKingNfts({ wallet: evmAddress, chains: [chainKey], force: true }).catch((err) => {
+        addClientBreadcrumb('marketplace.demon_king_sync_after_buy_failed', {
+          chain: chainKey,
+          tokenId: buyTarget.tokenId,
+          message: err?.message || String(err),
+        }, 'warn');
+      });
       setBuyTarget(null);
       // Indexer needs a couple of blocks; small delay before refresh.
       setTimeout(() => loadListings({ silent: true }), 4000);

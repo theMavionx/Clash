@@ -222,11 +222,21 @@ func upgrade_building(building_id: int) -> Dictionary:
 func buy_troop(troop_name: String) -> Dictionary:
 	return await _http_post("/troops/buy", {"troop_name": troop_name})
 
-func load_troop(building_id: int, troop_name: String) -> Dictionary:
-	return await _http_post("/buildings/%d/load-troop" % building_id, {"troop_name": troop_name})
+func load_troop(building_id: int, troop_name: String, extra: Dictionary = {}) -> Dictionary:
+	var payload: Dictionary = {"troop_name": troop_name}
+	if extra.has("nft_owner"):
+		payload["nft_owner"] = str(extra.get("nft_owner", ""))
+	if extra.has("owner"):
+		payload["owner"] = str(extra.get("owner", ""))
+	return await _http_post("/buildings/%d/load-troop" % building_id, payload)
 
-func swap_troop(building_id: int, slot: int, troop_name: String) -> Dictionary:
-	return await _http_post("/buildings/%d/swap-troop" % building_id, {"slot": slot, "troop_name": troop_name})
+func swap_troop(building_id: int, slot: int, troop_name: String, extra: Dictionary = {}) -> Dictionary:
+	var payload: Dictionary = {"slot": slot, "troop_name": troop_name}
+	if extra.has("nft_owner"):
+		payload["nft_owner"] = str(extra.get("nft_owner", ""))
+	if extra.has("owner"):
+		payload["owner"] = str(extra.get("owner", ""))
+	return await _http_post("/buildings/%d/swap-troop" % building_id, payload)
 
 func reinforce() -> Dictionary:
 	return await _http_post("/reinforce", {})

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js",
+    "jobs": "node hermes_jobs_worker.js",
     "recover:bridges": "node recover_pending_bridges.js"
   },
   "keywords": [],

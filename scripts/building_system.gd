@@ -39,8 +39,9 @@ var building_defs: Dictionary = {
 		"scene": "res://Model/Barn/1.glb",
 		"scenes": ["res://Model/Barn/1.glb", "res://Model/Barn/2.glb", "res://Model/Barn/3.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [2000, 3500, 6000],
+		"hp_levels": [2000, 3500, 6000, 9500],
 		"cost": {"gold": 300, "wood": 800, "ore": 600},
+		"max_count": 1,
 	},
 	"port": {
 		"name": "Port",
@@ -51,7 +52,7 @@ var building_defs: Dictionary = {
 		"scenes": ["res://Model/Port/1.glb", "res://Model/Port/2.glb", "res://Model/Port/3.glb"],
 		"model_scale": 0.25,
 		"model_rotation_y": 0.0,
-		"hp_levels": [1800, 3200, 5500],
+		"hp_levels": [1800, 3200, 5500, 8500],
 		"cost": {"gold": 500, "wood": 1200, "ore": 1000},
 		"no_outline": true,
 	},
@@ -75,13 +76,13 @@ var building_defs: Dictionary = {
 		"color": Color(0.7, 0.55, 0.2, 0.5),
 		"height": 0.5,
 		"scene": "res://Model/Town_Hall/1.gltf",
-		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb", "res://Model/Town_Hall/5.glb"],
+		"scenes": ["res://Model/Town_Hall/1.gltf", "res://Model/Town_Hall/2.gltf", "res://Model/Town_Hall/3.gltf", "res://Model/Town_Hall/4.glb"],
 		"model_scale": 0.25,
-		"hp_levels": [3500, 6000, 10000, 17000, 28000],
+		"hp_levels": [3500, 6000, 10000, 17000],
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 12000, "wood": 55000, "ore": 50000}, 5: {"gold": 30000, "wood": 130000, "ore": 120000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 12000, "wood": 55000, "ore": 50000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -132,18 +133,18 @@ var building_defs: Dictionary = {
 		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
-		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
+		"scenes": ["res://Model/MageTower/1.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700, 1300, 2200],
+		"hp_levels": [700],
 		"cost": {"gold": 500, "ore": 800},
+		"max_count": 2,
 		"hp_bar_height": 0.5,
 		# FBX ships no embedded texture (Unity .mat stripped) — applied at runtime
 		# via _apply_building_albedo. Violet palette + emission glow for the
 		# magic look (matches the DemonKing purple).
 		"albedo_texture": "res://Model/MageTower/mage_tower_albedo.png",
 		"emission_texture": "res://Model/MageTower/mage_tower_emit.png",
-		"test_only": true,  # only listed in the shop when test_mode is on
 		# Combat: tower_mage.gd is attached to the building node (like turret),
 		# casting magic orbs at troops within detect_range=1.0 (turret radius).
 	},
@@ -203,7 +204,6 @@ const TH_BASE_CAPACITY: Dictionary = {
 	2: {"gold": 20000, "wood": 20000, "ore": 20000},
 	3: {"gold": 40000, "wood": 40000, "ore": 40000},
 	4: {"gold": 70000, "wood": 70000, "ore": 70000},
-	5: {"gold": 110000, "wood": 110000, "ore": 110000},
 }
 const STORAGE_CAPACITY: Dictionary = {
 	1: {"gold": 15000, "wood": 15000, "ore": 15000},
@@ -219,7 +219,7 @@ func _get_resource_caps() -> Dictionary:
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "town_hall":
 				th_level = maxi(th_level, b.get("level", 1))
-	var base: Dictionary = TH_BASE_CAPACITY.get(th_level, TH_BASE_CAPACITY[1])
+	var base: Dictionary = TH_BASE_CAPACITY.get(mini(th_level, 4), TH_BASE_CAPACITY[1])
 	var max_gold: int = base.gold
 	var max_wood: int = base.wood
 	var max_ore: int = base.ore
@@ -243,18 +243,20 @@ const TH_UNLOCK: Dictionary = {
 	"storage": 2,
 	"tombstone": 2,
 	"turret": 3,
+	"mage_tower": 4,
 }
 
 # Max count per building per TH level: [th1, th2, th3, th4]
 const TH_MAX_COUNT: Dictionary = {
-	"mine": [1, 2, 3, 4],
-	"sawmill": [1, 2, 3, 4],
-	"barn": [1, 1, 2, 3],
+	"mine": [1, 2, 3, 3],
+	"sawmill": [1, 2, 3, 3],
+	"barn": [1, 1, 1, 1],
 	"port": [1, 2, 5, 6],
-	"archer_tower": [1, 2, 3, 4],
-	"tombstone": [0, 1, 3, 4],
-	"turret": [0, 0, 3, 4],
+	"archer_tower": [1, 2, 3, 3],
+	"tombstone": [0, 1, 3, 3],
+	"turret": [0, 0, 3, 3],
 	"storage": [0, 1, 2, 3],
+	"mage_tower": [0, 0, 0, 2],
 	"town_hall": [1, 1, 1, 1],
 }
 
@@ -412,6 +414,22 @@ static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
 
+
+static func _load_packed_scene_resource(path: String) -> PackedScene:
+	if path == "":
+		return null
+	if not ResourceLoader.exists(path, "PackedScene"):
+		return null
+	return ResourceLoader.load(path, "PackedScene") as PackedScene
+
+
+static func _load_script_resource(path: String) -> Script:
+	if path == "":
+		return null
+	if not ResourceLoader.exists(path, "Script"):
+		return null
+	return ResourceLoader.load(path, "Script") as Script
+
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
 var _ship_base_node: Node3D = null
@@ -534,6 +552,7 @@ var troop_defs: Dictionary = {
 			1: {"gold": 150, "ore": 100},
 			2: {"gold": 300, "ore": 250},
 			3: {"gold": 600, "ore": 500},
+			4: {"gold": 1200, "ore": 1000},
 		}
 	},
 	"Mage": {
@@ -544,6 +563,7 @@ var troop_defs: Dictionary = {
 			1: {"gold": 200, "ore": 200},
 			2: {"gold": 500, "ore": 500},
 			3: {"gold": 1000, "ore": 1000},
+			4: {"gold": 2000, "ore": 2000},
 		}
 	},
 	"Barbarian": {
@@ -554,6 +574,7 @@ var troop_defs: Dictionary = {
 			1: {"gold": 150, "ore": 150},
 			2: {"gold": 350, "ore": 350},
 			3: {"gold": 700, "ore": 700},
+			4: {"gold": 1400, "ore": 1400},
 		}
 	},
 	"Archer": {
@@ -564,6 +585,7 @@ var troop_defs: Dictionary = {
 			1: {"gold": 150, "wood": 150},
 			2: {"gold": 350, "wood": 350},
 			3: {"gold": 700, "wood": 700},
+			4: {"gold": 1400, "wood": 1400},
 		}
 	},
 	"Ranger": {
@@ -574,6 +596,7 @@ var troop_defs: Dictionary = {
 			1: {"gold": 120, "wood": 120},
 			2: {"gold": 250, "wood": 250},
 			3: {"gold": 500, "wood": 500},
+			4: {"gold": 1000, "wood": 1000},
 		}
 	},
 	"DemonKing": {
@@ -581,11 +604,11 @@ var troop_defs: Dictionary = {
 		"model": "res://Model/Characters/Model/DemonKing_Body.fbx",
 		"script": "res://scripts/demon_king.gd",
 		"slot_cost": 2,                # eats two ship slots; trade-off for raw power
-		"buy_cost": 500,               # 5x Knight — reflects 2-slot + premium tier
+		"buy_cost": 0,                 # NFT-backed; loading is free and reusable
 		"costs": {
-			1: {"gold": 500,  "ore": 0},   # spawn cost
-			2: {"gold": 1200, "ore": 5},   # ore introduced at L2 — rare resource gate
-			3: {"gold": 2500, "ore": 15},
+			1: {"gold": 0, "wood": 0, "ore": 0},
+			2: {"gold": 0, "wood": 0, "ore": 0},
+			3: {"gold": 0, "wood": 0, "ore": 0},
 		}
 	},
 }
@@ -1779,17 +1802,17 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			node.add_child(base)
 		
 		if building_type == "turret":
-			var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
+			var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
 			if turret_script:
 				node.set_script(turret_script)
 		elif building_type == "mage_tower":
-			var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+			var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
 			if mage_script:
 				node.set_script(mage_script)
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
-				scene_res = load(scene_path)
+				scene_res = _load_packed_scene_resource(scene_path)
 			if scene_res:
 				var model = scene_res.instantiate()
 				var s = _get_model_scale(def, level)
@@ -1804,7 +1827,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				# Other buildings reuse the same instantiation block, so gate
 				# on building_type to avoid attaching the script everywhere.
 				if building_type == "mine":
-					var mine_cart_script := load("res://scripts/mine_cart.gd")
+					var mine_cart_script := _load_script_resource("res://scripts/mine_cart.gd")
 					if mine_cart_script != null:
 						model.set_script(mine_cart_script)
 				node.add_child(model)
@@ -1906,9 +1929,14 @@ func _sync_react_buildings() -> void:
 			var max_at_th: int = limits_arr[clampi(th_lvl - 1, 0, limits_arr.size() - 1)]
 			if max_at_th <= 0:
 				continue
-			# Each slot × each level up to th_lvl = steps
+			var def_for_type: Dictionary = building_defs.get(btype, {})
+			var max_level_for_type: int = th_lvl
+			if def_for_type.has("hp_levels"):
+				max_level_for_type = mini(th_lvl, int(def_for_type.get("hp_levels", []).size()))
+			# Each slot × each reachable level = steps. Some TH4 unlocks, like
+			# Mage Tower, intentionally do not upgrade to TH4.
 			for slot_i in max_at_th:
-				for lvl_i in range(1, th_lvl + 1):
+				for lvl_i in range(1, max_level_for_type + 1):
 					total_req += 1
 			# Count what player actually has
 			var placed_of_type: Array = []
@@ -1920,7 +1948,7 @@ func _sync_react_buildings() -> void:
 			placed_of_type.reverse()
 			for slot_i in max_at_th:
 				var blvl: int = placed_of_type[slot_i] if slot_i < placed_of_type.size() else 0
-				for lvl_i in range(1, th_lvl + 1):
+				for lvl_i in range(1, max_level_for_type + 1):
 					if blvl >= lvl_i:
 						done_req += 1
 		bridge.send_to_react("th_info", {"level": th_lvl, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
@@ -1930,6 +1958,24 @@ func _local_troop_name_from_server(troop_type: String) -> String:
 		"demon_king", "demonking":
 			return "DemonKing"
 	return troop_type.capitalize()
+
+
+func _troop_entry_base_name(troop_name: String) -> String:
+	var base: String = str(troop_name).split(":")[0]
+	match base.to_lower():
+		"demon_king", "demonking":
+			return "DemonKing"
+		"knight":
+			return "Knight"
+		"mage":
+			return "Mage"
+		"barbarian":
+			return "Barbarian"
+		"archer":
+			return "Archer"
+		"ranger":
+			return "Ranger"
+	return base
 
 
 func _load_troop_levels_from_server(server_troops: Array) -> void:
@@ -2121,7 +2167,7 @@ func _create_ghost() -> void:
 	if def.has("scene"):
 		var scene_res: Resource = _scene_res_cache.get(def.scene, null)
 		if scene_res == null:
-			scene_res = load(def.scene)
+			scene_res = _load_packed_scene_resource(def.scene)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
@@ -2160,7 +2206,7 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 		var sz = def.cells.y * cell_size
 		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
 
-	var scene_res = load(scene_path)
+	var scene_res = _load_packed_scene_resource(scene_path)
 	if not scene_res:
 		var sx = def.cells.x * cell_size
 		var sz = def.cells.y * cell_size
@@ -2254,20 +2300,20 @@ func _preload_building_scenes() -> void:
 		if def.has("scenes"):
 			for path in def.scenes:
 				if path != "" and not _scene_res_cache.has(path):
-					var res = load(path)
+					var res = _load_packed_scene_resource(path)
 					if res:
 						_scene_res_cache[path] = res
 		elif def.has("scene"):
 			var path: String = def.scene
 			if path != "" and not _scene_res_cache.has(path):
-				var res = load(path)
+				var res = _load_packed_scene_resource(path)
 				if res:
 					_scene_res_cache[path] = res
 	# Pre-load turret script so set_script() at transition time is instant
 	if _turret_script_res == null:
-		_turret_script_res = load("res://scripts/turret.gd")
+		_turret_script_res = _load_script_resource("res://scripts/turret.gd")
 	if _mage_tower_script_res == null:
-		_mage_tower_script_res = load("res://scripts/tower_mage.gd")
+		_mage_tower_script_res = _load_script_resource("res://scripts/tower_mage.gd")
 
 
 ## Build cache key for a building type at a specific level.
@@ -2347,18 +2393,18 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 	
 	# Attach turret AI script BEFORE adding children so _process registers
 	if current_building_id == "turret":
-		var turret_script = _turret_script_res if _turret_script_res else load("res://scripts/turret.gd")
+		var turret_script = _turret_script_res if _turret_script_res else _load_script_resource("res://scripts/turret.gd")
 		if turret_script:
 			node.set_script(turret_script)
 	elif current_building_id == "mage_tower":
-		var mage_script = _mage_tower_script_res if _mage_tower_script_res else load("res://scripts/tower_mage.gd")
+		var mage_script = _mage_tower_script_res if _mage_tower_script_res else _load_script_resource("res://scripts/tower_mage.gd")
 		if mage_script:
 			node.set_script(mage_script)
 	if def.has("scene"):
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
 		if scene_res == null:
-			scene_res = load(_scene_path)
+			scene_res = _load_packed_scene_resource(_scene_path)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
@@ -3107,7 +3153,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	if def.has("scenes"):
 		var scene_idx = clampi(b.level - 1, 0, def.scenes.size() - 1)
 		var scene_path = def.scenes[scene_idx]
-		var scene_res = load(scene_path)
+		var scene_res = _load_packed_scene_resource(scene_path)
 		if scene_res:
 			for child in model.get_children():
 				child.queue_free()
@@ -3497,9 +3543,9 @@ static func _preload_defense_resources() -> void:
 	if _defense_preload_done:
 		return
 	_defense_preload_done = true
-	_skeleton_model_res = load(SKELETON_MODEL)
-	_skeleton_script_res = load(SKELETON_SCRIPT)
-	_tower_archer_script_res = load(TOWER_ARCHER_SCRIPT_PATH)
+	_skeleton_model_res = _load_packed_scene_resource(SKELETON_MODEL)
+	_skeleton_script_res = _load_script_resource(SKELETON_SCRIPT)
+	_tower_archer_script_res = _load_script_resource(TOWER_ARCHER_SCRIPT_PATH)
 
 func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	# Remove existing tower unit if any
@@ -3515,7 +3561,7 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	# is a dictionary lookup — no main-thread stall on WASM.
 	var model_res: Resource = _tower_unit_model_cache.get(model_path, null)
 	if model_res == null:
-		model_res = load(model_path)
+		model_res = _load_packed_scene_resource(model_path)
 		if model_res:
 			_tower_unit_model_cache[model_path] = model_res
 	if not model_res:
@@ -3700,7 +3746,7 @@ static var _ruins_res: Resource = null
 ## The base outline (MeshInstance3D with ShaderMaterial) stays untouched.
 func _replace_with_ruins(node: Node3D) -> void:
 	if _ruins_res == null:
-		_ruins_res = load(RUINS_MODEL)
+		_ruins_res = _load_packed_scene_resource(RUINS_MODEL)
 	if _ruins_res == null:
 		return
 	# Stop defense scripts (turret/archer tower) so they don't keep firing
@@ -3911,7 +3957,7 @@ func _refresh_port_panel() -> void:
 	var port_node = b.get("node", null)
 	var has_ship = is_instance_valid(port_node) and port_node.has_meta("has_ship")
 	var ship_level: int = port_node.get_meta("ship_level", 0) if has_ship and is_instance_valid(port_node) else 0
-	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9
+	var ship_capacity: int = ship_level * 3  # Lv1=3, Lv2=6, Lv3=9, Lv4=12
 	var ship_troops: Array = port_node.get_meta("ship_troops", []) if has_ship and is_instance_valid(port_node) else []
 
 	if has_ship:
@@ -3931,12 +3977,13 @@ func _refresh_port_panel() -> void:
 				if troop_name == "_SLOT_FILLER_":
 					continue  # extra capacity used by a multi-slot troop above
 				display_idx += 1
-				var tlvl = troop_levels.get(troop_name, 1)
-				var tdef_d: Dictionary = troop_defs.get(troop_name, {})
+				var troop_base_name: String = _troop_entry_base_name(troop_name)
+				var tlvl = troop_levels.get(troop_base_name, 1)
+				var tdef_d: Dictionary = troop_defs.get(troop_base_name, {})
 				var slots_d: int = int(tdef_d.get("slot_cost", 1))
 				var slots_suffix: String = "" if slots_d == 1 else " [%d slots]" % slots_d
 				var slot_lbl = Label.new()
-				slot_lbl.text = "  %d. %s (Lv.%d)%s" % [display_idx, troop_name, tlvl, slots_suffix]
+				slot_lbl.text = "  %d. %s (Lv.%d)%s" % [display_idx, troop_base_name, tlvl, slots_suffix]
 				slot_lbl.add_theme_color_override("font_color", Color(0.6, 0.8, 0.6))
 				slot_lbl.add_theme_font_size_override("font_size", 14)
 				port_vbox.add_child(slot_lbl)
@@ -3951,6 +3998,8 @@ func _refresh_port_panel() -> void:
 			port_vbox.add_child(load_title)
 			var ship_free: int = ship_capacity - ship_troops.size()
 			for troop_name in troop_defs.keys():
+				if troop_name == "DemonKing":
+					continue
 				var tlvl = troop_levels.get(troop_name, 0)
 				if tlvl < 1:
 					continue
@@ -4072,7 +4121,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 			"level": port_building.get("level", 1),
 			"hp": port_building.get("hp", 500),
 			"max_hp": port_building.get("max_hp", 500),
-			"max_level": 3,
+			"max_level": def.get("hp_levels", []).size(),
 			"next_hp": 600,
 			"upgrade_cost": {},
 			"is_enemy": is_viewing_enemy,
@@ -4104,8 +4153,8 @@ func _buy_ship_level(ship_lvl: int) -> void:
 	_port._buy_ship_level(ship_lvl)
 
 
-func _load_troop_to_ship(troop_name: String) -> void:
-	_port._load_troop_to_ship(troop_name)
+func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
+	_port._load_troop_to_ship(troop_name, extra)
 
 func _reinforce_troops() -> void:
 	# Refill all ships with troops that were lost in battle
@@ -4148,6 +4197,8 @@ func _on_troop_died(troop_name: String) -> void:
 		return
 	if _replay_active:
 		return
+	if _troop_entry_base_name(troop_name) == "DemonKing":
+		return
 	var net: Node = _net
 	if net and net.has_token():
 		net.report_troop_death(troop_name)
@@ -4169,8 +4220,8 @@ func _apply_ships_from_server(ships: Array) -> void:
 					if is_instance_valid(pnode):
 						pnode.set_meta("ship_troops", server_troops)
 
-func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
-	_port._swap_troop_on_ship(slot, troop_name)
+func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
+	_port._swap_troop_on_ship(slot, troop_name, extra)
 
 func _animate_main_ship() -> void:
 	_port._animate_main_ship()
@@ -4324,7 +4375,7 @@ func _refresh_barn_panel() -> void:
 		name_label.add_theme_color_override("font_color", Color.WHITE)
 		vb.add_child(name_label)
 
-		if lvl >= 3:
+		if lvl >= _get_troop_max_level(troop_name):
 			var max_label = Label.new()
 			max_label.text = "MAX LEVEL"
 			max_label.add_theme_color_override("font_color", Color(0.4, 0.8, 0.4))
@@ -4334,11 +4385,15 @@ func _refresh_barn_panel() -> void:
 			var next_lvl = lvl + 1
 			var costs = tdef.costs[next_lvl]
 			var cost_text = ""
-			for res_name in costs:
-				var res_display = res_name.capitalize()
-				if res_name == "ore":
-					res_display = "Ore"
-				cost_text += "%s: %d  " % [res_display, costs[res_name]]
+			if troop_name == "DemonKing":
+				var required_wins := 1000 if next_lvl == 2 else 10000
+				cost_text = "NFT upgrade + %s battle wins" % str(required_wins)
+			else:
+				for res_name in costs:
+					var res_display = res_name.capitalize()
+					if res_name == "ore":
+						res_display = "Ore"
+					cost_text += "%s: %d  " % [res_display, costs[res_name]]
 
 			var cost_label = Label.new()
 			cost_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
@@ -4348,7 +4403,7 @@ func _refresh_barn_panel() -> void:
 				cost_label.text = "Upgrade to LVL %d: %s" % [next_lvl, cost_text]
 			vb.add_child(cost_label)
 
-			var can_afford = _can_afford(costs)
+			var can_afford = true if troop_name == "DemonKing" else _can_afford(costs)
 			var btn = Button.new()
 			if lvl == 0:
 				btn.text = "Train"
@@ -4386,6 +4441,8 @@ func _refresh_barn_panel() -> void:
 		barn_vbox.add_child(no_ship_lbl)
 	else:
 		for troop_name in troop_defs.keys():
+			if troop_name == "DemonKing":
+				continue
 			var lvl2 = troop_levels[troop_name]
 			if lvl2 < 1:
 				continue
@@ -4434,6 +4491,15 @@ func _can_afford(costs: Dictionary) -> bool:
 	return true
 
 
+func _get_troop_max_level(troop_name: String) -> int:
+	var tdef: Dictionary = troop_defs.get(troop_name, {})
+	var costs: Dictionary = tdef.get("costs", {})
+	var max_level: int = 1
+	for key in costs.keys():
+		max_level = maxi(max_level, int(key))
+	return max_level
+
+
 func _refresh_troop_levels_from_server() -> void:
 	var net = _net
 	if not net or not net.has_token():
@@ -4472,7 +4538,7 @@ func _upgrade_troop(troop_name: String) -> void:
 	if _server_busy:
 		return
 	var lvl = troop_levels[troop_name]
-	if lvl >= 3:
+	if lvl >= _get_troop_max_level(troop_name):
 		return
 	var next_lvl = lvl + 1
 
@@ -4483,6 +4549,16 @@ func _upgrade_troop(troop_name: String) -> void:
 		var result = await net.upgrade_troop(troop_name)
 		_server_busy = false
 		if result.has("error"):
+			if troop_name == "DemonKing" and bool(result.get("requires_nft_upgrade", false)):
+				if _bridge:
+					_bridge.send_to_react("demon_king_upgrade_required", result)
+				_show_error("Upgrade Demon King NFT in Battle Shop first.")
+				return
+			if troop_name == "DemonKing" and str(result.get("code", "")) == "DEMON_KING_WINS_REQUIRED":
+				var wins = int(result.get("battle_wins", 0))
+				var required = int(result.get("required_wins", 0))
+				_show_error("Demon King needs %s / %s battle wins." % [str(wins), str(required)])
+				return
 			_show_error(str(result.error))
 			return
 		if result.has("trophies"):
@@ -4560,9 +4636,9 @@ func _buy_troop(troop_name: String) -> void:
 	var model_res: Resource = cached.get("model", null)
 	var script_res: Resource = cached.get("script", null)
 	if model_res == null:
-		model_res = load(model_path)
+		model_res = _load_packed_scene_resource(model_path)
 	if script_res == null:
-		script_res = load(script_path)
+		script_res = _load_script_resource(script_path)
 	if model_res == null or script_res == null:
 		return
 	var troop: Node3D = model_res.instantiate()
@@ -4746,7 +4822,7 @@ func _get_or_create_cloud() -> Node:
 	var existing = get_node_or_null("/root/BattleCloudTransition")
 	if existing:
 		return existing
-	var cloud_script = load("res://scripts/cloud_transition.gd")
+	var cloud_script = _load_script_resource("res://scripts/cloud_transition.gd")
 	var cloud = CanvasLayer.new()
 	cloud.name = "BattleCloudTransition"
 	cloud.set_script(cloud_script)

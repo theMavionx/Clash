@@ -65,6 +65,36 @@ const AVANTIS_AI_TRADE_SETTINGS_DEFAULTS = {
   max_leverage: Number(import.meta.env?.VITE_CLASH_AVANTIS_AI_MAX_LEVERAGE || 50),
   max_slippage_pct: 5,
 };
+const HERMES_JOB_DEFAULTS = {
+  name: 'RSI / MACD watcher',
+  instruction: 'Buy only when RSI hits 25 or lower, MACD crosses up, and volume is good. Otherwise just report no action.',
+  mode: 'monitor_only',
+  symbols: ['BTC', 'ETH', 'SOL'],
+  interval_minutes: 60,
+  max_runs_per_day: 6,
+  max_messages_total: 0,
+  policy: {
+    scan_timeframe: '1h',
+    lookback_candles: 160,
+    max_collateral_usd: 10,
+    max_balance_pct: 25,
+    max_leverage: 3,
+    max_slippage_pct: 2,
+    max_trades_per_day: 1,
+    cooldown_minutes: 240,
+    max_open_positions: 1,
+    allow_open: true,
+    allow_close: false,
+    allow_tpsl: false,
+    allow_cancel: false,
+  },
+};
+const HERMES_JOB_INTERVALS = [15, 30, 60, 120, 240, 720, 1440];
+const HERMES_JOB_TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d'];
+
+function cloneHermesJobDefaults() {
+  return JSON.parse(JSON.stringify(HERMES_JOB_DEFAULTS));
+}
 
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
@@ -1122,6 +1152,12 @@ function AiChatPanel({ onClose }) {
   // chat itself always renders the message list + composer; this flag
   // just toggles the shop overlay.
   const [shopOpen, setShopOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [jobs, setJobs] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsBusy, setJobsBusy] = useState('');
+  const [jobsNotice, setJobsNotice] = useState('');
+  const [jobForm, setJobForm] = useState(() => cloneHermesJobDefaults());
   const [quota, setQuota] = useState(null);
   const [shopConfig, setShopConfig] = useState(null);
   const [shopChain, setShopChain] = useState(() => aiShopChainForDex(dex));
@@ -1169,6 +1205,123 @@ function AiChatPanel({ onClose }) {
     topUpTimers.current = [t1, t2];
   }, [clearTopUpTimers]);
   useEffect(() => () => clearTopUpTimers(), [clearTopUpTimers]);
+
+  const loadHermesJobs = useCallback(async () => {
+    if (!token) return;
+    setJobsLoading(true);
+    try {
+      const data = await fetch('/api/ai-jobs', {
+        headers: { 'x-token': token },
+        cache: 'no-store',
+      }).then((r) => r.json().catch(() => ({})));
+      if (data?.ok === false) throw new Error(data?.error || 'Failed to load jobs');
+      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      if (data?.quota) setQuota(data.quota);
+    } catch (err) {
+      setJobsNotice(err?.message || 'Failed to load jobs');
+    } finally {
+      if (mountedRef.current) setJobsLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (jobsOpen) loadHermesJobs();
+  }, [jobsOpen, loadHermesJobs]);
+
+  const saveHermesJob = useCallback(async (activate = false) => {
+    if (!token) {
+      setJobsNotice('Game session is not ready yet.');
+      return;
+    }
+    setJobsBusy('save');
+    setJobsNotice('');
+    try {
+      const body = {
+        ...jobForm,
+        status: activate ? 'active' : 'draft',
+        symbols: Array.isArray(jobForm.symbols)
+          ? jobForm.symbols
+          : String(jobForm.symbols || '').split(/[,\s]+/).filter(Boolean),
+      };
+      const r = await fetch('/api/ai-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Failed to save job');
+      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      if (data?.quota) setQuota(data.quota);
+      setJobsNotice(activate ? 'Job activated. The first check will run shortly.' : 'Draft saved.');
+      setJobForm(cloneHermesJobDefaults());
+    } catch (err) {
+      setJobsNotice(err?.message || 'Failed to save job');
+    } finally {
+      if (mountedRef.current) setJobsBusy('');
+    }
+  }, [jobForm, token]);
+
+  const patchHermesJob = useCallback(async (jobId, patch) => {
+    if (!token || !jobId) return;
+    setJobsBusy(jobId);
+    setJobsNotice('');
+    try {
+      const r = await fetch(`/api/ai-jobs/${encodeURIComponent(jobId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: JSON.stringify(patch),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Failed to update job');
+      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      if (data?.quota) setQuota(data.quota);
+    } catch (err) {
+      setJobsNotice(err?.message || 'Failed to update job');
+    } finally {
+      if (mountedRef.current) setJobsBusy('');
+    }
+  }, [token]);
+
+  const runHermesJobNow = useCallback(async (jobId) => {
+    if (!token || !jobId) return;
+    setJobsBusy(`run:${jobId}`);
+    setJobsNotice('');
+    try {
+      const r = await fetch(`/api/ai-jobs/${encodeURIComponent(jobId)}/run-now`, {
+        method: 'POST',
+        headers: { 'x-token': token },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Failed to run job');
+      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      if (data?.quota) setQuota(data.quota);
+      setJobsNotice('Job queued to run now. It will spend 1 AI message when the worker executes.');
+    } catch (err) {
+      setJobsNotice(err?.message || 'Failed to run job');
+    } finally {
+      if (mountedRef.current) setJobsBusy('');
+    }
+  }, [token]);
+
+  const deleteHermesJob = useCallback(async (jobId) => {
+    if (!token || !jobId) return;
+    setJobsBusy(`delete:${jobId}`);
+    setJobsNotice('');
+    try {
+      const r = await fetch(`/api/ai-jobs/${encodeURIComponent(jobId)}`, {
+        method: 'DELETE',
+        headers: { 'x-token': token },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || data?.ok === false) throw new Error(data?.error || 'Failed to delete job');
+      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+    } catch (err) {
+      setJobsNotice(err?.message || 'Failed to delete job');
+    } finally {
+      if (mountedRef.current) setJobsBusy('');
+    }
+  }, [token]);
+
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const localEvmWallet = useMemo(
@@ -2502,6 +2655,15 @@ function AiChatPanel({ onClose }) {
               </button>
               <button
                 type="button"
+                style={styles.newChatToggle}
+                className="hermes-jobs-toggle"
+                onClick={() => setJobsOpen(true)}
+                title="Scheduled Hermes jobs"
+              >
+                Jobs
+              </button>
+              <button
+                type="button"
                 style={styles.shopToggle}
                 className="hermes-shop-toggle"
                 onClick={() => setShopOpen(true)}
@@ -2547,6 +2709,14 @@ function AiChatPanel({ onClose }) {
                 title={(status === 'sending' || resettingChat) ? 'Wait for the current answer' : 'Start a new chat'}
               >
                 New
+              </button>
+              <button
+                type="button"
+                style={styles.shopToggle}
+                onClick={() => setJobsOpen(true)}
+                title="Scheduled Hermes jobs"
+              >
+                Jobs
               </button>
               <button
                 type="button"
@@ -2699,6 +2869,26 @@ function AiChatPanel({ onClose }) {
         />
       )}
 
+      {jobsOpen && (
+        <AiJobsModal
+          jobs={jobs}
+          form={jobForm}
+          quota={quota}
+          dex={dex}
+          loading={jobsLoading}
+          busy={jobsBusy}
+          notice={jobsNotice}
+          onFormChange={setJobForm}
+          onSaveDraft={() => saveHermesJob(false)}
+          onActivate={() => saveHermesJob(true)}
+          onRefresh={loadHermesJobs}
+          onPatch={patchHermesJob}
+          onRunNow={runHermesJobNow}
+          onDelete={deleteHermesJob}
+          onClose={() => setJobsOpen(false)}
+        />
+      )}
+
       {topUpFlow && (
         <AiTopUpStatusModal
           flow={topUpFlow}
@@ -2761,6 +2951,143 @@ function AiChatPanel({ onClose }) {
 // flight; flips to a success card with a confetti burst when the
 // server credits messages, or to an error card with the failure
 // reason. zIndex 320 so it sits above both chat (80) and shop (90).
+function fmtJobTime(value) {
+  if (!value) return 'not scheduled';
+  const d = new Date(`${String(value).replace(' ', 'T')}Z`);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtJobMode(mode) {
+  if (mode === 'auto_trade') return 'Auto trade';
+  if (mode === 'ask_before_trade') return 'Ask first';
+  return 'Monitor only';
+}
+
+function updateJobFormPolicy(form, key, value) {
+  return { ...form, policy: { ...(form.policy || {}), [key]: value } };
+}
+
+function AiJobsModal({
+  jobs, form, quota, dex, loading, busy, notice,
+  onFormChange, onSaveDraft, onActivate, onRefresh, onPatch, onRunNow, onDelete, onClose,
+}) {
+  const isDecibel = dex === 'decibel';
+  const symbolsText = Array.isArray(form.symbols) ? form.symbols.join(', ') : String(form.symbols || '');
+  const setForm = (patch) => onFormChange((prev) => ({ ...prev, ...patch }));
+  const setPolicy = (key, value) => onFormChange((prev) => updateJobFormPolicy(prev, key, value));
+
+  return (
+    <div style={styles.shopBackdrop}>
+      <section style={{ ...styles.shopPanel, width: 'min(720px, calc(100vw - 24px))' }}>
+        <header style={styles.shopHeader}>
+          <div style={styles.shopHeaderLeft}>
+            <div style={styles.shopHeaderTitle}>Hermes Jobs</div>
+            <div style={styles.shopHeaderSub}>
+              Scheduled Decibel checks spend 1 AI message per run. {quota ? `${quota.available_messages} messages available.` : ''}
+            </div>
+          </div>
+          <div style={styles.shopHeaderRight}>
+            <button type="button" style={styles.newChatToggle} onClick={onRefresh} disabled={loading}>Refresh</button>
+            <button type="button" style={styles.close} onClick={onClose} aria-label="Close jobs">×</button>
+          </div>
+        </header>
+        <div className="shop-scroll" style={{ ...styles.shopBody, gap: 12 }}>
+          {!isDecibel && <div style={styles.error}>Scheduled jobs are enabled for Decibel accounts first.</div>}
+          <div style={styles.jobsGrid}>
+            <div style={styles.jobsColumn}>
+              <div style={styles.jobsSectionTitle}>Active jobs</div>
+              {loading ? (
+                <div style={styles.jobsEmpty}>Loading jobs...</div>
+              ) : jobs.length ? jobs.map((job) => (
+                <div key={job.id} style={styles.jobCard}>
+                  <div style={styles.jobCardTop}>
+                    <div>
+                      <div style={styles.jobName}>{job.name}</div>
+                      <div style={styles.jobMeta}>{fmtJobMode(job.mode)} · every {job.interval_minutes}m · {job.status}</div>
+                    </div>
+                    <span style={{ ...styles.jobStatus, ...(job.status === 'active' ? styles.jobStatusActive : null), ...(job.status === 'quota_blocked' ? styles.jobStatusBlocked : null) }}>{job.status}</span>
+                  </div>
+                  <div style={styles.jobInstruction}>{job.instruction}</div>
+                  <div style={styles.jobFacts}>
+                    <span>{(job.symbols || []).join(', ') || 'markets unset'}</span>
+                    <span>Next: {fmtJobTime(job.next_run_at)}</span>
+                    <span>Used: {job.messages_used || 0}</span>
+                  </div>
+                  {job.last_summary && <div style={styles.jobSummary}>{job.last_summary}</div>}
+                  {job.last_error && <div style={styles.jobError}>{job.last_error}</div>}
+                  <div style={styles.jobActions}>
+                    {job.status === 'active' ? (
+                      <button type="button" style={styles.jobSmallButton} disabled={!!busy} onClick={() => onPatch(job.id, { ...job, status: 'paused' })}>Pause</button>
+                    ) : (
+                      <button type="button" style={styles.jobSmallButton} disabled={!!busy} onClick={() => onPatch(job.id, { ...job, status: 'active' })}>Resume</button>
+                    )}
+                    <button type="button" style={styles.jobSmallButton} disabled={!!busy} onClick={() => onRunNow(job.id)}>Run now</button>
+                    <button type="button" style={styles.jobDangerButton} disabled={!!busy} onClick={() => onDelete(job.id)}>Delete</button>
+                  </div>
+                </div>
+              )) : (
+                <div style={styles.jobsEmpty}>No jobs yet. Create a watcher on the right.</div>
+              )}
+            </div>
+            <div style={styles.jobsColumn}>
+              <div style={styles.jobsSectionTitle}>Create watcher</div>
+              <label style={styles.jobLabel}>Name
+                <input style={styles.jobInput} value={form.name} onChange={(e) => setForm({ name: e.target.value })} />
+              </label>
+              <label style={styles.jobLabel}>Instruction
+                <textarea className="shop-scroll" style={{ ...styles.jobInput, minHeight: 78, resize: 'vertical' }} value={form.instruction} onChange={(e) => setForm({ instruction: e.target.value })} />
+              </label>
+              <label style={styles.jobLabel}>Symbols
+                <input style={styles.jobInput} value={symbolsText} onChange={(e) => setForm({ symbols: e.target.value.split(/[,\s]+/).map((s) => s.trim().toUpperCase()).filter(Boolean) })} />
+              </label>
+              <div style={styles.jobSegment}>
+                {[
+                  ['monitor_only', 'Monitor'],
+                  ['ask_before_trade', 'Ask first'],
+                  ['auto_trade', 'Auto'],
+                ].map(([id, label]) => (
+                  <button key={id} type="button" style={{ ...styles.jobSegmentButton, ...(form.mode === id ? styles.jobSegmentActive : null) }} onClick={() => setForm({ mode: id })}>{label}</button>
+                ))}
+              </div>
+              <label style={styles.jobLabel}>Interval: {form.interval_minutes}m
+                <input type="range" min="0" max={HERMES_JOB_INTERVALS.length - 1} step="1" value={Math.max(0, HERMES_JOB_INTERVALS.indexOf(Number(form.interval_minutes)))} onChange={(e) => setForm({ interval_minutes: HERMES_JOB_INTERVALS[Number(e.target.value)] || 60 })} />
+              </label>
+              <label style={styles.jobLabel}>Max runs/day: {form.max_runs_per_day}
+                <input type="range" min="1" max="24" value={form.max_runs_per_day} onChange={(e) => setForm({ max_runs_per_day: Number(e.target.value) })} />
+              </label>
+              <div style={styles.jobFieldRow}>
+                <label style={styles.jobLabel}>Timeframe
+                  <select style={styles.jobInput} value={form.policy.scan_timeframe} onChange={(e) => setPolicy('scan_timeframe', e.target.value)}>
+                    {HERMES_JOB_TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+                  </select>
+                </label>
+                <label style={styles.jobLabel}>Lookback
+                  <input style={styles.jobInput} type="number" min="50" max="500" value={form.policy.lookback_candles} onChange={(e) => setPolicy('lookback_candles', Number(e.target.value))} />
+                </label>
+              </div>
+              <label style={styles.jobLabel}>Max collateral: ${form.policy.max_collateral_usd}
+                <input type="range" min="1" max="100" value={form.policy.max_collateral_usd} onChange={(e) => setPolicy('max_collateral_usd', Number(e.target.value))} />
+              </label>
+              <label style={styles.jobLabel}>Max leverage: {form.policy.max_leverage}x
+                <input type="range" min="1" max="50" value={form.policy.max_leverage} onChange={(e) => setPolicy('max_leverage', Number(e.target.value))} />
+              </label>
+              <label style={styles.jobLabel}>Max trades/day: {form.policy.max_trades_per_day}
+                <input type="range" min="0" max="6" value={form.policy.max_trades_per_day} onChange={(e) => setPolicy('max_trades_per_day', Number(e.target.value))} />
+              </label>
+              <div style={styles.jobActions}>
+                <button type="button" style={styles.jobSmallButton} disabled={!isDecibel || !!busy} onClick={onSaveDraft}>Save draft</button>
+                <button type="button" style={styles.shopToggle} disabled={!isDecibel || !!busy} onClick={onActivate}>Activate</button>
+              </div>
+            </div>
+          </div>
+          {notice && <div style={styles.shopNotice}>{notice}</div>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function AiTopUpStatusModal({ flow, paymentLabel, onClose, onRetry }) {
   if (!flow) return null;
   const { status, product, granted, pass, error, failedAt } = flow;
@@ -4064,6 +4391,187 @@ const styles = {
     padding: '7px 9px',
     fontSize: 12,
     fontWeight: 800,
+  },
+  jobsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(260px, 0.95fr)',
+    gap: 12,
+  },
+  jobsColumn: {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  jobsSectionTitle: {
+    fontSize: 11,
+    fontWeight: 950,
+    color: '#8b6b3f',
+    textTransform: 'uppercase',
+    letterSpacing: 0.35,
+  },
+  jobsEmpty: {
+    border: '1px dashed #d4c8b0',
+    borderRadius: 10,
+    padding: 12,
+    color: '#8b6b3f',
+    fontSize: 12,
+    fontWeight: 800,
+    background: 'rgba(255,250,240,0.58)',
+  },
+  jobCard: {
+    border: '1px solid #d4c8b0',
+    borderRadius: 12,
+    padding: 10,
+    background: 'linear-gradient(180deg, #fffaf0 0%, #fff2d4 100%)',
+    boxShadow: '0 1px 3px rgba(95,58,33,0.10)',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  },
+  jobCardTop: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  jobName: {
+    fontSize: 13,
+    fontWeight: 950,
+    color: '#3a1f00',
+  },
+  jobMeta: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: 800,
+    color: '#8b6b3f',
+  },
+  jobStatus: {
+    flexShrink: 0,
+    borderRadius: 999,
+    border: '1px solid #d4c8b0',
+    background: '#f7ecc9',
+    color: '#6b4a20',
+    padding: '3px 7px',
+    fontSize: 9,
+    fontWeight: 950,
+    textTransform: 'uppercase',
+  },
+  jobStatusActive: {
+    border: '1px solid #8ecf84',
+    background: '#e4f8dc',
+    color: '#145a1f',
+  },
+  jobStatusBlocked: {
+    border: '1px solid #e8a39f',
+    background: '#fdecea',
+    color: '#7a1f1c',
+  },
+  jobInstruction: {
+    fontSize: 12,
+    lineHeight: 1.35,
+    fontWeight: 750,
+    color: '#5C3A21',
+  },
+  jobFacts: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: 6,
+    fontSize: 10,
+    fontWeight: 850,
+    color: '#8b6b3f',
+  },
+  jobSummary: {
+    borderRadius: 8,
+    background: '#fff6dc',
+    border: '1px solid rgba(139,107,63,0.2)',
+    padding: '6px 7px',
+    fontSize: 11,
+    fontWeight: 750,
+    color: '#5C3A21',
+  },
+  jobError: {
+    borderRadius: 8,
+    background: '#fdecea',
+    border: '1px solid #e8a39f',
+    padding: '6px 7px',
+    fontSize: 11,
+    fontWeight: 850,
+    color: '#7a1f1c',
+  },
+  jobActions: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  jobSmallButton: {
+    border: '1px solid #bba882',
+    borderRadius: 9,
+    background: 'linear-gradient(180deg, #fffaf0 0%, #e2d4a8 100%)',
+    color: '#4b351c',
+    padding: '6px 9px',
+    fontSize: 10,
+    fontWeight: 900,
+    cursor: 'pointer',
+  },
+  jobDangerButton: {
+    border: '1px solid #b23b32',
+    borderRadius: 9,
+    background: 'linear-gradient(180deg, #ff8d83 0%, #d9342c 100%)',
+    color: '#fff',
+    padding: '6px 9px',
+    fontSize: 10,
+    fontWeight: 900,
+    cursor: 'pointer',
+  },
+  jobLabel: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    fontSize: 10,
+    fontWeight: 900,
+    color: '#8b6b3f',
+    textTransform: 'uppercase',
+    letterSpacing: 0.25,
+  },
+  jobInput: {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: '1px solid #d4c8b0',
+    borderRadius: 9,
+    background: '#fffaf0',
+    color: '#3a1f00',
+    padding: '8px 9px',
+    fontSize: 12,
+    fontWeight: 750,
+    outline: 'none',
+    textTransform: 'none',
+  },
+  jobFieldRow: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 8,
+  },
+  jobSegment: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: 6,
+  },
+  jobSegmentButton: {
+    border: '1px solid #d4c8b0',
+    borderRadius: 9,
+    background: '#fffaf0',
+    color: '#5C3A21',
+    padding: '7px 6px',
+    fontSize: 10,
+    fontWeight: 900,
+    cursor: 'pointer',
+  },
+  jobSegmentActive: {
+    border: '1px solid #377d9f',
+    background: 'linear-gradient(180deg, #dff5ff 0%, #9fd7ee 100%)',
+    color: '#07324a',
   },
   aiProductList: {
     display: 'flex',

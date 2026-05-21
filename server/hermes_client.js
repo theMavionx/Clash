@@ -695,6 +695,48 @@ function classifyTradingIntent(message, normalizedText, player = {}) {
 function classifyGameIntent(message, player = {}) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
+  if (/(hermes\s+job|scheduled|schedule|watcher|watch\s+|monitor|cron|rsi|macd|volume|індикатор|монітор|спостеріг|крон|джоб|задач|робот)/i.test(text)
+    && /(hermes\s+job|jobs?|decibel|trade|trading|buy|sell|long|short|price|market|rsi|macd|volume|торг|куп|прод|лонг|шорт|ціна|цена|ринок|об.?єм|объем|робот|задач|джоб|watcher|monitor|cron)/i.test(text)) {
+    const lower = text.toLowerCase();
+    if (/(list|show|active|history|runs|статус|актив|спис|покажи|істор|истор)/i.test(text)) {
+      return {
+        kind: 'hermes_job_list',
+        action_required: true,
+        goal: 'Show the player scheduled Hermes Decibel jobs through MCP tools.',
+        required_loop: 'hermes_job_list -> summarize active jobs, next run, and last result',
+        expected_tools: ['hermes_job_list'],
+      };
+    }
+    if (/(pause|stop|disable|пауза|зупин|останов|вимк|выключ)/i.test(text)) {
+      return {
+        kind: 'hermes_job_pause',
+        action_required: true,
+        goal: 'Pause or stop the requested scheduled Hermes job through MCP tools.',
+        required_loop: 'hermes_job_list -> hermes_job_pause or hermes_job_delete -> summarize',
+        expected_tools: ['hermes_job_list', 'hermes_job_pause'],
+      };
+    }
+    if (/(resume|enable|start|увімк|включ|продовж|возобнов)/i.test(text)) {
+      return {
+        kind: 'hermes_job_resume',
+        action_required: true,
+        goal: 'Resume the requested scheduled Hermes job through MCP tools.',
+        required_loop: 'hermes_job_list -> hermes_job_resume -> summarize',
+        expected_tools: ['hermes_job_list', 'hermes_job_resume'],
+      };
+    }
+    const runNow = /\b(?:run|check|execute|scan)\b.*\b(?:now|right now)\b/i.test(text)
+      || /запусти.*зараз|перевір.*зараз|прямо зараз|проверь.*сейчас/i.test(text);
+    return {
+      kind: runNow ? 'hermes_job_run_now' : 'hermes_job_create',
+      action_required: true,
+      goal: 'Create or manage a scheduled Hermes Decibel monitoring job through MCP tools.',
+      required_loop: runNow
+        ? 'hermes_job_list -> hermes_job_run_now -> summarize queued run status'
+        : 'hermes_job_create_draft or hermes_job_update -> summarize the schedule, mode, symbols, and risk limits',
+      expected_tools: runNow ? ['hermes_job_list', 'hermes_job_run_now'] : ['hermes_job_create_draft'],
+    };
+  }
   const tradingIntent = classifyTradingIntent(message, text, player);
   if (tradingIntent) return tradingIntent;
   if (isAttackIntentText(text)) {

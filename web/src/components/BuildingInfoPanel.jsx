@@ -1,6 +1,8 @@
 import { memo, useCallback, useState, useEffect, useRef } from 'react';
 import { useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { nftLevelImageUrl, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -16,12 +18,14 @@ import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgShip from '../assets/buildings/shipsmall.png';
+import imgMageTower from '../assets/buildings/magetower.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
 import berserkImg from '../assets/units/berserk.png';
+import demonKingImg from '../assets/units/demonking.png';
 
 const ICONS = { gold: goldIcon, wood: woodIcon, ore: stoneIcon };
 
@@ -31,6 +35,7 @@ const UNIT_IMAGES = {
   Archer: archerImg,
   Ranger: arbaletImg,
   Barbarian: berserkImg,
+  DemonKing: demonKingImg,
 };
 
 const TROOP_STYLE_MAP = {
@@ -39,6 +44,7 @@ const TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.9, offsetY: '25%' },
   Archer: { scale: 1.9, offsetY: '25%' },
   Ranger: { scale: 1.9, offsetY: '25%' },
+  DemonKing: { scale: 1.3, offsetY: '10%' },
 };
 
 const CARD_TROOP_STYLE_MAP = {
@@ -47,6 +53,10 @@ const CARD_TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.05, offsetY: '0%' },
   Archer: { scale: 1.05, offsetY: '0%' },
   Ranger: { scale: 1.05, offsetY: '0%' },
+  // Demon King renders with the same full-bleed `troopImg` treatment as
+  // the other troops (cover + top-center) — bumped a touch larger so the
+  // boss portrait reads as the centerpiece it is.
+  DemonKing: { scale: 1.3, offsetY: '0%' },
 };
 
 const TROOP_COST = 100; // gold per unit
@@ -62,6 +72,7 @@ const THUMBNAIL_MAP = {
   archtower: imgArcherTower,
   archer_tower: imgArcherTower,
   archertower: imgArcherTower,
+  mage_tower: imgMageTower,
   storage: imgStorage,
 };
 
@@ -76,17 +87,57 @@ const DESC_MAP = {
   archtower: 'Ranged defense against invaders.',
   archer_tower: 'Ranged defense against invaders.',
   archertower: 'Ranged defense against invaders.',
+  mage_tower: 'Casts splash magic at groups of enemy troops.',
   residence: 'Residences produce gold.',
 };
+
+function troopBaseName(name) {
+  const base = String(name || '').split(':')[0];
+  const lower = base.toLowerCase();
+  if (lower === 'demonking' || lower === 'demon_king') return 'DemonKing';
+  if (lower === 'knight') return 'Knight';
+  if (lower === 'mage') return 'Mage';
+  if (lower === 'barbarian') return 'Barbarian';
+  if (lower === 'archer') return 'Archer';
+  if (lower === 'ranger') return 'Ranger';
+  return base;
+}
+
+function demonKingShipEntry(token) {
+  if (!token) return 'DemonKing';
+  return `DemonKing:${token.chain}:${token.tokenId}:L${Number(token.level || 1)}`;
+}
+
+function demonKingTokenKey(token) {
+  if (!token) return '';
+  return `${String(token.chain || '').toLowerCase()}:${String(token.tokenId || token.id || '')}`;
+}
+
+function demonKingEntryTokenKey(entry) {
+  const parts = String(entry || '').split(':');
+  if (parts[0] !== 'DemonKing' || parts.length < 3) return '';
+  return `${String(parts[1] || '').toLowerCase()}:${String(parts[2] || '')}`;
+}
+
+function shortTokenId(tokenId) {
+  const value = String(tokenId || '');
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
 
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
   const { isMobile } = useLayout();
+  const evmWallet = useEvmWallet();
+  const evmAddress = evmWallet?.address || null;
   
   const [view, setView] = useState('ACTIONS');
   const [swapSlot, setSwapSlot] = useState(null);
   const [localTroops, setLocalTroops] = useState(null);
+  const [demonKingNfts, setDemonKingNfts] = useState([]);
+  const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
+  const [demonKingNftError, setDemonKingNftError] = useState(null);
 
   useEffect(() => {
     if (building?.open_load_troops) {
@@ -103,6 +154,39 @@ function BuildingInfoPanel({ onOpenTroops }) {
   useEffect(() => {
     setLocalTroops(null);
   }, [serverTroopsKey]);
+
+  useEffect(() => {
+    if (view !== 'LOAD_TROOPS' || !evmAddress) {
+      if (!evmAddress) setDemonKingNfts([]);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setDemonKingNftLoading(true);
+    setDemonKingNftError(null);
+    syncDemonKingNfts({ wallet: evmAddress, signal: controller.signal })
+      .then((ownedJson) => {
+        if (controller.signal.aborted) return;
+        const tokens = [];
+        (ownedJson?.tokens || []).forEach((token) => {
+          tokens.push({
+            ...token,
+            chain: token.chain || 'base',
+            tokenId: String(token.tokenId || token.id || ''),
+            level: Number(token.level || 1),
+            imageUrl: token.imageUrl || nftLevelImageUrl(token.level || 1, token.tokenId || token.id || ''),
+          });
+        });
+        tokens.sort((a, b) => (b.level || 1) - (a.level || 1) || String(a.chain).localeCompare(String(b.chain)) || Number(a.tokenId) - Number(b.tokenId));
+        setDemonKingNfts(tokens.filter((token) => token.tokenId));
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setDemonKingNftError((err?.message || 'Could not read Demon King NFTs').slice(0, 120));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDemonKingNftLoading(false);
+      });
+    return () => controller.abort();
+  }, [evmAddress, view]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {
@@ -315,6 +399,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   );
 
   const renderInfo = () => {
+    const description = DESC_MAP[building.id];
     const leftContent = (
       <>
         <StatBox label="Health" current={building.max_hp} />
@@ -323,6 +408,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
     );
     const rightContent = (
       <>
+         {description && (
+           <>
+             <h3 style={styles.sectionTitle}>Description</h3>
+             <div style={styles.descriptionBox}>
+               <span style={styles.descriptionText}>{description}</span>
+             </div>
+           </>
+         )}
          <h3 style={styles.sectionTitle}>Status</h3>
          <div style={{...styles.reqBoxMax, padding: 16, background: 'rgba(0, 0, 0, 0.05)', borderRadius: 16, border: '1px solid rgba(0, 0, 0, 0.1)', boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)'}}>
            <span style={{color: '#377d9f', fontSize: 16, fontWeight: 800}}>Functional</span>
@@ -381,21 +474,39 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const capacity = building.ship_capacity || shipLevel;
     const isFull = shipTroops.length >= capacity;
     const troopLvls = building.troop_levels || {};
-    const getTroopLvl = (name) => troopLvls[name] || troopLvls[name.toLowerCase()] || 1;
+    const getTroopLvl = (name) => {
+      const base = troopBaseName(name);
+      return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
+    };
     const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+    const loadedDemonEntries = new Set(shipTroops.map(demonKingEntryTokenKey).filter(Boolean));
+    const availableDemonNfts = demonKingNfts.filter((token) => !loadedDemonEntries.has(demonKingTokenKey(token)));
+    const openNftShop = () => {
+      window.dispatchEvent(new CustomEvent('clash-open-nft-shop', { detail: { view: demonKingNfts.length ? 'upgrade' : 'shop' } }));
+    };
 
     const handleLoadTroop = (name) => {
+      const base = troopBaseName(name);
+      const slotCost = base === 'DemonKing' ? 2 : 1;
+      if (swapSlot === null && shipTroops.length + slotCost > capacity) return;
       if (swapSlot !== null) {
         // Optimistic swap
         const updated = [...shipTroops];
-        updated[swapSlot] = name;
+        let replaceCount = 1;
+        while (swapSlot + replaceCount < updated.length && updated[swapSlot + replaceCount] === '_SLOT_FILLER_') replaceCount += 1;
+        const replacement = [name];
+        for (let i = 1; i < slotCost; i += 1) replacement.push('_SLOT_FILLER_');
+        if (updated.length - replaceCount + replacement.length > capacity) return;
+        updated.splice(swapSlot, replaceCount, ...replacement);
         setLocalTroops(updated);
-        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name });
+        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
         setSwapSlot(null);
       } else {
         // Optimistic load
-        setLocalTroops([...shipTroops, name]);
-        sendToGodot('load_troop', { troop_name: name });
+        const nextTroops = [...shipTroops, name];
+        for (let i = 1; i < slotCost; i += 1) nextTroops.push('_SLOT_FILLER_');
+        setLocalTroops(nextTroops);
+        sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
       }
     };
 
@@ -420,6 +531,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const t = shipTroops[i];
               const isSwapping = swapSlot === i;
               if (t) {
+                if (t === '_SLOT_FILLER_') {
+                  return (
+                    <div key={i} style={{...LT.emptySlot, width: slotW, height: slotH, opacity: 0.6}}>
+                      <span style={{fontSize: isMobile ? 10 : 12, fontWeight: 900}}>2/2</span>
+                    </div>
+                  );
+                }
+                const base = troopBaseName(t);
+                const level = getTroopLvl(t);
+                const imgSrc = base === 'DemonKing' ? demonKingImg : UNIT_IMAGES[base];
                 return (
                   <div
                     key={i}
@@ -427,9 +548,16 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     onClick={() => setSwapSlot(isSwapping ? null : i)}
                   >
                     <div style={{ ...LT.troopImgWrap, paddingBottom: 0 }}>
-                      {UNIT_IMAGES[t] && (
+                      {imgSrc && (
                         <div key={`${t}-${i}`} style={{ animation: 'swapFlash 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', width: '100%', height: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                          <img src={UNIT_IMAGES[t]} alt={t} style={{ ...LT.loadedSlotImg, transform: `scale(${CARD_TROOP_STYLE_MAP[t]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[t]?.offsetY || '0%'})` }} />
+                          <img
+                            src={imgSrc}
+                            alt={base}
+                            style={{
+                              ...LT.loadedSlotImg,
+                              transform: `scale(${CARD_TROOP_STYLE_MAP[base]?.scale || 1}) translateY(${CARD_TROOP_STYLE_MAP[base]?.offsetY || '0%'})`,
+                            }}
+                          />
                         </div>
                       )}
                     </div>
@@ -457,10 +585,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0}}
                   onClick={() => {
                     if (isFull && swapSlot === null) {
-                      const updated = [...shipTroops];
-                      updated[capacity - 1] = name;
-                      setLocalTroops(updated);
-                      sendToGodot('swap_troop', { slot: capacity - 1, troop_name: name });
+                      return;
                     } else {
                       handleLoadTroop(name);
                     }
@@ -480,6 +605,65 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </button>
               );
             })}
+            {demonKingNftLoading && (
+              <button type="button" style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, opacity: 0.78}}>
+                <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
+                  <div style={LT.troopImgWrap}>
+                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
+                </div>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
+                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>LOADING</span>
+                </div>
+              </button>
+            )}
+            {!demonKingNftLoading && availableDemonNfts.map((token) => {
+              const entry = demonKingShipEntry(token);
+              const disabled = swapSlot === null
+                ? shipTroops.length + 2 > capacity
+                : (() => {
+                    let replaceCount = 1;
+                    while (swapSlot + replaceCount < shipTroops.length && shipTroops[swapSlot + replaceCount] === '_SLOT_FILLER_') replaceCount += 1;
+                    return shipTroops.length - replaceCount + 2 > capacity;
+                  })();
+              return (
+                <button
+                  key={entry}
+                  type="button"
+                  disabled={disabled}
+                  style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, ...(disabled ? { opacity: 0.45, cursor: 'not-allowed' } : null)}}
+                  onClick={() => {
+                    if (!disabled) handleLoadTroop(entry);
+                  }}
+                >
+                  <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {token.level || 1}</div>
+                  <div style={LT.troopImgWrap}>
+                    <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
+                  </div>
+                  <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
+                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>KING #{shortTokenId(token.tokenId)}</span>
+                    <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>FREE · 2</span>
+                  </div>
+                </button>
+              );
+            })}
+            {!demonKingNftLoading && availableDemonNfts.length === 0 && (
+              <button
+                type="button"
+                style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, opacity: 0.84}}
+                onClick={openNftShop}
+              >
+                <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
+                <div style={LT.troopImgWrap}>
+                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
+                </div>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
+                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
+                  <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>
+                    {evmAddress ? (demonKingNftError || 'NEED NFT') : 'CONNECT'}
+                  </span>
+                </div>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -607,6 +791,19 @@ const styles = {
     padding: '12px 16px',
     border: '1px solid rgba(0, 0, 0, 0.1)',
     boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+  },
+  descriptionBox: {
+    background: 'rgba(0, 0, 0, 0.05)',
+    borderRadius: 16,
+    padding: '12px 16px',
+    border: '1px solid rgba(0, 0, 0, 0.1)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+  },
+  descriptionText: {
+    color: '#1a3c4f',
+    fontSize: 14,
+    fontWeight: 800,
+    lineHeight: 1.35,
   },
   statBoxLabel: {
     fontSize: 12,

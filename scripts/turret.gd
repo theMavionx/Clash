@@ -6,7 +6,7 @@ const LEVEL_STATS = {
 	1: {"damage": 35, "fire_rate": 0.70},
 	2: {"damage": 50, "fire_rate": 0.55},
 	3: {"damage": 60, "fire_rate": 0.45},
-	4: {"damage": 75, "fire_rate": 0.40},  # unused (building max_level 3) — kept scaled
+	4: {"damage": 75, "fire_rate": 0.40},
 }
 
 const MUZZLE_FLASH_FRAMES: Array[String] = [

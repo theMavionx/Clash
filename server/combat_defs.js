@@ -1,33 +1,39 @@
 // Server-authoritative combat stat definitions.
 // Canonical source: scripts/*.gd LEVEL_STATS — keep in sync.
-// NOTE: HP and damage are 1/3 of original values. Ship capacity is 3x.
-// This gives 3x more troops per ship but each troop is 3x weaker — same total power.
+// Keep these values in lockstep with the client troop scripts. Replay
+// verification re-simulates client battles server-side, so stat drift here
+// causes valid wins to be rejected.
 
 const TROOP_STATS = {
   knight: {
-    1: { hp: 367, damage: 25,  atkSpeed: 1.667, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
-    2: { hp: 483, damage: 33,  atkSpeed: 1.538, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
-    3: { hp: 617, damage: 43,  atkSpeed: 1.429, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    1: { hp: 450,  damage: 38, atkSpeed: 1.40, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    2: { hp: 600,  damage: 50, atkSpeed: 1.30, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    3: { hp: 780,  damage: 66, atkSpeed: 1.20, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
+    4: { hp: 1000, damage: 86, atkSpeed: 1.10, moveSpeed: 0.5,  range: 0.24, melee: true, hitDelay: 0.4 },
   },
   mage: {
-    1: { hp: 140, damage: 62,  atkSpeed: 1.25,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    2: { hp: 187, damage: 82,  atkSpeed: 1.111, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
-    3: { hp: 240, damage: 107, atkSpeed: 1.0,   moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    1: { hp: 150, damage: 58,  atkSpeed: 1.25, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    2: { hp: 200, damage: 78,  atkSpeed: 1.12, moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    3: { hp: 265, damage: 104, atkSpeed: 1.0,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
+    4: { hp: 345, damage: 138, atkSpeed: 0.9,  moveSpeed: 0.4,  range: 0.95, melee: false, projSpeed: 1.5 },
   },
   barbarian: {
-    1: { hp: 173, damage: 30,  atkSpeed: 0.625, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
-    2: { hp: 230, damage: 40,  atkSpeed: 0.571, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
-    3: { hp: 293, damage: 53,  atkSpeed: 0.526, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    1: { hp: 240, damage: 24, atkSpeed: 0.6,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    2: { hp: 320, damage: 32, atkSpeed: 0.55, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    3: { hp: 420, damage: 43, atkSpeed: 0.5,  moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
+    4: { hp: 550, damage: 57, atkSpeed: 0.46, moveSpeed: 0.4,  range: 0.24, melee: true, hitDelay: 0.4 },
   },
   archer: {
-    1: { hp: 193, damage: 43,  atkSpeed: 1.111, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    2: { hp: 253, damage: 58,  atkSpeed: 1.0,   moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
-    3: { hp: 323, damage: 76,  atkSpeed: 0.909, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    1: { hp: 210, damage: 40, atkSpeed: 1.05, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    2: { hp: 280, damage: 54, atkSpeed: 0.95, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    3: { hp: 365, damage: 71, atkSpeed: 0.85, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
+    4: { hp: 470, damage: 94, atkSpeed: 0.78, moveSpeed: 0.45, range: 0.95, melee: false, projSpeed: 2.5 },
   },
   ranger: {
-    1: { hp: 227, damage: 37,  atkSpeed: 1.0,   moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
-    2: { hp: 300, damage: 49,  atkSpeed: 0.909, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
-    3: { hp: 383, damage: 64,  atkSpeed: 0.833, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    1: { hp: 250, damage: 34, atkSpeed: 1.0,  moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    2: { hp: 330, damage: 45, atkSpeed: 0.92, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    3: { hp: 430, damage: 60, atkSpeed: 0.83, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
+    4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
     1: { hp: 660,  damage: 70,  atkSpeed: 1.8,  moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
@@ -52,8 +58,6 @@ const DEFENSE_STATS = {
   },
   mage_tower: {
     1: { damage: 22, fireRate: 1.5, detectRange: 1.0, projSpeed: 1.6 },
-    2: { damage: 35, fireRate: 1.3, detectRange: 1.0, projSpeed: 1.6 },
-    3: { damage: 52, fireRate: 1.1, detectRange: 1.0, projSpeed: 1.6 },
   },
 };
 
@@ -72,9 +76,9 @@ const SKELETON_GUARD = {
 };
 
 // Attack session constraints
-const MAX_SHIPS = 5;
-const TROOPS_PER_SHIP = 9;                      // 3x original (was 3)
-const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP;  // 45
+const MAX_SHIPS = 6;
+const TROOPS_PER_SHIP = 12;                     // Lv4 port capacity: 4 * 3
+const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 72
 const SAIL_DELAY_SEC = 3.0;
 const TIME_LIMIT_SEC = 180;
 const LOOT_PERCENT = 0.15;

@@ -62,6 +62,8 @@ func _spawn_warmup_nodes() -> void:
 	_warmup_rally_marker()
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
+	_warmup_demon_king()
+	_warmup_mage_tower()
 	_warmup_flag_glb()
 	_warmup_ship_glbs()
 	_warmup_ghost_material()
@@ -158,7 +160,7 @@ func _prewarm_weapon_scenes() -> void:
 	]
 	var loaded := 0
 	for path in WEAPON_PATHS:
-		if load(path) != null:
+		if ResourceLoader.load(path, "PackedScene") != null:
 			loaded += 1
 	print("[WARMUP] weapon/projectile scenes cached: ", loaded, "/", WEAPON_PATHS.size())
 
@@ -399,11 +401,86 @@ func _warmup_one_troop_glb() -> void:
 	print("[WARMUP] knight GLB OK")
 
 
+## DemonKing uses a separate FBX body, custom mask-tint shader, and FBX
+## animation set. Warm those resources explicitly so the first DemonKing
+## deployment does not pay shader/material/model parsing costs mid-attack.
+func _warmup_demon_king() -> void:
+	var body_res: Resource = ResourceLoader.load("res://Model/Characters/Model/DemonKing_Body.fbx", "PackedScene")
+	if body_res == null:
+		print("[WARMUP] DemonKing body FBX missing — skipped")
+		return
+	var inst: Node3D = body_res.instantiate()
+	inst.scale = Vector3(1.0, 1.0, 1.0)
+	_apply_demon_king_material(inst)
+	_force_shadow_casting(inst)
+	add_child(inst)
+
+	const DEMON_ANIM_FILES: Array[String] = [
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Attack02.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Die.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Dizzy.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_GetHit.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_IdleBattle.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_IdleNormal.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_RunFWD.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingMaint.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingStart.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Taunting.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_Victory.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkBWD.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkFWD.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkLFT.fbx",
+		"res://Model/Characters/Animations/DemonKing/DemonKing_WalkRGT.fbx",
+	]
+	var loaded_anims := 0
+	for path in DEMON_ANIM_FILES:
+		if ResourceLoader.load(path, "PackedScene") != null:
+			loaded_anims += 1
+	print("[WARMUP] DemonKing OK, anims cached: ", loaded_anims, "/", DEMON_ANIM_FILES.size())
+
+
+## Mage Tower is an FBX with runtime-applied albedo/emission textures and a
+## distinct solid-blue orb material. Warm both the building model pipeline and
+## the projectile material before the first tower is placed or fires.
+func _warmup_mage_tower() -> void:
+	var tower_res: Resource = ResourceLoader.load("res://Model/MageTower/1.fbx", "PackedScene")
+	if tower_res == null:
+		print("[WARMUP] MageTower FBX missing — skipped")
+		return
+	var tower: Node3D = tower_res.instantiate()
+	tower.scale = Vector3(1.0, 1.0, 1.0)
+	_apply_mage_tower_material(tower)
+	_force_shadow_casting(tower)
+	add_child(tower)
+
+	# Cache the runtime script without attaching it here; the projectile material
+	# below covers the visible shader variant without spawning pooled scene nodes.
+	ResourceLoader.load("res://scripts/tower_mage.gd", "Script")
+
+	var orb := MeshInstance3D.new()
+	var orb_mesh := SphereMesh.new()
+	orb_mesh.radius = 0.05
+	orb_mesh.height = 0.10
+	orb_mesh.radial_segments = 8
+	orb_mesh.rings = 4
+	orb.mesh = orb_mesh
+	var orb_mat := StandardMaterial3D.new()
+	orb_mat.albedo_color = Color(0.2, 0.6, 1.0)
+	orb_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	orb_mat.emission_enabled = true
+	orb_mat.emission = Color(0.2, 0.6, 1.0)
+	orb_mat.emission_energy_multiplier = 2.0
+	orb.material_override = orb_mat
+	add_child(orb)
+	print("[WARMUP] MageTower OK")
+
+
 ## Pre-draws the pirate flag marker used by attack_system when a ship is
 ## placed. Also pre-mutates the animation loop_mode here so the attack-time
 ## spawn path doesn't trigger Animation resource CoW (re-upload) per flag.
 func _warmup_flag_glb() -> void:
-	var flag_res: Resource = load("res://Model/flag/pirate_flag_animated.glb")
+	var flag_res: Resource = ResourceLoader.load("res://Model/flag/pirate_flag_animated.glb", "PackedScene")
 	if flag_res == null:
 		print("[WARMUP] flag GLB missing — skipped")
 		return
@@ -455,6 +532,65 @@ static func _make_additive_billboard(tex: Texture2D, color: Color) -> StandardMa
 		mat.albedo_texture = tex
 	mat.albedo_color = color
 	return mat
+
+
+func _apply_demon_king_material(root: Node) -> void:
+	var shader: Shader = ResourceLoader.load("res://shaders/demon_mask_tint.gdshader", "Shader")
+	var albedo: Texture2D = ResourceLoader.load("res://Model/Characters/Model/DemonKing_mask_albedo.png", "Texture2D")
+	var emission: Texture2D = ResourceLoader.load("res://Model/Characters/Model/DemonKing_emission.png", "Texture2D")
+	var mask01: Texture2D = ResourceLoader.load("res://Model/Characters/Model/DemonKing_mask01.png", "Texture2D")
+	var mask02: Texture2D = ResourceLoader.load("res://Model/Characters/Model/DemonKing_mask02.png", "Texture2D")
+	var mask03: Texture2D = ResourceLoader.load("res://Model/Characters/Model/DemonKing_mask03.png", "Texture2D")
+	if shader == null or albedo == null or emission == null or mask01 == null or mask02 == null or mask03 == null:
+		print("[WARMUP] DemonKing material resources incomplete — shader warm skipped")
+		return
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("albedo", albedo)
+	mat.set_shader_parameter("emission_tex", emission)
+	mat.set_shader_parameter("mask01", mask01)
+	mat.set_shader_parameter("mask02", mask02)
+	mat.set_shader_parameter("mask03", mask03)
+	var palette: Array[Color] = [
+		Color(0.91, 0.16, 0.55),
+		Color(0.97, 0.13, 0.45),
+		Color(0.71, 0.06, 0.40),
+		Color(0.85, 0.28, 0.62),
+		Color(0.88, 0.21, 0.50),
+		Color(0.78, 0.28, 0.55),
+		Color(1.00, 0.17, 0.60),
+		Color(0.36, 0.36, 0.36),
+		Color(0.95, 0.70, 0.85),
+	]
+	for i in 9:
+		mat.set_shader_parameter("color%02d" % (i + 1), palette[i])
+	_assign_surface_material_recursive(root, mat)
+
+
+func _apply_mage_tower_material(root: Node) -> void:
+	var albedo: Texture2D = ResourceLoader.load("res://Model/MageTower/mage_tower_albedo.png", "Texture2D")
+	if albedo == null:
+		print("[WARMUP] MageTower albedo missing — material warm skipped")
+		return
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = albedo
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
+	var emission: Texture2D = ResourceLoader.load("res://Model/MageTower/mage_tower_emit.png", "Texture2D")
+	if emission != null:
+		mat.emission_enabled = true
+		mat.emission_texture = emission
+		mat.emission_energy_multiplier = 1.2
+	_assign_surface_material_recursive(root, mat)
+
+
+func _assign_surface_material_recursive(node: Node, mat: Material) -> void:
+	if node is MeshInstance3D:
+		var mi: MeshInstance3D = node as MeshInstance3D
+		var count: int = mi.mesh.get_surface_count() if mi.mesh else 0
+		for i in count:
+			mi.set_surface_override_material(i, mat)
+	for child in node.get_children():
+		_assign_surface_material_recursive(child, mat)
 
 
 ## Walks `node`'s descendants and sets `cast_shadow = ON` on every

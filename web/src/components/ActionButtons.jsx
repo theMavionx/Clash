@@ -15,6 +15,7 @@ import mageImg    from '../assets/units/mage.png';
 import archerImg  from '../assets/units/archer.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import berserkImg from '../assets/units/berserk.png';
+import demonKingImg from '../assets/units/demonking.png';
 
 // Matches SHIP_TROOPS index order in attack_system.gd — must stay in sync!
 // If SHIP_TROOPS order changes in attack_system.gd, update this array too.
@@ -25,6 +26,7 @@ const ATTACK_TROOPS = [
   { key: 'barbarian', label: 'Barbarian', img: berserkImg },
   { key: 'archer',    label: 'Ranger',    img: arbaletImg },
   { key: 'ranger',    label: 'Rogue',     img: archerImg  },
+  { key: 'demonking', label: 'Demon King', img: demonKingImg },
 ];
 
 const attackCostForTownHall = (level) => {
@@ -106,7 +108,15 @@ const TROOP_IMG_MAP = {
   barbarian: { img: berserkImg, label: 'Barbarian' },
   archer: { img: arbaletImg, label: 'Ranger' },
   ranger: { img: archerImg, label: 'Rogue' },
+  demonking: { img: demonKingImg, label: 'Demon King' },
+  demon_king: { img: demonKingImg, label: 'Demon King' },
 };
+
+function normalizeTroopKey(name) {
+  const base = String(name || '').split(':')[0].toLowerCase();
+  if (base === 'demonking' || base === 'demon_king') return 'demonking';
+  return base;
+}
 
 // ── Attack HUD (shown during enemy mode) ──────────────────────────────────
 function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, rallyMode, selectedTroopIdx, onSelectTroop, cannonEnergy, fleetInfo, battleTimer }) {
@@ -152,6 +162,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
         {ships.map((ship, shipIdx) => {
           const isPlaced = !!ship.placed;
           const troops = ship.troops || [];
+          const realTroops = troops.filter((troop) => String(troop || '') !== '_SLOT_FILLER_');
           const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
           const sz = mobile ? 56 : 70;
 
@@ -178,7 +189,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               </div>
               {/* Troop count badge */}
               <div style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
-                x{troops.length}
+                x{realTroops.length}
               </div>
             </button>
           );
@@ -195,7 +206,11 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
             {ships.map((ship, si) => {
               const troops = ship.troops || [];
               const groups = {};
-              for (const t of troops) groups[t.toLowerCase()] = (groups[t.toLowerCase()] || 0) + 1;
+              for (const t of troops) {
+                if (String(t || '') === '_SLOT_FILLER_') continue;
+                const key = normalizeTroopKey(t);
+                groups[key] = (groups[key] || 0) + 1;
+              }
               return (
                 <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: '#fff6dc', borderRadius: 10, border: '2px solid #d4c8b0' }}>
                   <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? '#9f8759' : '#5C3A21', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
@@ -496,6 +511,7 @@ function ActionButtons({ onOpenBattleLog }) {
   const [loadingCasualties, setLoadingCasualties] = useState(false);
   const [showTournament, setShowTournament] = useState(false);
   const [showNftMint, setShowNftMint] = useState(false);
+  const [nftMintInitial, setNftMintInitial] = useState(null);
   const resources = useResources();
   const { buildingDefs } = useBuildingDefs();
   const { isMobile: mobile, isLandscape, actionScale } = useLayout();
@@ -533,6 +549,15 @@ function ActionButtons({ onOpenBattleLog }) {
   }, [buildingDefs, resources]);
 
   const [showSurrender, setShowSurrender] = useState(false);
+  useEffect(() => {
+    const onOpenNftShop = (event) => {
+      setNftMintInitial(event?.detail || null);
+      setShowNftMint(true);
+    };
+    window.addEventListener('clash-open-nft-shop', onOpenNftShop);
+    return () => window.removeEventListener('clash-open-nft-shop', onOpenNftShop);
+  }, []);
+
   const handleReturnHome  = useCallback(() => sendToGodot('return_home'),     [sendToGodot]);
   const handleFindEnemy   = useCallback(() => {
     if (!canAffordAttack) {
@@ -632,7 +657,15 @@ function ActionButtons({ onOpenBattleLog }) {
     </CustomBtn>
   );
   const nftMintButton = (
-    <CustomBtn onClick={() => setShowNftMint(true)} width={btnSmall} height={btnSmall} data-tutorial="nft-mint-btn">
+    <CustomBtn
+      onClick={() => {
+        setNftMintInitial(null);
+        setShowNftMint(true);
+      }}
+      width={btnSmall}
+      height={btnSmall}
+      data-tutorial="nft-mint-btn"
+    >
       <NftMintIcon size={mobile ? 38 : 50} />
     </CustomBtn>
   );
@@ -713,7 +746,16 @@ function ActionButtons({ onOpenBattleLog }) {
         </CustomBtn>
       </div>
       {showTournament && <TournamentPanel onClose={() => setShowTournament(false)} />}
-      {showNftMint && <NftMintPanel onClose={() => setShowNftMint(false)} />}
+      {showNftMint && (
+        <NftMintPanel
+          initialView={nftMintInitial?.view}
+          initialUpgradeRequest={nftMintInitial?.request}
+          onClose={() => {
+            setShowNftMint(false);
+            setNftMintInitial(null);
+          }}
+        />
+      )}
       {showReinforce && (serverCasualties || pendingCasualties) && (
         <ReinforceModal
           casualties={serverCasualties?.casualties || pendingCasualties}

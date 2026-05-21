@@ -20,6 +20,24 @@ func init(building_system: Node3D) -> BSPort:
 	bs = building_system
 	return self
 
+
+func _troop_entry_base_name(troop_name: String) -> String:
+	var base: String = str(troop_name).split(":")[0]
+	match base.to_lower():
+		"demonking", "demon_king":
+			return "DemonKing"
+		"knight":
+			return "Knight"
+		"mage":
+			return "Mage"
+		"barbarian":
+			return "Barbarian"
+		"archer":
+			return "Archer"
+		"ranger":
+			return "Ranger"
+	return base
+
 # ---------------------------------------------------------------------------
 # Ship purchasing
 # ---------------------------------------------------------------------------
@@ -80,19 +98,20 @@ func _buy_ship_level(ship_lvl: int) -> void:
 ## Loads a named troop into the ship docked at the currently selected port.
 ## The capacity check is deferred to the server — local meta may be stale
 ## (e.g. post-battle casualties not yet synced), so we always round-trip.
-func _load_troop_to_ship(troop_name: String) -> void:
+func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return
 	var ship_level: int = port_node.get_meta("ship_level", 1)
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
-	var tdef: Dictionary = bs.troop_defs.get(troop_name, {})
+	var troop_base_name: String = _troop_entry_base_name(troop_name)
+	var tdef: Dictionary = bs.troop_defs.get(troop_base_name, {})
 	var slot_cost: int = int(tdef.get("slot_cost", 1))
 	# Ask server first — server is authoritative on capacity.
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
-		var result: Dictionary = await net.load_troop(sid, troop_name)
+		var result: Dictionary = await net.load_troop(sid, troop_name, extra)
 		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
@@ -120,19 +139,21 @@ func _load_troop_to_ship(troop_name: String) -> void:
 			"ship_capacity": ship_level * 3,
 		})
 
-func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
+func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
 	var port_node: Node3D = bs.selected_building.get("node", null)
 	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
 		return
 	var ship_troops: Array = port_node.get_meta("ship_troops", [])
 	if slot < 0 or slot >= ship_troops.size():
 		return
+	var troop_base_name: String = _troop_entry_base_name(troop_name)
+	var slot_cost: int = int(bs.troop_defs.get(troop_base_name, {}).get("slot_cost", 1))
 	var ship_level: int = port_node.get_meta("ship_level", 1)
 	# Ask server
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
-		var result: Dictionary = await net.swap_troop(sid, slot, troop_name)
+		var result: Dictionary = await net.swap_troop(sid, slot, troop_name, extra)
 		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
@@ -143,6 +164,11 @@ func _swap_troop_on_ship(slot: int, troop_name: String) -> void:
 			bs._apply_resources_from_server(result.resources)
 	else:
 		ship_troops[slot] = troop_name
+		for _i in range(slot_cost - 1):
+			if slot + 1 + _i < ship_troops.size():
+				ship_troops[slot + 1 + _i] = "_SLOT_FILLER_"
+			else:
+				ship_troops.append("_SLOT_FILLER_")
 		port_node.set_meta("ship_troops", ship_troops)
 	if not is_instance_valid(port_node): return
 	bs._refresh_port_panel()
@@ -184,6 +210,13 @@ func _animate_main_ship() -> void:
 # Ship spawning
 # ---------------------------------------------------------------------------
 
+func _get_port_dock_yaw(port_node: Node3D) -> float:
+	var parent_node: Node = port_node.get_parent()
+	if parent_node is Node3D:
+		return (parent_node as Node3D).global_rotation.y + port_node.rotation.y
+	return port_node.rotation.y
+
+
 ## Instantiates and positions the ship model for a port building.
 ## Uses bs.selected_building when b_override is empty.
 func _spawn_port_ship(b_override: Dictionary = {}) -> void:
@@ -215,12 +248,15 @@ func _spawn_port_ship(b_override: Dictionary = {}) -> void:
 	if not port_node.has_meta("ship_troops"):
 		port_node.set_meta("ship_troops", [])
 	var port_pos = port_node.global_position
-	var port_rot_y = port_node.global_rotation.y
-	var forward = Vector3(sin(port_rot_y), 0, cos(port_rot_y))
+	# During port upgrades the port node is briefly scaled to zero for the
+	# squash animation. Reading global_rotation from a zero-scale transform can
+	# return an unstable yaw, so derive the dock yaw from the stable grid parent.
+	var dock_yaw: float = _get_port_dock_yaw(port_node)
+	var forward = Vector3(sin(dock_yaw), 0, cos(dock_yaw))
 	var ship_dist = [0.35, 0.35, 0.4, 0.57][clampi(port_level, 0, 3)]
 	ship.global_position = port_pos + forward * ship_dist
 	ship.global_position.y = bs._water_y - 0.03
-	ship.global_rotation.y = port_rot_y + PI * 0.5
+	ship.global_rotation = Vector3(0.0, dock_yaw + PI * 0.5, 0.0)
 	port_node.set_meta("ship_node", ship)
 
 # ---------------------------------------------------------------------------

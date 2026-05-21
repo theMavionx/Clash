@@ -18,6 +18,7 @@ const WATCH_DIRS = [
   path.join(PROJECT, 'scripts'),
   path.join(PROJECT, 'scenes'),
   path.join(PROJECT, 'shaders'),
+  path.join(PROJECT, 'Model'),
 ];
 
 let exporting = false;
@@ -56,11 +57,17 @@ function onChange(file) {
   timer = setTimeout(doExport, 1000);
 }
 
+function shouldHandleChange(filename) {
+  if (!filename) return false;
+  const base = path.basename(filename);
+  return !base.endsWith('~') && !base.startsWith('.');
+}
+
 // Watch directories
 for (const dir of WATCH_DIRS) {
   if (fs.existsSync(dir)) {
     fs.watch(dir, { recursive: true }, (event, filename) => {
-      if (filename && !filename.includes('.import')) {
+      if (shouldHandleChange(filename)) {
         onChange(path.join(dir, filename));
       }
     });

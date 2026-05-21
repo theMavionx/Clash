@@ -1,6 +1,8 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
 import { useSend, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
+import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -11,6 +13,7 @@ import mageImg from '../assets/units/mage.png';
 import arbaletImg from '../assets/units/arbalet.png';
 import archerImg from '../assets/units/archer.png';
 import berserkImg from '../assets/units/berserk.png';
+import demonKingImg from '../assets/units/demonking.png';
 
 // Module-level CSS — injected once, not re-parsed on every render
 const UPGRADE_ANIM_CSS = `
@@ -47,6 +50,7 @@ const UNIT_IMAGES = {
   Archer: archerImg,
   Ranger: arbaletImg,
   Barbarian: berserkImg,
+  DemonKing: demonKingImg,
 };
 
 const CARD_TROOP_STYLE_MAP = {
@@ -55,6 +59,7 @@ const CARD_TROOP_STYLE_MAP = {
   Barbarian: { scale: 1.25, offsetY: '15%' },
   Archer: { scale: 1.25, offsetY: '15%' },
   Ranger: { scale: 1.25, offsetY: '15%' },
+  DemonKing: { scale: 1.35, offsetY: '10%' },
 };
 
 const RES_ICONS = {
@@ -65,61 +70,86 @@ const RES_ICONS = {
 
 const stopPropagation = (e) => e.stopPropagation();
 
+function demonKingShipEntry(token) {
+  if (!token) return 'DemonKing';
+  return `DemonKing:${token.chain}:${token.tokenId}:L${Number(token.level || 1)}`;
+}
+
+function shortTokenId(tokenId) {
+  const value = String(tokenId || '');
+  if (value.length <= 8) return value;
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
+
 const TROOP_STATS = {
   Knight: {
     display: "Knight",
     stats: {
-      1: { hp: 367, damage: 25, atk_speed: 1.667 },
-      2: { hp: 483, damage: 33, atk_speed: 1.538 },
-      3: { hp: 617, damage: 43, atk_speed: 1.429 },
+      1: { hp: 450, damage: 38, atk_speed: 1.4 },
+      2: { hp: 600, damage: 50, atk_speed: 1.3 },
+      3: { hp: 780, damage: 66, atk_speed: 1.2 },
+      4: { hp: 1000, damage: 86, atk_speed: 1.1 },
     },
-    maxStats: { hp: 700, damage: 50, atk_speed: 2.0 }
+    maxStats: { hp: 1000, damage: 86, atk_speed: 1.4 }
   },
   Mage: {
     display: "Mage",
     stats: {
-      1: { hp: 140, damage: 62, atk_speed: 1.25 },
-      2: { hp: 187, damage: 82, atk_speed: 1.111 },
-      3: { hp: 240, damage: 107, atk_speed: 1.0 },
+      1: { hp: 150, damage: 58, atk_speed: 1.25 },
+      2: { hp: 200, damage: 78, atk_speed: 1.12 },
+      3: { hp: 265, damage: 104, atk_speed: 1.0 },
+      4: { hp: 345, damage: 138, atk_speed: 0.9 },
     },
-    maxStats: { hp: 270, damage: 120, atk_speed: 2.0 }
+    maxStats: { hp: 345, damage: 138, atk_speed: 1.25 }
   },
   Barbarian: {
     display: "Barbarian",
     stats: {
-      1: { hp: 173, damage: 30, atk_speed: 0.625 },
-      2: { hp: 230, damage: 40, atk_speed: 0.571 },
-      3: { hp: 293, damage: 53, atk_speed: 0.526 },
+      1: { hp: 240, damage: 24, atk_speed: 0.6 },
+      2: { hp: 320, damage: 32, atk_speed: 0.55 },
+      3: { hp: 420, damage: 43, atk_speed: 0.5 },
+      4: { hp: 550, damage: 57, atk_speed: 0.46 },
     },
-    maxStats: { hp: 330, damage: 60, atk_speed: 1.0 }
+    maxStats: { hp: 550, damage: 57, atk_speed: 0.6 }
   },
   Archer: {
     display: "Archer",
     stats: {
-      1: { hp: 193, damage: 43, atk_speed: 1.111 },
-      2: { hp: 253, damage: 58, atk_speed: 1.0 },
-      3: { hp: 323, damage: 76, atk_speed: 0.909 },
+      1: { hp: 210, damage: 40, atk_speed: 1.05 },
+      2: { hp: 280, damage: 54, atk_speed: 0.95 },
+      3: { hp: 365, damage: 71, atk_speed: 0.85 },
+      4: { hp: 470, damage: 94, atk_speed: 0.78 },
     },
-    maxStats: { hp: 370, damage: 85, atk_speed: 1.5 }
+    maxStats: { hp: 470, damage: 94, atk_speed: 1.05 }
   },
   Ranger: {
     display: "Ranger",
     stats: {
-      1: { hp: 227, damage: 37, atk_speed: 1.0 },
-      2: { hp: 300, damage: 49, atk_speed: 0.909 },
-      3: { hp: 383, damage: 64, atk_speed: 0.833 },
+      1: { hp: 250, damage: 34, atk_speed: 1.0 },
+      2: { hp: 330, damage: 45, atk_speed: 0.92 },
+      3: { hp: 430, damage: 60, atk_speed: 0.83 },
+      4: { hp: 560, damage: 80, atk_speed: 0.76 },
     },
-    maxStats: { hp: 430, damage: 75, atk_speed: 1.0 }
+    maxStats: { hp: 560, damage: 80, atk_speed: 1.0 }
+  },
+  DemonKing: {
+    display: "Demon King",
+    stats: {
+      1: { hp: 660, damage: 70, atk_speed: 1.8 },
+      2: { hp: 880, damage: 92, atk_speed: 1.65 },
+      3: { hp: 1150, damage: 120, atk_speed: 1.5 },
+    },
+    maxStats: { hp: 1150, damage: 120, atk_speed: 1.8 }
   }
 };
 
-const ProgressBar = ({ label, value, max, gradient, showAsTime = false }) => {
+const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueText = null }) => {
   const percentage = Math.min((value / max) * 100, 100);
   return (
     <div style={styles.progressRow}>
       <div style={styles.progressHeader}>
         <span style={styles.progressLabel}>{label}</span>
-        <span style={styles.progressValue}>{value}{showAsTime ? 's' : ''}</span>
+        <span style={styles.progressValue}>{valueText || `${value}${showAsTime ? 's' : ''}`}</span>
       </div>
       <div style={styles.progressBarBg}>
         <div style={{...styles.progressBarFill, background: gradient, width: `${percentage}%`}} />
@@ -132,9 +162,16 @@ function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
+  const evmWallet = useEvmWallet();
+  const evmAddress = evmWallet?.address || null;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
+  const [demonKingNfts, setDemonKingNfts] = useState([]);
+  const [selectedDemonKey, setSelectedDemonKey] = useState('');
+  const [demonKingStatus, setDemonKingStatus] = useState(null);
+  const [demonKingLoading, setDemonKingLoading] = useState(false);
+  const [demonKingError, setDemonKingError] = useState(null);
   const troops = buildingDefs?.troops || {};
   const troopNames = Object.keys(troops);
   const safeIndex = troopNames.length ? Math.min(currentIndex, troopNames.length - 1) : 0;
@@ -148,6 +185,55 @@ function BarnPanel({ building, onClose }) {
   useEffect(() => {
     sendToGodot('refresh_troops');
   }, [sendToGodot]);
+
+  useEffect(() => {
+    if (currentTroopName !== 'DemonKing') return undefined;
+    const controller = new AbortController();
+    const token = typeof window !== 'undefined' ? window._playerToken : null;
+    setDemonKingLoading(true);
+    setDemonKingError(null);
+    const statusPromise = fetch('/api/troops/demon_king/upgrade-status', {
+      cache: 'no-store',
+      headers: token ? { 'x-token': token } : {},
+      signal: controller.signal,
+    }).then((res) => res.json().catch(() => ({}))).catch(() => null);
+    const ownedPromise = evmAddress
+      ? syncDemonKingNfts({ wallet: evmAddress, signal: controller.signal }).catch((err) => ({ error: err, tokens: [] }))
+      : Promise.resolve({ tokens: [] });
+
+    Promise.all([statusPromise, ownedPromise])
+      .then(([statusJson, ownedJson]) => {
+        if (controller.signal.aborted) return;
+        if (statusJson) setDemonKingStatus(statusJson);
+        const tokens = [];
+        (ownedJson?.tokens || []).forEach((item) => {
+          const tokenId = String(item.tokenId || item.id || '');
+          if (!tokenId) return;
+          const level = Number(item.level || 1);
+          tokens.push({
+            ...item,
+            chain: item.chain || 'base',
+            tokenId,
+            level,
+            imageUrl: item.imageUrl || demonKingImg,
+          });
+        });
+        tokens.sort((a, b) => (b.level || 1) - (a.level || 1) || String(a.chain).localeCompare(String(b.chain)) || Number(a.tokenId) - Number(b.tokenId));
+        setDemonKingNfts(tokens);
+        if (ownedJson?.error) setDemonKingError((ownedJson.error?.message || 'Could not load Demon King NFTs').slice(0, 140));
+        setSelectedDemonKey((prev) => {
+          if (prev && tokens.some((item) => demonKingShipEntry(item) === prev)) return prev;
+          return tokens[0] ? demonKingShipEntry(tokens[0]) : '';
+        });
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setDemonKingError((err?.message || 'Could not load Demon King NFTs').slice(0, 140));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDemonKingLoading(false);
+      });
+    return () => controller.abort();
+  }, [currentTroopName, evmAddress]);
 
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
   
@@ -181,17 +267,37 @@ function BarnPanel({ building, onClose }) {
   
   if (troopNames.length === 0) return null;
   
-  const isMax = lvl >= 3;
+  const troopMaxLevel = Math.max(
+    1,
+    ...Object.keys(tdef?.costs || {})
+      .map((key) => Number(key))
+      .filter((value) => Number.isFinite(value)),
+  );
+  const isDemonKing = currentTroopName === 'DemonKing';
+  const selectedDemonNft = isDemonKing
+    ? demonKingNfts.find((token) => demonKingShipEntry(token) === selectedDemonKey) || demonKingNfts[0] || null
+    : null;
+  const displayLvl = isDemonKing && selectedDemonNft ? Number(selectedDemonNft.level || 1) : lvl;
+  const isMax = displayLvl >= troopMaxLevel;
   // costs key = current level (cost to upgrade FROM that level)
-  const nextCost = !isMax && tdef?.costs?.[String(lvl)];
-  const stats = TROOP_STATS[currentTroopName]?.stats?.[lvl];
+  const nextCost = !isMax && tdef?.costs?.[String(displayLvl)];
+  const stats = TROOP_STATS[currentTroopName]?.stats?.[displayLvl];
   const maxStats = TROOP_STATS[currentTroopName]?.maxStats;
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
   const hasImage = !!UNIT_IMAGES[currentTroopName];
+  const battleWins = Number(demonKingStatus?.battle_wins ?? demonKingStatus?.wins ?? 0);
+  const nextDemonLevel = isDemonKing ? Math.min(3, displayLvl + 1) : null;
+  const requiredDemonWins = isDemonKing && nextDemonLevel && nextDemonLevel <= 3
+    ? (nextDemonLevel === 2 ? 1000 : 10000)
+    : 0;
+  const demonWinsShown = requiredDemonWins ? Math.min(battleWins, requiredDemonWins) : battleWins;
 
   // Formatting cost string:
   let costStr = "Lvl Up & Get improved stats";
-  if (nextCost) {
+  if (isDemonKing && !isMax) {
+    const requiredWins = requiredDemonWins;
+    costStr = `NFT upgrade + ${requiredWins.toLocaleString()} battle wins`;
+  } else if (nextCost) {
     const parts = [];
     if (nextCost.gold) parts.push(`${nextCost.gold} Coins`);
     if (nextCost.wood) parts.push(`${nextCost.wood} Wood`);
@@ -206,6 +312,24 @@ function BarnPanel({ building, onClose }) {
   const sliderW = mobile ? 32 : 48;
   const sliderH = mobile ? 52 : 72;
   const reqBoxSize = mobile ? 60 : 90;
+  const handleMainUpgrade = () => {
+    if (!isDemonKing) {
+      handleUpgradeTroop(currentTroopName);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+      detail: {
+        view: selectedDemonNft ? 'upgrade' : 'shop',
+        request: {
+          ...(demonKingStatus || {}),
+          chain: selectedDemonNft?.chain,
+          tokenId: selectedDemonNft?.tokenId,
+          owner: evmAddress,
+          next_level: Math.min(3, displayLvl + 1),
+        },
+      },
+    }));
+  };
 
   return (
     <div style={{...styles.overlay, ...(mobile ? { alignItems: 'stretch' } : {})}} onClick={onClose}>
@@ -230,7 +354,7 @@ function BarnPanel({ building, onClose }) {
                   <div style={{...styles.upgradeBadge, ...(mobile ? { padding: '2px 10px', top: -6, right: -14 } : {})}}>
                     <div style={styles.badgeBigPart}>
                       <span style={{...styles.badgeLvlText, fontSize: mobile ? 10 : 14}}>Lvl</span>
-                      <span style={{...styles.badgeLvlNumber, fontSize: mobile ? 18 : 32}}>{lvl}</span>
+                      <span style={{...styles.badgeLvlNumber, fontSize: mobile ? 18 : 32}}>{displayLvl}</span>
                     </div>
                   </div>
                   {isAnimatingUpgrade && (
@@ -241,7 +365,17 @@ function BarnPanel({ building, onClose }) {
                       LEVEL UP!
                     </div>
                   )}
-                  {troopNames.map(name => {
+                  {isDemonKing ? (
+                    <img
+                      src={demonKingImg}
+                      alt="Demon King"
+                      className={isAnimatingUpgrade ? 'upgrade-anim-char' : ''}
+                      style={{
+                        ...styles.characterImg,
+                        transform: `translateY(${CARD_TROOP_STYLE_MAP.DemonKing?.offsetY || '10%'}) scale(${CARD_TROOP_STYLE_MAP.DemonKing?.scale || 1.35})`,
+                      }}
+                    />
+                  ) : troopNames.map(name => {
                     if (!UNIT_IMAGES[name]) return null;
                     const isActive = name === currentTroopName;
                     const charStyle = CARD_TROOP_STYLE_MAP[name] || { scale: 1.8, offsetY: '5%' };
@@ -267,13 +401,59 @@ function BarnPanel({ building, onClose }) {
                 <ProgressBar label="Health Points" value={stats.hp} max={maxStats.hp} gradient="linear-gradient(90deg, #f59e0b, #fbbf24)" />
                 <ProgressBar label="Damage Output" value={stats.damage} max={maxStats.damage} gradient="linear-gradient(90deg, #10b981, #34d399)" />
                 <ProgressBar label="Attack Speed" value={stats.atk_speed} max={maxStats.atk_speed} showAsTime={true} gradient="linear-gradient(90deg, #6366f1, #818cf8)" />
-                <ProgressBar label="Level Progress" value={lvl} max={3} gradient="linear-gradient(90deg, #8b5cf6, #a78bfa)" />
+                <ProgressBar label="Level Progress" value={displayLvl} max={troopMaxLevel} gradient="linear-gradient(90deg, #8b5cf6, #a78bfa)" />
+                {isDemonKing && requiredDemonWins > 0 && (
+                  <ProgressBar
+                    label="Battle Wins"
+                    value={demonWinsShown}
+                    max={requiredDemonWins}
+                    valueText={`${demonWinsShown.toLocaleString()} / ${requiredDemonWins.toLocaleString()}`}
+                    gradient="linear-gradient(90deg, #ef4444, #f97316)"
+                  />
+                )}
+              </div>
+            )}
+
+            {isDemonKing && (
+              <div style={styles.demonInventory}>
+                <div style={styles.demonInventoryHeader}>
+                  <span>{evmAddress ? `${demonKingNfts.length} NFT${demonKingNfts.length === 1 ? '' : 's'} owned` : 'Connect EVM wallet'}</span>
+                  {demonKingLoading && <span>Loading...</span>}
+                </div>
+                {demonKingError && <div style={styles.demonInventoryHint}>{demonKingError}</div>}
+                {evmAddress && demonKingNfts.length > 0 ? (
+                  <div style={styles.demonTokenGrid}>
+                    {demonKingNfts.map((token) => {
+                      const key = demonKingShipEntry(token);
+                      const active = key === (selectedDemonKey || demonKingShipEntry(selectedDemonNft));
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setSelectedDemonKey(key)}
+                          style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null)}}
+                        >
+                          <span>Lv {token.level || 1}</span>
+                          <span>#{shortTokenId(token.tokenId)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={styles.demonInventoryHint}>
+                    {evmAddress ? 'Demon King unlocks when this wallet owns at least one NFT.' : 'Open the NFT shop to connect and load your Demon King NFTs.'}
+                  </div>
+                )}
               </div>
             )}
 
             <h3 style={{...styles.sectionTitle, marginTop: mobile ? 10 : 16, fontSize: mobile ? 16 : 20}}>Upgrade Resources</h3>
             <div style={{...styles.reqGrid, ...(mobile ? { flexWrap: 'nowrap', justifyContent: 'center', gap: 8 } : {})}}>
-              {nextCost ? Object.entries(nextCost).map(([res, amt]) => {
+              {isDemonKing && !isMax ? (
+                <div style={styles.reqBoxMax}>
+                  <span style={{color: '#5C3A21', fontSize: 13, fontWeight: 900, textAlign: 'center'}}>{costStr}</span>
+                </div>
+              ) : nextCost ? Object.entries(nextCost).map(([res, amt]) => {
                 if (amt === 0) return null;
                 return (
                   <div key={res} style={{...styles.reqBox, width: reqBoxSize, height: reqBoxSize}}>
@@ -294,8 +474,8 @@ function BarnPanel({ building, onClose }) {
         {/* Upgrade button — fixed at bottom, outside scroll area */}
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
-            <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={() => handleUpgradeTroop(currentTroopName)}>
-              Upgrade to Lv {lvl + 1}
+            <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
+              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT #${shortTokenId(selectedDemonNft.tokenId)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
             </button>
           </div>
         )}
@@ -450,6 +630,56 @@ const styles = {
     filter: 'drop-shadow(0 10px 20px rgba(0,0,0,0.4))',
     transformOrigin: 'bottom center',
     transition: 'opacity 0.35s ease-in-out',
+  },
+  demonInventory: {
+    background: 'rgba(255,255,255,0.18)',
+    border: '1px solid rgba(92,58,33,0.18)',
+    borderRadius: 8,
+    padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  demonInventoryHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 8,
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  demonInventoryHint: {
+    color: '#7c633e',
+    fontSize: 12,
+    fontWeight: 700,
+    lineHeight: 1.35,
+  },
+  demonTokenGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    gap: 6,
+  },
+  demonTokenBtn: {
+    border: '2px solid rgba(92,58,33,0.25)',
+    borderRadius: 8,
+    background: 'rgba(255,255,255,0.28)',
+    color: '#5C3A21',
+    cursor: 'pointer',
+    fontWeight: 900,
+    padding: '7px 8px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    gap: 6,
+    fontSize: 12,
+  },
+  demonTokenBtnActive: {
+    background: 'linear-gradient(180deg, #ffe27a 0%, #f59e0b 100%)',
+    // Full `border` shorthand — base demonTokenBtn uses `border: '2px
+    // solid ...'`, so overriding only borderColor here mixes shorthand
+    // + longhand and makes React warn when the selection toggles.
+    border: '2px solid #8a4b00',
+    color: '#3d250f',
   },
   upgradeBadge: {
     position: 'absolute',
