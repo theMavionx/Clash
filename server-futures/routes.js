@@ -11,6 +11,8 @@ const phoenixRewards = require('./phoenix-rewards-worker');
 const hyperliquid = require('./hyperliquid');
 const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 const risex = require('./risex');
+const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
+const { base } = require('viem/chains');
 
 const router = express.Router();
 
@@ -25,6 +27,10 @@ const PHOENIX_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.
 const PHOENIX_PROXY_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_PROXY_STALE_MS || 2 * 60_000)));
 const phoenixProxyCache = new Map();
 const phoenixProxyInflight = new Map();
+const basePublicClient = createPublicClient({
+  chain: base,
+  transport: http(avantis.BASE_RPC),
+});
 
 function normalizePhoenixProxyPath(rawPath) {
   const pathname = String(rawPath || '').split('?')[0];
@@ -1389,6 +1395,56 @@ function avantisLifecycleTradeKey(kind, address, pairIdx, tradeIdx, openedAt, fa
   return suffix ? `${base}:${suffix}` : base;
 }
 
+const AVANTIS_CLOSE_VERIFY_ABI = [
+  {
+    name: 'closeTradeMarket',
+    type: 'function',
+    stateMutability: 'payable',
+    inputs: [
+      { name: 'pairIndex', type: 'uint256' },
+      { name: 'index', type: 'uint256' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'delegatedAction',
+    type: 'function',
+    stateMutability: 'payable',
+    inputs: [
+      { name: 'trader', type: 'address' },
+      { name: 'call_data', type: 'bytes' },
+    ],
+    outputs: [{ type: 'bytes' }],
+  },
+];
+
+function decodeAvantisCloseCall(input, expectedTrader) {
+  const decoded = decodeFunctionData({ abi: AVANTIS_CLOSE_VERIFY_ABI, data: input });
+  if (decoded.functionName === 'closeTradeMarket') {
+    return { args: decoded.args, delegated: false };
+  }
+  if (decoded.functionName === 'delegatedAction') {
+    const [trader, callData] = decoded.args || [];
+    if (String(trader || '').toLowerCase() !== String(expectedTrader || '').toLowerCase()) {
+      throw new Error('delegated close trader mismatch');
+    }
+    const inner = decodeFunctionData({ abi: AVANTIS_CLOSE_VERIFY_ABI, data: callData });
+    if (inner.functionName !== 'closeTradeMarket') {
+      throw new Error('delegated action is not closeTradeMarket');
+    }
+    return { args: inner.args, delegated: true };
+  }
+  throw new Error('transaction is not an Avantis close');
+}
+
+function avantisOpenSuffix(openClientOrderId, address, pairIdx, tradeIdx) {
+  const prefix = avantisLifecycleTradeKey('open', address, pairIdx, tradeIdx, 0);
+  const raw = String(openClientOrderId || '');
+  if (!raw.startsWith(`${prefix}:`)) return '';
+  return raw.slice(prefix.length + 1).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40);
+}
+
 function avantisCreatedAtSeconds(createdAt) {
   if (!createdAt) return 0;
   const ms = Date.parse(`${String(createdAt).replace(' ', 'T')}Z`);
@@ -1409,6 +1465,91 @@ function avantisLegacyOpenRecordedForLifecycle(playerId, legacyKey, openedAt) {
     const created = avantisCreatedAtSeconds(row?.created_at);
     return created > 0 && created >= openedAt - 300;
   } catch {
+    return false;
+  }
+}
+
+async function recordVerifiedAvantisClose(req, body) {
+  try {
+    const orderType = String(body.order_type || '').toLowerCase();
+    const side = String(body.side || '').toLowerCase();
+    if (orderType !== 'close' && !side.includes('close')) return false;
+    const dedup = String(body.dedup_key || '').trim();
+    const m = dedup.match(/^avantis:close:(0x[0-9a-fA-F]{40}):(\d+):(\d+)(?::([A-Za-z0-9_.-]+))?$/);
+    if (!m) return false;
+    const address = String(body.address || '').trim().toLowerCase();
+    const dedupAddress = m[1].toLowerCase();
+    if (address !== dedupAddress) return false;
+    const txHash = String(body.tx_hash || '').trim();
+    if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) return false;
+
+    const receipt = await basePublicClient.getTransactionReceipt({ hash: txHash });
+    if (receipt?.status !== 'success') return false;
+    const tx = await basePublicClient.getTransaction({ hash: txHash });
+    if (String(tx?.to || '').toLowerCase() !== String(avantis.TRADING_ADDRESS).toLowerCase()) return false;
+
+    const pairIdx = Number(m[2]);
+    const tradeIdx = Number(m[3]);
+    const closeCall = decodeAvantisCloseCall(tx.input, address);
+    if (!closeCall.delegated && String(tx?.from || '').toLowerCase() !== address) return false;
+    const decodedArgs = closeCall.args;
+    const decodedPairIdx = Number(decodedArgs?.[0]);
+    const decodedTradeIdx = Number(decodedArgs?.[1]);
+    if (decodedPairIdx !== pairIdx || decodedTradeIdx !== tradeIdx) return false;
+
+    const closedCollateral = Number(formatUnits(decodedArgs?.[2] || 0n, 6));
+    if (!Number.isFinite(closedCollateral) || closedCollateral <= 0) return false;
+
+    const openPrefix = avantisLifecycleTradeKey('open', address, pairIdx, tradeIdx, 0);
+    const open = db.db.prepare(`
+      SELECT symbol, side, amount, notional_usd, client_order_id
+        FROM trade_history
+       WHERE player_id = ?
+         AND dex = 'avantis'
+         AND status = 'filled'
+         AND verified_source = 'worker'
+         AND side IN ('long', 'short')
+         AND (client_order_id = ? OR client_order_id LIKE ?)
+       ORDER BY id DESC
+       LIMIT 1
+    `).get(req.playerId, openPrefix, `${openPrefix}:%`);
+    if (!open) return false;
+
+    const openCollateral = Number(open.amount);
+    const openNotional = Number(open.notional_usd);
+    const leverage = openCollateral > 0 ? openNotional / openCollateral : Number(body.leverage || 1);
+    if (!Number.isFinite(leverage) || leverage <= 0) return false;
+    if (openCollateral > 0 && closedCollateral > openCollateral * 1.05) return false;
+
+    const notional = closedCollateral * leverage;
+    if (!Number.isFinite(notional) || notional < 0.01 || notional > 10_000_000) return false;
+    const closeSide = String(open.side || '').toLowerCase() === 'short' ? 'close_short' : 'close_long';
+    const openSuffix = avantisOpenSuffix(open.client_order_id, address, pairIdx, tradeIdx);
+    const txSuffix = txHash.toLowerCase().replace(/^0x/, '').slice(0, 32);
+    const recordKey = `${avantisLifecycleTradeKey('close', address, pairIdx, tradeIdx, 0)}:${openSuffix ? `${openSuffix}-${txSuffix}` : txSuffix}`;
+    const existing = db.db.prepare(`
+      SELECT id FROM trade_history
+       WHERE player_id = ? AND dex = 'avantis'
+         AND (client_order_id = ? OR order_id = ?)
+       LIMIT 1
+    `).get(req.playerId, recordKey, txHash);
+    if (existing) return true;
+
+    db.addTrade(req.playerId, {
+      symbol: String(open.symbol || body.symbol || '').toUpperCase(),
+      side: closeSide,
+      orderType: 'close',
+      amount: String(closedCollateral),
+      orderId: txHash,
+      clientOrderId: recordKey,
+      status: 'filled',
+      dex: 'avantis',
+      notional_usd: notional,
+      verifiedSource: 'worker',
+    });
+    return true;
+  } catch (e) {
+    console.warn('[trade-report] verified Avantis close failed:', e?.message || e);
     return false;
   }
 }
@@ -1996,13 +2137,18 @@ router.post('/trade-report', auth, async (req, res) => {
         }
       }
     }
-    // Do not write rewardable Avantis rows from the browser. A valid game token
-    // proves account ownership, not that tx_hash/amount/leverage happened on
-    // chain. For Avantis market opens we can cheaply verify against Core API
-    // immediately; everything else still waits for the polling worker.
-    const verified = req.dex === 'avantis'
-      ? await recordVerifiedAvantisOpen(req, req.body || {})
-      : false;
+    // Do not write rewardable Avantis rows from the browser payload alone.
+    // A valid game token proves account ownership, not that tx_hash/amount
+    // happened on-chain. Market opens are re-read from Core API; closes are
+    // verified from the successful Base transaction calldata + an existing
+    // verified open row. The polling worker remains the fallback.
+    let verified = false;
+    if (req.dex === 'avantis') {
+      const tradeKind = String(req.body?.order_type || req.body?.side || '').toLowerCase();
+      verified = tradeKind.includes('close')
+        ? await recordVerifiedAvantisClose(req, req.body || {})
+        : await recordVerifiedAvantisOpen(req, req.body || {});
+    }
     res.json({
       ok: true,
       verified,

@@ -1326,7 +1326,8 @@ export function useAvantis() {
       // dedupe via UNIQUE index instead of inserting a duplicate.
       const closeSide = String(side || '').toLowerCase();
       const closedSideLabel = closeSide === 'long' || closeSide === 'bid' ? 'close_long' : 'close_short';
-      const dedupKey = `avantis:close:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}`;
+      const closeTxSuffix = String(hash || '').toLowerCase().replace(/^0x/, '').replace(/[^a-f0-9]/g, '').slice(0, 32);
+      const dedupKey = `avantis:close:${walletAddr.toLowerCase()}:${pairIndex}:${tradeIndex}${closeTxSuffix ? `:${closeTxSuffix}` : ''}`;
       await reportTrade({
         tx_hash: hash, symbol, side: closedSideLabel,
         amount: amt, leverage: closeLeverage, order_type: 'close',

@@ -195,6 +195,27 @@ async function pollOnce(mainDb) {
         info.trade_index,
         info.opened_at_chain || 0
       );
+      const closePrefix = lifecycleTradeKey('close', addr, info.pair_index, info.trade_index, 0);
+      const existingClose = info.opened_at_chain
+        ? db.db.prepare(`
+            SELECT id
+              FROM trade_history
+             WHERE player_id = ?
+               AND dex = 'avantis'
+               AND side IN ('close_long', 'close_short')
+               AND (client_order_id = ? OR client_order_id LIKE ?)
+             LIMIT 1
+          `).get(row.id, closeKey, `${closeKey}-%`)
+        : db.db.prepare(`
+            SELECT id
+              FROM trade_history
+             WHERE player_id = ?
+               AND dex = 'avantis'
+               AND side IN ('close_long', 'close_short')
+               AND (client_order_id = ? OR client_order_id LIKE ?)
+             LIMIT 1
+          `).get(row.id, closeKey, `${closePrefix}:%`);
+      if (existingClose) continue;
       // side label distinct from the open so the task verifier counts
       // open + close as separate volume events.
       const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
