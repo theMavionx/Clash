@@ -33,6 +33,7 @@ FUTURES_DIR="$RELEASE_DIR/server-futures"
 MCP_DIR="$RELEASE_DIR/mcp"
 WEB_DIR="$RELEASE_DIR/web"
 WEB_DIST="$WEB_DIR/dist"
+OWNED_ASSETS_MANIFEST="$WEB_DIST/.clash-owned-assets"
 
 SHARED_SERVER_DIR="$SHARED_DIR/server"
 SHARED_FUTURES_DIR="$SHARED_DIR/server-futures"
@@ -436,20 +437,76 @@ fs.writeFileSync(file, source);
 NODE
 }
 
+previous_dist_file() {
+    local rel_path="$1"
+    local previous_file="$CURRENT_LINK/web/dist/$rel_path"
+    [ -f "$previous_file" ] || return 1
+    printf '%s' "$previous_file"
+}
+
+compress_static_file() {
+    local rel_path="$1"
+    local brotli_quality="$2"
+    local file="$WEB_DIST/$rel_path"
+    local previous_file=""
+
+    [ -f "$file" ] || return 0
+
+    if previous_file="$(previous_dist_file "$rel_path")" \
+        && [ -f "$previous_file.br" ] \
+        && [ -f "$previous_file.gz" ] \
+        && cmp -s "$file" "$previous_file"; then
+        cp -a "$previous_file.br" "$file.br"
+        cp -a "$previous_file.gz" "$file.gz"
+        STATIC_REUSED=$((STATIC_REUSED + 1))
+        case "$rel_path" in
+            godot/*) GODOT_REUSED=$((GODOT_REUSED + 1)) ;;
+        esac
+        return 0
+    fi
+
+    brotli -f -q "$brotli_quality" -o "$file.br" "$file"
+    gzip -f -k -9 "$file"
+    STATIC_COMPRESSED=$((STATIC_COMPRESSED + 1))
+    case "$rel_path" in
+        godot/*) GODOT_COMPRESSED=$((GODOT_COMPRESSED + 1)) ;;
+    esac
+}
+
+write_owned_assets_manifest() {
+    [ -d "$WEB_DIST/assets" ] || return 0
+    find "$WEB_DIST/assets" -maxdepth 1 -type f -printf '%f\n' | sort > "$OWNED_ASSETS_MANIFEST"
+}
+
 preserve_previous_frontend_assets() {
     local previous_assets="$CURRENT_LINK/web/dist/assets"
+    local previous_manifest="$CURRENT_LINK/web/dist/.clash-owned-assets"
     local new_assets="$WEB_DIST/assets"
     [ -d "$previous_assets" ] || return 0
     [ -d "$new_assets" ] || return 0
 
     local copied=0
-    while IFS= read -r -d '' src; do
-        local dest="$new_assets/$(basename "$src")"
-        if [ ! -e "$dest" ]; then
-            cp -a "$src" "$dest"
-            copied=$((copied + 1))
-        fi
-    done < <(find "$previous_assets" -maxdepth 1 -type f -print0)
+    if [ -f "$previous_manifest" ]; then
+        local name src dest
+        while IFS= read -r name || [ -n "$name" ]; do
+            [ -n "$name" ] || continue
+            src="$previous_assets/$name"
+            dest="$new_assets/$name"
+            if [ -f "$src" ] && [ ! -e "$dest" ]; then
+                cp -a "$src" "$dest"
+                copied=$((copied + 1))
+            fi
+        done < "$previous_manifest"
+    else
+        log "No previous asset manifest; preserving one legacy asset set."
+        while IFS= read -r -d '' src; do
+            local dest="$new_assets/$(basename "$src")"
+            if [ ! -e "$dest" ]; then
+                cp -a "$src" "$dest"
+                copied=$((copied + 1))
+            fi
+        done < <(find "$previous_assets" -maxdepth 1 -type f -print0)
+    fi
 
     if [ "$copied" -gt 0 ]; then
         log "Preserved $copied previous frontend asset(s) for active browser sessions"
@@ -481,25 +538,26 @@ build_frontend() {
     fi
 
     log "Compressing static assets..."
-    for f in "$WEB_DIST/godot/Work.pck"; do
-        if [ -f "$f" ]; then
-            brotli -f -q 9 -o "$f.br" "$f"
-            gzip -f -k -9 "$f"
-        fi
-    done
-    for f in "$WEB_DIST/godot/Work.wasm" "$WEB_DIST/godot/Work.js"; do
-        if [ -f "$f" ]; then
-            brotli -f -q 6 -o "$f.br" "$f"
-            gzip -f -k -9 "$f"
-        fi
-    done
+    STATIC_COMPRESSED=0
+    STATIC_REUSED=0
+    GODOT_COMPRESSED=0
+    GODOT_REUSED=0
+
+    compress_static_file "godot/Work.pck" 9
+    compress_static_file "godot/Work.wasm" 6
+    compress_static_file "godot/Work.js" 6
+
     for f in "$WEB_DIST"/assets/*.js "$WEB_DIST"/assets/*.css; do
         if [ -f "$f" ]; then
-            brotli -f -q 6 -o "$f.br" "$f"
-            gzip -f -k -9 "$f"
+            compress_static_file "assets/$(basename "$f")" 6
         fi
     done
 
+    if [ "$GODOT_REUSED" -gt 0 ] && [ "$GODOT_COMPRESSED" -eq 0 ]; then
+        log "Godot export unchanged; reused compressed Godot artifacts from current release."
+    fi
+    log "Static compression: compressed=$STATIC_COMPRESSED reused=$STATIC_REUSED godot_compressed=$GODOT_COMPRESSED godot_reused=$GODOT_REUSED"
+    write_owned_assets_manifest
     preserve_previous_frontend_assets
 }
 
