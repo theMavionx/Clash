@@ -106,19 +106,10 @@ var _skeleton_respawn_timer: float = 0.0
 var _victory_declared: bool = false
 var _find_in_progress: bool = false
 
-const ATTACK_COST_BY_TH: Dictionary = {
-	1: 100,
-	2: 250,
-	3: 500,
-}
+const RAID_ATTACK_COST_GOLD: int = 200
 
 func _get_attack_cost_gold() -> int:
-	var th_level: int = 1
-	if bs and bs.has_method("_get_th_level"):
-		th_level = max(1, int(bs._get_th_level()))
-	if ATTACK_COST_BY_TH.has(th_level):
-		return int(ATTACK_COST_BY_TH[th_level])
-	return int(round((50.0 * float(th_level) * float(th_level) + 50.0) / 50.0) * 50.0)
+	return RAID_ATTACK_COST_GOLD
 
 # ---------------------------------------------------------------------------
 # Cleanup helpers

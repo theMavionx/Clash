@@ -29,13 +29,8 @@ const ATTACK_TROOPS = [
   { key: 'demonking', label: 'Demon King', img: demonKingImg },
 ];
 
-const attackCostForTownHall = (level) => {
-  const th = Math.max(1, Math.floor(Number(level) || 1));
-  if (th === 1) return 100;
-  if (th === 2) return 250;
-  if (th === 3) return 500;
-  return Math.round((50 * th * th + 50) / 50) * 50;
-};
+const RAID_ATTACK_COST_GOLD = 200;
+const attackCostForTownHall = () => RAID_ATTACK_COST_GOLD;
 
 // ── Shared styled button (normal mode) ────────────────────────────────────
 const CustomBtn = ({ children, onClick, width = 140, height = 140, style = {}, mobileScale = 0.7, ...rest }) => (

@@ -3293,17 +3293,11 @@ function buyShip(playerId, buildingId) {
 
 const LOOT_PERCENT = 0.15;
 
-const ATTACK_COST_BY_TH = {
-  1: 100,
-  2: 250,
-  3: 500,
-};
+const RAID_ATTACK_COST_GOLD = 200;
 const TARGETED_ATTACK_COST_MULTIPLIER = 2;
 
 function attackCostForTownHallLevel(thLevel) {
-  const lvl = Math.max(1, Math.floor(Number(thLevel) || 1));
-  if (ATTACK_COST_BY_TH[lvl] != null) return ATTACK_COST_BY_TH[lvl];
-  return Math.round((50 * lvl * lvl + 50) / 50) * 50;
+  return RAID_ATTACK_COST_GOLD;
 }
 
 function getAttackCost(playerId) {
