@@ -92,6 +92,7 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
+		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3],
 		"hp_levels": [900, 1600, 2800, 4500],
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
@@ -1823,6 +1824,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var model = scene_res.instantiate()
 				var s = _get_model_scale(def, level)
 				model.scale = Vector3(s, s, s)
+				model.set_meta("building_visual_model", true)
 				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 				var offsets = def.get("model_offsets", [])
 				if offsets.size() >= level:
@@ -2291,7 +2293,13 @@ func _precompute_building_aabbs() -> void:
 			for lvl in range(2, def.scenes.size() + 1):
 				var key = _aabb_cache_key(id, lvl)
 				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
-		# Buildings without scenes array — same model at all levels, reuse level 1 AABB
+		# Buildings with per-level scale need per-level AABBs even if they
+		# reuse the same scene. Otherwise outlines keep the level-1 footprint.
+		if def.has("model_scales"):
+			for lvl in range(2, max_lvl + 1):
+				var key = _aabb_cache_key(id, lvl)
+				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
+		# Buildings without scenes or per-level scale reuse level 1 AABB.
 		for lvl in range(2, max_lvl + 1):
 			var key = _aabb_cache_key(id, lvl)
 			if not _building_aabb_cache.has(key):
@@ -2342,6 +2350,8 @@ func _get_cached_aabb(building_id: String) -> Dictionary:
 
 func _create_building_base(def: Dictionary, building_id: String = "") -> MeshInstance3D:
 	var mesh_inst = MeshInstance3D.new()
+	mesh_inst.name = "BuildingBase"
+	mesh_inst.set_meta("building_base", true)
 	var quad = QuadMesh.new()
 
 	var sx: float
@@ -2413,8 +2423,9 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			scene_res = _load_packed_scene_resource(_scene_path)
 		if scene_res:
 			var model = scene_res.instantiate()
-			var s = def.get("model_scale", 0.2)
+			var s = _get_model_scale(def, 1)
 			model.scale = Vector3(s, s, s)
+			model.set_meta("building_visual_model", true)
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			model.position = def.get("model_offset", Vector3.ZERO)
 			node.add_child(model)
@@ -3166,6 +3177,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var new_model = scene_res.instantiate()
 			var s = _get_model_scale(def, b.level)
 			new_model.scale = Vector3(s, s, s)
+			new_model.set_meta("building_visual_model", true)
 			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			var offsets = def.get("model_offsets", [])
 			if offsets.size() >= b.level:
@@ -3178,6 +3190,12 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar
 			b["hp_fill"] = hp_bar_data.fill
+	elif def.has("model_scales"):
+		var visual_model := _get_building_visual_model(model)
+		if is_instance_valid(visual_model):
+			var s = _get_model_scale(def, b.level)
+			visual_model.scale = Vector3(s, s, s)
+		_refresh_building_base_for_level(model, def, b.id, b.level)
 
 	# Respawn tower unit after model swap
 	if def.has("tower_unit"):
@@ -3264,6 +3282,29 @@ func _get_model_scale(def: Dictionary, level: int = 1) -> float:
 	if level >= 1 and scales.size() >= level:
 		return float(scales[level - 1])
 	return float(def.get("model_scale", 0.2))
+
+
+func _get_building_visual_model(building_node: Node3D) -> Node3D:
+	for child in building_node.get_children():
+		if child is Node3D and child.has_meta("building_visual_model"):
+			return child
+	for child in building_node.get_children():
+		if child is Node3D and not child.has_meta("building_base") and child.name != "BuildingHpBar":
+			if child is OmniLight3D or child is AnimationPlayer:
+				continue
+			return child
+	return null
+
+
+func _refresh_building_base_for_level(building_node: Node3D, def: Dictionary, building_id: String, level: int) -> void:
+	for child in building_node.get_children():
+		if child.has_meta("building_base"):
+			child.queue_free()
+	var cache_key = _aabb_cache_key(building_id, level)
+	if not _building_aabb_cache.has(cache_key):
+		_building_aabb_cache[cache_key] = _compute_model_aabb(def, level)
+	if not def.get("no_outline", false):
+		building_node.add_child(_create_building_base(def, cache_key))
 
 
 func _auto_center_model(model: Node3D) -> void:
@@ -3673,6 +3714,7 @@ func _make_bldg_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMate
 
 func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
 	var bar = Node3D.new()
+	bar.name = "BuildingHpBar"
 	bar.top_level = true
 	building.add_child(bar)
 	var bg = MeshInstance3D.new()
