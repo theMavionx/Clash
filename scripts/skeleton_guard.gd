@@ -36,6 +36,11 @@ var damage: int = 42
 var atk_speed: float = 0.85
 
 var tombstone_pos: Vector3 = Vector3.ZERO
+var _relocate_target_pos: Vector3 = Vector3.ZERO
+var _relocate_target_yaw: float = 0.0
+
+const RELOCATE_ARRIVE_DIST: float = 0.045
+const RELOCATE_SLOW_RADIUS: float = 0.18
 
 enum State { IDLE, PATROL, CHASE, ATTACK, VICTORY, RELOCATE }
 var state: State = State.IDLE
@@ -156,41 +161,58 @@ func _do_idle(delta: float) -> void:
 
 # ── Relocate: run to new tombstone position ───────────────────
 
-## Called when the tombstone is moved. The skeleton will run to
-## the new position instead of teleporting.
-func relocate_to(new_tombstone_pos: Vector3) -> void:
+## Called when the tombstone is moved. The skeleton will run to its assigned
+## guard post near the new tombstone instead of teleporting.
+func relocate_to(new_tombstone_pos: Vector3, guard_post_pos: Vector3 = Vector3.INF, guard_post_yaw: float = 0.0) -> void:
 	tombstone_pos = new_tombstone_pos
+	_relocate_target_pos = guard_post_pos if guard_post_pos != Vector3.INF else new_tombstone_pos
+	_relocate_target_pos.y = global_position.y
+	_relocate_target_yaw = guard_post_yaw
 	state = State.RELOCATE
 	if anim_player and anim_player.has_animation("Running_A"):
 		anim_player.play("Running_A")
 
 
 func _do_relocate(delta: float) -> void:
-	# Navigate to a point BESIDE the tombstone, not its center
-	var to_tomb: Vector3 = tombstone_pos - global_position
+	# Navigate to the guard's default formation point near the tombstone.
+	var to_tomb: Vector3 = _relocate_target_pos - global_position
 	to_tomb.y = 0
 	var dist: float = to_tomb.length()
-	# Arrived near the tombstone area — switch to idle / patrol
-	if dist < patrol_inner_radius + 0.04:
-		_pick_idle_wait()
+	if dist <= RELOCATE_ARRIVE_DIST:
+		_finish_relocate()
 		return
 	var dir: Vector3 = to_tomb.normalized()
-	# Stop if another skeleton is directly ahead
-	if _is_skeleton_ahead(dir):
+	var near_finish: bool = dist <= RELOCATE_SLOW_RADIUS
+	# Do not let close-formation guards keep each other oscillating at the
+	# finish line. Once near the assigned post, clamp the final approach and
+	# snap into place instead of applying avoidance pushes.
+	if not near_finish and _is_skeleton_ahead(dir):
 		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
 			anim_player.play("Idle_A")
 		return
 	# Steer around obstacles (tombstone, buildings)
-	var avoid: Vector3 = _steer_around_obstacles(dir)
+	var avoid: Vector3 = Vector3.ZERO if near_finish else _steer_around_obstacles(dir)
 	var final_dir: Vector3 = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
 	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
 	if anim_player and anim_player.current_animation != "Running_A" and anim_player.has_animation("Running_A"):
 		anim_player.play("Running_A")
-	var move_vec: Vector3 = final_dir * move_speed * delta
-	move_vec += _compute_separation(final_dir, delta)
-	move_vec += _compute_building_avoidance(delta)
+	var speed_factor: float = clampf(dist / RELOCATE_SLOW_RADIUS, 0.35, 1.0)
+	var step_len: float = minf(move_speed * speed_factor * delta, dist)
+	var move_vec: Vector3 = final_dir * step_len
+	if not near_finish:
+		move_vec += _compute_separation(final_dir, delta)
+		move_vec += _compute_building_avoidance(delta)
 	global_position += move_vec
+	if _flat_distance(global_position, _relocate_target_pos) <= RELOCATE_ARRIVE_DIST:
+		_finish_relocate()
+
+
+func _finish_relocate() -> void:
+	global_position = _relocate_target_pos
+	global_rotation = Vector3(0, _relocate_target_yaw, 0)
+	_last_separation = Vector3.ZERO
+	_pick_idle_wait()
 
 
 # ── Patrol: walk to random point on a ring around tombstone ───

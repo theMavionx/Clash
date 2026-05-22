@@ -3588,7 +3588,20 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	b["tower_unit_node"] = unit
 
 
-func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
+func _tombstone_skeleton_offset(index: int, target_count: int) -> Vector3:
+	if target_count == 4:
+		const DIAMOND_POINTS: Array[Vector3] = [
+			Vector3(0, 0,  0.18),
+			Vector3( 0.18, 0, 0),
+			Vector3(0, 0, -0.18),
+			Vector3(-0.18, 0, 0),
+		]
+		return DIAMOND_POINTS[index]
+	var angle := (TAU * float(index)) / maxf(float(target_count), 1.0)
+	return Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
+
+
+func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_existing: bool = true) -> void:
 	# Keep alive skeletons, remove invalid references
 	var alive: Array = []
 	for skel in b.get("skeletons", []):
@@ -3599,6 +3612,7 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 		var skel = alive.pop_back()
 		if is_instance_valid(skel):
 			skel.queue_free()
+	var existing_count := alive.size()
 	# Spawn missing
 	var tomb_pos = b.node.global_position
 	# Use preloaded cache (populated in _ready → _preload_defense_resources).
@@ -3610,33 +3624,26 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 	if not model_res or not script_res:
 		b["skeletons"] = alive
 		return
-	# Diamond layout for 4 skeletons: front of cross / behind / both sides.
-	const DIAMOND_POINTS: Array[Vector3] = [
-		Vector3(0, 0,  0.18),  # front (south)
-		Vector3( 0.18, 0, 0),  # right (east)
-		Vector3(0, 0, -0.18),  # back (north)
-		Vector3(-0.18, 0, 0),  # left (west)
-	]
 	while alive.size() < target_count:
+		var spawn_index := alive.size()
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
 		get_tree().current_scene.add_child(skel)
 		skel.tombstone_pos = tomb_pos
+		skel.global_position = tomb_pos + _tombstone_skeleton_offset(spawn_index, target_count)
+		skel.global_rotation = Vector3.ZERO
 		_apply_cel_shader(skel)
 		alive.append(skel)
 	# Reposition every guard to the current target_count layout so that an
 	# upgrade (e.g. L3 circle → L4 diamond) re-anchors existing skeletons
 	# instead of dropping the new one onto a stale spot.
 	for i in range(alive.size()):
-		var offset: Vector3
-		if target_count == 4:
-			offset = DIAMOND_POINTS[i]
-		else:
-			var angle := (TAU * float(i)) / maxf(float(target_count), 1.0)
-			offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
 		if is_instance_valid(alive[i]):
-			alive[i].global_position = tomb_pos + offset
+			alive[i].tombstone_pos = tomb_pos
+			if reposition_existing or i >= existing_count:
+				alive[i].global_position = tomb_pos + _tombstone_skeleton_offset(i, target_count)
+				alive[i].global_rotation = Vector3.ZERO
 	b["skeletons"] = alive
 
 
@@ -5104,11 +5111,22 @@ func _confirm_move() -> void:
 	# b.node is already at the new position (moved by _update_move_building)
 	# Tombstone: respawn dead skeletons and relocate alive ones
 	if b.id == "tombstone":
-		_spawn_tombstone_skeletons(b, b.get("level", 1))
-		var tomb_world = b["node"].global_position
+		var existing_skeletons: Array = []
 		for skel in b.get("skeletons", []):
-			if is_instance_valid(skel) and skel.has_method("relocate_to"):
-				skel.relocate_to(tomb_world)
+			if is_instance_valid(skel):
+				existing_skeletons.append(skel)
+		_spawn_tombstone_skeletons(b, b.get("level", 1), false)
+		var tomb_world = b["node"].global_position
+		var skeletons: Array = b.get("skeletons", [])
+		for i in range(skeletons.size()):
+			var skel = skeletons[i]
+			if not is_instance_valid(skel):
+				continue
+			if skel in existing_skeletons and skel.has_method("relocate_to"):
+				skel.relocate_to(tomb_world, tomb_world + _tombstone_skeleton_offset(i, int(b.get("level", 1))), 0.0)
+			else:
+				skel.tombstone_pos = tomb_world
+				skel.global_rotation = Vector3.ZERO
 	# Sync with server
 	var net = _net
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
