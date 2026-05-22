@@ -38,6 +38,55 @@ func _troop_entry_base_name(troop_name: String) -> String:
 			return "Ranger"
 	return base
 
+
+func _is_slot_filler(troop_name: Variant) -> bool:
+	return str(troop_name) == "_SLOT_FILLER_"
+
+
+func _troop_unit_span_at(ship_troops: Array, index: int) -> Dictionary:
+	if index < 0 or index >= ship_troops.size():
+		return {}
+	var start: int = index
+	if _is_slot_filler(ship_troops[start]):
+		while start > 0 and _is_slot_filler(ship_troops[start]):
+			start -= 1
+		if _is_slot_filler(ship_troops[start]):
+			return {}
+	var end: int = start + 1
+	while end < ship_troops.size() and _is_slot_filler(ship_troops[end]):
+		end += 1
+	return {"start": start, "end": end}
+
+
+func _swap_span_for_replacement(ship_troops: Array, slot: int, replacement_name: String, capacity: int) -> Dictionary:
+	if slot < 0 or slot >= ship_troops.size():
+		return {}
+	if _is_slot_filler(ship_troops[slot]):
+		return {}
+	var selected: Dictionary = _troop_unit_span_at(ship_troops, slot)
+	if selected.is_empty():
+		return {}
+	var start: int = int(selected.start)
+	var end: int = int(selected.end)
+	var replacement_base: String = _troop_entry_base_name(replacement_name)
+	var replacement_slots: int = int(bs.troop_defs.get(replacement_base, {}).get("slot_cost", 1))
+	var avoid_implicit_demon_king_removal: bool = replacement_base == "DemonKing"
+	while ship_troops.size() - (end - start) + replacement_slots > capacity:
+		var right: Dictionary = _troop_unit_span_at(ship_troops, end)
+		if not right.is_empty() and int(right.start) == end:
+			var right_base: String = _troop_entry_base_name(str(ship_troops[int(right.start)]))
+			if not (avoid_implicit_demon_king_removal and right_base == "DemonKing"):
+				end = int(right.end)
+				continue
+		var left: Dictionary = _troop_unit_span_at(ship_troops, start - 1)
+		if not left.is_empty() and int(left.end) == start:
+			var left_base: String = _troop_entry_base_name(str(ship_troops[int(left.start)]))
+			if not (avoid_implicit_demon_king_removal and left_base == "DemonKing"):
+				start = int(left.start)
+				continue
+		return {}
+	return {"start": start, "end": end}
+
 # ---------------------------------------------------------------------------
 # Ship purchasing
 # ---------------------------------------------------------------------------
@@ -163,12 +212,16 @@ func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) 
 		if result.has("resources"):
 			bs._apply_resources_from_server(result.resources)
 	else:
-		ship_troops[slot] = troop_name
+		var span: Dictionary = _swap_span_for_replacement(ship_troops, slot, troop_name, ship_level * 3)
+		if span.is_empty():
+			return
+		var start: int = int(span.start)
+		var remove_count: int = int(span.end) - start
+		for _i in range(remove_count):
+			ship_troops.remove_at(start)
+		ship_troops.insert(start, troop_name)
 		for _i in range(slot_cost - 1):
-			if slot + 1 + _i < ship_troops.size():
-				ship_troops[slot + 1 + _i] = "_SLOT_FILLER_"
-			else:
-				ship_troops.append("_SLOT_FILLER_")
+			ship_troops.insert(start + 1 + _i, "_SLOT_FILLER_")
 		port_node.set_meta("ship_troops", ship_troops)
 	if not is_instance_valid(port_node): return
 	bs._refresh_port_panel()

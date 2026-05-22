@@ -288,6 +288,31 @@ function battleIntentForTarget(targetPlayerName = '') {
   };
 }
 
+function isBuildAdviceIntentText(text) {
+  const raw = String(text || '').normalize('NFKC').trim();
+  if (!raw) return false;
+  const buildingWords = '(?:building|buildings|tower|mage\\s+tower|archer\\s+tower|turret|mine|sawmill|barn|port|storage|tombstone|town\\s+hall|shop)';
+  const explanation =
+    new RegExp(`\\b(?:what\\s+(?:is|are|does)|what'?s|purpose|used\\s+for|explain|describe|how\\s+does|why)\\b[\\s\\S]{0,90}\\b${buildingWords}\\b`, 'iu')
+      .test(raw)
+    || new RegExp(`\\b${buildingWords}\\b[\\s\\S]{0,90}\\b(?:what\\s+(?:is|are|does)|what'?s|purpose|used\\s+for|explain|describe|how\\s+does|why)\\b`, 'iu')
+      .test(raw);
+  const recommendation =
+    /\b(?:what|which)\b[\s\S]{0,40}\b(?:should|need|recommend|best|next)\b[\s\S]{0,50}\b(?:build|place|building|shop)\b/iu.test(raw)
+    || /\b(?:what|which)\b[\s\S]{0,40}\b(?:build|place|building)\b[\s\S]{0,50}\b(?:next|recommend|should|need|best)\b/iu.test(raw);
+  return explanation || recommendation;
+}
+
+function buildAdviceIntent() {
+  return {
+    kind: 'build_advice',
+    action_required: true,
+    goal: 'Explain building purpose or recommend what to build next without placing a building unless the player explicitly asks to build/place it now.',
+    required_loop: 'get_base_state -> get_building_catalog -> answer with building purpose or recommendation; do not call place_building for advice/explanation questions',
+    expected_tools: ['get_base_state', 'get_building_catalog'],
+  };
+}
+
 const DECIBEL_SYMBOL_RE = /\b(?:BTC|ETH|SOL|APT|SUI|XRP|DOGE|BNB|AVAX|LINK|ARB|OP|TIA|WIF|PEPE|MEGA|MOVE|HYPE|MON|USDC|USD)\b/i;
 const DECIBEL_BTC_ALIAS_RE = /(?:\bbitcoin\b|\u0431\u0456\u0442\u043e\u043a|\u0431\u0438\u0442\u043e\u043a|\u0431\u0456\u0442\u043a\u043e\u0457\u043d|\u0431\u0438\u0442\u043a\u043e\u0438\u043d)/iu;
 const DECIBEL_SYMBOL_ALIAS_RE = /собак|песик|додж|doge\s+coin|\bdog\s+(?:coin|token)\b/iu;
@@ -773,6 +798,9 @@ function classifyGameIntent(message, player = {}) {
       required_loop: 'get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers',
       expected_tools: ['get_base_state', 'auto_build_base'],
     };
+  }
+  if (isBuildAdviceIntentText(message)) {
+    return buildAdviceIntent();
   }
   if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building|建造|建筑|商店|港口|塔|xay)/i.test(text)) {
     return {

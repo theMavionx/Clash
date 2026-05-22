@@ -411,7 +411,14 @@ func _warmup_demon_king() -> void:
 		return
 	var inst: Node3D = body_res.instantiate()
 	inst.scale = Vector3(1.0, 1.0, 1.0)
-	_apply_demon_king_material(inst)
+	var script_res: Script = ResourceLoader.load("res://scripts/demon_king.gd", "Script")
+	if script_res != null:
+		# Match the attack-time spawn path (`instantiate` -> `set_script` ->
+		# `_ready`) so DemonKing's embedded AnimationPlayer merge and material
+		# setup happen during warmup, not on the first landing frame.
+		inst.set_script(script_res)
+	else:
+		_apply_demon_king_material(inst)
 	_force_shadow_casting(inst)
 	add_child(inst)
 
@@ -473,7 +480,59 @@ func _warmup_mage_tower() -> void:
 	orb_mat.emission_energy_multiplier = 2.0
 	orb.material_override = orb_mat
 	add_child(orb)
+	_warmup_mage_tower_beam_visuals()
 	print("[WARMUP] MageTower OK")
+
+
+func _warmup_mage_tower_beam_visuals() -> void:
+	var glow := _make_mage_tower_beam_cylinder(0.030, _make_mage_tower_beam_material(Color(0.15, 0.65, 1.0, 0.30), 2.0))
+	var core := _make_mage_tower_beam_cylinder(0.010, _make_mage_tower_beam_material(Color(0.45, 0.90, 1.0, 0.95), 4.0))
+	var impact := _make_mage_tower_impact_sphere(_make_mage_tower_beam_material(Color(0.55, 0.85, 1.0, 0.85), 5.0))
+	glow.position = Vector3(0.12, 0.0, 0.0)
+	core.position = Vector3(0.18, 0.0, 0.0)
+	impact.position = Vector3(0.24, 0.0, 0.0)
+	add_child(glow)
+	add_child(core)
+	add_child(impact)
+
+
+func _make_mage_tower_beam_material(color: Color, energy: float) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = energy
+	return mat
+
+
+func _make_mage_tower_beam_cylinder(radius: float, mat: StandardMaterial3D) -> MeshInstance3D:
+	var mesh := CylinderMesh.new()
+	mesh.height = 0.5
+	mesh.top_radius = radius
+	mesh.bottom_radius = radius
+	mesh.radial_segments = 12
+	mesh.rings = 1
+	var node := MeshInstance3D.new()
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return node
+
+
+func _make_mage_tower_impact_sphere(mat: StandardMaterial3D) -> MeshInstance3D:
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.045
+	mesh.height = 0.090
+	mesh.radial_segments = 12
+	mesh.rings = 6
+	var node := MeshInstance3D.new()
+	node.mesh = mesh
+	node.material_override = mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return node
 
 
 ## Pre-draws the pirate flag marker used by attack_system when a ship is

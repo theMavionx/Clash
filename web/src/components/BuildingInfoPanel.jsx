@@ -60,6 +60,7 @@ const CARD_TROOP_STYLE_MAP = {
 };
 
 const TROOP_COST = 100; // gold per unit
+const SLOT_FILLER = '_SLOT_FILLER_';
 
 const THUMBNAIL_MAP = {
   mine: imgMine,
@@ -101,6 +102,66 @@ function troopBaseName(name) {
   if (lower === 'archer') return 'Archer';
   if (lower === 'ranger') return 'Ranger';
   return base;
+}
+
+function troopSlotCost(name) {
+  return troopBaseName(name) === 'DemonKing' ? 2 : 1;
+}
+
+function troopReplacementEntries(name) {
+  const entries = [name];
+  for (let i = 1; i < troopSlotCost(name); i += 1) entries.push(SLOT_FILLER);
+  return entries;
+}
+
+function troopUnitSpanAt(troops, index) {
+  if (!Array.isArray(troops) || index < 0 || index >= troops.length) return null;
+  let start = index;
+  if (troops[start] === SLOT_FILLER) {
+    while (start > 0 && troops[start] === SLOT_FILLER) start -= 1;
+    if (troops[start] === SLOT_FILLER) return null;
+  }
+  let end = start + 1;
+  while (end < troops.length && troops[end] === SLOT_FILLER) end += 1;
+  return { start, end };
+}
+
+function troopSwapPlacement(troops, slot, replacementName, capacity) {
+  const list = Array.isArray(troops) ? troops : [];
+  const replacementCost = troopSlotCost(replacementName);
+  const replacementBase = troopBaseName(replacementName);
+  if (!Number.isInteger(slot) || slot < 0) return null;
+  if (slot >= list.length) {
+    return list.length + replacementCost <= capacity
+      ? { mode: 'append', start: list.length, end: list.length }
+      : null;
+  }
+  if (list[slot] === SLOT_FILLER) return null;
+  const selected = troopUnitSpanAt(list, slot);
+  if (!selected) return null;
+
+  let start = selected.start;
+  let end = selected.end;
+  const nextLength = () => list.length - (end - start) + replacementCost;
+  const canAutoRemove = (span) => {
+    if (!span) return false;
+    return !(replacementBase === 'DemonKing' && troopBaseName(list[span.start]) === 'DemonKing');
+  };
+
+  while (nextLength() > capacity) {
+    const right = troopUnitSpanAt(list, end);
+    if (canAutoRemove(right) && right.start === end) {
+      end = right.end;
+      continue;
+    }
+    const left = troopUnitSpanAt(list, start - 1);
+    if (canAutoRemove(left) && left.end === start) {
+      start = left.start;
+      continue;
+    }
+    return null;
+  }
+  return { mode: 'replace', start, end };
 }
 
 function demonKingShipEntry(token) {
@@ -471,8 +532,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const renderLoadTroops = () => {
     const shipLevel = building.ship_level || 1;
     const shipTroops = localTroops || building.ship_troops || [];
-    const capacity = building.ship_capacity || shipLevel;
-    const isFull = shipTroops.length >= capacity;
+    const capacity = building.ship_capacity || shipLevel * 3;
     const troopLvls = building.troop_levels || {};
     const getTroopLvl = (name) => {
       const base = troopBaseName(name);
@@ -487,27 +547,34 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
     const handleLoadTroop = (name) => {
       const base = troopBaseName(name);
-      const slotCost = base === 'DemonKing' ? 2 : 1;
+      const slotCost = troopSlotCost(name);
       if (swapSlot === null && shipTroops.length + slotCost > capacity) return;
+      const replacement = troopReplacementEntries(name);
       if (swapSlot !== null) {
-        // Optimistic swap
+        const placement = troopSwapPlacement(shipTroops, swapSlot, name, capacity);
+        if (!placement) return;
+        if (placement.mode === 'append') {
+          const nextTroops = [...shipTroops, ...replacement];
+          setLocalTroops(nextTroops);
+          sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
+          setSwapSlot(null);
+          return;
+        }
         const updated = [...shipTroops];
-        let replaceCount = 1;
-        while (swapSlot + replaceCount < updated.length && updated[swapSlot + replaceCount] === '_SLOT_FILLER_') replaceCount += 1;
-        const replacement = [name];
-        for (let i = 1; i < slotCost; i += 1) replacement.push('_SLOT_FILLER_');
-        if (updated.length - replaceCount + replacement.length > capacity) return;
-        updated.splice(swapSlot, replaceCount, ...replacement);
+        updated.splice(placement.start, placement.end - placement.start, ...replacement);
         setLocalTroops(updated);
         sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
         setSwapSlot(null);
       } else {
-        // Optimistic load
-        const nextTroops = [...shipTroops, name];
-        for (let i = 1; i < slotCost; i += 1) nextTroops.push('_SLOT_FILLER_');
+        const nextTroops = [...shipTroops, ...replacement];
         setLocalTroops(nextTroops);
         sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
       }
+    };
+
+    const canPlaceTroop = (name) => {
+      if (swapSlot === null) return shipTroops.length + troopSlotCost(name) <= capacity;
+      return !!troopSwapPlacement(shipTroops, swapSlot, name, capacity);
     };
 
     const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
@@ -531,7 +598,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const t = shipTroops[i];
               const isSwapping = swapSlot === i;
               if (t) {
-                if (t === '_SLOT_FILLER_') {
+                if (t === SLOT_FILLER) {
                   return (
                     <div key={i} style={{...LT.emptySlot, width: slotW, height: slotH, opacity: 0.6}}>
                       <span style={{fontSize: isMobile ? 10 : 12, fontWeight: 900}}>2/2</span>
@@ -584,7 +651,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   key={name}
                   style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0}}
                   onClick={() => {
-                    if (isFull && swapSlot === null) {
+                    if (!canPlaceTroop(name)) {
                       return;
                     } else {
                       handleLoadTroop(name);
@@ -621,9 +688,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
               const disabled = swapSlot === null
                 ? shipTroops.length + 2 > capacity
                 : (() => {
-                    let replaceCount = 1;
-                    while (swapSlot + replaceCount < shipTroops.length && shipTroops[swapSlot + replaceCount] === '_SLOT_FILLER_') replaceCount += 1;
-                    return shipTroops.length - replaceCount + 2 > capacity;
+                    return !troopSwapPlacement(shipTroops, swapSlot, entry, capacity);
                   })();
               return (
                 <button

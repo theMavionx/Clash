@@ -59,6 +59,8 @@ const ANIM_NAME_MAP: Dictionary = {
 	"Taunting":    "Taunting",
 }
 
+static var _merged_anim_cache_by_skeleton: Dictionary = {}
+
 # Note: DemonKing_albedo.png is the un-masked base; the MaskTint shader uses
 # DemonKing_mask_albedo.png instead, so the plain albedo isn't preloaded here.
 const DEMON_EMISSION: Texture2D = preload("res://Model/Characters/Model/DemonKing_emission.png")
@@ -197,29 +199,9 @@ func _use_embedded_anim_player_and_merge() -> void:
 	print("[DemonKing] anim_player root: ", ap_root_node.name, " skel_rel: ", target_skel_rel)
 
 	# Merge sibling FBX animations with bone-track retargeting + per-clip
-	# loop mode (one-shot for attack/die/hit, cyclic for run/walk/idle).
-	for file_path in DEMON_ANIM_FILES:
-		var res: Resource = ResourceLoader.load(file_path, "PackedScene")
-		if res == null:
-			continue
-		var temp_root: Node = res.instantiate()
-		var temp_player: AnimationPlayer = _find_first_anim_player(temp_root, null)
-		if temp_player:
-			for clip_name in temp_player.get_animation_list():
-				if clip_name == "RESET" or clip_name == "T-Pose":
-					continue
-				var src_anim: Animation = temp_player.get_animation(clip_name)
-				if src_anim == null:
-					continue
-				var dup: Animation = _retarget_to_skeleton(src_anim, target_skel_rel)
-				# Use file basename to avoid name collisions across the 16 files
-				# (each Unity export tends to name its single clip "Attack01" etc.,
-				# which would shadow earlier identically-named clips).
-				var unique: String = file_path.get_file().get_basename().replace("DemonKing_", "")
-				dup.loop_mode = _loop_mode_for(unique)
-				if not lib.has_animation(unique):
-					lib.add_animation(unique, dup)
-		temp_root.free()
+	# loop mode. Warmup builds this cache once so the first real deployment
+	# reuses the merged library instead of instantiating/retargeting 16 FBXs.
+	_merge_cached_sibling_anims(lib, target_skel_rel)
 
 	# Body FBX's own clip (RunFWD) — apply loop mode the same way.
 	for clip_name in lib.get_animation_list():
@@ -227,6 +209,50 @@ func _use_embedded_anim_player_and_merge() -> void:
 		if anim:
 			anim.loop_mode = _loop_mode_for(str(clip_name))
 
+	_add_canonical_aliases(lib)
+
+	if not anim_player.has_animation(attack_anim):
+		push_warning("DemonKing: '%s' alias missing — attack animation will not play" % attack_anim)
+
+	print("[DemonKing] lib anims: ", anim_player.get_animation_list())
+
+
+func _merge_cached_sibling_anims(lib: AnimationLibrary, target_skel_rel: NodePath) -> void:
+	var cache_key := str(target_skel_rel)
+	var cached_lib: AnimationLibrary = _merged_anim_cache_by_skeleton.get(cache_key, null)
+	if cached_lib == null:
+		cached_lib = AnimationLibrary.new()
+		for file_path in DEMON_ANIM_FILES:
+			var res: Resource = ResourceLoader.load(file_path, "PackedScene")
+			if res == null:
+				continue
+			var temp_root: Node = res.instantiate()
+			var temp_player: AnimationPlayer = _find_first_anim_player(temp_root, null)
+			if temp_player:
+				for clip_name in temp_player.get_animation_list():
+					if clip_name == "RESET" or clip_name == "T-Pose":
+						continue
+					var src_anim: Animation = temp_player.get_animation(clip_name)
+					if src_anim == null:
+						continue
+					var dup: Animation = _retarget_to_skeleton(src_anim, target_skel_rel)
+					# Use file basename to avoid name collisions across the 16 files
+					# (each Unity export tends to name its single clip "Attack01" etc.,
+					# which would shadow earlier identically-named clips).
+					var unique: String = file_path.get_file().get_basename().replace("DemonKing_", "")
+					dup.loop_mode = _loop_mode_for(unique)
+					if not cached_lib.has_animation(unique):
+						cached_lib.add_animation(unique, dup)
+			temp_root.free()
+		_add_canonical_aliases(cached_lib)
+		_merged_anim_cache_by_skeleton[cache_key] = cached_lib
+
+	for cached_name in cached_lib.get_animation_list():
+		if not lib.has_animation(cached_name):
+			lib.add_animation(cached_name, cached_lib.get_animation(cached_name))
+
+
+static func _add_canonical_aliases(lib: AnimationLibrary) -> void:
 	# Alias clips to the canonical names this script's combat code calls.
 	# Movement: longest non-one-shot clip = run cycle.
 	var movement_clip: StringName = &""
@@ -257,11 +283,6 @@ func _use_embedded_anim_player_and_merge() -> void:
 			var run_dup: Animation = run.duplicate()
 			run_dup.loop_mode = Animation.LOOP_LINEAR
 			lib.add_animation("Running_A", run_dup)
-
-	if not anim_player.has_animation(attack_anim):
-		push_warning("DemonKing: '%s' alias missing — attack animation will not play" % attack_anim)
-
-	print("[DemonKing] lib anims: ", anim_player.get_animation_list())
 
 
 ## Decide loop mode by clip name. Cyclic motion AND post-battle cheering loop

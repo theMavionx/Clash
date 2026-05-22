@@ -126,6 +126,7 @@ const CLASH_AGENT_PLAYBOOK = [
   'Generic requests like "attack a base", "attack new base", "battle again", or "find an enemy" are NOT named attacks. Omit target_player_name and use normal matchmaking.',
   'collect resources/збери ресурси -> get_base_state -> collect_resources({}) -> summarize collected resources and totals.',
   'build my base/setup base/розстав все/побудуй базу -> get_base_state -> auto_build_base({ focus: "balanced" }) -> summarize built buildings and blockers.',
+  'building purpose/advice/what should I build next -> get_base_state -> get_building_catalog -> answer with purpose or recommendation only; do not place a building unless the player explicitly asks to build/place now.',
   'build/place one building -> get_base_state -> find_build_slots -> place_building -> summarize.',
   'upgrade -> get_base_state -> choose exact building/troop -> upgrade_building or upgrade_troop -> summarize.',
   'ships/troops/reinforce -> get_base_state -> relevant ship or troop tool -> summarize.',

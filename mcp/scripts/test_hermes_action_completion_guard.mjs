@@ -136,6 +136,9 @@ const ukAnyTradeIntent = classifyGameIntent(ukAnyTrade, { dex: 'avantis' });
 const ukTpProfitIntent = classifyGameIntent(ukTpProfit20, { dex: 'avantis' });
 const volatileIntent = classifyGameIntent('open something more volatile than BTC on Avantis', { dex: 'avantis' });
 const compoundIntent = classifyGameIntent('close BTC and open something more volatile on Avantis', { dex: 'avantis' });
+const buildAdviceNextIntent = classifyGameIntent('What I need to build next?', { dex: 'pacifica' });
+const buildPurposeIntent = classifyGameIntent('Mage Tower - what is this? What is the purpose of the building?', { dex: 'pacifica' });
+const explicitBuildIntent = classifyGameIntent('build an archer tower', { dex: 'pacifica' });
 const dexScopeRows = [
   {
     name: 'avantis_runtime_excludes_decibel_tools',
@@ -175,6 +178,21 @@ const dexScopeRows = [
     ok: compoundIntent.kind === 'avantis_close_then_place_order'
       && terminalToolGroupsForIntent(compoundIntent).some((group) => group.includes('avantis_close_position'))
       && terminalToolGroupsForIntent(compoundIntent).some((group) => group.includes('avantis_place_order')),
+  },
+  {
+    name: 'build_recommendation_does_not_require_place_building',
+    ok: buildAdviceNextIntent.kind === 'build_advice'
+      && !terminalToolGroupsForIntent(buildAdviceNextIntent).some((group) => group.includes('place_building')),
+  },
+  {
+    name: 'building_purpose_does_not_require_place_building',
+    ok: buildPurposeIntent.kind === 'build_advice'
+      && !terminalToolGroupsForIntent(buildPurposeIntent).some((group) => group.includes('place_building')),
+  },
+  {
+    name: 'explicit_build_still_requires_place_building',
+    ok: explicitBuildIntent.kind === 'build'
+      && terminalToolGroupsForIntent(explicitBuildIntent).some((group) => group.includes('place_building')),
   },
 ];
 

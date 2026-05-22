@@ -796,6 +796,8 @@ function intentProgressMessage(intent, fallback) {
       return 'Checking production buildings and collecting resources';
     case 'build':
       return 'Checking the catalog and finding a valid build slot';
+    case 'build_advice':
+      return 'Checking your base and building catalog';
     case 'auto_build_base':
       return 'Planning and placing useful base buildings';
     case 'upgrade':

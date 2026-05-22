@@ -6192,6 +6192,49 @@ function _appendTroopSlots(shipTroops, troopName) {
   shipTroops.push(_canonicalTroopEntry(troopName));
   for (let i = 1; i < _troopSlotCost(normalized); i++) shipTroops.push('_SLOT_FILLER_');
 }
+function _troopUnitSpanAt(shipTroops, index) {
+  if (!Array.isArray(shipTroops) || index < 0 || index >= shipTroops.length) return null;
+  let start = index;
+  if (_isSlotFiller(shipTroops[start])) {
+    while (start > 0 && _isSlotFiller(shipTroops[start])) start--;
+    if (_isSlotFiller(shipTroops[start])) return null;
+  }
+  let end = start + 1;
+  while (end < shipTroops.length && _isSlotFiller(shipTroops[end])) end++;
+  return { start, end };
+}
+function _swapSpanForReplacement(shipTroops, slot, replacementName, capacity) {
+  if (!Array.isArray(shipTroops) || !Number.isInteger(slot) || slot < 0 || slot >= shipTroops.length) return null;
+  if (_isSlotFiller(shipTroops[slot])) return null;
+  const selected = _troopUnitSpanAt(shipTroops, slot);
+  if (!selected) return null;
+
+  let start = selected.start;
+  let end = selected.end;
+  const replacementSlots = _troopSlotCost(replacementName);
+  const avoidImplicitDemonKingRemoval = _normalizeTroopName(replacementName) === 'DemonKing';
+  const canAutoRemove = (span) => {
+    if (!span) return false;
+    return !(avoidImplicitDemonKingRemoval && _isDemonKing(shipTroops[span.start]));
+  };
+  const nextLength = () => shipTroops.length - (end - start) + replacementSlots;
+
+  while (nextLength() > capacity) {
+    const right = _troopUnitSpanAt(shipTroops, end);
+    if (right && right.start === end && canAutoRemove(right)) {
+      end = right.end;
+      continue;
+    }
+    const left = _troopUnitSpanAt(shipTroops, start - 1);
+    if (left && left.end === start && canAutoRemove(left)) {
+      start = left.start;
+      continue;
+    }
+    return null;
+  }
+
+  return { start, end };
+}
 function _applyCasualties(playerId, casualties) {
   if (!casualties || typeof casualties !== 'object') return;
 
@@ -6711,18 +6754,15 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     const shipTroops = JSON.parse(building.ship_troops || '[]');
     if (slot < 0 || slot >= shipTroops.length) throw { status: 400, error: 'Invalid slot' };
     if (_isSlotFiller(shipTroops[slot])) throw { status: 400, error: 'Cannot replace a reserved heavy-unit slot' };
-    let slotsToReplace = 1;
-    while (slot + slotsToReplace < shipTroops.length && _isSlotFiller(shipTroops[slot + slotsToReplace])) {
-      slotsToReplace++;
-    }
+    const capacity = building.level * 3;
+    const span = _swapSpanForReplacement(shipTroops, slot, normalizedTroop, capacity);
+    if (!span) throw { status: 400, error: 'Not enough ship capacity for this troop' };
+    const slotsToReplace = span.end - span.start;
     const replacement = [];
     const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
     _appendTroopSlots(replacement, troopEntry);
-    const nextLength = shipTroops.length - slotsToReplace + replacement.length;
-    const capacity = building.level * 3;
-    if (nextLength > capacity) throw { status: 400, error: 'Not enough ship capacity for this troop' };
     if (normalizedTroop === 'DemonKing') {
-      const keptTroops = shipTroops.filter((_, index) => index < slot || index >= slot + slotsToReplace);
+      const keptTroops = shipTroops.filter((_, index) => index < span.start || index >= span.end);
       if (keptTroops.some((row) => _demonKingEntryKey(row) === _demonKingEntryKey(troopEntry))) {
         throw { status: 400, error: 'This Demon King NFT is already loaded' };
       }
@@ -6733,7 +6773,7 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     if (player.gold < swapCost) throw { status: 400, error: 'Not enough gold' };
 
     if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
-    shipTroops.splice(slot, slotsToReplace, ...replacement);
+    shipTroops.splice(span.start, slotsToReplace, ...replacement);
     const troopsJson = JSON.stringify(shipTroops);
     // Update ship_troops only — template stays as the last full loadout so /reinforce
     // can still restore the original slot count after casualties.
