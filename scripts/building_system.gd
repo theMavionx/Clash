@@ -82,7 +82,7 @@ var building_defs: Dictionary = {
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 12000, "wood": 55000, "ore": 50000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 60000, "wood": 95000, "ore": 90000}},
 	},
 	"turret": {
 		"name": "Turret",
@@ -137,7 +137,7 @@ var building_defs: Dictionary = {
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
 		"hp_levels": [700],
-		"cost": {"gold": 500, "ore": 800},
+		"cost": {"gold": 2500, "ore": 4000},
 		"max_count": 2,
 		"hp_bar_height": 0.5,
 		# FBX ships no embedded texture (Unity .mat stripped) — applied at runtime
@@ -181,6 +181,12 @@ var building_defs: Dictionary = {
 		"cost": {},
 		"no_shop": true,
 	},
+}
+
+const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
+	2: 2,
+	3: 3,
+	4: 20,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -2887,17 +2893,9 @@ func _select_building(b: Dictionary) -> void:
 	# Send to React
 	var bridge = _bridge
 	if bridge:
-		var cost = def.get("cost", {})
-		var multiplier = level + 1
 		var upgrade_cost := {}
-		# TH has special upgrade_cost
-		if b.id == "town_hall" and def.has("upgrade_cost"):
-			var th_costs: Dictionary = def.get("upgrade_cost", {})
-			if th_costs.has(level + 1):
-				upgrade_cost = th_costs[level + 1]
-		elif level < max_level:
-			for res_name in cost:
-				upgrade_cost[res_name] = cost[res_name] * multiplier
+		if level < max_level:
+			upgrade_cost = _get_upgrade_cost(def, level + 1)
 		# HP at next level
 		var next_hp: int = max_hp
 		if def.has("hp_levels") and level < def.hp_levels.size():
@@ -3247,10 +3245,15 @@ func _get_all_meshes(node: Node, arr: Array[MeshInstance3D]) -> void:
 		_get_all_meshes(c, arr)
 
 func _get_upgrade_cost(def: Dictionary, next_level: int) -> Dictionary:
+	if def.has("upgrade_cost"):
+		var special_costs: Dictionary = def.get("upgrade_cost", {})
+		if special_costs.has(next_level):
+			return special_costs[next_level].duplicate()
 	var cost: Dictionary = def.get("cost", {})
 	var result := {}
+	var multiplier: int = int(BUILDING_UPGRADE_COST_MULTIPLIERS.get(next_level, next_level))
 	for res_name in cost:
-		result[res_name] = cost[res_name] * next_level
+		result[res_name] = cost[res_name] * multiplier
 	return result
 
 
@@ -3296,18 +3299,17 @@ func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 	if current_level >= max_level:
 		building_panel_cost.text = "MAX LEVEL"
 		return
-	var cost: Dictionary = def.get("cost", {})
-	if cost.size() == 0:
+	var upgrade_cost: Dictionary = _get_upgrade_cost(def, current_level + 1)
+	if upgrade_cost.size() == 0:
 		building_panel_cost.text = "Free"
 		return
-	var multiplier = current_level + 1
 	var parts: Array = []
-	if cost.has("gold"):
-		parts.append("Gold: %d" % (cost.gold * multiplier))
-	if cost.has("wood"):
-		parts.append("Wood: %d" % (cost.wood * multiplier))
-	if cost.has("ore"):
-		parts.append("Ore: %d" % (cost.ore * multiplier))
+	if upgrade_cost.has("gold"):
+		parts.append("Gold: %d" % upgrade_cost.gold)
+	if upgrade_cost.has("wood"):
+		parts.append("Wood: %d" % upgrade_cost.wood)
+	if upgrade_cost.has("ore"):
+		parts.append("Ore: %d" % upgrade_cost.ore)
 	building_panel_cost.text = "Upgrade: " + "  ".join(parts)
 
 
@@ -4303,15 +4305,14 @@ func _refresh_barn_panel() -> void:
 	var max_bld_level = def.hp_levels.size() if def.has("hp_levels") else 3
 	if bld_level < max_bld_level:
 		# Upgrade cost label
-		var cost: Dictionary = def.get("cost", {})
-		var multiplier = bld_level + 1
+		var upgrade_cost: Dictionary = _get_upgrade_cost(def, bld_level + 1)
 		var cost_parts: Array = []
-		if cost.has("gold"):
-			cost_parts.append("Gold: %d" % (cost.gold * multiplier))
-		if cost.has("wood"):
-			cost_parts.append("Wood: %d" % (cost.wood * multiplier))
-		if cost.has("ore"):
-			cost_parts.append("Ore: %d" % (cost.ore * multiplier))
+		if upgrade_cost.has("gold"):
+			cost_parts.append("Gold: %d" % upgrade_cost.gold)
+		if upgrade_cost.has("wood"):
+			cost_parts.append("Wood: %d" % upgrade_cost.wood)
+		if upgrade_cost.has("ore"):
+			cost_parts.append("Ore: %d" % upgrade_cost.ore)
 		var cost_lbl = Label.new()
 		cost_lbl.text = "  ".join(cost_parts) if cost_parts.size() > 0 else "Free"
 		cost_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

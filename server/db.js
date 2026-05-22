@@ -1782,7 +1782,7 @@ const BUILDING_DEFS = {
     upgrade_cost: {
       2: { gold: 2000, wood: 6000, ore: 5000 },
       3: { gold: 5000, wood: 20000, ore: 18000 },
-      4: { gold: 12000, wood: 55000, ore: 50000 },
+      4: { gold: 60000, wood: 95000, ore: 90000 },
     },
     max_count: 1,
   },
@@ -1837,10 +1837,32 @@ const BUILDING_DEFS = {
   mage_tower: {
     size: [3, 3], max_level: 1,
     hp_levels: [700],
-    cost: { gold: 500, wood: 0, ore: 800 },
+    cost: { gold: 2500, wood: 0, ore: 4000 },
     max_count: 2,
   },
 };
+
+const BUILDING_UPGRADE_COST_MULTIPLIERS = {
+  2: 2,
+  3: 3,
+  4: 20,
+};
+
+function getBuildingUpgradeCost(type, currentLevel) {
+  const def = BUILDING_DEFS[type];
+  if (!def) return { gold: 0, wood: 0, ore: 0 };
+  const nextLevel = Number(currentLevel || 1) + 1;
+  if (nextLevel > def.max_level) return { gold: 0, wood: 0, ore: 0 };
+  if (type === 'town_hall' && def.upgrade_cost?.[nextLevel]) {
+    return { ...def.upgrade_cost[nextLevel] };
+  }
+  const multiplier = BUILDING_UPGRADE_COST_MULTIPLIERS[nextLevel] || nextLevel;
+  return {
+    gold: (def.cost.gold || 0) * multiplier,
+    wood: (def.cost.wood || 0) * multiplier,
+    ore: (def.cost.ore || 0) * multiplier,
+  };
+}
 
 // ---------- Troop Definitions ----------
 
@@ -2575,18 +2597,8 @@ function upgradeBuilding(playerId, buildingId) {
     }
   }
 
-  // Cost — TH has special upgrade_cost, others use multiplier
-  let cost;
-  if (building.type === 'town_hall' && def.upgrade_cost?.[nextLevel]) {
-    cost = def.upgrade_cost[nextLevel];
-  } else {
-    const costMultiplier = nextLevel;
-    cost = {
-      gold: def.cost.gold * costMultiplier,
-      wood: def.cost.wood * costMultiplier,
-      ore: def.cost.ore * costMultiplier,
-    };
-  }
+  // Cost mirrors the Godot economy helper.
+  const cost = getBuildingUpgradeCost(building.type, building.level);
 
   if (!canAfford(playerId, cost.gold, cost.wood, cost.ore)) {
     return { error: 'Not enough resources', cost };
@@ -3513,6 +3525,7 @@ module.exports = {
   // call sites can already construct on demand.
   stmts,
   BUILDING_DEFS,
+  BUILDING_UPGRADE_COST_MULTIPLIERS,
   TH_UNLOCK,
   TH_MAX_COUNT,
   TH_UPGRADE_REQUIRES,
@@ -3538,6 +3551,7 @@ module.exports = {
   addResources,
   canAfford,
   subtractResources,
+  getBuildingUpgradeCost,
   canPlaceBuildingAt,
   findOpenBuildingSlots,
   placeBuilding,
