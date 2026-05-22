@@ -435,6 +435,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const solWallet = adapterSolWallet?.publicKey ? adapterSolWallet : (privySolWallet || adapterSolWallet);
   const usingPrivySolWallet = !adapterSolWallet?.publicKey && !!privySolWallet;
   const solAddress = solWallet?.publicKey?.toBase58?.() || null;
+  const aptosAddress = aptosWallet?.address || null;
   const preparingPrivySolWallet = !!optionalPrivy.enabled
     && !!optionalPrivy.authenticated
     && !adapterSolWallet?.publicKey
@@ -466,14 +467,14 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [shopPayment, setShopPayment] = useState('usdc');
 
   useEffect(() => {
-    if (!evmAddress || !sessionToken) return undefined;
+    if (!sessionToken || (!evmAddress && !solAddress && !aptosAddress)) return undefined;
     let cancelled = false;
-    syncDemonKingNfts({ wallet: evmAddress })
+    syncDemonKingNfts({ wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress } })
       .then((result) => {
         if (cancelled) return;
         addClientBreadcrumb('nft.demon_king_wallet_sync', {
           dex,
-          wallet: `${evmAddress.slice(0, 6)}...${evmAddress.slice(-4)}`,
+          wallets: result?.wallets?.length || 0,
           total: Number(result?.total) || 0,
           cached: !!result?.cached,
         });
@@ -482,12 +483,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         if (cancelled) return;
         addClientBreadcrumb('nft.demon_king_wallet_sync_failed', {
           dex,
-          wallet: `${evmAddress.slice(0, 6)}...${evmAddress.slice(-4)}`,
           message: err?.message || String(err),
         }, 'warn');
       });
     return () => { cancelled = true; };
-  }, [dex, evmAddress, sessionToken]);
+  }, [aptosAddress, dex, evmAddress, sessionToken, solAddress]);
 
   // Reset payment to USDC when the player switches to a chain that doesn't
   // offer the previously-chosen token. The chain-allowed sets here mirror
@@ -780,7 +780,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
-        afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: [selected.chain], force: true }),
+        afterMint: () => syncDemonKingNfts({ wallet: solAddress, chains: ['solana'], force: true }),
         dex,
       });
       return;
@@ -798,6 +798,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
+        afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: [selected.chain], force: true }),
         dex,
       });
       return;
@@ -812,6 +813,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
+        afterMint: () => syncDemonKingNfts({ wallet: aptosAddress, chains: ['aptos'], force: true }),
         dex,
       });
       return;
@@ -827,7 +829,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     } else {
       handleSolanaReady();
     }
-  }, [aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
+  }, [aptosAddress, aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
 
   const handleBuyGameProduct = useCallback(async (product) => {
     if (!sessionToken) {
@@ -1096,6 +1098,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 initialRequest={initialUpgradeRequest}
                 evmWallet={evmWallet}
                 evmAddress={evmAddress}
+                solAddress={solAddress}
+                aptosAddress={aptosAddress}
                 evmChainId={evmChainId}
                 onOpenEvmModal={() => setEvmModalOpen(true)}
                 onSelectChain={setSelectedChain}
@@ -1540,6 +1544,8 @@ function DemonKingUpgradePanel({
   initialRequest,
   evmWallet,
   evmAddress,
+  solAddress,
+  aptosAddress,
   evmChainId,
   onOpenEvmModal,
   onSelectChain,
@@ -1592,6 +1598,7 @@ function DemonKingUpgradePanel({
   const winsReady = requiredWins <= 0 || wins >= requiredWins;
   const quotePriceLabel = quotePaymentLabel(quotePreview, selectedPaymentOption?.label);
   const displayNextLevel = Number(quotePreview?.newLevel || nextLevel || 2);
+  const ownerAddressForChain = chain === 'solana' ? solAddress : chain === 'aptos' ? aptosAddress : evmAddress;
 
   const load = useCallback(async () => {
     const token = typeof window !== 'undefined' ? window._playerToken : null;
@@ -1602,8 +1609,8 @@ function DemonKingUpgradePanel({
       const statusRes = await fetch('/api/troops/demon_king/upgrade-status', { cache: 'no-store', headers });
       const statusJson = await statusRes.json().catch(() => ({}));
       if (statusRes.ok) setStatus(statusJson);
-      if (evmAddress) {
-        const ownedJson = await syncDemonKingNfts({ wallet: evmAddress, chains: [chain] });
+      if (ownerAddressForChain) {
+        const ownedJson = await syncDemonKingNfts({ wallet: ownerAddressForChain, chains: [chain] });
         const nextTokens = ownedJson?.tokens || [];
         setOwned(nextTokens);
         setSelectedTokenId((prev) => {
@@ -1617,7 +1624,7 @@ function DemonKingUpgradePanel({
     } finally {
       setLoading(false);
     }
-  }, [chain, evmAddress, setNotice]);
+  }, [chain, ownerAddressForChain, setNotice]);
 
   useEffect(() => {
     load();
@@ -2296,7 +2303,7 @@ async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, 
 
 // Aptos — server signs a MintQuote, client calls mint_with_quote on the
 // Move module via the connected wallet (Petra/Pontem/Martian). USDC only.
-async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
+async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
   const buyer = aptosWallet?.address;
   if (!buyer) { setNotice('Connect Aptos wallet first.'); return; }
   const payment = selected?.id === 'aptos-apt' ? 'apt' : 'usdc';
@@ -2315,6 +2322,13 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
     });
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
+    void afterMint?.().catch((err) => {
+      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+        dex,
+        chain: 'aptos',
+        message: err?.message || String(err),
+      }, 'warn');
+    });
   } catch (err) {
     const message = err?.shortMessage || err?.message || 'Aptos mint failed';
     setNotice(message.slice(0, 140));
@@ -2325,7 +2339,7 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
   }
 }
 
-async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, dex }) {
+async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
   const payment = String(selected?.token || '').toLowerCase() === 'skr'
     ? 'skr'
     : selected.id === 'sol-sol' ? 'sol' : 'usdc';
@@ -2354,6 +2368,13 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
     });
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
+    void afterMint?.().catch((err) => {
+      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+        dex,
+        chain: 'solana',
+        message: err?.message || String(err),
+      }, 'warn');
+    });
   } catch (err) {
     const message = err?.shortMessage || err?.message || 'Solana mint failed';
     setNotice(message.slice(0, 140));

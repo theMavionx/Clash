@@ -1,7 +1,10 @@
 import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useSend, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useOptionalPrivy } from './PrivyAuthProvider';
 import { syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -164,6 +167,13 @@ function BarnPanel({ building, onClose }) {
   const { isMobile: mobile } = useLayout();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
+  const solWallet = useSolWallet();
+  const optionalPrivy = useOptionalPrivy();
+  const solAddress = solWallet?.publicKey?.toBase58?.()
+    || (optionalPrivy.solanaWallets || []).find((wallet) => wallet?.address)?.address
+    || null;
+  const aptosWallet = useAptosWallet();
+  const aptosAddress = aptosWallet?.address || null;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
@@ -197,8 +207,11 @@ function BarnPanel({ building, onClose }) {
       headers: token ? { 'x-token': token } : {},
       signal: controller.signal,
     }).then((res) => res.json().catch(() => ({}))).catch(() => null);
-    const ownedPromise = evmAddress
-      ? syncDemonKingNfts({ wallet: evmAddress, signal: controller.signal }).catch((err) => ({ error: err, tokens: [] }))
+    const ownedPromise = evmAddress || solAddress || aptosAddress
+      ? syncDemonKingNfts({
+          wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress },
+          signal: controller.signal,
+        }).catch((err) => ({ error: err, tokens: [] }))
       : Promise.resolve({ tokens: [] });
 
     Promise.all([statusPromise, ownedPromise])
@@ -218,7 +231,11 @@ function BarnPanel({ building, onClose }) {
             imageUrl: item.imageUrl || demonKingImg,
           });
         });
-        tokens.sort((a, b) => (b.level || 1) - (a.level || 1) || String(a.chain).localeCompare(String(b.chain)) || Number(a.tokenId) - Number(b.tokenId));
+        tokens.sort((a, b) => (
+          (b.level || 1) - (a.level || 1)
+          || String(a.chain).localeCompare(String(b.chain))
+          || String(a.tokenId).localeCompare(String(b.tokenId), undefined, { numeric: true })
+        ));
         setDemonKingNfts(tokens);
         if (ownedJson?.error) setDemonKingError((ownedJson.error?.message || 'Could not load Demon King NFTs').slice(0, 140));
         setSelectedDemonKey((prev) => {
@@ -233,7 +250,7 @@ function BarnPanel({ building, onClose }) {
         if (!controller.signal.aborted) setDemonKingLoading(false);
       });
     return () => controller.abort();
-  }, [currentTroopName, evmAddress]);
+  }, [aptosAddress, currentTroopName, evmAddress, solAddress]);
 
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
   
@@ -324,7 +341,8 @@ function BarnPanel({ building, onClose }) {
           ...(demonKingStatus || {}),
           chain: selectedDemonNft?.chain,
           tokenId: selectedDemonNft?.tokenId,
-          owner: evmAddress,
+          owner: selectedDemonNft?.wallet
+            || (selectedDemonNft?.chain === 'solana' ? solAddress : selectedDemonNft?.chain === 'aptos' ? aptosAddress : evmAddress),
           next_level: Math.min(3, displayLvl + 1),
         },
       },

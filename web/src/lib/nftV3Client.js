@@ -34,6 +34,7 @@ const OWNED_CACHE_PREFIX = 'nft-owned-v3:';
 const DEMON_KING_SYNC_CACHE_TTL_MS = 5 * 60_000;
 const DEMON_KING_SYNC_CACHE_PREFIX = 'demon-king-sync:';
 const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_SUPPORTED_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
 
 const ownedNftMemoryCache = new Map();
 const demonKingSyncMemoryCache = new Map();
@@ -641,12 +642,22 @@ function normalizeDemonKingChains(chains) {
   const rows = Array.isArray(chains) ? chains : String(chains || '').split(',');
   const filtered = rows
     .map((chain) => String(chain || '').trim().toLowerCase())
-    .filter((chain) => DEMON_KING_EVM_CHAINS.includes(chain));
+    .filter((chain) => DEMON_KING_SUPPORTED_CHAINS.includes(chain));
   return [...new Set(filtered.length ? filtered : DEMON_KING_EVM_CHAINS)];
 }
 
-function demonKingSyncCacheKey(wallet, chains) {
-  return `${DEMON_KING_SYNC_CACHE_PREFIX}${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
+function demonKingPlayerCacheScope(token) {
+  const text = String(token || 'guest');
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function demonKingSyncCacheKey(wallet, chains, token = null) {
+  return `${DEMON_KING_SYNC_CACHE_PREFIX}${demonKingPlayerCacheScope(token)}:${String(wallet || '').toLowerCase()}:${normalizeDemonKingChains(chains).join(',')}`;
 }
 
 function readDemonKingSyncCache(key) {
@@ -698,14 +709,52 @@ export function clearDemonKingNftCache(wallet = null) {
   } catch {}
 }
 
-export async function syncDemonKingNfts({ wallet, chains = DEMON_KING_EVM_CHAINS, force = false, signal } = {}) {
-  const walletText = String(wallet || '').trim();
-  if (!/^0x[0-9a-fA-F]{40}$/.test(walletText)) {
-    return { ok: true, wallet: walletText, chains: normalizeDemonKingChains(chains), total: 0, tokens: [] };
+function isEvmWalletAddress(value) {
+  return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
+}
+
+function isAptosWalletAddress(value) {
+  return /^0x[0-9a-fA-F]{1,64}$/.test(String(value || '').trim());
+}
+
+function isSolanaWalletAddress(value) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
+}
+
+function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
+  const requested = normalizeDemonKingChains(chains);
+  const jobs = [];
+  const addJob = (walletValue, candidateChains) => {
+    const walletText = String(walletValue || '').trim();
+    if (!walletText) return;
+    const chainList = requested.filter((chain) => candidateChains.includes(chain));
+    if (!chainList.length) return;
+    jobs.push({ wallet: walletText, chains: chainList });
+  };
+
+  if (wallets && typeof wallets === 'object') {
+    addJob(wallets.evm || wallets.ethereum || wallets.base || wallet, DEMON_KING_EVM_CHAINS);
+    addJob(wallets.solana || wallets.sol, ['solana']);
+    addJob(wallets.aptos || wallets.apt, ['aptos']);
+    return jobs;
   }
 
+  const walletText = String(wallet || '').trim();
+  if (!walletText) return jobs;
+  if (isEvmWalletAddress(walletText)) addJob(walletText, DEMON_KING_EVM_CHAINS);
+  if (isSolanaWalletAddress(walletText)) addJob(walletText, ['solana']);
+  if (!isEvmWalletAddress(walletText) && isAptosWalletAddress(walletText)) addJob(walletText, ['aptos']);
+  return jobs;
+}
+
+async function syncDemonKingNftWallet({ wallet, chains, force, signal, token }) {
+  const walletText = String(wallet || '').trim();
   const chainList = normalizeDemonKingChains(chains);
-  const cacheKey = demonKingSyncCacheKey(walletText, chainList);
+  if (!walletText || !chainList.length) {
+    return { ok: true, wallet: walletText, chains: chainList, total: 0, tokens: [] };
+  }
+
+  const cacheKey = demonKingSyncCacheKey(walletText, chainList, token);
   if (!force) {
     const cached = readDemonKingSyncCache(cacheKey);
     if (cached) return cached;
@@ -713,11 +762,8 @@ export async function syncDemonKingNfts({ wallet, chains = DEMON_KING_EVM_CHAINS
     clearDemonKingNftCache(walletText);
   }
 
-  const inflightKey = `${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
+  const inflightKey = `${demonKingPlayerCacheScope(token)}:${String(walletText).toLowerCase()}:${chainList.join(',')}:${force ? 'force' : 'normal'}`;
   if (demonKingSyncInflight.has(inflightKey)) return demonKingSyncInflight.get(inflightKey);
-
-  const token = typeof window !== 'undefined' ? window._playerToken : null;
-  if (!token) throw new Error('Game account token required');
 
   const job = (async () => {
     const res = await fetchWithTimeout('/api/nft/demon-king/sync', {
@@ -747,6 +793,69 @@ export async function syncDemonKingNfts({ wallet, chains = DEMON_KING_EVM_CHAINS
   } finally {
     demonKingSyncInflight.delete(inflightKey);
   }
+}
+
+export async function syncDemonKingNfts({ wallet, wallets = null, chains = DEMON_KING_SUPPORTED_CHAINS, force = false, signal } = {}) {
+  const jobs = normalizeDemonKingSyncJobs({ wallet, wallets, chains });
+  const requestedChains = normalizeDemonKingChains(chains);
+  if (!jobs.length) {
+    return { ok: true, wallet: String(wallet || ''), chains: requestedChains, total: 0, tokens: [] };
+  }
+
+  const token = typeof window !== 'undefined' ? window._playerToken : null;
+  if (!token) throw new Error('Game account token required');
+
+  const settled = await Promise.allSettled(jobs.map((job) => syncDemonKingNftWallet({
+    ...job,
+    force,
+    signal,
+    token,
+  })));
+
+  const tokensByKey = new Map();
+  const errors = [];
+  const walletsSynced = [];
+  const chainsSynced = new Set();
+  for (let i = 0; i < settled.length; i += 1) {
+    const row = settled[i];
+    const job = jobs[i];
+    if (row.status === 'rejected') {
+      errors.push({ wallet: job.wallet, chains: job.chains, error: row.reason?.message || String(row.reason) });
+      continue;
+    }
+    walletsSynced.push(row.value.wallet || job.wallet);
+    (row.value.chains || job.chains || []).forEach((chain) => chainsSynced.add(chain));
+    for (const tokenItem of row.value.tokens || []) {
+      const tokenId = String(tokenItem.tokenId || tokenItem.tokenAddress || tokenItem.asset || tokenItem.mint || tokenItem.id || '').trim();
+      const chain = String(tokenItem.chain || '').toLowerCase();
+      if (!chain || !tokenId) continue;
+      tokensByKey.set(`${chain}:${tokenId}`, {
+        ...tokenItem,
+        chain,
+        tokenId,
+      });
+    }
+  }
+
+  if (!tokensByKey.size && errors.length === jobs.length) {
+    throw new Error(errors[0]?.error || 'Demon King NFT sync failed');
+  }
+
+  const value = normalizeNftPayloadImages({
+    ok: true,
+    partial: errors.length > 0,
+    wallets: walletsSynced,
+    chains: [...chainsSynced],
+    total: tokensByKey.size,
+    tokens: [...tokensByKey.values()],
+    errors,
+  });
+  try {
+    window?.dispatchEvent?.(new CustomEvent('demon-king-nfts:updated', {
+      detail: { wallets: walletsSynced, chains: value.chains, tokens: value.tokens, force },
+    }));
+  } catch {}
+  return value;
 }
 
 function evmRpcUrls(chain) {

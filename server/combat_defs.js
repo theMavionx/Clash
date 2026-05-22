@@ -86,9 +86,9 @@ const SKELETON_GUARD = {
 };
 
 // Attack session constraints
-const MAX_SHIPS = 6;
+const MAX_SHIPS = 5;
 const TROOPS_PER_SHIP = 12;                     // Lv4 port capacity: 4 * 3
-const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 72
+const MAX_TROOPS = MAX_SHIPS * TROOPS_PER_SHIP; // 60
 const SAIL_DELAY_SEC = 3.0;
 const TIME_LIMIT_SEC = 180;
 const LOOT_PERCENT = 0.15;

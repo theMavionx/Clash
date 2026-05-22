@@ -1,7 +1,10 @@
 import { memo, useCallback, useState, useEffect, useRef } from 'react';
+import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
+import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useOptionalPrivy } from './PrivyAuthProvider';
 import { nftLevelImageUrl, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
@@ -192,6 +195,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { isMobile } = useLayout();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
+  const solWallet = useSolWallet();
+  const optionalPrivy = useOptionalPrivy();
+  const solAddress = solWallet?.publicKey?.toBase58?.()
+    || (optionalPrivy.solanaWallets || []).find((wallet) => wallet?.address)?.address
+    || null;
+  const aptosWallet = useAptosWallet();
+  const aptosAddress = aptosWallet?.address || null;
   
   const [view, setView] = useState('ACTIONS');
   const [swapSlot, setSwapSlot] = useState(null);
@@ -217,14 +227,17 @@ function BuildingInfoPanel({ onOpenTroops }) {
   }, [serverTroopsKey]);
 
   useEffect(() => {
-    if (view !== 'LOAD_TROOPS' || !evmAddress) {
-      if (!evmAddress) setDemonKingNfts([]);
+    if (view !== 'LOAD_TROOPS' || (!evmAddress && !solAddress && !aptosAddress)) {
+      if (!evmAddress && !solAddress && !aptosAddress) setDemonKingNfts([]);
       return undefined;
     }
     const controller = new AbortController();
     setDemonKingNftLoading(true);
     setDemonKingNftError(null);
-    syncDemonKingNfts({ wallet: evmAddress, signal: controller.signal })
+    syncDemonKingNfts({
+      wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress },
+      signal: controller.signal,
+    })
       .then((ownedJson) => {
         if (controller.signal.aborted) return;
         const tokens = [];
@@ -237,7 +250,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
             imageUrl: token.imageUrl || nftLevelImageUrl(token.level || 1, token.tokenId || token.id || ''),
           });
         });
-        tokens.sort((a, b) => (b.level || 1) - (a.level || 1) || String(a.chain).localeCompare(String(b.chain)) || Number(a.tokenId) - Number(b.tokenId));
+        tokens.sort((a, b) => (
+          (b.level || 1) - (a.level || 1)
+          || String(a.chain).localeCompare(String(b.chain))
+          || String(a.tokenId).localeCompare(String(b.tokenId), undefined, { numeric: true })
+        ));
         setDemonKingNfts(tokens.filter((token) => token.tokenId));
       })
       .catch((err) => {
@@ -247,7 +264,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         if (!controller.signal.aborted) setDemonKingNftLoading(false);
       });
     return () => controller.abort();
-  }, [evmAddress, view]);
+  }, [aptosAddress, evmAddress, solAddress, view]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {
@@ -541,6 +558,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
     const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
     const loadedDemonEntries = new Set(shipTroops.map(demonKingEntryTokenKey).filter(Boolean));
     const availableDemonNfts = demonKingNfts.filter((token) => !loadedDemonEntries.has(demonKingTokenKey(token)));
+    const demonKingOwnerForEntry = (entry) => {
+      const key = demonKingEntryTokenKey(entry);
+      const token = demonKingNfts.find((item) => demonKingTokenKey(item) === key);
+      if (!token) return evmAddress || solAddress || aptosAddress || undefined;
+      return token.wallet
+        || (token.chain === 'solana' ? solAddress : token.chain === 'aptos' ? aptosAddress : evmAddress)
+        || undefined;
+    };
     const openNftShop = () => {
       window.dispatchEvent(new CustomEvent('clash-open-nft-shop', { detail: { view: demonKingNfts.length ? 'upgrade' : 'shop' } }));
     };
@@ -556,19 +581,19 @@ function BuildingInfoPanel({ onOpenTroops }) {
         if (placement.mode === 'append') {
           const nextTroops = [...shipTroops, ...replacement];
           setLocalTroops(nextTroops);
-          sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
+          sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? demonKingOwnerForEntry(name) : undefined });
           setSwapSlot(null);
           return;
         }
         const updated = [...shipTroops];
         updated.splice(placement.start, placement.end - placement.start, ...replacement);
         setLocalTroops(updated);
-        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
+        sendToGodot('swap_troop', { slot: swapSlot, troop_name: name, nft_owner: base === 'DemonKing' ? demonKingOwnerForEntry(name) : undefined });
         setSwapSlot(null);
       } else {
         const nextTroops = [...shipTroops, ...replacement];
         setLocalTroops(nextTroops);
-        sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? evmAddress : undefined });
+        sendToGodot('load_troop', { troop_name: name, nft_owner: base === 'DemonKing' ? demonKingOwnerForEntry(name) : undefined });
       }
     };
 

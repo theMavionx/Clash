@@ -776,6 +776,45 @@ function evmNftChainConfig(chainKey) {
 
 async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
   const chainKey = String(proof?.chain || '').toLowerCase();
+  if (chainKey === 'aptos' || chainKey === 'solana') {
+    const tokenIdRaw = String(proof?.tokenId ?? proof?.token_id ?? '').trim();
+    const tokenOk = chainKey === 'aptos'
+      ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenIdRaw)
+      : SOLANA_WALLET_RE.test(tokenIdRaw);
+    if (!tokenOk) return { error: 'Demon King NFT tokenId is invalid', status: 400 };
+    const normalizeOwner = (value) => (
+      chainKey === 'aptos'
+        ? (APTOS_WALLET_RE.test(String(value || '')) ? `0x${String(value).replace(/^0x/i, '').padStart(64, '0').toLowerCase()}` : null)
+        : (SOLANA_WALLET_RE.test(String(value || '')) ? String(value).trim() : null)
+    );
+    const ownerHint = proof?.owner ? normalizeOwner(proof.owner) : null;
+    const cached = db.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
+    if (!cached || !freshDemonKingBinding(cached)) {
+      return { error: `Sync your ${chainKey === 'aptos' ? 'Aptos' : 'Solana'} Demon King wallet first`, status: 403 };
+    }
+    const cachedOwner = normalizeOwner(cached.wallet);
+    if (!cachedOwner || (ownerHint && ownerHint !== cachedOwner)) {
+      return { error: 'Demon King NFT owner mismatch', status: 403 };
+    }
+    const level = normalizeNftLevel(cached.level);
+    if (level < Number(nextLevel)) {
+      return {
+        error: `Demon King NFT must be upgraded to level ${nextLevel}`,
+        status: 403,
+        nft_level: level,
+        next_level: nextLevel,
+      };
+    }
+    return {
+      nftVerified: true,
+      nftLevel: level,
+      nftChain: chainKey,
+      nftTokenId: tokenIdRaw,
+      nftOwner: cachedOwner,
+      txHash: proof?.txHash || proof?.tx_hash || null,
+      cached: true,
+    };
+  }
   const cfg = evmNftChainConfig(chainKey);
   const spec = NFT_EVM_CHAIN_SPECS[chainKey];
   if (!cfg || !spec || !cfg.nft) {
@@ -872,10 +911,15 @@ function parseDemonKingTroopEntry(entry) {
   }
   const chainKey = String(parts[1] || '').toLowerCase();
   const tokenIdRaw = String(parts[2] || '').trim();
-  if (!evmNftChainConfig(chainKey) || !NFT_EVM_CHAIN_SPECS[chainKey]) {
-    return { error: 'Demon King NFTs are supported on Base, Arbitrum, and Monad only' };
-  }
-  if (!/^\d+$/.test(tokenIdRaw)) {
+  const isEvmDemonKing = !!(evmNftChainConfig(chainKey) && NFT_EVM_CHAIN_SPECS[chainKey]);
+  const tokenIdOk = isEvmDemonKing
+    ? /^\d+$/.test(tokenIdRaw)
+    : chainKey === 'aptos'
+      ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenIdRaw)
+      : chainKey === 'solana'
+        ? SOLANA_WALLET_RE.test(tokenIdRaw)
+        : false;
+  if (!tokenIdOk) {
     return { error: 'Demon King NFT tokenId is invalid' };
   }
   let encodedLevel = 1;
@@ -891,6 +935,34 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
   const { chainKey, tokenIdRaw } = parsed;
   const cfg = evmNftChainConfig(chainKey);
   const spec = NFT_EVM_CHAIN_SPECS[chainKey];
+  const cached = db.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
+
+  if (chainKey === 'aptos' || chainKey === 'solana') {
+    const normalizeOwner = (value) => (
+      chainKey === 'aptos'
+        ? (APTOS_WALLET_RE.test(String(value || '')) ? `0x${String(value).replace(/^0x/i, '').padStart(64, '0').toLowerCase()}` : null)
+        : (SOLANA_WALLET_RE.test(String(value || '')) ? String(value).trim() : null)
+    );
+    const ownerHint = ownerHintRaw ? normalizeOwner(ownerHintRaw) : null;
+    if (!cached || !freshDemonKingBinding(cached)) {
+      return { error: `Sync your ${chainKey === 'aptos' ? 'Aptos' : 'Solana'} Demon King wallet first`, status: 403 };
+    }
+    const cachedOwner = normalizeOwner(cached.wallet);
+    if (!cachedOwner || (ownerHint && ownerHint !== cachedOwner)) {
+      return { error: 'Demon King NFT owner mismatch', status: 403 };
+    }
+    const level = normalizeNftLevel(cached.level);
+    return {
+      nftVerified: true,
+      nftLevel: level,
+      nftChain: chainKey,
+      nftTokenId: String(tokenIdRaw),
+      nftOwner: cachedOwner,
+      troopEntry: `DemonKing:${chainKey}:${tokenIdRaw}:L${level}`,
+      cached: true,
+    };
+  }
+
   try {
     const { createPublicClient, getAddress, http } = await import('viem');
     const ownerHint = ownerHintRaw ? getAddress(String(ownerHintRaw)) : null;
@@ -898,7 +970,6 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       player?.wallet,
       player?.nft_gold_boost_wallet,
     ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
-    const cached = db.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
     if (cached && freshDemonKingBinding(cached)) {
       const cachedOwner = getAddress(cached.wallet);
       const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);

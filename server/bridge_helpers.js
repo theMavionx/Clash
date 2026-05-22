@@ -835,6 +835,7 @@ module.exports = {
   NON_EVM_CHAINS,
   ALL_CHAINS,
   deploymentOf,
+  normalizeAptosAddress,
   aptosPrimaryFungibleStoreAddress,
   aptosNativeFeePaidOctas,
   aptosAccount,

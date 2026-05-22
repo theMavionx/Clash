@@ -859,7 +859,14 @@ try {
             if (parts.length < 3 || parts[0] !== 'DemonKing') continue;
             const chain = String(parts[1] || '').trim().toLowerCase();
             const tokenId = String(parts[2] || '').trim();
-            if (!['base', 'arbitrum', 'monad'].includes(chain) || !/^\d+$/.test(tokenId)) continue;
+            const tokenOk = ['base', 'arbitrum', 'monad'].includes(chain)
+              ? /^\d+$/.test(tokenId)
+              : chain === 'aptos'
+                ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenId)
+                : chain === 'solana'
+                  ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(tokenId)
+                  : false;
+            if (!tokenOk) continue;
             tokens.set(`${chain}:${tokenId}`, { chain, tokenId });
           }
         }
@@ -1758,7 +1765,7 @@ const TH_MAX_COUNT = {
   mine:         [1, 2, 3, 3],
   sawmill:      [1, 2, 3, 3],
   barn:         [1, 1, 1, 1],
-  port:         [1, 2, 5, 6],
+  port:         [1, 2, 5, 5],
   archer_tower: [1, 2, 3, 3],
   tombstone:    [0, 1, 3, 3],  // unlocked at TH2
   turret:       [0, 0, 3, 3],  // unlocked at TH3
@@ -2291,7 +2298,14 @@ function normalizeDemonKingBattleToken(token = {}) {
   const tokenId = String(
     token.tokenId ?? token.token_id ?? token.tokenIdRaw ?? token.nftTokenId ?? ''
   ).trim();
-  if (!chain || !/^\d+$/.test(tokenId)) return null;
+  const tokenOk = ['base', 'arbitrum', 'monad'].includes(chain)
+    ? /^\d+$/.test(tokenId)
+    : chain === 'aptos'
+      ? /^0x[0-9a-fA-F]{1,64}$/.test(tokenId)
+      : chain === 'solana'
+        ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(tokenId)
+        : false;
+  if (!chain || !tokenOk) return null;
   return { chain, tokenId };
 }
 

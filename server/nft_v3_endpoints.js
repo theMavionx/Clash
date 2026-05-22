@@ -354,6 +354,7 @@ function evmRpc(chainKey, env) {
 }
 
 const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_SYNC_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
 const DEMON_KING_SYNC_DB_TTL_MS = Math.max(
   30_000,
   Number(process.env.NFT_DEMON_KING_SYNC_TTL_MS || 15 * 60_000)
@@ -368,8 +369,8 @@ function normalizeDemonKingSyncChains(value) {
   const rows = Array.isArray(value) ? value : String(value || '').split(',');
   const chains = rows
     .map((chain) => String(chain || '').trim().toLowerCase())
-    .filter((chain) => DEMON_KING_EVM_CHAINS.includes(chain));
-  return [...new Set(chains.length ? chains : DEMON_KING_EVM_CHAINS)];
+    .filter((chain) => DEMON_KING_SYNC_CHAINS.includes(chain));
+  return [...new Set(chains.length ? chains : DEMON_KING_SYNC_CHAINS)];
 }
 
 function sqliteTimeMs(value) {
@@ -395,6 +396,35 @@ function playerLinkedEvmWallets(player, getAddress) {
       try { return getAddress(wallet); } catch { return null; }
     })
     .filter(Boolean);
+}
+
+function playerLinkedDemonKingWallet(player, chainKey, wallet, getAddress) {
+  const candidates = [
+    player?.wallet,
+    player?.nft_gold_boost_wallet,
+  ].filter(Boolean);
+  if (DEMON_KING_EVM_CHAINS.includes(chainKey)) {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(String(wallet || ''))) return false;
+    let expected = null;
+    try { expected = getAddress(wallet); } catch { return false; }
+    return candidates
+      .filter((candidate) => /^0x[0-9a-fA-F]{40}$/.test(String(candidate || '')))
+      .some((candidate) => {
+        try { return getAddress(candidate) === expected; } catch { return false; }
+      });
+  }
+  if (chainKey === 'aptos') {
+    const { normalizeAptosAddress } = require('./bridge_helpers');
+    const expected = normalizeAptosAddress(wallet);
+    if (!expected) return false;
+    return candidates.some((candidate) => normalizeAptosAddress(candidate) === expected);
+  }
+  if (chainKey === 'solana') {
+    const expected = String(wallet || '').trim();
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(expected)) return false;
+    return candidates.some((candidate) => String(candidate || '').trim() === expected);
+  }
+  return false;
 }
 
 async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
@@ -497,6 +527,205 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
   return body;
 }
 
+function normalizeSolanaDemonKingToken(token = {}) {
+  const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '').trim();
+  if (!tokenId) return null;
+  const level = normalizeNftLevel(token.level);
+  return {
+    ...token,
+    chain: 'solana',
+    tokenId,
+    asset: token.asset || token.mint || tokenId,
+    mint: token.mint || token.asset || tokenId,
+    level,
+    imageUrl: token.imageUrl || nftLevelImageUrl(level, tokenId),
+  };
+}
+
+function normalizeAptosDemonKingToken(token = {}) {
+  const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.id || '').trim();
+  if (!tokenId) return null;
+  const level = normalizeNftLevel(token.level);
+  return {
+    ...token,
+    chain: 'aptos',
+    tokenId,
+    tokenAddress: token.tokenAddress || tokenId,
+    level,
+    imageUrl: token.imageUrl || nftLevelImageUrl(level, tokenId),
+  };
+}
+
+async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
+  const { deploymentOf, normalizeAptosAddress } = require('./bridge_helpers');
+  const dep = deploymentOf('aptos');
+  if (!dep?.collection) {
+    const err = new Error('Aptos not deployed');
+    err.status = 503;
+    throw err;
+  }
+  const owner = normalizeAptosAddress(ownerRaw);
+  if (!owner) {
+    const err = new Error('Aptos address malformed');
+    err.status = 400;
+    throw err;
+  }
+
+  const cacheKey = `aptos:${owner}`;
+  const cached = _ownedNftCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
+    return cached.body;
+  }
+
+  const indexerUrl = process.env.APTOS_INDEXER_URL || 'https://indexer.mainnet.aptoslabs.com/v1/graphql';
+  const query = `query Q($owner:String!, $collection:String!) {
+    current_token_ownerships_v2(
+      where: {owner_address:{_eq:$owner}, current_token_data:{collection_id:{_eq:$collection}}, amount:{_gt:0}}
+    ) {
+      token_data_id
+      current_token_data { token_name token_properties }
+    }
+  }`;
+  const headers = { 'content-type': 'application/json' };
+  if (process.env.APTOS_NODE_API_KEY) headers.Authorization = `Bearer ${process.env.APTOS_NODE_API_KEY}`;
+  const response = await timeoutPromise(fetch(indexerUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables: { owner, collection: dep.collection } }),
+  }), 12_000, 'Aptos Demon King owner scan');
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok || json?.errors?.length) {
+    const err = new Error(json?.errors?.[0]?.message || `Aptos indexer ${response.status}`);
+    err.status = response.ok ? 502 : response.status;
+    throw err;
+  }
+
+  const rows = json?.data?.current_token_ownerships_v2 || [];
+  const tokens = rows.map((row) => {
+    let level = 1;
+    const props = row.current_token_data?.token_properties;
+    if (props && typeof props === 'object' && props.level != null) {
+      level = Number(props.level);
+    } else if (typeof props === 'string') {
+      try {
+        const parsed = JSON.parse(props);
+        if (parsed?.level != null) level = Number(parsed.level);
+      } catch {}
+    }
+    return normalizeAptosDemonKingToken({
+      tokenId: row.token_data_id,
+      tokenAddress: row.token_data_id,
+      level,
+      name: row.current_token_data?.token_name || `Demon King ${row.token_data_id}`,
+      imageUrl: nftLevelImageUrl(level, row.token_data_id),
+      standard: 'aptos-token-v2',
+    });
+  }).filter(Boolean);
+
+  const body = {
+    chain: 'aptos',
+    owner,
+    collection: dep.collection,
+    total: tokens.length,
+    tokens,
+    source: 'server-aptos-demon-king',
+  };
+  _ownedNftCache.set(cacheKey, { at: Date.now(), body });
+  return body;
+}
+
+async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
+  const { deploymentOf } = require('./bridge_helpers');
+  const dep = deploymentOf('solana');
+  if (!dep?.collection) {
+    const err = new Error('Solana not deployed');
+    err.status = 503;
+    throw err;
+  }
+  const owner = String(ownerRaw || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(owner)) {
+    const err = new Error('Solana address malformed');
+    err.status = 400;
+    throw err;
+  }
+
+  const cacheKey = `solana:${owner}`;
+  const cached = _ownedNftCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
+    return cached.body;
+  }
+
+  let token2022Body = null;
+  let token2022Error = null;
+  try {
+    token2022Body = await listOwnedSolanaToken2022Nfts(owner);
+    if (token2022Body.tokens.length) {
+      token2022Body = {
+        ...token2022Body,
+        tokens: token2022Body.tokens.map(normalizeSolanaDemonKingToken).filter(Boolean),
+      };
+      _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
+      return token2022Body;
+    }
+  } catch (err) {
+    token2022Error = err;
+  }
+
+  let recentCoreBody = null;
+  try {
+    recentCoreBody = await listOwnedSolanaCoreNftsFromRecentMints(owner, dep.collection);
+    if (recentCoreBody?.tokens?.length) {
+      recentCoreBody = {
+        ...recentCoreBody,
+        tokens: recentCoreBody.tokens.map(normalizeSolanaDemonKingToken).filter(Boolean),
+      };
+      _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
+      return recentCoreBody;
+    }
+  } catch {}
+
+  const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+  const { mplCore, fetchAssetsByOwner } = await import('@metaplex-foundation/mpl-core');
+  const { publicKey } = await import('@metaplex-foundation/umi');
+  let assets = [];
+  try {
+    assets = await withSolanaRpcFallback(async (rpc) => {
+      const umi = createUmi(rpc).use(mplCore());
+      return timeoutPromise(
+        fetchAssetsByOwner(umi, publicKey(owner), { skipDerivePlugins: true }),
+        12_000,
+        `Solana Core owner scan ${rpc}`,
+      );
+    }, { urls: solanaOwnedRpcUrls(), label: 'Solana Core owner scan' });
+  } catch (err) {
+    const fallback = recentCoreBody || token2022Body;
+    if (fallback) {
+      _ownedNftCache.set(cacheKey, { at: Date.now(), body: fallback });
+      return fallback;
+    }
+    throw token2022Error || err;
+  }
+
+  const tokens = assets
+    .filter((asset) => publicKeyText(asset.owner) === owner)
+    .filter((asset) => solanaCoreAssetLooksRelevant(asset, dep.collection))
+    .map(solanaCoreAssetToken)
+    .map(normalizeSolanaDemonKingToken)
+    .filter(Boolean);
+
+  const body = {
+    chain: 'solana',
+    owner,
+    collection: dep.collection,
+    total: tokens.length,
+    tokens,
+    source: 'server-solana-demon-king',
+    token2022Error: token2022Error ? (token2022Error?.message || String(token2022Error)).slice(0, 160) : undefined,
+  };
+  _ownedNftCache.set(cacheKey, { at: Date.now(), body });
+  return body;
+}
+
 /**
  * Mount V3 endpoints on the supplied Express router.
  *
@@ -525,38 +754,54 @@ function mountNftV3Endpoints(router, ctx) {
       const player = playerFromUpgradeRequest(req);
       if (!player?.id) return res.status(401).json({ error: 'Game account token required' });
 
-      const walletRaw = String(req.body?.wallet || req.query?.wallet || '').trim();
-      if (!/^0x[0-9a-fA-F]{40}$/.test(walletRaw)) {
-        return res.status(400).json({ error: 'EVM wallet required' });
-      }
-
       const { getAddress } = await import('viem');
-      const wallet = getAddress(walletRaw);
-      const linkedWallets = playerLinkedEvmWallets(player, getAddress);
-      if (!linkedWallets.some((linked) => linked === wallet)) {
-        return res.status(403).json({ error: 'Connect or verify this EVM wallet on the game account first' });
-      }
+      const walletRaw = String(req.body?.wallet || req.query?.wallet || '').trim();
       const requestedChains = normalizeDemonKingSyncChains(req.body?.chains ?? req.query?.chains);
+      const walletByChain = new Map();
+      for (const chain of requestedChains) {
+        try {
+          if (DEMON_KING_EVM_CHAINS.includes(chain)) {
+            if (/^0x[0-9a-fA-F]{40}$/.test(walletRaw)) walletByChain.set(chain, getAddress(walletRaw));
+          } else if (chain === 'aptos') {
+            const { normalizeAptosAddress } = require('./bridge_helpers');
+            const owner = normalizeAptosAddress(walletRaw);
+            if (owner) walletByChain.set(chain, owner);
+          } else if (chain === 'solana' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(walletRaw)) {
+            walletByChain.set(chain, walletRaw);
+          }
+        } catch {}
+      }
+      const syncChains = requestedChains.filter((chain) => walletByChain.has(chain));
+      if (!syncChains.length) {
+        return res.status(400).json({ error: 'Wallet does not match requested Demon King chain(s)' });
+      }
+      for (const chain of syncChains) {
+        if (!playerLinkedDemonKingWallet(player, chain, walletByChain.get(chain), getAddress)) {
+          const label = chain === 'aptos' ? 'Aptos' : chain === 'solana' ? 'Solana' : 'EVM';
+          return res.status(403).json({ error: `Connect or verify this ${label} wallet on the game account first` });
+        }
+      }
+      const wallet = walletByChain.get(syncChains[0]);
       const force = req.body?.force === true || String(req.body?.force || req.query?.force || '') === '1';
       const cachedTokens = gameDb.listPlayerDemonKingNfts(player.id, wallet)
-        .filter((token) => requestedChains.includes(token.chain));
+        .filter((token) => syncChains.includes(token.chain));
       const check = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
 
-      if (!force && walletCheckCovers(check, requestedChains)) {
+      if (!force && walletCheckCovers(check, syncChains)) {
         res.set('Cache-Control', 'private, no-store');
         return res.json({
           ok: true,
           cached: true,
           stale: false,
           wallet,
-          chains: requestedChains,
+          chains: syncChains,
           checkedAt: check.checkedAt,
           total: cachedTokens.length,
           tokens: cachedTokens,
         });
       }
 
-      const inflightKey = `${player.id}:${wallet.toLowerCase()}:${requestedChains.join(',')}:${force ? 'force' : 'normal'}`;
+      const inflightKey = `${player.id}:${wallet.toLowerCase()}:${syncChains.join(',')}:${force ? 'force' : 'normal'}`;
       if (_demonKingSyncInflight.has(inflightKey)) {
         const body = await _demonKingSyncInflight.get(inflightKey);
         res.set('Cache-Control', 'private, no-store');
@@ -567,17 +812,25 @@ function mountNftV3Endpoints(router, ctx) {
         const tokens = [];
         const errors = [];
         const successfulChains = [];
-        for (const chain of requestedChains) {
+        for (const chain of syncChains) {
           try {
-            const body = await listOwnedEvmDemonKingNfts(chain, wallet, { force });
+            const owner = walletByChain.get(chain);
+            const body = DEMON_KING_EVM_CHAINS.includes(chain)
+              ? await listOwnedEvmDemonKingNfts(chain, owner, { force })
+              : chain === 'solana'
+                ? await listOwnedSolanaDemonKingNfts(owner, { force })
+                : await listOwnedAptosDemonKingNfts(owner, { force });
             successfulChains.push(chain);
             for (const token of body.tokens || []) {
+              const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '');
+              if (!tokenId) continue;
+              const level = normalizeNftLevel(token.level);
               tokens.push({
                 ...token,
                 chain,
-                tokenId: String(token.tokenId || token.id || ''),
-                level: normalizeNftLevel(token.level),
-                imageUrl: token.imageUrl || nftLevelImageUrl(token.level || 1, token.tokenId || token.id || ''),
+                tokenId,
+                level,
+                imageUrl: token.imageUrl || nftLevelImageUrl(level, tokenId),
               });
             }
           } catch (err) {
@@ -592,7 +845,7 @@ function mountNftV3Endpoints(router, ctx) {
               cached: true,
               stale: true,
               wallet,
-              chains: requestedChains,
+              chains: syncChains,
               checkedAt: check?.checkedAt || null,
               total: cachedTokens.length,
               tokens: cachedTokens,
@@ -608,7 +861,7 @@ function mountNftV3Endpoints(router, ctx) {
         const boundTokens = gameDb.replacePlayerDemonKingNfts(player.id, wallet, tokens, {
           chains: successfulChains,
           source: force ? 'force-sync' : 'sync',
-        }).filter((token) => requestedChains.includes(token.chain));
+        }).filter((token) => syncChains.includes(token.chain));
         const nextCheck = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
         return {
           ok: true,
@@ -616,7 +869,7 @@ function mountNftV3Endpoints(router, ctx) {
           stale: false,
           partial: errors.length > 0,
           wallet,
-          chains: requestedChains,
+          chains: syncChains,
           checkedAt: nextCheck?.checkedAt || null,
           total: boundTokens.length,
           tokens: boundTokens,
@@ -996,6 +1249,9 @@ function mountNftV3Endpoints(router, ctx) {
 
       // Aptos path
       if (chainKey === 'aptos') {
+        const ownedBody = await listOwnedAptosDemonKingNfts(ownerRaw);
+        res.set('Cache-Control', 'public, max-age=10');
+        return res.json(ownedBody);
         const { deploymentOf, aptosFullnodeBase } = require('./bridge_helpers');
         const dep = deploymentOf('aptos');
         if (!dep?.collection) return res.status(503).json({ error: 'Aptos not deployed' });
@@ -1038,6 +1294,9 @@ function mountNftV3Endpoints(router, ctx) {
 
       // Solana path
       if (chainKey === 'solana') {
+        const ownedBody = await listOwnedSolanaDemonKingNfts(ownerRaw);
+        res.set('Cache-Control', 'public, max-age=10');
+        return res.json(ownedBody);
         const { deploymentOf } = require('./bridge_helpers');
         const dep = deploymentOf('solana');
         if (!dep?.collection) return res.status(503).json({ error: 'Solana not deployed' });
