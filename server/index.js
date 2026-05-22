@@ -648,6 +648,15 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="gold">Gold</option>
             </select>
           </label>
+          <label style="font-size:11px;color:#9ca3af">Scoring mode
+            <select id="tn_scoring_mode" onchange="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+              <option value="live">Live scoring</option>
+              <option value="daily_pool">Daily pool at 00:00 UTC</option>
+            </select>
+          </label>
+          <label style="font-size:11px;color:#9ca3af">Daily pool points
+            <input id="tn_daily_pool_points" type="number" min="1" step="1" value="1000" oninput="updateTournamentPointsUi()" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb">
+          </label>
           <div id="tn_points_box" style="grid-column:1/-1;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px">
             <div style="font-size:11px;color:#fbbf24;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Point weights</div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
@@ -1982,6 +1991,10 @@ function isTournamentPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
 }
 
+function isTournamentDailyPool(t) {
+  return String(t?.scoring_mode || 'live') === 'daily_pool';
+}
+
 function tournamentPointsWeights(t) {
   if (t && t.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
   const w = (t && t.points_weights) || {};
@@ -2174,6 +2187,11 @@ function tournamentPrizeLabel(t) {
 
 function tournamentSortLabel(tOrSort) {
   const sortBy = typeof tOrSort === 'string' ? tOrSort : tOrSort?.sort_by;
+  if (typeof tOrSort === 'object' && isTournamentDailyPool(tOrSort)) {
+    const w = tournamentPointsWeights(tOrSort);
+    const parts = tournamentPointParts(w);
+    return 'Daily pool (' + (parts.length ? parts.join(' / ') : 'no enabled metrics') + ')';
+  }
   if (sortBy === 'trophies') return 'Trophies';
   if (sortBy === 'volume_usd') return 'Volume (USD)';
   if (sortBy === 'gold') return 'Gold';
@@ -2257,7 +2275,17 @@ function updateTournamentPointsUi() {
   const hint = document.getElementById('tn_points_hint');
   if (!sort || !box || !hint) return;
   const teamUsesPoints = tournamentTeamUsesCustomPoints();
-  const isPoints = sort.value === 'points' || teamUsesPoints;
+  const scoringMode = document.getElementById('tn_scoring_mode')?.value || 'live';
+  const isDailyPool = scoringMode === 'daily_pool';
+  if (isDailyPool && sort.value !== 'points') sort.value = 'points';
+  sort.disabled = isDailyPool;
+  sort.style.opacity = isDailyPool ? '0.6' : '1';
+  const poolInput = document.getElementById('tn_daily_pool_points');
+  if (poolInput) {
+    poolInput.disabled = !isDailyPool;
+    poolInput.style.opacity = isDailyPool ? '1' : '0.55';
+  }
+  const isPoints = isDailyPool || sort.value === 'points' || teamUsesPoints;
   box.style.opacity = isPoints ? '1' : '0.45';
   ['tn_points_trophy', 'tn_points_volume', 'tn_points_pnl'].forEach((id) => {
     const input = document.getElementById(id);
@@ -2276,8 +2304,10 @@ function updateTournamentPointsUi() {
   const total = weights.trophies + weights.volume + weights.pnl;
   const parts = tournamentPointParts(weights);
   hint.style.color = Math.abs(total - 100) < 0.001 ? '#9ca3af' : '#fca5a5';
+  const poolPoints = Math.max(1, Number(poolInput?.value || 1000) || 1000);
   hint.textContent = 'Total: ' + total + '%. '
     + (parts.length ? 'Points = ' + parts.join(' + ') + '.' : 'Enable at least one metric.')
+    + (isDailyPool ? ' Awards ' + poolPoints + ' points per closed UTC day using these weights.' : '')
     + (teamUsesPoints && sort.value !== 'points' ? ' Used by DEX vs DEX custom points.' : '');
 }
 
@@ -2322,7 +2352,9 @@ function renderTournaments() {
       + '<td>' + t.trophy_boost + '×</td>'
       + '<td>' + esc(t.shield_label || 'Default') + '</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
-      + '<td>' + esc(t.sort_label || tournamentSortLabel(t)) + '</td>'
+      + '<td>' + esc(t.sort_label || tournamentSortLabel(t))
+        + (isTournamentDailyPool(t) ? '<div style="font-size:10px;color:#fbbf24">' + esc(Number(t.daily_pool_points || 1000) + ' pts/day @ 00:00 UTC') + '</div>' : '')
+      + '</td>'
       + '<td style="font-size:11px">' + tournamentPrizeLabel(t) + '</td>'
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
@@ -2366,6 +2398,8 @@ function getTournamentFormBody() {
     freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
     seeker_only: document.getElementById('tn_seeker_only').checked,
     sort_by: document.getElementById('tn_sort').value,
+    scoring_mode: document.getElementById('tn_scoring_mode')?.value || 'live',
+    daily_pool_points: Math.max(1, Number(document.getElementById('tn_daily_pool_points')?.value || 1000) || 1000),
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
     points_pnl_weight: pointWeights.pnl,
@@ -2402,6 +2436,8 @@ function resetTournamentForm() {
   document.getElementById('tn_freeze_trophies').checked = true;
   document.getElementById('tn_seeker_only').checked = false;
   document.getElementById('tn_sort').value = 'points';
+  document.getElementById('tn_scoring_mode').value = 'live';
+  document.getElementById('tn_daily_pool_points').value = '1000';
   document.getElementById('tn_points_trophy').value = '20';
   document.getElementById('tn_points_volume').value = '60';
   document.getElementById('tn_points_pnl').value = '20';
@@ -2447,6 +2483,8 @@ function editTournament(id) {
   document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;
   document.getElementById('tn_seeker_only').checked = !!t.seeker_only;
   document.getElementById('tn_sort').value = t.sort_by === 'volume_trophies_50_50' ? 'points' : (t.sort_by || 'points');
+  document.getElementById('tn_scoring_mode').value = isTournamentDailyPool(t) ? 'daily_pool' : 'live';
+  document.getElementById('tn_daily_pool_points').value = Math.max(1, Number(t.daily_pool_points || 1000) || 1000);
   const weights = tournamentPointsWeights(t);
   document.getElementById('tn_points_trophy').value = weights.trophies;
   document.getElementById('tn_points_volume').value = weights.volume;
@@ -2490,7 +2528,8 @@ async function saveTournament() {
       }
     }
   }
-  const needsPointWeights = body.sort_by === 'points'
+  const needsPointWeights = body.scoring_mode === 'daily_pool'
+    || body.sort_by === 'points'
     || (body.mode === 'dex_vs_dex' && (body.team_score_by === 'points' || body.team_member_reward_by === 'points'));
   if (needsPointWeights) {
     const total = body.points_trophy_weight + body.points_volume_weight + body.points_pnl_weight;

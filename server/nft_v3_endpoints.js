@@ -907,6 +907,103 @@ function mountNftV3Endpoints(router, ctx) {
       const { createPublicClient, getAddress, http, zeroAddress } = await import('viem');
 
       const chainKey = String(req.body?.chain || '').toLowerCase();
+      if (chainKey === 'aptos') {
+        const player = playerFromUpgradeRequest(req);
+        if (!player?.id) return res.status(401).json({ error: 'Log in to upgrade Demon King' });
+        const {
+          deploymentOf,
+          normalizeAptosAddress,
+          signAptosUpgradeQuote,
+        } = require('./bridge_helpers');
+        const deployment = deploymentOf('aptos') || {};
+        if (!deployment?.module || !deployment?.usdcMetadata) {
+          return res.status(503).json({ error: 'Aptos Demon King upgrade is not configured' });
+        }
+        const owner = normalizeAptosAddress(req.body?.owner);
+        if (!owner) return res.status(400).json({ error: 'owner must be a valid Aptos address' });
+        if (!playerLinkedDemonKingWallet(player, 'aptos', owner, (v) => v)) {
+          return res.status(403).json({ error: 'Connect or verify the Aptos wallet that owns this Demon King NFT first' });
+        }
+        const tokenAddress = normalizeAptosAddress(req.body?.tokenAddress || req.body?.tokenId || req.body?.token_id);
+        if (!tokenAddress) return res.status(400).json({ error: 'tokenId must be a valid Aptos object address' });
+        const newLevel = Number(req.body?.newLevel || 0);
+        if (![2, 3].includes(newLevel)) return res.status(400).json({ error: 'newLevel must be 2 or 3' });
+        const payment = String(req.body?.payment || 'usdc').toLowerCase();
+        if (payment !== 'usdc') return res.status(400).json({ error: 'Aptos NFT upgrades use USDC only' });
+
+        const owned = await listOwnedAptosDemonKingNfts(owner, { force: true });
+        const token = (owned.tokens || []).find((item) => {
+          const id = normalizeAptosAddress(item.tokenAddress || item.tokenId || item.asset || item.id);
+          return id === tokenAddress;
+        });
+        if (!token) return res.status(403).json({ error: 'Aptos wallet does not own this Demon King NFT' });
+        const currentLevel = normalizeNftLevel(token.level);
+        if (newLevel !== currentLevel + 1) {
+          return res.status(409).json({ error: `Must upgrade by exactly 1. Current level: ${currentLevel}` });
+        }
+        const requiredWins = gameDb.demonKingRequiredWins(newLevel);
+        const battleWins = gameDb.getDemonKingBattleWins(player.id, 'aptos', tokenAddress);
+        if (requiredWins != null && battleWins < requiredWins) {
+          return res.status(403).json({
+            error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
+            code: 'DEMON_KING_WINS_REQUIRED',
+            battle_wins: battleWins,
+            required_wins: requiredWins,
+            next_level: newLevel,
+          });
+        }
+
+        const usdPriceE6 = BigInt(
+          process.env.NFT_UPGRADE_USD_PRICE_E6
+          || process.env.NFT_APTOS_USD_PRICE_E6
+          || deployment.upgradeUsdPriceE6
+          || '8900000'
+        );
+        const usdcAmount = usdPriceE6;
+        const ttl = Math.max(60, Math.min(900, Number(process.env.NFT_UPGRADE_DEADLINE_SECONDS || 600)));
+        const deadline = BigInt(Math.floor(Date.now() / 1000) + ttl);
+        const nonce = `0x${crypto.randomBytes(16).toString('hex')}`;
+        const signature = await signAptosUpgradeQuote({
+          ownerAddress: owner,
+          tokenAddress,
+          newLevel,
+          usdcAmount,
+          nonce,
+          deadline,
+        });
+
+        gameDb.bindPlayerDemonKingNft(player.id, owner, {
+          chain: 'aptos',
+          tokenId: tokenAddress,
+          level: currentLevel,
+          imageUrl: token.imageUrl || nftLevelImageUrl(currentLevel, tokenAddress),
+        }, { source: 'aptos-upgrade-quote' });
+
+        res.set('Cache-Control', 'no-store');
+        return res.json({
+          chain: 'aptos',
+          owner,
+          tokenId: tokenAddress,
+          tokenAddress,
+          currentLevel,
+          newLevel,
+          payment: 'usdc',
+          paymentToken: deployment.usdcMetadata,
+          priceUnits: usdcAmount.toString(),
+          priceFormatted: formatUnits(usdcAmount, 6),
+          decimals: 6,
+          priceSymbol: 'USDC',
+          usdPriceE6: usdPriceE6.toString(),
+          priceSource: 'USDC 1:1 USD',
+          nonce,
+          deadline: deadline.toString(),
+          signature,
+          callData: {
+            functionId: `${deployment.module}::upgrade_with_quote`,
+            args: [tokenAddress, newLevel, usdcAmount.toString(), nonce, deadline.toString(), signature],
+          },
+        });
+      }
       const spec = SUPPORTED_EVM_CHAINS[chainKey];
       if (!spec) return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad.' });
 

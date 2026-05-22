@@ -19,7 +19,7 @@ import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig
 import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
-import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, syncDemonKingNfts, upgradeNft } from '../lib/nftV3Client';
+import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
@@ -73,6 +73,8 @@ const CHAIN_LOGO_SRC = {
   base: '/tokens/BASE.svg',
   arbitrum: '/tokens/ARB.svg',
   monad: '/tokens/MON.svg',
+  solana: '/tokens/SOL.svg',
+  aptos: '/tokens/APT.png',
 };
 function chainLogo(chain) { return CHAIN_LOGO_SRC[chain] || null; }
 
@@ -1096,12 +1098,19 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             {view === 'upgrade' ? (
               <DemonKingUpgradePanel
                 initialRequest={initialUpgradeRequest}
+                defaultChain={activePaymentChain}
                 evmWallet={evmWallet}
                 evmAddress={evmAddress}
+                solWallet={solWallet}
                 solAddress={solAddress}
+                aptosWallet={aptosWallet}
                 aptosAddress={aptosAddress}
                 evmChainId={evmChainId}
                 onOpenEvmModal={() => setEvmModalOpen(true)}
+                onConnectSolana={handleSolanaReady}
+                onConnectAptos={() => {
+                  try { aptosWallet?.connect?.(); } catch { /* user-cancel */ }
+                }}
                 onSelectChain={setSelectedChain}
                 setNotice={setNotice}
                 setBusy={setBusy}
@@ -1520,13 +1529,20 @@ function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
   );
 }
 
-const DEMON_KING_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad', 'solana', 'aptos'];
+const DEMON_KING_EVM_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad'];
 const DEMON_KING_UPGRADE_PRICE_HINT = {
   usdc: '$8.90',
   eth: '~$8.90',
   mon: '~$8.90',
+  sol: '~$8.90',
+  skr: '~$8.90',
   cop: '$5.00',
 };
+
+function shopChainChoice(chain) {
+  return SHOP_CHAIN_CHOICES.find((choice) => choice.id === chain) || null;
+}
 
 function upgradePaymentForQuote(payment) {
   const value = String(payment || 'usdc').toLowerCase();
@@ -1542,12 +1558,17 @@ function quotePaymentLabel(quote, fallbackLabel = '') {
 
 function DemonKingUpgradePanel({
   initialRequest,
+  defaultChain = 'base',
   evmWallet,
   evmAddress,
+  solWallet,
   solAddress,
+  aptosWallet,
   aptosAddress,
   evmChainId,
   onOpenEvmModal,
+  onConnectSolana,
+  onConnectAptos,
   onSelectChain,
   setNotice,
   setBusy,
@@ -1555,7 +1576,7 @@ function DemonKingUpgradePanel({
   onClose,
 }) {
   const [chain, setChain] = useState(() => {
-    const requested = String(initialRequest?.chain || initialRequest?.preferred_chain || '').toLowerCase();
+    const requested = String(initialRequest?.chain || initialRequest?.preferred_chain || defaultChain || '').toLowerCase();
     return DEMON_KING_UPGRADE_CHAINS.includes(requested) ? requested : 'base';
   });
   const [payment, setPayment] = useState('usdc');
@@ -1569,11 +1590,23 @@ function DemonKingUpgradePanel({
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
 
+  const isEvmUpgradeChain = DEMON_KING_EVM_UPGRADE_CHAINS.includes(chain);
   const chainId = EVM_CHAIN_ID_BY_NFT_CHAIN[chain];
-  const onCorrectChain = !!chainId && Number(evmChainId) === Number(chainId);
-  const paymentOptions = (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon', 'cop'].includes(option.id));
+  const onCorrectChain = !isEvmUpgradeChain || (!!chainId && Number(evmChainId) === Number(chainId));
+  const paymentOptions = useMemo(() => {
+    if (isEvmUpgradeChain) {
+      return (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon', 'cop'].includes(option.id));
+    }
+    if (chain === 'solana') {
+      return (SHOP_PAYMENTS_BY_CHAIN.solana || []).filter((option) => ['usdc', 'sol', 'skr'].includes(option.id));
+    }
+    if (chain === 'aptos') {
+      return (SHOP_PAYMENTS_BY_CHAIN.aptos || []).filter((option) => option.id === 'usdc');
+    }
+    return [];
+  }, [chain, isEvmUpgradeChain]);
   const selectedPaymentOption = paymentOptions.find((option) => option.id === payment) || null;
-  const tokens = useMemo(() => (owned || []).filter((token) => Number(token?.level || 1) < 3), [owned]);
+  const tokens = useMemo(() => (owned || []), [owned]);
   const tokenId = String(selectedTokenId || manualTokenId || '').trim();
   const selectedToken = useMemo(() => tokens.find((token) => String(token.tokenId) === tokenId) || null, [tokens, tokenId]);
   const statusNft = status?.nft || {};
@@ -1582,9 +1615,12 @@ function DemonKingUpgradePanel({
     && String(statusNft.chain || '').toLowerCase() === String(chain || '').toLowerCase();
   const troopNextLevel = Number(status?.next_level || status?.nextLevel || 0);
   const selectedTokenLevel = Number(selectedToken?.level || 0);
-  const nextLevel = selectedTokenLevel > 0
-    ? Math.min(3, selectedTokenLevel + 1)
-    : (troopNextLevel || 2);
+  const tokenAlreadyCoversTroopLevel = !!(troopNextLevel && selectedTokenLevel >= troopNextLevel);
+  const nextLevel = tokenAlreadyCoversTroopLevel
+    ? troopNextLevel
+    : selectedTokenLevel > 0
+      ? Math.min(3, selectedTokenLevel + 1)
+      : (troopNextLevel || 2);
   const wins = Number(
     (statusMatchesToken ? (status?.battle_wins ?? status?.wins) : undefined)
     ?? selectedToken?.battleWins
@@ -1592,13 +1628,20 @@ function DemonKingUpgradePanel({
     ?? 0
   );
   const statusRequiredWins = Number(status?.required_wins ?? status?.nextLevelRequiredWins ?? 0);
-  const requiredWins = troopNextLevel === nextLevel && statusRequiredWins > 0
+  const requiredWins = tokenAlreadyCoversTroopLevel
+    ? 0
+    : troopNextLevel === nextLevel && statusRequiredWins > 0
     ? statusRequiredWins
     : (nextLevel === 2 ? 1000 : 10000);
   const winsReady = requiredWins <= 0 || wins >= requiredWins;
   const quotePriceLabel = quotePaymentLabel(quotePreview, selectedPaymentOption?.label);
   const displayNextLevel = Number(quotePreview?.newLevel || nextLevel || 2);
   const ownerAddressForChain = chain === 'solana' ? solAddress : chain === 'aptos' ? aptosAddress : evmAddress;
+  const chainWalletConnected = !!ownerAddressForChain;
+  const actionReady = isEvmUpgradeChain
+    ? !!(winsReady && evmAddress && tokenId)
+    : !!(winsReady && chainWalletConnected && tokenId);
+  const actionDisabled = !!busy || loading || (chainWalletConnected && !winsReady);
 
   const load = useCallback(async () => {
     const token = typeof window !== 'undefined' ? window._playerToken : null;
@@ -1618,6 +1661,9 @@ function DemonKingUpgradePanel({
           const firstUpgradeable = nextTokens.find((tokenItem) => Number(tokenItem.level || 1) < 3);
           return firstUpgradeable ? String(firstUpgradeable.tokenId) : '';
         });
+      } else {
+        setOwned([]);
+        setSelectedTokenId('');
       }
     } catch (err) {
       setNotice?.((err?.message || 'Could not load Demon King NFTs').slice(0, 140));
@@ -1653,16 +1699,74 @@ function DemonKingUpgradePanel({
   }, [chain, tokenId]);
 
   useEffect(() => {
-    const options = (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon', 'cop'].includes(option.id));
-    if (options.length && !options.some((option) => option.id === payment)) {
-      setPayment(options[0].id);
+    if (paymentOptions.length && !paymentOptions.some((option) => option.id === payment)) {
+      setPayment(paymentOptions[0].id);
     }
-  }, [chain, payment]);
+  }, [payment, paymentOptions]);
 
   useEffect(() => {
     let cancelled = false;
     setQuotePreview(null);
     setQuoteError('');
+    if (!isEvmUpgradeChain) {
+      if (!tokenId) {
+        setQuoteLoading(false);
+        return () => { cancelled = true; };
+      }
+      if (!winsReady) {
+        setQuoteLoading(false);
+        return () => { cancelled = true; };
+      }
+      const tokenLevel = Number(selectedToken?.level || 1);
+      const contractNextLevel = Math.min(3, tokenLevel + 1);
+      const requiredTroopLevel = Number(status?.next_level || status?.nextLevel || 0);
+      const targetLevel = requiredTroopLevel && tokenLevel >= requiredTroopLevel
+        ? tokenLevel
+        : contractNextLevel;
+      if (tokenLevel >= targetLevel) {
+        setQuotePreview({
+          alreadySynced: true,
+          chain,
+          tokenId,
+          owner: ownerAddressForChain,
+          newLevel: targetLevel,
+        });
+        setQuoteLoading(false);
+        return () => { cancelled = true; };
+      }
+      if (chain === 'aptos' && ownerAddressForChain) {
+        async function loadAptosQuotePreview() {
+          setQuoteLoading(true);
+          try {
+            const quote = await fetchUpgradeQuote({
+              chain: 'aptos',
+              tokenId,
+              owner: ownerAddressForChain,
+              newLevel: targetLevel,
+              payment: 'usdc',
+            });
+            if (!cancelled) setQuotePreview({ ...quote, stateLevel: tokenLevel });
+          } catch (err) {
+            if (!cancelled) setQuoteError((err?.shortMessage || err?.message || 'Aptos upgrade quote unavailable').slice(0, 140));
+          } finally {
+            if (!cancelled) setQuoteLoading(false);
+          }
+        }
+        loadAptosQuotePreview();
+        return () => { cancelled = true; };
+      }
+      setQuotePreview({
+        chain,
+        tokenId,
+        owner: ownerAddressForChain,
+        newLevel: targetLevel,
+        payment,
+        priceFormatted: DEMON_KING_UPGRADE_PRICE_HINT[payment] || '$8.90',
+        priceSymbol: getShopPaymentLabel(chain, payment),
+      });
+      setQuoteLoading(false);
+      return () => { cancelled = true; };
+    }
     if (!evmAddress || !tokenId || !winsReady) {
       setQuoteLoading(false);
       return () => { cancelled = true; };
@@ -1704,10 +1808,16 @@ function DemonKingUpgradePanel({
 
     loadQuotePreview();
     return () => { cancelled = true; };
-  }, [chain, evmAddress, evmWallet, payment, selectedToken?.level, status?.nextLevel, status?.next_level, tokenId, winsReady]);
+  }, [chain, evmAddress, evmWallet, isEvmUpgradeChain, nextLevel, ownerAddressForChain, payment, selectedToken?.level, status?.nextLevel, status?.next_level, tokenId, winsReady]);
 
   const submitUpgrade = useCallback(async () => {
-    if (!evmAddress || !evmWallet) {
+    if (!ownerAddressForChain) {
+      if (chain === 'solana') onConnectSolana?.();
+      else if (chain === 'aptos') onConnectAptos?.();
+      else onOpenEvmModal?.();
+      return;
+    }
+    if (isEvmUpgradeChain && (!evmAddress || !evmWallet)) {
       onOpenEvmModal?.();
       return;
     }
@@ -1720,8 +1830,73 @@ function DemonKingUpgradePanel({
       return;
     }
     setBusy?.('demon-king-upgrade');
-    setNotice?.('Signing Demon King upgrade...');
+    setNotice?.(isEvmUpgradeChain ? 'Signing Demon King upgrade...' : 'Preparing same-chain Demon King upgrade...');
     try {
+      if (!isEvmUpgradeChain) {
+        const levelBefore = Number(selectedToken?.level || quotePreview?.stateLevel || 1);
+        const contractNextLevel = Math.min(3, levelBefore + 1);
+        const requiredTroopLevel = Number(status?.next_level || status?.nextLevel || 0);
+        const targetLevel = requiredTroopLevel && levelBefore >= requiredTroopLevel
+          ? levelBefore
+          : contractNextLevel;
+        let upgradeTxHash = null;
+        if (levelBefore < targetLevel) {
+          if (chain === 'aptos') {
+            setNotice?.('Signing Aptos Demon King upgrade...');
+            const aptosResult = await upgradeAptosNft({
+              aptosWallet,
+              owner: ownerAddressForChain,
+              tokenId,
+              tokenAddress: tokenId,
+              newLevel: targetLevel,
+            });
+            upgradeTxHash = aptosResult?.txHash || null;
+          } else if (chain === 'solana') {
+            if (!solWallet) throw new Error('Solana wallet is not connected');
+            const sessionToken = typeof window !== 'undefined' ? window._playerToken : null;
+            setNotice?.('Signing Solana Demon King upgrade payment...');
+            const solResult = await buySolanaShopItem({
+              solWallet,
+              buyer: ownerAddressForChain,
+              token: sessionToken,
+              sku: 'demon_king_upgrade',
+              payment,
+              quantity: 1,
+              redeemPath: '/api/nft/solana/upgrade/redeem',
+              redeemExtra: { tokenId, newLevel: targetLevel },
+            });
+            upgradeTxHash = solResult?.grant?.metadataTxSignature || solResult?.signature || null;
+          } else {
+            throw new Error(`Unsupported upgrade chain: ${chain}`);
+          }
+        } else {
+          setNotice?.('NFT is already upgraded. Syncing Demon King level...');
+        }
+        const synced = await syncDemonKingNfts({ wallet: ownerAddressForChain, chains: [chain], force: true }).catch(() => null);
+        if (synced?.tokens) setOwned(synced.tokens);
+        const levelAfter = Math.max(levelBefore, targetLevel);
+        if (requiredTroopLevel && levelAfter < requiredTroopLevel) {
+          setDone({ level: levelAfter, nftOnly: true });
+          setNotice?.(`Demon King NFT upgraded to level ${levelAfter}. Upgrade once more to unlock level ${requiredTroopLevel}.`);
+          return;
+        }
+        const res = await fetch('/api/troops/demon_king/upgrade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(typeof window !== 'undefined' && window._playerToken ? { 'x-token': window._playerToken } : {}),
+          },
+          body: JSON.stringify({ chain, tokenId, owner: ownerAddressForChain, txHash: upgradeTxHash }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.error) throw new Error(json?.error || `Upgrade sync failed (${res.status})`);
+        setDone(json);
+        setNotice?.(`Demon King upgraded to level ${json.level}.`);
+        if (typeof window !== 'undefined' && window.godotBridge) {
+          window.godotBridge(JSON.stringify({ action: 'refresh_troops', data: {} }));
+        }
+        return;
+      }
       let state = null;
       try {
         state = await fetchNftState(chain, tokenId, { evmWallet });
@@ -1795,7 +1970,7 @@ function DemonKingUpgradePanel({
     } finally {
       setBusy?.(null);
     }
-  }, [chain, evmAddress, evmWallet, nextLevel, onOpenEvmModal, payment, quotePreview, requiredWins, selectedToken?.level, setBusy, setNotice, status?.nextLevel, status?.next_level, tokenId, winsReady]);
+  }, [aptosWallet, chain, evmAddress, evmWallet, isEvmUpgradeChain, nextLevel, onConnectAptos, onConnectSolana, onOpenEvmModal, ownerAddressForChain, payment, quotePreview, requiredWins, selectedToken?.level, setBusy, setNotice, solWallet, status?.nextLevel, status?.next_level, tokenId, winsReady]);
 
   return (
     <div className="shop-scroll" style={{ ...styles.slide, width: '100%', minWidth: 0 }}>
@@ -1807,10 +1982,12 @@ function DemonKingUpgradePanel({
         <div style={styles.summary}>
           <span style={styles.heroName}>Demon King Upgrade</span>
           <span style={styles.editionTag}>
-            Level {displayNextLevel}: {wins} / {requiredWins} wins
+            {requiredWins > 0
+              ? `Level ${displayNextLevel}: ${wins} / ${requiredWins} wins`
+              : `Level ${displayNextLevel}: NFT level verified`}
           </span>
           <span style={{ fontSize: 12, color: winsReady ? '#257a28' : '#9a5b0f', fontWeight: 900 }}>
-            {winsReady ? 'Wins requirement complete' : 'Win more battles to unlock the contract upgrade'}
+            {winsReady ? 'Wins requirement complete' : 'Win more battles to unlock the NFT upgrade'}
           </span>
         </div>
       </div>
@@ -1834,51 +2011,69 @@ function DemonKingUpgradePanel({
             <span style={styles.chainLogoBadge}>
               {chainLogo(choice)
                 ? <img src={chainLogo(choice)} alt={SHOP_CHAIN_LABEL[choice]} style={styles.chainLogoImg} />
-                : 'EVM'}
+                : (shopChainChoice(choice)?.badge || 'NFT')}
             </span>
             <span style={styles.chainSwitchMain}>
               <span style={styles.chainSwitchName}>{SHOP_CHAIN_LABEL[choice]}</span>
-              <span style={styles.chainSwitchSub}>{choice === 'base' ? 'USDC / ETH / CoP' : choice === 'monad' ? 'USDC / MON' : 'USDC / ETH'}</span>
+              <span style={styles.chainSwitchSub}>{shopChainChoice(choice)?.subtitle || 'NFT sync'}</span>
             </span>
           </button>
         ))}
       </div>
 
-      <div style={styles.options}>
-        {paymentOptions.map((option) => {
-          const active = payment === option.id;
-          const livePrice = active && quotePriceLabel ? quotePriceLabel : '';
-          const priceText = active
-            ? (quoteLoading ? 'Loading quote...' : (livePrice || (quoteError ? 'Quote unavailable' : DEMON_KING_UPGRADE_PRICE_HINT[option.id] || option.sub)))
-            : (DEMON_KING_UPGRADE_PRICE_HINT[option.id] || 'Live quote');
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => setPayment(option.id)}
-              style={{
-                ...styles.optionBtn,
-                ...(active ? styles.optionBtnActive : null),
-              }}
-            >
-              <span style={styles.optionBadge}>
-                {tokenLogo(option.label) ? <img src={tokenLogo(option.label)} alt={option.label} style={styles.optionBadgeImg} /> : option.label}
-              </span>
-              <span style={styles.optionMain}>{option.label}</span>
-              <span style={styles.optionPrice}>{priceText}</span>
-            </button>
-          );
-        })}
-      </div>
+      {paymentOptions.length > 0 && (
+        <div style={styles.options}>
+          {paymentOptions.map((option) => {
+            const active = payment === option.id;
+            const livePrice = active && quotePriceLabel ? quotePriceLabel : '';
+            const priceText = active
+              ? (quoteLoading ? 'Loading quote...' : (livePrice || (quoteError ? 'Quote unavailable' : DEMON_KING_UPGRADE_PRICE_HINT[option.id] || option.sub)))
+              : (DEMON_KING_UPGRADE_PRICE_HINT[option.id] || 'Live quote');
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setPayment(option.id)}
+                style={{
+                  ...styles.optionBtn,
+                  ...(active ? styles.optionBtnActive : null),
+                }}
+              >
+                <span style={styles.optionBadge}>
+                  {tokenLogo(option.label) ? <img src={tokenLogo(option.label)} alt={option.label} style={styles.optionBadgeImg} /> : option.label}
+                </span>
+                <span style={styles.optionMain}>{option.label}</span>
+                <span style={styles.optionPrice}>{priceText}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!isEvmUpgradeChain && (
+        <div style={styles.quoteStrip}>
+          {SHOP_CHAIN_LABEL[chain] || chain} Demon King NFTs upgrade only on {SHOP_CHAIN_LABEL[chain] || chain}. If the NFT is already upgraded, this syncs it into the game.
+        </div>
+      )}
 
       <div style={{ ...styles.quoteStrip, ...(quoteError ? styles.quoteStripWarn : null) }}>
-        {quoteLoading
-          ? 'Checking NFT owner and live price...'
-          : quotePreview?.alreadySynced
-            ? 'NFT level is already high enough. This will sync the server troop level.'
-            : quotePriceLabel
-              ? `Live upgrade price: ${quotePriceLabel}`
-              : quoteError || 'Select an NFT to load the live upgrade price.'}
+        {!isEvmUpgradeChain
+          ? (quoteLoading
+            ? 'Checking NFT owner and same-chain upgrade price...'
+            : quotePreview?.alreadySynced
+              ? 'NFT level is already high enough. This will sync the server troop level.'
+              : quotePriceLabel
+                ? `Same-chain upgrade price: ${quotePriceLabel}`
+                : quoteError || (tokenId
+                  ? 'This will upgrade the connected NFT on its own chain, then sync the troop level.'
+                  : `Select a ${SHOP_CHAIN_LABEL[chain] || chain} Demon King NFT to load the upgrade price.`))
+          : quoteLoading
+            ? 'Checking NFT owner and live price...'
+            : quotePreview?.alreadySynced
+              ? 'NFT level is already high enough. This will sync the server troop level.'
+              : quotePriceLabel
+                ? `Live upgrade price: ${quotePriceLabel}`
+                : quoteError || 'Select an NFT to load the live upgrade price.'}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1906,7 +2101,9 @@ function DemonKingUpgradePanel({
                   </span>
                   <span style={styles.chainSwitchMain}>
                     <span style={styles.chainSwitchName}>#{tokenItem.tokenId}</span>
-                    <span style={styles.chainSwitchSub}>Upgrade to L{Math.min(3, Number(tokenItem.level || 1) + 1)}</span>
+                    <span style={styles.chainSwitchSub}>
+                      {Number(tokenItem.level || 1) >= 3 ? 'Sync L3' : `Upgrade to L${Math.min(3, Number(tokenItem.level || 1) + 1)}`}
+                    </span>
                   </span>
                 </button>
               );
@@ -1914,13 +2111,19 @@ function DemonKingUpgradePanel({
           </div>
         ) : (
           <div style={{ fontSize: 12, color: '#7c633e', lineHeight: 1.4 }}>
-            {evmAddress ? 'No upgradeable NFT auto-detected. Paste a token id if the indexer is behind.' : 'Connect an EVM wallet to load NFTs.'}
+            {chainWalletConnected ? 'No upgradeable NFT auto-detected. Paste a token id if the indexer is behind.' : `Connect ${SHOP_CHAIN_LABEL[chain] || chain} wallet to load NFTs.`}
           </div>
         )}
         <input
           value={manualTokenId}
-          onChange={(e) => { setManualTokenId(e.target.value.replace(/[^0-9]/g, '')); setSelectedTokenId(''); }}
-          placeholder="Token ID"
+          onChange={(e) => {
+            const nextValue = isEvmUpgradeChain
+              ? e.target.value.replace(/[^0-9]/g, '')
+              : e.target.value.replace(/\s/g, '');
+            setManualTokenId(nextValue);
+            setSelectedTokenId('');
+          }}
+          placeholder={isEvmUpgradeChain ? 'Token ID' : 'Token / asset ID'}
           style={styles.textInput}
         />
       </div>
@@ -1928,28 +2131,32 @@ function DemonKingUpgradePanel({
       <button
         type="button"
         onClick={submitUpgrade}
-        disabled={!!busy || loading || !winsReady}
+        disabled={actionDisabled}
         style={{
           ...styles.mintBtn,
-          ...(winsReady && evmAddress && onCorrectChain ? styles.mintBtnReady : null),
-          ...((loading || !winsReady) ? styles.mintBtnDisabled : null),
-          cursor: busy || loading || !winsReady ? 'not-allowed' : 'pointer',
+          ...(actionReady ? styles.mintBtnReady : null),
+          ...(actionDisabled ? styles.mintBtnDisabled : null),
+          cursor: actionDisabled ? 'not-allowed' : 'pointer',
         }}
       >
         <span style={styles.mintBtnGlyph}>
-          {evmAddress && onCorrectChain && tokenLogo(selectedPaymentOption?.label)
+          {isEvmUpgradeChain && evmAddress && onCorrectChain && tokenLogo(selectedPaymentOption?.label)
             ? <img src={tokenLogo(selectedPaymentOption.label)} alt={selectedPaymentOption.label} style={styles.mintBtnGlyphImg} />
-            : evmAddress && !onCorrectChain && chainLogo(chain)
+            : isEvmUpgradeChain && evmAddress && !onCorrectChain && chainLogo(chain)
               ? <img src={chainLogo(chain)} alt={SHOP_CHAIN_LABEL[chain]} style={styles.mintBtnGlyphImg} />
-              : (evmAddress ? 'UP' : 'W')}
+              : chainLogo(chain)
+                ? <img src={chainLogo(chain)} alt={SHOP_CHAIN_LABEL[chain]} style={styles.mintBtnGlyphImg} />
+                : (chainWalletConnected ? 'UP' : 'W')}
         </span>
         <span>
-          {!evmAddress
-            ? 'Connect EVM wallet'
+          {!chainWalletConnected
+            ? `Connect ${SHOP_CHAIN_LABEL[chain] || chain} wallet`
             : loading
               ? 'Loading...'
               : quoteLoading
                 ? 'Loading price...'
+                : !tokenId
+                  ? 'Choose Demon King NFT'
                 : quotePreview?.alreadySynced
                   ? 'Sync Demon King level'
                 : quotePriceLabel

@@ -54,6 +54,10 @@ function isPointsSort(sortBy) {
   return sortBy === 'points' || sortBy === 'volume_trophies_50_50';
 }
 
+function isDailyPoolTournament(t) {
+  return String(t?.scoring_mode || 'live') === 'daily_pool';
+}
+
 function pointWeights(t) {
   if (t?.sort_by === 'volume_trophies_50_50') return { trophies: 50, volume: 50, pnl: 0 };
   const w = t?.points_weights || {};
@@ -72,6 +76,14 @@ function fmtWeight(n) {
 function sortLabel(tOrSort) {
   const sortBy = typeof tOrSort === 'string' ? tOrSort : tOrSort?.sort_by;
   if (typeof tOrSort === 'object' && tOrSort?.sort_label) return tOrSort.sort_label;
+  if (typeof tOrSort === 'object' && isDailyPoolTournament(tOrSort)) {
+    const w = pointWeights(tOrSort);
+    const parts = [];
+    if (Number(w.trophies) > 0) parts.push(`${fmtWeight(w.trophies)}% Trophy`);
+    if (Number(w.volume) > 0) parts.push(`${fmtWeight(w.volume)}% Volume`);
+    if (Number(w.pnl) > 0) parts.push(`${fmtWeight(w.pnl)}% PnL`);
+    return parts.length ? `Daily pool: ${parts.join(' / ')}` : 'Daily pool';
+  }
   if (sortBy === 'trophies') return 'Trophies';
   if (sortBy === 'volume_usd') return 'Volume';
   if (sortBy === 'gold') return 'Gold';
@@ -347,6 +359,7 @@ function TournamentPanel({ onClose }) {
                   <span style={S.dexTag}>{dexLabel(t, dex)}</span>
                   {t.mode === 'dex_vs_dex' && <span style={S.teamTag}>DEX VS DEX</span>}
                   <span style={S.tag}>Sort: {sortLabel(t)}</span>
+                  {isDailyPoolTournament(t) && <span style={S.prizeTag}>{fmt(t.daily_pool_points || 1000)} pts/day at 00:00 UTC</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Winner: {t.team_score_label || 'Volume'}</span>}
                   {t.mode === 'dex_vs_dex' && <span style={S.tag}>Player payout: {t.team_member_reward_label || 'Volume'}</span>}
                   {isHistory
@@ -483,7 +496,9 @@ function TournamentPanel({ onClose }) {
                     />
                   </div>
                   <div style={S.freezeNote}>
-                    {t.freeze_trophies === false ? (
+                    {isDailyPoolTournament(t) ? (
+                      <>Score is awarded from the daily pool after each UTC day closes. Current battle, volume, and PnL activity is tracked live.</>
+                    ) : t.freeze_trophies === false ? (
                       <>Main trophies keep updating while joined. Battle wins/losses also count toward this tournament.</>
                     ) : (
                       <>Main trophies are <strong>frozen</strong> while joined. Battle wins/losses count only toward this tournament.</>

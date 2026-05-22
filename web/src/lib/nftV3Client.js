@@ -389,6 +389,75 @@ export async function upgradeNft({ evmWallet, chainKey, tokenId, owner, newLevel
   return { hash, receipt, quote };
 }
 
+function aptosHexVectorArg(hex) {
+  const clean = String(hex || '').replace(/^0x/i, '');
+  if (!clean) return [];
+  const out = [];
+  for (let i = 0; i < clean.length; i += 2) {
+    out.push(parseInt(clean.slice(i, i + 2), 16));
+  }
+  return out;
+}
+
+async function waitForAptosTx(txHash) {
+  const fullnode = (typeof window !== 'undefined' && window.APTOS_FULLNODE)
+    || 'https://fullnode.mainnet.aptoslabs.com/v1';
+  for (let i = 0; i < 30; i += 1) {
+    const response = await fetch(`${fullnode}/transactions/by_hash/${txHash}`).catch(() => null);
+    if (response?.ok) {
+      const data = await response.json().catch(() => null);
+      if (data?.success === true) return data;
+      if (data?.success === false) throw new Error(`Aptos tx failed on-chain: ${data?.vm_status || 'unknown'}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return null;
+}
+
+export async function fetchAptosUpgradeQuote({ owner, tokenId, tokenAddress, newLevel }) {
+  return fetchUpgradeQuote({
+    chain: 'aptos',
+    tokenId: tokenAddress || tokenId,
+    owner,
+    newLevel,
+    payment: 'usdc',
+  });
+}
+
+export async function upgradeAptosNft({ aptosWallet, owner, tokenId, tokenAddress, newLevel }) {
+  if (!aptosWallet) throw new Error('Aptos wallet is not connected');
+  const quote = await fetchAptosUpgradeQuote({ owner, tokenId, tokenAddress, newLevel });
+  const payload = {
+    data: {
+      function: quote?.callData?.functionId,
+      typeArguments: [],
+      functionArguments: [
+        quote.tokenAddress || quote.tokenId,
+        Number(quote.newLevel || newLevel),
+        String(quote.priceUnits),
+        aptosHexVectorArg(quote.nonce),
+        String(quote.deadline),
+        aptosHexVectorArg(quote.signature),
+      ],
+    },
+  };
+  if (!payload.data.function) throw new Error('Aptos upgrade quote is missing call data');
+  const submitFn = aptosWallet.loginSignAndSubmit
+    || aptosWallet.signAndSubmitTransaction
+    || aptosWallet.signAndSubmit;
+  if (typeof submitFn !== 'function') {
+    throw new Error('Connected Aptos wallet cannot sign transactions');
+  }
+  const result = await submitFn.call(aptosWallet, payload);
+  const txHash = result?.hash
+    || result?.txnHash
+    || result?.transactionHash
+    || result?.signature;
+  if (!txHash) throw new Error('Aptos tx submission returned no hash');
+  const receipt = await waitForAptosTx(txHash);
+  return { txHash, receipt, quote };
+}
+
 // ====================================================================
 // Bridge client helpers — talk to server's /bridge/init + /bridge/confirm
 // (see server/nft_v3_endpoints.js).

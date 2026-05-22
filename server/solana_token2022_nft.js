@@ -23,6 +23,7 @@ const {
   getMintLen,
   getTokenMetadata,
   tokenMetadataInitializeWithRentTransfer,
+  tokenMetadataUpdateFieldWithRentTransfer,
 } = require('@solana/spl-token');
 const { createSolanaConnection, solanaPrimaryRpcUrl } = require('./solana_rpc');
 
@@ -80,6 +81,18 @@ function levelFromToken2022Metadata(meta) {
   const text = `${meta?.name || ''} ${meta?.uri || ''}`;
   const match = text.match(/(?:level|lvl|l)[=\s_-]*([123])\b/i);
   return match ? Number(match[1]) : 1;
+}
+
+function sourceRefFromToken2022Metadata(meta) {
+  const uri = String(meta?.uri || '');
+  if (!uri) return null;
+  try {
+    const parsed = new URL(uri);
+    return parsed.searchParams.get('src') || null;
+  } catch {
+    const match = uri.match(/[?&]src=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
 }
 
 async function sendAndConfirmFresh(connection, transaction, signers, label) {
@@ -432,6 +445,62 @@ async function getToken2022NftInfo({ mint, expectedOwner, connection = null, col
   };
 }
 
+async function upgradeToken2022NftLevel({
+  mint,
+  owner,
+  level,
+  sourceRef = null,
+  payerSecretKey = null,
+  connection = null,
+} = {}) {
+  if (!mint) throw new Error('mint required');
+  if (!owner) throw new Error('owner required');
+  const nextLevel = normalizeLevel(level);
+  if (nextLevel <= 1) throw new Error('Token-2022 upgrade level must be 2 or 3');
+  const conn = connection || createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed');
+  const payer = payerFromSecretKey(payerSecretKey);
+  const info = await getToken2022NftInfo({ mint, expectedOwner: owner, connection: conn });
+  const currentLevel = normalizeLevel(info.level);
+  if (nextLevel !== currentLevel + 1) {
+    throw new Error(`Solana Demon King must upgrade by 1 level (current L${currentLevel}, requested L${nextLevel})`);
+  }
+  const mintPk = new PublicKey(mint);
+  const nextSourceRef = sourceRef || sourceRefFromToken2022Metadata(info.metadata);
+  const uri = token2022MetadataUri({ mint: mintPk.toBase58(), level: nextLevel, sourceRef: nextSourceRef });
+  const confirmOptions = { commitment: 'confirmed', preflightCommitment: 'confirmed', maxRetries: 5 };
+  const nameSig = await tokenMetadataUpdateFieldWithRentTransfer(
+    conn,
+    payer,
+    mintPk,
+    payer.publicKey,
+    'name',
+    token2022Name(nextLevel),
+    [],
+    confirmOptions,
+    TOKEN_2022_PROGRAM_ID,
+  ).catch((err) => recoverExpiredSignatureIfLanded(conn, err, 'Token-2022 NFT name update'));
+  const uriSig = await tokenMetadataUpdateFieldWithRentTransfer(
+    conn,
+    payer,
+    mintPk,
+    payer.publicKey,
+    'uri',
+    uri,
+    [],
+    confirmOptions,
+    TOKEN_2022_PROGRAM_ID,
+  ).catch((err) => recoverExpiredSignatureIfLanded(conn, err, 'Token-2022 NFT uri update'));
+  return {
+    ...info,
+    level: nextLevel,
+    previousLevel: currentLevel,
+    imageUrl: token2022MetadataUri({ mint: mintPk.toBase58(), level: nextLevel, sourceRef: nextSourceRef }),
+    updateTxSig: uriSig || nameSig,
+    nameTxSig: nameSig,
+    uriTxSig: uriSig,
+  };
+}
+
 function createToken2022BurnInstructions({ mint, owner, tokenAccount, destination = null }) {
   const mintPk = new PublicKey(mint);
   const ownerPk = new PublicKey(owner);
@@ -477,5 +546,6 @@ module.exports = {
   mintToken2022Nft,
   completeExistingToken2022NftMint,
   getToken2022NftInfo,
+  upgradeToken2022NftLevel,
   createToken2022BurnInstructions,
 };

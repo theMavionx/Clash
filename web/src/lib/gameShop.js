@@ -463,8 +463,8 @@ async function resolveTokenProgramId({ connection, splToken, mintPk, tokenAccoun
 // tx itself (recipient, amount, memo, ed25519 signature of the memo).
 // =====================================================================
 
-export async function fetchSolanaShopQuote({ token, buyer, sku, quantity = 1, payment }) {
-  const response = await fetch('/api/shop/solana/quote', {
+export async function fetchSolanaShopQuote({ token, buyer, sku, quantity = 1, payment, path = '/api/shop/solana/quote' }) {
+  const response = await fetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -477,14 +477,14 @@ export async function fetchSolanaShopQuote({ token, buyer, sku, quantity = 1, pa
   return json;
 }
 
-export async function redeemSolanaShopPurchase({ token, txSignature, buyer, serverSignature }) {
-  const response = await fetch('/api/shop/solana/redeem', {
+export async function redeemSolanaShopPurchase({ token, txSignature, buyer, serverSignature, path = '/api/shop/solana/redeem', extra = {} }) {
+  const response = await fetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { 'x-token': token } : {}),
     },
-    body: JSON.stringify({ txSignature, buyer, signature: serverSignature }),
+    body: JSON.stringify({ txSignature, buyer, signature: serverSignature, ...extra }),
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -545,7 +545,17 @@ class InsufficientSolanaBalanceError extends Error {
   }
 }
 
-export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment = 'usdc', quantity = 1 }) {
+export async function buySolanaShopItem({
+  solWallet,
+  buyer,
+  token,
+  sku,
+  payment = 'usdc',
+  quantity = 1,
+  quotePath = '/api/shop/solana/quote',
+  redeemPath = '/api/shop/solana/redeem',
+  redeemExtra = {},
+}) {
   if (!token) throw new Error('Game session is not ready');
   const address = solWallet?.publicKey?.toBase58?.() || buyer;
   if (!address) throw new Error('Solana wallet is not connected');
@@ -583,7 +593,7 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     import('./solanaTx'),
   ]);
 
-  const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment });
+  const quote = await fetchSolanaShopQuote({ token, buyer: address, sku, quantity, payment, path: quotePath });
   if (!quote?.treasury) throw new Error('Solana treasury not configured');
   solanaShopLog('quote_ok', {
     ...shopTrace,
@@ -838,6 +848,8 @@ export async function buySolanaShopItem({ solWallet, buyer, token, sku, payment 
     txSignature: signature,
     buyer: address,
     serverSignature: quote.signature,
+    path: redeemPath,
+    extra: redeemExtra,
   });
   solanaShopLog('redeemed', {
     ...shopTrace,

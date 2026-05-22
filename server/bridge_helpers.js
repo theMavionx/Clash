@@ -236,6 +236,27 @@ async function signAptosMintQuotePayment({ buyerAddress, paymentMetadata, paymen
   return '0x' + Buffer.from(sig.toUint8Array()).toString('hex');
 }
 
+// Sign an UpgradeQuote for `clash_nft::upgrade_with_quote`.
+// Move verifies:
+//   owner_addr || token_addr || new_level(u8) || usdc_amount(u64 LE)
+//     || nonce(raw bytes) || deadline(u64 LE)
+async function signAptosUpgradeQuote({ ownerAddress, tokenAddress, newLevel, usdcAmount, nonce, deadline }) {
+  const acc = aptosAccount();
+  if (!acc) throw new Error('Aptos signer not available (set NFT_BASE)');
+
+  const buf = [];
+  buf.push(addressToBytes(ownerAddress));
+  buf.push(addressToBytes(tokenAddress));
+  buf.push(new Uint8Array([Number(newLevel) & 0xff]));
+  buf.push(u64LeBytes(BigInt(usdcAmount)));
+  buf.push(hexToBytes(nonce));
+  buf.push(u64LeBytes(BigInt(deadline)));
+  const msg = concat(buf);
+
+  const sig = acc.sign(msg);
+  return '0x' + Buffer.from(sig.toUint8Array()).toString('hex');
+}
+
 // Sign a BridgeReceipt for an Aptos destination. The Move function
 // `bridge_mint` verifies ed25519 over:
 //   bcs(to) ‖ u8(level) ‖ source_ref(32) ‖ bcs(u64 dest_chain_id) ‖ bcs(u64 deadline)
@@ -844,6 +865,7 @@ module.exports = {
   signAptosBridgeReceipt,
   signAptosMintQuote,
   signAptosMintQuotePayment,
+  signAptosUpgradeQuote,
   solanaConnection,
   verifySolanaBurnTx,
   getSolanaBridgeAssetInfo,

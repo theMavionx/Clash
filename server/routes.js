@@ -15,6 +15,8 @@ const { broadcastToPlayer, consumePendingAgentEvents } = require('./websocket');
 const {
   solanaToken2022CollectionId,
   solanaToken2022Symbol,
+  getToken2022NftInfo,
+  upgradeToken2022NftLevel,
 } = require('./solana_token2022_nft');
 const {
   createSolanaConnection,
@@ -1345,10 +1347,20 @@ const GAME_SHOP_PRODUCTS = {
     dailyLimit: 100,
     maxQuantity: 1,
   },
+  demon_king_upgrade: {
+    id: 'demon_king_upgrade',
+    sku: 'demon_king_upgrade',
+    title: 'Demon King Upgrade',
+    subtitle: 'Upgrade a verified Demon King NFT level',
+    kind: 'nft_upgrade',
+    usdPriceE6: '8900000',
+    maxQuantity: 1,
+    hidden: true,
+  },
 };
 
 function gameShopProductsForClient() {
-  return Object.values(GAME_SHOP_PRODUCTS).map((product) => ({
+  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => ({
     id: product.id,
     sku: product.sku,
     skuBytes32: skuToBytes32(product.sku),
@@ -3196,6 +3208,137 @@ function txTransfersToTreasury({ parsedTx, expectedMint, expectedTreasury, expec
   return false;
 }
 
+async function verifySolanaShopPaymentForPlayer(req, { expectedSku = null } = {}) {
+  const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{43,90}$/.test(signature)) {
+    const err = new Error('Bad Solana tx signature');
+    err.status = 400;
+    throw err;
+  }
+  const solana = gameShopSolanaConfig();
+  if (!solana.ready) {
+    const err = new Error('Solana game shop is not configured');
+    err.status = 503;
+    throw err;
+  }
+  const parsedTx = await getParsedTransactionWithSolanaFallback(signature, {
+    commitment: 'confirmed',
+    maxSupportedTransactionVersion: 0,
+  });
+  if (!parsedTx) {
+    const err = new Error('Solana tx not found or not confirmed yet');
+    err.status = 400;
+    throw err;
+  }
+  if (parsedTx.meta?.err) {
+    const err = new Error('Solana tx failed on-chain');
+    err.status = 400;
+    throw err;
+  }
+
+  const memoInfo = extractShopMemoFromTx(parsedTx, solana.memoProgram);
+  if (!memoInfo) {
+    const err = new Error('Shop memo not found in tx');
+    err.status = 400;
+    throw err;
+  }
+  const memoSig = String(req.body?.signature || req.body?.serverSignature || '').trim();
+  if (!memoSig) {
+    const err = new Error('Missing memo signature');
+    err.status = 400;
+    throw err;
+  }
+  if (!verifySolanaShopMemoSignature(memoInfo.memo, memoSig)) {
+    const err = new Error('Bad memo signature');
+    err.status = 403;
+    throw err;
+  }
+
+  const memoData = memoInfo.parsed;
+  if (memoData?.v !== 1) {
+    const err = new Error('Unsupported memo version');
+    err.status = 400;
+    throw err;
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (Number(memoData.deadline) < nowSec - 600) {
+    const err = new Error('Quote deadline expired');
+    err.status = 400;
+    throw err;
+  }
+  const expectedAccount = gameAccountHash(req.player.id);
+  if (String(memoData.acc).toLowerCase() !== expectedAccount.toLowerCase()) {
+    const err = new Error('Purchase belongs to another game account');
+    err.status = 403;
+    throw err;
+  }
+
+  const sku = String(memoData.sku || '');
+  if (expectedSku && sku !== expectedSku) {
+    const err = new Error(`Expected ${expectedSku} payment memo`);
+    err.status = 400;
+    throw err;
+  }
+  const product = GAME_SHOP_PRODUCTS[sku];
+  if (!product) {
+    const err = new Error('Unknown purchased item');
+    err.status = 400;
+    throw err;
+  }
+  const quantity = Number(memoData.qty);
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > (product.maxQuantity || 10)) {
+    const err = new Error('Bad purchase quantity');
+    err.status = 400;
+    throw err;
+  }
+  const payment = String(memoData.pay || 'usdc');
+  if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
+    const err = new Error('Bad memo payment token');
+    err.status = 400;
+    throw err;
+  }
+  if (payment === 'skr' && !solana.skrReady) {
+    const err = new Error('SKR shop is not configured on this server');
+    err.status = 503;
+    throw err;
+  }
+  const expectedAmount = BigInt(memoData.amt);
+  const expectedMint = payment === 'usdc' ? solana.usdcMint
+                      : payment === 'skr'  ? solana.skrMint
+                      : null;
+  const expectedDecimals = payment === 'usdc' ? 6
+                          : payment === 'skr'  ? await resolveSolanaMintDecimals(solana.skrMint, solana.skrDecimals)
+                          : 9;
+
+  if (!txTransfersToTreasury({
+    parsedTx,
+    expectedMint,
+    expectedTreasury: solana.treasury,
+    expectedAmount,
+  })) {
+    const tokenLabel = payment === 'usdc' ? 'USDC' : payment === 'skr' ? 'SKR' : 'SOL';
+    const err = new Error(`${tokenLabel} transfer to treasury not found or under-paid`);
+    err.status = 400;
+    throw err;
+  }
+
+  return {
+    signature,
+    solana,
+    parsedTx,
+    memoData,
+    sku,
+    product,
+    quantity,
+    payment,
+    expectedAmount,
+    expectedMint,
+    expectedDecimals,
+    tokenLabel: payment === 'usdc' ? expectedMint : payment === 'skr' ? expectedMint : 'SOL',
+    buyer: String(req.body?.buyer || ''),
+  };
+}
+
 router.post('/shop/solana/redeem', auth, async (req, res) => {
   try {
     const signature = String(req.body?.txSignature || req.body?.signature || '').trim();
@@ -3335,6 +3478,119 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
     });
   } catch (err) {
     const message = err?.message || 'redeem failed';
+    res.status(err?.status || 500).json({ error: message.slice(0, 180) });
+  }
+});
+
+router.post('/nft/solana/upgrade/redeem', auth, async (req, res) => {
+  try {
+    const paymentInfo = await verifySolanaShopPaymentForPlayer(req, { expectedSku: 'demon_king_upgrade' });
+    const signature = paymentInfo.signature;
+    const existing = db.db.prepare('SELECT * FROM utility_purchases WHERE tx_hash = ?').get(signature);
+    if (existing) {
+      if (existing.player_id !== req.player.id) return res.status(409).json({ error: 'Upgrade payment already redeemed' });
+      return res.json({
+        success: true,
+        alreadyRedeemed: true,
+        chain: 'solana',
+        txSignature: signature,
+      });
+    }
+
+    const owner = String(req.body?.buyer || '').trim();
+    if (!SOLANA_WALLET_RE.test(owner)) return res.status(400).json({ error: 'Invalid Solana owner address' });
+    const mint = String(req.body?.tokenId || req.body?.mint || req.body?.tokenAddress || '').trim();
+    if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'Invalid Solana Demon King mint' });
+    const newLevel = Number(req.body?.newLevel || req.body?.level || 0);
+    if (![2, 3].includes(newLevel)) return res.status(400).json({ error: 'newLevel must be 2 or 3' });
+
+    const current = await getToken2022NftInfo({ mint, expectedOwner: owner });
+    const currentLevel = normalizeNftLevel(current.level);
+    if (newLevel !== currentLevel + 1) {
+      return res.status(409).json({ error: `Must upgrade by exactly 1. Current level: ${currentLevel}` });
+    }
+    const requiredWins = db.demonKingRequiredWins(newLevel);
+    const battleWins = db.getDemonKingBattleWins(req.player.id, 'solana', mint);
+    if (requiredWins != null && battleWins < requiredWins) {
+      return res.status(403).json({
+        error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
+        code: 'DEMON_KING_WINS_REQUIRED',
+        battle_wins: battleWins,
+        required_wins: requiredWins,
+        next_level: newLevel,
+      });
+    }
+
+    const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
+    if (!rawKey) return res.status(503).json({ error: 'Solana NFT authority key is not configured' });
+    const { parseSolanaSecretKey } = require('./bridge_helpers');
+    const { Connection } = require('@solana/web3.js');
+    const connection = await withSolanaRpcFallback(async (rpc) => {
+      const candidate = createSolanaConnection(Connection, rpc, 'confirmed');
+      await candidate.getLatestBlockhash('confirmed');
+      return candidate;
+    }, {
+      label: 'Solana Token-2022 upgrade RPC probe',
+    });
+    const upgraded = await upgradeToken2022NftLevel({
+      mint,
+      owner,
+      level: newLevel,
+      payerSecretKey: parseSolanaSecretKey(rawKey),
+      connection,
+    });
+
+    const bound = db.db.transaction(() => {
+      const duplicate = db.db.prepare('SELECT id FROM utility_purchases WHERE tx_hash = ?').get(signature);
+      if (duplicate) {
+        const err = new Error('Upgrade payment already redeemed');
+        err.status = 409;
+        throw err;
+      }
+      db.db.prepare(`
+        INSERT INTO utility_purchases
+          (player_id, utility, chain, tx_hash, payer, token, recipient, amount, usd_price_e6, duration_hours, shield_until)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        req.player.id,
+        paymentInfo.sku,
+        'solana',
+        signature,
+        owner,
+        paymentInfo.tokenLabel,
+        paymentInfo.solana.treasury,
+        paymentInfo.expectedAmount.toString(),
+        (BigInt(paymentInfo.product.usdPriceE6) * BigInt(paymentInfo.quantity)).toString(),
+        null,
+        null,
+      );
+      return db.bindPlayerDemonKingNft(req.player.id, owner, {
+        chain: 'solana',
+        tokenId: mint,
+        level: newLevel,
+        imageUrl: nftImageUrl(req, newLevel),
+        txHash: upgraded.updateTxSig || signature,
+      }, {
+        source: 'solana-upgrade',
+        txHash: upgraded.updateTxSig || signature,
+      });
+    })();
+
+    res.json({
+      success: true,
+      chain: 'solana',
+      tokenId: mint,
+      level: newLevel,
+      previousLevel: currentLevel,
+      payment: paymentInfo.payment,
+      txSignature: signature,
+      metadataTxSignature: upgraded.updateTxSig || null,
+      bound,
+      amount: paymentInfo.expectedAmount.toString(),
+      amountFormatted: unitsToDecimalString(paymentInfo.expectedAmount, paymentInfo.expectedDecimals),
+    });
+  } catch (err) {
+    const message = err?.message || 'Solana NFT upgrade redeem failed';
     res.status(err?.status || 500).json({ error: message.slice(0, 180) });
   }
 });
@@ -10363,6 +10619,7 @@ const TOURNAMENT_DEX_LABELS = {
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
 const TOURNAMENT_ATTACK_MATCH_POLICIES = ['all', 'enemy_or_non_participant', 'enemy_only'];
+const TOURNAMENT_SCORING_MODES = ['live', 'daily_pool'];
 const TOURNAMENT_TEAM_METRIC_KEYS = ['volume_usd', 'pnl_usd', 'trades_count', 'trophies', 'gold', TOURNAMENT_POINTS_SORT];
 const TOURNAMENT_TEAM_METRIC_LABELS = {
   volume_usd: 'Volume',
@@ -10503,6 +10760,21 @@ function normalizeTournamentAttackMatchPolicy(v, fallback = 'all') {
   return TOURNAMENT_ATTACK_MATCH_POLICIES.includes(policy) ? policy : 'all';
 }
 
+function normalizeTournamentScoringMode(v, fallback = 'live') {
+  const mode = String(v || fallback || 'live').trim().toLowerCase();
+  return TOURNAMENT_SCORING_MODES.includes(mode) ? mode : 'live';
+}
+
+function tournamentUsesDailyPool(t) {
+  return normalizeTournamentScoringMode(t?.scoring_mode, 'live') === 'daily_pool';
+}
+
+function normalizeTournamentDailyPoolPoints(v, fallback = 1000) {
+  const n = v === undefined || v === null || v === '' ? Number(fallback) : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 1000;
+  return Math.max(1, Math.min(1_000_000, Number(n.toFixed(4))));
+}
+
 function normalizeTournamentShieldHours(v, fallback = null) {
   if (v === undefined) return fallback;
   if (v === null || v === '') return null;
@@ -10603,6 +10875,14 @@ function normalizeTournamentPointWeights(input, fallback = DEFAULT_TOURNAMENT_PO
 
 function tournamentSortLabel(tOrSort) {
   const sortBy = typeof tOrSort === 'string' ? tOrSort : normalizeTournamentSort(tOrSort?.sort_by);
+  if (typeof tOrSort === 'object' && tournamentUsesDailyPool(tOrSort)) {
+    const w = tournamentPointWeights(tOrSort);
+    const parts = [];
+    if (Number(w.trophies) > 0) parts.push(`${fmtTournamentWeight(w.trophies)}% Trophies`);
+    if (Number(w.volume) > 0) parts.push(`${fmtTournamentWeight(w.volume)}% Volume`);
+    if (Number(w.pnl) > 0) parts.push(`${fmtTournamentWeight(w.pnl)}% PnL`);
+    return `Daily pool (${parts.length ? parts.join(' / ') : 'no enabled metrics'})`;
+  }
   switch (sortBy) {
     case 'trophies': return 'Trophies';
     case 'volume_usd': return 'Volume (USD)';
@@ -10623,6 +10903,16 @@ function tournamentSortLabel(tOrSort) {
 }
 
 function applyTournamentPointsScore(rows, t) {
+  if (tournamentUsesDailyPool(t)) {
+    for (const r of rows) {
+      const awarded = Math.max(0, Number(r.awarded_points) || 0);
+      r.volume_score = 0;
+      r.trophy_score = 0;
+      r.pnl_score = 0;
+      r.score = Number(awarded.toFixed(4));
+    }
+    return rows;
+  }
   const w = tournamentPointWeights(t);
   for (const r of rows) {
     const volumeScore = Math.max(0, Number(r.volume_usd) || 0) * (w.volume / 100);
@@ -10925,6 +11215,7 @@ function tournamentRowToPublic(t, options = {}) {
   const teamPrizeMode = normalizeTournamentTeamPrizeMode(t.team_prize_mode);
   const teamMemberRewardBy = normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(t.attack_match_policy, 'all');
+  const scoringMode = normalizeTournamentScoringMode(t.scoring_mode, 'live');
   return {
     id: t.id,
     name: t.name,
@@ -10945,6 +11236,10 @@ function tournamentRowToPublic(t, options = {}) {
     team_member_reward_label: tournamentMetricLabel(teamMemberRewardBy),
     attack_match_policy: attackMatchPolicy,
     attack_match_policy_label: tournamentAttackMatchPolicyLabel(attackMatchPolicy),
+    scoring_mode: scoringMode,
+    scoring_label: scoringMode === 'daily_pool' ? 'Daily points at 00:00 UTC' : 'Live scoring',
+    daily_pool_points: normalizeTournamentDailyPoolPoints(t.daily_pool_points, 1000),
+    daily_pool_enabled_at: cleanSqlDate(t.daily_pool_enabled_at),
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
@@ -11101,9 +11396,9 @@ router.get('/tournaments/me', auth, (req, res) => {
     }
   }
   let comboMeScore = null;
-  if (me && isTournamentPointsSort(t.sort_by)) {
+  if (me && (isTournamentPointsSort(t.sort_by) || tournamentUsesDailyPool(t))) {
     const scored = applyTournamentPointsScore(db.db.prepare(`
-      SELECT player_id, trophies, volume_usd, pnl_usd
+      SELECT player_id, trophies, volume_usd, pnl_usd, awarded_points
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
     `).all(t.id), t);
@@ -11120,6 +11415,7 @@ router.get('/tournaments/me', auth, (req, res) => {
       trades_count: me.trades_count,
       volume_usd: me.volume_usd,
       pnl_usd: me.pnl_usd,
+      awarded_points: me.awarded_points || 0,
       score: comboMeScore?.score ?? null,
       volume_score: comboMeScore?.volume_score ?? null,
       trophy_score: comboMeScore?.trophy_score ?? null,
@@ -11151,6 +11447,7 @@ router.get('/tournaments/history', auth, (req, res) => {
            tp.trades_count AS my_trades_count,
            tp.volume_usd AS my_volume_usd,
            tp.pnl_usd    AS my_pnl_usd,
+           tp.awarded_points AS my_awarded_points,
            tp.team_dex   AS my_team_dex,
            tp.reward_wallet_evm AS my_reward_wallet_evm,
            tp.left_at    AS my_left_at
@@ -11172,9 +11469,9 @@ router.get('/tournaments/history', auth, (req, res) => {
   `).all(req.player.id, dex, dex, seekerAccess, limit);
   const comboScores = new Map();
   for (const r of rows) {
-    if (!isTournamentPointsSort(r.sort_by)) continue;
+    if (!isTournamentPointsSort(r.sort_by) && !tournamentUsesDailyPool(r)) continue;
     const scored = applyTournamentPointsScore(db.db.prepare(`
-      SELECT player_id, trophies, volume_usd, pnl_usd
+      SELECT player_id, trophies, volume_usd, pnl_usd, awarded_points
       FROM tournament_participants
       WHERE tournament_id = ? AND left_at IS NULL
     `).all(r.id), r);
@@ -11190,6 +11487,7 @@ router.get('/tournaments/history', auth, (req, res) => {
         trades_count: r.my_trades_count || 0,
         volume_usd: r.my_volume_usd || 0,
         pnl_usd: r.my_pnl_usd || 0,
+        awarded_points: r.my_awarded_points || 0,
         score: comboScores.get(r.id)?.score ?? null,
         volume_score: comboScores.get(r.id)?.volume_score ?? null,
         trophy_score: comboScores.get(r.id)?.trophy_score ?? null,
@@ -11314,10 +11612,11 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   const includeRewardWallets = isAdminRequest(req);
   const mode = normalizeTournamentMode(t.mode);
   const needsPointsScore = isTournamentPointsSort(sortBy)
+    || tournamentUsesDailyPool(t)
     || normalizeTournamentTeamMetric(t.team_score_by, 'volume_usd') === TOURNAMENT_POINTS_SORT
     || normalizeTournamentTeamMetric(t.team_member_reward_by, 'volume_usd') === TOURNAMENT_POINTS_SORT;
   const baseSql = `
-    SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd,
+    SELECT tp.player_id, tp.trophies, tp.gold, tp.trades_count, tp.volume_usd, tp.pnl_usd, tp.awarded_points,
            tp.team_dex, tp.reward_wallet_evm,
            p.name, p.wallet, p.dex AS player_dex
     FROM tournament_participants tp
@@ -11329,7 +11628,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
   if (mode === 'dex_vs_dex') {
     rows = db.db.prepare(baseSql).all(tid);
     if (needsPointsScore) applyTournamentPointsScore(rows, t);
-  } else if (isTournamentPointsSort(sortBy)) {
+  } else if (isTournamentPointsSort(sortBy) || tournamentUsesDailyPool(t)) {
     rows = applyTournamentPointsScore(db.db.prepare(baseSql).all(tid), t)
       .sort((a, b) =>
         (Number(b.score) || 0) - (Number(a.score) || 0)
@@ -11387,6 +11686,7 @@ router.get('/tournaments/:id/leaderboard', (req, res) => {
       trades_count: r.trades_count,
       volume_usd: r.volume_usd,
       pnl_usd: r.pnl_usd,
+      awarded_points: r.awarded_points || 0,
       score: r.score ?? null,
       volume_score: r.volume_score ?? null,
       trophy_score: r.trophy_score ?? null,
@@ -11430,6 +11730,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
+    scoring_mode, daily_pool_points,
     prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -11440,11 +11741,14 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode, 'winner_takes_all');
   const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy, 'all');
+  const scoringMode = normalizeTournamentScoringMode(scoring_mode, 'live');
+  const dailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points, 1000);
   if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
-  const sortCol = normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
+  const sortCol = scoringMode === 'daily_pool' ? TOURNAMENT_POINTS_SORT : normalizeTournamentSort(sort_by, TOURNAMENT_POINTS_SORT);
   const needsPointWeights = sortCol === TOURNAMENT_POINTS_SORT
+    || scoringMode === 'daily_pool'
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
@@ -11502,10 +11806,11 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     INSERT INTO tournaments (
       name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
+      scoring_mode, daily_pool_points, daily_pool_enabled_at,
       prize_currency, prize_tiers, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -11527,6 +11832,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     pointWeights.trophies,
     pointWeights.volume,
     pointWeights.pnl,
+    scoringMode,
+    dailyPoolPoints,
+    scoringMode === 'daily_pool' ? nowSql() : null,
     sanitizePrizeCurrency(prize_currency),
     JSON.stringify(prizeTiers),
     parseBool(rewards_in_cop) ? 1 : 0,
@@ -11551,6 +11859,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
+    scoring_mode, daily_pool_points,
     prize_currency, prize_tiers, rewards_in_cop, seeker_only,
     mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy,
   } = req.body || {};
@@ -11560,6 +11869,8 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const teamPrizeMode = normalizeTournamentTeamPrizeMode(team_prize_mode !== undefined ? team_prize_mode : t.team_prize_mode, 'winner_takes_all');
   const teamMemberRewardBy = normalizeTournamentTeamMetric(team_member_reward_by !== undefined ? team_member_reward_by : t.team_member_reward_by, 'volume_usd');
   const attackMatchPolicy = normalizeTournamentAttackMatchPolicy(attack_match_policy !== undefined ? attack_match_policy : t.attack_match_policy, 'all');
+  const nextScoringMode = normalizeTournamentScoringMode(scoring_mode !== undefined ? scoring_mode : t.scoring_mode, 'live');
+  const nextDailyPoolPoints = normalizeTournamentDailyPoolPoints(daily_pool_points !== undefined ? daily_pool_points : t.daily_pool_points, 1000);
   if (tournamentMode === 'dex_vs_dex' && tournamentEligibleDexes(dexConfig).length < 2) {
     return res.status(400).json({ error: 'DEX vs DEX tournaments need at least two eligible DEXes' });
   }
@@ -11588,8 +11899,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     registration_closes_at: nextRegistrationClosesAt,
   });
   if (windowError) return res.status(400).json({ error: windowError });
-  const nextSortBy = normalizeTournamentSort(sort_by, t.sort_by);
+  const nextSortBy = nextScoringMode === 'daily_pool' ? TOURNAMENT_POINTS_SORT : normalizeTournamentSort(sort_by, t.sort_by);
   const needsPointWeights = nextSortBy === TOURNAMENT_POINTS_SORT
+    || nextScoringMode === 'daily_pool'
     || (tournamentMode === 'dex_vs_dex' && (teamScoreBy === TOURNAMENT_POINTS_SORT || teamMemberRewardBy === TOURNAMENT_POINTS_SORT));
   let pointWeights;
   let nextPrizeTiers;
@@ -11637,6 +11949,11 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     points_trophy_weight: pointWeights.trophies,
     points_volume_weight: pointWeights.volume,
     points_pnl_weight: pointWeights.pnl,
+    scoring_mode: nextScoringMode,
+    daily_pool_points: nextDailyPoolPoints,
+    daily_pool_enabled_at: nextScoringMode === 'daily_pool'
+      ? (normalizeTournamentScoringMode(t.scoring_mode, 'live') === 'daily_pool' ? (cleanSqlDate(t.daily_pool_enabled_at) || nowSql()) : nowSql())
+      : null,
     prize_currency: prize_currency !== undefined ? sanitizePrizeCurrency(prize_currency) : sanitizePrizeCurrency(t.prize_currency),
     prize_tiers: nextPrizeTiers,
     rewards_in_cop: rewards_in_cop !== undefined ? (parseBool(rewards_in_cop) ? 1 : 0) : Number(t.rewards_in_cop || 0),
@@ -11654,6 +11971,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
                             start_at = ?, end_at = ?,
                             gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
+                            scoring_mode = ?, daily_pool_points = ?, daily_pool_enabled_at = ?,
                             prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
                             freeze_trophies = ?, preregistration_enabled = ?, registration_opens_at = ?, registration_closes_at = ?
     WHERE id = ?
@@ -11679,6 +11997,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.points_trophy_weight,
     next.points_volume_weight,
     next.points_pnl_weight,
+    next.scoring_mode,
+    next.daily_pool_points,
+    next.daily_pool_enabled_at,
     next.prize_currency,
     JSON.stringify(next.prize_tiers),
     next.rewards_in_cop,
@@ -11689,6 +12010,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.registration_closes_at,
     tid
   );
+  if (normalizeTournamentScoringMode(t.scoring_mode, 'live') !== 'daily_pool' && next.scoring_mode === 'daily_pool') {
+    try { db.seedTournamentDailyPoolBaseline(tid); } catch (e) { console.warn('[tournament daily pool seed]', e.message); }
+  }
   const updated = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   res.json({ ok: true, tournament: tournamentRowToPublic(updated) });
 });
@@ -11703,6 +12027,21 @@ router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  try {
+    const now = new Date();
+    const yesterdayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1)).toISOString().slice(0, 10);
+    const result = db.awardTournamentDailyPoolDay(tid, req.body?.day || req.query?.day || yesterdayUtc, {
+      force: parseBool(req.body?.force || req.query?.force),
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily award failed').slice(0, 180) });
+  }
+});
+
 // Delete a tournament (and its participants via ON DELETE CASCADE).
 router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
@@ -11710,6 +12049,32 @@ router.delete('/admin/tournaments/:id', adminAuth, (req, res) => {
   db.db.prepare('DELETE FROM tournaments WHERE id = ?').run(tid);
   res.json({ ok: true });
 });
+
+let tournamentDailyPoolTimer = null;
+
+function runTournamentDailyPoolSweep(label = 'timer') {
+  try {
+    const result = db.awardPendingTournamentDailyPools({
+      maxDays: Math.max(1, Math.min(60, Number(process.env.TOURNAMENT_DAILY_POOL_MAX_DAYS || 14))),
+    });
+    if (Number(result?.processed || 0) > 0) {
+      console.log(`[tournament daily-pool ${label}] processed=${result.processed}`);
+    }
+  } catch (err) {
+    console.warn('[tournament daily-pool] sweep failed:', err?.message || err);
+  }
+}
+
+function startTournamentDailyPoolScheduler() {
+  if (process.env.TOURNAMENT_DAILY_POOL_SCHEDULER === '0') return;
+  if (tournamentDailyPoolTimer) return;
+  const intervalMs = Math.max(60_000, Number(process.env.TOURNAMENT_DAILY_POOL_INTERVAL_MS || 5 * 60_000));
+  setTimeout(() => runTournamentDailyPoolSweep('startup'), 15_000).unref?.();
+  tournamentDailyPoolTimer = setInterval(() => runTournamentDailyPoolSweep('interval'), intervalMs);
+  tournamentDailyPoolTimer.unref?.();
+}
+
+startTournamentDailyPoolScheduler();
 
 // ==================== ENCRYPTED CLIENT DIAGNOSTICS ====================
 //
