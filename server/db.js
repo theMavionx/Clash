@@ -981,8 +981,8 @@ try {
 // ---------- Resource Production Definitions ----------
 
 const PRODUCTION_DEFS = {
-  mine:    { resource: 'ore',  rate: [6, 11, 18, 27], max: [200, 400, 800, 1600] },    // per minute
-  sawmill: { resource: 'wood', rate: [8, 15, 24, 36], max: [250, 500, 1000, 2000] },
+  mine:    { resource: 'ore',  rate: [18, 33, 54, 81], max: [200, 400, 800, 1600] },    // per minute
+  sawmill: { resource: 'wood', rate: [24, 45, 72, 108], max: [250, 500, 1000, 2000] },
 };
 
 // ---------- Prepared Statements ----------
@@ -1782,7 +1782,7 @@ const BUILDING_DEFS = {
     upgrade_cost: {
       2: { gold: 2000, wood: 6000, ore: 5000 },
       3: { gold: 5000, wood: 20000, ore: 18000 },
-      4: { gold: 60000, wood: 95000, ore: 90000 },
+      4: { gold: 30000, wood: 47500, ore: 45000 },
     },
     max_count: 1,
   },

@@ -28,7 +28,7 @@ var building_defs: Dictionary = {
 		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "wood": 500},
 		"produces": "ore",
-		"produce_rate": [6, 11, 18, 27],    # per minute per level
+		"produce_rate": [18, 33, 54, 81],    # per minute per level
 		"produce_max": [200, 400, 800, 1600],  # max stored before collection
 	},
 	"barn": {
@@ -66,7 +66,7 @@ var building_defs: Dictionary = {
 		"hp_levels": [1200, 2200, 3800, 6000],
 		"cost": {"gold": 200, "ore": 500},
 		"produces": "wood",
-		"produce_rate": [8, 15, 24, 36],
+		"produce_rate": [24, 45, 72, 108],
 		"produce_max": [250, 500, 1000, 2000],
 	},
 	"town_hall": {
@@ -82,7 +82,7 @@ var building_defs: Dictionary = {
 		"is_main": true,
 		"max_count": 1,
 		"cost": {},
-		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 60000, "wood": 95000, "ore": 90000}},
+		"upgrade_cost": {2: {"gold": 2000, "wood": 6000, "ore": 5000}, 3: {"gold": 5000, "wood": 20000, "ore": 18000}, 4: {"gold": 30000, "wood": 47500, "ore": 45000}},
 	},
 	"turret": {
 		"name": "Turret",
