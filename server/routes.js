@@ -823,7 +823,7 @@ async function verifyDemonKingNftUpgradeProof(player, proof, nextLevel) {
         next_level: nextLevel,
       };
     }
-    gameDb.bindPlayerDemonKingNft(player.id, onchainOwner, {
+    db.bindPlayerDemonKingNft(player.id, onchainOwner, {
       chain: chainKey,
       tokenId: String(tokenIdRaw),
       level,
@@ -898,7 +898,7 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
       player?.wallet,
       player?.nft_gold_boost_wallet,
     ].filter((wallet) => EVM_WALLET_RE.test(String(wallet || '')));
-    const cached = gameDb.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
+    const cached = db.getPlayerDemonKingNft(player.id, chainKey, tokenIdRaw);
     if (cached && freshDemonKingBinding(cached)) {
       const cachedOwner = getAddress(cached.wallet);
       const cachedLinked = linkedWallets.some((wallet) => getAddress(wallet) === cachedOwner);
@@ -942,7 +942,7 @@ async function verifyDemonKingNftLoadToken(player, entry, ownerHintRaw) {
     }
 
     const level = normalizeNftLevel(tokenLevel);
-    gameDb.bindPlayerDemonKingNft(player.id, onchainOwner, {
+    db.bindPlayerDemonKingNft(player.id, onchainOwner, {
       chain: chainKey,
       tokenId: String(tokenIdRaw),
       level,
