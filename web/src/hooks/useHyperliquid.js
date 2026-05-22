@@ -46,6 +46,8 @@ const BUILDER_APPROVAL_POLL_MS = 1_500;
 const AGENT_APPROVAL_TIMEOUT_MS = 24_000;
 const AGENT_APPROVAL_POLL_MS = 1_500;
 const SETUP_VERIFY_RETRY_MS = 1_000;
+const HYPERLIQUID_DEPOSIT_FIRST_MESSAGE =
+  `Deposit at least ${HYPERLIQUID_MIN_DEPOSIT_USDC} USDC to Hyperliquid first, then enable builder fee.`;
 const abstractionModeCache = new Map();
 const builderStatusCache = new Map();
 
@@ -218,6 +220,33 @@ function compactErrorDetails(error) {
     causeMessage: error?.cause?.message || error?.cause?.shortMessage || null,
   };
   return Object.fromEntries(Object.entries(details).filter(([, value]) => value != null && value !== ''));
+}
+
+function hyperliquidDepositValue(snapshot) {
+  return Math.max(
+    num(snapshot?.equity),
+    num(snapshot?.available),
+    num(snapshot?.perpEquity),
+    num(snapshot?.perpAvailable),
+    num(snapshot?.spotUsdc),
+    num(snapshot?.spotAvailable),
+  );
+}
+
+function hasHyperliquidDeposit(snapshot) {
+  return hyperliquidDepositValue(snapshot) > DEPOSIT_CREDIT_TOLERANCE_USD;
+}
+
+function hyperliquidDepositRequiredError(snapshot = null) {
+  const err = new Error(HYPERLIQUID_DEPOSIT_FIRST_MESSAGE);
+  err.code = 'HYPERLIQUID_DEPOSIT_REQUIRED';
+  err.hyperliquidBalanceUsd = hyperliquidDepositValue(snapshot);
+  return err;
+}
+
+function isHyperliquidDepositRequiredError(error) {
+  return error?.code === 'HYPERLIQUID_DEPOSIT_REQUIRED'
+    || /must deposit before performing actions|deposit .*hyperliquid first/i.test(String(error?.message || error || ''));
 }
 
 async function readUserAbstractionMode(info, walletAddr, { refresh = false } = {}) {
@@ -1014,6 +1043,22 @@ export function useHyperliquid() {
       };
     }
     if (before.approved >= builder.f) return { success: true, approved: before.approved, useBuilder: true, builder };
+
+    const userSnapshot = await readHyperliquidBalances(walletAddr, { refresh: true }).catch(() => null);
+    if (userSnapshot && !hasHyperliquidDeposit(userSnapshot)) {
+      console.info('[useHyperliquid] builder fee approval waiting for deposit', {
+        builder: builder.b,
+        user: walletAddr,
+        balanceUsd: hyperliquidDepositValue(userSnapshot),
+      });
+      setBuilderApproval(prev => (
+        prev?.builder && String(prev.builder).toLowerCase() === String(builder.b).toLowerCase()
+          ? { ...prev, approving: false, userCanApprove: false, depositRequired: true }
+          : { ...before, approving: false, userCanApprove: false, depositRequired: true }
+      ));
+      throw hyperliquidDepositRequiredError(userSnapshot);
+    }
+
     if (typeof ensureChain === 'function') await ensureChain(HYPERLIQUID_ARBITRUM_CHAIN_ID);
     setBuilderApproval({ ...before, userCanApprove: true, approving: true });
     console.info('[useHyperliquid] requesting builder fee approval', {
@@ -1052,16 +1097,20 @@ export function useHyperliquid() {
       }
       return { success: true, approved: verified.status.approved, raw: result, useBuilder: true, builder };
     } catch (e) {
-      console.error('[useHyperliquid] builder fee approval failed', {
+      const msg = hyperliquidErrorMessage(e, e?.message || 'Builder fee approval failed');
+      const depositRequired = isHyperliquidDepositRequiredError(e);
+      const log = depositRequired ? console.info : console.error;
+      log('[useHyperliquid] builder fee approval failed', {
         builder: builder.b,
-        message: hyperliquidErrorMessage(e, e?.message || 'Builder fee approval failed'),
+        message: msg,
         raw: compactErrorDetails(e),
       });
       setBuilderApproval(prev => (
         prev?.builder && String(prev.builder).toLowerCase() === String(builder.b).toLowerCase()
-          ? { ...prev, approving: false, userCanApprove: true }
+          ? { ...prev, approving: false, userCanApprove: !depositRequired, depositRequired }
           : prev
       ));
+      if (depositRequired) throw hyperliquidDepositRequiredError();
       throw e;
     }
   }, [walletAddr, ensureChain, exchange]);

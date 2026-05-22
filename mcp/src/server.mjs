@@ -422,6 +422,105 @@ function maxForCurrentTownHall(type, townHallLevel) {
   return limits[Math.min(Math.max(Number(townHallLevel) || 1, 1) - 1, limits.length - 1)] || 0;
 }
 
+function normalizeBuildingTypeInput(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  const normalized = raw.replace(/[\s-]+/g, '_');
+  if (game.BUILDING_DEFS[normalized]) return normalized;
+  const compact = normalized.replace(/_/g, '');
+  return Object.keys(game.BUILDING_DEFS).find((type) => type.replace(/_/g, '') === compact) || '';
+}
+
+function autoUpgradeFocusPriority(focus = 'balanced') {
+  const normalized = String(focus || 'balanced').toLowerCase();
+  if (normalized === 'economy') return ['mine', 'sawmill', 'storage', 'barn', 'port', 'town_hall'];
+  if (normalized === 'defense') return ['mage_tower', 'archer_tower', 'turret', 'tombstone', 'town_hall'];
+  if (normalized === 'ports') return ['port'];
+  if (normalized === 'town_hall') return ['town_hall'];
+  return ['mine', 'sawmill', 'storage', 'barn', 'port', 'archer_tower', 'turret', 'tombstone', 'town_hall'];
+}
+
+function autoUpgradeCandidateRows(playerId, options = {}) {
+  const focus = String(options.focus || 'balanced').toLowerCase();
+  const targetType = normalizeBuildingTypeInput(options.target_type || options.type || '');
+  const priority = autoUpgradeFocusPriority(focus);
+  const allowedTypes = new Set(priority);
+  if (targetType) allowedTypes.add(targetType);
+  const priorityIndex = (type) => {
+    const idx = priority.indexOf(type);
+    return idx === -1 ? priority.length + 1 : idx;
+  };
+
+  return game.getPlayerBuildings(playerId)
+    .map(normalizeBuilding)
+    .filter((building) => {
+      const def = game.BUILDING_DEFS[building.type];
+      if (!def || Number(building.level || 1) >= Number(def.max_level || 1)) return false;
+      if (targetType) return building.type === targetType;
+      return allowedTypes.has(building.type);
+    })
+    .map((building) => ({
+      building,
+      cost: game.getBuildingUpgradeCost(building.type, building.level),
+      priority: priorityIndex(building.type),
+    }))
+    .sort((a, b) => (
+      a.priority - b.priority
+      || Number(a.building.level || 1) - Number(b.building.level || 1)
+      || Number(a.building.id || 0) - Number(b.building.id || 0)
+    ));
+}
+
+async function autoUpgradeBuildings(playerId, agentKey, options = {}) {
+  const maxUpgrades = Math.max(1, Math.min(20, Math.floor(Number(options.max_upgrades) || 10)));
+  const focus = String(options.focus || 'balanced').toLowerCase();
+  const targetType = normalizeBuildingTypeInput(options.target_type || options.type || '');
+  const upgraded = [];
+  const blockers = [];
+  const blockedIds = new Set();
+
+  while (upgraded.length < maxUpgrades) {
+    const candidates = autoUpgradeCandidateRows(playerId, { focus, target_type: targetType })
+      .filter((row) => !blockedIds.has(Number(row.building.id)));
+    if (!candidates.length) break;
+
+    let upgradedThisPass = false;
+    for (const row of candidates) {
+      const buildingId = Number(row.building.id);
+      const result = game.upgradeBuilding(playerId, buildingId);
+      if (result?.error) {
+        blockedIds.add(buildingId);
+        blockers.push({
+          building_id: buildingId,
+          type: row.building.type,
+          level: row.building.level,
+          next_level: Number(row.building.level || 1) + 1,
+          error: result.error,
+          cost: result.cost || row.cost,
+        });
+        continue;
+      }
+      upgraded.push(result);
+      await notifyAgentAction(agentKey, 'upgrade_building', { building_id: buildingId, ...result });
+      upgradedThisPass = true;
+      break;
+    }
+
+    if (!upgradedThisPass) break;
+  }
+
+  return {
+    success: upgraded.length > 0,
+    focus,
+    target_type: targetType || null,
+    requested_max_upgrades: maxUpgrades,
+    upgraded,
+    blockers,
+    resources: game.getResources(playerId),
+    base: buildBaseState(playerId, false),
+  };
+}
+
 async function autoBuildBase(playerId, agentKey, options = {}) {
   const maxBuildings = Math.max(1, Math.min(12, Math.floor(Number(options.max_buildings) || 6)));
   const focus = String(options.focus || 'balanced').toLowerCase();
@@ -3672,6 +3771,24 @@ function registerTools(server, session, agentKey, reqMeta = {}) {
       if (result.error) return toolError(result.error, result);
       await notifyAgentAction(agentKey, 'upgrade_building', { building_id, ...result });
       return jsonResult({ ...result, base: buildBaseState(playerId, false) });
+    }
+  );
+
+  server.registerTool(
+    'auto_upgrade_buildings',
+    {
+      title: 'Auto Upgrade Buildings',
+      description: 'Upgrade multiple affordable owned buildings in one action. Use for broad requests like upgrade all buildings, upgrade everything, or upgrade 10 buildings.',
+      inputSchema: {
+        focus: z.enum(['balanced', 'economy', 'defense', 'ports', 'town_hall']).optional(),
+        target_type: z.string().optional(),
+        max_upgrades: z.number().int().min(1).max(20).optional(),
+      },
+    },
+    async ({ focus = 'balanced', target_type, max_upgrades = 10 }) => {
+      const result = await autoUpgradeBuildings(playerId, agentKey, { focus, target_type, max_upgrades });
+      if (!result.success) return toolError('No eligible buildings could be upgraded', result);
+      return jsonResult(result);
     }
   );
 

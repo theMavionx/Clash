@@ -69,6 +69,7 @@ For Decibel trading requests, do not run a gameplay base preflight. Hermes is th
 - `find_build_slots({ type, grid_index?, limit? })`: get valid open cells for a specific building.
 - `place_building({ type, grid_x, grid_z, grid_index? })`: place a building. Use grid 0 for normal buildings and grid 1 for ports.
 - `upgrade_building({ building_id })`: upgrade an owned building by id.
+- `auto_upgrade_buildings({ focus?, target_type?, max_upgrades? })`: upgrade multiple eligible owned buildings in one action. Use for broad requests like "upgrade all buildings", "upgrade everything", or "upgrade 10 buildings".
 - `move_building({ building_id, grid_x, grid_z, grid_index? })`: move a building. Ports with docked ships cannot be moved.
 - `remove_building({ building_id })`: remove one owned building.
 - `upgrade_troop({ troop_type })`: upgrade `knight`, `mage`, `barbarian`, `archer`, or `ranger`.
@@ -186,6 +187,7 @@ Never claim an Avantis write executed from MCP alone. The MCP result means the b
 - "Collect my resources": call `get_base_state`, then `collect_resources({})`.
 - "Build my base / arrange everything": call `get_base_state`, then `auto_build_base({ "focus": "balanced" })`. Do not ask the player for grids or a building list.
 - "Build an archer tower": call `get_base_state`, `find_build_slots({ "type": "archer_tower" })`, then `place_building`.
+- "Upgrade all buildings / upgrade 10 buildings": call `get_base_state`, collect resources, then `auto_upgrade_buildings({ "focus": "balanced", "max_upgrades": 10 })`. Do not manually loop one building at a time when the bulk tool fits.
 - "Upgrade sawmill to level 2": find the sawmill in `get_base_state`, then call `upgrade_building` until it reaches level 2 or resources run out.
 - "Find an enemy and attack": confirm or prepare at least 3 loaded troops, then call `execute_ai_attack_plan({})`.
 - "Recover after battle": call `get_base_state`, inspect ships/casualties, then `reinforce_ships`.

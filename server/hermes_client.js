@@ -188,6 +188,37 @@ function normalizeIntentText(text) {
     .trim();
 }
 
+function detectCurrentMessageLanguage(message) {
+  const text = String(message || '').normalize('NFKC');
+  const cyrillicCount = (text.match(/[\u0400-\u04FF]/gu) || []).length;
+  const latinCount = (text.match(/[A-Za-z]/g) || []).length;
+  if (latinCount >= 3 && latinCount >= cyrillicCount) return 'english';
+  if (cyrillicCount >= 3) return 'cyrillic';
+  return '';
+}
+
+function buildLanguageInstructions(message) {
+  const language = detectCurrentMessageLanguage(message);
+  if (language === 'english') {
+    return [
+      '## Response Language',
+      'The current player message is English/Latin script. Answer in English.',
+      'Do not switch to Ukrainian/Russian because recent chat, MCP tool output, or server context contains Ukrainian/Russian.',
+    ].join('\n');
+  }
+  if (language === 'cyrillic') {
+    return [
+      '## Response Language',
+      'The current player message is Ukrainian/Russian/Cyrillic script. Answer in that player language.',
+      'Do not switch to English because older chat or tool output is English.',
+    ].join('\n');
+  }
+  return [
+    '## Response Language',
+    'Choose the final answer language from the current player message, not from recent chat or MCP tool output.',
+  ].join('\n');
+}
+
 function startsWithToken(text, token) {
   return text === token
     || text.startsWith(`${token} `)
@@ -717,6 +748,38 @@ function classifyTradingIntent(message, normalizedText, player = {}) {
   return remapTradingIntentForDex(intent, tradingDexForMessage(message, player));
 }
 
+function extractRequestedUpgradeCount(message) {
+  const raw = String(message || '').normalize('NFKC');
+  const match = raw.match(/(?:upgrade|level|апгрейд|апни|прокач|покращ|улучш|качн|підніми|повыс|upgrade\s+up\s+to|апгрейдни)\D{0,30}(\d{1,2})|(\d{1,2})\D{0,20}(?:building|buildings|будів|здан|постро|апгрейд|upgrade)/iu);
+  const value = Number(match?.[1] || match?.[2] || 0);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  return Math.max(1, Math.min(20, Math.floor(value)));
+}
+
+function isBulkBuildingUpgradeIntent(text) {
+  const hasUpgrade = /(upgrade|апгрейд|апгреид|апни|прокач|покращ|улучш|качн|підніми|пидніми|повыс|підкач|пидкач|nang cap)/iu.test(text);
+  if (!hasUpgrade) return false;
+  const broadTarget = /(all|every|everything|base|buildings|as many|max|maximum|вс|ус|будів|будив|здан|постро|баз|максим|скільки мож|скільки можно|сколько мож|сколько можно)/iu.test(text);
+  const countedBuildings = /\b\d{1,2}\b[\s\S]{0,30}\b(?:building|buildings|ports?)\b|\b(?:building|buildings|ports?)\b[\s\S]{0,30}\b\d{1,2}\b|\b\d{1,2}\b[\s\S]{0,30}(?:будів|будив|здан|постро|порт)/iu.test(text);
+  return broadTarget || countedBuildings;
+}
+
+function bulkUpgradeTargetForText(text) {
+  if (/(mage\s*tower|ма[гґ]ічн|маг\s*тав|mage\s*тав)/iu.test(text)) return { target_type: 'mage_tower', focus: 'defense' };
+  if (/(archer\s*tower|лучн|арчер)/iu.test(text)) return { target_type: 'archer_tower', focus: 'defense' };
+  if (/(town\s*hall|\bth\b|ратуш|таун\s*хол)/iu.test(text)) return { target_type: 'town_hall', focus: 'town_hall' };
+  if (/(ports?|порт)/iu.test(text)) return { target_type: 'port', focus: 'ports' };
+  if (/(mine|шахт)/iu.test(text)) return { target_type: 'mine', focus: 'economy' };
+  if (/(sawmill|пилорам|лісопил|лесопил)/iu.test(text)) return { target_type: 'sawmill', focus: 'economy' };
+  if (/(storage|склад|сховищ|хранилищ)/iu.test(text)) return { target_type: 'storage', focus: 'economy' };
+  if (/(barn|барн)/iu.test(text)) return { target_type: 'barn', focus: 'economy' };
+  if (/(turret|турел|гармат|пушк)/iu.test(text)) return { target_type: 'turret', focus: 'defense' };
+  if (/(tombstone|могил|надгроб|томб)/iu.test(text)) return { target_type: 'tombstone', focus: 'defense' };
+  if (/(defen[cs]e|tower|веж|башн|захист|обор)/iu.test(text)) return { focus: 'defense' };
+  if (/(economy|resource|ресурс|економ|эконом)/iu.test(text)) return { focus: 'economy' };
+  return { focus: 'balanced' };
+}
+
 function classifyGameIntent(message, player = {}) {
   const text = normalizeIntentText(message);
   if (!text) return { kind: 'general', action_required: false };
@@ -801,6 +864,21 @@ function classifyGameIntent(message, player = {}) {
   }
   if (isBuildAdviceIntentText(message)) {
     return buildAdviceIntent();
+  }
+  if (isBulkBuildingUpgradeIntent(text)) {
+    const requestedCount = extractRequestedUpgradeCount(message);
+    const target = bulkUpgradeTargetForText(text);
+    const targetArg = target.target_type ? `, target_type: "${target.target_type}"` : '';
+    return {
+      kind: 'auto_upgrade_buildings',
+      action_required: true,
+      goal: 'Upgrade as many requested eligible buildings as possible using MCP bulk upgrade tools.',
+      required_loop: `get_base_state -> collect_resources({}) -> auto_upgrade_buildings({ focus: "${target.focus}", max_upgrades: ${requestedCount || 10}${targetArg} }) -> summarize upgraded buildings and first blocker`,
+      expected_tools: ['get_base_state', 'collect_resources', 'auto_upgrade_buildings'],
+      focus: target.focus,
+      target_type: target.target_type || undefined,
+      max_upgrades: requestedCount || 10,
+    };
   }
   if (/(побуд|постав|build|place|shop|магазин|archer tower|tower|порт|port|будів|building|建造|建筑|商店|港口|塔|xay)/i.test(text)) {
     return {
@@ -1079,12 +1157,13 @@ function buildChatInput(message, history, internalContext = '') {
 function buildInstructionsForMessage(message, player = {}) {
   const intent = classifyGameIntent(message, player);
   const intentInstructions = buildIntentInstructions(intent);
+  const languageInstructions = buildLanguageInstructions(message);
   const phraseHints = buildTradingPhraseHints(message, intent);
   const runtimeInstructions = buildRuntimeInstructions('', player?.dex || '');
   const requestHints = phraseHints ? `## Current Request Parsing Hints\n${phraseHints}` : '';
   return {
     intent,
-    instructions: [runtimeInstructions, intentInstructions, requestHints].filter(Boolean).join('\n\n'),
+    instructions: [runtimeInstructions, languageInstructions, intentInstructions, requestHints].filter(Boolean).join('\n\n'),
   };
 }
 

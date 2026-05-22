@@ -414,6 +414,9 @@ export function hyperliquidErrorMessage(error, fallback = 'Hyperliquid request f
   if (/chainId should be same|provided chainId|must match the active chainId|chain mismatch|unsupported network/i.test(text)) {
     return 'Switch your EVM wallet to Arbitrum, enable One tap trading, then retry.';
   }
+  if (/must deposit before performing actions|deposit .*before/i.test(text)) {
+    return `Deposit at least ${HYPERLIQUID_MIN_DEPOSIT_USDC} USDC to Hyperliquid first, then enable builder fee.`;
+  }
   if (/insufficient margin|margin/i.test(text)) return 'Insufficient Hyperliquid margin. Deposit USDC or reduce size.';
   if (/Builder fee approval was signed|maxBuilderFee|Builder account must be in Standard mode|Current mode:/i.test(text)) {
     return text.slice(0, 260);

@@ -38,6 +38,14 @@ Use this skill only for Decibel trading requests from the authenticated Clash of
 - Leverage changes: `decibel_get_positions` -> `decibel_set_leverage`. Reading positions alone does not change leverage.
 - TP/SL: `decibel_get_positions` -> `decibel_set_tpsl`. Reading positions alone does not attach or update TP/SL.
 
+## Decibel Concepts
+
+- Use the bundled official docs in `docs/decibel/` for Decibel education/explanation requests.
+- Decibel is an Aptos perpetual futures exchange where orders are placed, matched, and settled on-chain.
+- Explain market, limit, stop, TWAP, reduce-only close, cancel, leverage, margin type, TP/SL, funding, fees, liquidation, subaccounts, and trade history when the player asks how Decibel works.
+- Leverage controls exposure relative to collateral and amplifies gains and losses. Funding is a recurring payment mechanism that keeps perp prices aligned with spot. Liquidation happens when margin can no longer support the position.
+- Use MCP/account/market data as the live truth for supported markets, max leverage, tick/lot sizes, mark/oracle price, funding, open interest, margin, and open orders.
+
 ## Tool Blocker Repair
 
 - If a Decibel MCP tool blocks, inspect the blocker and current context.
