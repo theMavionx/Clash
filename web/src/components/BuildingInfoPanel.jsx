@@ -202,6 +202,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
+  const hasDemonKingWallet = !!(evmAddress || solAddress || aptosAddress);
   
   const [view, setView] = useState('ACTIONS');
   const [swapSlot, setSwapSlot] = useState(null);
@@ -227,8 +228,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
   }, [serverTroopsKey]);
 
   useEffect(() => {
-    if (view !== 'LOAD_TROOPS' || (!evmAddress && !solAddress && !aptosAddress)) {
-      if (!evmAddress && !solAddress && !aptosAddress) setDemonKingNfts([]);
+    if (view !== 'LOAD_TROOPS' || !hasDemonKingWallet) {
+      if (!hasDemonKingWallet) setDemonKingNfts([]);
       return undefined;
     }
     const controller = new AbortController();
@@ -264,7 +265,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         if (!controller.signal.aborted) setDemonKingNftLoading(false);
       });
     return () => controller.abort();
-  }, [aptosAddress, evmAddress, solAddress, view]);
+  }, [aptosAddress, evmAddress, hasDemonKingWallet, solAddress, view]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {
@@ -749,7 +750,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
                   <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
                   <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>
-                    {evmAddress ? (demonKingNftError || 'NEED NFT') : 'CONNECT'}
+                    {hasDemonKingWallet ? (demonKingNftError || 'NEED NFT') : 'CONNECT'}
                   </span>
                 </div>
               </button>

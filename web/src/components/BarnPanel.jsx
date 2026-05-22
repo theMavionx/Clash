@@ -174,6 +174,7 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
+  const hasDemonKingWallet = !!(evmAddress || solAddress || aptosAddress);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
@@ -207,7 +208,7 @@ function BarnPanel({ building, onClose }) {
       headers: token ? { 'x-token': token } : {},
       signal: controller.signal,
     }).then((res) => res.json().catch(() => ({}))).catch(() => null);
-    const ownedPromise = evmAddress || solAddress || aptosAddress
+    const ownedPromise = hasDemonKingWallet
       ? syncDemonKingNfts({
           wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress },
           signal: controller.signal,
@@ -250,7 +251,32 @@ function BarnPanel({ building, onClose }) {
         if (!controller.signal.aborted) setDemonKingLoading(false);
       });
     return () => controller.abort();
-  }, [aptosAddress, currentTroopName, evmAddress, solAddress]);
+  }, [aptosAddress, currentTroopName, evmAddress, hasDemonKingWallet, solAddress]);
+
+  useEffect(() => {
+    if (currentTroopName !== 'DemonKing') return undefined;
+    const selectedToken = demonKingNfts.find((token) => demonKingShipEntry(token) === selectedDemonKey) || demonKingNfts[0] || null;
+    if (!selectedToken?.chain || !selectedToken?.tokenId) return undefined;
+
+    const controller = new AbortController();
+    const token = typeof window !== 'undefined' ? window._playerToken : null;
+    const params = new URLSearchParams({
+      chain: selectedToken.chain,
+      tokenId: String(selectedToken.tokenId),
+    });
+    fetch(`/api/troops/demon_king/upgrade-status?${params.toString()}`, {
+      cache: 'no-store',
+      headers: token ? { 'x-token': token } : {},
+      signal: controller.signal,
+    })
+      .then((res) => res.json().catch(() => ({})))
+      .then((json) => {
+        if (!controller.signal.aborted && json && !json.error) setDemonKingStatus(json);
+      })
+      .catch(() => {});
+
+    return () => controller.abort();
+  }, [currentTroopName, demonKingNfts, selectedDemonKey]);
 
   const handleUpgradeTroop = useCallback((name) => sendToGodot('upgrade_troop', { troop_name: name }), [sendToGodot]);
   
@@ -435,11 +461,11 @@ function BarnPanel({ building, onClose }) {
             {isDemonKing && (
               <div style={styles.demonInventory}>
                 <div style={styles.demonInventoryHeader}>
-                  <span>{evmAddress ? `${demonKingNfts.length} NFT${demonKingNfts.length === 1 ? '' : 's'} owned` : 'Connect EVM wallet'}</span>
+                  <span>{hasDemonKingWallet ? `${demonKingNfts.length} NFT${demonKingNfts.length === 1 ? '' : 's'} owned` : 'Connect wallet'}</span>
                   {demonKingLoading && <span>Loading...</span>}
                 </div>
                 {demonKingError && <div style={styles.demonInventoryHint}>{demonKingError}</div>}
-                {evmAddress && demonKingNfts.length > 0 ? (
+                {hasDemonKingWallet && demonKingNfts.length > 0 ? (
                   <div style={styles.demonTokenGrid}>
                     {demonKingNfts.map((token) => {
                       const key = demonKingShipEntry(token);
@@ -459,7 +485,7 @@ function BarnPanel({ building, onClose }) {
                   </div>
                 ) : (
                   <div style={styles.demonInventoryHint}>
-                    {evmAddress ? 'Demon King unlocks when this wallet owns at least one NFT.' : 'Open the NFT shop to connect and load your Demon King NFTs.'}
+                    {hasDemonKingWallet ? 'Demon King unlocks when a connected wallet owns at least one NFT.' : 'Open the NFT shop to connect and load your Demon King NFTs.'}
                   </div>
                 )}
               </div>
