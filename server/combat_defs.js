@@ -57,7 +57,17 @@ const DEFENSE_STATS = {
     4: { damage: 65, fireRate: 0.6,  detectRange: 1.3, projSpeed: 2.5 },
   },
   mage_tower: {
-    1: { damage: 22, fireRate: 1.5, detectRange: 1.0, projSpeed: 1.6 },
+    1: {
+      beam: true,
+      baseDamage: 4,
+      maxDamage: 18,
+      tickRate: 0.25,
+      rampTime: 4.0,
+      detectRange: 1.0,
+      damage: 4,
+      fireRate: 0.25,
+      projSpeed: 0,
+    },
   },
 };
 

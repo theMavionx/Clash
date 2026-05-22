@@ -762,6 +762,13 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
         buildingId: b.id, type: 'mage_tower',
         damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,
         projSpeed: s.projSpeed,
+        beam: !!s.beam,
+        baseDamage: s.baseDamage ?? s.damage,
+        maxDamage: s.maxDamage ?? s.damage,
+        tickRate: s.tickRate ?? s.fireRate,
+        rampTime: s.rampTime ?? 1,
+        beamCharge: 0,
+        beamTick: 0,
         x: b.x, z: b.z,
         timer: 0, isAttacking: false, targetId: null,
         _searchTimer: 0,
@@ -1101,6 +1108,10 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       if (aliveTroops.length === 0) {
         d.targetId = null;
         d.isAttacking = false;
+        if (d.beam) {
+          d.beamCharge = 0;
+          d.beamTick = 0;
+        }
         continue;
       }
 
@@ -1117,9 +1128,17 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           d.isAttacking = false;
           d.timer = 0;
           d.targetId = null;
+          if (d.beam) {
+            d.beamCharge = 0;
+            d.beamTick = 0;
+          }
         }
         if (currentTarget && distSq2d(d.x, d.z, currentTarget.x, currentTarget.z) > detectSq) {
           currentTarget = null;
+          if (d.beam) {
+            d.beamCharge = 0;
+            d.beamTick = 0;
+          }
         }
       }
 
@@ -1147,16 +1166,72 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       }
 
       if (!currentTarget) {
-        if (d.isAttacking) { d.isAttacking = false; d.timer = 0; d.targetId = null; }
+        if (d.isAttacking) {
+          d.isAttacking = false;
+          d.timer = 0;
+          d.targetId = null;
+          if (d.beam) {
+            d.beamCharge = 0;
+            d.beamTick = 0;
+          }
+        }
         continue;
       }
 
+      const previousTargetId = d.targetId;
       d.targetId = currentTarget.id;
+      if (d.beam && previousTargetId !== currentTarget.id) {
+        d.beamCharge = 0;
+        d.beamTick = 0;
+      }
 
       if (!d.isAttacking) {
         d.isAttacking = true;
         // Turret: first shot instant (timer = fireRate). Archer Tower: full delay (timer = 0)
         d.timer = d.type === 'turret' ? d.fireRate : 0;
+      }
+
+      if (d.type === 'mage_tower' && d.beam) {
+        d.beamCharge = Math.min(1, d.beamCharge + TICK_DT / Math.max(d.rampTime, TICK_DT));
+        d.beamTick += TICK_DT;
+        while (d.beamTick >= d.tickRate && currentTarget.hp > 0) {
+          d.beamTick -= d.tickRate;
+          const damage = Math.max(1, Math.round(d.baseDamage + (d.maxDamage - d.baseDamage) * d.beamCharge));
+          const hpBefore = currentTarget.hp;
+          currentTarget.hp -= damage;
+          traceEvent('defense_beam_tick', {
+            defenseType: d.type,
+            buildingId: d.buildingId,
+            targetTroopId: currentTarget.id,
+            replayOrder: currentTarget.replayOrder ?? null,
+            targetTroop: currentTarget.type,
+            charge: Math.round(d.beamCharge * 1000) / 1000,
+            damage,
+            hpBefore,
+            hpAfter: currentTarget.hp,
+            x: Math.round(currentTarget.x * 1000) / 1000,
+            z: Math.round(currentTarget.z * 1000) / 1000,
+          });
+        }
+        if (currentTarget.hp <= 0) {
+          traceEvent('troop_death', {
+            troopId: currentTarget.id,
+            replayOrder: currentTarget.replayOrder ?? null,
+            troop: currentTarget.type,
+            damage: Math.max(1, Math.round(d.baseDamage + (d.maxDamage - d.baseDamage) * d.beamCharge)),
+            hp: currentTarget.hp,
+            x: Math.round(currentTarget.x * 1000) / 1000,
+            z: Math.round(currentTarget.z * 1000) / 1000,
+          });
+          const deadIdx = aliveTroops.findIndex(t => t.id === currentTarget.id);
+          if (deadIdx >= 0) aliveTroops.splice(deadIdx, 1);
+          d.targetId = null;
+          d.isAttacking = false;
+          d.timer = 0;
+          d.beamCharge = 0;
+          d.beamTick = 0;
+        }
+        continue;
       }
 
       d.timer += TICK_DT;

@@ -136,6 +136,7 @@ try {
     );
     CREATE INDEX IF NOT EXISTS idx_player_nft_wallet_checks_recent
       ON player_nft_wallet_checks(collection, wallet, checked_at DESC);
+
   `);
 } catch (e) { console.warn('[db] player_nfts migration:', e.message); }
 
@@ -795,6 +796,21 @@ try {
     )
   `);
 } catch {}
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS player_nft_battle_win_events (
+      replay_id   INTEGER NOT NULL REFERENCES battle_replays(id) ON DELETE CASCADE,
+      player_id   TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+      collection  TEXT NOT NULL DEFAULT 'demon_king',
+      chain       TEXT NOT NULL,
+      token_id    TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (replay_id, collection, chain, token_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_player_nft_battle_win_events_token
+      ON player_nft_battle_win_events(player_id, collection, chain, token_id, created_at DESC);
+  `);
+} catch (e) { console.warn('[db] player_nft_battle_win_events migration:', e.message); }
 try { db.exec(`ALTER TABLE battle_replays ADD COLUMN sim_debug TEXT`); } catch {}
 try {
   db.exec(`
@@ -809,6 +825,54 @@ try {
     WHERE COALESCE(battle_wins, 0) = 0
   `);
 } catch {}
+
+try {
+  const backfillRows = db.prepare(`
+    SELECT id, attacker_id, replay_data
+      FROM battle_replays
+     WHERE lower(COALESCE(claimed_result, '')) = 'victory'
+       AND lower(COALESCE(verified_result, '')) IN ('accepted', 'victory')
+       AND replay_data LIKE '%DemonKing:%'
+  `).all();
+  if (backfillRows.length) {
+    const insertNftWin = db.prepare(`
+      INSERT OR IGNORE INTO player_nft_battle_win_events
+        (replay_id, player_id, collection, chain, token_id)
+      VALUES (?, ?, 'demon_king', ?, ?)
+    `);
+    const backfillTxn = db.transaction((rows) => {
+      let inserted = 0;
+      for (const row of rows) {
+        let replay = null;
+        try { replay = JSON.parse(row.replay_data || '[]'); } catch { replay = []; }
+        const actions = Array.isArray(replay)
+          ? replay
+          : (Array.isArray(replay?.actions) ? replay.actions : []);
+        const tokens = new Map();
+        for (const action of actions) {
+          if (action?.type !== 'place_ship') continue;
+          const troopEntries = Array.isArray(action.troops)
+            ? action.troops
+            : (action.troopType ? [action.troopType] : []);
+          for (const entry of troopEntries) {
+            const parts = String(entry || '').split(':');
+            if (parts.length < 3 || parts[0] !== 'DemonKing') continue;
+            const chain = String(parts[1] || '').trim().toLowerCase();
+            const tokenId = String(parts[2] || '').trim();
+            if (!['base', 'arbitrum', 'monad'].includes(chain) || !/^\d+$/.test(tokenId)) continue;
+            tokens.set(`${chain}:${tokenId}`, { chain, tokenId });
+          }
+        }
+        for (const token of tokens.values()) {
+          inserted += insertNftWin.run(row.id, row.attacker_id, token.chain, token.tokenId).changes || 0;
+        }
+      }
+      return inserted;
+    });
+    const inserted = backfillTxn(backfillRows);
+    if (inserted) console.log(`[db] backfilled ${inserted} Demon King NFT battle win event(s)`);
+  }
+} catch (e) { console.warn('[db] Demon King NFT win backfill:', e.message); }
 
 // Battle matchmaking reservations. /find-enemy creates a short-lived session
 // so two attackers cannot be handed the same unshielded defender, play the
@@ -1147,14 +1211,30 @@ const stmts = {
   getBattleWins: db.prepare(`SELECT COALESCE(battle_wins, 0) AS battle_wins FROM players WHERE id = ?`),
   listPlayerDemonKingNfts: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
-           active, source, tx_hash, verified_at, last_seen_at, updated_at
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = 'demon_king'
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
       FROM player_nfts
      WHERE player_id = ? AND collection = 'demon_king' AND active = 1
      ORDER BY level DESC, chain ASC, CAST(token_id AS INTEGER) ASC
   `),
   listPlayerDemonKingNftsByWallet: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
-           active, source, tx_hash, verified_at, last_seen_at, updated_at
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = 'demon_king'
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
       FROM player_nfts
      WHERE player_id = ?
        AND collection = 'demon_king'
@@ -1164,7 +1244,15 @@ const stmts = {
   `),
   getPlayerDemonKingNft: db.prepare(`
     SELECT player_id, collection, chain, token_id, wallet, level, image_url,
-           active, source, tx_hash, verified_at, last_seen_at, updated_at
+           active, source, tx_hash, verified_at, last_seen_at, updated_at,
+           COALESCE((
+             SELECT COUNT(*)
+               FROM player_nft_battle_win_events e
+              WHERE e.player_id = player_nfts.player_id
+                AND e.collection = 'demon_king'
+                AND e.chain = player_nfts.chain
+                AND e.token_id = player_nfts.token_id
+           ), 0) AS battle_wins
       FROM player_nfts
      WHERE player_id = ?
        AND collection = 'demon_king'
@@ -1221,6 +1309,19 @@ const stmts = {
       chains = excluded.chains,
       result_count = excluded.result_count,
       checked_at = datetime('now')
+  `),
+  insertDemonKingBattleWinEvent: db.prepare(`
+    INSERT OR IGNORE INTO player_nft_battle_win_events
+      (replay_id, player_id, collection, chain, token_id)
+    VALUES (?, ?, 'demon_king', ?, ?)
+  `),
+  getDemonKingBattleWins: db.prepare(`
+    SELECT COUNT(*) AS wins
+      FROM player_nft_battle_win_events
+     WHERE player_id = ?
+       AND collection = 'demon_king'
+       AND chain = ?
+       AND token_id = ?
   `),
 
   // Production
@@ -2146,6 +2247,8 @@ function normalizeDemonKingNftRow(row) {
     verifiedAt: row.verified_at || null,
     lastSeenAt: row.last_seen_at || null,
     updatedAt: row.updated_at || null,
+    wins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
+    battleWins: Math.max(0, Number(row.battle_wins || row.wins || 0) || 0),
   };
 }
 
@@ -2159,6 +2262,26 @@ function normalizeDemonKingNftInput(token = {}) {
     level: normalizeDemonKingNftLevel(token.level),
     imageUrl: token.imageUrl || token.image_url || null,
   };
+}
+
+function normalizeDemonKingBattleToken(token = {}) {
+  const chain = String(token.chain ?? token.chainKey ?? token.nftChain ?? '').trim().toLowerCase();
+  const tokenId = String(
+    token.tokenId ?? token.token_id ?? token.tokenIdRaw ?? token.nftTokenId ?? ''
+  ).trim();
+  if (!chain || !/^\d+$/.test(tokenId)) return null;
+  return { chain, tokenId };
+}
+
+function normalizeDemonKingBattleTokens(tokens = []) {
+  const unique = new Map();
+  if (!Array.isArray(tokens)) return [];
+  for (const raw of tokens) {
+    const token = normalizeDemonKingBattleToken(raw);
+    if (!token) continue;
+    unique.set(`${token.chain}:${token.tokenId}`, token);
+  }
+  return [...unique.values()];
 }
 
 function normalizeDemonKingChains(chains, tokens = []) {
@@ -2518,24 +2641,51 @@ function getBattleWins(playerId) {
   return Math.max(0, Number(stmts.getBattleWins.get(playerId)?.battle_wins || 0) || 0);
 }
 
-function getDemonKingUpgradeStatus(playerId) {
+function getDemonKingBattleWins(playerId, chain, tokenId) {
+  const token = normalizeDemonKingBattleToken({ chain, tokenId });
+  if (!playerId || !token) return 0;
+  return Math.max(0, Number(stmts.getDemonKingBattleWins.get(playerId, token.chain, token.tokenId)?.wins || 0) || 0);
+}
+
+function recordDemonKingBattleWinEvents(replayId, playerId, tokens = []) {
+  const id = Number(replayId);
+  const normalized = normalizeDemonKingBattleTokens(tokens);
+  if (!Number.isFinite(id) || id <= 0 || !playerId || !normalized.length) return [];
+  const tx = db.transaction(() => {
+    for (const token of normalized) {
+      stmts.insertDemonKingBattleWinEvent.run(id, playerId, token.chain, token.tokenId);
+    }
+    return normalized.map((token) => ({
+      ...token,
+      wins: getDemonKingBattleWins(playerId, token.chain, token.tokenId),
+    }));
+  });
+  return tx();
+}
+
+function getDemonKingUpgradeStatus(playerId, options = {}) {
   const def = TROOP_DEFS.demon_king;
   const levels = stmts.getTroopLevels.all(playerId);
   const current = levels.find(t => t.troop_type === 'demon_king');
   const currentLevel = current ? current.level : 1;
   const nextLevel = currentLevel >= def.max_level ? null : currentLevel + 1;
   const requiredWins = nextLevel ? demonKingRequiredWins(nextLevel) : null;
-  const battleWins = getBattleWins(playerId);
+  const token = normalizeDemonKingBattleToken(options);
+  const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
   return {
     troop_type: 'demon_king',
     current_level: currentLevel,
     max_level: def.max_level,
     next_level: nextLevel,
     battle_wins: battleWins,
+    wins: battleWins,
+    account_battle_wins: getBattleWins(playerId),
     required_wins: requiredWins,
     wins_ready: requiredWins == null || battleWins >= requiredWins,
     requires_nft_upgrade: nextLevel != null,
     nft_upgrade_price: 'same_as_purchase',
+    win_scope: token ? 'demon_king_nft' : 'none',
+    nft: token ? { chain: token.chain, token_id: token.tokenId } : null,
   };
 }
 
@@ -2554,12 +2704,17 @@ function upgradeTroop(playerId, troopType, options = {}) {
   if (troopType === 'demon_king') {
     const newLevel = currentLevel + 1;
     const requiredWins = demonKingRequiredWins(newLevel);
-    const battleWins = getBattleWins(playerId);
+    const token = normalizeDemonKingBattleToken({
+      chain: options.nftChain || options.chain,
+      tokenId: options.nftTokenId || options.tokenId || options.token_id,
+    });
+    const battleWins = token ? getDemonKingBattleWins(playerId, token.chain, token.tokenId) : 0;
     const status = {
-      ...getDemonKingUpgradeStatus(playerId),
+      ...getDemonKingUpgradeStatus(playerId, token || {}),
       next_level: newLevel,
       required_wins: requiredWins,
       battle_wins: battleWins,
+      wins: battleWins,
       wins_ready: requiredWins == null || battleWins >= requiredWins,
     };
     if (requiredWins != null && battleWins < requiredWins) {
@@ -3339,13 +3494,14 @@ function replaySimDebug(simResult) {
 
 function storeReplay(attackerId, defenderId, replayData, buildingsSnapshot, claimedResult, verifiedResult, reason, loot, simResult) {
   const duration = replayDurationSec(replayData, simResult);
-  stmts.insertReplay.run(
+  const info = stmts.insertReplay.run(
     attackerId, defenderId, claimedResult, verifiedResult, reason || '',
     JSON.stringify(replayData), JSON.stringify(buildingsSnapshot),
     loot?.gold || 0, loot?.wood || 0, loot?.ore || 0,
     simResult?.townHallHpPct ?? null, simResult?.buildingsDestroyed ?? 0,
     replaySimDebug(simResult), duration
   );
+  return Number(info?.lastInsertRowid || 0) || null;
 }
 
 module.exports = {
@@ -3399,6 +3555,8 @@ module.exports = {
   recalculateTrophies,
   getTrophies,
   getBattleWins,
+  getDemonKingBattleWins,
+  recordDemonKingBattleWinEvents,
   getDemonKingUpgradeStatus,
   demonKingRequiredWins,
   getFullPlayerState,

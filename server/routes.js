@@ -6150,6 +6150,40 @@ function _demonKingEntryKey(name) {
   if (parsed.error) return String(name || '');
   return `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
 }
+function _loadedDemonKingTokenKeys(playerId) {
+  const keys = new Set();
+  const ports = db.db.prepare('SELECT ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseDemonKingTroopEntry(troop);
+      if (parsed.error) continue;
+      keys.add(`${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase());
+    }
+  }
+  return keys;
+}
+function _demonKingWinTokensFromActions(actions, playerId) {
+  const loadedKeys = _loadedDemonKingTokenKeys(playerId);
+  const tokens = new Map();
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type !== 'place_ship') continue;
+    const troops = Array.isArray(action.troops)
+      ? action.troops
+      : (action.troopType ? [action.troopType] : []);
+    for (const troop of troops) {
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseDemonKingTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      if (!loadedKeys.has(key)) continue;
+      tokens.set(key, { chain: parsed.chainKey, tokenId: parsed.tokenIdRaw });
+    }
+  }
+  return [...tokens.values()];
+}
 function _troopSlotCost(name) {
   return _isDemonKing(name) ? 2 : 1;
 }
@@ -6369,18 +6403,30 @@ router.post('/attack/result', auth, (req, res) => {
 
   // Victory verified — grant loot
   if (serverResolvedResult === 'victory') {
+    const demonKingWinTokens = _demonKingWinTokensFromActions(gameActions, req.player.id);
     const battleResult = db.battleVictory(req.player.id, defender_id, battleSessionId);
     if (battleResult.error) {
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'error', battleResult.error, null, verification);
       return res.status(400).json(battleResult);
     }
-    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, verification);
+    const replayId = db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', storedAcceptReason, battleResult.loot, verification);
+    let demonKingNftWins = [];
+    try {
+      demonKingNftWins = db.recordDemonKingBattleWinEvents(replayId, req.player.id, demonKingWinTokens);
+    } catch (err) {
+      console.warn('[BATTLE] Demon King NFT win record failed:', err?.message || err);
+    }
     // Remove server-simulated casualties from attacker's ships. Real-time
     // /troop-died may already have removed some; _applyCasualties caps against
     // the current ship state, so the final submit is idempotent.
     _applyCasualties(req.player.id, verification.casualties);
     // Return authoritative post-casualty ship state so client can sync immediately
-    return res.json({ ...battleResult, ships: _getShipsPayload(req.player.id), casualties: _paidCasualties(verification.casualties) });
+    return res.json({
+      ...battleResult,
+      ships: _getShipsPayload(req.player.id),
+      casualties: _paidCasualties(verification.casualties),
+      demon_king_nft_wins: demonKingNftWins,
+    });
   }
 
   // Defeat — attacker loses trophies, defender gains
@@ -6407,7 +6453,10 @@ router.get('/troops', auth, (req, res) => {
 });
 
 router.get('/troops/demon_king/upgrade-status', auth, (req, res) => {
-  res.json(db.getDemonKingUpgradeStatus(req.player.id));
+  res.json(db.getDemonKingUpgradeStatus(req.player.id, {
+    chain: req.query?.chain,
+    tokenId: req.query?.tokenId ?? req.query?.token_id,
+  }));
 });
 
 // Upgrade a troop
@@ -6415,13 +6464,22 @@ router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const { type } = req.params;
   let upgradeOptions = {};
   if (type === 'demon_king') {
-    const status = db.getDemonKingUpgradeStatus(req.player.id);
+    const proof = {
+      ...(req.body?.nft || {}),
+      ...req.body,
+    };
+    upgradeOptions = {
+      chain: proof.chain,
+      tokenId: proof.tokenId ?? proof.token_id,
+      nftChain: proof.chain,
+      nftTokenId: proof.tokenId ?? proof.token_id,
+    };
+    const status = db.getDemonKingUpgradeStatus(req.player.id, {
+      chain: proof.chain,
+      tokenId: proof.tokenId ?? proof.token_id,
+    });
     const nextLevel = status.next_level;
-    if (nextLevel && status.wins_ready && (req.body?.chain || req.body?.nft?.chain)) {
-      const proof = {
-        ...(req.body?.nft || {}),
-        ...req.body,
-      };
+    if (nextLevel && status.wins_ready && proof.chain) {
       const verified = await verifyDemonKingNftUpgradeProof(req.player, proof, nextLevel);
       if (verified.error) return res.status(verified.status || 400).json({ ...status, ...verified });
       upgradeOptions = verified;

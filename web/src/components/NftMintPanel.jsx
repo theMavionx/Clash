@@ -1570,12 +1570,21 @@ function DemonKingUpgradePanel({
   const tokens = useMemo(() => (owned || []).filter((token) => Number(token?.level || 1) < 3), [owned]);
   const tokenId = String(selectedTokenId || manualTokenId || '').trim();
   const selectedToken = useMemo(() => tokens.find((token) => String(token.tokenId) === tokenId) || null, [tokens, tokenId]);
+  const statusNft = status?.nft || {};
+  const statusMatchesToken = !!tokenId
+    && String(statusNft.token_id ?? statusNft.tokenId ?? '') === tokenId
+    && String(statusNft.chain || '').toLowerCase() === String(chain || '').toLowerCase();
   const troopNextLevel = Number(status?.next_level || status?.nextLevel || 0);
   const selectedTokenLevel = Number(selectedToken?.level || 0);
   const nextLevel = selectedTokenLevel > 0
     ? Math.min(3, selectedTokenLevel + 1)
     : (troopNextLevel || 2);
-  const wins = Number(status?.battle_wins ?? status?.wins ?? 0);
+  const wins = Number(
+    (statusMatchesToken ? (status?.battle_wins ?? status?.wins) : undefined)
+    ?? selectedToken?.battleWins
+    ?? selectedToken?.wins
+    ?? 0
+  );
   const statusRequiredWins = Number(status?.required_wins ?? status?.nextLevelRequiredWins ?? 0);
   const requiredWins = troopNextLevel === nextLevel && statusRequiredWins > 0
     ? statusRequiredWins
@@ -1613,6 +1622,28 @@ function DemonKingUpgradePanel({
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!chain || !tokenId) return () => { cancelled = true; };
+    const playerToken = typeof window !== 'undefined' ? window._playerToken : null;
+    if (!playerToken) return () => { cancelled = true; };
+
+    async function loadTokenStatus() {
+      try {
+        const params = new URLSearchParams({ chain, tokenId });
+        const res = await fetch(`/api/troops/demon_king/upgrade-status?${params.toString()}`, {
+          cache: 'no-store',
+          headers: { 'x-token': playerToken },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setStatus(json);
+      } catch {}
+    }
+
+    loadTokenStatus();
+    return () => { cancelled = true; };
+  }, [chain, tokenId]);
 
   useEffect(() => {
     const options = (SHOP_PAYMENTS_BY_CHAIN[chain] || []).filter((option) => ['usdc', 'eth', 'mon', 'cop'].includes(option.id));

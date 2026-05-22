@@ -722,7 +722,7 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(401).json({ error: 'Log in to upgrade Demon King' });
       }
       const requiredWins = gameDb.demonKingRequiredWins(newLevel);
-      const battleWins = gameDb.getBattleWins(player.id);
+      const battleWins = gameDb.getDemonKingBattleWins(player.id, chainKey, tokenId.toString());
       if (requiredWins != null && battleWins < requiredWins) {
         return res.status(403).json({
           error: `Demon King level ${newLevel} requires ${requiredWins} battle wins`,
@@ -859,7 +859,7 @@ function mountNftV3Endpoints(router, ctx) {
       const nextLevel = upgradeable ? Number(level) + 1 : null;
       const requiredWins = nextLevel ? gameDb.demonKingRequiredWins(nextLevel) : null;
       const player = playerFromUpgradeRequest(req);
-      const battleWins = player ? gameDb.getBattleWins(player.id) : null;
+      const battleWins = player ? gameDb.getDemonKingBattleWins(player.id, chainKey, tokenId.toString()) : null;
 
       res.set('Cache-Control', player ? 'private, no-store' : 'public, max-age=15');
       res.json({
