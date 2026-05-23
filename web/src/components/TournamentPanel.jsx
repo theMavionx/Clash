@@ -333,6 +333,7 @@ function TournamentPanel({ onClose }) {
                       <div style={S.histSub}>
                         {dexLabel(h, dex)} | Ended {ended}
                         {Number(h.gold_boost) !== 1 && <> · ×{h.gold_boost}G</>}
+                        {Number(h.seeker_gold_boost || 1) !== 1 && <> · Seeker ×{h.seeker_gold_boost}G</>}
                         {Number(h.trophy_boost) !== 1 && <> · ×{h.trophy_boost}T</>}
                         {placed ? <> · sort: {sortLabel(h)}</> : <> · did not join</>}
                       </div>
@@ -367,6 +368,7 @@ function TournamentPanel({ onClose }) {
                     : <span style={preregistration ? S.phaseTagBlue : live ? S.phaseTagGreen : S.tag}>{phase || t.status}</span>
                   }
                   {Number(t.gold_boost) !== 1 && <span style={S.boostTag}>×{t.gold_boost} GOLD</span>}
+                  {Number(t.seeker_gold_boost || 1) !== 1 && <span style={S.boostTag}>Seeker ×{t.seeker_gold_boost} GOLD</span>}
                   {Number(t.trophy_boost) !== 1 && <span style={S.boostTag}>×{t.trophy_boost} TROPHY</span>}
                   <span style={S.tag}>{t.freeze_trophies === false ? 'Main trophies live' : 'Main trophies frozen'}</span>
                   {Number(t.prize_pool_usd || 0) > 0 && <span style={S.prizeTag}>Prize {fmtPrize(t.prize_pool_usd)}</span>}

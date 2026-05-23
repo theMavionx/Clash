@@ -10563,8 +10563,9 @@ router.post('/admin/wipe', adminAuth, (req, res) => {
 //   - Trophies earned from battles are routed into tournament_participants
 //     (with optional trophy_boost). Per tournament, admins choose whether
 //     players.trophies stays frozen or also receives the raw battle delta.
-//   - Gold earned from /claim-gold is multiplied by gold_boost and the
-//     boosted amount lands in both players.gold and tournament_participants.gold.
+//   - Gold earned from /claim-gold is multiplied by gold_boost. Seeker/Saga
+//     players can receive an extra seeker_gold_boost. The boosted amount lands
+//     in both players.gold and tournament_participants.gold.
 //   - Volume + pnl + trades_count are tracked in tournament_participants
 //     for the leaderboard.
 // Tournament scope is enforced by getActiveTournamentForPlayer and explicitly
@@ -10781,6 +10782,12 @@ function normalizeTournamentShieldHours(v, fallback = null) {
   const n = Number(v);
   if (!Number.isFinite(n)) throw new Error('shield_hours must be a number of hours, blank, or 0');
   return Math.max(0, Math.min(720, Number(n.toFixed(4))));
+}
+
+function normalizeTournamentBoost(v, fallback = 1) {
+  const n = v === undefined || v === null || v === '' ? Number(fallback) : Number(v);
+  if (!Number.isFinite(n)) return 1;
+  return Math.max(0.1, Math.min(10, Number(n.toFixed(4))));
 }
 
 function tournamentModeLabel(mode) {
@@ -11243,6 +11250,7 @@ function tournamentRowToPublic(t, options = {}) {
     start_at: cleanSqlDate(t.start_at),
     end_at: cleanSqlDate(t.end_at),
     gold_boost: Number(t.gold_boost),
+    seeker_gold_boost: normalizeTournamentBoost(t.seeker_gold_boost, 1),
     trophy_boost: Number(t.trophy_boost),
     shield_hours: t.shield_hours === null || t.shield_hours === undefined ? null : Number(t.shield_hours),
     shield_label: t.shield_hours === null || t.shield_hours === undefined ? 'Default' : (Number(t.shield_hours) === 0 ? 'No shield' : `${Number(t.shield_hours)}h`),
@@ -11727,7 +11735,7 @@ router.get('/admin/tournaments', adminAuth, (req, res) => {
 // default to 1.0 (no boost), sort_by defaults to raw weighted points.
 router.post('/admin/tournaments', adminAuth, (req, res) => {
   const {
-    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points,
@@ -11753,8 +11761,9 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const STATUSES = ['active', 'ended', 'draft'];
   const stat = STATUSES.includes(status) ? status : 'active';
   // Boosts clamped to a sane range so an admin typo can't print 1000x gold.
-  const gb = Math.max(0.1, Math.min(10, Number(gold_boost) || 1));
-  const tb = Math.max(0.1, Math.min(10, Number(trophy_boost) || 1));
+  const gb = normalizeTournamentBoost(gold_boost, 1);
+  const sgb = normalizeTournamentBoost(seeker_gold_boost, 1);
+  const tb = normalizeTournamentBoost(trophy_boost, 1);
   const freeze = freeze_trophies === undefined ? 1 : (parseBool(freeze_trophies) ? 1 : 0);
   let startIso, endIso, registrationOpenIso, registrationCloseIso;
   try {
@@ -11804,13 +11813,13 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
   const prereg = parseBool(preregistration_enabled) ? 1 : 0;
   const r = db.db.prepare(`
     INSERT INTO tournaments (
-      name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+      name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
       points_trophy_weight, points_volume_weight, points_pnl_weight,
       scoring_mode, daily_pool_points, daily_pool_enabled_at,
       prize_currency, prize_tiers, rewards_in_cop, seeker_only,
       shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     name.trim(),
     (description || '').toString().slice(0, 500),
@@ -11826,6 +11835,7 @@ router.post('/admin/tournaments', adminAuth, (req, res) => {
     startIso,
     endIso,
     gb,
+    sgb,
     tb,
     sortCol,
     stat,
@@ -11856,7 +11866,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
   const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
   if (!t) return res.status(404).json({ error: 'not found' });
   const {
-    name, description, start_at, end_at, gold_boost, trophy_boost, sort_by, status,
+    name, description, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost, sort_by, status,
     shield_hours, freeze_trophies, preregistration_enabled, registration_opens_at, registration_closes_at,
     points_trophy_weight, points_volume_weight, points_pnl_weight,
     scoring_mode, daily_pool_points,
@@ -11939,8 +11949,9 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     attack_match_policy: attackMatchPolicy,
     start_at: nextStartAt,
     end_at: nextEndAt,
-    gold_boost: gold_boost !== undefined ? Math.max(0.1, Math.min(10, Number(gold_boost) || 1)) : t.gold_boost,
-    trophy_boost: trophy_boost !== undefined ? Math.max(0.1, Math.min(10, Number(trophy_boost) || 1)) : t.trophy_boost,
+    gold_boost: gold_boost !== undefined ? normalizeTournamentBoost(gold_boost, 1) : normalizeTournamentBoost(t.gold_boost, 1),
+    seeker_gold_boost: seeker_gold_boost !== undefined ? normalizeTournamentBoost(seeker_gold_boost, 1) : normalizeTournamentBoost(t.seeker_gold_boost, 1),
+    trophy_boost: trophy_boost !== undefined ? normalizeTournamentBoost(trophy_boost, 1) : normalizeTournamentBoost(t.trophy_boost, 1),
     shield_hours: nextShieldHours,
     freeze_trophies: freeze_trophies !== undefined
       ? (parseBool(freeze_trophies) ? 1 : 0)
@@ -11969,7 +11980,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     UPDATE tournaments SET name = ?, description = ?, dex = ?, dex_scope = ?, eligible_dexes = ?,
                             mode = ?, team_score_by = ?, team_prize_mode = ?, team_prize_splits = ?, team_member_reward_by = ?, attack_match_policy = ?,
                             start_at = ?, end_at = ?,
-                            gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
+                            gold_boost = ?, seeker_gold_boost = ?, trophy_boost = ?, shield_hours = ?, sort_by = ?, status = ?,
                             points_trophy_weight = ?, points_volume_weight = ?, points_pnl_weight = ?,
                             scoring_mode = ?, daily_pool_points = ?, daily_pool_enabled_at = ?,
                             prize_currency = ?, prize_tiers = ?, rewards_in_cop = ?, seeker_only = ?,
@@ -11990,6 +12001,7 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
     next.start_at,
     next.end_at,
     next.gold_boost,
+    next.seeker_gold_boost,
     next.trophy_boost,
     next.shield_hours,
     next.sort_by,

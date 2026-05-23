@@ -10,13 +10,11 @@
 // and should not be used for use cases where you need a guaranteed Seeker
 // user." The doc's *guaranteed* path is verifying an SGT (Seeker Genesis
 // Token) NFT on-chain after a SIWS handshake. That's overkill for this
-// surface — we only use the signal to (a) decide whether to mount the
-// Mobile Wallet Adapter (avoids "wallet not found" on plain Android) and
-// (b) surface the user's `.skr` handle as a nickname suggestion. A spoofer
-// gains nothing from a false positive on either path, and a false NEGATIVE
-// on a real Seeker just means the user taps MWA themselves and types their
-// nickname manually instead of one-tap-applying their `.skr`. Both paths
-// are recoverable.
+// surface — we use the signal to (a) decide whether to mount the Mobile
+// Wallet Adapter (avoids "wallet not found" on plain Android), (b) surface
+// the user's `.skr` handle as a nickname suggestion, and (c) enable low-stakes
+// promotional game boosts. Do not use this soft signal for cash-equivalent
+// rewards or high-value access without an SGT ownership verification path.
 //
 // Why we can't use SolanaMobileWalletAdapter.readyState alone:
 // the adapter reports `Loadable` on EVERY Android device (the package's

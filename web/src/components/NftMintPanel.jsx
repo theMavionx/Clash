@@ -1098,7 +1098,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             {view === 'upgrade' ? (
               <DemonKingUpgradePanel
                 initialRequest={initialUpgradeRequest}
-                defaultChain={activePaymentChain}
                 evmWallet={evmWallet}
                 evmAddress={evmAddress}
                 solWallet={solWallet}
@@ -1111,7 +1110,6 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 onConnectAptos={() => {
                   try { aptosWallet?.connect?.(); } catch { /* user-cancel */ }
                 }}
-                onSelectChain={setSelectedChain}
                 setNotice={setNotice}
                 setBusy={setBusy}
                 busy={busy}
@@ -1529,7 +1527,6 @@ function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
   );
 }
 
-const DEMON_KING_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad', 'solana', 'aptos'];
 const DEMON_KING_EVM_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad'];
 const DEMON_KING_UPGRADE_PRICE_HINT = {
   usdc: '$8.90',
@@ -1558,7 +1555,6 @@ function quotePaymentLabel(quote, fallbackLabel = '') {
 
 function DemonKingUpgradePanel({
   initialRequest,
-  defaultChain = 'base',
   evmWallet,
   evmAddress,
   solWallet,
@@ -1569,16 +1565,12 @@ function DemonKingUpgradePanel({
   onOpenEvmModal,
   onConnectSolana,
   onConnectAptos,
-  onSelectChain,
   setNotice,
   setBusy,
   busy,
   onClose,
 }) {
-  const [chain, setChain] = useState(() => {
-    const requested = String(initialRequest?.chain || initialRequest?.preferred_chain || defaultChain || '').toLowerCase();
-    return DEMON_KING_UPGRADE_CHAINS.includes(requested) ? requested : 'base';
-  });
+  const chain = 'solana';
   const [payment, setPayment] = useState('usdc');
   const [status, setStatus] = useState(initialRequest || null);
   const [owned, setOwned] = useState([]);
@@ -1992,35 +1984,6 @@ function DemonKingUpgradePanel({
         </div>
       </div>
 
-      <div style={styles.chainSwitchPanel}>
-        {DEMON_KING_UPGRADE_CHAINS.map((choice) => (
-          <button
-            key={choice}
-            type="button"
-            onClick={() => {
-              setChain(choice);
-              setSelectedTokenId('');
-              setManualTokenId('');
-              onSelectChain?.(choice);
-            }}
-            style={{
-              ...styles.chainSwitchBtn,
-              ...(choice === chain ? styles.chainSwitchBtnActive : null),
-            }}
-          >
-            <span style={styles.chainLogoBadge}>
-              {chainLogo(choice)
-                ? <img src={chainLogo(choice)} alt={SHOP_CHAIN_LABEL[choice]} style={styles.chainLogoImg} />
-                : (shopChainChoice(choice)?.badge || 'NFT')}
-            </span>
-            <span style={styles.chainSwitchMain}>
-              <span style={styles.chainSwitchName}>{SHOP_CHAIN_LABEL[choice]}</span>
-              <span style={styles.chainSwitchSub}>{shopChainChoice(choice)?.subtitle || 'NFT sync'}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-
       {paymentOptions.length > 0 && (
         <div style={styles.options}>
           {paymentOptions.map((option) => {
@@ -2050,31 +2013,17 @@ function DemonKingUpgradePanel({
         </div>
       )}
 
-      {!isEvmUpgradeChain && (
-        <div style={styles.quoteStrip}>
-          {SHOP_CHAIN_LABEL[chain] || chain} Demon King NFTs upgrade only on {SHOP_CHAIN_LABEL[chain] || chain}. If the NFT is already upgraded, this syncs it into the game.
+      {(quoteLoading || quoteError || quotePreview?.alreadySynced || quotePriceLabel) && (
+        <div style={{ ...styles.quoteStrip, ...(quoteError ? styles.quoteStripWarn : null) }}>
+          {quoteLoading
+            ? 'Loading upgrade price...'
+            : quotePreview?.alreadySynced
+              ? 'NFT level already synced.'
+              : quotePriceLabel
+                ? `Upgrade price: ${quotePriceLabel}`
+                : quoteError}
         </div>
       )}
-
-      <div style={{ ...styles.quoteStrip, ...(quoteError ? styles.quoteStripWarn : null) }}>
-        {!isEvmUpgradeChain
-          ? (quoteLoading
-            ? 'Checking NFT owner and same-chain upgrade price...'
-            : quotePreview?.alreadySynced
-              ? 'NFT level is already high enough. This will sync the server troop level.'
-              : quotePriceLabel
-                ? `Same-chain upgrade price: ${quotePriceLabel}`
-                : quoteError || (tokenId
-                  ? 'This will upgrade the connected NFT on its own chain, then sync the troop level.'
-                  : `Select a ${SHOP_CHAIN_LABEL[chain] || chain} Demon King NFT to load the upgrade price.`))
-          : quoteLoading
-            ? 'Checking NFT owner and live price...'
-            : quotePreview?.alreadySynced
-              ? 'NFT level is already high enough. This will sync the server troop level.'
-              : quotePriceLabel
-                ? `Live upgrade price: ${quotePriceLabel}`
-                : quoteError || 'Select an NFT to load the live upgrade price.'}
-      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ fontSize: 12, fontWeight: 900, color: '#5C3A21' }}>Your upgradeable NFTs</div>

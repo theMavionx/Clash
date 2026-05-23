@@ -631,6 +631,7 @@ app.get('/api/admin/panel', (req, res) => {
           <label style="font-size:11px;color:#9ca3af">Registration opens<input id="tn_reg_open" placeholder="optional" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Registration closes<input id="tn_reg_close" placeholder="defaults to start" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Gold boost (×)<input id="tn_gold" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
+          <label style="font-size:11px;color:#9ca3af">Seeker gold boost (×)<input id="tn_seeker_gold" type="number" step="0.1" min="0.1" max="10" value="1" title="Extra gold multiplier only for Solana Mobile Seeker/Saga users. Use 1.2 for +20%." style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Trophy boost (×)<input id="tn_trophy" type="number" step="0.1" min="0.1" max="10" value="1" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af">Shield after raid (hours)<input id="tn_shield_hours" type="number" step="0.25" min="0" max="720" placeholder="blank = default, 0 = none" style="width:100%;margin-top:4px;background:#0f172a;border:1px solid #374151;border-radius:6px;padding:6px;color:#e5e7eb"></label>
           <label style="font-size:11px;color:#9ca3af;display:flex;align-items:center;gap:8px;margin-top:4px">
@@ -705,7 +706,7 @@ app.get('/api/admin/panel', (req, res) => {
       </div>
     </div>
     <table><thead><tr>
-      <th>ID</th><th>Name</th><th>DEX</th><th>Access</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
+      <th>ID</th><th>Name</th><th>DEX</th><th>Access</th><th>Status</th><th>Phase</th><th>Start</th><th>End</th><th>Reg</th><th>Gold×</th><th>Seeker Gold×</th><th>Trophy×</th><th>Shield</th><th>Freeze</th><th>Sort</th><th>Prize</th><th>Players</th><th>Actions</th>
     </tr></thead><tbody id="tournamentsBody"></tbody></table>
   </div>
 
@@ -2324,7 +2325,7 @@ function renderTournaments() {
   const body = document.getElementById('tournamentsBody');
   if (!body) return;
   if (TOURNAMENTS_CACHE.length === 0) {
-    body.innerHTML = '<tr><td colspan="17" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
+    body.innerHTML = '<tr><td colspan="18" style="text-align:center;color:#6b7280;padding:20px">No tournaments yet - create one above</td></tr>';
     return;
   }
   body.innerHTML = TOURNAMENTS_CACHE.map(t => {
@@ -2349,6 +2350,7 @@ function renderTournaments() {
       + '<td style="font-size:11px">' + esc(t.end_at || '∞') + '</td>'
       + '<td style="font-size:11px">' + reg + '</td>'
       + '<td>' + t.gold_boost + '×</td>'
+      + '<td>' + (t.seeker_gold_boost || 1) + '×</td>'
       + '<td>' + t.trophy_boost + '×</td>'
       + '<td>' + esc(t.shield_label || 'Default') + '</td>'
       + '<td>' + (t.freeze_trophies ? '<span style="color:#60a5fa">ON</span>' : '<span style="color:#fbbf24">OFF</span>') + '</td>'
@@ -2393,6 +2395,7 @@ function getTournamentFormBody() {
     registration_opens_at: document.getElementById('tn_reg_open').value.trim() || undefined,
     registration_closes_at: document.getElementById('tn_reg_close').value.trim() || undefined,
     gold_boost: parseFloat(document.getElementById('tn_gold').value) || 1,
+    seeker_gold_boost: parseFloat(document.getElementById('tn_seeker_gold').value) || 1,
     trophy_boost: parseFloat(document.getElementById('tn_trophy').value) || 1,
     shield_hours: document.getElementById('tn_shield_hours').value.trim() === '' ? null : Number(document.getElementById('tn_shield_hours').value),
     freeze_trophies: document.getElementById('tn_freeze_trophies').checked,
@@ -2431,6 +2434,7 @@ function resetTournamentForm() {
   document.getElementById('tn_reg_open').value = '';
   document.getElementById('tn_reg_close').value = '';
   document.getElementById('tn_gold').value = '1';
+  document.getElementById('tn_seeker_gold').value = '1';
   document.getElementById('tn_trophy').value = '1';
   document.getElementById('tn_shield_hours').value = '';
   document.getElementById('tn_freeze_trophies').checked = true;
@@ -2478,6 +2482,7 @@ function editTournament(id) {
   document.getElementById('tn_reg_open').value = t.registration_opens_at || '';
   document.getElementById('tn_reg_close').value = t.registration_closes_at || '';
   document.getElementById('tn_gold').value = t.gold_boost || 1;
+  document.getElementById('tn_seeker_gold').value = t.seeker_gold_boost || 1;
   document.getElementById('tn_trophy').value = t.trophy_boost || 1;
   document.getElementById('tn_shield_hours').value = t.shield_hours == null ? '' : t.shield_hours;
   document.getElementById('tn_freeze_trophies').checked = t.freeze_trophies !== false;

@@ -545,6 +545,7 @@ try {
       start_at     TEXT NOT NULL,                        -- ISO datetime
       end_at       TEXT,                                  -- nullable (open-ended)
       gold_boost   REAL NOT NULL DEFAULT 1.0,
+      seeker_gold_boost REAL NOT NULL DEFAULT 1.0,
       trophy_boost REAL NOT NULL DEFAULT 1.0,
       shield_hours REAL,
       freeze_trophies INTEGER NOT NULL DEFAULT 1,
@@ -615,7 +616,9 @@ try {
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN prize_tiers TEXT NOT NULL DEFAULT '[]'`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN rewards_in_cop INTEGER NOT NULL DEFAULT 0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
+  try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
   try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
+  try { db.exec(`UPDATE tournaments SET seeker_gold_boost = 1.0 WHERE seeker_gold_boost IS NULL OR seeker_gold_boost <= 0`); } catch {}
   try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
   try {
     db.exec(`
@@ -632,7 +635,7 @@ try {
   try {
     const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tournaments'").get()?.sql || '';
     const needsRebuild = schema
-      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
+      && (!schema.includes("'points'") || !schema.includes("'volume_trophies_50_50'") || !schema.includes("'monad'") || !schema.includes("'phoenix'") || !schema.includes("'hyperliquid'") || !schema.includes("'risex'") || !schema.includes("points_trophy_weight") || !schema.includes("scoring_mode") || !schema.includes("daily_pool_points") || !schema.includes("prize_tiers") || !schema.includes("rewards_in_cop") || !schema.includes("seeker_only") || !schema.includes("seeker_gold_boost") || !schema.includes("shield_hours") || !schema.includes("dex_scope") || !schema.includes("eligible_dexes") || !schema.includes("dex_vs_dex") || !schema.includes("team_prize_splits") || !schema.includes("attack_match_policy"));
     if (needsRebuild) {
       db.pragma('foreign_keys = OFF');
       db.transaction(() => {
@@ -653,6 +656,7 @@ try {
             start_at     TEXT NOT NULL,
             end_at       TEXT,
             gold_boost   REAL NOT NULL DEFAULT 1.0,
+            seeker_gold_boost REAL NOT NULL DEFAULT 1.0,
             trophy_boost REAL NOT NULL DEFAULT 1.0,
             shield_hours REAL,
             freeze_trophies INTEGER NOT NULL DEFAULT 1,
@@ -674,7 +678,7 @@ try {
             registration_closes_at TEXT
           );
           INSERT INTO tournaments_new (
-            id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, trophy_boost,
+            id, name, description, dex, dex_scope, eligible_dexes, mode, team_score_by, team_prize_mode, team_prize_splits, team_member_reward_by, attack_match_policy, start_at, end_at, gold_boost, seeker_gold_boost, trophy_boost,
             shield_hours, freeze_trophies, sort_by, points_trophy_weight, points_volume_weight, points_pnl_weight,
             scoring_mode, daily_pool_points, daily_pool_enabled_at,
             prize_currency, prize_tiers, rewards_in_cop, seeker_only, status, created_at, preregistration_enabled, registration_opens_at, registration_closes_at
@@ -693,7 +697,7 @@ try {
             COALESCE(team_prize_splits, '[]'),
             COALESCE(team_member_reward_by, 'volume_usd'),
             CASE WHEN attack_match_policy IN ('all','enemy_or_non_participant','enemy_only') THEN attack_match_policy ELSE 'all' END,
-            start_at, end_at, gold_boost, trophy_boost,
+            start_at, end_at, gold_boost, COALESCE(seeker_gold_boost, 1.0), trophy_boost,
             CASE WHEN shield_hours IS NULL THEN NULL ELSE MAX(0, shield_hours) END,
             COALESCE(freeze_trophies, 1),
             CASE WHEN sort_by IN ('pnl_usd','trophies','volume_usd','gold','points','volume_trophies_50_50') THEN sort_by ELSE 'pnl_usd' END,
@@ -739,6 +743,7 @@ try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_prize_splits TEXT NOT NUL
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN team_member_reward_by TEXT NOT NULL DEFAULT 'volume_usd'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN attack_match_policy TEXT NOT NULL DEFAULT 'all'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_only INTEGER NOT NULL DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE tournaments ADD COLUMN seeker_gold_boost REAL NOT NULL DEFAULT 1.0`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN shield_hours REAL`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN scoring_mode TEXT NOT NULL DEFAULT 'live'`); } catch {}
 try { db.exec(`ALTER TABLE tournaments ADD COLUMN daily_pool_points REAL NOT NULL DEFAULT 1000`); } catch {}
@@ -757,6 +762,7 @@ try {
     WHERE daily_pool_points IS NULL OR daily_pool_points <= 0
   `);
 } catch {}
+try { db.exec(`UPDATE tournaments SET seeker_gold_boost = 1.0 WHERE seeker_gold_boost IS NULL OR seeker_gold_boost <= 0`); } catch {}
 try { db.exec(`UPDATE tournaments SET shield_hours = 0 WHERE shield_hours IS NOT NULL AND shield_hours < 0`); } catch {}
 try {
   db.exec(`
@@ -1503,7 +1509,9 @@ const stmts = {
   // means the participant is still active (didn't soft-leave).
   // Status='active' + (end_at IS NULL OR end_at > now) defines "live now".
   getActiveTournamentForPlayer: db.prepare(`
-    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex, t.gold_boost, t.trophy_boost,
+    SELECT t.id AS tournament_id, t.dex, t.dex_scope, t.eligible_dexes, t.mode, t.seeker_only, p.team_dex,
+           t.gold_boost, COALESCE(t.seeker_gold_boost, 1.0) AS seeker_gold_boost, t.trophy_boost,
+           COALESCE(pl.is_seeker, 0) AS is_seeker,
            COALESCE(t.freeze_trophies, 1) AS freeze_trophies, t.sort_by,
            COALESCE(t.scoring_mode, 'live') AS scoring_mode,
            COALESCE(t.daily_pool_points, 1000) AS daily_pool_points,
@@ -1769,7 +1777,8 @@ function applyTrophyDelta(playerId, delta, opts = {}) {
 }
 
 // Apply tournament gold_boost to a base gold reward and record the boosted
-// amount in tournament_participants.gold for the leaderboard.
+// amount in tournament_participants.gold for the leaderboard. Seeker/Saga
+// players can receive an extra per-tournament seeker_gold_boost.
 //   - Returns the gold amount the caller should actually credit to
 //     `players.gold` (boosted when in tournament, original otherwise).
 //   - The caller still owns the players.gold update via addResources();
@@ -1781,9 +1790,12 @@ function applyGoldReward(playerId, baseGold) {
   if (!playerId || amount <= 0) return amount;
   const t = getPlayerActiveTournament(playerId);
   if (!t) return amount;
-  const boosted = Math.round(amount * Number(t.gold_boost || 1));
+  const baseBoost = Number(t.gold_boost || 1) || 1;
+  const seekerBoost = Number(t.is_seeker || 0) === 1 ? (Number(t.seeker_gold_boost || 1) || 1) : 1;
+  const multiplier = Math.min(10, Math.max(0.1, baseBoost) * Math.max(0.1, seekerBoost));
+  const boosted = Math.round(amount * multiplier);
   stmts.bumpTournamentGold.run(boosted, t.tournament_id, playerId);
-  console.log(`[gold-boost] player=${playerId.slice(0,8)} t=${t.tournament_id} base=${amount} boost=${t.gold_boost}x -> ${boosted}`);
+  console.log(`[gold-boost] player=${playerId.slice(0,8)} t=${t.tournament_id} base=${amount} boost=${baseBoost}x seeker=${seekerBoost}x -> ${boosted}`);
   return boosted;
 }
 
