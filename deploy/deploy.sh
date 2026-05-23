@@ -225,7 +225,7 @@ prepare_shared_runtime() {
                 printf '%s\n' DECIBEL_API_KEY=
                 printf '%s\n' DECIBEL_API_WALLET_PRIVATE_KEY=
                 printf '%s\n' DECIBEL_ALLOWED_BUILDER_ADDRS=
-                printf '%s\n' DECIBEL_BUILDER_FEE_BPS=10
+                printf '%s\n' DECIBEL_BUILDER_FEE_BPS=5
                 printf '%s=%s\n' CLASH_WALLET_ENCRYPTION_KEY "$generated_wallet_enc"
             } > "$ENV_FILE"
             chmod 600 "$ENV_FILE"
@@ -240,7 +240,11 @@ prepare_shared_runtime() {
     ensure_env_default "DECIBEL_API_KEY" ""
     ensure_env_default "DECIBEL_API_WALLET_PRIVATE_KEY" ""
     ensure_env_default "DECIBEL_ALLOWED_BUILDER_ADDRS" ""
-    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "10"
+    ensure_env_default "DECIBEL_BUILDER_FEE_BPS" "5"
+    ensure_env_default "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
+    ensure_env_default "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
+    ensure_env_default "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
+    ensure_env_default "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
     ensure_env_default "CLASH_WALLET_ENCRYPTION_KEY" "$(openssl rand -hex 32)"
     ensure_env_default "VITE_PRIVY_APP_ID" ""
     ensure_env_default "VITE_APTOS_NODE_API_KEY" ""
@@ -279,7 +283,11 @@ prepare_shared_runtime() {
     ensure_env_default "CLASH_HERMES_BACKEND_TIMEOUT_MS" "300000"
 
     set_env_value "NODE_ENV" "production"
-    set_env_value "DECIBEL_BUILDER_FEE_BPS" "10"
+    set_env_value "DECIBEL_BUILDER_FEE_BPS" "5"
+    set_env_value "HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
+    set_env_value "VITE_HYPERLIQUID_BUILDER_FEE_TENTH_BPS" "50"
+    set_env_value "PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
+    set_env_value "VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS" "5"
     set_env_value "CLASH_MAIN_DB" "$SHARED_SERVER_DIR/clash.db"
     set_env_value "CLASH_FUTURES_DB" "$SHARED_FUTURES_DIR/futures.db"
     set_env_value "CLASH_MCP_PUBLIC_URL" "https://$MCP_DOMAIN"

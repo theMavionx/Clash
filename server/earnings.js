@@ -305,7 +305,7 @@ async function fetchGmxEarnings() {
 // HTTPS call each, except Pacifica which paginates) but cumulatively
 // 4–10s if Pacifica has a lot of trades. Cache aggressively — a 60 s
 // staleness window is fine for an internal dashboard.
-// Fallback matches the deploy.sh default (10 bps = 0.1%). Production
+// Fallback matches the deploy.sh default (5 bps = 0.05%). Production
 // always has DECIBEL_BUILDER_FEE_BPS set via env so this fallback only
 // fires in fresh local checkouts.
 const PHOENIX_FLIGHT_BUILDER_AUTHORITY = (
@@ -321,8 +321,8 @@ const PHOENIX_FLIGHT_BUILDER_TRADER_ACCOUNT = (
 const PHOENIX_FLIGHT_BUILDER_FEE_BPS = Number(
   process.env.PHOENIX_FLIGHT_BUILDER_FEE_BPS
   || process.env.VITE_PHOENIX_FLIGHT_BUILDER_FEE_BPS
-  || 10,
-) || 10;
+  || 5,
+) || 5;
 const PHOENIX_API = (process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade').replace(/\/+$/, '');
 
 function phoenixTokenAmountToNumber(value, decimals = 6) {
@@ -452,7 +452,7 @@ async function fetchPhoenixEarnings() {
   };
 }
 
-const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 10;
+const PERPL_BUILDER_FEE_BPS = Number(process.env.PERPL_BUILDER_FEE_BPS || process.env.DECIBEL_BUILDER_FEE_BPS) || 5;
 
 async function fetchPerplEarnings() {
   const Db = loadSqlite();
@@ -492,7 +492,7 @@ async function fetchPerplEarnings() {
 }
 
 const HYPERLIQUID_BUILDER_ADDRESS = (process.env.HYPERLIQUID_BUILDER_ADDRESS || '').trim();
-const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 100) || 100;
+const HYPERLIQUID_BUILDER_FEE_TENTH_BPS = Number(process.env.HYPERLIQUID_BUILDER_FEE_TENTH_BPS || 50) || 50;
 const HYPERLIQUID_API = (process.env.HYPERLIQUID_API_URL || 'https://api.hyperliquid.xyz').replace(/\/+$/, '');
 
 async function hyperliquidInfo(body) {
