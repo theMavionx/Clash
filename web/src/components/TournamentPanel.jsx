@@ -10,7 +10,12 @@ import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
-const fmt = (n) => (Number(n) || 0).toLocaleString().replace(/,/g, ' ');
+function formatNumber(n, options = {}) {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US', options).replace(/,/g, ' ');
+}
+
+const fmt = (n) => formatNumber(n, { maximumFractionDigits: 0 });
 const EVM_WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 const DEX_LABELS = {
   pacifica: 'Pacifica',
@@ -24,29 +29,29 @@ const DEX_LABELS = {
 
 function fmtUsd(n) {
   const v = Number(n) || 0;
-  if (Math.abs(v) >= 1000) return '$' + Math.round(v).toLocaleString().replace(/,/g, ' ');
-  return '$' + v.toFixed(2);
+  if (Math.abs(v) >= 1000) return '$' + formatNumber(Math.round(v), { maximumFractionDigits: 0 });
+  return '$' + formatNumber(v, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtPrize(amount) {
   const v = Number(amount) || 0;
   const rounded = Number(v.toFixed(2));
   if (Math.abs(rounded) >= 1000 || Number.isInteger(rounded)) {
-    return '$' + Math.round(rounded).toLocaleString().replace(/,/g, ' ');
+    return '$' + formatNumber(Math.round(rounded), { maximumFractionDigits: 0 });
   }
-  return '$' + rounded.toFixed(2);
+  return '$' + formatNumber(rounded, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtTeamMetric(metric, value) {
   if (metric === 'volume_usd' || metric === 'pnl_usd') return fmtUsd(value);
-  if (metric === 'points') return `${Number(value || 0).toFixed(1)} pts`;
+  if (metric === 'points') return `${fmtPoints(value)} pts`;
   return fmt(value);
 }
 
 function fmtPoints(n) {
   const v = Number(n) || 0;
   const digits = Math.abs(v) >= 100 ? 1 : 2;
-  return v.toLocaleString(undefined, { maximumFractionDigits: digits }).replace(/,/g, ' ');
+  return formatNumber(v, { maximumFractionDigits: digits });
 }
 
 function fmtDate(s) {
@@ -134,7 +139,7 @@ function featuredMetric(sortKey, row) {
   if (sortKey === 'gold') return { value: fmt(row.gold), color: '#b45309' };
   if (sortKey === 'volume_usd') return { value: fmtUsd(row.volume_usd), color: '#b45309' };
   if (isPointsSort(sortKey)) {
-    return { value: `${Number(row.score || 0).toFixed(1)} pts`, color: '#b45309' };
+    return { value: `${fmtPoints(row.score)} pts`, color: '#b45309' };
   }
   return {
     value: fmtUsd(row.pnl_usd),
@@ -149,6 +154,7 @@ function TournamentPanel({ onClose }) {
   const [tab, setTab] = useState('active');
   const [pickedHistoryId, setPickedHistoryId] = useState(null);
   const [pickedDailyDay, setPickedDailyDay] = useState(null);
+  const [dailyOpen, setDailyOpen] = useState(false);
 
   const {
     me,
@@ -236,6 +242,10 @@ function TournamentPanel({ onClose }) {
       setPickedDailyDay(dailyDays[0].day_utc);
     }
   }, [dailyActive, dailyDays, pickedDailyDay]);
+
+  useEffect(() => {
+    setDailyOpen(false);
+  }, [dailyActive, t?.id]);
 
   const myRank = useMemo(() => {
     if (!board || !playerId) return null;
@@ -565,6 +575,8 @@ function TournamentPanel({ onClose }) {
                   selectedDayId={pickedDailyDay}
                   onPickDay={setPickedDailyDay}
                   myPlayerId={dailyMyPlayerId}
+                  expanded={dailyOpen}
+                  onToggle={() => setDailyOpen(open => !open)}
                 />
               )}
 
@@ -636,7 +648,7 @@ function TournamentPanel({ onClose }) {
   );
 }
 
-function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPlayerId }) {
+function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPlayerId, expanded, onToggle }) {
   const day = selectedDay || days?.[0] || null;
   const players = day?.players || [];
   const processed = !!day?.processed;
@@ -656,85 +668,94 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
           <div style={S.dailyTitle}>Daily points</div>
           <div style={S.dailySub}>{fmt(pool)} pool at 00:00 UTC</div>
         </div>
-        <span style={processed ? S.dailyModeDone : S.dailyModeLive}>
-          {processed ? 'Awarded' : 'Estimate'}
-        </span>
+        <button
+          type="button"
+          style={processed ? S.dailyToggleDone : S.dailyToggleLive}
+          onClick={onToggle}
+          aria-expanded={!!expanded}
+        >
+          {expanded ? 'Hide' : (processed ? 'Awarded' : 'Estimate')}
+        </button>
       </div>
 
-      {days?.length > 0 && (
-        <div style={S.dailyChips}>
-          {days.map(dayRow => (
-            <button
-              key={dayRow.day_utc}
-              style={dayRow.day_utc === activeDayId ? S.dailyChipActive : S.dailyChip}
-              onClick={() => onPickDay(dayRow.day_utc)}
-            >
-              {fmtDay(dayRow.day_utc)}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {!day && (
-        <div style={S.dailyEmpty}>No daily activity yet.</div>
-      )}
-
-      {day && (
+      {expanded && (
         <>
-          <div style={S.dailyMine}>
-            <div style={S.dailyMineMain}>
-              <span style={S.dailyMineLabel}>Your day</span>
-              <strong style={S.dailyMineValue}>{fmtPoints(minePoints)} pts</strong>
-            </div>
-            <span style={S.dailyMineRank}>{mineRank ? `#${mineRank}` : '-'}</span>
-          </div>
-
-          <div style={S.dailyGrid}>
-            <div style={S.dailyMiniStat}>
-              <strong style={S.dailyMiniValue}>{fmtUsd(day.totals?.volume_usd)}</strong>
-              <span style={S.dailyMiniLabel}>Volume</span>
-            </div>
-            <div style={S.dailyMiniStat}>
-              <strong style={S.dailyMiniValue}>{fmt(day.totals?.trophies)}</strong>
-              <span style={S.dailyMiniLabel}>Trophies</span>
-            </div>
-            <div style={S.dailyMiniStat}>
-              <strong style={S.dailyMiniValue}>{fmt(day.totals?.trades_count)}</strong>
-              <span style={S.dailyMiniLabel}>Trades</span>
-            </div>
-            <div style={S.dailyMiniStat}>
-              <strong style={S.dailyMiniValue}>{fmt(day.totals?.players)}</strong>
-              <span style={S.dailyMiniLabel}>Players</span>
-            </div>
-          </div>
-
-          <div style={S.dailyList}>
-            {shownPlayers.map((row) => {
-              const isMe = row.player_id === myPlayerId;
-              const rank = Number(row[rankKey] || row.rank || 0);
-              const points = Number(row[pointsKey] || 0);
-              return (
-                <div
-                  key={row.player_id}
-                  style={{
-                    ...S.dailyPlayerRow,
-                    background: isMe ? '#fef3c7' : '#fdf8e7',
-                    borderColor: isMe ? '#f59e0b' : '#d4c8b0',
-                  }}
+          {days?.length > 0 && (
+            <div style={S.dailyChips}>
+              {days.map(dayRow => (
+                <button
+                  key={dayRow.day_utc}
+                  style={dayRow.day_utc === activeDayId ? S.dailyChipActive : S.dailyChip}
+                  onClick={() => onPickDay(dayRow.day_utc)}
                 >
-                  <span style={S.dailyPlayerRank}>{rank || '-'}</span>
-                  <div style={S.dailyPlayerInfo}>
-                    <span style={S.dailyPlayerName}>{compactPlayerName(row)}{isMe ? ' (you)' : ''}</span>
-                    <span style={S.dailyPlayerMeta}>
-                      {fmt(row.trophies)} trophies | {row.trades_count || 0} trades | {fmtUsd(row.volume_usd)} vol | {fmtUsd(row.pnl_usd)} PnL | {fmt(row.gold)} gold
-                    </span>
-                  </div>
-                  <span style={S.dailyPlayerPoints}>{fmtPoints(points)}</span>
+                  {fmtDay(dayRow.day_utc)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!day && (
+            <div style={S.dailyEmpty}>No daily activity yet.</div>
+          )}
+
+          {day && (
+            <>
+              <div style={S.dailyMine}>
+                <div style={S.dailyMineMain}>
+                  <span style={S.dailyMineLabel}>Your day</span>
+                  <strong style={S.dailyMineValue}>{fmtPoints(minePoints)} pts</strong>
                 </div>
-              );
-            })}
-            {players.length === 0 && <div style={S.dailyEmpty}>No players yet.</div>}
-          </div>
+                <span style={S.dailyMineRank}>{mineRank ? `#${mineRank}` : '-'}</span>
+              </div>
+
+              <div style={S.dailyGrid}>
+                <div style={S.dailyMiniStat}>
+                  <strong style={S.dailyMiniValue}>{fmtUsd(day.totals?.volume_usd)}</strong>
+                  <span style={S.dailyMiniLabel}>Volume</span>
+                </div>
+                <div style={S.dailyMiniStat}>
+                  <strong style={S.dailyMiniValue}>{fmt(day.totals?.trophies)}</strong>
+                  <span style={S.dailyMiniLabel}>Trophies</span>
+                </div>
+                <div style={S.dailyMiniStat}>
+                  <strong style={S.dailyMiniValue}>{fmt(day.totals?.trades_count)}</strong>
+                  <span style={S.dailyMiniLabel}>Trades</span>
+                </div>
+                <div style={S.dailyMiniStat}>
+                  <strong style={S.dailyMiniValue}>{fmt(day.totals?.players)}</strong>
+                  <span style={S.dailyMiniLabel}>Players</span>
+                </div>
+              </div>
+
+              <div style={S.dailyList}>
+                {shownPlayers.map((row) => {
+                  const isMe = row.player_id === myPlayerId;
+                  const rank = Number(row[rankKey] || row.rank || 0);
+                  const points = Number(row[pointsKey] || 0);
+                  return (
+                    <div
+                      key={row.player_id}
+                      style={{
+                        ...S.dailyPlayerRow,
+                        background: isMe ? '#fef3c7' : '#fdf8e7',
+                        borderColor: isMe ? '#f59e0b' : '#d4c8b0',
+                      }}
+                    >
+                      <span style={S.dailyPlayerRank}>{rank || '-'}</span>
+                      <div style={S.dailyPlayerInfo}>
+                        <span style={S.dailyPlayerName}>{compactPlayerName(row)}{isMe ? ' (you)' : ''}</span>
+                        <span style={S.dailyPlayerMeta}>
+                          {fmt(row.trophies)} trophies | {row.trades_count || 0} trades | {fmtUsd(row.volume_usd)} vol | {fmtUsd(row.pnl_usd)} PnL | {fmt(row.gold)} gold
+                        </span>
+                      </div>
+                      <span style={S.dailyPlayerPoints}>{fmtPoints(points)}</span>
+                    </div>
+                  );
+                })}
+                {players.length === 0 && <div style={S.dailyEmpty}>No players yet.</div>}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
@@ -970,15 +991,17 @@ const S = {
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   dailySub: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 1 },
-  dailyModeLive: {
+  dailyToggleLive: {
     fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
     background: '#dbeafe', border: '2px solid #60a5fa', color: '#1d4ed8',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
+    fontFamily: 'inherit',
   },
-  dailyModeDone: {
+  dailyToggleDone: {
     fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
     background: '#dcfce7', border: '2px solid #16a34a', color: '#15803d',
-    textTransform: 'uppercase', letterSpacing: 0.4,
+    textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
+    fontFamily: 'inherit',
   },
   dailyChips: {
     display: 'flex', gap: 5, overflowX: 'auto', paddingBottom: 2, scrollbarWidth: 'none',
