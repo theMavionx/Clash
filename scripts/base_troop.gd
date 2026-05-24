@@ -5,8 +5,8 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
-@export var separation_radius: float = 0.0
-@export var separation_force: float = 0.0
+@export var separation_radius: float = 0.14
+@export var separation_force: float = 0.6
 
 var level: int = 1
 var hp: int = 100
@@ -1302,6 +1302,9 @@ func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) ->
 func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: float) -> Vector3:
 	var sep = Vector3.ZERO
 	var sep_range_sq = separation_radius * separation_radius * 4.0
+	var move_len: float = move_dir.length()
+	var forward: Vector3 = move_dir / move_len if move_len > 0.0001 else Vector3.ZERO
+	var lateral: Vector3 = Vector3.UP.cross(forward).normalized() if forward.length_squared() > 0.0001 else Vector3.ZERO
 
 	# Troop-to-troop separation
 	for other in _get_troops_cached():
@@ -1328,7 +1331,16 @@ func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: f
 			if gd < separation_radius:
 				sep -= (to_guard / gd) * (separation_radius - gd) / separation_radius * 0.5
 
-	# Building avoidance — push out of non-target buildings using footprint radius
+			# Lateral steer prevents troops from trying to walk through guards.
+			if gd < separation_radius * 2.0 and lateral.length_squared() > 0.0001:
+				var guard_dir: Vector3 = to_guard / gd
+				var ahead: float = guard_dir.dot(forward)
+				if ahead > 0.15:
+					var side: float = guard_dir.dot(lateral)
+					var steer_strength: float = ahead * (1.0 - gd / (separation_radius * 2.0)) * 0.65
+					sep += (-lateral if side >= 0.0 else lateral) * steer_strength
+
+	# Building avoidance: push out of non-target buildings using footprint radius.
 	var target_node = target_building.get("node")
 	for entry in _get_buildings_cached():
 		if entry.b.get("node") == target_node:

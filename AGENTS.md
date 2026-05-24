@@ -14,6 +14,10 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 @.Codex/docs/directory-structure.md
 
+## Scene Workflow
+
+@docs/scene-workflow.md
+
 ## Technical Preferences
 
 @.Codex/docs/technical-preferences.md

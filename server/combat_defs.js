@@ -68,6 +68,28 @@ const DEFENSE_STATS = {
       fireRate: 0.25,
       projSpeed: 0,
     },
+    2: {
+      beam: true,
+      baseDamage: 6,
+      maxDamage: 26,
+      tickRate: 0.25,
+      rampTime: 3.8,
+      detectRange: 1.0,
+      damage: 6,
+      fireRate: 0.25,
+      projSpeed: 0,
+    },
+    3: {
+      beam: true,
+      baseDamage: 8,
+      maxDamage: 36,
+      tickRate: 0.22,
+      rampTime: 3.6,
+      detectRange: 1.0,
+      damage: 8,
+      fireRate: 0.22,
+      projSpeed: 0,
+    },
   },
 };
 

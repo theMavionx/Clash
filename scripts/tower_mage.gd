@@ -12,6 +12,18 @@ const LEVEL_STATS := {
 		"tick_rate": 0.25,
 		"ramp_time": 4.0,
 	},
+	2: {
+		"base_damage": 6,
+		"max_damage": 26,
+		"tick_rate": 0.25,
+		"ramp_time": 3.8,
+	},
+	3: {
+		"base_damage": 8,
+		"max_damage": 36,
+		"tick_rate": 0.22,
+		"ramp_time": 3.6,
+	},
 }
 
 @export var detect_range: float = 1.0
@@ -80,7 +92,7 @@ func _ready() -> void:
 
 
 func set_level(lvl: int) -> void:
-	level = lvl
+	level = clampi(lvl, 1, LEVEL_STATS.size())
 	_apply_stats()
 	# A new level may swap in a different FBX -> re-find its crystal node.
 	_crystal = null
@@ -90,6 +102,7 @@ func set_level(lvl: int) -> void:
 
 
 func _apply_stats() -> void:
+	level = clampi(level, 1, LEVEL_STATS.size())
 	var s: Dictionary = LEVEL_STATS.get(level, LEVEL_STATS[1])
 	base_damage = int(s.base_damage)
 	max_damage = int(s.max_damage)

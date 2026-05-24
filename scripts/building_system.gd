@@ -134,10 +134,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
-		"scenes": ["res://Model/MageTower/1.fbx"],
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700],
+		"hp_levels": [700, 1200, 2000],
 		"cost": {"gold": 2500, "ore": 4000},
 		"max_count": 2,
 		"hp_bar_height": 0.5,
@@ -1533,11 +1533,11 @@ func _apply_resources_from_server(res: Dictionary) -> void:
 
 
 func _update_resource_ui() -> void:
-	if wood_label:
+	if is_instance_valid(wood_label):
 		wood_label.text = str(resources.wood)
-	if gold_label:
+	if is_instance_valid(gold_label):
 		gold_label.text = str(resources.gold)
-	if ore_label:
+	if is_instance_valid(ore_label):
 		ore_label.text = str(resources.ore)
 	# Send to React
 	var bridge = _bridge
@@ -1549,7 +1549,10 @@ func _update_resource_ui() -> void:
 
 func _on_add_resource(res_name: String) -> void:
 	var net = _net
-	if net and net.has_token():
+	if test_mode:
+		resources[res_name] += 1000
+		_update_resource_ui()
+	elif net and net.has_token():
 		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("shop_toggled", {"open": true, "reason": "resource_topup"})
@@ -1722,6 +1725,9 @@ func _reveal_initial_cover() -> void:
 	if not create_ui or _initial_load_done:
 		return
 	_initial_load_done = true
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_base"):
+		audio.play_base()
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
 
@@ -3632,17 +3638,22 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 func _tombstone_skeleton_offset(index: int, target_count: int) -> Vector3:
 	if target_count == 4:
 		const DIAMOND_POINTS: Array[Vector3] = [
-			Vector3(0, 0,  0.18),
-			Vector3( 0.18, 0, 0),
-			Vector3(0, 0, -0.18),
-			Vector3(-0.18, 0, 0),
+			Vector3(0, 0,  0.21),
+			Vector3( 0.21, 0, 0),
+			Vector3(0, 0, -0.21),
+			Vector3(-0.21, 0, 0),
 		]
 		return DIAMOND_POINTS[index]
 	var angle := (TAU * float(index)) / maxf(float(target_count), 1.0)
-	return Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
+	var radius: float = maxf(0.18, 0.04 * float(target_count))
+	return Vector3(cos(angle) * radius, 0, sin(angle) * radius)
 
 
 func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_existing: bool = true) -> void:
+	var tomb_node: Node3D = b.get("node", null)
+	if not is_instance_valid(tomb_node):
+		b["skeletons"] = []
+		return
 	# Keep alive skeletons, remove invalid references
 	var alive: Array = []
 	for skel in b.get("skeletons", []):
@@ -3655,7 +3666,7 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 			skel.queue_free()
 	var existing_count := alive.size()
 	# Spawn missing
-	var tomb_pos = b.node.global_position
+	var tomb_pos: Vector3 = tomb_node.global_position
 	# Use preloaded cache (populated in _ready → _preload_defense_resources).
 	# Defensive lazy init if something else called us before _ready ran.
 	if _skeleton_model_res == null or _skeleton_script_res == null:

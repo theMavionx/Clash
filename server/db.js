@@ -2214,8 +2214,8 @@ const BUILDING_DEFS = {
     max_count: 4,
   },
   mage_tower: {
-    size: [3, 3], max_level: 1,
-    hp_levels: [700],
+    size: [3, 3], max_level: 3,
+    hp_levels: [700, 1200, 2000],
     cost: { gold: 2500, wood: 0, ore: 4000 },
     max_count: 2,
   },
@@ -2285,7 +2285,7 @@ const TROPHY_TABLE = {
   tombstone: [5, 10, 20, 40],
   storage:      [10, 25, 50, 90],
   archer_tower: [15, 35, 70, 125],
-  mage_tower:   [20],
+  mage_tower:   [20, 45, 90],
 };
 
 // ---------- Helper Functions ----------

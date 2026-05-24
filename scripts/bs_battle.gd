@@ -590,6 +590,9 @@ func _on_find_pressed() -> void:
 		if bridge0:
 			bridge0.send_to_react("error", {"message": "Need %d gold to attack" % attack_cost})
 		return
+	var audio = bs.get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_pre_attack"):
+		audio.play_pre_attack()
 	_find_in_progress = true
 	# Snapshot the fleet BEFORE anything is freed or destroyed
 	_saved_fleet = await bs._build_fleet()
@@ -639,6 +642,8 @@ func _on_find_pressed() -> void:
 	if result.has("error"):
 		print("Find enemy error: ", result.error)
 		_find_in_progress = false
+		if audio and audio.has_method("play_base"):
+			audio.play_base()
 		cloud.reveal()
 		await cloud.reveal_finished
 		if bridge2:
@@ -947,6 +952,9 @@ func _switch_to_enemy_island_after_sail() -> void:
 ## home buildings from the server, restores ships and troops, and cleans up
 ## all battle UI elements.
 func _return_home() -> void:
+	var audio = bs.get_node_or_null("/root/AudioManager") if bs else null
+	if audio and audio.has_method("play_base"):
+		audio.play_base()
 	if not is_viewing_enemy:
 		_cleanup_combat_runtime_nodes()
 		return
@@ -1070,6 +1078,9 @@ const REPLAY_OUTCOME_POLL_INTERVAL: float = 0.1
 func _on_town_hall_destroyed() -> void:
 	_battle_timer_active = false
 	_victory_declared = true
+	var audio = bs.get_node_or_null("/root/AudioManager") if bs else null
+	if audio and audio.has_method("play_result"):
+		audio.play_result()
 	if not _replay_active:
 		_record_battle_end("victory")
 	_stop_defensive_combat_after_town_hall_destroyed()
@@ -1238,6 +1249,9 @@ func _on_replay_town_hall_destroyed() -> void:
 		return
 	_replay_chain_destroying = true
 	_victory_declared = true
+	var audio = bs.get_node_or_null("/root/AudioManager") if bs else null
+	if audio and audio.has_method("play_result"):
+		audio.play_result()
 	record_replay_telemetry("chain_destroy_start", {"reason": "town_hall_destroyed"})
 	_stop_defensive_combat_after_town_hall_destroyed()
 	_stop_attacker_combat_after_town_hall_destroyed()
@@ -1812,6 +1826,9 @@ func check_defeat(delta: float) -> void:
 		if defeat_result is Dictionary and defeat_result.has("casualties"):
 			defeat_casualties = defeat_result.get("casualties", defeat_casualties)
 	if not is_instance_valid(bs): return
+	var audio = bs.get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_result"):
+		audio.play_result()
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
 		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": "All troops lost", "casualties": defeat_casualties})
@@ -1826,6 +1843,9 @@ func _force_defeat(reason: String) -> void:
 	_skeleton_respawn_timer = 0.0
 	_victory_declared = true  # prevent check_defeat from firing again
 	_record_battle_end("defeat")
+	var audio = bs.get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_result"):
+		audio.play_result()
 	# Casualties already reported to server via /troop-died in real-time
 	# Just send the defeat result with empty casualties (server already has the data)
 	var net_def: Node = bs._net

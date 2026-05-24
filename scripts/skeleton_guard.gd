@@ -25,8 +25,8 @@ var patrol_radius: float = 0.35
 var patrol_inner_radius: float = 0.18  ## min distance from tombstone center (outside building body)
 var move_speed: float = 0.45
 var attack_range: float = 0.15
-var separation_radius: float = 0.15
-var separation_force: float = 0.4
+var separation_radius: float = 0.18
+var separation_force: float = 0.65
 var building_push_radius: float = 0.18  ## push-away zone around any building center
 var tombstone_avoid_radius: float = 0.14  ## hard avoidance radius for own tombstone
 
@@ -40,6 +40,7 @@ var _relocate_target_pos: Vector3 = Vector3.ZERO
 var _relocate_target_yaw: float = 0.0
 
 const RELOCATE_ARRIVE_DIST: float = 0.045
+const RELOCATE_SNAP_DIST: float = 0.08
 const RELOCATE_SLOW_RADIUS: float = 0.18
 
 enum State { IDLE, PATROL, CHASE, ATTACK, VICTORY, RELOCATE }
@@ -178,20 +179,16 @@ func _do_relocate(delta: float) -> void:
 	var to_tomb: Vector3 = _relocate_target_pos - global_position
 	to_tomb.y = 0
 	var dist: float = to_tomb.length()
-	if dist <= RELOCATE_ARRIVE_DIST:
+	if dist <= RELOCATE_SNAP_DIST:
 		_finish_relocate()
 		return
 	var dir: Vector3 = to_tomb.normalized()
 	var near_finish: bool = dist <= RELOCATE_SLOW_RADIUS
-	# Do not let close-formation guards keep each other oscillating at the
-	# finish line. Once near the assigned post, clamp the final approach and
-	# snap into place instead of applying avoidance pushes.
-	if not near_finish and _is_skeleton_ahead(dir):
-		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
-			anim_player.play("Idle_A")
-		return
-	# Steer around obstacles (tombstone, buildings)
-	var avoid: Vector3 = Vector3.ZERO if near_finish else _steer_around_obstacles(dir)
+	if near_finish:
+		_last_separation = Vector3.ZERO
+	# Steer around obstacles while travelling, then take a clean direct final
+	# approach so guard-post avoidance cannot make the skeleton jitter.
+	var avoid: Vector3 = Vector3.ZERO if near_finish else _steer_around_obstacles(dir, false)
 	var final_dir: Vector3 = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
 	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
@@ -204,7 +201,7 @@ func _do_relocate(delta: float) -> void:
 		move_vec += _compute_separation(final_dir, delta)
 		move_vec += _compute_building_avoidance(delta)
 	global_position += move_vec
-	if _flat_distance(global_position, _relocate_target_pos) <= RELOCATE_ARRIVE_DIST:
+	if _flat_distance(global_position, _relocate_target_pos) <= RELOCATE_SNAP_DIST:
 		_finish_relocate()
 
 
@@ -250,13 +247,8 @@ func _do_patrol(delta: float) -> void:
 		return
 
 	var dir: Vector3 = diff.normalized()
-	# Stop if another skeleton is directly ahead
-	if _is_skeleton_ahead(dir):
-		if anim_player and anim_player.current_animation != "Idle_A" and anim_player.has_animation("Idle_A"):
-			anim_player.play("Idle_A")
-		return
-	# Steer around obstacles (tombstone, buildings)
-	var avoid: Vector3 = _steer_around_obstacles(dir)
+	# Steer around obstacles and other guards instead of stopping in a traffic jam.
+	var avoid: Vector3 = _steer_around_obstacles(dir, false)
 	var final_dir: Vector3 = (dir + avoid).normalized() if (dir + avoid).length() > 0.001 else dir
 	look_at(global_position + final_dir, Vector3.UP)
 	rotate_y(PI)
@@ -297,7 +289,7 @@ func _do_chase(delta: float) -> void:
 		var move_vec: Vector3 = dir * move_speed * delta
 		move_vec += _compute_separation(dir, delta)
 		var new_pos: Vector3 = global_position + move_vec
-		if _flat_distance(new_pos, _target_troop.global_position) > dist:
+		if _flat_distance(new_pos, _target_troop.global_position) > dist + 0.02:
 			new_pos = global_position + dir * move_speed * delta
 		global_position = new_pos
 
@@ -487,6 +479,16 @@ func _compute_separation(move_dir: Vector3, delta: float) -> Vector3:
 		if d < separation_radius and d > 0.001:
 			sep += (global_position - other.global_position).normalized() * (separation_radius - d) / separation_radius
 
+	if state == State.CHASE:
+		for other_guard in _get_guards_cached():
+			if other_guard == self or not is_instance_valid(other_guard):
+				continue
+			var to_guard: Vector3 = other_guard.global_position - global_position
+			to_guard.y = 0
+			var gd: float = to_guard.length()
+			if gd < separation_radius and gd > 0.001:
+				sep -= (to_guard / gd) * (separation_radius - gd) / separation_radius
+
 	_last_separation = sep * separation_force * delta * 3.0 + steer
 	return _last_separation
 
@@ -510,8 +512,9 @@ func _compute_building_avoidance(delta: float) -> Vector3:
 	return push * separation_force * delta * 4.0
 
 
-## Lateral steering to go around nearby obstacles (tombstone, buildings, other skeletons).
-func _steer_around_obstacles(move_dir: Vector3) -> Vector3:
+## Lateral steering to go around nearby obstacles. On base, skeleton guards are
+## non-blocking for each other; combat can opt into guard avoidance.
+func _steer_around_obstacles(move_dir: Vector3, include_guards: bool = true) -> Vector3:
 	var steer: Vector3 = Vector3.ZERO
 	var lateral: Vector3 = Vector3.UP.cross(move_dir)
 	if lateral.length() < 0.001:
@@ -543,6 +546,18 @@ func _steer_around_obstacles(move_dir: Vector3) -> Vector3:
 	# 2) Other buildings in range
 	for bpos in _get_buildings_cached():
 		steer += _steer_point.call(bpos, building_push_radius * 2.0, 1.2)
+
+	# 3) Moving units in range
+	if include_guards:
+		for guard in _get_guards_cached():
+			if guard == self or not is_instance_valid(guard):
+				continue
+			steer += _steer_point.call(guard.global_position, separation_radius * 2.2, 0.9)
+
+	for troop in BaseTroop._get_troops_cached():
+		if not is_instance_valid(troop) or troop == _target_troop:
+			continue
+		steer += _steer_point.call(troop.global_position, separation_radius * 2.0, 0.65)
 
 	return steer
 

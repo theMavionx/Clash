@@ -247,6 +247,9 @@ func enter_attack_mode(fleet: Array = []) -> void:
 	if ship_count == 0:
 		is_attack_mode = false
 		return
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_pre_attack"):
+		audio.play_pre_attack()
 	# Build fleet summary for React HUD
 	var ships_data: Array = []
 	for i in mini(_fleet.size(), max_ships):
@@ -467,6 +470,9 @@ func _try_place_ship(hit: Vector3) -> bool:
 			return false
 	if not _spawn_single_ship(hit, ship_idx):
 		return false
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_fight"):
+		audio.play_fight()
 	_fleet[ship_idx]["_placed"] = true
 	_ships_placed += 1
 	_total_ships_launched += 1

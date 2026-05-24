@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://es5eo3csr4u8"
+path="res://.godot/imported/Update Bild.mp3-ac78055c8473a22499ac6f9369d38866.mp3str"
+
+[deps]
+
+source_file="res://Musik/base/Update Bild.mp3"
+dest_files=["res://.godot/imported/Update Bild.mp3-ac78055c8473a22499ac6f9369d38866.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

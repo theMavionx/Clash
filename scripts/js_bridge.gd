@@ -16,7 +16,10 @@ var _bs_cache: Array = []  # cached building_systems group
 
 
 func _refresh_cache() -> void:
-	_bs_cache = get_tree().get_nodes_in_group("building_systems")
+	_bs_cache.clear()
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if is_instance_valid(bs):
+			_bs_cache.append(bs)
 
 
 func _ready() -> void:
@@ -63,6 +66,8 @@ func _send_perf_data() -> void:
 	var turrets: int = 0
 	var active_bullets: int = 0
 	for bs in _bs_cache:
+		if not is_instance_valid(bs):
+			continue
 		for b in bs.placed_buildings:
 			if b.get("id", "") == "turret" and is_instance_valid(b.get("node")):
 				if "_active_bullets" in b.node:
@@ -262,7 +267,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"collect_resource":
 			var sid = data.get("server_id", -1)
 			for bsys in _bs_cache:
-				bsys._collect_building_resource(sid)
+				if is_instance_valid(bsys):
+					bsys._collect_building_resource(sid)
 		"buy_ship":
 			var active = _get_active_building_system()
 			if active:
@@ -286,7 +292,8 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 		"resource_bar_positions":
 			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 			for bsys in _bs_cache:
-				bsys._react_resource_positions = data
+				if is_instance_valid(bsys):
+					bsys._react_resource_positions = data
 		"ui_overlay":
 			_set_island_paused(data.get("active", false))
 		"replay_speed":
@@ -553,7 +560,7 @@ func _do_logout() -> void:
 	cfg.save("user://auth.cfg")  # overwrites any saved token
 	# Destroy all placed buildings so next login starts from a clean scene.
 	for bsys in _bs_cache:
-		if bsys and bsys.has_method("_destroy_all_buildings"):
+		if is_instance_valid(bsys) and bsys.has_method("_destroy_all_buildings"):
 			bsys._destroy_all_buildings()
 	# Reset React-side UI
 	send_to_react("state", {
@@ -615,14 +622,20 @@ func _get_building_system() -> Node:
 		systems = _bs_cache
 	# Find the main grid (not the port grid)
 	for s in systems:
-		if s.name == "BuildingSystem":
+		if is_instance_valid(s) and s.name == "BuildingSystem":
 			return s
 	# Fallback: return first with blocked_buildings (main grid blocks port)
 	for s in systems:
-		if s.blocked_buildings.size() > 0:
+		if is_instance_valid(s) and "blocked_buildings" in s and s.blocked_buildings.size() > 0:
 			return s
 	if systems.size() > 0:
-		return systems[0]
+		for s in systems:
+			if is_instance_valid(s):
+				return s
+	_refresh_cache()
+	for s in _bs_cache:
+		if is_instance_valid(s):
+			return s
 	return null
 
 
@@ -630,7 +643,7 @@ func _get_active_building_system() -> Node:
 	# Return whichever system currently has a building selected
 	var systems = _bs_cache
 	for s in systems:
-		if s.selected_building.size() > 0:
+		if is_instance_valid(s) and "selected_building" in s and s.selected_building.size() > 0:
 			return s
 	return _get_building_system()
 

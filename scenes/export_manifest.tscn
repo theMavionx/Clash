@@ -1,4 +1,4 @@
-[gd_scene load_steps=182 format=3]
+[gd_scene load_steps=184 format=3]
 
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/4.glb" id="1"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/tower2plus_3.glb" id="2"]
@@ -73,6 +73,8 @@
 [ext_resource type="PackedScene" path="res://Model/MageTower/1.fbx" id="71"]
 [ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_albedo.png" id="72"]
 [ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_emit.png" id="73"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/2.fbx" id="182"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/3.fbx" id="183"]
 [ext_resource type="PackedScene" path="res://Model/Mine/1.glb" id="74"]
 [ext_resource type="Texture2D" path="res://Model/Mine/1_hexagons_medieval.png" id="75"]
 [ext_resource type="PackedScene" path="res://Model/Port/1.glb" id="76"]
@@ -364,5 +366,7 @@ resources = {
 "res_178": ExtResource("178"),
 "res_179": ExtResource("179"),
 "res_180": ExtResource("180"),
-"res_181": ExtResource("181")
+"res_181": ExtResource("181"),
+"res_182": ExtResource("182"),
+"res_183": ExtResource("183")
 }
