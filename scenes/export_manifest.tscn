@@ -1,6 +1,6 @@
 [gd_scene load_steps=194 format=3]
 
-[ext_resource type="PackedScene" path="res://Model/Archer_towers/4.glb" id="1"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/3,4,5.glb" id="1"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/tower2plus_3.glb" id="2"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/tower_1.glb" id="3"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/towerplus_2.fbx" id="4"]

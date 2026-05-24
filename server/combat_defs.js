@@ -55,6 +55,7 @@ const DEFENSE_STATS = {
     2: { damage: 38, fireRate: 0.85, detectRange: 1.1, projSpeed: 2.5 },
     3: { damage: 50, fireRate: 0.7,  detectRange: 1.2, projSpeed: 2.5 },
     4: { damage: 65, fireRate: 0.6,  detectRange: 1.3, projSpeed: 2.5 },
+    5: { damage: 82, fireRate: 0.52, detectRange: 1.4, projSpeed: 2.5 },
   },
   mage_tower: {
     1: {

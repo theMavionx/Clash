@@ -115,11 +115,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb", "res://Model/Archer_towers/4.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500, 3800],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800, 5600],
 		"cost": {"gold": 400, "wood": 1500},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -188,6 +188,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	2: 2,
 	3: 3,
 	4: 20,
+	5: 35,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -1085,6 +1086,46 @@ func _apply_building_albedo(model: Node, def: Dictionary) -> void:
 	_assign_albedo_recursive(model, mat)
 
 
+func _apply_archer_tower_level_visuals(model: Node, level: int) -> void:
+	if model == null:
+		return
+	var show_mannequin: bool = level >= 5
+	var show_target: bool = level >= 4
+	_set_archer_tower_extra_visible(model, show_mannequin, ["RootNode", "Dummy.002"], ["Leather"])
+	_set_archer_tower_extra_visible(model, show_target, ["RootNode.001", "Cylinder.003"], ["White", "Celing"])
+
+
+func _set_archer_tower_extra_visible(root: Node, is_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
+	if root == null:
+		return
+	if root is Node3D:
+		var node_3d := root as Node3D
+		if node_names.has(str(root.name)) or _mesh_uses_material_marker(root, material_markers):
+			node_3d.visible = is_visible
+	for child in root.get_children():
+		_set_archer_tower_extra_visible(child, is_visible, node_names, material_markers)
+
+
+func _mesh_uses_material_marker(node: Node, markers: Array[String]) -> bool:
+	if markers.is_empty() or not (node is MeshInstance3D):
+		return false
+	var mesh_inst := node as MeshInstance3D
+	var mesh: Mesh = mesh_inst.mesh
+	if mesh == null:
+		return false
+	for surface_idx in mesh.get_surface_count():
+		var mat: Material = mesh_inst.get_surface_override_material(surface_idx)
+		if mat == null:
+			mat = mesh.surface_get_material(surface_idx)
+		if mat == null:
+			continue
+		var mat_name := str(mat.resource_name)
+		for marker in markers:
+			if mat_name.findn(marker) != -1:
+				return true
+	return false
+
+
 func _assign_albedo_recursive(node: Node, mat: Material) -> void:
 	if node is MeshInstance3D:
 		var mi: MeshInstance3D = node as MeshInstance3D
@@ -1847,6 +1888,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
+				if building_type == "archer_tower":
+					_apply_archer_tower_level_visuals(model, level)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -2437,6 +2480,8 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
+			if current_building_id == "archer_tower":
+				_apply_archer_tower_level_visuals(model, 1)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -3192,6 +3237,8 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			_apply_building_albedo(new_model, def)
+			if b.id == "archer_tower":
+				_apply_archer_tower_level_visuals(new_model, b.level)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar

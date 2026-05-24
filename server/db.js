@@ -2208,8 +2208,8 @@ const BUILDING_DEFS = {
     max_count: 3,
   },
   archer_tower: {
-    size: [3, 3], max_level: 4,
-    hp_levels: [800, 1500, 2500, 3800],
+    size: [3, 3], max_level: 5,
+    hp_levels: [800, 1500, 2500, 3800, 5600],
     cost: { gold: 400, wood: 1500, ore: 0 },
     max_count: 4,
   },
@@ -2225,6 +2225,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS = {
   2: 2,
   3: 3,
   4: 20,
+  5: 35,
 };
 
 function getBuildingUpgradeCost(type, currentLevel) {
@@ -2284,7 +2285,7 @@ const TROPHY_TABLE = {
   turret:    [20, 45, 90, 160],
   tombstone: [5, 10, 20, 40],
   storage:      [10, 25, 50, 90],
-  archer_tower: [15, 35, 70, 125],
+  archer_tower: [15, 35, 70, 125, 200],
   mage_tower:   [20, 45, 90],
 };
 
