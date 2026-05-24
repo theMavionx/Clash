@@ -33,6 +33,10 @@ function fmtUsd(n) {
   return '$' + formatNumber(v, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function fmtUsdWhole(n) {
+  return '$' + formatNumber(Math.round(Number(n) || 0), { maximumFractionDigits: 0 });
+}
+
 function fmtPrize(amount) {
   const v = Number(amount) || 0;
   const rounded = Number(v.toFixed(2));
@@ -50,8 +54,7 @@ function fmtTeamMetric(metric, value) {
 
 function fmtPoints(n) {
   const v = Number(n) || 0;
-  const digits = Math.abs(v) >= 100 ? 1 : 2;
-  return formatNumber(v, { maximumFractionDigits: digits });
+  return formatNumber(Math.round(v), { maximumFractionDigits: 0 });
 }
 
 function fmtDate(s) {
@@ -498,12 +501,11 @@ function TournamentPanel({ onClose }) {
                   </div>
                   <div style={S.statRow}>
                     {isPointsSort(t.sort_by) && (
-                      <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
+                      <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
-                    <Stat label="Gold" value={fmt(myStats.gold)} />
                     <Stat label="Trades" value={myStats.trades_count} />
-                    <Stat label="Volume" value={fmtUsd(myStats.volume_usd)} />
+                    <Stat label="Volume" value={fmtUsdWhole(myStats.volume_usd)} />
                     <Stat
                       label="PnL"
                       value={fmtUsd(myStats.pnl_usd)}
@@ -540,12 +542,11 @@ function TournamentPanel({ onClose }) {
                   </div>
                   <div style={S.statRow}>
                     {isPointsSort(t.sort_by) && (
-                      <Stat label="Score" value={`${Number(myStats.score || 0).toFixed(1)} pts`} />
+                      <Stat label="Score" value={`${fmtPoints(myStats.score)} pts`} />
                     )}
                     <Stat label="Trophies" value={fmt(myStats.trophies)} />
-                    <Stat label="Gold" value={fmt(myStats.gold)} />
                     <Stat label="Trades" value={myStats.trades_count} />
-                    <Stat label="Volume" value={fmtUsd(myStats.volume_usd)} />
+                    <Stat label="Volume" value={fmtUsdWhole(myStats.volume_usd)} />
                     <Stat
                       label="PnL"
                       value={fmtUsd(myStats.pnl_usd)}
@@ -664,9 +665,15 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
   return (
     <div style={S.dailyCard}>
       <div style={S.dailyHeader}>
-        <div>
-          <div style={S.dailyTitle}>Daily points</div>
-          <div style={S.dailySub}>{fmt(pool)} pool at 00:00 UTC</div>
+        <div style={S.dailyHeaderMain}>
+          <div>
+            <div style={S.dailyTitle}>Daily points</div>
+            <div style={S.dailySub}>{fmt(pool)} pool at 00:00 UTC</div>
+          </div>
+          <div style={S.dailyCompactMine}>
+            <span style={S.dailyCompactLabel}>You</span>
+            <strong style={S.dailyCompactValue}>{fmtPoints(minePoints)} pts</strong>
+          </div>
         </div>
         <button
           type="button"
@@ -674,7 +681,15 @@ function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPla
           onClick={onToggle}
           aria-expanded={!!expanded}
         >
-          {expanded ? 'Hide' : (processed ? 'Awarded' : 'Estimate')}
+          <span>{expanded ? 'Hide' : (processed ? 'Awarded' : 'Estimate')}</span>
+          <span
+            aria-hidden="true"
+            style={{
+              ...S.dailyCaret,
+              transform: expanded ? 'rotate(225deg)' : 'rotate(45deg)',
+              marginTop: expanded ? 2 : -2,
+            }}
+          />
         </button>
       </div>
 
@@ -986,22 +1001,41 @@ const S = {
   dailyHeader: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
   },
+  dailyHeaderMain: {
+    minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 auto',
+  },
   dailyTitle: {
     fontSize: 13, fontWeight: 900, color: '#5C3A21',
     textTransform: 'uppercase', letterSpacing: 0.5,
   },
   dailySub: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 1 },
+  dailyCompactMine: {
+    display: 'flex', alignItems: 'baseline', gap: 4, minWidth: 0,
+    padding: '4px 7px', borderRadius: 8,
+    background: 'rgba(255, 248, 231, 0.72)', border: '1px solid rgba(124, 90, 58, 0.18)',
+    whiteSpace: 'nowrap',
+  },
+  dailyCompactLabel: {
+    fontSize: 9, fontWeight: 900, color: '#7c5a3a', textTransform: 'uppercase',
+  },
+  dailyCompactValue: {
+    fontSize: 12, fontWeight: 900, color: '#047857',
+  },
   dailyToggleLive: {
     fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
     background: '#dbeafe', border: '2px solid #60a5fa', color: '#1d4ed8',
     textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
-    fontFamily: 'inherit',
+    fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5,
   },
   dailyToggleDone: {
     fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
     background: '#dcfce7', border: '2px solid #16a34a', color: '#15803d',
     textTransform: 'uppercase', letterSpacing: 0.4, cursor: 'pointer',
-    fontFamily: 'inherit',
+    fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5,
+  },
+  dailyCaret: {
+    width: 6, height: 6, borderRight: '2px solid currentColor', borderBottom: '2px solid currentColor',
+    flex: '0 0 auto',
   },
   dailyChips: {
     display: 'flex', gap: 5, overflowX: 'auto', paddingBottom: 2, scrollbarWidth: 'none',
