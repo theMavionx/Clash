@@ -506,26 +506,64 @@ function solanaAssetLevel(asset) {
   return [1, 2, 3].includes(level) ? level : 1;
 }
 
-async function isSolanaToken2022Account(assetPubkey) {
+function bridgeBadRequest(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+function normalizeSolanaPubkey(value, label) {
   try {
     const { PublicKey } = require('@solana/web3.js');
-    const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
-    for (const conn of solanaConnections()) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const account = await conn.getAccountInfo(new PublicKey(assetPubkey), 'confirmed');
-        if (account) return !!account.owner?.equals?.(TOKEN_2022_PROGRAM_ID);
-      } catch {}
-    }
+    return new PublicKey(String(value || '').trim()).toBase58();
   } catch {
-    // fall through
+    throw bridgeBadRequest(`${label || 'Solana public key'} is malformed`);
   }
-  return false;
+}
+
+async function solanaAccountDescriptor(assetPubkey) {
+  const { PublicKey } = require('@solana/web3.js');
+  const pubkey = new PublicKey(assetPubkey);
+  const connections = solanaConnections();
+  if (connections.length === 0) {
+    const err = new Error('Solana RPC endpoint is not configured');
+    err.status = 503;
+    throw err;
+  }
+  let lastError = null;
+  let receivedResponse = false;
+  for (const conn of connections) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const account = await conn.getParsedAccountInfo(pubkey, 'confirmed');
+      receivedResponse = true;
+      const value = account?.value;
+      if (!value) continue;
+      const parsed = value.data?.parsed || null;
+      return {
+        exists: true,
+        owner: value.owner?.toBase58?.() || String(value.owner || ''),
+        parsedType: parsed?.type || null,
+        parsedInfo: parsed?.info || null,
+      };
+    } catch (err) {
+      lastError = err;
+      // try next RPC
+    }
+  }
+  if (!receivedResponse && lastError) {
+    const err = new Error(`Solana account read failed: ${lastError.message || lastError}`);
+    err.status = 502;
+    throw err;
+  }
+  return { exists: false, owner: '', parsedType: null, parsedInfo: null };
 }
 
 async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
   const dep = deploymentOf('solana');
   if (!dep?.collection) throw new Error('Solana collection not configured');
+  const sourceAsset = normalizeSolanaPubkey(assetPubkey, 'Solana source asset');
+  const sourceOwner = expectedOwner ? normalizeSolanaPubkey(expectedOwner, 'Solana source owner') : '';
   try {
     const { getToken2022NftInfo } = require('./solana_token2022_nft');
     let token2022Err = null;
@@ -533,8 +571,8 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
       try {
         // eslint-disable-next-line no-await-in-loop
         return await getToken2022NftInfo({
-          mint: assetPubkey,
-          expectedOwner,
+          mint: sourceAsset,
+          expectedOwner: sourceOwner,
           connection,
           collectionPubkey: dep.collection,
         });
@@ -545,35 +583,56 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
     throw token2022Err || new Error('Token-2022 read failed');
   } catch (err) {
     const msg = String(err?.message || err);
-    if (await isSolanaToken2022Account(assetPubkey)) {
-      err.status = err.status || 400;
-      throw err;
+    const account = await solanaAccountDescriptor(sourceAsset);
+    if (!account.exists) {
+      const migrated = solanaMigratedCoreAsset(sourceAsset);
+      if (migrated) {
+        const replacement = migrated.newMint || migrated.mint || migrated.assetAddress || 'the migrated Token-2022 mint';
+        throw bridgeBadRequest(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
+      }
+      throw bridgeBadRequest('Solana source asset was not found. Use the current Demon King mint/asset address from the NFT picker.');
+    }
+    const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+    if (account.owner === TOKEN_2022_PROGRAM_ID.toBase58()) {
+      const isTokenAccount = String(account.parsedType || '').toLowerCase() === 'account';
+      const hint = isTokenAccount && account.parsedInfo?.mint
+        ? ` Use mint ${account.parsedInfo.mint} instead of the token account.`
+        : '';
+      throw bridgeBadRequest(`${msg}.${hint}`.slice(0, 240));
+    }
+    if (account.owner && account.owner !== SOLANA_MPL_CORE_PROGRAM) {
+      throw bridgeBadRequest('Solana source address is not a Demon King NFT asset. Use the NFT mint/asset address, not a wallet, token account, or transaction signature.');
     }
     if (!/Token-2022|token|mint|owner|1-of-1|Demon King/i.test(msg)) throw err;
   }
-  const migrated = solanaMigratedCoreAsset(assetPubkey);
+  const migrated = solanaMigratedCoreAsset(sourceAsset);
   if (migrated) {
     const replacement = migrated.newMint || migrated.mint || migrated.assetAddress || 'the migrated Token-2022 mint';
-    throw new Error(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
+    throw bridgeBadRequest(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
   }
   const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
   const { mplCore, fetchAsset } = await import('@metaplex-foundation/mpl-core');
   const { publicKey } = await import('@metaplex-foundation/umi');
-  const asset = await withSolanaRpcFallback(async (rpc) => {
-    const umi = createUmi(rpc).use(mplCore());
-    return fetchAsset(umi, publicKey(assetPubkey));
-  }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls()), label: 'Solana bridge source asset read' });
+  let asset;
+  try {
+    asset = await withSolanaRpcFallback(async (rpc) => {
+      const umi = createUmi(rpc).use(mplCore());
+      return fetchAsset(umi, publicKey(sourceAsset));
+    }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls()), label: 'Solana bridge source asset read' });
+  } catch {
+    throw bridgeBadRequest('Solana source asset is not a Demon King NFT or was not found. Use the current mint/asset address from the NFT picker.');
+  }
   const owner = solanaAssetOwner(asset);
   const collection = solanaAssetCollection(asset);
   if (String(collection) !== String(dep.collection)) {
-    throw new Error('Solana asset is not in the Demon King collection');
+    throw bridgeBadRequest('Solana asset is not in the Demon King collection');
   }
-  if (expectedOwner && String(owner) !== String(expectedOwner)) {
-    throw new Error('Solana source wallet is not the asset owner');
+  if (sourceOwner && String(owner) !== String(sourceOwner)) {
+    throw bridgeBadRequest('Solana source wallet is not the asset owner');
   }
   return {
     standard: 'mpl-core',
-    asset: assetPubkey,
+    asset: sourceAsset,
     owner,
     collection,
     level: solanaAssetLevel(asset),

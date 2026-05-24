@@ -7401,6 +7401,56 @@ function volumeGoldForDex(dex, usdVolume) {
   return Math.floor(volume * rate);
 }
 
+function decibelTradeMs(row) {
+  const ms = Date.parse(`${String(row?.created_at || '').replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function decibelTradesProbablyDuplicate(a, b) {
+  if (!a || !b) return false;
+  if (String(a.symbol || '').toUpperCase() !== String(b.symbol || '').toUpperCase()) return false;
+  if (String(a.side || '').toLowerCase() !== String(b.side || '').toLowerCase()) return false;
+  const av = Number(a.notional_usd);
+  const bv = Number(b.notional_usd);
+  if (!Number.isFinite(av) || !Number.isFinite(bv) || av <= 0 || bv <= 0) return false;
+  const drift = Math.abs(av - bv) / Math.max(av, bv, 1);
+  if (drift > 0.35) return false;
+  const ams = decibelTradeMs(a);
+  const bms = decibelTradeMs(b);
+  return ams > 0 && bms > 0 && Math.abs(ams - bms) <= 5 * 60 * 1000;
+}
+
+function isDecibelLimitFillRewardRow(row) {
+  return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
+}
+
+function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
+  if (!rows?.length) return rows || [];
+  const maxId = rows.reduce((m, row) => Math.max(m, Number(row.id) || 0), Number(lastTradeId || 0));
+  const context = fdb.prepare(`
+    SELECT id, symbol, side, notional_usd, verified_source, client_order_id, created_at
+    FROM trade_history
+    WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
+      AND verified_source IN ('server', 'worker')
+      AND id <= ? AND id >= ?
+    ORDER BY id ASC
+  `).all(playerId, maxId, Math.max(0, Number(lastTradeId || 0) - 250));
+  return rows.map((row) => {
+    if (row.verified_source !== 'worker') return row;
+    const rowIsLimitFill = isDecibelLimitFillRewardRow(row);
+    const duplicate = context.some((candidate) => {
+      if (Number(candidate.id) >= Number(row.id)) return false;
+      if (candidate.verified_source === 'server') {
+        return decibelTradesProbablyDuplicate(candidate, row);
+      }
+      const candidateIsLimitFill = isDecibelLimitFillRewardRow(candidate);
+      if (candidateIsLimitFill && rowIsLimitFill) return false;
+      return decibelTradesProbablyDuplicate(candidate, row);
+    });
+    return duplicate ? { ...row, reward_duplicate: 1 } : row;
+  });
+}
+
 const NFT_GOLD_BOOST_CONTRACT_RAW =
   process.env.NFT_GOLD_BOOST_CONTRACT || '0x145B4eA581924882e854F34630a2544b4c2Fe4bD';
 const NFT_GOLD_BOOST_BONUS_PERCENT = 20;
@@ -8235,13 +8285,13 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let newTrades = [];
     let hyperliquidWalletRowsAvailable = 0;
     try {
-      // Avantis/GMX stay worker-only. Decibel uses server rows as the
-      // instant source of truth: they are inserted only after our server-side
-      // signer waits for Aptos transaction success. The Decibel worker polls
-      // positions and can miss fast open+close cycles, and including both
-      // sources would double-count when the worker later writes a duplicate.
+      // Avantis/GMX stay worker-only. Decibel uses server rows for immediate
+      // market/close claims and worker rows for later limit-order fills. The
+      // worker can also see the same market position a few seconds after the
+      // server row, so duplicate worker rows are filtered below while still
+      // advancing the cursor.
       const sourceWhere = dex === 'decibel'
-        ? "AND verified_source = 'server'"
+        ? "AND verified_source IN ('server', 'worker')"
         : dex === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dex === 'hyperliquid'
@@ -8266,7 +8316,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             AND id > ?
         `).get(hyperliquidWalletPrefix, reward.last_trade_id || 0)?.n || 0;
         newTrades = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
           FROM trade_history
           WHERE dex = ? AND status = 'filled'
             ${sourceWhere} AND id > ?
@@ -8278,7 +8328,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         `).all(dex, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix);
       } else {
         newTrades = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
           FROM trade_history
           WHERE player_id = ? AND dex = ? AND status = 'filled'
             ${sourceWhere} AND id > ?
@@ -8289,12 +8339,19 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
+    if (dex === 'decibel' && newTrades.length) {
+      try {
+        newTrades = markDuplicateDecibelWorkerTrades(fdb, req.player.id, reward.last_trade_id || 0, newTrades);
+      } catch (e) {
+        console.warn('[claim-gold decibel] duplicate worker filter failed:', e.message);
+      }
+    }
 
     let decibelPnlRows = [];
     if (dex === 'decibel') {
       try {
         decibelPnlRows = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at
+          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
           FROM trade_history
           WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
             AND verified_source = 'worker'
@@ -8373,6 +8430,10 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // 'long' / 'short' for opens and 'close_long' / 'close_short' for closes.
     let creditedOpens = 0;
     for (const t of newTrades) {
+      if (t.reward_duplicate) {
+        if (t.id > maxId) maxId = t.id;
+        continue;
+      }
       const raw = Number(t.notional_usd);
       if (!Number.isFinite(raw) || raw < SANE_MIN_NOTIONAL || raw > SANE_MAX_NOTIONAL) {
         if (t.id > maxId) maxId = t.id; // still advance cursor to skip it

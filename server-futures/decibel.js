@@ -782,7 +782,11 @@ async function fetchDecibelRows(path, query = {}) {
         throw lastError;
       }
       const j = await r.json();
-      return Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : []);
+      if (Array.isArray(j)) return j;
+      if (Array.isArray(j?.data)) return j.data;
+      if (Array.isArray(j?.items)) return j.items;
+      if (Array.isArray(j?.data?.items)) return j.data.items;
+      return [];
     } catch (err) {
       lastError = err;
       if (err?.noRetry) throw err;
@@ -989,6 +993,7 @@ async function fetchOrderHistory(subaccountAddr, options = {}) {
       account: subaccountAddr,
       limit: options.limit,
       offset: options.offset,
+      sort_dir: options.sortDir || options.sort_dir,
     });
   } catch {
     return [];
@@ -1002,6 +1007,7 @@ async function fetchTradeHistory(subaccountAddr, options = {}) {
       account: subaccountAddr,
       limit: options.limit,
       offset: options.offset,
+      sort_dir: options.sortDir || options.sort_dir,
     });
   } catch {
     return [];

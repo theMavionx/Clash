@@ -49,6 +49,152 @@ async function resolveSubaccount(ownerAddr) {
   return sub;
 }
 
+function fieldString(row, keys) {
+  for (const key of keys) {
+    const v = row?.[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (typeof v === 'object') {
+      if (Array.isArray(v.vec) && v.vec.length) return String(v.vec[0]);
+      if (v.value !== undefined && v.value !== null) return String(v.value);
+      if (v.inner !== undefined && v.inner !== null) return String(v.inner);
+      continue;
+    }
+    return String(v);
+  }
+  return '';
+}
+
+function orderKeys(row) {
+  const keys = new Set();
+  const orderId = fieldString(row, ['order_id', 'orderId', 'orderID']);
+  const clientOrderId = fieldString(row, ['client_order_id', 'clientOrderId', 'clientOrderID']);
+  if (orderId) keys.add(`order:${orderId.toLowerCase()}`);
+  if (clientOrderId) keys.add(`client:${clientOrderId.toLowerCase()}`);
+  return keys;
+}
+
+function isFilledLimitOrder(row) {
+  const status = fieldString(row, ['status', 'order_status', 'orderStatus', 'state']).toLowerCase();
+  if (status && !status.includes('fill')) return false;
+  const type = fieldString(row, ['order_type', 'orderType', 'type']).toLowerCase();
+  if (type.includes('market') || type.includes('ioc')) return false;
+  if (type.includes('limit')) return true;
+  const tif = fieldString(row, ['time_in_force', 'timeInForce', 'tif']).toLowerCase();
+  return tif.includes('good') || tif.includes('gtc');
+}
+
+function marketAddress(row) {
+  const raw = fieldString(row, ['market', 'market_addr', 'marketAddr', 'market_address']);
+  const normalized = decibel.normalizeAptosAddress(raw);
+  return normalized && normalized.startsWith('0x') ? normalized : '';
+}
+
+async function marketsByAddress() {
+  const markets = await decibel.fetchMarkets();
+  const byAddr = new Map();
+  for (const market of markets) {
+    const addr = marketAddress(market);
+    if (addr) byAddr.set(addr.toLowerCase(), market);
+  }
+  return byAddr;
+}
+
+function symbolFromFill(row, marketMap) {
+  const direct = fieldString(row, ['marketName', 'market_name', 'symbol']);
+  if (direct) return (direct.split(/[-/]/)[0] || direct).toUpperCase();
+  const market = marketMap?.get(marketAddress(row).toLowerCase());
+  if (market) return decibel.symbolFromMarket({ marketName: market.market_name, symbol: market.symbol });
+  return decibel.symbolFromMarket(row);
+}
+
+function sideFromFill(row) {
+  const action = fieldString(row, ['action', 'trade_action', 'order_action']).toLowerCase();
+  if (action.includes('closeshort') || (action.includes('close') && action.includes('short'))) return 'close_short';
+  if (action.includes('closelong') || (action.includes('close') && action.includes('long'))) return 'close_long';
+  if (action.includes('openshort') || (action.includes('open') && action.includes('short'))) return 'short';
+  if (action.includes('openlong') || (action.includes('open') && action.includes('long'))) return 'long';
+
+  const side = fieldString(row, ['side', 'order_side', 'direction', 'order_direction']).toLowerCase();
+  if (side.includes('short') || side.includes('sell') || side.includes('ask')) return 'short';
+  if (side.includes('long') || side.includes('buy') || side.includes('bid')) return 'long';
+  return Number(row?.size ?? 0) < 0 ? 'short' : 'long';
+}
+
+function fillPnl(row) {
+  const raw = Number(row?.realized_pnl_amount ?? row?.realized_pnl ?? row?.realised_pnl ?? row?.pnl);
+  return Number.isFinite(raw) ? raw : 0;
+}
+
+function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
+  const groups = new Map();
+  for (const fill of Array.isArray(trades) ? trades : []) {
+    const keys = orderKeys(fill);
+    const matchingKey = Array.from(keys).find(k => limitOrderKeySet.has(k));
+    if (!matchingKey) continue;
+
+    const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
+    const sizeAbs = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
+    const notional = Number.isFinite(price) && Number.isFinite(sizeAbs) ? price * sizeAbs : 0;
+    if (!Number.isFinite(notional) || notional < MIN_NOTIONAL_USD) continue;
+
+    const side = sideFromFill(fill);
+    const key = `${matchingKey}:${side}`;
+    const current = groups.get(key) || {
+      key,
+      symbol: symbolFromFill(fill, marketMap),
+      side,
+      orderId: fieldString(fill, ['order_id', 'orderId', 'orderID']) || matchingKey,
+      clientOrderId: `decibel:limit-fill:${matchingKey}:${side}`,
+      sizeAbs: 0,
+      notional: 0,
+      weightedPrice: 0,
+      pnl: 0,
+    };
+    current.sizeAbs += sizeAbs;
+    current.notional += notional;
+    current.weightedPrice += price * sizeAbs;
+    current.pnl += fillPnl(fill);
+    groups.set(key, current);
+  }
+  return Array.from(groups.values()).filter(g => g.notional >= MIN_NOTIONAL_USD);
+}
+
+async function recordRecentLimitFills(playerId, subAddr) {
+  const [orders, trades, marketMap] = await Promise.all([
+    decibel.fetchOrderHistory(subAddr, { limit: 100, sortDir: 'DESC' }),
+    decibel.fetchTradeHistory(subAddr, { limit: 100, sortDir: 'DESC' }),
+    marketsByAddress(),
+  ]);
+  const limitOrderKeySet = new Set();
+  for (const order of orders) {
+    if (!isFilledLimitOrder(order)) continue;
+    for (const key of orderKeys(order)) limitOrderKeySet.add(key);
+  }
+  if (!limitOrderKeySet.size) return 0;
+
+  let inserted = 0;
+  for (const fill of aggregateLimitFills(trades, limitOrderKeySet, marketMap)) {
+    const avgPrice = fill.sizeAbs > 0 ? fill.weightedPrice / fill.sizeAbs : 0;
+    const isClose = String(fill.side || '').startsWith('close_');
+    const r = db.addTrade(playerId, {
+      symbol: fill.symbol,
+      side: fill.side,
+      orderType: isClose ? 'close' : 'limit',
+      amount: String(fill.sizeAbs),
+      price: Number.isFinite(avgPrice) && avgPrice > 0 ? String(avgPrice) : null,
+      orderId: fill.orderId,
+      clientOrderId: fill.clientOrderId,
+      status: 'filled',
+      dex: 'decibel',
+      notional_usd: fill.notional,
+      verifiedSource: 'worker',
+      pnl: isClose && Number.isFinite(fill.pnl) ? fill.pnl : null,
+    });
+    inserted += r.changes || 0;
+  }
+  return inserted;
+}
+
 async function pollOnce(mainDb) {
   const rows = mainDb.prepare(
     `SELECT id, wallet FROM players WHERE dex='decibel' AND wallet IS NOT NULL AND wallet != ''`
@@ -69,6 +215,11 @@ async function pollOnce(mainDb) {
     // skip cleanly until they have one.
     const subAddr = await resolveSubaccount(addr);
     if (!subAddr) continue;
+    try {
+      creditsQueued += await recordRecentLimitFills(row.id, subAddr);
+    } catch (e) {
+      console.warn(`[decibel-rewards-worker] limit fill history failed for ${addr.slice(0, 10)}:`, e.message);
+    }
     const positions = await decibel.fetchAccountPositions(subAddr);
     const currentKeys = new Set(positions.map(decibel.tradeKey));
     const richPrev = seenOpenTrades.get(addr) instanceof Map

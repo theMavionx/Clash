@@ -1649,6 +1649,7 @@ function mountNftV3Endpoints(router, ctx) {
 
   const bridgeHelpers = require('./bridge_helpers');
   const { CHAIN_IDS, EVM_CHAINS, ALL_CHAINS, deploymentOf,
+          normalizeAptosAddress,
           aptosAccount, signAptosBridgeReceipt, verifyAptosBurnTx,
           verifySolanaBurnTx, buildSourceRef,
           getSolanaBridgeAssetInfo, buildSolanaBridgeMemo,
@@ -1717,21 +1718,25 @@ function mountNftV3Endpoints(router, ctx) {
     monad:    { chainId: 143,   name: 'DemonKingMonad'    },
   };
 
-  // Lightweight per-chain destAddress validators. Aligns the lax `length<4`
-  // checks at the API boundary with the actual on-chain shape.
-  function validateDestAddressForChain(chainKey, addr) {
-    const s = String(addr || '');
+  // Lightweight per-chain destAddress normalizer. Aligns the API boundary
+  // with the actual on-chain shape and keeps bridge memo/receipt data stable.
+  function normalizeDestAddressForChain(chainKey, addr) {
+    const s = String(addr || '').trim();
     if (chainKey === 'base' || chainKey === 'arbitrum' || chainKey === 'monad') {
-      return /^0x[0-9a-fA-F]{40}$/.test(s);
+      return /^0x[0-9a-fA-F]{40}$/.test(s) ? s : null;
     }
     if (chainKey === 'aptos') {
-      // Aptos uses 1..64 hex chars after 0x; the receipt signer left-pads to 32 bytes.
-      return /^0x[0-9a-fA-F]{1,64}$/.test(s);
+      return normalizeAptosAddress(s);
     }
     if (chainKey === 'solana') {
-      return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s);
+      try {
+        const { PublicKey } = require('@solana/web3.js');
+        return new PublicKey(s).toBase58();
+      } catch {
+        return null;
+      }
     }
-    return false;
+    return null;
   }
 
   // res.json crashes on BigInt — recursively stringify any BigInt fields in
@@ -1974,14 +1979,14 @@ function mountNftV3Endpoints(router, ctx) {
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const tokenIdRaw  = req.body?.sourceTokenId;
-      const destAddress = String(req.body?.destAddress || '');
+      const destAddress = normalizeDestAddressForChain(destChain, req.body?.destAddress);
       const sourceOwner = String(req.body?.sourceOwner || '');
 
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
       if (!ALL_CHAINS.includes(destChain)) return res.status(400).json({ error: 'Unsupported destChain. Use base|arbitrum|monad|aptos|solana.' });
       if (!ALL_CHAINS.includes(sourceChain)) return res.status(400).json({ error: 'Unsupported sourceChain. Use base|arbitrum|monad|aptos|solana.' });
       const destSpec = EVM_DEST_DOMAIN[destChain];  // null for non-EVM
-      if (!validateDestAddressForChain(destChain, destAddress)) {
+      if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
 
@@ -2100,13 +2105,13 @@ function mountNftV3Endpoints(router, ctx) {
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const burnTxHash  = String(req.body?.burnTxHash  || '');
-      const destAddress = String(req.body?.destAddress || '');
+      const destAddress = normalizeDestAddressForChain(destChain, req.body?.destAddress);
 
       if (!ALL_CHAINS.includes(sourceChain) || !ALL_CHAINS.includes(destChain)) {
         return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad|aptos|solana.' });
       }
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
-      if (!validateDestAddressForChain(destChain, destAddress)) {
+      if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
       if (!burnTxHash) return res.status(400).json({ error: 'burnTxHash required' });
@@ -2484,13 +2489,13 @@ function mountNftV3Endpoints(router, ctx) {
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const burnTxHash  = String(req.body?.burnTxHash  || '');
-      const destAddress = String(req.body?.destAddress || '');
+      const destAddress = normalizeDestAddressForChain(destChain, req.body?.destAddress);
 
       if (!ALL_CHAINS.includes(sourceChain) || !ALL_CHAINS.includes(destChain)) {
         return res.status(400).json({ error: 'Unsupported chain' });
       }
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
-      if (!validateDestAddressForChain(destChain, destAddress)) {
+      if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
       if (!burnTxHash) return res.status(400).json({ error: 'burnTxHash required' });
