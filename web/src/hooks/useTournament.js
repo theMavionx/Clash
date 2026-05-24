@@ -138,6 +138,56 @@ export function useTournamentLeaderboard(tournamentId, { active = false, pollMs 
   return { board, loading, refresh };
 }
 
+export function useTournamentDailyPoints(tournamentId, { active = false, pollMs = 30000, limit = 7 } = {}) {
+  const player = usePlayer();
+  const token = player?.token;
+  const [daily, setDaily] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const idRef = useRef(tournamentId);
+  const tokenRef = useRef(token);
+  idRef.current = tournamentId;
+  tokenRef.current = token;
+
+  const refresh = useCallback(async () => {
+    if (!tournamentId) return;
+    setLoading(true);
+    const fetchId = tournamentId;
+    const fetchToken = token;
+    try {
+      const res = await fetch(`/api/tournaments/${fetchId}/daily-points?limit=${Math.max(1, Math.min(60, Number(limit) || 7))}`, {
+        headers: fetchToken ? { 'x-token': fetchToken } : {},
+      });
+      if (!res.ok) throw new Error('failed');
+      const data = await res.json();
+      if (idRef.current !== fetchId || tokenRef.current !== fetchToken) return;
+      setDaily(data);
+    } catch {
+      /* keep last-known daily stats on transient failure */
+    } finally {
+      setLoading(false);
+    }
+  }, [tournamentId, token, limit]);
+
+  useEffect(() => {
+    if (!active || !tournamentId) return;
+    refresh();
+    const id = setInterval(refresh, pollMs);
+    return () => clearInterval(id);
+  }, [active, tournamentId, pollMs, refresh]);
+
+  useEffect(() => {
+    setDaily(null);
+  }, [tournamentId]);
+
+  useEffect(() => {
+    if (!active || tournamentId) return;
+    setDaily(null);
+    setLoading(false);
+  }, [active, tournamentId]);
+
+  return { daily, loading, refresh };
+}
+
 // Past tournaments for the current player's DEX (status='ended' or end_at
 // < now). Used by the "History" tab in TournamentPanel so a finished
 // tournament's leaderboard doesn't disappear the moment it ends. Returned

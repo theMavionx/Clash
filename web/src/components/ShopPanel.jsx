@@ -194,6 +194,17 @@ function ShopPanel({ onClose }) {
       <style>{animCSS}</style>
       <div style={styles.overlay} onClick={onClose}>
         <div style={styles.container} onClick={stopPropagation}>
+        <button
+          style={{
+            ...styles.closeBtn,
+            top: isMobile ? 48 : 58,
+            right: isMobile ? 10 : 18,
+          }}
+          onClick={onClose}
+          aria-label="Close shop"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
         <div style={styles.tabArea}>
           <div style={{ ...styles.tabContainer, gap: isMobile ? 2 : 4 }}>
             {TABS.map(tab => {
@@ -224,9 +235,6 @@ function ShopPanel({ onClose }) {
               );
             })}
           </div>
-          <button style={{ ...styles.closeBtn, right: isMobile ? 4 : 16, bottom: isMobile ? 0 : -8 }} onClick={onClose}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-          </button>
         </div>
 
         <div style={styles.cardArea} className="grad-scrollbar">
@@ -509,10 +517,8 @@ const styles = {
   },
   closeBtn: {
     position: 'absolute',
-    bottom: -8,
-    right: 16,
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     borderRadius: '50%',
     background: '#E53935',
     border: '3px solid #fff',
@@ -521,8 +527,8 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-    zIndex: 100,
+    boxShadow: '0 3px 0 #a92826, 0 8px 14px rgba(0,0,0,0.28)',
+    zIndex: 40,
     padding: 0,
   },
 };

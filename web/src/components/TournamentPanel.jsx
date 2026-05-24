@@ -5,7 +5,7 @@
 // e8dfc8 rows. Three states (no tournament / not joined / joined) share the
 // same paper modal so the visual language is consistent across the game.
 import { memo, useEffect, useState, useMemo } from 'react';
-import { useTournament, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
+import { useTournament, useTournamentDailyPoints, useTournamentLeaderboard, useTournamentHistory } from '../hooks/useTournament';
 import { usePlayer } from '../hooks/useGodot';
 import { useDex } from '../contexts/DexContext';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
@@ -43,11 +43,32 @@ function fmtTeamMetric(metric, value) {
   return fmt(value);
 }
 
+function fmtPoints(n) {
+  const v = Number(n) || 0;
+  const digits = Math.abs(v) >= 100 ? 1 : 2;
+  return v.toLocaleString(undefined, { maximumFractionDigits: digits }).replace(/,/g, ' ');
+}
+
 function fmtDate(s) {
   if (!s) return null;
   const d = new Date(s.replace(' ', 'T') + 'Z');
   if (isNaN(d.getTime())) return s;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function fmtDay(s) {
+  if (!s) return '';
+  const d = new Date(`${s}T00:00:00Z`);
+  if (isNaN(d.getTime())) return s;
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function compactPlayerName(row) {
+  const name = String(row?.name || '').trim();
+  if (name) return name;
+  const wallet = String(row?.wallet || '').trim();
+  if (wallet) return `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
+  return String(row?.player_id || '').slice(0, 8) || 'Player';
 }
 
 function isPointsSort(sortBy) {
@@ -127,6 +148,7 @@ function TournamentPanel({ onClose }) {
   // disappear from the player's view.
   const [tab, setTab] = useState('active');
   const [pickedHistoryId, setPickedHistoryId] = useState(null);
+  const [pickedDailyDay, setPickedDailyDay] = useState(null);
 
   const {
     me,
@@ -162,7 +184,19 @@ function TournamentPanel({ onClose }) {
   const live = !isHistory && phase === 'live';
   const canJoin = !isHistory && !!me?.can_join;
   const { board } = useTournamentLeaderboard(t?.id, { active: !!t, pollMs: isHistory ? 60000 : 10000 });
+  const dailyActive = !!t && isDailyPoolTournament(t);
+  const { daily } = useTournamentDailyPoints(t?.id, {
+    active: dailyActive,
+    pollMs: isHistory ? 60000 : 20000,
+    limit: 7,
+  });
+  const dailyDays = daily?.days || [];
+  const selectedDailyDay = useMemo(() => {
+    if (!dailyDays.length) return null;
+    return dailyDays.find(day => day.day_utc === pickedDailyDay) || dailyDays[0];
+  }, [dailyDays, pickedDailyDay]);
   const playerId = player?.player_id;
+  const dailyMyPlayerId = daily?.my_player_id || playerId;
   const [busy, setBusy] = useState(false);
   const [rewardWalletEvm, setRewardWalletEvm] = useState('');
   const activeInitialLoading = tab === 'active' && !tournamentLoaded && !me;
@@ -191,6 +225,17 @@ function TournamentPanel({ onClose }) {
   useEffect(() => {
     if (myStats?.reward_wallet_evm) setRewardWalletEvm(myStats.reward_wallet_evm);
   }, [myStats?.reward_wallet_evm]);
+
+  useEffect(() => {
+    if (!dailyActive) {
+      setPickedDailyDay(null);
+      return;
+    }
+    if (!dailyDays.length) return;
+    if (!pickedDailyDay || !dailyDays.some(day => day.day_utc === pickedDailyDay)) {
+      setPickedDailyDay(dailyDays[0].day_utc);
+    }
+  }, [dailyActive, dailyDays, pickedDailyDay]);
 
   const myRank = useMemo(() => {
     if (!board || !playerId) return null;
@@ -512,6 +557,17 @@ function TournamentPanel({ onClose }) {
                 </div>
               )}
 
+              {isDailyPoolTournament(t) && (
+                <DailyPointsCard
+                  t={t}
+                  days={dailyDays}
+                  selectedDay={selectedDailyDay}
+                  selectedDayId={pickedDailyDay}
+                  onPickDay={setPickedDailyDay}
+                  myPlayerId={dailyMyPlayerId}
+                />
+              )}
+
               <div style={S.lbHeader}>Leaderboard</div>
               {t.mode === 'dex_vs_dex' && board?.teams?.teams?.length > 0 && (
                 <div style={S.teamBoard}>
@@ -577,6 +633,111 @@ function TournamentPanel({ onClose }) {
         </div>
       </div>
     </>
+  );
+}
+
+function DailyPointsCard({ t, days, selectedDay, selectedDayId, onPickDay, myPlayerId }) {
+  const day = selectedDay || days?.[0] || null;
+  const players = day?.players || [];
+  const processed = !!day?.processed;
+  const pointsKey = processed ? 'awarded_points' : 'estimated_points';
+  const rankKey = processed ? 'rank' : 'estimate_rank';
+  const mine = myPlayerId ? players.find(row => row.player_id === myPlayerId) : null;
+  const pool = Number(day?.estimate?.pool || t?.daily_pool_points || 1000) || 1000;
+  const activeDayId = selectedDayId || day?.day_utc;
+  const minePoints = mine ? Number(mine[pointsKey] || 0) : 0;
+  const mineRank = mine ? Number(mine[rankKey] || mine.rank || 0) : 0;
+  const shownPlayers = players;
+
+  return (
+    <div style={S.dailyCard}>
+      <div style={S.dailyHeader}>
+        <div>
+          <div style={S.dailyTitle}>Daily points</div>
+          <div style={S.dailySub}>{fmt(pool)} pool at 00:00 UTC</div>
+        </div>
+        <span style={processed ? S.dailyModeDone : S.dailyModeLive}>
+          {processed ? 'Awarded' : 'Estimate'}
+        </span>
+      </div>
+
+      {days?.length > 0 && (
+        <div style={S.dailyChips}>
+          {days.map(dayRow => (
+            <button
+              key={dayRow.day_utc}
+              style={dayRow.day_utc === activeDayId ? S.dailyChipActive : S.dailyChip}
+              onClick={() => onPickDay(dayRow.day_utc)}
+            >
+              {fmtDay(dayRow.day_utc)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!day && (
+        <div style={S.dailyEmpty}>No daily activity yet.</div>
+      )}
+
+      {day && (
+        <>
+          <div style={S.dailyMine}>
+            <div style={S.dailyMineMain}>
+              <span style={S.dailyMineLabel}>Your day</span>
+              <strong style={S.dailyMineValue}>{fmtPoints(minePoints)} pts</strong>
+            </div>
+            <span style={S.dailyMineRank}>{mineRank ? `#${mineRank}` : '-'}</span>
+          </div>
+
+          <div style={S.dailyGrid}>
+            <div style={S.dailyMiniStat}>
+              <strong style={S.dailyMiniValue}>{fmtUsd(day.totals?.volume_usd)}</strong>
+              <span style={S.dailyMiniLabel}>Volume</span>
+            </div>
+            <div style={S.dailyMiniStat}>
+              <strong style={S.dailyMiniValue}>{fmt(day.totals?.trophies)}</strong>
+              <span style={S.dailyMiniLabel}>Trophies</span>
+            </div>
+            <div style={S.dailyMiniStat}>
+              <strong style={S.dailyMiniValue}>{fmt(day.totals?.trades_count)}</strong>
+              <span style={S.dailyMiniLabel}>Trades</span>
+            </div>
+            <div style={S.dailyMiniStat}>
+              <strong style={S.dailyMiniValue}>{fmt(day.totals?.players)}</strong>
+              <span style={S.dailyMiniLabel}>Players</span>
+            </div>
+          </div>
+
+          <div style={S.dailyList}>
+            {shownPlayers.map((row) => {
+              const isMe = row.player_id === myPlayerId;
+              const rank = Number(row[rankKey] || row.rank || 0);
+              const points = Number(row[pointsKey] || 0);
+              return (
+                <div
+                  key={row.player_id}
+                  style={{
+                    ...S.dailyPlayerRow,
+                    background: isMe ? '#fef3c7' : '#fdf8e7',
+                    borderColor: isMe ? '#f59e0b' : '#d4c8b0',
+                  }}
+                >
+                  <span style={S.dailyPlayerRank}>{rank || '-'}</span>
+                  <div style={S.dailyPlayerInfo}>
+                    <span style={S.dailyPlayerName}>{compactPlayerName(row)}{isMe ? ' (you)' : ''}</span>
+                    <span style={S.dailyPlayerMeta}>
+                      {fmt(row.trophies)} trophies | {row.trades_count || 0} trades | {fmtUsd(row.volume_usd)} vol | {fmtUsd(row.pnl_usd)} PnL | {fmt(row.gold)} gold
+                    </span>
+                  </div>
+                  <span style={S.dailyPlayerPoints}>{fmtPoints(points)}</span>
+                </div>
+              );
+            })}
+            {players.length === 0 && <div style={S.dailyEmpty}>No players yet.</div>}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -795,6 +956,98 @@ const S = {
   leaveBtn: {
     width: '100%', padding: '6px', background: 'transparent', border: '2px solid #a3906a',
     color: '#7c5a3a', borderRadius: 8, cursor: 'pointer', fontSize: 11, fontWeight: 700,
+  },
+
+  dailyCard: {
+    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 14, padding: 10,
+    display: 'flex', flexDirection: 'column', gap: 8,
+  },
+  dailyHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+  },
+  dailyTitle: {
+    fontSize: 13, fontWeight: 900, color: '#5C3A21',
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  dailySub: { fontSize: 10, fontWeight: 800, color: '#7c5a3a', marginTop: 1 },
+  dailyModeLive: {
+    fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
+    background: '#dbeafe', border: '2px solid #60a5fa', color: '#1d4ed8',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  dailyModeDone: {
+    fontSize: 10, fontWeight: 900, padding: '4px 7px', borderRadius: 7,
+    background: '#dcfce7', border: '2px solid #16a34a', color: '#15803d',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  dailyChips: {
+    display: 'flex', gap: 5, overflowX: 'auto', paddingBottom: 2, scrollbarWidth: 'none',
+  },
+  dailyChip: {
+    flex: '0 0 auto', padding: '5px 8px', borderRadius: 999,
+    background: '#fdf8e7', border: '2px solid #d4c8b0', color: '#7c5a3a',
+    fontSize: 10, fontWeight: 900, cursor: 'pointer',
+  },
+  dailyChipActive: {
+    flex: '0 0 auto', padding: '5px 8px', borderRadius: 999,
+    background: '#fef3c7', border: '2px solid #f59e0b', color: '#5C3A21',
+    fontSize: 10, fontWeight: 900, cursor: 'pointer',
+  },
+  dailyMine: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    background: '#fef3c7', border: '2px solid #f59e0b', borderRadius: 12,
+    padding: '7px 9px',
+  },
+  dailyMineMain: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
+  dailyMineLabel: {
+    fontSize: 10, fontWeight: 900, color: '#7c5a3a',
+    textTransform: 'uppercase', letterSpacing: 0.4,
+  },
+  dailyMineValue: {
+    fontSize: 16, fontWeight: 900, color: '#15803d',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  dailyMineRank: { fontSize: 20, fontWeight: 900, color: '#b45309' },
+  dailyGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 5 },
+  dailyMiniStat: {
+    minWidth: 0, background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 9,
+    padding: '5px 3px', textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 1,
+  },
+  dailyMiniValue: {
+    fontSize: 10, fontWeight: 900, color: '#5C3A21',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  dailyMiniLabel: {
+    fontSize: 8, fontWeight: 800, color: '#a3906a',
+    textTransform: 'uppercase', letterSpacing: 0.35,
+  },
+  dailyList: { display: 'flex', flexDirection: 'column', gap: 5 },
+  dailyPlayerRow: {
+    display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr) max-content',
+    alignItems: 'center', gap: 6, border: '2px solid #d4c8b0', borderRadius: 10,
+    padding: '5px 7px',
+  },
+  dailyPlayerRank: {
+    width: 24, height: 24, borderRadius: '50%', background: '#a3906a', color: '#fff',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: 11, fontWeight: 900,
+  },
+  dailyPlayerInfo: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 },
+  dailyPlayerName: {
+    fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  dailyPlayerMeta: {
+    fontSize: 9, fontWeight: 800, color: '#a3906a',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  dailyPlayerPoints: {
+    fontSize: 12, fontWeight: 900, color: '#15803d',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  dailyEmpty: {
+    textAlign: 'center', padding: 8, color: '#a3906a', fontSize: 11, fontWeight: 800,
+    background: '#fdf8e7', border: '2px solid #d4c8b0', borderRadius: 9,
   },
 
   lbHeader: { fontSize: 13, fontWeight: 900, color: '#5C3A21', textTransform: 'uppercase', letterSpacing: 0.6, padding: '4px 2px 0' },

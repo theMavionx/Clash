@@ -11675,6 +11675,301 @@ router.post('/tournaments/:id/leave', auth, (req, res) => {
 // can spectate. Sort column comes from the tournament's `sort_by` setting,
 // not the request, so spectators can't game the ordering by sending crafted
 // params.
+// Daily-pool readers used by the player-facing tournament panel. The estimate
+// mirrors the midnight award formula, but runs against today's current rows.
+function tournamentUtcDayString(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function readTournamentDailyRunDetails(row) {
+  if (!row) return {};
+  try { return JSON.parse(row.details_json || '{}') || {}; }
+  catch { return {}; }
+}
+
+function buildTournamentDailyEstimate(activityRows, t) {
+  const pool = normalizeTournamentDailyPoolPoints(t?.daily_pool_points, 1000);
+  const weights = tournamentPointWeights(t);
+  const categories = [
+    { key: 'trophies', column: 'trophies', weight: weights.trophies },
+    { key: 'volume', column: 'volume_usd', weight: weights.volume },
+    { key: 'pnl', column: 'pnl_usd', weight: weights.pnl },
+  ];
+  const byPlayer = new Map(activityRows.map(row => [row.player_id, {
+    estimated_points: 0,
+    estimated_trophy_points: 0,
+    estimated_volume_points: 0,
+    estimated_pnl_points: 0,
+  }]));
+  const details = { pool, weights, categories: {} };
+  let totalPoints = 0;
+
+  for (const cat of categories) {
+    const catPool = pool * (Math.max(0, Number(cat.weight) || 0) / 100);
+    const values = activityRows.map(row => ({
+      player_id: row.player_id,
+      value: Math.max(0, Number(row[cat.column]) || 0),
+    })).filter(row => row.value > 0);
+    const rawTotal = values.reduce((sum, row) => sum + row.value, 0);
+    details.categories[cat.key] = {
+      pool: Number(catPool.toFixed(6)),
+      raw_total: Number(rawTotal.toFixed(6)),
+      players: values.length,
+    };
+    if (catPool <= 0 || rawTotal <= 0) continue;
+
+    for (const row of values) {
+      const points = Number((catPool * (row.value / rawTotal)).toFixed(6));
+      if (points <= 0) continue;
+      const target = byPlayer.get(row.player_id) || {
+        estimated_points: 0,
+        estimated_trophy_points: 0,
+        estimated_volume_points: 0,
+        estimated_pnl_points: 0,
+      };
+      target.estimated_points += points;
+      if (cat.key === 'trophies') target.estimated_trophy_points += points;
+      if (cat.key === 'volume') target.estimated_volume_points += points;
+      if (cat.key === 'pnl') target.estimated_pnl_points += points;
+      byPlayer.set(row.player_id, target);
+      totalPoints += points;
+    }
+  }
+
+  for (const target of byPlayer.values()) {
+    target.estimated_points = Number(target.estimated_points.toFixed(6));
+    target.estimated_trophy_points = Number(target.estimated_trophy_points.toFixed(6));
+    target.estimated_volume_points = Number(target.estimated_volume_points.toFixed(6));
+    target.estimated_pnl_points = Number(target.estimated_pnl_points.toFixed(6));
+  }
+
+  return { total_points: Number(totalPoints.toFixed(6)), details, byPlayer };
+}
+
+function buildTournamentDailyPointRows(t, options = {}) {
+  const tid = Number(t?.id);
+  if (!Number.isFinite(tid)) return [];
+  const limit = Math.max(1, Math.min(60, parseInt(options.limit, 10) || 7));
+  const includeCurrentDay = options.includeCurrentDay !== false && tournamentPhase(t) === 'live';
+  const daySet = new Set(db.db.prepare(`
+    SELECT day_utc FROM (
+      SELECT day_utc FROM tournament_daily_activity WHERE tournament_id = ?
+      UNION
+      SELECT day_utc FROM tournament_daily_awards WHERE tournament_id = ?
+      UNION
+      SELECT day_utc FROM tournament_daily_point_runs WHERE tournament_id = ?
+    )
+  `).all(tid, tid, tid).map(row => row.day_utc).filter(Boolean));
+  if (includeCurrentDay) daySet.add(tournamentUtcDayString());
+  const days = Array.from(daySet).sort((a, b) => String(b).localeCompare(String(a))).slice(0, limit);
+  const participantRows = db.db.prepare(`
+    SELECT tp.player_id, p.name, p.wallet, p.dex
+    FROM tournament_participants tp
+    LEFT JOIN players p ON p.id = tp.player_id
+    WHERE tp.tournament_id = ? AND tp.left_at IS NULL
+  `).all(tid);
+  const runByDay = new Map(db.db.prepare(`
+    SELECT day_utc, processed_at, total_points, details_json
+    FROM tournament_daily_point_runs
+    WHERE tournament_id = ?
+  `).all(tid).map(row => [row.day_utc, row]));
+
+  return days.map((day) => {
+    const activityRows = db.db.prepare(`
+      SELECT a.player_id, p.name, p.wallet, COALESCE(p.dex, a.dex) AS dex,
+             COALESCE(SUM(a.trades_count), 0) AS trades_count,
+             COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+             COALESCE(SUM(a.pnl_usd), 0) AS pnl_usd,
+             COALESCE(SUM(a.trophies), 0) AS trophies,
+             COALESCE(SUM(a.gold), 0) AS gold,
+             COUNT(*) AS events
+      FROM tournament_daily_activity a
+      LEFT JOIN players p ON p.id = a.player_id
+      WHERE a.tournament_id = ? AND a.day_utc = ?
+      GROUP BY a.player_id
+    `).all(tid, day);
+    const awardRows = db.db.prepare(`
+      SELECT a.player_id, p.name, p.wallet, p.dex,
+             COALESCE(SUM(a.points), 0) AS awarded_points,
+             COALESCE(SUM(CASE WHEN a.category = 'trophies' THEN a.points ELSE 0 END), 0) AS trophy_points,
+             COALESCE(SUM(CASE WHEN a.category = 'volume' THEN a.points ELSE 0 END), 0) AS volume_points,
+             COALESCE(SUM(CASE WHEN a.category = 'pnl' THEN a.points ELSE 0 END), 0) AS pnl_points,
+             COALESCE(SUM(CASE WHEN a.category = 'trophies' THEN a.raw_value ELSE 0 END), 0) AS raw_trophies,
+             COALESCE(SUM(CASE WHEN a.category = 'volume' THEN a.raw_value ELSE 0 END), 0) AS raw_volume_usd,
+             COALESCE(SUM(CASE WHEN a.category = 'pnl' THEN a.raw_value ELSE 0 END), 0) AS raw_pnl_usd
+      FROM tournament_daily_awards a
+      LEFT JOIN players p ON p.id = a.player_id
+      WHERE a.tournament_id = ? AND a.day_utc = ?
+      GROUP BY a.player_id
+    `).all(tid, day);
+    const byPlayer = new Map();
+    for (const row of participantRows) {
+      byPlayer.set(row.player_id, {
+        player_id: row.player_id,
+        name: row.name,
+        wallet: row.wallet,
+        dex: row.dex,
+        events: 0,
+        trades_count: 0,
+        volume_usd: 0,
+        pnl_usd: 0,
+        trophies: 0,
+        gold: 0,
+        awarded_points: 0,
+        trophy_points: 0,
+        volume_points: 0,
+        pnl_points: 0,
+        raw_trophies: 0,
+        raw_volume_usd: 0,
+        raw_pnl_usd: 0,
+      });
+    }
+    for (const row of activityRows) {
+      const existing = byPlayer.get(row.player_id) || {};
+      byPlayer.set(row.player_id, {
+        ...existing,
+        player_id: row.player_id,
+        name: existing.name || row.name,
+        wallet: existing.wallet || row.wallet,
+        dex: existing.dex || row.dex,
+        events: Number(row.events || 0),
+        trades_count: Number(row.trades_count || 0),
+        volume_usd: Number(row.volume_usd || 0),
+        pnl_usd: Number(row.pnl_usd || 0),
+        trophies: Number(row.trophies || 0),
+        gold: Number(row.gold || 0),
+        awarded_points: Number(existing.awarded_points || 0),
+        trophy_points: Number(existing.trophy_points || 0),
+        volume_points: Number(existing.volume_points || 0),
+        pnl_points: Number(existing.pnl_points || 0),
+        raw_trophies: Number(existing.raw_trophies || 0),
+        raw_volume_usd: Number(existing.raw_volume_usd || 0),
+        raw_pnl_usd: Number(existing.raw_pnl_usd || 0),
+      });
+    }
+    for (const row of awardRows) {
+      const existing = byPlayer.get(row.player_id) || {};
+      byPlayer.set(row.player_id, {
+        ...existing,
+        player_id: row.player_id,
+        name: existing.name || row.name,
+        wallet: existing.wallet || row.wallet,
+        dex: existing.dex || row.dex,
+        events: Number(existing.events || 0),
+        trades_count: Number(existing.trades_count || 0),
+        volume_usd: Number(existing.volume_usd || 0),
+        pnl_usd: Number(existing.pnl_usd || 0),
+        trophies: Number(existing.trophies || 0),
+        gold: Number(existing.gold || 0),
+        awarded_points: Number(row.awarded_points || 0),
+        trophy_points: Number(row.trophy_points || 0),
+        volume_points: Number(row.volume_points || 0),
+        pnl_points: Number(row.pnl_points || 0),
+        raw_trophies: Number(row.raw_trophies || 0),
+        raw_volume_usd: Number(row.raw_volume_usd || 0),
+        raw_pnl_usd: Number(row.raw_pnl_usd || 0),
+      });
+    }
+
+    const estimate = buildTournamentDailyEstimate(Array.from(byPlayer.values()), t);
+    const players = Array.from(byPlayer.values()).map((row) => {
+      const estimated = estimate.byPlayer.get(row.player_id) || {};
+      return {
+        ...row,
+        estimated_points: Number(estimated.estimated_points || 0),
+        estimated_trophy_points: Number(estimated.estimated_trophy_points || 0),
+        estimated_volume_points: Number(estimated.estimated_volume_points || 0),
+        estimated_pnl_points: Number(estimated.estimated_pnl_points || 0),
+      };
+    });
+    const processed = !!runByDay.get(day);
+    players.sort((a, b) => {
+      const primary = processed
+        ? (Number(b.awarded_points) || 0) - (Number(a.awarded_points) || 0)
+        : (Number(b.estimated_points) || 0) - (Number(a.estimated_points) || 0);
+      return primary
+        || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+        || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+        || String(a.player_id).localeCompare(String(b.player_id));
+    });
+    players.forEach((row, index) => { row.rank = index + 1; });
+    const estimateSorted = [...players].sort((a, b) =>
+      (Number(b.estimated_points) || 0) - (Number(a.estimated_points) || 0)
+      || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+      || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+      || String(a.player_id).localeCompare(String(b.player_id))
+    );
+    estimateSorted.forEach((row, index) => { row.estimate_rank = index + 1; });
+
+    const totals = players.reduce((acc, row) => {
+      acc.players += 1;
+      acc.events += Number(row.events || 0);
+      acc.trades_count += Number(row.trades_count || 0);
+      acc.volume_usd += Number(row.volume_usd || 0);
+      acc.pnl_usd += Number(row.pnl_usd || 0);
+      acc.trophies += Number(row.trophies || 0);
+      acc.gold += Number(row.gold || 0);
+      acc.awarded_points += Number(row.awarded_points || 0);
+      acc.estimated_points += Number(row.estimated_points || 0);
+      return acc;
+    }, { players: 0, events: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, trophies: 0, gold: 0, awarded_points: 0, estimated_points: 0 });
+    totals.volume_usd = Number(totals.volume_usd.toFixed(2));
+    totals.pnl_usd = Number(totals.pnl_usd.toFixed(2));
+    totals.awarded_points = Number(totals.awarded_points.toFixed(6));
+    totals.estimated_points = Number(totals.estimated_points.toFixed(6));
+
+    const run = runByDay.get(day);
+    return {
+      day_utc: day,
+      processed,
+      run: run ? {
+        processed_at: run.processed_at,
+        total_points: Number(run.total_points || 0),
+        details: readTournamentDailyRunDetails(run),
+      } : null,
+      estimate: estimate.details,
+      estimate_total_points: estimate.total_points,
+      totals,
+      players,
+    };
+  });
+}
+
+router.get('/tournaments/:id/daily-points', (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  if (!tournamentUsesDailyPool(t)) {
+    return res.json({ tournament: tournamentRowToPublic(t), my_player_id: null, days: [] });
+  }
+
+  let viewer = null;
+  const token = req.headers['x-token'];
+  if (typeof token === 'string' && token.length > 10) {
+    try { viewer = db.authenticatePlayer(token); } catch {}
+  }
+  if (viewer && tournamentPhase(t) === 'live' && isTournamentForDex(t, viewer.dex)) {
+    const participant = db.db.prepare(`
+      SELECT left_at FROM tournament_participants
+      WHERE tournament_id = ? AND player_id = ?
+    `).get(tid, viewer.id);
+    if (participant && participant.left_at === null) {
+      try { syncFuturesTournamentRows(viewer.id, viewer.dex); } catch {}
+    }
+  }
+
+  const totalVolumeUsd = tournamentTotalVolumeUsd(tid);
+  const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 7));
+  res.json({
+    tournament: tournamentRowToPublic(t, { totalVolumeUsd }),
+    my_player_id: viewer?.id || null,
+    server_day_utc: tournamentUtcDayString(),
+    days: buildTournamentDailyPointRows(t, { limit }),
+  });
+});
+
+// Real-time leaderboard for a tournament. Public endpoint, anyone can spectate.
 router.get('/tournaments/:id/leaderboard', (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
