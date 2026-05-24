@@ -35,6 +35,21 @@ const DEMON_KING_SYNC_CACHE_TTL_MS = 5 * 60_000;
 const DEMON_KING_SYNC_CACHE_PREFIX = 'demon-king-sync:';
 const DEMON_KING_EVM_CHAINS = ['base', 'arbitrum', 'monad'];
 const DEMON_KING_SUPPORTED_CHAINS = [...DEMON_KING_EVM_CHAINS, 'solana', 'aptos'];
+const DEMON_KING_CHAIN_BY_DEX = {
+  avantis: 'base',
+  gmx: 'arbitrum',
+  hyperliquid: 'arbitrum',
+  risex: 'arbitrum',
+  monad: 'monad',
+  pacifica: 'solana',
+  phoenix: 'solana',
+  decibel: 'aptos',
+};
+const DEMON_KING_CHAIN_BY_EVM_CHAIN_ID = {
+  8453: 'base',
+  42161: 'arbitrum',
+  143: 'monad',
+};
 
 const ownedNftMemoryCache = new Map();
 const demonKingSyncMemoryCache = new Map();
@@ -788,6 +803,39 @@ function isAptosWalletAddress(value) {
 
 function isSolanaWalletAddress(value) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
+}
+
+export function resolveDemonKingConnectedSyncTarget({
+  dex = '',
+  evmAddress = null,
+  evmChainId = null,
+  solAddress = null,
+  aptosAddress = null,
+} = {}) {
+  const evm = String(evmAddress || '').trim();
+  const sol = String(solAddress || '').trim();
+  const apt = String(aptosAddress || '').trim();
+  const targetForChain = (chain) => {
+    if (DEMON_KING_EVM_CHAINS.includes(chain) && isEvmWalletAddress(evm)) {
+      return { wallet: evm, chains: [chain] };
+    }
+    if (chain === 'solana' && isSolanaWalletAddress(sol)) {
+      return { wallet: sol, chains: ['solana'] };
+    }
+    if (chain === 'aptos' && isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
+      return { wallet: apt, chains: ['aptos'] };
+    }
+    return null;
+  };
+
+  const preferred = DEMON_KING_CHAIN_BY_DEX[String(dex || '').toLowerCase()];
+  if (preferred) return targetForChain(preferred);
+
+  const evmChain = DEMON_KING_CHAIN_BY_EVM_CHAIN_ID[Number(evmChainId)];
+  const evmTarget = evmChain ? targetForChain(evmChain) : null;
+  if (evmTarget) return evmTarget;
+
+  return targetForChain('solana') || targetForChain('aptos') || targetForChain('base');
 }
 
 function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {

@@ -11341,7 +11341,7 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source = 'server'";
+  if (dex === 'decibel') return "verified_source IN ('server', 'worker')";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
@@ -11359,7 +11359,7 @@ function syncFuturesTournamentRows(playerId, dex) {
   if (!fdb) return { ok: false, reason: 'futures db unavailable' };
   try {
     const sourceWhere = tournamentTradeSourceWhere(normalizedDex);
-    const rows = fdb.prepare(`
+    let rows = fdb.prepare(`
       SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex
       FROM trade_history
       WHERE player_id = ? AND dex = ? AND status = 'filled'
@@ -11367,12 +11367,18 @@ function syncFuturesTournamentRows(playerId, dex) {
       ORDER BY id ASC
       LIMIT 2000
     `).all(playerId, normalizedDex);
+    if (normalizedDex === 'decibel' && rows.length) {
+      rows = markDuplicateDecibelWorkerTrades(fdb, playerId, 0, rows)
+        .filter(row => !row.reward_duplicate);
+    }
     const main = db.recordTournamentTradeRows(playerId, rows, {
       source: 'trade_history',
       dex: normalizedDex,
       count: true,
       volume: true,
-      pnl: true,
+      // Decibel worker close PnL is credited through trade_history_decibel_pnl
+      // so worker limit fills can add volume without double-counting PnL.
+      pnl: normalizedDex !== 'decibel',
     });
     let pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
     if (normalizedDex === 'decibel') {
@@ -12112,6 +12118,172 @@ router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => 
     res.json(result);
   } catch (err) {
     res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily award failed').slice(0, 180) });
+  }
+});
+
+router.get('/admin/tournaments/:id/daily-points', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return res.status(404).json({ error: 'tournament not found' });
+  const limit = Math.max(1, Math.min(60, parseInt(req.query.limit, 10) || 14));
+  try {
+    const days = db.db.prepare(`
+      SELECT day_utc FROM (
+        SELECT day_utc FROM tournament_daily_activity WHERE tournament_id = ?
+        UNION
+        SELECT day_utc FROM tournament_daily_awards WHERE tournament_id = ?
+        UNION
+        SELECT day_utc FROM tournament_daily_point_runs WHERE tournament_id = ?
+      )
+      ORDER BY day_utc DESC
+      LIMIT ?
+    `).all(tid, tid, tid, limit).map(r => r.day_utc);
+
+    const runByDay = new Map(db.db.prepare(`
+      SELECT day_utc, processed_at, total_points, details_json
+      FROM tournament_daily_point_runs
+      WHERE tournament_id = ?
+    `).all(tid).map((row) => {
+      let details = {};
+      try { details = JSON.parse(row.details_json || '{}'); } catch {}
+      return [row.day_utc, {
+        day_utc: row.day_utc,
+        processed_at: row.processed_at,
+        total_points: Number(row.total_points || 0),
+        details,
+      }];
+    }));
+
+    const outputDays = days.map((day) => {
+      const activityRows = db.db.prepare(`
+        SELECT a.player_id, p.name, p.wallet, p.dex,
+               COALESCE(SUM(a.trades_count), 0) AS trades_count,
+               COALESCE(SUM(a.volume_usd), 0) AS volume_usd,
+               COALESCE(SUM(a.pnl_usd), 0) AS pnl_usd,
+               COALESCE(SUM(a.trophies), 0) AS trophies,
+               COALESCE(SUM(a.gold), 0) AS gold,
+               COUNT(*) AS events
+        FROM tournament_daily_activity a
+        LEFT JOIN players p ON p.id = a.player_id
+        WHERE a.tournament_id = ? AND a.day_utc = ?
+        GROUP BY a.player_id
+      `).all(tid, day);
+      const awardRows = db.db.prepare(`
+        SELECT a.player_id, p.name, p.wallet, p.dex,
+               COALESCE(SUM(a.points), 0) AS points,
+               COALESCE(SUM(CASE WHEN a.category = 'trophies' THEN a.points ELSE 0 END), 0) AS trophy_points,
+               COALESCE(SUM(CASE WHEN a.category = 'volume' THEN a.points ELSE 0 END), 0) AS volume_points,
+               COALESCE(SUM(CASE WHEN a.category = 'pnl' THEN a.points ELSE 0 END), 0) AS pnl_points,
+               COALESCE(SUM(CASE WHEN a.category = 'trophies' THEN a.raw_value ELSE 0 END), 0) AS raw_trophies,
+               COALESCE(SUM(CASE WHEN a.category = 'volume' THEN a.raw_value ELSE 0 END), 0) AS raw_volume_usd,
+               COALESCE(SUM(CASE WHEN a.category = 'pnl' THEN a.raw_value ELSE 0 END), 0) AS raw_pnl_usd
+        FROM tournament_daily_awards a
+        LEFT JOIN players p ON p.id = a.player_id
+        WHERE a.tournament_id = ? AND a.day_utc = ?
+        GROUP BY a.player_id
+      `).all(tid, day);
+      const byPlayer = new Map();
+      for (const row of activityRows) {
+        byPlayer.set(row.player_id, {
+          player_id: row.player_id,
+          name: row.name,
+          wallet: row.wallet,
+          dex: row.dex,
+          events: Number(row.events || 0),
+          trades_count: Number(row.trades_count || 0),
+          volume_usd: Number(row.volume_usd || 0),
+          pnl_usd: Number(row.pnl_usd || 0),
+          trophies: Number(row.trophies || 0),
+          gold: Number(row.gold || 0),
+          points: 0,
+          trophy_points: 0,
+          volume_points: 0,
+          pnl_points: 0,
+          raw_trophies: 0,
+          raw_volume_usd: 0,
+          raw_pnl_usd: 0,
+        });
+      }
+      for (const row of awardRows) {
+        const existing = byPlayer.get(row.player_id) || {
+          player_id: row.player_id,
+          name: row.name,
+          wallet: row.wallet,
+          dex: row.dex,
+          events: 0,
+          trades_count: 0,
+          volume_usd: 0,
+          pnl_usd: 0,
+          trophies: 0,
+          gold: 0,
+        };
+        byPlayer.set(row.player_id, {
+          ...existing,
+          name: existing.name || row.name,
+          wallet: existing.wallet || row.wallet,
+          dex: existing.dex || row.dex,
+          points: Number(row.points || 0),
+          trophy_points: Number(row.trophy_points || 0),
+          volume_points: Number(row.volume_points || 0),
+          pnl_points: Number(row.pnl_points || 0),
+          raw_trophies: Number(row.raw_trophies || 0),
+          raw_volume_usd: Number(row.raw_volume_usd || 0),
+          raw_pnl_usd: Number(row.raw_pnl_usd || 0),
+        });
+      }
+      const category_totals = db.db.prepare(`
+        SELECT category,
+               COALESCE(SUM(points), 0) AS points,
+               COALESCE(SUM(raw_value), 0) AS raw_value,
+               COUNT(DISTINCT player_id) AS players
+        FROM tournament_daily_awards
+        WHERE tournament_id = ? AND day_utc = ?
+        GROUP BY category
+      `).all(tid, day).map(row => ({
+        category: row.category,
+        points: Number(row.points || 0),
+        raw_value: Number(row.raw_value || 0),
+        players: Number(row.players || 0),
+      }));
+      const players = Array.from(byPlayer.values())
+        .sort((a, b) =>
+          (Number(b.points) || 0) - (Number(a.points) || 0)
+          || (Number(b.volume_usd) || 0) - (Number(a.volume_usd) || 0)
+          || (Number(b.trophies) || 0) - (Number(a.trophies) || 0)
+          || String(a.player_id).localeCompare(String(b.player_id))
+        );
+      const totals = players.reduce((acc, row) => {
+        acc.players += 1;
+        acc.events += Number(row.events || 0);
+        acc.trades_count += Number(row.trades_count || 0);
+        acc.volume_usd += Number(row.volume_usd || 0);
+        acc.pnl_usd += Number(row.pnl_usd || 0);
+        acc.trophies += Number(row.trophies || 0);
+        acc.gold += Number(row.gold || 0);
+        acc.points += Number(row.points || 0);
+        return acc;
+      }, { players: 0, events: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0, trophies: 0, gold: 0, points: 0 });
+      totals.volume_usd = Number(totals.volume_usd.toFixed(2));
+      totals.pnl_usd = Number(totals.pnl_usd.toFixed(2));
+      totals.points = Number(totals.points.toFixed(6));
+      return {
+        day_utc: day,
+        processed: runByDay.has(day),
+        run: runByDay.get(day) || null,
+        totals,
+        category_totals,
+        players,
+      };
+    });
+
+    res.json({
+      ok: true,
+      tournament: tournamentRowToPublic(t),
+      days: outputDays,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: (err?.message || 'daily point log failed').slice(0, 180) });
   }
 });
 

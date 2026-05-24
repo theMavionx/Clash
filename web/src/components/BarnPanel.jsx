@@ -1,11 +1,12 @@
-import { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { memo, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useSend, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useDex } from '../contexts/DexContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { syncDemonKingNfts } from '../lib/nftV3Client';
+import { resolveDemonKingConnectedSyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -165,8 +166,10 @@ function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
+  const { dex } = useDex();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
+  const evmChainId = evmWallet?.chainId || null;
   const solWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
@@ -174,7 +177,14 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const hasDemonKingWallet = !!(evmAddress || solAddress || aptosAddress);
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
+    dex,
+    evmAddress,
+    evmChainId,
+    solAddress,
+    aptosAddress,
+  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isAnimatingUpgrade, setIsAnimatingUpgrade] = useState(false);
@@ -208,9 +218,9 @@ function BarnPanel({ building, onClose }) {
       headers: token ? { 'x-token': token } : {},
       signal: controller.signal,
     }).then((res) => res.json().catch(() => ({}))).catch(() => null);
-    const ownedPromise = hasDemonKingWallet
+    const ownedPromise = demonKingSyncTarget
       ? syncDemonKingNfts({
-          wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress },
+          ...demonKingSyncTarget,
           signal: controller.signal,
         }).catch((err) => ({ error: err, tokens: [] }))
       : Promise.resolve({ tokens: [] });
@@ -251,7 +261,7 @@ function BarnPanel({ building, onClose }) {
         if (!controller.signal.aborted) setDemonKingLoading(false);
       });
     return () => controller.abort();
-  }, [aptosAddress, currentTroopName, evmAddress, hasDemonKingWallet, solAddress]);
+  }, [currentTroopName, demonKingSyncTarget]);
 
   useEffect(() => {
     if (currentTroopName !== 'DemonKing') return undefined;

@@ -703,6 +703,9 @@ app.get('/api/admin/panel', (req, res) => {
         <table style="font-size:12px"><thead><tr>
           <th>#</th><th>Player</th><th>Team</th><th>Score</th><th>Prize</th><th>Trophies</th><th>Gold</th><th>Trades</th><th>Volume</th><th>PnL</th>
         </tr></thead><tbody id="tn_lb_body"></tbody></table>
+        <h3 style="color:#f59e0b;font-size:13px;margin:18px 0 10px;text-transform:uppercase;letter-spacing:0.5px">Daily Point Logs</h3>
+        <div id="tn_daily_meta" style="font-size:12px;color:#9ca3af;margin-bottom:8px">Pick a tournament daily log to inspect UTC day awards.</div>
+        <div id="tn_daily_body" style="display:flex;flex-direction:column;gap:12px"></div>
       </div>
     </div>
     <table><thead><tr>
@@ -2361,6 +2364,7 @@ function renderTournaments() {
       + '<td>' + (t.participants || 0) + '/' + (t.registered || 0) + '</td>'
       + '<td>'
       +   '<button class="btn" onclick="loadTournamentLeaderboard(' + t.id + ')">Leaderboard</button> '
+      +   '<button class="btn" onclick="loadTournamentDailyLogs(' + t.id + ')">Daily log</button> '
       +   '<button class="btn" onclick="editTournament(' + t.id + ')">Edit</button> '
       +   (t.status === 'active' ? '<button class="btn" onclick="endTournament(' + t.id + ')">End</button> ' : '')
       +   '<button class="btn" onclick="deleteTournament(' + t.id + ')" style="background:#7f1d1d">Delete</button>'
@@ -2579,6 +2583,8 @@ async function deleteTournament(id) {
     TOURNAMENT_LB_ID = null;
     document.getElementById('tn_lb_meta').textContent = 'Pick a tournament below to view its leaderboard.';
     document.getElementById('tn_lb_body').innerHTML = '';
+    document.getElementById('tn_daily_meta').textContent = 'Pick a tournament daily log to inspect UTC day awards.';
+    document.getElementById('tn_daily_body').innerHTML = '';
   }
   loadTournaments();
 }
@@ -2619,6 +2625,89 @@ async function loadTournamentLeaderboard(id) {
         + '<td>$' + Math.round(r.volume_usd || 0).toLocaleString() + '</td>'
         + '<td style="color:' + ((r.pnl_usd || 0) >= 0 ? '#34d399' : '#fca5a5') + '">$' + (r.pnl_usd || 0).toFixed(2) + '</td>'
         + '</tr>';
+    }).join('');
+    if (isTournamentDailyPool(t)) {
+      loadTournamentDailyLogs(id);
+    } else {
+      document.getElementById('tn_daily_meta').textContent = 'Tournament #' + t.id + ' uses live scoring, so no daily point awards are generated.';
+      document.getElementById('tn_daily_body').innerHTML = '';
+    }
+  } catch(e) { console.error(e); }
+}
+
+function fmtTournamentPoints(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 100) return v.toFixed(1);
+  return v.toFixed(3).replace(/\.?0+$/, '') || '0';
+}
+
+function tournamentDailyCategorySummary(categories) {
+  if (!categories || !categories.length) return '<span style="color:#6b7280">no awards yet</span>';
+  const label = { trophies: 'Trophies', volume: 'Volume', pnl: 'PnL' };
+  return categories.map(c => {
+    const raw = c.category === 'volume'
+      ? '$' + Math.round(Number(c.raw_value || 0)).toLocaleString()
+      : fmtTournamentPoints(c.raw_value);
+    return '<span style="display:inline-block;margin-right:10px;color:#cbd5e1">'
+      + esc(label[c.category] || c.category) + ': <strong style="color:#fbbf24">' + fmtTournamentPoints(c.points) + ' pts</strong>'
+      + ' <span style="color:#6b7280">raw ' + raw + ' / ' + (c.players || 0) + ' players</span></span>';
+  }).join('');
+}
+
+async function loadTournamentDailyLogs(id) {
+  try {
+    const r = await fetch('/api/admin/tournaments/' + id + '/daily-points?limit=21', {
+      headers: { 'x-admin-key': KEY },
+    });
+    const j = await r.json();
+    if (!r.ok) { alert(j.error || 'Failed'); return; }
+    const t = j.tournament || {};
+    const days = j.days || [];
+    document.getElementById('tn_daily_meta').textContent =
+      '#' + t.id + ' ' + (t.name || '') + ' - daily pool log, newest UTC days first (' + days.length + ' day rows)';
+    if (!days.length) {
+      document.getElementById('tn_daily_body').innerHTML =
+        '<div style="color:#6b7280;font-size:12px;padding:12px;border:1px dashed #374151;border-radius:8px">No daily activity or awards recorded yet.</div>';
+      return;
+    }
+    document.getElementById('tn_daily_body').innerHTML = days.map(day => {
+      const run = day.run || {};
+      const totals = day.totals || {};
+      const processed = day.processed
+        ? '<span style="color:#34d399">processed ' + esc(run.processed_at || '') + '</span>'
+        : '<span style="color:#fbbf24">not awarded yet</span>';
+      const players = day.players || [];
+      const rows = players.map((p, idx) => {
+        const name = p.name || (p.wallet ? p.wallet.slice(0, 8) : String(p.player_id || '').slice(0, 8));
+        const points = fmtTournamentPoints(p.points || 0);
+        return '<tr>'
+          + '<td>' + (idx + 1) + '</td>'
+          + '<td>' + esc(name) + '<div style="font-size:10px;color:#6b7280">' + esc(p.dex || '') + '</div></td>'
+          + '<td style="color:#fbbf24;font-weight:700">' + points + '</td>'
+          + '<td>' + fmtTournamentPoints(p.trophy_points || 0) + '</td>'
+          + '<td>' + fmtTournamentPoints(p.volume_points || 0) + '</td>'
+          + '<td>' + fmtTournamentPoints(p.pnl_points || 0) + '</td>'
+          + '<td>' + (p.trophies || 0) + '</td>'
+          + '<td>$' + Math.round(p.volume_usd || 0).toLocaleString() + '</td>'
+          + '<td style="color:' + ((p.pnl_usd || 0) >= 0 ? '#34d399' : '#fca5a5') + '">$' + Number(p.pnl_usd || 0).toFixed(2) + '</td>'
+          + '<td>' + (p.trades_count || 0) + '</td>'
+          + '<td>' + (p.events || 0) + '</td>'
+          + '</tr>';
+      }).join('') || '<tr><td colspan="11" style="text-align:center;color:#6b7280;padding:10px">No player rows for this day.</td></tr>';
+      return '<div style="border:1px solid #374151;border-radius:10px;background:#111827;padding:12px">'
+        + '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px">'
+        +   '<div><strong style="color:#e5e7eb">' + esc(day.day_utc) + '</strong>'
+        +     '<div style="font-size:11px;color:#9ca3af">' + processed + ' - total awards ' + fmtTournamentPoints(totals.points || run.total_points || 0) + ' pts</div>'
+        +   '</div>'
+        +   '<div style="font-size:11px;color:#9ca3af;text-align:right">'
+        +     (totals.players || 0) + ' players - ' + (totals.trades_count || 0) + ' trades - $' + Math.round(totals.volume_usd || 0).toLocaleString() + ' volume - ' + (totals.trophies || 0) + ' trophies'
+        +   '</div>'
+        + '</div>'
+        + '<div style="font-size:11px;margin-bottom:8px">' + tournamentDailyCategorySummary(day.category_totals || []) + '</div>'
+        + '<table style="font-size:11px"><thead><tr>'
+        + '<th>#</th><th>Player</th><th>Pts</th><th>Trophy pts</th><th>Volume pts</th><th>PnL pts</th><th>Trophies</th><th>Volume</th><th>PnL</th><th>Trades</th><th>Events</th>'
+        + '</tr></thead><tbody>' + rows + '</tbody></table>'
+        + '</div>';
     }).join('');
   } catch(e) { console.error(e); }
 }

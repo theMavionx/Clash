@@ -1,11 +1,12 @@
-import { memo, useCallback, useState, useEffect, useRef } from 'react';
+import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
 import { useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
+import { useDex } from '../contexts/DexContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -193,8 +194,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
   const { isMobile } = useLayout();
+  const { dex } = useDex();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
+  const evmChainId = evmWallet?.chainId || null;
   const solWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
@@ -202,7 +205,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const hasDemonKingWallet = !!(evmAddress || solAddress || aptosAddress);
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
+    dex,
+    evmAddress,
+    evmChainId,
+    solAddress,
+    aptosAddress,
+  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  const hasDemonKingWallet = !!demonKingSyncTarget;
   
   const [view, setView] = useState('ACTIONS');
   const [swapSlot, setSwapSlot] = useState(null);
@@ -236,7 +246,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setDemonKingNftLoading(true);
     setDemonKingNftError(null);
     syncDemonKingNfts({
-      wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress },
+      ...demonKingSyncTarget,
       signal: controller.signal,
     })
       .then((ownedJson) => {
@@ -265,7 +275,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         if (!controller.signal.aborted) setDemonKingNftLoading(false);
       });
     return () => controller.abort();
-  }, [aptosAddress, evmAddress, hasDemonKingWallet, solAddress, view]);
+  }, [demonKingSyncTarget, hasDemonKingWallet, view]);
 
   const handleDeselect = useCallback(() => sendToGodot('deselect_building'), [sendToGodot]);
   const handleUpgrade = useCallback(() => {

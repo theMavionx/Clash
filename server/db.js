@@ -1922,6 +1922,7 @@ function recordTournamentTradeRows(playerId, rows, opts = {}) {
   let pnlUsd = 0;
 
   for (const row of rows) {
+    if (row?.reward_duplicate) continue;
     if (!tradeInTournamentWindow(t, row)) continue;
     const tradeId = row?.id ?? row?.history_id ?? row?.trade_id;
     if (tradeId === undefined || tradeId === null || tradeId === '') continue;

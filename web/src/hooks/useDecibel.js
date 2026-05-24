@@ -592,7 +592,7 @@ async function fetchBuilderApprovalOnChain(sub, builder) {
   const raw = moveOptionValue(result);
   if (raw == null) return false;
   const cap = Number(raw);
-  return Number.isFinite(cap) && cap >= bpsToChainUnits(BUILDER_FEE_BPS);
+  return Number.isFinite(cap) && cap === bpsToChainUnits(BUILDER_FEE_BPS);
 }
 
 async function fetchTradingDelegationOnChain(sub, apiAddr) {
@@ -1157,10 +1157,9 @@ export function useDecibel() {
   }, [address]);
 
   // ───── Builder fee linkage ─────
-  // We treat builder approvals as a one-shot on-chain cap: if
-  // builder_code_registry::get_approved_max_fee(subaccount, builder) is
-  // >= our chosen rate, we're good. localStorage is only a fast cache for a
-  // prior positive read/tx, never the source of truth.
+  // We treat builder approvals as a one-shot on-chain cap, but require it to
+  // exactly match the current fee. Otherwise old 10 bps approvals would keep
+  // passing after lowering Clash's Decibel fee to 5 bps.
   const fetchBuilderApproval = useCallback(async () => {
     if (!isBuilderConfigured()) {
       setBuilderApproved(true);
@@ -1181,7 +1180,7 @@ export function useDecibel() {
         setBuilderApproved(true);
         return true;
       }
-      if (hadLocalApproval) D.warn('local builder approval marker is stale; on-chain cap is missing/too low');
+      if (hadLocalApproval) D.warn('local builder approval marker is stale; on-chain cap is missing or mismatched');
       setBuilderApproved(false);
       return false;
     } catch (e) {

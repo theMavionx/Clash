@@ -19,7 +19,7 @@ import { MONAD_CHAIN_ID, ensureMonadChain, monadChain } from '../lib/monadConfig
 import { fetchGameShopConfig, buyGameShopItem, buySolanaShopItem, buyEvmShopItem, buyAptosShopItem } from '../lib/gameShop';
 import { flyResourcesToBars } from '../lib/resourceFlyFx';
 import { fetchNftMintConfig, mintBaseNft, mintSolanaNft, mintEvmNft, mintAptosNft } from '../lib/nftMint';
-import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
+import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts, upgradeAptosNft, upgradeNft } from '../lib/nftV3Client';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
@@ -463,19 +463,27 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     aptos:    !!gameShopConfig?.aptos?.ready    && !!gameShopConfig?.aptos?.saleActive,
   };
   const shopChainReady = !!shopReadiness[shopChain];
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
+    dex,
+    evmAddress,
+    evmChainId,
+    solAddress,
+    aptosAddress,
+  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
   // Multi-token chains (Solana, Aptos) expose a sub-toggle. EVM-USDC-only
   // chains don't need one. Default to USDC on multi-token chains since
   // most players already have it from the trading flow.
   const [shopPayment, setShopPayment] = useState('usdc');
 
   useEffect(() => {
-    if (!sessionToken || (!evmAddress && !solAddress && !aptosAddress)) return undefined;
+    if (!sessionToken || !demonKingSyncTarget) return undefined;
     let cancelled = false;
-    syncDemonKingNfts({ wallets: { evm: evmAddress, solana: solAddress, aptos: aptosAddress } })
+    syncDemonKingNfts(demonKingSyncTarget)
       .then((result) => {
         if (cancelled) return;
         addClientBreadcrumb('nft.demon_king_wallet_sync', {
           dex,
+          chains: result?.chains || demonKingSyncTarget.chains,
           wallets: result?.wallets?.length || 0,
           total: Number(result?.total) || 0,
           cached: !!result?.cached,
@@ -489,7 +497,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         }, 'warn');
       });
     return () => { cancelled = true; };
-  }, [aptosAddress, dex, evmAddress, sessionToken, solAddress]);
+  }, [demonKingSyncTarget, dex, sessionToken]);
 
   // Reset payment to USDC when the player switches to a chain that doesn't
   // offer the previously-chosen token. The chain-allowed sets here mirror
