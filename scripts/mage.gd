@@ -39,6 +39,7 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Ranged_Magic_Spellcasting"
+	attack_sfx_path = "res://Musik/sound_effects/mage/attack.mp3"
 	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
@@ -170,6 +171,7 @@ func _do_attack(delta: float) -> void:
 		if attack_anim != "" and anim_player.has_animation(attack_anim):
 			anim_player.stop()
 			anim_player.play(attack_anim)
+		_play_attack_sfx()
 		_spawn_projectile()
 
 

@@ -60,8 +60,10 @@ func play_fight() -> void:
 		return
 	if _current_state == "fight":
 		return
-	var idx := randi_range(0, FIGHT_TRACKS.size() - 1)
-	_play_state("fight", FIGHT_TRACKS[idx], true)
+	var fight_track := _pick_fight_track()
+	if fight_track == "":
+		return
+	_play_state("fight", fight_track, true)
 
 
 func play_result() -> void:
@@ -104,6 +106,13 @@ func _play_state(state: String, path: String, loop: bool) -> void:
 	_set_stream_loop(stream, loop)
 	_current_state = state
 	_fade_to_stream(stream)
+
+
+func _pick_fight_track() -> String:
+	if FIGHT_TRACKS.is_empty():
+		push_warning("AudioManager: no fight tracks configured")
+		return ""
+	return FIGHT_TRACKS.pick_random()
 
 
 func _fade_to_stream(stream: AudioStream) -> void:

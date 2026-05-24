@@ -194,12 +194,21 @@ func _make_impact_sphere(mat: StandardMaterial3D) -> MeshInstance3D:
 
 
 func _exit_tree() -> void:
+	cleanup_defense_visuals()
+
+
+func cleanup_defense_visuals() -> void:
+	_drop_target()
 	if is_instance_valid(_beam_core):
 		_beam_core.queue_free()
 	if is_instance_valid(_beam_glow):
 		_beam_glow.queue_free()
 	if is_instance_valid(_impact):
 		_impact.queue_free()
+	_beam_core = null
+	_beam_glow = null
+	_impact = null
+	_beam_ready = false
 
 
 func _physics_process(delta: float) -> void:

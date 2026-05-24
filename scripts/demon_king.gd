@@ -140,6 +140,7 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Melee_1H_Attack_Chop"
+	attack_sfx_path = "res://Musik/sound_effects/DemonKingAttack.mp3"
 	anim_files = DEMON_ANIM_FILES
 
 
@@ -389,6 +390,7 @@ func _do_attack(delta: float) -> void:
 
 	if not _hit_this_swing and attack_timer >= atk_speed * hit_anim_threshold:
 		_hit_this_swing = true
+		_play_attack_sfx()
 		_deal_target_damage()
 		_shake_camera()
 

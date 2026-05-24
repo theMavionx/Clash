@@ -7,6 +7,7 @@ extends Node3D
 @export var attack_range: float = 0.15
 @export var separation_radius: float = 0.14
 @export var separation_force: float = 0.6
+@export var attack_sfx_path: String = ""
 
 var level: int = 1
 var hp: int = 100
@@ -26,12 +27,17 @@ var anim_files: Array = []
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
+var _attack_sfx_player: AudioStreamPlayer = null
 const TROOP_MESH_CULL_MARGIN: float = 0.75
 const TROOP_MESH_LOD_BIAS: float = 4.0
+const ATTACK_SFX_VOLUME_DB: float = -8.0
+const ATTACK_SFX_PITCH_JITTER: float = 0.06
 
 ## Cached troop list — shared across all BaseTroop instances via static
 static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
+static var _attack_sfx_cache: Dictionary = {}
+static var _attack_sfx_missing: Dictionary = {}
 
 ## Rally pointer — set by BSRally when the player drops a marker. The visual
 ## marker expires quickly, but the command target stays sticky until that
@@ -451,6 +457,7 @@ static func _get_camera_cached() -> Camera3D:
 func _ready() -> void:
 	_init_stats()
 	max_hp = hp
+	_setup_attack_sfx()
 	_setup_animations()
 	_setup_weapons()
 	_stabilize_render_meshes()
@@ -470,11 +477,42 @@ func _init_stats() -> void:
 func upgrade_to(lvl: int) -> void:
 	level = lvl
 	_init_stats()
+	_setup_attack_sfx()
 
 
 ## Override to attach weapons via _attach_to_bone()
 func _setup_weapons() -> void:
 	pass
+
+
+func _setup_attack_sfx() -> void:
+	if attack_sfx_path == "":
+		return
+	if _attack_sfx_player == null:
+		_attack_sfx_player = AudioStreamPlayer.new()
+		_attack_sfx_player.name = "AttackSFX"
+		_attack_sfx_player.volume_db = ATTACK_SFX_VOLUME_DB
+		add_child(_attack_sfx_player)
+	if not _attack_sfx_cache.has(attack_sfx_path) and not _attack_sfx_missing.has(attack_sfx_path):
+		var stream: AudioStream = ResourceLoader.load(attack_sfx_path) as AudioStream
+		if stream:
+			_attack_sfx_cache[attack_sfx_path] = stream
+		else:
+			_attack_sfx_missing[attack_sfx_path] = true
+			push_warning("%s: missing attack sound '%s'" % [name, attack_sfx_path])
+	if _attack_sfx_cache.has(attack_sfx_path):
+		_attack_sfx_player.stream = _attack_sfx_cache[attack_sfx_path]
+
+
+func _play_attack_sfx() -> void:
+	if attack_sfx_path == "":
+		return
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		_setup_attack_sfx()
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		return
+	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
+	_attack_sfx_player.play()
 
 
 ## Transitions the troop from INACTIVE to IDLE, makes it visible, registers it
@@ -1136,7 +1174,7 @@ func _record_projectile_payload(kind: String, payload: Dictionary, projectile_po
 	_record_replay_telemetry(kind, payload)
 
 
-func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref: Node3D, projectile_pos: Vector3, extra: Dictionary = {}) -> void:
+func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref = null, projectile_pos: Vector3 = Vector3.ZERO, extra: Dictionary = {}) -> void:
 	_record_projectile_payload(kind, _target_payload_from_refs(target_ref, guard_ref), projectile_pos, extra)
 
 
@@ -1491,6 +1529,7 @@ func _do_attack(delta: float) -> void:
 		if attack_anim != "" and anim_player.has_animation(attack_anim):
 			anim_player.stop()
 			anim_player.play(attack_anim)
+		_play_attack_sfx()
 		_deal_target_damage()
 
 

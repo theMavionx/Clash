@@ -39,6 +39,7 @@ func _init_stats() -> void:
 	damage = s.damage
 	atk_speed = s.atk_speed
 	attack_anim = "Ranged_1H_Shoot"
+	attack_sfx_path = "res://Musik/sound_effects/ranger/attack.mp3"
 	anim_files = BaseTroop.MEDIUM_RIG_ANIM_FILES
 
 
@@ -143,6 +144,7 @@ func _do_attack(delta: float) -> void:
 
 	if not _shot_this_cycle and attack_timer >= atk_speed * shoot_threshold:
 		_shot_this_cycle = true
+		_play_attack_sfx()
 		_spawn_bolt()
 
 

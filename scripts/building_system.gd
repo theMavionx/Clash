@@ -3812,6 +3812,8 @@ func _replace_with_ruins(node: Node3D) -> void:
 	if _ruins_res == null:
 		return
 	# Stop defense scripts (turret/archer tower) so they don't keep firing
+	if node.has_method("cleanup_defense_visuals"):
+		node.cleanup_defense_visuals()
 	node.set_process(false)
 	node.set_physics_process(false)
 	# Clean up active bullets/projectiles/flashes from turrets and archer towers
