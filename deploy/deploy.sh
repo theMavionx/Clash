@@ -21,7 +21,7 @@ DEPLOY_ROOT="/opt/clash"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
 SHARED_DIR="$DEPLOY_ROOT/shared"
 CURRENT_LINK="$DEPLOY_ROOT/current"
-KEEP_RELEASES="${KEEP_RELEASES:-5}"
+KEEP_RELEASES="${KEEP_RELEASES:-7}"
 
 SOURCE_DIR="${CLASH_SOURCE_DIR:-$(dirname "$(dirname "$(readlink -f "$0")")")}"
 SOURCE_DIR="$(readlink -f "$SOURCE_DIR")"
@@ -1084,16 +1084,41 @@ restart_services() {
 }
 
 cleanup_old_releases() {
+    if ! [[ "$KEEP_RELEASES" =~ ^[0-9]+$ ]] || [ "$KEEP_RELEASES" -lt 1 ]; then
+        die "KEEP_RELEASES must be a positive integer, got '$KEEP_RELEASES'."
+    fi
+
     log "Keeping last $KEEP_RELEASES release(s)."
-    local count=0
-    local release
+
+    local current_real=""
+    current_real="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+
+    local kept=0
+    local release release_real keep_current=0
+    if [ -n "$current_real" ] && [ -d "$current_real" ]; then
+        keep_current=1
+        kept=1
+    fi
+
+    # Release directories are named YYYYMMDDHHMMSS-<git-sha>. Sort by that
+    # stable release id instead of directory mtime, because rsync -a can rewrite
+    # mtimes and make mtime-based pruning keep the wrong directories.
     while IFS= read -r release; do
-        count=$((count + 1))
-        if [ "$count" -gt "$KEEP_RELEASES" ] && [ "$release" != "$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)" ]; then
-            rm -rf "$release"
-            log "Removed old release $(basename "$release")"
+        [ -n "$release" ] || continue
+        release_real="$(readlink -f "$release" 2>/dev/null || true)"
+
+        if [ "$keep_current" -eq 1 ] && [ "$release_real" = "$current_real" ]; then
+            continue
         fi
-    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | awk '{print $2}')
+
+        if [ "$kept" -lt "$KEEP_RELEASES" ]; then
+            kept=$((kept + 1))
+            continue
+        fi
+
+        rm -rf "$release"
+        log "Removed old release $(basename "$release")"
+    done < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\t%p\n' | sort -r | cut -f2-)
 }
 
 main() {
