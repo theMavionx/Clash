@@ -171,8 +171,16 @@ async function confirmSolanaSignatureOrRecover(connection, confirmation, label) 
   }
 }
 
-export default function NftBridgePanel({ styles, onBack, onClose }) {
-  const tradingEvmWallet = useEvmWallet();
+export default function NftBridgePanel({
+  styles,
+  onBack,
+  onClose,
+  evmWallet: evmWalletOverride = null,
+  evmAddress: evmAddressOverride = null,
+  onOpenEvmModal = null,
+}) {
+  const contextEvmWallet = useEvmWallet();
+  const tradingEvmWallet = evmWalletOverride || contextEvmWallet;
   const solWallet = useSolWallet();
   const aptosWallet = useAptosWallet();
   const { setVisible: setSolanaModalVisible } = useWalletModal();
@@ -209,7 +217,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
   }
 
   // ── Wallet addresses on each chain (read-only refs) ─────────────────
-  const evmAddress  = tradingEvmWallet?.address || null;
+  const evmAddress  = evmAddressOverride || tradingEvmWallet?.address || null;
   const solAddress  = solWallet?.publicKey?.toBase58?.() || null;
   const aptAddress  = aptosWallet?.address || null;
 
@@ -303,11 +311,13 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
     const kind = CHAIN_BY_ID[sourceChain]?.kind;
     try {
       if (kind === 'evm') {
-        // The EvmWallet context auto-picks an installed injected wallet.
-        // We rely on the trading wallet adapter — if not connected, hint
-        // the player to use whichever DEX brought them here.
         if (!evmAddress) {
-          setNotice('Connect an EVM wallet from your DEX/trading flow first.');
+          if (typeof onOpenEvmModal === 'function') {
+            onOpenEvmModal(sourceChain);
+            setNotice(`Choose a ${CHAIN_BY_ID[sourceChain]?.label || 'Base'} wallet to load your NFTs.`);
+          } else {
+            setNotice('Connect an EVM wallet first.');
+          }
           return;
         }
         await tradingEvmWallet.ensureChain(EVM_CHAIN_IDS[sourceChain]);
@@ -319,7 +329,7 @@ export default function NftBridgePanel({ styles, onBack, onClose }) {
     } catch (err) {
       setNotice(err?.message?.slice?.(0, 160) || 'Wallet connect failed');
     }
-  }, [sourceChain, evmAddress, solAddress, aptAddress, tradingEvmWallet, aptosWallet, setSolanaModalVisible]);
+  }, [sourceChain, evmAddress, solAddress, aptAddress, tradingEvmWallet, aptosWallet, setSolanaModalVisible, onOpenEvmModal]);
 
   // ── Send the source burn tx via the appropriate wallet ─────────────
   // Returns the burn tx hash that the server's /bridge/confirm can verify.

@@ -70,6 +70,7 @@ try {
 
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
+const TASK_TRADE_SETTLE_DELAY_SECONDS = 30;
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }
@@ -161,22 +162,31 @@ function isDecibelLimitFillTaskRow(row) {
   return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
 }
 
+function isDecibelCloseTaskRow(row) {
+  return String(row?.side || '').toLowerCase().startsWith('close_');
+}
+
 function filterDuplicateDecibelTaskRows(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return rows || [];
   const kept = [];
   for (const row of rows) {
-    if (row.verified_source === 'worker') {
-      const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
-      const duplicate = kept.some((candidate) => {
+    const rowIsClose = isDecibelCloseTaskRow(row);
+    const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
+    const duplicate = kept.some((candidate) => {
+      if (rowIsClose && isDecibelCloseTaskRow(candidate)) {
+        return decibelTradesProbablyDuplicate(candidate, row);
+      }
+      if (row.verified_source === 'worker') {
         if (candidate.verified_source === 'server') {
           return decibelTradesProbablyDuplicate(candidate, row);
         }
         const candidateIsLimitFill = isDecibelLimitFillTaskRow(candidate);
         if (candidateIsLimitFill && rowIsLimitFill) return false;
         return decibelTradesProbablyDuplicate(candidate, row);
-      });
-      if (duplicate) continue;
-    }
+      }
+      return false;
+    });
+    if (duplicate) continue;
     kept.push(row);
   }
   return kept;
@@ -197,7 +207,7 @@ async function buildSnapshot(player, task) {
     // (avoids a zero baseline that would leak ALL past trades).
     // Snapshot only needs the MAX history_id, so first page (200 trades) is
     // enough — pass firstPageOnly to skip multi-page walks.
-    const trades = await fetchWalletTrades(player, { firstPageOnly: true });
+    const trades = await fetchWalletTrades(player, { firstPageOnly: true, includeUnsettled: true });
     let baseline = 0;
     for (const t of trades) {
       const id = Number(t.history_id || 0);
@@ -350,13 +360,20 @@ async function fetchWalletTrades(player, opts = {}) {
           : dexFilter === 'nado'
             ? "AND verified_source = 'nado_api'"
           : "AND verified_source = 'worker'";
+      const settleWhere = opts.includeUnsettled
+        ? ''
+        : "AND created_at <= datetime('now', ?)";
+      const settleParams = opts.includeUnsettled
+        ? []
+        : [`-${TASK_TRADE_SETTLE_DELAY_SECONDS} seconds`];
       let rows = fdb.prepare(`
         SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
           ${sourceWhere}
+          ${settleWhere}
         ORDER BY id ASC
-      `).all(player.id, dexFilter);
+      `).all(player.id, dexFilter, ...settleParams);
       if (dexFilter === 'decibel') {
         rows = filterDuplicateDecibelTaskRows(rows);
       }

@@ -7562,6 +7562,10 @@ function isDecibelLimitFillRewardRow(row) {
   return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
 }
 
+function isDecibelCloseRewardRow(row) {
+  return String(row?.side || '').toLowerCase().startsWith('close_');
+}
+
 function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
   if (!rows?.length) return rows || [];
   const maxId = rows.reduce((m, row) => Math.max(m, Number(row.id) || 0), Number(lastTradeId || 0));
@@ -7574,10 +7578,14 @@ function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
     ORDER BY id ASC
   `).all(playerId, maxId, Math.max(0, Number(lastTradeId || 0) - 250));
   return rows.map((row) => {
-    if (row.verified_source !== 'worker') return row;
+    const rowIsClose = isDecibelCloseRewardRow(row);
     const rowIsLimitFill = isDecibelLimitFillRewardRow(row);
     const duplicate = context.some((candidate) => {
       if (Number(candidate.id) >= Number(row.id)) return false;
+      if (rowIsClose && isDecibelCloseRewardRow(candidate)) {
+        return decibelTradesProbablyDuplicate(candidate, row);
+      }
+      if (row.verified_source !== 'worker') return false;
       if (candidate.verified_source === 'server') {
         return decibelTradesProbablyDuplicate(candidate, row);
       }
@@ -7587,6 +7595,11 @@ function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
     });
     return duplicate ? { ...row, reward_duplicate: 1 } : row;
   });
+}
+
+function sqliteUtcMs(value) {
+  const ms = Date.parse(`${String(value || '').replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : 0;
 }
 
 const NFT_GOLD_BOOST_CONTRACT_RAW =
@@ -8077,6 +8090,7 @@ try {
 // transaction + gold_history UNIQUE dedup, so even rapid identical calls
 // can't double-credit).
 const CLAIM_COOLDOWN_MS = 25;  // bumped 250 → 25ms (100× more lenient) per user request — last_trade_id transaction still prevents double-credit
+const TRADE_REWARD_SETTLE_DELAY_SECONDS = 30;
 const claimCooldowns = new Map();
 setInterval(() => {
   const cutoff = Date.now() - 60000;
@@ -8422,26 +8436,27 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     }
     let newTrades = [];
     let hyperliquidWalletRowsAvailable = 0;
+    const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
+    const sourceWhere = dex === 'decibel'
+      ? "AND verified_source IN ('server', 'worker')"
+      : dex === 'monad'
+        ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
+        : dex === 'hyperliquid'
+          ? "AND verified_source = 'hyperliquid_api'"
+        : dex === 'risex'
+          ? "AND verified_source = 'risex_api'"
+        : dex === 'nado'
+          ? "AND verified_source = 'nado_api'"
+        : "AND verified_source = 'worker'";
+    const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
+      ? `hyperliquid:${String(wallet).toLowerCase()}:%`
+      : null;
     try {
       // Avantis/GMX stay worker-only. Decibel uses server rows for immediate
       // market/close claims and worker rows for later limit-order fills. The
       // worker can also see the same market position a few seconds after the
       // server row, so duplicate worker rows are filtered below while still
       // advancing the cursor.
-      const sourceWhere = dex === 'decibel'
-        ? "AND verified_source IN ('server', 'worker')"
-        : dex === 'monad'
-          ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
-          : dex === 'hyperliquid'
-            ? "AND verified_source = 'hyperliquid_api'"
-          : dex === 'risex'
-            ? "AND verified_source = 'risex_api'"
-          : dex === 'nado'
-            ? "AND verified_source = 'nado_api'"
-          : "AND verified_source = 'worker'";
-      const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
-        ? `hyperliquid:${String(wallet).toLowerCase()}:%`
-        : null;
       if (hyperliquidWalletPrefix) {
         // Hyperliquid fill client_order_id is wallet-scoped. This fallback
         // lets a user keep rewards if the same EVM wallet was re-registered
@@ -8459,21 +8474,25 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
           FROM trade_history
           WHERE dex = ? AND status = 'filled'
-            ${sourceWhere} AND id > ?
+            ${sourceWhere}
+            AND created_at <= datetime('now', ?)
+            AND id > ?
             AND (
               player_id = ?
               OR lower(client_order_id) LIKE ?
             )
           ORDER BY id ASC
-        `).all(dex, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix);
+        `).all(dex, rewardSettleDelaySql, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix);
       } else {
         newTrades = fdb.prepare(`
           SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
           FROM trade_history
           WHERE player_id = ? AND dex = ? AND status = 'filled'
-            ${sourceWhere} AND id > ?
+            ${sourceWhere}
+            AND created_at <= datetime('now', ?)
+            AND id > ?
           ORDER BY id ASC
-        `).all(req.player.id, dex, reward.last_trade_id || 0);
+        `).all(req.player.id, dex, rewardSettleDelaySql, reward.last_trade_id || 0);
       }
     } catch (e) {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
@@ -8485,6 +8504,35 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       } catch (e) {
         console.warn('[claim-gold decibel] duplicate worker filter failed:', e.message);
       }
+    }
+
+    let settlingTrades = { n: 0, first_at: null };
+    try {
+      if (hyperliquidWalletPrefix) {
+        settlingTrades = fdb.prepare(`
+          SELECT COUNT(*) AS n, MIN(created_at) AS first_at
+          FROM trade_history
+          WHERE dex = ? AND status = 'filled'
+            ${sourceWhere}
+            AND created_at > datetime('now', ?)
+            AND id > ?
+            AND (
+              player_id = ?
+              OR lower(client_order_id) LIKE ?
+            )
+        `).get(dex, rewardSettleDelaySql, reward.last_trade_id || 0, req.player.id, hyperliquidWalletPrefix) || settlingTrades;
+      } else {
+        settlingTrades = fdb.prepare(`
+          SELECT COUNT(*) AS n, MIN(created_at) AS first_at
+          FROM trade_history
+          WHERE player_id = ? AND dex = ? AND status = 'filled'
+            ${sourceWhere}
+            AND created_at > datetime('now', ?)
+            AND id > ?
+        `).get(req.player.id, dex, rewardSettleDelaySql, reward.last_trade_id || 0) || settlingTrades;
+      }
+    } catch (e) {
+      console.warn(`[claim-gold ${dex}] settling trade query failed:`, e.message);
     }
 
     let decibelPnlRows = [];
@@ -8516,6 +8564,18 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
         pnl: true,
       });
     };
+    const settlingPayload = () => {
+      const firstMs = sqliteUtcMs(settlingTrades.first_at);
+      const readyAt = firstMs ? firstMs + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000 : Date.now() + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000;
+      const retryAfterMs = Math.max(1000, readyAt - Date.now());
+      return {
+        gold: 0,
+        reason: `Trade is settling - rewards unlock in ${Math.ceil(retryAfterMs / 1000)}s`,
+        dex,
+        retry_after_ms: retryAfterMs,
+        pending_trades: Number(settlingTrades.n || 0),
+      };
+    };
     console.log(`[claim-gold ${dex}] player=${req.player.name} id=${req.player.id} wallet=${(wallet||'').slice(0,10)} last_trade_id=${reward.last_trade_id||0} new_trades=${newTrades.length} wallet_rows=${hyperliquidWalletRowsAvailable || '-'} stored_volume=$${(reward.total_volume||0).toFixed(2)} stored_gold=${reward.total_gold||0}`);
     const hyperliquidClaimDebug = () => dex === 'hyperliquid' ? {
       last_trade_id: reward.last_trade_id || 0,
@@ -8525,6 +8585,21 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       player_id: String(req.player.id || '').slice(0, 8),
       wallet: EVM_WALLET_RE.test(String(wallet || '')) ? `${String(wallet).slice(0, 10)}...` : null,
     } : undefined;
+
+    if (newTrades.length === 0 && Number(settlingTrades.n || 0) > 0) {
+      const pnlSync = syncDecibelTournamentPnl();
+      if (pnlSync.credited_rows > 0) {
+        console.log(`[claim-gold ${dex}] player=${req.player.name} -> SYNCED tournament pnl=$${pnlSync.pnl_usd.toFixed(2)} rows=${pnlSync.credited_rows}`);
+        return res.json({
+          gold: 0,
+          reason: `Tournament PnL synced: $${pnlSync.pnl_usd.toFixed(2)}`,
+          dex,
+          tournament_pnl_usd: pnlSync.pnl_usd,
+        });
+      }
+      console.log(`[claim-gold ${dex}] player=${req.player.name} -> SETTLING pending=${settlingTrades.n}`);
+      return res.json(settlingPayload());
+    }
 
     if (newTrades.length === 0 && reward.first_deposit && reward.first_trade) {
       const pnlSync = syncDecibelTournamentPnl();

@@ -12,7 +12,7 @@
  */
 
 const {
-  TROOP_STATS, DEFENSE_STATS, SKELETON_GUARD,
+  TROOP_STATS, computeDemonKingStats, DEFENSE_STATS, SKELETON_GUARD,
   MAX_SHIPS, TROOPS_PER_SHIP, TIME_LIMIT_SEC, SAIL_DELAY_SEC,
   CANNON_DAMAGE, CANNON_INITIAL_ENERGY, CANNON_ENERGY_PER_DESTROY,
   CANNON_RELOAD_SEC, CANNON_SPEED, CANNON_MIN_FLIGHT_SEC,
@@ -839,6 +839,7 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
           pendingSpawns.push({
             time: act.t + SAIL_DELAY_SEC + ti * TROOP_SPAWN_DELAY,
             troopType, troopLevel: level,
+            playerTroopLevels: serverTroopLevels || act.playerTroopLevels || act.troopLevels || {},
             x: finiteNumber(troopSpawn.x, spawnX),
             z: finiteNumber(troopSpawn.z, spawnZ),
             replayOrder: shipReplayIndex * 100 + ti,
@@ -949,7 +950,9 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
     for (let i = pendingSpawns.length - 1; i >= 0; i--) {
       if (pendingSpawns[i].time <= time) {
         const sp = pendingSpawns.splice(i, 1)[0];
-        const stats = TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1];
+        const stats = sp.troopType === 'demon_king'
+          ? computeDemonKingStats(sp.playerTroopLevels, sp.troopLevel)
+          : (TROOP_STATS[sp.troopType]?.[sp.troopLevel] || TROOP_STATS[sp.troopType]?.[1]);
         if (!stats) continue;
         // One troop per spawn entry
         const troopId = nextTroopId++;

@@ -72,6 +72,8 @@ const ACCOUNT_BACKOFF_MAX_MS = 60_000;
 const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const FUTURES_API = '/api/futures';
+const DECIBEL_REWARD_CLAIM_DELAY_MS = 30_000;
+const DECIBEL_CLOSE_RETRY_LOCK_MS = 30_000;
 const BUILDER_APPROVAL_VIEW = `${DECIBEL_PACKAGE_MAINNET}::builder_code_registry::get_approved_max_fee`;
 const TRADING_DELEGATION_VIEW = `${DECIBEL_PACKAGE_MAINNET}::dex_accounts::view_delegated_permissions`;
 
@@ -819,6 +821,7 @@ export function useDecibel() {
   const positionsRef = useRef([]);
   const ordersRef = useRef([]);
   const claimGoldRef = useRef(null);
+  const closeInFlightRef = useRef(new Set());
   const activationInFlightRef = useRef(false);
   // Builder subaccount cache (deterministic, but resolution touches REST +
   // SDK helpers so we avoid repeating the work on every trade).
@@ -1630,7 +1633,7 @@ export function useDecibel() {
     ...payload,
   }), [address, decibelServerRequest]);
 
-  const scheduleClaim = useCallback((delayMs = 2500) => {
+  const scheduleClaim = useCallback((delayMs = DECIBEL_REWARD_CLAIM_DELAY_MS) => {
     const t = setTimeout(() => {
       const fn = claimGoldRef.current;
       if (typeof fn === 'function') fn();
@@ -1813,6 +1816,15 @@ export function useDecibel() {
     setLoading(true);
     setError(null);
     const startedAt = performance.now();
+    const closeLockKey = `${String(symbol || '').toUpperCase()}:${String(side || '').toLowerCase()}`;
+    if (closeInFlightRef.current.has(closeLockKey)) {
+      const msg = 'Close is already processing - wait for Decibel to settle it.';
+      setLoading(false);
+      setError(msg);
+      return { error: msg, code: 'CLOSE_SETTLING' };
+    }
+    closeInFlightRef.current.add(closeLockKey);
+    let holdCloseLockMs = 0;
     try {
       requireServerSigner();
       const amt = Number(amount);
@@ -1877,14 +1889,20 @@ export function useDecibel() {
       fetchPositions();
       fetchAccount({ force: true });
       fetchBalance();
-      scheduleClaim(2500);
-      scheduleClaim(8000);
+      holdCloseLockMs = DECIBEL_CLOSE_RETRY_LOCK_MS;
+      scheduleClaim();
+      scheduleClaim(DECIBEL_REWARD_CLAIM_DELAY_MS + 15_000);
       return { tx_hash: txHash, status: 'closed' };
     } catch (e) {
       const msg = decodeTradeError(e, 'Close failed');
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     } finally {
+      if (holdCloseLockMs > 0) {
+        setTimeout(() => closeInFlightRef.current.delete(closeLockKey), holdCloseLockMs);
+      } else {
+        closeInFlightRef.current.delete(closeLockKey);
+      }
       setLoading(false);
     }
   }, [requireServerSigner, address, ensureSubaccount, builderFields, prices, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
@@ -2117,6 +2135,9 @@ export function useDecibel() {
         console.warn('[useDecibel] claim-gold failed:', res.status, data?.error || '(no body)');
         return data;
       }
+      if (Number(data.retry_after_ms) > 0 && !(Number(data.gold) > 0)) {
+        scheduleClaim(Math.min(Math.max(Number(data.retry_after_ms), 1000), 60_000));
+      }
       if (data.gold > 0) {
         setGoldEarned({ amount: data.gold, reason: data.reason || 'Trading rewards' });
         if (window.onGodotMessage) {
@@ -2128,7 +2149,7 @@ export function useDecibel() {
       console.warn('[useDecibel] claim-gold network error:', e?.message || e);
       return null;
     }
-  }, [address]);
+  }, [address, scheduleClaim]);
 
   claimGoldRef.current = claimGold;
 

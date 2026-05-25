@@ -408,6 +408,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   // tabs; 'bridge' replaces the body with the cross-chain bridge UI.
   const [view, setView] = useState(initialView === 'upgrade' ? 'upgrade' : 'shop');
   const [evmModalOpen, setEvmModalOpen] = useState(false);
+  const [evmModalTargetOverride, setEvmModalTargetOverride] = useState(null);
   const [nftEvmWallet, setNftEvmWallet] = useState(null);
   const [evmChainId, setEvmChainId] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -727,6 +728,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const handleBaseReady = useCallback(() => handleEvmReady('base'), [handleEvmReady]);
   const handleShopChainReady = useCallback(() => handleEvmReady(shopChain), [handleEvmReady, shopChain]);
   const handleMarketplaceReady = useCallback(() => handleEvmReady(marketplaceChain), [handleEvmReady, marketplaceChain]);
+  const handleBridgeEvmModal = useCallback((targetChain = 'base') => {
+    const chainKey = EVM_CHAIN_ID_BY_NFT_CHAIN[targetChain] ? targetChain : 'base';
+    setEvmModalTargetOverride(chainKey);
+    setEvmModalOpen(true);
+  }, []);
 
   const handleSolanaReady = useCallback(() => {
     if (solAddress) {
@@ -1015,11 +1021,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     busy,
   });
 
-  const evmModalTargetChain = activeShopTab === 'marketplace'
+  const evmModalTargetChain = evmModalTargetOverride || (activeShopTab === 'marketplace'
     ? marketplaceChain
     : activeShopTab === 'resources'
       ? shopChain
-      : selectedChain;
+      : selectedChain);
   const evmModalTargetEvmChain = EVM_CHAIN_ID_BY_NFT_CHAIN[evmModalTargetChain]
     ? evmModalTargetChain
     : 'base';
@@ -1109,6 +1115,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             {view === 'upgrade' ? (
               <DemonKingUpgradePanel
                 initialRequest={initialUpgradeRequest}
+                dex={dex}
                 evmWallet={evmWallet}
                 evmAddress={evmAddress}
                 solWallet={solWallet}
@@ -1129,6 +1136,9 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             ) : view === 'bridge' ? (
               <NftBridgePanel
                 styles={styles}
+                evmWallet={evmWallet}
+                evmAddress={evmAddress}
+                onOpenEvmModal={handleBridgeEvmModal}
                 onBack={() => setView('shop')}
                 onClose={onClose}
               />
@@ -1431,12 +1441,16 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
       <EvmWalletModal
         open={evmModalOpen}
-        onClose={() => setEvmModalOpen(false)}
+        onClose={() => {
+          setEvmModalOpen(false);
+          setEvmModalTargetOverride(null);
+        }}
         targetChain={evmModalTargetEvmChain}
         onConnected={({ provider, address, rdns }) => {
           setNftEvmWallet({ provider, address, rdns });
           setEvmChainId(evmModalTargetChainId);
           setEvmModalOpen(false);
+          setEvmModalTargetOverride(null);
           setNotice(`${evmModalTargetLabel} wallet connected.`);
           addClientBreadcrumb('nft.connect_evm_success', { dex, scope: 'nft', chain: evmModalTargetEvmChain });
         }}
@@ -1539,6 +1553,7 @@ function ShopChainSwitcher({ activeChain, readiness, onSelect }) {
 }
 
 const DEMON_KING_EVM_UPGRADE_CHAINS = ['base', 'arbitrum', 'monad'];
+const DEMON_KING_UPGRADE_CHAINS = new Set([...DEMON_KING_EVM_UPGRADE_CHAINS, 'solana', 'aptos']);
 const DEMON_KING_UPGRADE_PRICE_HINT = {
   usdc: '$8.90',
   eth: '~$8.90',
@@ -1550,6 +1565,39 @@ const DEMON_KING_UPGRADE_PRICE_HINT = {
 
 function shopChainChoice(chain) {
   return SHOP_CHAIN_CHOICES.find((choice) => choice.id === chain) || null;
+}
+
+function normalizeDemonKingUpgradeChain(chain) {
+  const key = String(chain || '').toLowerCase();
+  return DEMON_KING_UPGRADE_CHAINS.has(key) ? key : null;
+}
+
+function nftChainFromEvmChainId(chainId) {
+  const id = Number(chainId);
+  if (!Number.isFinite(id)) return null;
+  return Object.entries(EVM_CHAIN_ID_BY_NFT_CHAIN)
+    .find(([, value]) => Number(value) === id)?.[0] || null;
+}
+
+function resolveDemonKingUpgradeChain({
+  initialRequest,
+  dex,
+  evmAddress,
+  evmChainId,
+  solAddress,
+  aptosAddress,
+}) {
+  const explicit = normalizeDemonKingUpgradeChain(initialRequest?.chain || initialRequest?.nft?.chain);
+  if (explicit) return explicit;
+
+  const preferred = normalizeDemonKingUpgradeChain(DEX_TO_NFT_CHAIN[String(dex || '').toLowerCase()]);
+  const activeEvm = evmAddress ? nftChainFromEvmChainId(evmChainId) : null;
+
+  if (preferred) return preferred;
+  if (activeEvm) return activeEvm;
+  if (aptosAddress) return 'aptos';
+  if (solAddress) return 'solana';
+  return 'base';
 }
 
 function upgradePaymentForQuote(payment) {
@@ -1566,6 +1614,7 @@ function quotePaymentLabel(quote, fallbackLabel = '') {
 
 function DemonKingUpgradePanel({
   initialRequest,
+  dex,
   evmWallet,
   evmAddress,
   solWallet,
@@ -1581,7 +1630,14 @@ function DemonKingUpgradePanel({
   busy,
   onClose,
 }) {
-  const chain = 'solana';
+  const chain = resolveDemonKingUpgradeChain({
+    initialRequest,
+    dex,
+    evmAddress,
+    evmChainId,
+    solAddress,
+    aptosAddress,
+  });
   const [payment, setPayment] = useState('usdc');
   const [status, setStatus] = useState(initialRequest || null);
   const [owned, setOwned] = useState([]);

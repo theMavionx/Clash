@@ -477,6 +477,7 @@ func _init_stats() -> void:
 func upgrade_to(lvl: int) -> void:
 	level = lvl
 	_init_stats()
+	max_hp = hp
 	_setup_attack_sfx()
 
 

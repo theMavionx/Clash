@@ -18,11 +18,57 @@ extends BaseTroop
 ## "Melee_1H_Attack_Chop") so the rest of the combat code works unchanged.
 
 
-const LEVEL_STATS = {
-	1: {"hp": 2400, "damage": 220, "atk_speed": 1.25},
-	2: {"hp": 3200, "damage": 300, "atk_speed": 1.15},
-	3: {"hp": 4300, "damage": 410, "atk_speed": 1.05},
+const NORMAL_TROOP_STATS: Dictionary = {
+	"knight": {
+		1: {"hp": 450, "damage": 38, "atk_speed": 1.40},
+		2: {"hp": 600, "damage": 50, "atk_speed": 1.30},
+		3: {"hp": 780, "damage": 66, "atk_speed": 1.20},
+		4: {"hp": 1000, "damage": 86, "atk_speed": 1.10},
+	},
+	"mage": {
+		1: {"hp": 150, "damage": 58, "atk_speed": 1.25},
+		2: {"hp": 200, "damage": 78, "atk_speed": 1.12},
+		3: {"hp": 265, "damage": 104, "atk_speed": 1.0},
+		4: {"hp": 345, "damage": 138, "atk_speed": 0.90},
+	},
+	"barbarian": {
+		1: {"hp": 240, "damage": 24, "atk_speed": 0.60},
+		2: {"hp": 320, "damage": 32, "atk_speed": 0.55},
+		3: {"hp": 420, "damage": 43, "atk_speed": 0.50},
+		4: {"hp": 550, "damage": 57, "atk_speed": 0.46},
+	},
+	"archer": {
+		1: {"hp": 210, "damage": 40, "atk_speed": 1.05},
+		2: {"hp": 280, "damage": 54, "atk_speed": 0.95},
+		3: {"hp": 365, "damage": 71, "atk_speed": 0.85},
+		4: {"hp": 470, "damage": 94, "atk_speed": 0.78},
+	},
+	"ranger": {
+		1: {"hp": 250, "damage": 34, "atk_speed": 1.0},
+		2: {"hp": 330, "damage": 45, "atk_speed": 0.92},
+		3: {"hp": 430, "damage": 60, "atk_speed": 0.83},
+		4: {"hp": 560, "damage": 80, "atk_speed": 0.76},
+	},
 }
+
+const DEMON_KING_ATK_SPEED_BY_LEVEL: Dictionary = {
+	1: 1.25,
+	2: 1.15,
+	3: 1.05,
+}
+const DEMON_KING_MIN_STATS_BY_LEVEL: Dictionary = {
+	1: {"hp": 2400, "damage": 220},
+	2: {"hp": 3200, "damage": 300},
+	3: {"hp": 4300, "damage": 410},
+}
+const DEMON_KING_NFT_LEVEL_MULT: Dictionary = {
+	1: 1.0,
+	2: 1.1,
+	3: 1.2,
+}
+const DEMON_KING_DAMAGE_BASE_ATK_SPEED: float = 1.25
+const DEMON_KING_SLOT_COUNT: float = 2.0
+const DEMON_KING_POWER_OVER_TWO_TROOPS: float = 1.3
 
 const DEMON_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx",
@@ -60,6 +106,8 @@ const ANIM_NAME_MAP: Dictionary = {
 }
 
 static var _merged_anim_cache_by_skeleton: Dictionary = {}
+
+var player_troop_levels: Dictionary = {}
 
 # Note: DemonKing_albedo.png is the un-masked base; the MaskTint shader uses
 # DemonKing_mask_albedo.png instead, so the plain albedo isn't preloaded here.
@@ -127,13 +175,12 @@ const ACTIVE_PALETTE: Array[Color] = TINT_PINK  # default skin — change to TIN
 
 
 ## Sets hp, damage, atk_speed, move_speed, attack_range, attack_anim, and anim_files
-## from LEVEL_STATS for the current level. Called by BaseTroop._ready().
+## from the player's current troop levels. Called by BaseTroop._ready().
 func _init_stats() -> void:
 	# Clamp to a valid tier — upgrade_to(lvl) could be handed an out-of-range
-	# level (server desync, bad payload) and LEVEL_STATS[level] would crash.
-	if not LEVEL_STATS.has(level):
-		level = clampi(level, 1, LEVEL_STATS.size())
-	var s = LEVEL_STATS[level]
+	# level (server desync, bad payload) and dynamic stat calculation stays safe.
+	level = clampi(level, 1, DEMON_KING_ATK_SPEED_BY_LEVEL.size())
+	var s: Dictionary = _compute_dynamic_stats(level, player_troop_levels)
 	move_speed = 0.38        # 24% slower than Knight (0.50) — heavy boss feel
 	attack_range = 0.32      # 33% greater reach than Knight (0.24) — large hit zone
 	hp = s.hp
@@ -142,6 +189,45 @@ func _init_stats() -> void:
 	attack_anim = "Melee_1H_Attack_Chop"
 	attack_sfx_path = "res://Musik/sound_effects/DemonKingAttack.mp3"
 	anim_files = DEMON_ANIM_FILES
+
+
+func set_player_troop_levels(levels: Dictionary) -> void:
+	player_troop_levels = levels.duplicate(true) if levels != null else {}
+
+
+static func _troop_level_from_map(levels: Dictionary, troop_type: String) -> int:
+	var aliases: Array[String] = [
+		troop_type,
+		troop_type.capitalize(),
+		troop_type.replace("_", ""),
+	]
+	for key in aliases:
+		if levels.has(key):
+			return clampi(int(levels[key]), 1, 4)
+	return 1
+
+
+static func _compute_dynamic_stats(demon_level: int, levels: Dictionary) -> Dictionary:
+	var best_hp: float = 0.0
+	var best_dps: float = 0.0
+	for troop_type in NORMAL_TROOP_STATS.keys():
+		var troop_level: int = _troop_level_from_map(levels, troop_type)
+		var stat_by_level: Dictionary = NORMAL_TROOP_STATS[troop_type]
+		var stat: Dictionary = stat_by_level.get(troop_level, stat_by_level[1])
+		best_hp = maxf(best_hp, float(stat.hp))
+		best_dps = maxf(best_dps, float(stat.damage) / maxf(0.01, float(stat.atk_speed)))
+
+	var clamped_level: int = clampi(demon_level, 1, DEMON_KING_ATK_SPEED_BY_LEVEL.size())
+	var atk: float = float(DEMON_KING_ATK_SPEED_BY_LEVEL[clamped_level])
+	var nft_mult: float = float(DEMON_KING_NFT_LEVEL_MULT.get(clamped_level, 1.0))
+	var target_hp: float = best_hp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nft_mult
+	var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nft_mult
+	var min_stats: Dictionary = DEMON_KING_MIN_STATS_BY_LEVEL[clamped_level]
+	return {
+		"hp": maxi(int(min_stats.hp), int(ceil(target_hp))),
+		"damage": maxi(int(min_stats.damage), int(ceil(target_dps * DEMON_KING_DAMAGE_BASE_ATK_SPEED))),
+		"atk_speed": atk,
+	}
 
 
 ## DemonKing fights bare-handed (no skeleton slot for a weapon).

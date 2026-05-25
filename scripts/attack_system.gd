@@ -810,6 +810,9 @@ func _spawn_troop_after_delay(
 	troop.set_script(script_res)
 	troop.name = troop_node_name
 	troop.set_meta("replay_order", replay_order)
+	if troop.has_method("set_player_troop_levels"):
+		var player_levels: Dictionary = bs_ref.troop_levels if bs_ref and "troop_levels" in bs_ref else {}
+		troop.set_player_troop_levels(player_levels)
 	get_tree().current_scene.add_child(troop)
 	troop._spawn_scale = troop_scale
 	troop.scale = Vector3(troop_scale, troop_scale, troop_scale)

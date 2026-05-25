@@ -42,7 +42,76 @@ const TROOP_STATS = {
   },
 };
 
-// Defense building stats — turrets fire bullets, archer towers fire arrows
+// Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
+const NORMAL_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
+const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
+const DEMON_KING_MIN_STATS_BY_LEVEL = {
+  1: { hp: 2400, damage: 220 },
+  2: { hp: 3200, damage: 300 },
+  3: { hp: 4300, damage: 410 },
+};
+const DEMON_KING_NFT_LEVEL_MULT = { 1: 1.0, 2: 1.1, 3: 1.2 };
+const DEMON_KING_DAMAGE_BASE_ATK_SPEED = 1.25;
+const DEMON_KING_SLOT_COUNT = 2;
+const DEMON_KING_POWER_OVER_TWO_TROOPS = 1.3;
+
+const TROOP_TYPE_DISPLAY_KEYS = {
+  knight: 'Knight',
+  mage: 'Mage',
+  barbarian: 'Barbarian',
+  archer: 'Archer',
+  ranger: 'Ranger',
+};
+
+function clampInt(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+function troopLevelFromMap(levels = {}, troopType) {
+  const display = TROOP_TYPE_DISPLAY_KEYS[troopType];
+  const compact = display ? display.replace(/\s+/g, '') : troopType;
+  const candidates = [troopType, display, compact].filter(Boolean);
+  for (const key of candidates) {
+    if (Object.prototype.hasOwnProperty.call(levels, key)) {
+      return clampInt(levels[key], 1, 4);
+    }
+  }
+  return 1;
+}
+
+function computeDemonKingStats(troopLevels = {}, demonLevel = 1) {
+  const clampedLevel = clampInt(demonLevel, 1, 3);
+  let bestHp = 0;
+  let bestDps = 0;
+
+  for (const troopType of NORMAL_TROOP_TYPES) {
+    const troopLevel = troopLevelFromMap(troopLevels, troopType);
+    const stats = TROOP_STATS[troopType]?.[troopLevel] || TROOP_STATS[troopType]?.[1];
+    if (!stats) continue;
+    bestHp = Math.max(bestHp, Number(stats.hp) || 0);
+    bestDps = Math.max(bestDps, (Number(stats.damage) || 0) / Math.max(0.01, Number(stats.atkSpeed) || 1));
+  }
+
+  const atkSpeed = DEMON_KING_ATK_SPEED_BY_LEVEL[clampedLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
+  const nftMult = DEMON_KING_NFT_LEVEL_MULT[clampedLevel] || 1;
+  const minStats = DEMON_KING_MIN_STATS_BY_LEVEL[clampedLevel] || DEMON_KING_MIN_STATS_BY_LEVEL[1];
+  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+
+  return {
+    hp: Math.max(minStats.hp, Math.ceil(targetHp)),
+    damage: Math.max(minStats.damage, Math.ceil(targetDps * DEMON_KING_DAMAGE_BASE_ATK_SPEED)),
+    atkSpeed,
+    moveSpeed: 0.38,
+    range: 0.32,
+    melee: true,
+    hitDelay: 0.4,
+  };
+}
+
+// Defense building stats: turrets fire bullets, archer towers fire arrows.
 const DEFENSE_STATS = {
   turret: {
     1: { damage: 35, fireRate: 0.70, detectRange: 0.95, projSpeed: 4.0 },
@@ -170,6 +239,7 @@ const CANONICAL_GRID_CONFIG = CANONICAL_GRID_CONFIGS[0];
 
 module.exports = {
   TROOP_STATS,
+  computeDemonKingStats,
   DEFENSE_STATS,
   SKELETON_GUARD,
   MAX_SHIPS,

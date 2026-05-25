@@ -147,6 +147,68 @@ const TROOP_STATS = {
   }
 };
 
+const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
+const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
+const DEMON_KING_MIN_STATS_BY_LEVEL = {
+  1: { hp: 2400, damage: 220 },
+  2: { hp: 3200, damage: 300 },
+  3: { hp: 4300, damage: 410 },
+};
+const DEMON_KING_NFT_LEVEL_MULT = { 1: 1.0, 2: 1.1, 3: 1.2 };
+const DEMON_KING_DAMAGE_BASE_ATK_SPEED = 1.25;
+const DEMON_KING_SLOT_COUNT = 2;
+const DEMON_KING_POWER_OVER_TWO_TROOPS = 1.3;
+
+function clampLevel(value, min, max) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
+}
+
+function troopLevelFromMap(levels = {}, troopName) {
+  const keys = [troopName, troopName.toLowerCase()];
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(levels, key)) {
+      return clampLevel(levels[key], 1, 4);
+    }
+  }
+  return 1;
+}
+
+function computeDemonKingStats(level, troopLevels = {}) {
+  const demonLevel = clampLevel(level, 1, 3);
+  let bestHp = 0;
+  let bestDps = 0;
+  for (const troopName of NORMAL_TROOP_NAMES) {
+    const troopLevel = troopLevelFromMap(troopLevels, troopName);
+    const stats = TROOP_STATS[troopName]?.stats?.[troopLevel] || TROOP_STATS[troopName]?.stats?.[1];
+    if (!stats) continue;
+    bestHp = Math.max(bestHp, Number(stats.hp) || 0);
+    bestDps = Math.max(bestDps, (Number(stats.damage) || 0) / Math.max(0.01, Number(stats.atk_speed) || 1));
+  }
+
+  const atk_speed = DEMON_KING_ATK_SPEED_BY_LEVEL[demonLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
+  const nftMult = DEMON_KING_NFT_LEVEL_MULT[demonLevel] || 1;
+  const minStats = DEMON_KING_MIN_STATS_BY_LEVEL[demonLevel] || DEMON_KING_MIN_STATS_BY_LEVEL[1];
+  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+  return {
+    hp: Math.max(minStats.hp, Math.ceil(targetHp)),
+    damage: Math.max(minStats.damage, Math.ceil(targetDps * DEMON_KING_DAMAGE_BASE_ATK_SPEED)),
+    atk_speed,
+  };
+}
+
+function getTroopStats(name, level, troopLevels = {}) {
+  if (name === 'DemonKing') return computeDemonKingStats(level, troopLevels);
+  return TROOP_STATS[name]?.stats?.[level];
+}
+
+function getTroopMaxStats(name, troopLevels = {}) {
+  if (name === 'DemonKing') return computeDemonKingStats(3, troopLevels);
+  return TROOP_STATS[name]?.maxStats;
+}
+
 const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueText = null }) => {
   const percentage = Math.min((value / max) * 100, 100);
   return (
@@ -334,8 +396,8 @@ function BarnPanel({ building, onClose }) {
   const isMax = displayLvl >= troopMaxLevel;
   // costs key = current level (cost to upgrade FROM that level)
   const nextCost = !isMax && tdef?.costs?.[String(displayLvl)];
-  const stats = TROOP_STATS[currentTroopName]?.stats?.[displayLvl];
-  const maxStats = TROOP_STATS[currentTroopName]?.maxStats;
+  const stats = getTroopStats(currentTroopName, displayLvl, troopLevels);
+  const maxStats = getTroopMaxStats(currentTroopName, troopLevels);
   const displayName = TROOP_STATS[currentTroopName]?.display || tdef?.display || currentTroopName;
   const hasImage = !!UNIT_IMAGES[currentTroopName];
   const battleWins = Number(demonKingStatus?.battle_wins ?? demonKingStatus?.wins ?? 0);
