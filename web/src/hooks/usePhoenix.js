@@ -29,6 +29,11 @@ const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
+const PHOENIX_CONDITIONAL_ORDER_CAPACITY = 16;
+const PHOENIX_CONDITIONAL_ORDER_ACCOUNT_BASE_BYTES = 224;
+const PHOENIX_CONDITIONAL_ORDER_BYTES = 112;
+const PHOENIX_TPSL_SETUP_FEE_BUFFER_LAMPORTS = 100_000;
+const PHOENIX_TPSL_OPTIMISTIC_TTL_MS = 45_000;
 const PHOENIX_ACCESS_CACHE_PREFIX = 'clash:phoenix:access:v1';
 const PHOENIX_SETUP_CACHE_PREFIX = 'clash:phoenix:setup:v1';
 const PHOENIX_ACCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
@@ -97,6 +102,33 @@ function isPhoenixMetadataDriftError(error) {
 function shortPhoenixAddress(value) {
   const text = String(value || '');
   return text.length > 12 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
+}
+
+function phoenixPositionTpslKey(symbol, side, subaccountIndex = 0) {
+  return `${phoenixSymbol(symbol)}:${String(side || '').toLowerCase()}:${Number(subaccountIndex) || 0}`;
+}
+
+function phoenixLamportsToSol(lamports) {
+  const n = Number(lamports || 0);
+  if (!Number.isFinite(n)) return '0';
+  return (n / 1_000_000_000).toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+function phoenixConditionalOrderAccountSize(capacity = PHOENIX_CONDITIONAL_ORDER_CAPACITY) {
+  return PHOENIX_CONDITIONAL_ORDER_ACCOUNT_BASE_BYTES + (Number(capacity) || 0) * PHOENIX_CONDITIONAL_ORDER_BYTES;
+}
+
+function phoenixInsufficientLamportsMessage(error) {
+  const logs = phoenixErrorLogs(error);
+  for (const line of logs) {
+    const match = String(line || '').match(/Transfer:\s*insufficient lamports\s*(\d+),\s*need\s*(\d+)/i);
+    if (!match) continue;
+    const have = Number(match[1]);
+    const need = Number(match[2]);
+    const missing = Math.max(0, need - have);
+    return `Phoenix TP/SL first setup needs ${phoenixLamportsToSol(need)} SOL rent for its conditional order account. Your wallet had ${phoenixLamportsToSol(have)} SOL, missing about ${phoenixLamportsToSol(missing + PHOENIX_TPSL_SETUP_FEE_BUFFER_LAMPORTS)} SOL. This is a one-time refundable account rent, not the trading balance.`;
+  }
+  return null;
 }
 
 function phoenixCacheWallet(value) {
@@ -441,7 +473,34 @@ function activeTriggerPrice(triggers, market) {
   const row = rows.find(t => !/cancel|disable|fill|execut/i.test(String(t?.status || '')))
     || rows[0]
     || null;
-  return ticksToUsd(row?.trigger?.triggerPriceTicks, market);
+  return triggerRowPrice(row, market);
+}
+
+function triggerRowPrice(row, market) {
+  const tickPrice = ticksToUsd(
+    row?.trigger?.triggerPriceTicks
+      ?? row?.triggerPriceTicks
+      ?? row?.trigger_price_ticks
+      ?? row?.trigger?.trigger_price_ticks,
+    market,
+  );
+  if (tickPrice != null) return tickPrice;
+  const directPriceCandidates = [
+    tokenAmountValue(row?.trigger?.triggerPrice),
+    tokenAmountValue(row?.triggerPrice),
+    row?.trigger?.triggerPriceUsd,
+    row?.triggerPriceUsd,
+    row?.priceUsd,
+    row?.price,
+  ].filter(value => value != null);
+  return firstFinite(...directPriceCandidates);
+}
+
+function activeTriggerRow(triggers) {
+  const rows = Array.isArray(triggers) ? triggers : [];
+  return rows.find(t => !/cancel|disable|fill|execut/i.test(String(t?.status || '')))
+    || rows[0]
+    || null;
 }
 
 function collateralForTraderView(traderView) {
@@ -527,8 +586,14 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
     tokenAmountValue(traderView?.initialMargin),
     accountCollateral
   ) || 0;
-  const directTakeProfitPrice = firstFinite(tokenAmountValue(vp?.takeProfitPrice), activeTriggerPrice(snapshotRow?.takeProfitTriggers, m));
-  const directStopLossPrice = firstFinite(tokenAmountValue(vp?.stopLossPrice), activeTriggerPrice(snapshotRow?.stopLossTriggers, m));
+  const directTakeProfitPrice = firstFinite(...[
+    tokenAmountValue(vp?.takeProfitPrice),
+    activeTriggerPrice(snapshotRow?.takeProfitTriggers, m),
+  ].filter(value => value != null));
+  const directStopLossPrice = firstFinite(...[
+    tokenAmountValue(vp?.stopLossPrice),
+    activeTriggerPrice(snapshotRow?.stopLossTriggers, m),
+  ].filter(value => value != null));
   const conditionalTakeProfitPrice = activeTriggerPrice(snapshotRow?.conditionalTakeProfitTriggers, m);
   const conditionalStopLossPrice = activeTriggerPrice(snapshotRow?.conditionalStopLossTriggers, m);
   const subaccountIndex = Number(traderView?.traderSubaccountIndex) || 0;
@@ -587,6 +652,51 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
       _phoenixSubaccountIndex: Number(subaccountIndex) || 0,
       _raw: o,
     };
+  });
+}
+
+function tpslOrdersFromPositions(positions) {
+  return (positions || []).flatMap(position => {
+    const symbol = phoenixSymbol(position?.symbol);
+    if (!symbol) return [];
+    const subaccountIndex = Number(position?._phoenixSubaccountIndex || 0);
+    const direction = position.side === 'bid' ? 'LONG' : 'SHORT';
+    const amount = Number(position.amount || 0);
+    const common = {
+      symbol,
+      side: position.side,
+      order_direction: direction,
+      amount: amount > 0 ? String(amount) : 'Full position',
+      tif: 'CONDITIONAL',
+      reduce_only: true,
+      market_addr: position.market_addr || null,
+      market_name: symbol,
+      _phoenixSubaccountIndex: subaccountIndex,
+      _phoenixSyntheticTpsl: true,
+      _readOnly: true,
+    };
+    const rows = [];
+    const tp = Number(position.take_profit_price || position._phoenixOptimisticTakeProfitPrice || 0);
+    if (Number.isFinite(tp) && tp > 0) {
+      rows.push({
+        ...common,
+        price: String(tp),
+        order_type: 'TAKE_PROFIT',
+        order_id: `phoenix-tp:${symbol}:${position.side}:${subaccountIndex}:${tp}`,
+        _phoenixTpslKind: 'take_profit',
+      });
+    }
+    const sl = Number(position.stop_loss_price || position._phoenixOptimisticStopLossPrice || 0);
+    if (Number.isFinite(sl) && sl > 0) {
+      rows.push({
+        ...common,
+        price: String(sl),
+        order_type: 'STOP_LOSS',
+        order_id: `phoenix-sl:${symbol}:${position.side}:${subaccountIndex}:${sl}`,
+        _phoenixTpslKind: 'stop_loss',
+      });
+    }
+    return rows;
   });
 }
 
@@ -660,6 +770,7 @@ export function usePhoenix() {
   const refreshTraderStateCachedAtRef = useRef(0);
   const refreshTraderStateLastResultRef = useRef(undefined);
   const refreshTraderStateRetryMsRef = useRef(PHOENIX_TRADER_STATE_DEDUP_MS);
+  const tpslOptimisticRef = useRef(new Map());
   const accountRef = useRef(null);
   const txClientRef = useRef(null);
   const txClientEndpointRef = useRef(null);
@@ -692,6 +803,7 @@ export function usePhoenix() {
     refreshTraderStateCachedAtRef.current = 0;
     refreshTraderStateLastResultRef.current = undefined;
     refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
+    tpslOptimisticRef.current.clear();
     subaccountsRef.current = [];
     setTraderRegistered(false);
     setAccountReady(false);
@@ -908,11 +1020,30 @@ export function usePhoenix() {
     const conditionalOrders = await orderClient.pda.getConditionalOrdersAddress({ traderAccount });
     const info = await connection.getAccountInfo(new PublicKey(conditionalOrders));
     if (info) return null;
+    try {
+      const [rentLamports, walletLamports] = await Promise.all([
+        connection.getMinimumBalanceForRentExemption(
+          phoenixConditionalOrderAccountSize(PHOENIX_CONDITIONAL_ORDER_CAPACITY),
+          'confirmed',
+        ),
+        connection.getBalance(new PublicKey(walletAddr), 'confirmed'),
+      ]);
+      const requiredLamports = Number(rentLamports || 0) + PHOENIX_TPSL_SETUP_FEE_BUFFER_LAMPORTS;
+      if (Number.isFinite(requiredLamports) && Number(walletLamports || 0) < requiredLamports) {
+        throw new Error(`Phoenix TP/SL first setup needs ${phoenixLamportsToSol(requiredLamports)} SOL for conditional order rent and fees. Your wallet has ${phoenixLamportsToSol(walletLamports)} SOL. This is a one-time refundable account rent, not the trading balance.`);
+      }
+    } catch (error) {
+      if (/Phoenix TP\/SL first setup needs/i.test(error?.message || '')) throw error;
+      console.warn('[Phoenix] conditional order rent precheck failed', {
+        message: error?.message || String(error),
+        capacity: PHOENIX_CONDITIONAL_ORDER_CAPACITY,
+      });
+    }
     return orderClient.ixs.buildCreateConditionalOrdersAccount({
       authority: walletAddr,
       traderPdaIndex: 0,
       traderSubaccountIndex: Number(subaccountIndex) || 0,
-      capacity: 32,
+      capacity: PHOENIX_CONDITIONAL_ORDER_CAPACITY,
     });
   }, [client, connection, walletAddr, walletMismatch, walletMismatchMessage]);
 
@@ -1145,11 +1276,37 @@ export function usePhoenix() {
             .map(p => positionFromSnapshot(p, marketsBySymbolRef, collateral, subIndex))
             .filter(Boolean);
         });
-      const pos = viewPositions.length ? viewPositions : fallbackPositions;
-      const ord = subaccounts.flatMap(sub => {
+      const optimisticNow = Date.now();
+      const pos = (viewPositions.length ? viewPositions : fallbackPositions).map(p => {
+        const key = phoenixPositionTpslKey(p?.symbol, p?.side, p?._phoenixSubaccountIndex);
+        const optimistic = tpslOptimisticRef.current.get(key);
+        if (!optimistic) return p;
+        if (optimisticNow - Number(optimistic.at || 0) > PHOENIX_TPSL_OPTIMISTIC_TTL_MS) {
+          tpslOptimisticRef.current.delete(key);
+          return p;
+        }
+        const currentTakeProfit = Number(p.take_profit_price);
+        const currentStopLoss = Number(p.stop_loss_price);
+        const nextTakeProfit = Number.isFinite(currentTakeProfit) && currentTakeProfit > 0
+          ? currentTakeProfit
+          : optimistic.takeProfit;
+        const nextStopLoss = Number.isFinite(currentStopLoss) && currentStopLoss > 0
+          ? currentStopLoss
+          : optimistic.stopLoss;
+        return {
+          ...p,
+          take_profit_price: nextTakeProfit,
+          stop_loss_price: nextStopLoss,
+          _phoenixOptimisticTakeProfitPrice: optimistic.takeProfit,
+          _phoenixOptimisticStopLossPrice: optimistic.stopLoss,
+          _phoenixTpslPendingRefresh: true,
+        };
+      });
+      const limitOrders = subaccounts.flatMap(sub => {
         const subIndex = Number(sub?.subaccountIndex) || 0;
         return (sub?.orders || []).flatMap(group => ordersFromSnapshot(group, marketsBySymbolRef, subIndex));
       });
+      const ord = [...limitOrders, ...tpslOrdersFromPositions(pos)];
       const notional = pos.reduce((sum, p) => sum + Number(p.size_usd || 0), 0);
       const marginUsed = pos.reduce((sum, p) => sum + Number(p.margin || 0), 0);
       const pnl = pos.reduce((sum, p) => sum + Number(p.pnl_usd || 0), 0);
@@ -1787,12 +1944,77 @@ export function usePhoenix() {
             traderSubaccountIndex: subaccountIndex,
           });
           const instructions = [createConditionalIx, placeConditionalIx].filter(Boolean);
+          console.info('[Phoenix] TP/SL build', {
+            symbol: phx,
+            requested_side: side,
+            position_side: position.side,
+            close_side: closeSide === Side.Bid ? 'bid' : 'ask',
+            wallet: shortPhoenixAddress(walletAddr),
+            subaccount_index: subaccountIndex,
+            mark_price: mark || null,
+            take_profit: tp,
+            stop_loss: sl,
+            has_conditional_account: !createConditionalIx,
+            creates_conditional_account: !!createConditionalIx,
+            greater_trigger: !!greaterTriggerOrder,
+            less_trigger: !!lessTriggerOrder,
+            instruction_count: instructions.length,
+            conditional_order_capacity: createConditionalIx ? PHOENIX_CONDITIONAL_ORDER_CAPACITY : null,
+          });
           return sendIxs(instructions, 'phoenix.tpsl', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
-        refreshTraderStateSoon();
+        const optimisticKey = phoenixPositionTpslKey(phx, position.side, subaccountIndex);
+        tpslOptimisticRef.current.set(optimisticKey, {
+          takeProfit: tp,
+          stopLoss: sl,
+          at: Date.now(),
+        });
+        setPositions(prev => prev.map(p => {
+          const samePosition = p?.symbol === phx
+            && p?.side === position.side
+            && Number(p?._phoenixSubaccountIndex || 0) === subaccountIndex;
+          if (!samePosition) return p;
+          return {
+            ...p,
+            take_profit_price: tp != null ? tp : p.take_profit_price,
+            stop_loss_price: sl != null ? sl : p.stop_loss_price,
+            _phoenixOptimisticTakeProfitPrice: tp != null ? tp : p._phoenixOptimisticTakeProfitPrice,
+            _phoenixOptimisticStopLossPrice: sl != null ? sl : p._phoenixOptimisticStopLossPrice,
+            _phoenixTpslPendingRefresh: true,
+          };
+        }));
+        const optimisticPosition = {
+          ...position,
+          take_profit_price: tp != null ? tp : position.take_profit_price,
+          stop_loss_price: sl != null ? sl : position.stop_loss_price,
+          _phoenixOptimisticTakeProfitPrice: tp != null ? tp : position._phoenixOptimisticTakeProfitPrice,
+          _phoenixOptimisticStopLossPrice: sl != null ? sl : position._phoenixOptimisticStopLossPrice,
+          _phoenixTpslPendingRefresh: true,
+        };
+        setOrders(prev => [
+          ...prev.filter(o => !(
+            o?._phoenixSyntheticTpsl
+            && o?.symbol === phx
+            && o?.side === position.side
+            && Number(o?._phoenixSubaccountIndex || 0) === subaccountIndex
+          )),
+          ...tpslOrdersFromPositions([optimisticPosition]),
+        ]);
+        refreshTraderStateSoon([1_000, 4_000, 10_000, 20_000]);
         return { success: true, signature };
       } catch (e) {
-        const msg = e?.message || 'Phoenix TP/SL failed';
+        const msg = phoenixInsufficientLamportsMessage(e) || e?.message || 'Phoenix TP/SL failed';
+        console.warn('[Phoenix] setTpsl failed', {
+          symbol: phx,
+          requested_side: side,
+          take_profit: takeProfit || null,
+          stop_loss: stopLoss || null,
+          code: phoenixSimulationCode(e),
+          failed_program_id: phoenixFailedProgramId(e),
+          lighthouse_assertion: isLighthouseAssertionError(e),
+          logs: phoenixErrorLogs(e).slice(-10),
+          message: msg,
+        });
         setError(msg);
         return { error: msg };
       } finally {

@@ -42,6 +42,42 @@ function isMobileWalletAdapter(solWallet) {
   return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
 }
 
+function isPhoenixTpslDiagnostic(label) {
+  return /^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || ''));
+}
+
+function instructionSummary(instructions) {
+  const list = Array.isArray(instructions) ? instructions : [instructions];
+  return {
+    instruction_count: list.length,
+    instructions: list.slice(0, 8).map((ix) => {
+      const accounts = ix?.accounts || ix?.keys || [];
+      const flags = accounts.map((account) => (
+        account.role !== undefined
+          ? roleFlags(account.role)
+          : { isWritable: !!account.isWritable, isSigner: !!account.isSigner }
+      ));
+      return {
+        program: shortAddress(ix?.programAddress || ix?.programId),
+        program_id: String(ix?.programAddress || ix?.programId || ''),
+        account_count: accounts.length,
+        writable_count: flags.filter(flag => flag.isWritable).length,
+        signer_count: flags.filter(flag => flag.isSigner).length,
+        data_bytes: ix?.data?.length || 0,
+        account_roles: accounts.slice(0, 10).map((account, index) => {
+          const flag = flags[index] || {};
+          return {
+            index,
+            address: shortAddress(account.address || account.pubkey),
+            writable: !!flag.isWritable,
+            signer: !!flag.isSigner,
+          };
+        }),
+      };
+    }),
+  };
+}
+
 function solanaMobileAppIdentity() {
   const origin = typeof window !== 'undefined' && window.location?.origin
     ? window.location.origin
@@ -165,9 +201,29 @@ export async function sendSolanaInstructionsWithMobileSupport({
   venueLabel = 'Solana',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
-  const web3Instructions = list.map(kitInstructionToWeb3);
   const ownerAddress = ownerPk?.toBase58?.() || String(ownerPk || '');
   const mobileWalletAdapter = !privyActive && isMobileWalletAdapter(solWallet);
+  if (isPhoenixTpslDiagnostic(label)) {
+    console.info('[Phoenix] transaction input', {
+      label,
+      owner: shortAddress(ownerAddress),
+      privy_active: !!privyActive,
+      wallet_adapter: walletAdapterName(solWallet) || null,
+      mobile_wallet_adapter: !!mobileWalletAdapter,
+      has_adapter_send: !!sendTransaction,
+      has_adapter_sign: !!signTransaction,
+      has_privy_send: !!privySendTx,
+      has_privy_sign: !!privySignTx,
+      compute_unit_limit: computeUnitLimit,
+      skip_preflight: !!skipPreflight,
+      prefer_wallet_send_transaction: !!preferWalletSendTransaction,
+      force_versioned_transaction: !!mobileWalletAdapter,
+      fast_blockhash: !!fastBlockhash,
+      max_attempts: maxAttempts ?? null,
+      ...instructionSummary(list),
+    });
+  }
+  const web3Instructions = list.map(kitInstructionToWeb3);
   return sendSolanaTransactionWithRetry({
     instructions: web3Instructions,
     ownerPk,

@@ -314,8 +314,30 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
 }
 
 function getPositionTpsl(pos) {
-  const tp = numOrNull(pos?.take_profit ?? pos?.takeProfit ?? pos?.tp ?? pos?.tp_trigger_price ?? pos?.tpTriggerPrice ?? pos?.tp_limit_price ?? pos?.tpLimitPrice);
-  const sl = numOrNull(pos?.stop_loss ?? pos?.stopLoss ?? pos?.sl ?? pos?.sl_trigger_price ?? pos?.slTriggerPrice ?? pos?.sl_limit_price ?? pos?.slLimitPrice);
+  const tp = numOrNull(
+    pos?.take_profit_price
+      ?? pos?.takeProfitPrice
+      ?? pos?._phoenixOptimisticTakeProfitPrice
+      ?? pos?.take_profit
+      ?? pos?.takeProfit
+      ?? pos?.tp
+      ?? pos?.tp_trigger_price
+      ?? pos?.tpTriggerPrice
+      ?? pos?.tp_limit_price
+      ?? pos?.tpLimitPrice
+  );
+  const sl = numOrNull(
+    pos?.stop_loss_price
+      ?? pos?.stopLossPrice
+      ?? pos?._phoenixOptimisticStopLossPrice
+      ?? pos?.stop_loss
+      ?? pos?.stopLoss
+      ?? pos?.sl
+      ?? pos?.sl_trigger_price
+      ?? pos?.slTriggerPrice
+      ?? pos?.sl_limit_price
+      ?? pos?.slLimitPrice
+  );
   return {
     tp: tp && tp > 0 ? tp : 0,
     sl: sl && sl > 0 ? sl : 0,
@@ -411,6 +433,10 @@ function orderSideLabel(order) {
   if (direction) return direction;
   const side = order?.side || order?.d;
   return side === 'bid' ? 'BUY' : 'SELL';
+}
+
+function isReadOnlyOrder(order) {
+  return !!(order?._readOnly || order?._phoenixSyntheticTpsl);
 }
 
 function useOpenedSortedPositions(positions) {
@@ -986,7 +1012,11 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
               <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                 {sideLabel}
               </span>
-              <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+              {isReadOnlyOrder(o) ? (
+                <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
+              ) : (
+                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+              )}
             </div>
             <div style={S.row}>
               <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>
@@ -1239,7 +1269,11 @@ const BottomPanel = memo(function BottomPanel({
                     <td style={S.td}>${fmtPrice(price)}</td>
                     <td style={S.td}>{amt}</td>
                     <td style={S.td}>
-                      <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>Cancel</button>
+                      {isReadOnlyOrder(o) ? (
+                        <span style={{color: '#8b7655', fontSize: 11, fontWeight: 800}}>On position</span>
+                      ) : (
+                        <button style={S.tblCloseBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>Cancel</button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -4371,7 +4405,11 @@ function FuturesPanel() {
                 <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
                   {sideLabel}
                 </span>
-                <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+                {isReadOnlyOrder(o) ? (
+                  <span style={{fontSize: 10, fontWeight: 800, color: '#8b7655'}}>On position</span>
+                ) : (
+                  <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
+                )}
               </div>
               <div style={S.row}>
                 <span style={S.detail}>Price: ${fmtPrice(parseFloat(price))}</span>

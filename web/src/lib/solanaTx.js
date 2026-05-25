@@ -91,9 +91,17 @@ function failedProgramId(error) {
   return null;
 }
 
+function isPhoenixTpslDiagnostic(label, type) {
+  return /^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || ''))
+    && /^(attempt_start|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
+}
+
 function logTx(label, type, data = {}, level = 'info') {
-  if (level === 'info') return;
+  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type)) return;
   const payload = { label, ...data };
+  if (/^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || '')) && payload.signature_short && !payload.txid_short) {
+    payload.txid_short = payload.signature_short;
+  }
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
   try {
     const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
@@ -127,6 +135,50 @@ function transactionProgramSummary(tx) {
   } catch {
     return [];
   }
+}
+
+function serializeUnsignedTransaction(tx) {
+  if (!tx || typeof tx.serialize !== 'function') return null;
+  try {
+    return tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+  } catch {
+    try {
+      return tx.serialize();
+    } catch {
+      return null;
+    }
+  }
+}
+
+function transactionAccountKeyCount(tx) {
+  try {
+    if (Array.isArray(tx?.message?.staticAccountKeys)) return tx.message.staticAccountKeys.length;
+    if (Array.isArray(tx?.instructions)) {
+      const keys = new Set();
+      for (const ix of tx.instructions) {
+        if (ix?.programId) keys.add(String(ix.programId));
+        for (const key of ix?.keys || []) {
+          if (key?.pubkey) keys.add(String(key.pubkey));
+        }
+      }
+      if (tx?.feePayer) keys.add(String(tx.feePayer));
+      return keys.size;
+    }
+  } catch {}
+  return null;
+}
+
+function transactionSummary(tx) {
+  const programs = transactionProgramSummary(tx);
+  const raw = serializeUnsignedTransaction(tx);
+  return {
+    tx_version: tx?.version === 0 || tx?.message?.version === 0 ? 'v0' : 'legacy',
+    tx_instruction_count: programs.length,
+    tx_instruction_programs: programs.slice(0, 12).map(shortAddress),
+    tx_account_key_count: transactionAccountKeyCount(tx),
+    tx_has_lighthouse_assertion: programs.includes(LIGHTHOUSE_PROGRAM_ID),
+    tx_unsigned_bytes: raw?.length || null,
+  };
 }
 
 function extractPrivySignature(result) {
@@ -950,6 +1002,7 @@ export async function sendSolanaTransactionWithRetry({
         prefer_privy_sign_and_send: !!preferPrivySignAndSend,
         prefer_wallet_send_transaction: !!preferWalletSendTransaction,
         status_rpc_hosts: statusConnections.map(rpcHost).slice(0, 5),
+        ...transactionSummary(tx),
       });
 
       const sendOptions = { ...SEND_OPTIONS, skipPreflight: !!skipPreflight };
@@ -985,6 +1038,7 @@ export async function sendSolanaTransactionWithRetry({
           signature_short: shortSig(sig),
           signed_fee_payer: shortAddress(transactionFeePayer(decoded)),
           signed_blockhash: String(transactionBlockhash(decoded)).slice(0, 8),
+          ...transactionSummary(decoded),
         }, transactionProgramSummary(decoded).includes(LIGHTHOUSE_PROGRAM_ID) ? 'warn' : 'info');
       } else if (sendTransaction && !privyActive) {
         sig = await sendTransaction(tx, attemptConnection, sendOptions);
@@ -999,7 +1053,7 @@ export async function sendSolanaTransactionWithRetry({
         throw new Error('Wallet cannot send Solana transactions');
       }
 
-      logTx(label, 'signed', { attempt, signature_short: shortSig(sig) });
+      logTx(label, 'signed', { attempt, signature_short: shortSig(sig), txid: sig, txid_short: shortSig(sig) });
       if (rawTransaction) {
         const broadcast = await sendRawTransactionWithFallback({
           rawTransaction,
@@ -1022,7 +1076,7 @@ export async function sendSolanaTransactionWithRetry({
         label,
         attempt,
       });
-      logTx(label, 'confirmed', { attempt, signature_short: shortSig(sig) });
+      logTx(label, 'confirmed', { attempt, signature_short: shortSig(sig), txid: sig, txid_short: shortSig(sig) });
       return sig;
     } catch (error) {
       lastError = error;
