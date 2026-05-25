@@ -32,6 +32,10 @@ const { setupWebSocket, getOnlinePlayers } = require('./websocket');
 const PORT = process.env.PORT || 4000;
 
 const app = express();
+// Production traffic is normally behind nginx on the same host. Trust only
+// loopback proxy headers so per-IP rate limits do not collapse all users into
+// 127.0.0.1, while still ignoring spoofed X-Forwarded-For from the open web.
+app.set('trust proxy', process.env.CLASH_TRUST_PROXY || 'loopback');
 const DEFAULT_ORIGINS = [
   'https://clashofperps.fun',
   'https://www.clashofperps.fun',
@@ -3403,6 +3407,18 @@ server.listen(PORT, '127.0.0.1', () => {
       console.warn('[marketplace-indexer] init failed:', err?.message || err);
     }
   }
+
+  if (process.env.CLASH_BRIDGE_RETRY_WORKER !== '0') {
+    try {
+      const { startBridgeRetryWorker } = require('./bridge_retry_worker');
+      startBridgeRetryWorker({
+        apiBase: process.env.BRIDGE_API_BASE || `http://127.0.0.1:${PORT}/api`,
+      });
+      console.log('[bridge-retry] worker scheduled');
+    } catch (err) {
+      console.warn('[bridge-retry] worker failed to start:', err?.message || err);
+    }
+  }
 });
 
 // Graceful shutdown of the indexer's poll loop. SIGTERM is the platform-
@@ -3412,6 +3428,10 @@ for (const sig of ['SIGINT', 'SIGTERM']) {
     try {
       const { stopMarketplaceIndexer } = require('./marketplace_indexer');
       stopMarketplaceIndexer();
+    } catch { /* ignore */ }
+    try {
+      const { stopBridgeRetryWorker } = require('./bridge_retry_worker');
+      stopBridgeRetryWorker();
     } catch { /* ignore */ }
     process.exit(0);
   });

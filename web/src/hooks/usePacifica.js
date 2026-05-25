@@ -9,7 +9,7 @@ import { usePlayer } from './useGodot';
 import { usePacificaAgent } from './usePacificaAgent';
 import { pacificaNow, setPacificaServerTimeFromResponse } from '../lib/pacificaTime';
 import { reportDiag } from '../lib/diagReporter';
-import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
+import { sendSolanaInstructionsWithMobileSupport } from '../lib/phoenixTx';
 import { SOLANA_RPC_URLS } from '../lib/solanaRpc';
 // Privy hooks — called only when VITE_PRIVY_APP_ID is set. That env var is a
 // build-time constant, so the conditional call is stable per build (safe under
@@ -156,7 +156,8 @@ const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const PACIFICA_INCOMPATIBLE_WALLETS = new Set(['MetaMask']);
 
 export function usePacifica() {
-  const { publicKey, signMessage, sendTransaction, signTransaction, connected, wallet } = useWallet();
+  const solWallet = useWallet();
+  const { publicKey, signMessage, sendTransaction, signTransaction, connected, wallet } = solWallet;
   const { connection } = useConnection();
   const adapterName = wallet?.adapter?.name || '';
   const isIncompatibleWallet = PACIFICA_INCOMPATIBLE_WALLETS.has(adapterName);
@@ -921,16 +922,20 @@ export function usePacifica() {
         data: Buffer.from(data),
       });
 
-      const sig = await sendSolanaTransactionWithRetry({
+      const sig = await sendSolanaInstructionsWithMobileSupport({
         instructions: [ix],
         ownerPk,
         connection,
         sendTransaction,
         signTransaction,
+        solWallet,
         privyActive,
         privySendTx,
         privySignTx,
         privyWalletObj,
+        preferPrivySignAndSend: true,
+        preferWalletSendTransaction: true,
+        venueLabel: 'Pacifica',
         label: 'pacifica.deposit',
       });
       /*
@@ -964,7 +969,7 @@ export function usePacifica() {
     } finally {
       setLoading(false);
     }
-  }, [walletAddr, publicKey, sendTransaction, signTransaction, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privySignTx, privyWalletObj, claimGold]);
+  }, [walletAddr, publicKey, sendTransaction, signTransaction, solWallet, connection, activate, fetchAccount, fetchWalletUsdc, privyActive, privySendTx, privySignTx, privyWalletObj, claimGold]);
 
   // ---------- Trading ----------
   const placeMarketOrder = useCallback(async (symbol, side, amount, slippage) => {

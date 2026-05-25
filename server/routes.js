@@ -8090,7 +8090,7 @@ try {
 // transaction + gold_history UNIQUE dedup, so even rapid identical calls
 // can't double-credit).
 const CLAIM_COOLDOWN_MS = 25;  // bumped 250 → 25ms (100× more lenient) per user request — last_trade_id transaction still prevents double-credit
-const TRADE_REWARD_SETTLE_DELAY_SECONDS = 30;
+const TRADE_REWARD_SETTLE_DELAY_SECONDS = 0;
 const claimCooldowns = new Map();
 setInterval(() => {
   const cutoff = Date.now() - 60000;

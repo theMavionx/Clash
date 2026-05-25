@@ -70,7 +70,7 @@ try {
 
 const VALID_TYPES = ['volume', 'positions', 'combo_volume_attack', 'daily_trade_gold'];
 const VALID_SIDES = ['any', 'long', 'short'];
-const TASK_TRADE_SETTLE_DELAY_SECONDS = 30;
+const TASK_TRADE_SETTLE_DELAY_SECONDS = 0;
 
 function parseParams(p) {
   try { return typeof p === 'string' ? JSON.parse(p) : (p || {}); } catch { return {}; }

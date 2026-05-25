@@ -65,9 +65,15 @@ function base64AddressToBase58(address) {
   }
 }
 
-async function sendSolanaMobileProtocolTransaction({ transaction, options, expectedAddress, label }) {
+async function sendSolanaMobileProtocolTransaction({
+  transaction,
+  options,
+  expectedAddress,
+  label,
+  venueLabel = 'Solana',
+}) {
   const { transact } = await import('@solana-mobile/mobile-wallet-adapter-protocol-web3js');
-  console.info('[Phoenix] mobile wallet protocol open', {
+  console.info(`[${venueLabel}] mobile wallet protocol open`, {
     label,
     expected_wallet: shortAddress(expectedAddress),
     tx_version: transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy',
@@ -76,7 +82,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
     const capabilities = typeof wallet.getCapabilities === 'function'
       ? await wallet.getCapabilities().catch(() => null)
       : null;
-    console.info('[Phoenix] mobile wallet capabilities', {
+    console.info(`[${venueLabel}] mobile wallet capabilities`, {
       label,
       supports_sign_and_send: capabilities?.supports_sign_and_send_transactions ?? null,
       max_transactions_per_request: capabilities?.max_transactions_per_request ?? null,
@@ -89,7 +95,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
       features: ['solana:signAndSendTransactions'],
     });
     const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address);
-    console.info('[Phoenix] mobile wallet authorized', {
+    console.info(`[${venueLabel}] mobile wallet authorized`, {
       label,
       expected_wallet: shortAddress(expectedAddress),
       authorized_wallet: shortAddress(authorizedAddress),
@@ -97,7 +103,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
       has_auth_token: !!authorization?.auth_token,
     });
     if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
-      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but Phoenix is connected to ${expectedAddress}`);
+      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
     }
 
     const [signature] = await wallet.signAndSendTransactions({
@@ -107,7 +113,7 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
       skipPreflight: !!options?.skipPreflight,
       maxRetries: options?.maxRetries,
     });
-    console.info('[Phoenix] mobile wallet sign-and-send ok', {
+    console.info(`[${venueLabel}] mobile wallet sign-and-send ok`, {
       label,
       signature_short: shortAddress(signature),
     });
@@ -138,7 +144,7 @@ export function kitInstructionToWeb3(ix) {
   });
 }
 
-export async function sendPhoenixInstructions({
+export async function sendSolanaInstructionsWithMobileSupport({
   instructions,
   ownerPk,
   connection,
@@ -152,9 +158,11 @@ export async function sendPhoenixInstructions({
   label = 'phoenix',
   computeUnitLimit = null,
   skipPreflight = false,
+  preferPrivySignAndSend = true,
   preferWalletSendTransaction = true,
   fastBlockhash = false,
   maxAttempts,
+  venueLabel = 'Solana',
 }) {
   const list = Array.isArray(instructions) ? instructions : [instructions];
   const web3Instructions = list.map(kitInstructionToWeb3);
@@ -172,6 +180,7 @@ export async function sendPhoenixInstructions({
             options: opts,
             expectedAddress: ownerAddress,
             label,
+            venueLabel,
           });
         }
       : sendTransaction,
@@ -183,11 +192,18 @@ export async function sendPhoenixInstructions({
     skipPreflight,
     computeUnitLimit,
     maxAttempts,
-    preferPrivySignAndSend: true,
+    preferPrivySignAndSend,
     preferWalletSendTransaction,
     forceVersionedTransaction: mobileWalletAdapter,
     fastBlockhash,
     walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
     label,
+  });
+}
+
+export async function sendPhoenixInstructions(args) {
+  return sendSolanaInstructionsWithMobileSupport({
+    ...args,
+    venueLabel: args?.venueLabel || 'Phoenix',
   });
 }

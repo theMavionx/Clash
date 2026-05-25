@@ -85,6 +85,58 @@ function shortTokenId(tokenId) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function demonKingDisplayIdFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const hashMatch = text.match(/#\s*(\d{1,10})\b/);
+  if (hashMatch) return hashMatch[1];
+  const namedMatch = text.match(/\b(?:demon\s*king|king)\s+(?:no\.?\s*)?#?\s*(\d{1,10})\b/i);
+  if (namedMatch) return namedMatch[1];
+  const fieldMatch = text.match(/\b(?:token|id|index|serial|number)[\s:_-]*#?\s*(\d{1,10})\b/i);
+  if (fieldMatch) return fieldMatch[1];
+  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
+  if (uriMatch) return uriMatch[1];
+  return '';
+}
+
+function demonKingDisplayIdFromToken(token) {
+  if (!token) return '';
+  const direct = [
+    token.displayId,
+    token.display_id,
+    token.tokenIndex,
+    token.token_index,
+    token.sourceTokenId,
+    token.source_token_id,
+    token.originalTokenId,
+    token.original_token_id,
+    token.serial,
+    token.number,
+  ].find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+  if (direct !== undefined && direct !== null) {
+    return String(direct).trim().replace(/^#/, '');
+  }
+  return [
+    token.name,
+    token.title,
+    token.uri,
+    token.tokenUri,
+    token.metadataUri,
+    token.json_uri,
+    token.imageUrl,
+    token.metadata?.name,
+    token.metadata?.uri,
+    token.content?.metadata?.name,
+    token.content?.json_uri,
+  ].map(demonKingDisplayIdFromText).find(Boolean) || '';
+}
+
+function demonKingDisplayLabel(token) {
+  const value = demonKingDisplayIdFromToken(token) || shortTokenId(token?.tokenId);
+  const text = String(value || '').trim().replace(/^#/, '');
+  return text ? `#${text}` : '';
+}
+
 const TROOP_STATS = {
   Knight: {
     display: "Knight",
@@ -542,6 +594,7 @@ function BarnPanel({ building, onClose }) {
                     {demonKingNfts.map((token) => {
                       const key = demonKingShipEntry(token);
                       const active = key === (selectedDemonKey || demonKingShipEntry(selectedDemonNft));
+                      const tokenLabel = demonKingDisplayLabel(token);
                       return (
                         <button
                           key={key}
@@ -550,7 +603,7 @@ function BarnPanel({ building, onClose }) {
                           style={{...styles.demonTokenBtn, ...(active ? styles.demonTokenBtnActive : null)}}
                         >
                           <span>Lv {token.level || 1}</span>
-                          <span>#{shortTokenId(token.tokenId)}</span>
+                          <span>{tokenLabel}</span>
                         </button>
                       );
                     })}
@@ -591,7 +644,7 @@ function BarnPanel({ building, onClose }) {
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
             <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
-              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT #${shortTokenId(selectedDemonNft.tokenId)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
+              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
             </button>
           </div>
         )}

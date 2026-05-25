@@ -742,7 +742,7 @@ function mountNftV3Endpoints(router, ctx) {
   }
 
   const upgradeLimit  = makeRateLimiter(10);
-  const bridgeLimit   = makeRateLimiter(5);
+  const bridgeLimit   = makeRateLimiter(Number(process.env.NFT_BRIDGE_RATE_LIMIT_PER_MIN || 20));
   const readLimit     = makeRateLimiter(60);
 
   router.post('/nft/demon-king/sync', async (req, res) => {
@@ -1890,6 +1890,8 @@ function mountNftV3Endpoints(router, ctx) {
       txSig: body.txSig || null,
       destTxHash: body.destTxHash || null,
       note: body.note || null,
+      retryable: body.retryable || null,
+      retryAfterSec: body.retryAfterSec || null,
       error: body.error || null,
     };
     try {
@@ -1973,7 +1975,10 @@ function mountNftV3Endpoints(router, ctx) {
     try {
       const ip = req.ip || 'unknown';
       const rl = bridgeLimit(ip);
-      if (!rl.ok) { res.set('Retry-After', String(rl.retryAfterSec)); return res.status(429).json({ error: 'rate limited' }); }
+      if (!rl.ok) {
+        res.set('Retry-After', String(rl.retryAfterSec));
+        return res.status(429).json({ error: 'rate limited', retryable: true, retryAfterSec: rl.retryAfterSec });
+      }
 
       const { getAddress, isAddress } = await import('viem');
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
@@ -2100,7 +2105,10 @@ function mountNftV3Endpoints(router, ctx) {
     try {
       const ip = req.ip || 'unknown';
       const rl = bridgeLimit(ip);
-      if (!rl.ok) { res.set('Retry-After', String(rl.retryAfterSec)); return res.status(429).json({ error: 'rate limited' }); }
+      if (!rl.ok) {
+        res.set('Retry-After', String(rl.retryAfterSec));
+        return res.status(429).json({ error: 'rate limited', retryable: true, retryAfterSec: rl.retryAfterSec });
+      }
 
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -2129,7 +2137,13 @@ function mountNftV3Endpoints(router, ctx) {
         if (!txRcp || txRcp.status !== 'success') return res.status(404).json({ error: 'burn tx not found or reverted' });
         const head = await client.getBlock();
         const confirmations = Number(head.number - txRcp.blockNumber);
-        if (confirmations < 2) return res.status(425).json({ error: `need 2 confirmations, have ${confirmations}` });
+        if (confirmations < 2) {
+          return res.status(425).json({
+            error: `need 2 confirmations, have ${confirmations}`,
+            retryable: true,
+            retryAfterSec: 45,
+          });
+        }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
         const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceDeployment.proxy);
         const feePaid = BigInt(sourceTx?.value || 0);
@@ -2484,7 +2498,10 @@ function mountNftV3Endpoints(router, ctx) {
     try {
       const ip = req.ip || 'unknown';
       const rl = bridgeLimit(ip);
-      if (!rl.ok) { res.set('Retry-After', String(rl.retryAfterSec)); return res.status(429).json({ error: 'rate limited' }); }
+      if (!rl.ok) {
+        res.set('Retry-After', String(rl.retryAfterSec));
+        return res.status(429).json({ error: 'rate limited', retryable: true, retryAfterSec: rl.retryAfterSec });
+      }
 
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
@@ -2513,7 +2530,13 @@ function mountNftV3Endpoints(router, ctx) {
         if (!txRcp || txRcp.status !== 'success') return res.status(404).json({ error: 'burn tx not found or reverted' });
         const head = await client.getBlock();
         const confirmations = Number(head.number - txRcp.blockNumber);
-        if (confirmations < 2) return res.status(425).json({ error: `need 2 confirmations, have ${confirmations}` });
+        if (confirmations < 2) {
+          return res.status(425).json({
+            error: `need 2 confirmations, have ${confirmations}`,
+            retryable: true,
+            retryAfterSec: 45,
+          });
+        }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
         const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceDeployment.proxy);
         const feePaid = BigInt(sourceTx?.value || 0);

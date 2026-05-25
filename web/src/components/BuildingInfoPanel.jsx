@@ -197,6 +197,63 @@ function shortTokenId(tokenId) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function demonKingDisplayIdFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const hashMatch = text.match(/#\s*(\d{1,10})\b/);
+  if (hashMatch) return hashMatch[1];
+  const namedMatch = text.match(/\b(?:demon\s*king|king)\s+(?:no\.?\s*)?#?\s*(\d{1,10})\b/i);
+  if (namedMatch) return namedMatch[1];
+  const fieldMatch = text.match(/\b(?:token|id|index|serial|number)[\s:_-]*#?\s*(\d{1,10})\b/i);
+  if (fieldMatch) return fieldMatch[1];
+  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
+  if (uriMatch) return uriMatch[1];
+  return '';
+}
+
+function demonKingDisplayIdFromToken(token) {
+  if (!token) return '';
+  const direct = [
+    token.displayId,
+    token.display_id,
+    token.tokenIndex,
+    token.token_index,
+    token.sourceTokenId,
+    token.source_token_id,
+    token.originalTokenId,
+    token.original_token_id,
+    token.serial,
+    token.number,
+  ].find((value) => value !== undefined && value !== null && String(value).trim() !== '');
+  if (direct !== undefined && direct !== null) {
+    return String(direct).trim().replace(/^#/, '');
+  }
+  return [
+    token.name,
+    token.title,
+    token.uri,
+    token.tokenUri,
+    token.metadataUri,
+    token.json_uri,
+    token.imageUrl,
+    token.metadata?.name,
+    token.metadata?.uri,
+    token.content?.metadata?.name,
+    token.content?.json_uri,
+  ].map(demonKingDisplayIdFromText).find(Boolean) || '';
+}
+
+function demonKingDisplayIdFromEntry(entry, tokens = []) {
+  const key = demonKingEntryTokenKey(entry);
+  const token = tokens.find((item) => demonKingTokenKey(item) === key);
+  return demonKingDisplayIdFromToken(token) || shortTokenId(demonKingEntryTokenId(entry));
+}
+
+function demonKingDisplayLabel(value) {
+  const text = String(value || '').trim().replace(/^#/, '');
+  return text ? `#${text}` : '';
+}
+
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
@@ -706,7 +763,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 const base = troopBaseName(t);
                 const level = getTroopLvl(t);
                 const imgSrc = base === 'DemonKing' ? demonKingImg : UNIT_IMAGES[base];
-                const demonTokenId = base === 'DemonKing' ? demonKingEntryTokenId(t) : '';
+                const demonTokenLabel = base === 'DemonKing'
+                  ? demonKingDisplayLabel(demonKingDisplayIdFromEntry(t, demonKingNfts))
+                  : '';
                 return (
                   <div
                     key={i}
@@ -727,9 +786,9 @@ function BuildingInfoPanel({ onOpenTroops }) {
                         </div>
                       )}
                     </div>
-                    {demonTokenId && (
+                    {demonTokenLabel && (
                       <div style={{...LT.demonIdBadge, fontSize: isMobile ? 8 : 9}}>
-                        #{shortTokenId(demonTokenId)}
+                        {demonTokenLabel}
                       </div>
                     )}
                     {isSwapping && <div style={LT.swapBadge}>SWAP</div>}
@@ -808,6 +867,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
             )}
             {!demonKingNftLoading && availableDemonNfts.map((token) => {
               const entry = demonKingShipEntry(token);
+              const demonTokenLabel = demonKingDisplayLabel(demonKingDisplayIdFromToken(token) || shortTokenId(token.tokenId));
               const disabled = swapSlot === null
                 ? shipTroops.length + 2 > capacity
                 : (() => {
@@ -824,14 +884,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
                   }}
                 >
                   <div style={{...LT.demonIdBadge, fontSize: isMobile ? 9 : 11}}>
-                    #{shortTokenId(token.tokenId)}
+                    {demonTokenLabel}
                   </div>
                   <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {token.level || 1}</div>
                   <div style={LT.troopImgWrap}>
                     <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                   </div>
                   <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
-                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>KING #{shortTokenId(token.tokenId)}</span>
+                    <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>KING {demonTokenLabel}</span>
                     <span style={{...LT.costText, fontSize: isMobile ? 10 : 12}}>FREE · 2</span>
                   </div>
                 </button>

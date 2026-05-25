@@ -72,8 +72,8 @@ const ACCOUNT_BACKOFF_MAX_MS = 60_000;
 const TX_WAIT_TIMEOUT_MS = 45_000;
 const APTOS_FULLNODE = 'https://fullnode.mainnet.aptoslabs.com/v1';
 const FUTURES_API = '/api/futures';
-const DECIBEL_REWARD_CLAIM_DELAY_MS = 30_000;
-const DECIBEL_CLOSE_RETRY_LOCK_MS = 30_000;
+const DECIBEL_REWARD_CLAIM_DELAY_MS = 1_500;
+const DECIBEL_CLOSE_CONFIRM_TIMEOUT_MS = 20_000;
 const BUILDER_APPROVAL_VIEW = `${DECIBEL_PACKAGE_MAINNET}::builder_code_registry::get_approved_max_fee`;
 const TRADING_DELEGATION_VIEW = `${DECIBEL_PACKAGE_MAINNET}::dex_accounts::view_delegated_permissions`;
 
@@ -122,6 +122,21 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
   });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sameDecibelPosition(position, symbol, side) {
+  const normalizeSide = value => {
+    const raw = String(value || '').toLowerCase();
+    if (raw === 'long') return 'bid';
+    if (raw === 'short') return 'ask';
+    return raw;
+  };
+  return String(position?.symbol || '').toUpperCase() === String(symbol || '').toUpperCase()
+    && normalizeSide(position?.side) === normalizeSide(side);
 }
 
 function isAbortLikeError(e) {
@@ -1166,10 +1181,15 @@ export function useDecibel() {
   // array (and the consequent re-creation chain). Updated alongside
   // setPositions inside fetchPositions.
   const fetchPositions = useCallback(async () => {
-    if (!address) return;
+    if (!address) return [];
     try {
       const sub = await ensureSubaccount();
-      if (!sub) { setPositions([]); positionsRef.current = []; setDataReady(true); return; }
+      if (!sub) {
+        setPositions([]);
+        positionsRef.current = [];
+        setDataReady(true);
+        return [];
+      }
       let list;
       try {
         const read = await getReadClient();
@@ -1195,10 +1215,38 @@ export function useDecibel() {
       positionsRef.current = norm;
       setDataReady(true);
       window._openPositionsCount = norm.length;
+      return norm;
     } catch (e) {
       D.warn('fetchPositions failed:', e?.message || e);
+      return null;
     }
   }, [address, ensureSubaccount, decibelServerRequest]);
+
+  const waitForCloseSettlement = useCallback(async ({ symbol, side, beforeAmount, closeAmount }) => {
+    const before = Number(beforeAmount);
+    const closing = Number(closeAmount);
+    const fullClose = !(before > 0) || closing >= before * 0.995;
+    const minReduction = Math.max(1e-8, Math.min(Math.max(closing * 0.25, before * 0.05), before));
+    const deadline = Date.now() + DECIBEL_CLOSE_CONFIRM_TIMEOUT_MS;
+    let delayMs = 700;
+
+    while (Date.now() <= deadline) {
+      const latest = await fetchPositions();
+      const list = Array.isArray(latest) ? latest : positionsRef.current;
+      const match = (list || []).find(p => sameDecibelPosition(p, symbol, side));
+      if (!match) return { settled: true, closed: true };
+
+      const remaining = Number(match.amount);
+      if (!fullClose && Number.isFinite(before) && Number.isFinite(remaining) && remaining <= before - minReduction) {
+        return { settled: true, closed: false };
+      }
+
+      await sleep(delayMs);
+      delayMs = Math.min(2_000, Math.round(delayMs * 1.25));
+    }
+
+    return { settled: false, closed: false };
+  }, [fetchPositions]);
 
   const fetchOrders = useCallback(async () => {
     if (!address) return;
@@ -1824,13 +1872,14 @@ export function useDecibel() {
       return { error: msg, code: 'CLOSE_SETTLING' };
     }
     closeInFlightRef.current.add(closeLockKey);
-    let holdCloseLockMs = 0;
     try {
       requireServerSigner();
       const amt = Number(amount);
       if (!Number.isFinite(amt) || amt <= 0) throw new Error('Invalid close amount');
       const market = marketsRef.current.find(m => m.symbol === symbol);
       if (!market) throw new Error(`Unknown market: ${symbol}`);
+      const existingPosition = (positionsRef.current || []).find(p => sameDecibelPosition(p, symbol, side));
+      const beforeAmount = Number(existingPosition?.amount);
 
       const sub = await ensureSubaccount();
       if (!sub) throw new Error('Trading account not yet provisioned');
@@ -1886,26 +1935,30 @@ export function useDecibel() {
         amount: amt, leverage: 1, order_type: 'close', dedup_key: dedupKey,
       });
 
-      fetchPositions();
+      const closeSettlement = await waitForCloseSettlement({
+        symbol,
+        side,
+        beforeAmount: Number.isFinite(beforeAmount) ? beforeAmount : amt,
+        closeAmount: amt,
+      });
       fetchAccount({ force: true });
       fetchBalance();
-      holdCloseLockMs = DECIBEL_CLOSE_RETRY_LOCK_MS;
-      scheduleClaim();
-      scheduleClaim(DECIBEL_REWARD_CLAIM_DELAY_MS + 15_000);
-      return { tx_hash: txHash, status: 'closed' };
+      scheduleClaim(500);
+      scheduleClaim(3_000);
+      return {
+        tx_hash: txHash,
+        status: closeSettlement.settled ? 'closed' : 'submitted',
+        close_settled: closeSettlement.settled,
+      };
     } catch (e) {
       const msg = decodeTradeError(e, 'Close failed');
       setError(msg.slice(0, 300));
       return { error: msg, code: e?.code };
     } finally {
-      if (holdCloseLockMs > 0) {
-        setTimeout(() => closeInFlightRef.current.delete(closeLockKey), holdCloseLockMs);
-      } else {
-        closeInFlightRef.current.delete(closeLockKey);
-      }
+      closeInFlightRef.current.delete(closeLockKey);
       setLoading(false);
     }
-  }, [requireServerSigner, address, ensureSubaccount, builderFields, prices, reportTrade, fetchPositions, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
+  }, [requireServerSigner, address, ensureSubaccount, builderFields, prices, reportTrade, waitForCloseSettlement, fetchAccount, fetchBalance, scheduleClaim, placeOrderOnServer]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     try {

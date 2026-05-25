@@ -848,6 +848,15 @@ const SP = {
   row: { transition: 'background 0.1s' },
 };
 
+const ClosingButtonLabel = memo(function ClosingButtonLabel({ text = 'Closing...' }) {
+  return (
+    <span style={S.closeLoadingLabel}>
+      <span style={S.closeLoadingSpinner} />
+      {text ? <span>{text}</span> : null}
+    </span>
+  );
+});
+
 // ==================== ORDERS LIST (mobile/tab card view) ====================
 const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
   if (!orders.length) {
@@ -985,7 +994,7 @@ const PositionsList = memo(function PositionsList({
                 <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                 <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
                   <button style={{...S.btnRed, width: '100%'}} onClick={() => closePosition(pos.symbol, pos.side, String((dex === 'avantis' ? parseFloat(pos.margin) : parseFloat(pos.amount)) * closePct / 100), pos.pair_index, pos.trade_index, closePct >= 100)} disabled={loading}>
-                  {loading ? 'Closing...' : `Close ${closePct}%`}
+                  {loading ? <ClosingButtonLabel /> : `Close ${closePct}%`}
                 </button>
               </div>
             )}
@@ -1101,7 +1110,7 @@ const BottomPanel = memo(function BottomPanel({
                         style={{...S.tblCloseBtn, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer'}}
                         disabled={loading}
                         onClick={() => closePosition(p.symbol, p.side, dex === 'avantis' ? p.margin : p.amount, p.pair_index, p.trade_index, true)}
-                      >{loading ? '…' : 'Close'}</button>
+                      >{loading ? <ClosingButtonLabel text="" /> : 'Close'}</button>
                     </td>
                   </tr>
                 );
@@ -3915,7 +3924,7 @@ function FuturesPanel() {
               );
               // closePosition returns the API response on success and
               // undefined on error (catches internally + sets `error`).
-              if (result && !result.error) {
+              if (result && !result.error && result.status === 'closed') {
                 setShareTrade(finalSnapshot);
               }
             };
@@ -3960,7 +3969,7 @@ function FuturesPanel() {
                     onClick={handleClose}
                     disabled={loading}
                   >
-                    {loading ? 'Closing…' : 'Close position'}
+                    {loading ? <ClosingButtonLabel text="Closing position..." /> : 'Close position'}
                   </button>
                   <button
                     style={{
@@ -4017,7 +4026,7 @@ function FuturesPanel() {
             // on error. Only show the share modal when the close was a FULL
             // exit (closeFraction = 1) — partial closes still leave a position
             // open and showing the modal mid-trade is confusing.
-            if (result && !result.error && closeFraction >= 1) {
+            if (result && !result.error && result.status === 'closed' && closeFraction >= 1) {
               setShareTrade(finalSnapshot);
             }
           };
@@ -4128,7 +4137,7 @@ function FuturesPanel() {
                   <input type="range" min="5" max="100" step="5" value={closePct} className="grad-slider" onChange={e => setClosePct(Number(e.target.value))} style={{...S.slider, '--val': `${((closePct - 5) / 95) * 100}%`}} />
                   <div style={S.sliderLabels}><span>5%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
                   <button style={{...S.btnRed, width: '100%'}} onClick={() => handleProClose(closePct / 100)} disabled={loading}>
-                    {loading ? 'Closing...' : `Close ${closePct}%`}
+                    {loading ? <ClosingButtonLabel /> : `Close ${closePct}%`}
                   </button>
                 </div>
               )}
@@ -5208,6 +5217,9 @@ const animCSS = `
   @keyframes wallet-spin {
     to { transform: rotate(360deg); }
   }
+  @keyframes futures-close-spin {
+    to { transform: rotate(360deg); }
+  }
   /* Gradient Scrollbar */
   .grad-scrollbar::-webkit-scrollbar { width: 8px; }
   .grad-scrollbar::-webkit-scrollbar-track { background: #fdf8e7; border-radius: 4px; }
@@ -5574,6 +5586,17 @@ const S = {
   btnRed: {
     flex: 1, padding: '8px', background: '#E53935', border: '2px solid #B71C1C', borderRadius: 8,
     color: '#fff', fontWeight: 800, fontSize: 12, cursor: 'pointer', boxShadow: '0 2px 0 #B71C1C', textAlign: 'center',
+  },
+  closeLoadingLabel: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: 14, whiteSpace: 'nowrap',
+  },
+  closeLoadingSpinner: {
+    width: 12, height: 12, borderRadius: '50%',
+    border: '2px solid rgba(255,255,255,0.42)',
+    borderTopColor: '#fff',
+    animation: 'futures-close-spin 0.75s linear infinite',
+    flexShrink: 0,
   },
   btnBlue: {
     padding: '8px 12px', background: '#1E88E5', border: '2px solid #1565C0', borderRadius: 8,
