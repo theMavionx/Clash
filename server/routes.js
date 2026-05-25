@@ -7635,6 +7635,18 @@ function isDecibelCloseRewardRow(row) {
   return String(row?.side || '').toLowerCase().startsWith('close_');
 }
 
+function canFuzzyDedupeDecibelRewardRows(candidate, row) {
+  const candidateSource = String(candidate?.verified_source || '');
+  const rowSource = String(row?.verified_source || '');
+  const candidateIsLimitFill = isDecibelLimitFillRewardRow(candidate);
+  const rowIsLimitFill = isDecibelLimitFillRewardRow(row);
+
+  if (candidateIsLimitFill && rowIsLimitFill) return false;
+  if (candidateSource === 'server' && rowSource === 'server') return false;
+  if (candidateSource !== rowSource) return true;
+  return candidateSource === 'worker' && candidateIsLimitFill !== rowIsLimitFill;
+}
+
 function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
   if (!rows?.length) return rows || [];
   const maxId = rows.reduce((m, row) => Math.max(m, Number(row.id) || 0), Number(lastTradeId || 0));
@@ -7647,19 +7659,13 @@ function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
     ORDER BY id ASC
   `).all(playerId, maxId, Math.max(0, Number(lastTradeId || 0) - 250));
   return rows.map((row) => {
-    const rowIsClose = isDecibelCloseRewardRow(row);
-    const rowIsLimitFill = isDecibelLimitFillRewardRow(row);
     const duplicate = context.some((candidate) => {
       if (Number(candidate.id) >= Number(row.id)) return false;
-      if (rowIsClose && isDecibelCloseRewardRow(candidate)) {
+      if (!canFuzzyDedupeDecibelRewardRows(candidate, row)) return false;
+      if (isDecibelCloseRewardRow(row) && isDecibelCloseRewardRow(candidate)) {
         return decibelTradesProbablyDuplicate(candidate, row);
       }
       if (row.verified_source !== 'worker') return false;
-      if (candidate.verified_source === 'server') {
-        return decibelTradesProbablyDuplicate(candidate, row);
-      }
-      const candidateIsLimitFill = isDecibelLimitFillRewardRow(candidate);
-      if (candidateIsLimitFill && rowIsLimitFill) return false;
       return decibelTradesProbablyDuplicate(candidate, row);
     });
     return duplicate ? { ...row, reward_duplicate: 1 } : row;
@@ -9280,12 +9286,16 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   }
   const nextRepeatableSnapshot = task.repeatable ? await tasks.buildSnapshot(req.player, task) : null;
 
-  // Atomic payout: re-check claimed_at inside the transaction so two
-  // concurrent /tasks/:id/claim calls can't both pass canClaim() and
-  // double-pay. Previously the rate-limiter's 3s gate was the only guard;
-  // two requests arriving within ~ms of each other would both credit.
+  // Atomic payout: re-check the snapshot inside the transaction so two
+  // concurrent /tasks/:id/claim calls can't both pay the same completed
+  // cycle. Repeatable zero-cooldown tasks auto-start the next cycle by
+  // replacing the snapshot and clearing claimed_at, so claimed_at alone is
+  // not a reliable race guard.
   const payout = db.db.transaction(() => {
-    const latest = db.db.prepare('SELECT claimed_at FROM player_tasks WHERE player_id = ? AND task_id = ?').get(req.player.id, id);
+    const latest = db.db.prepare('SELECT claimed_at, snapshot FROM player_tasks WHERE player_id = ? AND task_id = ?').get(req.player.id, id);
+    if (!latest || String(latest.snapshot || '') !== String(pt.snapshot || '')) {
+      return { raced: true };
+    }
     // For one-shot tasks: if claimed_at already set by a racing request,
     // abort. For repeatable tasks: if claimed_at advanced since we started,
     // the cooldown check we did earlier is stale — abort and let user
@@ -9299,15 +9309,29 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
         .run(req.player.id, task.reward_gold, `Quest: ${task.title}`);
     }
     if (task.repeatable) {
-      db.db.prepare(`
-        UPDATE player_tasks
-        SET claimed_at = datetime('now'),
-            snapshot = ?,
-            progress = 0,
-            progress_value = 0,
-            target_value = ?
-        WHERE player_id = ? AND task_id = ?
-      `).run(JSON.stringify(nextRepeatableSnapshot || {}), result.target_value || 0, req.player.id, id);
+      const cooldownHours = Number(task.cooldown_hours) || 0;
+      if (cooldownHours > 0) {
+        db.db.prepare(`
+          UPDATE player_tasks
+          SET claimed_at = datetime('now'),
+              snapshot = ?,
+              progress = 0,
+              progress_value = 0,
+              target_value = ?
+          WHERE player_id = ? AND task_id = ?
+        `).run(JSON.stringify(nextRepeatableSnapshot || {}), result.target_value || 0, req.player.id, id);
+      } else {
+        db.db.prepare(`
+          UPDATE player_tasks
+          SET claimed_at = NULL,
+              snapshot = ?,
+              progress = 0,
+              progress_value = 0,
+              target_value = ?,
+              started_at = datetime('now')
+          WHERE player_id = ? AND task_id = ?
+        `).run(JSON.stringify(nextRepeatableSnapshot || {}), result.target_value || 0, req.player.id, id);
+      }
     } else {
       db.db.prepare(`UPDATE player_tasks SET claimed_at = datetime('now') WHERE player_id = ? AND task_id = ?`).run(req.player.id, id);
     }
@@ -9327,6 +9351,7 @@ router.post('/tasks/:id/claim', auth, async (req, res) => {
   res.json({
     ok: true,
     completed: true,
+    auto_restarted: Boolean(task.repeatable && (Number(task.cooldown_hours) || 0) <= 0),
     reward: { gold: task.reward_gold, wood: task.reward_wood, ore: task.reward_ore },
     progress_value: result.progress_value,
     target_value: result.target_value,

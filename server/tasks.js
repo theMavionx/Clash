@@ -166,22 +166,28 @@ function isDecibelCloseTaskRow(row) {
   return String(row?.side || '').toLowerCase().startsWith('close_');
 }
 
+function canFuzzyDedupeDecibelTaskRows(candidate, row) {
+  const candidateSource = String(candidate?.verified_source || '');
+  const rowSource = String(row?.verified_source || '');
+  const candidateIsLimitFill = isDecibelLimitFillTaskRow(candidate);
+  const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
+
+  if (candidateIsLimitFill && rowIsLimitFill) return false;
+  if (candidateSource === 'server' && rowSource === 'server') return false;
+  if (candidateSource !== rowSource) return true;
+  return candidateSource === 'worker' && candidateIsLimitFill !== rowIsLimitFill;
+}
+
 function filterDuplicateDecibelTaskRows(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return rows || [];
   const kept = [];
   for (const row of rows) {
-    const rowIsClose = isDecibelCloseTaskRow(row);
-    const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
     const duplicate = kept.some((candidate) => {
-      if (rowIsClose && isDecibelCloseTaskRow(candidate)) {
+      if (!canFuzzyDedupeDecibelTaskRows(candidate, row)) return false;
+      if (isDecibelCloseTaskRow(row) && isDecibelCloseTaskRow(candidate)) {
         return decibelTradesProbablyDuplicate(candidate, row);
       }
       if (row.verified_source === 'worker') {
-        if (candidate.verified_source === 'server') {
-          return decibelTradesProbablyDuplicate(candidate, row);
-        }
-        const candidateIsLimitFill = isDecibelLimitFillTaskRow(candidate);
-        if (candidateIsLimitFill && rowIsLimitFill) return false;
         return decibelTradesProbablyDuplicate(candidate, row);
       }
       return false;

@@ -142,14 +142,16 @@ function QuestCard({ task, onStart, onClaim, loading }) {
   const pct = task.target_value > 0 ? Math.min(1, task.progress_value / task.target_value) : 0;
   const isDone = task.target_value > 0 && task.progress_value >= task.target_value;
   const isClaimed = !!task.claimed_at;
-  const canReClaim = isClaimed && task.repeatable;
+  const autoRestarted = isClaimed && task.repeatable && Number(task.cooldown_hours || 0) <= 0;
+  const canReClaim = isClaimed && task.repeatable && !autoRestarted;
+  const showClaimed = isClaimed && !task.repeatable;
 
   return (
     <div style={S.card}>
       <div style={S.cardHeader}>
         <span style={S.cardTitle}>{task.title}</span>
-        {isClaimed && !canReClaim && <span style={S.badgeDone}>Claimed</span>}
-        {canReClaim && <span style={S.badgeRepeat}>Repeatable</span>}
+        {showClaimed && <span style={S.badgeDone}>Claimed</span>}
+        {task.repeatable && <span style={S.badgeRepeat}>{autoRestarted ? 'Active again' : 'Repeatable'}</span>}
       </div>
       {task.description && <div style={S.cardDesc}>{task.description}</div>}
       <div style={S.cardAuto}>{describeTask(task)}</div>
@@ -189,11 +191,11 @@ function QuestCard({ task, onStart, onClaim, loading }) {
 
         {!task.started ? (
           <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>Start</button>
-        ) : isDone && !isClaimed ? (
+        ) : isDone && (!isClaimed || autoRestarted) ? (
           <button style={S.btnClaim} onClick={() => onClaim(task.id)} disabled={loading}>Claim</button>
         ) : canReClaim && isClaimed ? (
           <button style={S.btnStart} onClick={() => onStart(task.id)} disabled={loading}>Restart</button>
-        ) : isClaimed ? (
+        ) : isClaimed && !autoRestarted ? (
           <span style={S.doneLabel}>✓</span>
         ) : (
           <button style={S.btnRefresh} onClick={() => onClaim(task.id)} disabled={loading}>Refresh</button>
