@@ -1038,6 +1038,7 @@ const PositionsList = memo(function PositionsList({
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
 
   if (!positions.length) {
     return (
@@ -1055,6 +1056,7 @@ const PositionsList = memo(function PositionsList({
         const { entryP, markP, amt, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
         const posKey = `${pos.symbol}-${pos.side}`;
         const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+        const tpslBusy = tpslSubmittingPos === posKey;
 
         return (
           <div key={positionStableKey(pos) || i} style={S.posCard}>
@@ -1129,9 +1131,16 @@ const PositionsList = memo(function PositionsList({
                 <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                 <button style={S.btnBlue} onClick={async () => {
-                  await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
-                  setTpPrice(''); setSlPrice(''); setExpandedPos(null);
-                }} disabled={!tpPrice && !slPrice}>Set</button>
+                  setTpslSubmittingPos(posKey);
+                  try {
+                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                  } finally {
+                    setTpslSubmittingPos((current) => current === posKey ? null : current);
+                  }
+                }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
+                  {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
+                </button>
               </div>
             )}
           </div>
@@ -1602,6 +1611,7 @@ function FuturesPanel() {
   const [closePct, setClosePct] = useState(100);
   const [tpPrice, setTpPrice] = useState('');
   const [slPrice, setSlPrice] = useState('');
+  const [tpslSubmittingPos, setTpslSubmittingPos] = useState(null);
   const [showFilter, setShowFilter] = useState(false);
   const defaultFilters = { symbol: 'All', side: 'All', sortBy: 'time', sortDir: 'desc' };
   const [btmFilters, setBtmFilters] = useState(defaultFilters);
@@ -4086,6 +4096,7 @@ function FuturesPanel() {
           const { entryP, markP, margin, pnlVal, setLev, posValueUsd, pnlPct, pnlColor } = getPositionMetrics(pos, prices, leverageSettings);
           const posKey = `${pos.symbol}-${pos.side}`;
           const expanded = expandedPos?.startsWith(posKey) ? expandedPos.split(':')[1] : null;
+          const tpslBusy = tpslSubmittingPos === posKey;
 
           // Basic mode shows a stripped-down card: ticker + UP/DOWN icon +
           // leverage + dollar PnL + Close. No size, no entry/mark prices,
@@ -4339,9 +4350,16 @@ function FuturesPanel() {
                   <input type="number" placeholder="TP Price" value={tpPrice} onChange={e => setTpPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <input type="number" placeholder="SL Price" value={slPrice} onChange={e => setSlPrice(e.target.value)} style={{...S.input, flex: 1, padding: '7px 8px', fontSize: 12}} />
                   <button style={S.btnBlue} onClick={async () => {
-                    await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
-                    setTpPrice(''); setSlPrice(''); setExpandedPos(null);
-                  }} disabled={!tpPrice && !slPrice}>Set</button>
+                    setTpslSubmittingPos(posKey);
+                    try {
+                      await setTpsl(pos.symbol, pos.side === 'bid' ? 'ask' : 'bid', tpPrice || null, slPrice || null, pos.pair_index, pos.trade_index, pos.amount, pos.market_addr);
+                      setTpPrice(''); setSlPrice(''); setExpandedPos(null);
+                    } finally {
+                      setTpslSubmittingPos((current) => current === posKey ? null : current);
+                    }
+                  }} disabled={tpslBusy || loading || (!tpPrice && !slPrice)}>
+                    {tpslBusy ? <ClosingButtonLabel text="Setting..." /> : 'Set'}
+                  </button>
                 </div>
               )}
             </div>
