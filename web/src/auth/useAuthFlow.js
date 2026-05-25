@@ -491,6 +491,7 @@ export function useAuthFlow() {
   // manual-connect screen yet. Also a short timer after dex-pick so we
   // give auto-resolvers a chance before offering manual CTAs.
   const booting =
+    !smReady ||
     (isInFrame && fcLoading) ||
     (privyEnabled && !privyReady);
 

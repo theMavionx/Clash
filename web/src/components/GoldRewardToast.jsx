@@ -36,8 +36,8 @@ const S = {
     boxSizing: 'border-box',
   },
   icon: {
-    width: 34,
-    height: 34,
+    width: 41,
+    height: 41,
     objectFit: 'contain',
     flexShrink: 0,
     filter: 'drop-shadow(0 0 1px #fff) drop-shadow(0 0 3px #fff) drop-shadow(0 2px 3px rgba(0,0,0,0.45))',

@@ -6,7 +6,7 @@ import avantisLogo from '../assets/avantis.svg';
 const decibelLogo = '/favicon.png';
 import { usePlayer } from '../hooks/useGodot';
 import { isFarcasterFrame } from '../hooks/useFarcaster';
-import { isSolanaMobileSync } from '../hooks/useSolanaMobile';
+import { isSolanaMobileSync, useSolanaMobile } from '../hooks/useSolanaMobile';
 
 const DexContext = createContext(null);
 
@@ -221,6 +221,17 @@ export function DexProvider({ children }) {
       return isDexAvailableInContext(cached, ctx) ? cached : 'pacifica';
     }
   );
+  const { isSolanaMobile, ready: solanaMobileReady } = useSolanaMobile();
+
+  useEffect(() => {
+    if (!solanaMobileReady) return;
+    const ctx = { isInFrame: isFarcasterFrame(), isSolanaMobile };
+    setDexState(prevDex => {
+      const nextDex = isDexAvailableInContext(prevDex, ctx) ? prevDex : 'pacifica';
+      if (nextDex !== prevDex) localStorage.setItem(STORAGE_KEY, nextDex);
+      return nextDex;
+    });
+  }, [solanaMobileReady, isSolanaMobile]);
 
   const setDex = useCallback((newDex) => {
     const ctx = { isInFrame: isFarcasterFrame(), isSolanaMobile: isSolanaMobileSync() };

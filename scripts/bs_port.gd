@@ -87,6 +87,23 @@ func _swap_span_for_replacement(ship_troops: Array, slot: int, replacement_name:
 		return {}
 	return {"start": start, "end": end}
 
+
+func _ship_edit_context(port_node: Node3D, ship_troops: Array) -> Dictionary:
+	var context: Dictionary = {
+		"ship_troops": ship_troops.duplicate(),
+	}
+	if is_instance_valid(port_node) and port_node.has_meta("port_number"):
+		context["port_number"] = int(port_node.get_meta("port_number", 0))
+	if bs != null and bs.has_method("_get_grid_index"):
+		context["grid_index"] = int(bs._get_grid_index())
+	var gp: Vector2i = Vector2i(-9999, -9999)
+	if bs != null:
+		gp = bs.selected_building.get("grid_pos", Vector2i(-9999, -9999))
+	if gp.x > -9999 and gp.y > -9999:
+		context["grid_x"] = int(gp.x)
+		context["grid_z"] = int(gp.y)
+	return context
+
 # ---------------------------------------------------------------------------
 # Ship purchasing
 # ---------------------------------------------------------------------------
@@ -262,7 +279,7 @@ func _remove_troop_from_ship(slot: int) -> void:
 	var sid: int = bs.selected_building.get("server_id", -1)
 	var net: Node = bs._net
 	if net and net.has_token() and sid >= 0:
-		var result: Dictionary = await net.remove_troop(sid, int(span.start))
+		var result: Dictionary = await net.remove_troop(sid, int(span.start), _ship_edit_context(port_node, ship_troops))
 		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))

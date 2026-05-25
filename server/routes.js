@@ -6626,6 +6626,65 @@ function _swapSpanForReplacement(shipTroops, slot, replacementName, capacity) {
 
   return { start, end };
 }
+
+function _parseShipTroopsArray(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item));
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.map((item) => String(item)) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function _shipTroopsMatch(a, b) {
+  const left = _parseShipTroopsArray(a);
+  const right = _parseShipTroopsArray(b);
+  if (!left || !right || left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i++) {
+    if (String(left[i]) !== String(right[i])) return false;
+  }
+  return true;
+}
+
+function _resolvePlayerShipEditBuilding(playerId, buildingId, body = {}) {
+  const byId = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, playerId);
+  if (byId) return { building: byId, matchedBy: 'id' };
+
+  const ports = db.db.prepare(
+    'SELECT * FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1 ORDER BY grid_index ASC, grid_x ASC, grid_z ASC, id ASC'
+  ).all(playerId, 'port');
+  if (!ports.length) return { building: null, matchedBy: null };
+
+  const gridIndex = Number(body.grid_index);
+  const gridX = Number(body.grid_x);
+  const gridZ = Number(body.grid_z);
+  if (Number.isInteger(gridIndex) && Number.isInteger(gridX) && Number.isInteger(gridZ)) {
+    const byGrid = ports.find((port) => (
+      Number(port.grid_index) === gridIndex
+      && Number(port.grid_x) === gridX
+      && Number(port.grid_z) === gridZ
+    ));
+    if (byGrid) return { building: byGrid, matchedBy: 'grid' };
+  }
+
+  const clientTroops = _parseShipTroopsArray(body.ship_troops);
+  if (clientTroops) {
+    const byTroops = ports.filter((port) => _shipTroopsMatch(port.ship_troops, clientTroops));
+    if (byTroops.length === 1) return { building: byTroops[0], matchedBy: 'ship_troops' };
+  }
+
+  const portNumber = Number(body.port_number);
+  if (Number.isInteger(portNumber) && portNumber > 0 && portNumber <= ports.length) {
+    return { building: ports[portNumber - 1], matchedBy: 'port_number' };
+  }
+
+  return { building: null, matchedBy: null };
+}
+
 function _applyCasualties(playerId, casualties) {
   if (!casualties || typeof casualties !== 'object') return;
 
@@ -7224,8 +7283,15 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
   if (!Number.isInteger(slot)) return res.status(400).json({ error: 'Valid integer slot required' });
 
   const txn = db.db.transaction(() => {
-    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
-    if (!building) throw { status: 404, error: 'Building not found' };
+    const resolved = _resolvePlayerShipEditBuilding(req.player.id, buildingId, req.body || {});
+    const building = resolved.building;
+    if (!building) {
+      throw {
+        status: 404,
+        error: 'Building not found',
+        requested_building_id: buildingId,
+      };
+    }
     if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
 
     let shipTroops = [];
@@ -7245,6 +7311,9 @@ router.post('/buildings/:id/remove-troop', auth, (req, res) => {
       ship_level: building.level,
       ship_capacity: building.level * 3,
       resources: updated,
+      building_id: building.id,
+      requested_building_id: buildingId,
+      matched_by: resolved.matchedBy,
     };
   });
 

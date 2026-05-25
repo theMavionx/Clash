@@ -99,6 +99,30 @@ function nftLevelImageUrl(level, id = null) {
   return `${base}/${lvl}/default.jpg`;
 }
 
+function demonKingDisplayIdFromText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const hashMatch = text.match(/#\s*(\d{1,10})\b/);
+  if (hashMatch) return hashMatch[1];
+  const namedMatch = text.match(/\b(?:demon\s*king|king)\s+(?:no\.?\s*)?#?\s*(\d{1,10})\b/i);
+  if (namedMatch) return namedMatch[1];
+  const fieldMatch = text.match(/\b(?:token|id|index|serial|number)[\s:_-]*#?\s*(\d{1,10})\b/i);
+  if (fieldMatch) return fieldMatch[1];
+  const uriMatch = text.match(/\/api\/nft\/(?:base|arbitrum|monad|aptos|solana)\/(?:token2022\/)?(\d{1,10})(?:[/?#]|$)/i);
+  return uriMatch ? uriMatch[1] : '';
+}
+
+function parseMaybeJsonObject(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function timeoutPromise(promise, ms, label) {
   let timer = null;
   const timeout = new Promise((_, reject) => {
@@ -583,7 +607,7 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
       where: {owner_address:{_eq:$owner}, current_token_data:{collection_id:{_eq:$collection}}, amount:{_gt:0}}
     ) {
       token_data_id
-      current_token_data { token_name token_properties }
+      current_token_data { token_name token_uri token_properties }
     }
   }`;
   const headers = { 'content-type': 'application/json' };
@@ -603,20 +627,27 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
   const rows = json?.data?.current_token_ownerships_v2 || [];
   const tokens = rows.map((row) => {
     let level = 1;
-    const props = row.current_token_data?.token_properties;
-    if (props && typeof props === 'object' && props.level != null) {
-      level = Number(props.level);
-    } else if (typeof props === 'string') {
-      try {
-        const parsed = JSON.parse(props);
-        if (parsed?.level != null) level = Number(parsed.level);
-      } catch {}
-    }
+    const props = parseMaybeJsonObject(row.current_token_data?.token_properties);
+    if (props?.level != null) level = Number(props.level);
+    const tokenName = row.current_token_data?.token_name || `Demon King ${row.token_data_id}`;
+    const tokenUri = row.current_token_data?.token_uri || '';
+    const displayId = String(
+      props.token_index
+      || props.tokenIndex
+      || props.index
+      || props.serial
+      || demonKingDisplayIdFromText(tokenName)
+      || demonKingDisplayIdFromText(tokenUri)
+      || ''
+    ).replace(/^#/, '');
     return normalizeAptosDemonKingToken({
       tokenId: row.token_data_id,
       tokenAddress: row.token_data_id,
       level,
-      name: row.current_token_data?.token_name || `Demon King ${row.token_data_id}`,
+      name: tokenName,
+      uri: tokenUri,
+      displayId,
+      tokenIndex: displayId,
       imageUrl: nftLevelImageUrl(level, row.token_data_id),
       standard: 'aptos-token-v2',
     });
@@ -858,10 +889,26 @@ function mountNftV3Endpoints(router, ctx) {
           throw err;
         }
 
+        const scannedTokenByKey = new Map(tokens.map((token) => [
+          `${String(token.chain || '').toLowerCase()}:${String(token.tokenId || token.tokenAddress || token.asset || token.mint || token.id || '')}`,
+          token,
+        ]));
         const boundTokens = gameDb.replacePlayerDemonKingNfts(player.id, wallet, tokens, {
           chains: successfulChains,
           source: force ? 'force-sync' : 'sync',
         }).filter((token) => syncChains.includes(token.chain));
+        const responseTokens = boundTokens.map((token) => {
+          const scanned = scannedTokenByKey.get(`${String(token.chain || '').toLowerCase()}:${String(token.tokenId || '')}`) || {};
+          return {
+            ...scanned,
+            ...token,
+            displayId: scanned.displayId || scanned.display_id || scanned.tokenIndex || scanned.token_index || undefined,
+            tokenIndex: scanned.tokenIndex || scanned.token_index || scanned.displayId || scanned.display_id || undefined,
+            name: scanned.name || token.name,
+            uri: scanned.uri || scanned.tokenUri || token.uri,
+            standard: scanned.standard || token.standard,
+          };
+        });
         const nextCheck = gameDb.getDemonKingNftWalletCheck(player.id, wallet);
         return {
           ok: true,
@@ -871,8 +918,8 @@ function mountNftV3Endpoints(router, ctx) {
           wallet,
           chains: syncChains,
           checkedAt: nextCheck?.checkedAt || null,
-          total: boundTokens.length,
-          tokens: boundTokens,
+          total: responseTokens.length,
+          tokens: responseTokens,
           errors,
         };
       })();

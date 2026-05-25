@@ -85,6 +85,21 @@ function shortTokenId(tokenId) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function isEvmDemonKingChain(chain) {
+  return ['base', 'arbitrum', 'monad'].includes(String(chain || '').toLowerCase());
+}
+
+function demonKingTokenKey(token) {
+  if (!token) return '';
+  return `${String(token.chain || '').toLowerCase()}:${String(token.tokenId || token.id || '')}`;
+}
+
+function demonKingTokenSortValue(token) {
+  const tokenId = String(token?.tokenId || token?.id || '').trim();
+  if (/^\d+$/.test(tokenId)) return tokenId.padStart(20, '0');
+  return tokenId.toLowerCase();
+}
+
 function demonKingDisplayIdFromText(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -99,7 +114,19 @@ function demonKingDisplayIdFromText(value) {
   return '';
 }
 
-function demonKingDisplayIdFromToken(token) {
+function demonKingOrdinalDisplayId(token, tokens = []) {
+  if (!token || isEvmDemonKingChain(token.chain)) return '';
+  const key = demonKingTokenKey(token);
+  if (!key) return '';
+  const chain = String(token.chain || '').toLowerCase();
+  const sameChain = (Array.isArray(tokens) ? tokens : [])
+    .filter((item) => String(item?.chain || '').toLowerCase() === chain && demonKingTokenKey(item))
+    .sort((a, b) => demonKingTokenSortValue(a).localeCompare(demonKingTokenSortValue(b)));
+  const index = sameChain.findIndex((item) => demonKingTokenKey(item) === key);
+  return index >= 0 ? String(index + 1) : '';
+}
+
+function demonKingDisplayIdFromToken(token, tokens = []) {
   if (!token) return '';
   const direct = [
     token.displayId,
@@ -116,7 +143,7 @@ function demonKingDisplayIdFromToken(token) {
   if (direct !== undefined && direct !== null) {
     return String(direct).trim().replace(/^#/, '');
   }
-  return [
+  const parsed = [
     token.name,
     token.title,
     token.uri,
@@ -129,10 +156,15 @@ function demonKingDisplayIdFromToken(token) {
     token.content?.metadata?.name,
     token.content?.json_uri,
   ].map(demonKingDisplayIdFromText).find(Boolean) || '';
+  if (parsed) return parsed;
+
+  const tokenId = String(token.tokenId || token.id || '').trim();
+  if (isEvmDemonKingChain(token.chain) && /^\d+$/.test(tokenId)) return tokenId;
+  return demonKingOrdinalDisplayId(token, tokens);
 }
 
-function demonKingDisplayLabel(token) {
-  const value = demonKingDisplayIdFromToken(token) || shortTokenId(token?.tokenId);
+function demonKingDisplayLabel(token, tokens = []) {
+  const value = demonKingDisplayIdFromToken(token, tokens);
   const text = String(value || '').trim().replace(/^#/, '');
   return text ? `#${text}` : '';
 }
@@ -594,7 +626,7 @@ function BarnPanel({ building, onClose }) {
                     {demonKingNfts.map((token) => {
                       const key = demonKingShipEntry(token);
                       const active = key === (selectedDemonKey || demonKingShipEntry(selectedDemonNft));
-                      const tokenLabel = demonKingDisplayLabel(token);
+                      const tokenLabel = demonKingDisplayLabel(token, demonKingNfts);
                       return (
                         <button
                           key={key}
@@ -644,7 +676,7 @@ function BarnPanel({ building, onClose }) {
         {!isMax && !building.is_enemy && (
           <div style={{ padding: mobile ? '8px 12px 12px' : '12px 20px 16px', display: 'flex', justifyContent: 'center' }}>
             <button style={{...styles.actionBtn, width: '100%', maxWidth: mobile ? '100%' : 240, padding: mobile ? '12px 16px' : '14px 20px', fontSize: mobile ? 14 : 14}} onClick={handleMainUpgrade}>
-              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
+              {isDemonKing ? (selectedDemonNft ? `Upgrade NFT ${demonKingDisplayLabel(selectedDemonNft, demonKingNfts)} to Lv` : 'Get Demon King NFT') : 'Upgrade to Lv'} {isDemonKing && !selectedDemonNft ? '' : displayLvl + 1}
             </button>
           </div>
         )}

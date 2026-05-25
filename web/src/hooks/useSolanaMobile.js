@@ -2,39 +2,43 @@
 //
 // Reference: https://docs.solanamobile.com/recipes/general/detecting-seeker-users
 //
-// The official recipe assumes a React Native runtime and recommends
-//   `Platform.constants.Model === 'Seeker'`
-// (with `Brand: solanamobile`, `Manufacturer: Solana Mobile Inc.`). We're a
-// PWA / TWA — `Platform.constants` doesn't exist in the browser, and the
-// docs explicitly call out that "the Platform Constants API can be spoofed
-// and should not be used for use cases where you need a guaranteed Seeker
-// user." The doc's *guaranteed* path is verifying an SGT (Seeker Genesis
-// Token) NFT on-chain after a SIWS handshake. That's overkill for this
-// surface — we use the signal to (a) decide whether to mount the Mobile
-// Wallet Adapter (avoids "wallet not found" on plain Android), (b) surface
-// the user's `.skr` handle as a nickname suggestion, and (c) enable low-stakes
-// promotional game boosts. Do not use this soft signal for cash-equivalent
-// rewards or high-value access without an SGT ownership verification path.
+// The official recipe checks React Native Platform constants:
+//   Platform.constants.Model === 'Seeker'
+// with Brand=solanamobile and Manufacturer=Solana Mobile Inc. We run in a
+// browser/PWA/TWA, so Platform.constants is unavailable. We mirror that signal
+// with narrow UA markers first, then with browser User-Agent Client Hints
+// (`model`, `platform`, etc.) when Chrome exposes them.
+//
+// This is a soft UI signal only. The docs call out that device constants can be
+// spoofed; use on-chain SGT verification for high-value gated rewards.
 //
 // Why we can't use SolanaMobileWalletAdapter.readyState alone:
-// the adapter reports `Loadable` on EVERY Android device (the package's
-// own getIsSupported() is just a UA + secureContext check), and only
-// flips to `Installed` AFTER a successful connect() call has gone through
-// Seed Vault. So at detection time both Seeker and a regular Android
-// phone read `Loadable` — indistinguishable from each other. Trusting
-// that signal is what produced the "We can't find a wallet" dialog on
-// plain Android phones for everyone hitting the Pacifica auto-flow.
-//
-// Web-equivalent UA markers — Brand/Manufacturer/Model surface in the
-// Android WebView UA string Solana Mobile devices ship:
-//   - Saga (OG): "OnePlus" + "Saga" model code
-//   - Saga 2 / Seeker: "Seeker" model token, "Solana Mobile" brand token
-// Vendor rebrands of the next Solana Mobile chassis (Telegram, etc.)
-// would need to be added here; keep the regex narrow on purpose.
+// @solana-mobile/wallet-adapter-mobile reports Loadable on every Android
+// secure-context page because its getIsSupported() check is only Android UA +
+// secureContext. That would hide non-Solana DEXes on ordinary Android phones.
 
 import { useEffect, useState } from 'react';
 
-let cachedResult = null;        // null = not yet checked, true/false = result
+let cachedResult = null; // null = not yet checked, true/false = final result
+let pendingAsyncDetection = null;
+
+function hasSolanaMobileMarkers(value) {
+  const text = String(value || '');
+  return (
+    /\bSeeker\b/i.test(text) ||
+    /\bSolana\b.*\bMobile\b/i.test(text) ||
+    /solanamobile/i.test(text) ||
+    (/\bSaga\b/i.test(text) && /OnePlus/i.test(text))
+  );
+}
+
+function canProbeUserAgentData() {
+  return (
+    typeof navigator !== 'undefined' &&
+    navigator.userAgentData &&
+    typeof navigator.userAgentData.getHighEntropyValues === 'function'
+  );
+}
 
 function detectSolanaMobileSync() {
   if (cachedResult !== null) return cachedResult;
@@ -47,63 +51,76 @@ function detectSolanaMobileSync() {
     cachedResult = false;
     return false;
   }
-  // MWA also needs a secure context to deeplink at all — gate on it
-  // mirroring the package's own getIsSupported() check, so we never
-  // promise MWA on plain http://localhost or insecure embeds.
   if (!window.isSecureContext) {
     cachedResult = false;
     return false;
   }
-  // Saga / Seeker UA markers. "Saga" alone is too generic (matches a few
-  // unrelated apps in WebView UAs), so we gate it on either OEM presence
-  // ("OnePlus" — original Saga) or one of the Solana Mobile brand tokens.
-  // The flagship tokens we look for:
-  //   - `Seeker` (the Model field on Seeker firmware MR4+)
-  //   - `Solana Mobile` (the Manufacturer field — "Solana Mobile Inc.")
-  //   - `solanamobile` (the Brand field — emitted as the lowercase build
-  //     fingerprint on Seeker; the spaceless variant won't be caught by
-  //     `\bSolana\b.*\bMobile\b` so we add it explicitly)
-  const isSagaSeeker =
-    /\bSeeker\b/i.test(ua) ||
-    /\bSolana\b.*\bMobile\b/i.test(ua) ||
-    /solanamobile/i.test(ua) ||
-    (/\bSaga\b/i.test(ua) && /OnePlus/i.test(ua));
-  cachedResult = isSagaSeeker;
+
+  const isSagaSeeker = hasSolanaMobileMarkers(ua);
+  if (isSagaSeeker) cachedResult = true;
   return isSagaSeeker;
 }
 
-// Async wrapper kept for API compatibility — detection itself is
-// synchronous now (UA-only), but components await this in a useEffect
-// so they don't break if we ever need to add an async probe.
 async function detectSolanaMobile() {
-  return detectSolanaMobileSync();
+  if (detectSolanaMobileSync()) return true;
+  if (!canProbeUserAgentData()) {
+    cachedResult = false;
+    return false;
+  }
+  if (pendingAsyncDetection) return pendingAsyncDetection;
+
+  pendingAsyncDetection = navigator.userAgentData
+    .getHighEntropyValues(['model', 'platform', 'platformVersion', 'fullVersionList'])
+    .then(values => {
+      const signals = [
+        values?.model,
+        values?.platform,
+        values?.platformVersion,
+        values?.fullVersionList?.map(v => `${v.brand} ${v.version}`).join(' '),
+      ].join(' ');
+      const detected = hasSolanaMobileMarkers(signals);
+      cachedResult = detected;
+      return detected;
+    })
+    .catch(() => {
+      cachedResult = false;
+      return false;
+    })
+    .finally(() => { pendingAsyncDetection = null; });
+
+  return pendingAsyncDetection;
 }
 
 /**
  * Hook returning `{ isSolanaMobile, ready }`.
- *   - `ready: false` while detection is in flight (typically <50ms).
- *   - `isSolanaMobile: true` ONLY when running on Saga/Seeker.
- *
- * Callers gate UI on `ready` so they don't show "DEX picker" then
- * yank it away one frame later. The auth flow auto-picks Pacifica
- * the moment `isSolanaMobile` resolves to true.
+ * `isSolanaMobile` is true only for Saga/Seeker-like devices. Ordinary phones
+ * stay false and keep the full DEX picker.
  */
 export function useSolanaMobile() {
-  // Detection is sync (UA-only) so we run it inside the useState
-  // initializer — `ready` is true on the very first render with no
-  // useEffect dance. Subsequent hook instances hit the cached result.
-  const [state] = useState(() => ({
-    ready: true,
-    isSolanaMobile: detectSolanaMobileSync(),
-  }));
-  // Keep async path warm for any tests that still await it.
-  useEffect(() => { detectSolanaMobile(); }, []);
+  const [state, setState] = useState(() => {
+    const syncDetected = detectSolanaMobileSync();
+    const hasFinalSyncResult = cachedResult !== null;
+    return {
+      ready: syncDetected || hasFinalSyncResult || !canProbeUserAgentData(),
+      isSolanaMobile: syncDetected,
+    };
+  });
+
+  useEffect(() => {
+    if (state.ready) return;
+    let cancelled = false;
+    detectSolanaMobile().then(detected => {
+      if (cancelled) return;
+      setState({ ready: true, isSolanaMobile: detected });
+    });
+    return () => { cancelled = true; };
+  }, [state.ready]);
+
   return state;
 }
 
-// Synchronous read — used by render-time guards (e.g.
-// isDexAvailableInContext). Self-caches on first call, so callers get
-// the correct value even if useSolanaMobile() hasn't mounted yet.
+// Synchronous read used by render-time guards. It can only use cheap markers;
+// components that need UA Client Hints should use the hook and respect `ready`.
 export function isSolanaMobileSync() {
   return detectSolanaMobileSync();
 }

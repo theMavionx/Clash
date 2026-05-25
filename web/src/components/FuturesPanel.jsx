@@ -59,6 +59,31 @@ const PHOENIX_MARKET_SLIPPAGE_RATE = 0.02;
 const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_FEE_BUFFER_RATE = 0.0001;
 
+function decimalPlaces(value) {
+  const text = String(value || '');
+  const exponent = text.match(/e-(\d+)$/i);
+  if (exponent) return Number(exponent[1]) || 0;
+  return Math.max(0, text.split('.')[1]?.replace(/e.*$/i, '').length || 0);
+}
+
+function roundDownToLot(value, lotSize) {
+  const n = Number(value);
+  const lot = Number(lotSize);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  if (!Number.isFinite(lot) || lot <= 0) return n;
+  const decimals = Math.min(12, Math.max(decimalPlaces(value), decimalPlaces(lotSize)));
+  const scale = 10 ** decimals;
+  const lotUnits = Math.max(1, Math.round(lot * scale));
+  const valueUnits = Math.floor(n * scale + 1e-9);
+  return Number(((Math.floor(valueUnits / lotUnits) * lotUnits) / scale).toFixed(decimals));
+}
+
+function floorUsdCents(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n * 100) / 100;
+}
+
 function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRate }) {
   const m = Number(margin);
   const p = Number(price);
@@ -113,6 +138,29 @@ function pacificaUsableMargin({ balance }) {
 
 function phoenixUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
   return phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }).usable_margin;
+}
+
+function phoenixQtyFromMargin({ margin, price, leverage, lotSize }) {
+  const m = Number(margin);
+  const p = Number(price);
+  const lev = Number(leverage);
+  if (!Number.isFinite(m) || !Number.isFinite(p) || !Number.isFinite(lev) || m <= 0 || p <= 0 || lev <= 0) {
+    return 0;
+  }
+  return roundDownToLot((m * lev) / p, lotSize || '0.0001');
+}
+
+function phoenixRequiredMarginForQty({ qty, price, leverage, orderType, takerFeeRate }) {
+  const q = Number(qty);
+  const p = Number(price);
+  const lev = Number(leverage);
+  if (!Number.isFinite(q) || !Number.isFinite(p) || !Number.isFinite(lev) || q <= 0 || p <= 0 || lev <= 0) {
+    return 0;
+  }
+  const slippage = orderType === 'market' ? PHOENIX_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PHOENIX_DEFAULT_TAKER_FEE_RATE) + PHOENIX_FEE_BUFFER_RATE;
+  const worstNotional = q * p * (1 + slippage);
+  return worstNotional * ((1 / lev) + feeRate);
 }
 
 function phoenixMarginReserveDetails({ balance, leverage, orderType, takerFeeRate }) {
@@ -1700,12 +1748,12 @@ function FuturesPanel() {
   }, [account?.taker_fee]);
   const phoenixMaxMargin = useMemo(() => (
     dex === 'phoenix'
-      ? phoenixUsableMargin({
+      ? floorUsdCents(phoenixUsableMargin({
           balance: pacBalance,
           leverage,
           orderType,
           takerFeeRate: phoenixTakerFeeRate,
-        })
+        }))
       : pacBalance
   ), [dex, pacBalance, leverage, orderType, phoenixTakerFeeRate]);
   const pacificaMaxMargin = useMemo(() => (
@@ -1818,7 +1866,8 @@ function FuturesPanel() {
       // Slider now sets MARGIN (a fraction of the wallet balance), not
       // notional. 100% = full balance committed as collateral, which gives
       // a position = balance × leverage (= old "buying power").
-      const marginVal = (sizePctMarginBase * pct / 100).toFixed(2);
+      const rawMarginVal = sizePctMarginBase * pct / 100;
+      const marginVal = (dex === 'phoenix' ? floorUsdCents(rawMarginVal) : rawMarginVal).toFixed(2);
       if (amountInUsdc) {
         setAmount(marginVal);
       } else {
@@ -1831,11 +1880,18 @@ function FuturesPanel() {
               orderType,
               takerFeeRate: pacificaTakerFeeRate,
             })
+          : dex === 'phoenix'
+          ? phoenixQtyFromMargin({
+              margin: marginVal,
+              price: orderSizingPrice || currentPrice,
+              leverage,
+              lotSize,
+            })
           : ((parseFloat(marginVal) * leverage) / parseFloat(orderSizingPrice || currentPrice));
         setAmount(String(qty.toFixed(6)));
       }
     }
-  }, [clearTradeFeedback, sizePctMarginBase, currentPrice, amountInUsdc, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate]);
+  }, [clearTradeFeedback, sizePctMarginBase, currentPrice, amountInUsdc, leverage, dex, orderSizingPrice, orderType, pacificaTakerFeeRate, lotSize]);
 
   const levTimerRef = useRef(null);
   const handleLeverageChange = useCallback((val) => {
@@ -1913,7 +1969,7 @@ function FuturesPanel() {
         }
         // Avantis and Decibel hooks take USDC collateral directly. The token
         // readout is display math, so do not round collateral through it.
-        const collateralUsdc = amountInUsdc
+        let collateralUsdc = amountInUsdc
           ? parseFloat(amount)
           : (tradePrice > 0 ? (parseFloat(tokenAmount) * tradePrice) / leverage : 0);
         if (dex === 'phoenix') {
@@ -1924,28 +1980,56 @@ function FuturesPanel() {
             takerFeeRate: phoenixTakerFeeRate,
           });
           const maxMargin = reserve.usable_margin;
+          const phoenixOrderPrice = orderType === 'limit' ? parseFloat(limitPrice) : tradePrice;
+          const requestedQty = amountInUsdc
+            ? phoenixQtyFromMargin({
+                margin: collateralUsdc,
+                price: phoenixOrderPrice,
+                leverage,
+                lotSize,
+              })
+            : roundDownToLot(parseFloat(tokenAmount), lotSize);
+          const requiredMargin = phoenixRequiredMarginForQty({
+            qty: requestedQty,
+            price: phoenixOrderPrice,
+            leverage,
+            orderType,
+            takerFeeRate: phoenixTakerFeeRate,
+          });
           console.info('[Phoenix UI] margin reserve check', {
             symbol,
             orderType,
             requested_side: side,
             requested_margin: collateralUsdc,
+            requested_qty: requestedQty,
+            required_margin: requiredMargin,
             position_usdc: Number.isFinite(positionUsdc) ? positionUsdc : null,
             amount_mode: amountInUsdc ? 'usdc_margin' : 'token_size',
             ...reserve,
           });
-          if (Number.isFinite(collateralUsdc) && collateralUsdc > maxMargin + 1e-6) {
+          if (!Number.isFinite(requestedQty) || requestedQty <= 0) {
+            setLocalAlert('Phoenix order size is below this market lot size. Increase margin or leverage.');
+            return;
+          }
+          if (Number.isFinite(requiredMargin) && requiredMargin > pacBalance + 1e-6) {
+            const safeMaxMargin = floorUsdCents(maxMargin);
             console.warn('[Phoenix UI] margin blocked by fee/slippage buffer', {
               symbol,
               orderType,
               requested_side: side,
               requested_margin: collateralUsdc,
+              requested_qty: requestedQty,
+              required_margin: requiredMargin,
               max_margin: maxMargin,
               ...reserve,
             });
             setLocalAlert(
-              `Phoenix needs fee/slippage buffer at ${leverage}x. Use $${maxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
+              `Phoenix needs fee/slippage buffer at ${leverage}x. Use $${safeMaxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`
             );
             return;
+          }
+          if (amountInUsdc && collateralUsdc > floorUsdCents(maxMargin) && requiredMargin <= pacBalance) {
+            collateralUsdc = Math.min(collateralUsdc, maxMargin);
           }
         }
         qty = String(collateralUsdc.toFixed(6));
@@ -2059,7 +2143,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, positions]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, positions, lotSize]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)

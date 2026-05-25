@@ -31,6 +31,7 @@ const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BA
 const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
+const MAX_BATCH_QUANTITY = 10;
 
 const EVM_CHAIN_ID_BY_NFT_CHAIN = {
   base: BASE_CHAIN_ID,
@@ -265,6 +266,28 @@ function formatCount(value) {
   return count == null ? '-' : count.toLocaleString('en-US');
 }
 
+function clampQuantity(value, max = MAX_BATCH_QUANTITY) {
+  const hardMax = Math.max(1, Math.floor(Number(max) || MAX_BATCH_QUANTITY));
+  const count = Math.floor(Number(value));
+  if (!Number.isFinite(count)) return 1;
+  return Math.max(1, Math.min(hardMax, count));
+}
+
+function multiplyRewards(rewards, quantity) {
+  if (!rewards) return null;
+  const count = clampQuantity(quantity);
+  return {
+    gold: Math.max(0, Number(rewards.gold || 0) * count),
+    wood: Math.max(0, Number(rewards.wood || 0) * count),
+    ore: Math.max(0, Number(rewards.ore || 0) * count),
+  };
+}
+
+function formatUsdAmount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(2) : '0.00';
+}
+
 function getSupplyInfo(config, chain) {
   const chainConfig = config?.[chain] || {};
   const supply = chainConfig.supply || {};
@@ -478,6 +501,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   // chains don't need one. Default to USDC on multi-token chains since
   // most players already have it from the trading flow.
   const [shopPayment, setShopPayment] = useState('usdc');
+  const [mintQuantity, setMintQuantity] = useState(1);
+  const [shopQuantities, setShopQuantities] = useState({});
 
   useEffect(() => {
     if (!sessionToken || !demonKingSyncTarget) return undefined;
@@ -674,6 +699,13 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     addClientBreadcrumb('shop.chain_selected', { chain, dex, source: 'manual' });
   }, [dex]);
 
+  const handleShopQuantityChange = useCallback((productId, next, max = MAX_BATCH_QUANTITY) => {
+    setShopQuantities((prev) => ({
+      ...prev,
+      [productId]: clampQuantity(next, max),
+    }));
+  }, []);
+
   const handleSwitchPanelChain = useCallback((chain) => {
     if (activeShopTab === 'resources') {
       handleSelectShopChain(chain);
@@ -762,6 +794,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   }, [adapterSolWallet, dex, isInFrame, preparingPrivySolWallet, setSolanaModalVisible, solAddress, usingPrivySolWallet]);
 
   const handlePrimary = useCallback(() => {
+    const quantity = clampQuantity(mintQuantity);
     if (selected.soon) {
       setNotice('CoP mint opens after token launch.');
       return;
@@ -786,6 +819,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         refreshMintConfig,
         afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: ['base'], force: true }),
         dex,
+        quantity,
       });
       return;
     }
@@ -801,6 +835,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         refreshMintConfig,
         afterMint: () => syncDemonKingNfts({ wallet: solAddress, chains: ['solana'], force: true }),
         dex,
+        quantity,
       });
       return;
     }
@@ -819,6 +854,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         refreshMintConfig,
         afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: [selected.chain], force: true }),
         dex,
+        quantity,
       });
       return;
     }
@@ -834,6 +870,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         refreshMintConfig,
         afterMint: () => syncDemonKingNfts({ wallet: aptosAddress, chains: ['aptos'], force: true }),
         dex,
+        quantity,
       });
       return;
     }
@@ -848,7 +885,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     } else {
       handleSolanaReady();
     }
-  }, [aptosAddress, aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, refreshMintConfig, selected, solAddress, solWallet]);
+  }, [aptosAddress, aptosWallet, dex, evmAddress, evmOnBase, evmWallet, handleBaseReady, handleSolanaReady, mintConfig?.solana, mintQuantity, refreshMintConfig, selected, solAddress, solWallet]);
 
   const handleBuyGameProduct = useCallback(async (product) => {
     if (!sessionToken) {
@@ -859,6 +896,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       setNotice(`${shopChain.charAt(0).toUpperCase() + shopChain.slice(1)} game shop is not live yet.`);
       return;
     }
+    const quantity = clampQuantity(shopQuantities[product.id] || 1, product.maxQuantity || MAX_BATCH_QUANTITY);
 
     // Wallet-readiness gating per chain. We avoid prompting the buy flow
     // until the right wallet is connected — every DEX comes with its own
@@ -886,6 +924,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       chain: shopChain,
       payment: shopPayment,
       paymentLabel: pendingPaymentLabel,
+      quantity,
     });
     try {
       let result;
@@ -896,7 +935,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           token: sessionToken,
           sku: product.sku,
           payment: shopPayment,
-          quantity: 1,
+          quantity,
         });
       } else if (shopChain === 'base') {
         result = shopPayment === 'cop'
@@ -905,7 +944,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               buyer: evmAddress,
               token: sessionToken,
               sku: product.sku,
-              quantity: 1,
+              quantity,
             })
           : await buyEvmShopItem({
               evmWallet,
@@ -914,7 +953,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
               chain: shopChain,
               sku: product.sku,
               payment: shopPayment,
-              quantity: 1,
+              quantity,
             });
       } else if (shopChain === 'arbitrum' || shopChain === 'monad') {
         result = await buyEvmShopItem({
@@ -924,7 +963,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           chain: shopChain,
           sku: product.sku,
           payment: shopPayment,
-          quantity: 1,
+          quantity,
         });
       } else if (shopChain === 'aptos') {
         result = await buyAptosShopItem({
@@ -933,7 +972,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
           token: sessionToken,
           sku: product.sku,
           payment: shopPayment,
-          quantity: 1,
+          quantity,
         });
       } else {
         throw new Error(`Unsupported chain: ${shopChain}`);
@@ -956,13 +995,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       // "Done" handler can fire the fly-to-bar animation. We deliberately
       // DON'T fly here — the burst would happen behind the success overlay
       // that's about to cover the screen, which the player wouldn't see.
-      const flyRewards = product.rewards
-        ? {
-            gold: product.rewards.gold || 0,
-            wood: product.rewards.wood || 0,
-            ore:  product.rewards.ore  || 0,
-          }
-        : null;
+      const flyRewards = multiplyRewards(product.rewards, quantity);
       // Each chain returns a different tx-ID field shape; normalize so the
       // success popup + analytics see a single string.
       const txId = result.signature || result.hash || result.txHash || '';
@@ -975,6 +1008,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         chain: shopChain,
         payment: shopPayment,
         paymentLabel,
+        quantity,
         explorer: getShopPurchaseExplorer(shopChain, txId),
       });
       setShopPurchaseStatus('success');
@@ -983,6 +1017,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         chain: shopChain,
         payment: shopPayment,
         sku: product.sku,
+        quantity,
         tx: txId,
       });
       void refreshGameShopConfig({ log: false });
@@ -995,7 +1030,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     } finally {
       setBusy(null);
     }
-  }, [aptosWallet, dex, evmAddress, evmOnShopChain, evmWallet, handleShopChainReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopChainReady, shopPayment, solAddress, solWallet]);
+  }, [aptosWallet, dex, evmAddress, evmOnShopChain, evmWallet, handleShopChainReady, handleSolanaReady, refreshGameShopConfig, sessionToken, shopChain, shopChainReady, shopPayment, shopQuantities, solAddress, solWallet]);
 
   const handleDismissShopPurchase = useCallback(() => {
     // Fire the fly-to-bar burst when the user dismisses the success popup.
@@ -1246,6 +1281,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     preparingSolanaWallet={preparingPrivySolWallet}
                     aptosAddress={aptosWallet?.address || null}
                     busy={busy}
+                    quantities={shopQuantities}
+                    onQuantityChange={handleShopQuantityChange}
                     onConnectBase={handleShopChainReady}
                     onConnectSolana={handleSolanaReady}
                     onConnectAptos={() => aptosWallet?.connect?.()}
@@ -1326,6 +1363,14 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         })}
                       </div>
 
+                      <QuantityStepper
+                        label="Quantity"
+                        value={mintQuantity}
+                        onChange={setMintQuantity}
+                        max={MAX_BATCH_QUANTITY}
+                        disabled={!!busy}
+                      />
+
                       <button
                         style={{
                           ...styles.mintBtn,
@@ -1341,7 +1386,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                             ? <img src={tokenLogo(selected.token)} alt={selected.token} style={styles.mintBtnGlyphImg} />
                             : primaryState.glyph}
                         </span>
-                        <span>{primaryState.label}</span>
+                        <span>
+                          {primaryState.label}
+                          {primaryState.ready && mintQuantity > 1 ? ` x${mintQuantity}` : ''}
+                        </span>
                       </button>
                     </>
                   ) : (
@@ -2204,6 +2252,8 @@ function GameResourcesTab({
   preparingSolanaWallet,
   aptosAddress,
   busy,
+  quantities,
+  onQuantityChange,
   onConnectBase,
   onConnectSolana,
   onConnectAptos,
@@ -2293,16 +2343,17 @@ function GameResourcesTab({
         {products.map((product) => {
           const isBusy = busy === `shop:${product.id}`;
           const discounted = chain === 'base' && payment === 'cop';
-          const priceUsd = discounted
-            ? (Number(product.priceUsd || 0) * 0.8).toFixed(2)
-            : product.priceUsd;
+          const quantity = clampQuantity(quantities?.[product.id] || 1, product.maxQuantity || MAX_BATCH_QUANTITY);
+          const unitUsd = Number(product.priceUsd || 0) * (discounted ? 0.8 : 1);
+          const priceUsd = formatUsdAmount(unitUsd * quantity);
+          const displayRewards = multiplyRewards(product.rewards, quantity);
           const actionLabel = walletPreparing
             ? (isMobile ? 'Preparing' : 'Preparing wallet...')
             : !walletConnected
             ? connectLabel
             : isBusy
               ? (isMobile ? 'Buying' : 'Buying...')
-              : (isMobile ? 'Buy' : `Buy with ${paymentLabel}`);
+              : (isMobile ? `Buy x${quantity}` : `Buy x${quantity} with ${paymentLabel}`);
           const cardStyle = {
             ...styles.resourceCard,
             ...(isMobile ? styles.resourceCardMobile : null),
@@ -2334,8 +2385,15 @@ function GameResourcesTab({
                     {discounted && <span style={styles.resourceMeta}> 20% off</span>}
                   </span>
                   {product.durationHours && <span style={styles.resourceMeta}>{product.durationHours}h</span>}
-                  {product.rewards && <span style={styles.resourceMeta}>{formatRewards(product.rewards)}</span>}
+                  {displayRewards && <span style={styles.resourceMeta}>{formatRewards(displayRewards)}</span>}
                 </div>
+                <QuantityStepper
+                  value={quantity}
+                  onChange={(next) => onQuantityChange?.(product.id, next, product.maxQuantity || MAX_BATCH_QUANTITY)}
+                  max={product.maxQuantity || MAX_BATCH_QUANTITY}
+                  disabled={!!busy}
+                  compact
+                />
               </div>
               <button
                 type="button"
@@ -2426,6 +2484,49 @@ function ResourceGlyph({ size = 48 }) {
   );
 }
 
+function QuantityStepper({ label = null, value, onChange, max = MAX_BATCH_QUANTITY, disabled = false, compact = false }) {
+  const limit = Math.max(1, Math.floor(Number(max) || MAX_BATCH_QUANTITY));
+  const count = clampQuantity(value, limit);
+  const wrapperStyle = compact ? styles.quantityStepperCompact : styles.quantityStepper;
+  const btnStyle = compact ? styles.quantityBtnCompact : styles.quantityBtn;
+  return (
+    <div style={wrapperStyle}>
+      {label && <span style={styles.quantityLabel}>{label}</span>}
+      <div style={styles.quantityControls}>
+        <button
+          type="button"
+          style={btnStyle}
+          disabled={disabled || count <= 1}
+          onClick={() => onChange?.(clampQuantity(count - 1, limit))}
+          aria-label="Decrease quantity"
+        >
+          -
+        </button>
+        <input
+          type="number"
+          min="1"
+          max={limit}
+          step="1"
+          value={count}
+          disabled={disabled}
+          onChange={(e) => onChange?.(clampQuantity(e.target.value, limit))}
+          style={compact ? styles.quantityInputCompact : styles.quantityInput}
+          aria-label={label || 'Quantity'}
+        />
+        <button
+          type="button"
+          style={btnStyle}
+          disabled={disabled || count >= limit}
+          onClick={() => onChange?.(clampQuantity(count + 1, limit))}
+          aria-label="Increase quantity"
+        >
+          +
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function formatRewards(rewards) {
   const values = [rewards.gold, rewards.wood, rewards.ore].filter(Boolean);
   if (!values.length) return '';
@@ -2438,30 +2539,33 @@ function getContextLine(dex) {
   return `${label} active`;
 }
 
-async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
+async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
   const payment = selected.id === 'base-usdc' ? 'usdc'
     : selected.id === 'base-clash' ? 'cop'
       : 'eth';
+  const count = clampQuantity(quantity);
   setBusy('mint');
   setMintStatus?.('pending');
-  setMintResult?.(null);
+  setMintResult?.({ quantity: count });
   setNotice(null);
   try {
     const result = await mintBaseNft({
       evmWallet,
       buyer: evmAddress,
       payment,
-      quantity: 1,
+      quantity: count,
     });
     addClientBreadcrumb('nft.base_mint_submitted', {
       dex,
       payment,
+      quantity: count,
       tx: result.hash,
     });
     setMintResult?.({
       chain: 'base',
       tx: result.hash,
       payment,
+      quantity: count,
       explorer: result.hash ? `https://basescan.org/tx/${result.hash}` : null,
     });
     setMintStatus?.('success');
@@ -2487,22 +2591,24 @@ async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNot
 // the client. The flow mirrors handleBaseMint but switches the chain on
 // the connected EVM wallet first. Payment id format: `<chain>-<token>` →
 // USDC or the chain's native (eth/mon).
-async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
+async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
   const payment = /usdc$/i.test(selected.id) ? 'usdc' : 'native';
+  const count = clampQuantity(quantity);
   setBusy('mint');
   setMintStatus?.('pending');
-  setMintResult?.(null);
+  setMintResult?.({ quantity: count });
   setNotice(null);
   try {
     const result = await mintEvmNft({
-      evmWallet, chain, buyer: evmAddress, payment, quantity: 1,
+      evmWallet, chain, buyer: evmAddress, payment, quantity: count,
     });
-    addClientBreadcrumb('nft.evm_mint_submitted', { dex, chain, payment, tx: result.hash });
+    addClientBreadcrumb('nft.evm_mint_submitted', { dex, chain, payment, quantity: count, tx: result.hash });
     const explorerBase = chain === 'arbitrum' ? 'https://arbiscan.io/tx/' : `https://explorer.monad.xyz/tx/`;
     setMintResult?.({
       chain,
       tx: result.hash,
       payment,
+      quantity: count,
       explorer: result.hash ? `${explorerBase}${result.hash}` : null,
     });
     setMintStatus?.('success');
@@ -2526,21 +2632,23 @@ async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, 
 
 // Aptos — server signs a MintQuote, client calls mint_with_quote on the
 // Move module via the connected wallet (Petra/Pontem/Martian). USDC only.
-async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
+async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
   const buyer = aptosWallet?.address;
   if (!buyer) { setNotice('Connect Aptos wallet first.'); return; }
   const payment = selected?.id === 'aptos-apt' ? 'apt' : 'usdc';
+  const count = clampQuantity(quantity);
   setBusy('mint');
   setMintStatus?.('pending');
-  setMintResult?.(null);
+  setMintResult?.({ quantity: count });
   setNotice(null);
   try {
-    const result = await mintAptosNft({ aptosWallet, buyer, quantity: 1, payment });
-    addClientBreadcrumb('nft.aptos_mint_submitted', { dex, payment, tx: result.hash });
+    const result = await mintAptosNft({ aptosWallet, buyer, quantity: count, payment });
+    addClientBreadcrumb('nft.aptos_mint_submitted', { dex, payment, quantity: count, tx: result.hash });
     setMintResult?.({
       chain: 'aptos',
       tx: result.hash,
       payment,
+      quantity: count,
       explorer: result.hash ? `https://explorer.aptoslabs.com/txn/${result.hash}` : null,
     });
     setMintStatus?.('success');
@@ -2562,31 +2670,47 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
   }
 }
 
-async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex }) {
+async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotice, setMintStatus, setMintResult, refreshMintConfig, afterMint, dex, quantity = 1 }) {
   const payment = String(selected?.token || '').toLowerCase() === 'skr'
     ? 'skr'
     : selected.id === 'sol-sol' ? 'sol' : 'usdc';
+  const count = clampQuantity(quantity);
   setBusy('mint');
   setMintStatus?.('pending');
-  setMintResult?.(null);
+  setMintResult?.({ quantity: count, progressText: count > 1 ? `Minting 1 of ${count}` : null });
   setNotice(null);
   try {
-    const result = await mintSolanaNft({
-      solWallet,
-      config,
-      payment,
-    });
-    addClientBreadcrumb('nft.solana_mint_submitted', {
-      dex,
-      payment,
-      tx: result.signature,
-      asset: result.asset,
-    });
+    const minted = [];
+    for (let i = 0; i < count; i += 1) {
+      setMintResult?.({
+        quantity: count,
+        progressText: count > 1 ? `Minting ${i + 1} of ${count}` : null,
+        minted: i,
+      });
+      const result = await mintSolanaNft({
+        solWallet,
+        config,
+        payment,
+      });
+      minted.push(result);
+      addClientBreadcrumb('nft.solana_mint_submitted', {
+        dex,
+        payment,
+        quantity: count,
+        index: i + 1,
+        tx: result.signature,
+        asset: result.asset,
+      });
+    }
+    const result = minted[minted.length - 1] || {};
     setMintResult?.({
       chain: 'solana',
       tx: result.signature,
       payment,
       asset: result.asset,
+      quantity: count,
+      txs: minted.map((item) => item.signature).filter(Boolean),
+      assets: minted.map((item) => item.asset).filter(Boolean),
       explorer: result.signature ? `https://solscan.io/tx/${result.signature}` : null,
     });
     setMintStatus?.('success');
@@ -2734,6 +2858,8 @@ const CONFETTI = [
 function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
   const pending = status === 'pending';
   const success = status === 'success';
+  const quantity = clampQuantity(result?.quantity || 1);
+  const mintLabel = quantity > 1 ? `${quantity} Demon Kings` : 'Demon King';
   return (
     <div style={overlayStyles.root}>
       {/* Backdrop вЂ” soft cream wash with a moving radial sheen so it feels
@@ -2793,14 +2919,17 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
             <>
               <span style={overlayStyles.titleSpinner}>Forging on {chainLabel}</span>
               <span style={overlayStyles.subtitle}>
-                Waiting for confirmation<span className="nft-mint-dots" />
+                {result?.progressText || `Waiting for ${mintLabel} confirmation`}
+                <span className="nft-mint-dots" />
               </span>
               <span style={overlayStyles.hint}>Keep this window open вЂ” the tx is propagating.</span>
             </>
           ) : (
             <>
-              <span style={overlayStyles.titleSuccess}>Mint Complete</span>
-              <span style={overlayStyles.subtitleSuccess}>Demon King now lives on {chainLabel}.</span>
+              <span style={overlayStyles.titleSuccess}>{quantity > 1 ? 'Mints Complete' : 'Mint Complete'}</span>
+              <span style={overlayStyles.subtitleSuccess}>
+                {mintLabel} now {quantity > 1 ? 'live' : 'lives'} on {chainLabel}.
+              </span>
               {result?.tx && (
                 <span style={overlayStyles.txChip}>tx В· {shortAddress(result.tx)}</span>
               )}
@@ -2837,6 +2966,7 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
   const chain = result?.chain || 'base';
   const chainLabel = SHOP_CHAIN_LABEL[chain] || chain;
   const paymentLabel = result?.paymentLabel || getShopPaymentLabel(chain, result?.payment);
+  const quantity = clampQuantity(result?.quantity || 1, product?.maxQuantity || MAX_BATCH_QUANTITY);
 
   let successHeadline = 'Purchase Complete';
   let successDetail = null;
@@ -2846,17 +2976,17 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
       successHeadline = 'Shield Activated';
       successDetail = until
         ? `Base protected until ${until.toLocaleString()}`
-        : `Your base is protected for ${product.durationHours || 24}h.`;
+        : `Your base is protected for ${(product.durationHours || 24) * quantity}h.`;
     } else if (grant?.resources) {
-      const rewards = product.rewards || {};
+      const rewards = multiplyRewards(product.rewards, quantity) || {};
       const parts = [];
       if (rewards.gold) parts.push(`+${rewards.gold.toLocaleString()} gold`);
       if (rewards.wood) parts.push(`+${rewards.wood.toLocaleString()} wood`);
       if (rewards.ore) parts.push(`+${rewards.ore.toLocaleString()} ore`);
-      successHeadline = `${product.title} Delivered`;
+      successHeadline = quantity > 1 ? `${product.title} x${quantity} Delivered` : `${product.title} Delivered`;
       successDetail = parts.length ? parts.join('  ·  ') : 'Resources added to your stockpile.';
     } else {
-      successHeadline = `${product.title} Purchased`;
+      successHeadline = quantity > 1 ? `${product.title} x${quantity} Purchased` : `${product.title} Purchased`;
       successDetail = 'The item is now active on your base.';
     }
   }
@@ -2923,7 +3053,7 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
           {pending ? (
             <>
               <span style={overlayStyles.titleSpinner}>
-                Buying {product?.title || 'item'}
+                Buying {product?.title || 'item'}{quantity > 1 ? ` x${quantity}` : ''}
               </span>
               <span style={overlayStyles.subtitle}>
                 Confirm in wallet, then waiting for tx<span className="nft-mint-dots" />
@@ -3978,6 +4108,85 @@ const styles = {
     color: '#6b502d',
     fontSize: 10,
     fontWeight: 900,
+  },
+  quantityStepper: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    border: '3px solid #d4c8b0',
+    borderRadius: 12,
+    background: '#fff8df',
+    padding: '8px 10px',
+    boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.55)',
+  },
+  quantityStepperCompact: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 6,
+    marginTop: 4,
+  },
+  quantityLabel: {
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+  },
+  quantityControls: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+  },
+  quantityBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    border: '2px solid #9f8759',
+    background: 'linear-gradient(180deg, #fff6dc 0%, #d7c69f 100%)',
+    color: '#5C3A21',
+    fontSize: 17,
+    fontWeight: 900,
+    lineHeight: 1,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  quantityBtnCompact: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    border: '2px solid #9f8759',
+    background: '#fff6dc',
+    color: '#5C3A21',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1,
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+  },
+  quantityInput: {
+    width: 52,
+    height: 30,
+    borderRadius: 9,
+    border: '2px solid #d4c8b0',
+    background: '#fffaf0',
+    color: '#5C3A21',
+    fontSize: 14,
+    fontWeight: 900,
+    textAlign: 'center',
+    fontFamily: 'inherit',
+  },
+  quantityInputCompact: {
+    width: 42,
+    height: 24,
+    borderRadius: 7,
+    border: '2px solid #d4c8b0',
+    background: '#fffaf0',
+    color: '#5C3A21',
+    fontSize: 12,
+    fontWeight: 900,
+    textAlign: 'center',
+    fontFamily: 'inherit',
   },
   resourceBuyBtn: {
     minWidth: 104,

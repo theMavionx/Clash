@@ -197,6 +197,16 @@ function shortTokenId(tokenId) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
+function isEvmDemonKingChain(chain) {
+  return ['base', 'arbitrum', 'monad'].includes(String(chain || '').toLowerCase());
+}
+
+function demonKingTokenSortValue(token) {
+  const tokenId = String(token?.tokenId || token?.id || '').trim();
+  if (/^\d+$/.test(tokenId)) return tokenId.padStart(20, '0');
+  return tokenId.toLowerCase();
+}
+
 function demonKingDisplayIdFromText(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -211,7 +221,19 @@ function demonKingDisplayIdFromText(value) {
   return '';
 }
 
-function demonKingDisplayIdFromToken(token) {
+function demonKingOrdinalDisplayId(token, tokens = []) {
+  if (!token || isEvmDemonKingChain(token.chain)) return '';
+  const key = demonKingTokenKey(token);
+  if (!key) return '';
+  const chain = String(token.chain || '').toLowerCase();
+  const sameChain = (Array.isArray(tokens) ? tokens : [])
+    .filter((item) => String(item?.chain || '').toLowerCase() === chain && demonKingTokenKey(item))
+    .sort((a, b) => demonKingTokenSortValue(a).localeCompare(demonKingTokenSortValue(b)));
+  const index = sameChain.findIndex((item) => demonKingTokenKey(item) === key);
+  return index >= 0 ? String(index + 1) : '';
+}
+
+function demonKingDisplayIdFromToken(token, tokens = []) {
   if (!token) return '';
   const direct = [
     token.displayId,
@@ -228,7 +250,7 @@ function demonKingDisplayIdFromToken(token) {
   if (direct !== undefined && direct !== null) {
     return String(direct).trim().replace(/^#/, '');
   }
-  return [
+  const parsed = [
     token.name,
     token.title,
     token.uri,
@@ -241,16 +263,29 @@ function demonKingDisplayIdFromToken(token) {
     token.content?.metadata?.name,
     token.content?.json_uri,
   ].map(demonKingDisplayIdFromText).find(Boolean) || '';
+  if (parsed) return parsed;
+
+  const tokenId = String(token.tokenId || token.id || '').trim();
+  if (isEvmDemonKingChain(token.chain) && /^\d+$/.test(tokenId)) return tokenId;
+  return demonKingOrdinalDisplayId(token, tokens);
 }
 
 function demonKingDisplayIdFromEntry(entry, tokens = []) {
   const key = demonKingEntryTokenKey(entry);
   const token = tokens.find((item) => demonKingTokenKey(item) === key);
-  return demonKingDisplayIdFromToken(token) || shortTokenId(demonKingEntryTokenId(entry));
+  if (token) return demonKingDisplayIdFromToken(token, tokens);
+  const parts = String(entry || '').split(':');
+  const chain = String(parts[1] || '').toLowerCase();
+  const tokenId = demonKingEntryTokenId(entry);
+  if (isEvmDemonKingChain(chain) && /^\d+$/.test(tokenId)) return tokenId;
+  return '';
 }
 
-function demonKingDisplayLabel(value) {
-  const text = String(value || '').trim().replace(/^#/, '');
+function demonKingDisplayLabel(value, tokens = []) {
+  const resolved = value && typeof value === 'object'
+    ? demonKingDisplayIdFromToken(value, tokens)
+    : value;
+  const text = String(resolved || '').trim().replace(/^#/, '');
   return text ? `#${text}` : '';
 }
 
@@ -675,6 +710,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
     ]);
     const availableDemonNfts = demonKingNfts.filter((token) => !loadedDemonEntries.has(demonKingTokenKey(token)));
     const demonKingInUseCount = Math.max(0, demonKingNfts.length - availableDemonNfts.length);
+    const demonKingUseRatio = demonKingNfts.length ? `${demonKingInUseCount}/${demonKingNfts.length}` : '0/0';
     const demonKingOwnerForEntry = (entry) => {
       const key = demonKingEntryTokenKey(entry);
       const token = demonKingNfts.find((item) => demonKingTokenKey(item) === key);
@@ -732,10 +768,13 @@ function BuildingInfoPanel({ onOpenTroops }) {
 
     const handleClose = () => { setSwapSlot(null); setView('ACTIONS'); };
 
-    const slotW = isMobile ? 36 : (capacity > 6 ? 50 : 70);
-    const slotH = isMobile ? 46 : (capacity > 6 ? 64 : 90);
-    const cardW = isMobile ? 'calc(33% - 6px)' : 108;
-
+    const slotW = isMobile ? 52 : (capacity > 6 ? 58 : 78);
+    const slotH = isMobile ? 66 : (capacity > 6 ? 74 : 100);
+    const cardW = isMobile ? 'clamp(84px, 27%, 102px)' : 100;
+    const mobileLoadedBarStyle = isMobile ? {
+      justifyContent: 'center',
+      alignContent: 'center',
+    } : null;
     return (
       <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleClose}>
         <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
@@ -748,7 +787,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
           </div>
 
           {/* Loaded troops slots */}
-          <div style={{...LT.loadedBar, padding: isMobile ? '6px 8px' : '10px 14px', flexWrap: 'wrap', gap: isMobile ? 4 : 6}}>
+          <div style={{...LT.loadedBar, padding: isMobile ? '11px 10px' : '12px 16px', flexWrap: 'wrap', gap: isMobile ? 7 : 8, ...(mobileLoadedBarStyle || {})}}>
             {Array.from({ length: capacity }).map((_, i) => {
               const t = shipTroops[i];
               const isSwapping = swapSlot === i;
@@ -756,7 +795,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 if (t === SLOT_FILLER) {
                   return (
                     <div key={i} style={{...LT.emptySlot, width: slotW, height: slotH, opacity: 0.6}}>
-                      <span style={{fontSize: isMobile ? 10 : 12, fontWeight: 900}}>2/2</span>
+                    <span style={{fontSize: isMobile ? 11 : 12, fontWeight: 900}}>2/2</span>
                     </div>
                   );
                 }
@@ -787,7 +826,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
                       )}
                     </div>
                     {demonTokenLabel && (
-                      <div style={{...LT.demonIdBadge, fontSize: isMobile ? 8 : 9}}>
+                      <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 11 : 9}}>
                         {demonTokenLabel}
                       </div>
                     )}
@@ -815,7 +854,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
           )}
 
           {/* Troop selection grid */}
-          <div style={{...LT.grid, padding: isMobile ? '10px 8px' : '16px 20px', gap: isMobile ? 6 : 10}}>
+          <div style={{...LT.grid, padding: isMobile ? '8px 8px' : '14px 18px', gap: isMobile ? 8 : 10, flexDirection: 'column', flexWrap: 'nowrap', justifyContent: 'flex-start', alignItems: 'center'}}>
+            <div style={{...LT.normalTroopGrid, gap: isMobile ? 6 : 10}}>
             {allTroops.map(name => {
               const lvl = getTroopLvl(name);
               return (
@@ -844,30 +884,26 @@ function BuildingInfoPanel({ onOpenTroops }) {
                 </button>
               );
             })}
+            </div>
+            <div style={{...LT.demonKingRow, gap: isMobile ? 6 : 10}}>
             {demonKingNftLoading && (
-              <button type="button" style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, opacity: 0.78}}>
+              <button type="button" style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}>
+                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                  SYNC
+                </div>
                 <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
                   <div style={LT.troopImgWrap}>
-                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
+                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                 </div>
-                <div style={{...LT.bottomOverlay, height: isMobile ? 28 : 34}}>
-                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 8 : 10}}>LOADING</span>
+                <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
+                  <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
+                  <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>SYNCING</span>
                 </div>
               </button>
             )}
-            {hasDemonKingWallet && (
-              <div style={{...LT.nftSectionHeader, fontSize: isMobile ? 10 : 12}}>
-                <span>Demon Kings</span>
-                <span>
-                  {demonKingNftLoading
-                    ? 'Syncing'
-                    : `${availableDemonNfts.length} available${demonKingInUseCount ? ` / ${demonKingInUseCount} in use` : ''}`}
-                </span>
-              </div>
-            )}
             {!demonKingNftLoading && availableDemonNfts.map((token) => {
               const entry = demonKingShipEntry(token);
-              const demonTokenLabel = demonKingDisplayLabel(demonKingDisplayIdFromToken(token) || shortTokenId(token.tokenId));
+              const demonTokenLabel = demonKingDisplayLabel(token, demonKingNfts);
               const disabled = swapSlot === null
                 ? shipTroops.length + 2 > capacity
                 : (() => {
@@ -883,8 +919,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
                     if (!disabled) handleLoadTroop(entry);
                   }}
                 >
-                  <div style={{...LT.demonIdBadge, fontSize: isMobile ? 9 : 11}}>
+                  <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
                     {demonTokenLabel}
+                  </div>
+                  <div style={{...LT.demonUseBadge, fontSize: isMobile ? 9 : 10}}>
+                    {demonKingUseRatio}
                   </div>
                   <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>Lvl {token.level || 1}</div>
                   <div style={LT.troopImgWrap}>
@@ -900,21 +939,25 @@ function BuildingInfoPanel({ onOpenTroops }) {
             {!demonKingNftLoading && availableDemonNfts.length === 0 && (
               <button
                 type="button"
-                style={{...LT.troopCard, width: cardW, flexShrink: isMobile ? 1 : 0, opacity: 0.84}}
+                style={{...LT.troopCard, ...LT.troopCardMuted, width: cardW, flexShrink: isMobile ? 1 : 0}}
                 onClick={openNftShop}
               >
+                <div style={{...LT.demonIdBadge, ...(isMobile ? LT.demonIdBadgeMobile : null), fontSize: isMobile ? 9 : 11}}>
+                  {demonKingUseRatio}
+                </div>
                 <div style={{...LT.troopLvlBadge, fontSize: isMobile ? 12 : 16}}>NFT</div>
                 <div style={LT.troopImgWrap}>
-                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
+                  <img src={demonKingImg} alt="Demon King" style={{ ...LT.troopImg, ...LT.troopImgMuted, transform: `scale(${CARD_TROOP_STYLE_MAP.DemonKing.scale}) translateY(${CARD_TROOP_STYLE_MAP.DemonKing.offsetY})` }} />
                 </div>
                 <div style={{...LT.bottomOverlay, height: isMobile ? 30 : 38}}>
                   <span style={{...LT.bottomLabel, fontSize: isMobile ? 7 : 9}}>DEMON KING</span>
                   <span style={{...LT.costText, fontSize: isMobile ? 9 : 11}}>
-                    {hasDemonKingWallet ? (demonKingNftError || 'NEED NFT') : 'CONNECT'}
+                    {hasDemonKingWallet ? (demonKingNftError || (demonKingNfts.length ? 'ALL USED' : 'NEED NFT')) : 'CONNECT'}
                   </span>
                 </div>
               </button>
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -1277,6 +1320,21 @@ const LT = {
     padding: '16px 20px', justifyContent: 'center',
     overflowY: 'auto', flex: 1, minHeight: 0,
   },
+  normalTroopGrid: {
+    width: '100%',
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+  demonKingRow: {
+    width: '100%',
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    minHeight: 108,
+  },
   nftSectionHeader: {
     width: '100%',
     margin: '4px 4px 0',
@@ -1300,6 +1358,11 @@ const LT = {
     boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.4), 0 2px 4px rgba(0,0,0,0.15)',
     transition: 'filter 0.1s', padding: 0,
   },
+  troopCardMuted: {
+    opacity: 0.72,
+    cursor: 'pointer',
+    background: 'linear-gradient(180deg, #d0cec3 0%, #8f8c80 100%)',
+  },
   troopLvlBadge: {
     position: 'absolute', top: 6, right: 8, zIndex: 10,
     fontSize: 16, fontStyle: 'italic', fontWeight: 900, color: '#fff', 
@@ -1314,6 +1377,27 @@ const LT = {
     overflow: 'hidden', textOverflow: 'ellipsis',
     textShadow: '0 1px 2px rgba(0,0,0,0.9)',
   },
+  demonIdBadgeMobile: {
+    top: 4,
+    left: 4,
+    maxWidth: '72%',
+    padding: '3px 5px',
+    borderRadius: 6,
+  },
+  demonUseBadge: {
+    position: 'absolute',
+    top: 26,
+    left: 6,
+    zIndex: 12,
+    padding: '3px 5px',
+    borderRadius: 5,
+    background: 'rgba(255, 214, 77, 0.92)',
+    color: '#4a2f1c',
+    border: '1px solid rgba(92, 56, 22, 0.35)',
+    fontWeight: 900,
+    lineHeight: 1,
+    textShadow: 'none',
+  },
   troopImgWrap: {
     position: 'absolute', inset: 0,
     display: 'flex', alignItems: 'center', justifyContent: 'center', paddingBottom: 16,
@@ -1322,6 +1406,9 @@ const LT = {
     width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'top center',
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.5))',
     transformOrigin: 'top center',
+  },
+  troopImgMuted: {
+    filter: 'grayscale(1) saturate(0.45) brightness(0.82) drop-shadow(0 4px 6px rgba(0,0,0,0.45))',
   },
   bottomOverlay: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
