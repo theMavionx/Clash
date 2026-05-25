@@ -122,6 +122,8 @@ export function buildNadoOrderParams({
   orderType = 'market',
   reduceOnly = false,
   slippagePercent = 0.5,
+  triggerType,
+  expirationSeconds,
 }) {
   if (!market) throw new Error('Select a valid Nado market');
   const productId = Number(market.market_id ?? market.pair_index ?? market?._nado?.productId);
@@ -154,14 +156,49 @@ export function buildNadoOrderParams({
     productId,
     order: {
       subaccountName: 'default',
-      expiration: String(Math.floor(Date.now() / 1000) + (isLimit ? 7 * 24 * 60 * 60 : 5 * 60)),
+      expiration: String(Math.floor(Date.now() / 1000) + (expirationSeconds || (isLimit ? 7 * 24 * 60 * 60 : 5 * 60))),
       price: roundedPrice,
       amount: signedAmount,
       nonce: getOrderNonce(),
       appendix: packOrderAppendix({
         orderExecutionType: isLimit ? 'default' : 'ioc',
         reduceOnly: !!reduceOnly,
+        triggerType,
       }),
+    },
+    spotLeverage: true,
+  };
+}
+
+export function buildNadoTriggerOrderParams({
+  market,
+  side,
+  amountBase,
+  price,
+  triggerPrice,
+  triggerRequirementType,
+}) {
+  const params = buildNadoOrderParams({
+    market,
+    side,
+    amountBase,
+    price,
+    orderType: 'limit',
+    reduceOnly: true,
+    triggerType: 'price',
+    expirationSeconds: 30 * 24 * 60 * 60,
+  });
+
+  return {
+    productId: params.productId,
+    order: params.order,
+    nonce: params.order.nonce,
+    triggerCriteria: {
+      type: 'price',
+      criteria: {
+        type: triggerRequirementType,
+        triggerPrice: bn(triggerPrice),
+      },
     },
     spotLeverage: true,
   };

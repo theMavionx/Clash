@@ -13,9 +13,9 @@ class_name BSProduction extends RefCounted
 
 # ── Icon texture paths ─────────────────────────────────────────
 const COLLECT_ICON_TEXTURES: Dictionary = {
-	"ore":  "res://web/src/assets/resources/stone_bar.png",
-	"wood": "res://web/src/assets/resources/wood_bar.png",
-	"gold": "res://web/src/assets/resources/gold_bar.png",
+	"ore":  "res://Model/Resources/stone_bar.png",
+	"wood": "res://Model/Resources/wood_bar.png",
+	"gold": "res://Model/Resources/gold_bar.png",
 }
 
 # ── Back-reference to BuildingSystem ──────────────────────────

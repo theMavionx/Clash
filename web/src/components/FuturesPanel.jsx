@@ -4252,7 +4252,8 @@ function FuturesPanel() {
       marginUsed = parseFloat(account?.total_margin_used || 0);
     }
     const phoenixHasMarginRisk = dex === 'phoenix' && ((positions?.length || 0) > 0 || (orders?.length || 0) > 0);
-    const withdrawMax = Math.max(0, available - (phoenixHasMarginRisk ? 0.01 : 0));
+    const withdrawReserve = phoenixHasMarginRisk ? 0.01 : (dex === 'nado' ? 1 : 0);
+    const withdrawMax = Math.max(0, available - withdrawReserve);
     const hyperliquidSpot = dex === 'hyperliquid'
       ? Math.max(0, Number(account?.spot_usdc_balance ?? 0))
       : 0;
@@ -4678,14 +4679,14 @@ function FuturesPanel() {
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' ? 'Amount (USDt0)' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' && !account?.exists ? 'Min 5 USDt0' : dex === 'nado' ? 'Amount (USDt0)' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
-                const minDeposit = dex === 'pacifica' ? 10 : 0;
+                const minDeposit = dex === 'pacifica' ? 10 : (dex === 'nado' && !account?.exists ? 5 : 0);
                 const v = parseFloat(depositAmt);
                 if (!Number.isFinite(v) || v <= 0 || (minDeposit > 0 && v < minDeposit)) {
-                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} USDC` : 'Enter a positive amount');
+                  setLocalAlert(minDeposit > 0 ? `Min deposit ${minDeposit} ${dex === 'nado' ? 'USDt0' : 'USDC'}` : 'Enter a positive amount');
                   return;
                 }
                 if (dex === 'risex') {
@@ -4735,10 +4736,10 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'nado' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && (dex === 'decibel' || dex === 'hyperliquid' || dex === 'nado' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
+              <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : dex === 'nado' ? 'Withdraw USDt0' : 'Withdraw USDC'}</span>
               <span style={S.detail}>Max: ${withdrawMax.toFixed(2)}</span>
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
@@ -4758,11 +4759,14 @@ function FuturesPanel() {
                     return;
                   }
                   if (v > withdrawMax + 0.000001) {
-                    setLocalAlert(`Max withdraw is ${withdrawMax.toFixed(2)} USDC`);
+                    setLocalAlert(`Max withdraw is ${withdrawMax.toFixed(2)} ${dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}`);
                     return;
                   }
                   const r = await withdraw(withdrawAmt);
-                  if (!r?.error) setWithdrawAmt('');
+                  if (!r?.error) {
+                    setWithdrawAmt('');
+                    if (r?.info) setLocalAlert(r.info);
+                  }
                 }}
                 disabled={loading || !withdrawAmt || withdrawMax <= 0}
               >
@@ -4778,6 +4782,8 @@ function FuturesPanel() {
                 ? 'Withdraws AUSD from Perpl back to your Monad wallet.'
                 : dex === 'phoenix'
                 ? 'Withdraws USDC from your Phoenix trader account back to your Solana wallet.'
+                : dex === 'nado'
+                ? 'Withdraws USDt0 from your Nado default subaccount back to your Ink wallet. Nado charges a 1 USDt0 withdrawal fee, so Max subtracts it.'
                 : 'Withdraws USDC from Pacifica back to your wallet.'}
             </span>
           </div>

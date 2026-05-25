@@ -780,9 +780,9 @@ func _update_collect_icons() -> void:
 
 
 const COLLECT_ICON_TEXTURES = {
-	"ore": "res://web/src/assets/resources/stone_bar.png",
-	"wood": "res://web/src/assets/resources/wood_bar.png",
-	"gold": "res://web/src/assets/resources/gold_bar.png",
+	"ore": "res://Model/Resources/stone_bar.png",
+	"wood": "res://Model/Resources/wood_bar.png",
+	"gold": "res://Model/Resources/gold_bar.png",
 }
 
 func _create_collect_icon(b: Dictionary, building_node: Node3D, def: Dictionary) -> Control:

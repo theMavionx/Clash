@@ -235,12 +235,9 @@ sorted.forEach((resPath, index) => {
 
 lines.push('');
 lines.push('[node name="ExportManifest" type="ResourcePreloader"]');
-lines.push('resources = {');
-sorted.forEach((_resPath, index) => {
-  const comma = index === sorted.length - 1 ? '' : ',';
-  lines.push(`"res_${String(index + 1).padStart(3, '0')}": ExtResource("${index + 1}")${comma}`);
-});
-lines.push('}');
+const resourceNames = sorted.map((_resPath, index) => `"res_${String(index + 1).padStart(3, '0')}"`);
+const resourceRefs = sorted.map((_resPath, index) => `ExtResource("${index + 1}")`);
+lines.push(`resources = [PackedStringArray(${resourceNames.join(', ')}), [${resourceRefs.join(', ')}]]`);
 lines.push('');
 
 fs.mkdirSync(path.dirname(output), { recursive: true });

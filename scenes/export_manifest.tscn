@@ -1,392 +1,203 @@
-[gd_scene load_steps=194 format=3]
+[gd_scene load_steps=199 format=3]
 
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/3,4,5.glb" id="1"]
-[ext_resource type="PackedScene" path="res://Model/Archer_towers/tower2plus_3.glb" id="2"]
-[ext_resource type="PackedScene" path="res://Model/Archer_towers/tower_1.glb" id="3"]
-[ext_resource type="PackedScene" path="res://Model/Archer_towers/towerplus_2.fbx" id="4"]
-[ext_resource type="PackedScene" path="res://Model/Barn/1.glb" id="5"]
-[ext_resource type="PackedScene" path="res://Model/Barn/2.glb" id="6"]
-[ext_resource type="PackedScene" path="res://Model/Barn/3.glb" id="7"]
-[ext_resource type="PackedScene" path="res://Model/BrokenModel/BrokenModel.glb" id="8"]
-[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_0.jpg" id="9"]
-[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_1.jpg" id="10"]
-[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_2.jpg" id="11"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx" id="12"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Attack02.fbx" id="13"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Die.fbx" id="14"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Dizzy.fbx" id="15"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_GetHit.fbx" id="16"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_IdleBattle.fbx" id="17"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_IdleNormal.fbx" id="18"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_RunFWD.fbx" id="19"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingMaint.fbx" id="20"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingStart.fbx" id="21"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Taunting.fbx" id="22"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Victory.fbx" id="23"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkBWD.fbx" id="24"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkFWD.fbx" id="25"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkLFT.fbx" id="26"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkRGT.fbx" id="27"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb" id="28"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb" id="29"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb" id="30"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb" id="31"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb" id="32"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_bow.gltf" id="33"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_crossbow.gltf" id="34"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/axe_1handed.gltf" id="35"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Assets/barbarian_texture.png" id="36"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/bow_withString.gltf" id="37"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/crossbow_1handed.gltf" id="38"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Assets/knight_texture.png" id="39"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Assets/mage_texture.png" id="40"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Assets/ranger_texture.png" id="41"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Assets/rogue_texture.png" id="42"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/staff.gltf" id="43"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Assets/sword_1handed.gltf" id="44"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/Barbarian.glb" id="45"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/Barbarian_barbarian_texture.png" id="46"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/DemonKing_Body.fbx" id="47"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_emission.png" id="48"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask01.png" id="49"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask02.png" id="50"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask03.png" id="51"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask_albedo.png" id="52"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/Knight.glb" id="53"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/Knight_knight_texture.png" id="54"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/Mage.glb" id="55"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/Mage_mage_texture.png" id="56"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/Ranger.glb" id="57"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/Ranger_ranger_texture.png" id="58"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Model/Rogue_Hooded.glb" id="59"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Model/Rogue_Hooded_rogue_texture.png" id="60"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb" id="61"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb" id="62"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf" id="63"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Skelet/assets/gltf/skeleton_texture.png" id="64"]
-[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb" id="65"]
-[ext_resource type="Texture2D" path="res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion_skeleton_texture.png" id="66"]
-[ext_resource type="PackedScene" path="res://Model/Island/Isl.glb" id="67"]
-[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901.webp" id="68"]
-[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp" id="69"]
-[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901_normal.webp" id="70"]
-[ext_resource type="PackedScene" path="res://Model/MageTower/1.fbx" id="71"]
-[ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_albedo.png" id="72"]
-[ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_emit.png" id="73"]
-[ext_resource type="PackedScene" path="res://Model/MageTower/2.fbx" id="182"]
-[ext_resource type="PackedScene" path="res://Model/MageTower/3.fbx" id="183"]
-[ext_resource type="PackedScene" path="res://Model/Mine/1.glb" id="74"]
-[ext_resource type="Texture2D" path="res://Model/Mine/1_hexagons_medieval.png" id="75"]
-[ext_resource type="PackedScene" path="res://Model/Port/1.glb" id="76"]
-[ext_resource type="PackedScene" path="res://Model/Port/2.glb" id="77"]
-[ext_resource type="PackedScene" path="res://Model/Port/3.glb" id="78"]
-[ext_resource type="PackedScene" path="res://Model/Sawmill/1.glb" id="79"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00001.png" id="80"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00004.png" id="81"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00007.png" id="82"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00010.png" id="83"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00013.png" id="84"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00016.png" id="85"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00019.png" id="86"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00022.png" id="87"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00025.png" id="88"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00028.png" id="89"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00031.png" id="90"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00034.png" id="91"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00037.png" id="92"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00040.png" id="93"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00043.png" id="94"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00046.png" id="95"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00049.png" id="96"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00052.png" id="97"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00055.png" id="98"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00058.png" id="99"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00061.png" id="100"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00064.png" id="101"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00067.png" id="102"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00070.png" id="103"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00073.png" id="104"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00076.png" id="105"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00079.png" id="106"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00082.png" id="107"]
-[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00085.png" id="108"]
-[ext_resource type="PackedScene" path="res://Model/Ship/MainShip/MainShip.glb" id="109"]
-[ext_resource type="Texture2D" path="res://Model/Ship/MainShip/MainShip_Atlas_Pirate.png" id="110"]
-[ext_resource type="Texture2D" path="res://Model/Ship/Ships/Textures/colormap.png" id="111"]
-[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-large_3.glb" id="112"]
-[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-medium_2.glb" id="113"]
-[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-small_1.glb" id="114"]
-[ext_resource type="PackedScene" path="res://Model/Storage/Business Building_3.glb" id="115"]
-[ext_resource type="PackedScene" path="res://Model/Storage/Storage House_2.glb" id="116"]
-[ext_resource type="PackedScene" path="res://Model/Storage/Storage shed_1.glb" id="117"]
-[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/1.glb" id="118"]
-[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/2.glb" id="119"]
-[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/3.glb" id="120"]
-[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/4.glb" id="121"]
-[ext_resource type="Texture2D" path="res://Model/Tombstone/GLB format/Textures/colormap.png" id="122"]
-[ext_resource type="PackedScene" path="res://Model/Town_Hall/1.gltf" id="123"]
-[ext_resource type="PackedScene" path="res://Model/Town_Hall/2.gltf" id="124"]
-[ext_resource type="PackedScene" path="res://Model/Town_Hall/3.gltf" id="125"]
-[ext_resource type="PackedScene" path="res://Model/Town_Hall/4.glb" id="126"]
-[ext_resource type="Texture2D" path="res://Model/Town_Hall/hexagons_medieval.png" id="127"]
-[ext_resource type="PackedScene" path="res://Model/Turret/scene.gltf" id="128"]
-[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png" id="129"]
-[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png" id="130"]
-[ext_resource type="Texture2D" path="res://Model/Turret/textures/texture_baseColor.png" id="131"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (1).png" id="132"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (2).png" id="133"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (3).png" id="134"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (4).png" id="135"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (5).png" id="136"]
-[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505.png" id="137"]
-[ext_resource type="PackedScene" path="res://Model/flag/pirate_flag_animated.glb" id="138"]
-[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_0.jpg" id="139"]
-[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_1.png" id="140"]
-[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_2.png" id="141"]
-[ext_resource type="Texture2D" path="res://clashofperpslogo.jpg" id="142"]
-[ext_resource type="PackedScene" path="res://scenes/Main.tscn" id="143"]
-[ext_resource type="Script" path="res://scripts/archer.gd" id="144"]
-[ext_resource type="Script" path="res://scripts/attack_system.gd" id="145"]
-[ext_resource type="Script" path="res://scripts/barbarian.gd" id="146"]
-[ext_resource type="Script" path="res://scripts/base_troop.gd" id="147"]
-[ext_resource type="Script" path="res://scripts/bs_battle.gd" id="148"]
-[ext_resource type="Script" path="res://scripts/bs_cannon.gd" id="149"]
-[ext_resource type="Script" path="res://scripts/bs_port.gd" id="150"]
-[ext_resource type="Script" path="res://scripts/bs_production.gd" id="151"]
-[ext_resource type="Script" path="res://scripts/bs_rally.gd" id="152"]
-[ext_resource type="Script" path="res://scripts/building_system.gd" id="153"]
-[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="154"]
-[ext_resource type="Script" path="res://scripts/cloud_transition.gd" id="155"]
-[ext_resource type="Script" path="res://scripts/demon_king.gd" id="156"]
-[ext_resource type="Script" path="res://scripts/game_manager.gd" id="157"]
-[ext_resource type="Script" path="res://scripts/home_troop.gd" id="158"]
-[ext_resource type="Script" path="res://scripts/hud.gd" id="159"]
-[ext_resource type="Script" path="res://scripts/js_bridge.gd" id="160"]
-[ext_resource type="Script" path="res://scripts/knight.gd" id="161"]
-[ext_resource type="Script" path="res://scripts/mage.gd" id="162"]
-[ext_resource type="Script" path="res://scripts/map_islands.gd" id="163"]
-[ext_resource type="Script" path="res://scripts/mine_cart.gd" id="164"]
-[ext_resource type="Script" path="res://scripts/network_client.gd" id="165"]
-[ext_resource type="Script" path="res://scripts/ranger.gd" id="166"]
-[ext_resource type="Script" path="res://scripts/skeleton_guard.gd" id="167"]
-[ext_resource type="Script" path="res://scripts/tower_archer.gd" id="168"]
-[ext_resource type="Script" path="res://scripts/tower_mage.gd" id="169"]
-[ext_resource type="Script" path="res://scripts/turret.gd" id="170"]
-[ext_resource type="Script" path="res://scripts/warmup.gd" id="171"]
-[ext_resource type="Script" path="res://scripts/world_map_camera.gd" id="172"]
-[ext_resource type="Shader" path="res://shaders/cloud.gdshader" id="173"]
-[ext_resource type="Shader" path="res://shaders/demon_mask_tint.gdshader" id="174"]
-[ext_resource type="Shader" path="res://shaders/hp_bar.gdshader" id="175"]
-[ext_resource type="Shader" path="res://shaders/magic_orb.gdshader" id="176"]
-[ext_resource type="Shader" path="res://shaders/upgrade_outline.gdshader" id="177"]
-[ext_resource type="Shader" path="res://shaders/water.gdshader" id="178"]
-[ext_resource type="Texture2D" path="res://web/src/assets/resources/gold_bar.png" id="179"]
-[ext_resource type="Texture2D" path="res://web/src/assets/resources/stone_bar.png" id="180"]
-[ext_resource type="Texture2D" path="res://web/src/assets/resources/wood_bar.png" id="181"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/archer/attack.mp3" id="184"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/barbarian/attack.mp3" id="185"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/knight/attack.mp3" id="186"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/mage/attack.mp3" id="187"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/ranger/attack.mp3" id="188"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/DemonKingAttack.mp3" id="189"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/Turret/Turret_Attack1.mp3" id="190"]
-[ext_resource type="AudioStream" path="res://Musik/sound_effects/Turret/Turret_Attack2.mp3" id="191"]
-[ext_resource type="AudioStream" path="res://Musik/fight/fight_1.mp3" id="192"]
-[ext_resource type="AudioStream" path="res://Musik/fight/fight_2.wav" id="193"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/tower_1.glb" id="2"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/towerplus_2.fbx" id="3"]
+[ext_resource type="PackedScene" path="res://Model/Barn/1.glb" id="4"]
+[ext_resource type="PackedScene" path="res://Model/Barn/2.glb" id="5"]
+[ext_resource type="PackedScene" path="res://Model/Barn/3.glb" id="6"]
+[ext_resource type="PackedScene" path="res://Model/BrokenModel/BrokenModel.glb" id="7"]
+[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_0.jpg" id="8"]
+[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_1.jpg" id="9"]
+[ext_resource type="Texture2D" path="res://Model/BrokenModel/BrokenModel_2.jpg" id="10"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx" id="11"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Attack02.fbx" id="12"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Die.fbx" id="13"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Dizzy.fbx" id="14"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_GetHit.fbx" id="15"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_IdleBattle.fbx" id="16"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_IdleNormal.fbx" id="17"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_RunFWD.fbx" id="18"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingMaint.fbx" id="19"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_SenseSomethingStart.fbx" id="20"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Taunting.fbx" id="21"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_Victory.fbx" id="22"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkBWD.fbx" id="23"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkFWD.fbx" id="24"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkLFT.fbx" id="25"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/DemonKing/DemonKing_WalkRGT.fbx" id="26"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatMelee.glb" id="27"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb" id="28"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_General.glb" id="29"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_MovementBasic.glb" id="30"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb" id="31"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_bow.gltf" id="32"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/arrow_crossbow.gltf" id="33"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/axe_1handed.gltf" id="34"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Assets/barbarian_texture.png" id="35"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/bow_withString.gltf" id="36"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/crossbow_1handed.gltf" id="37"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Assets/knight_texture.png" id="38"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Assets/mage_texture.png" id="39"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Assets/ranger_texture.png" id="40"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Assets/rogue_texture.png" id="41"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/staff.gltf" id="42"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Assets/sword_1handed.gltf" id="43"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Barbarian.glb" id="44"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/Barbarian_barbarian_texture.png" id="45"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/DemonKing_Body.fbx" id="46"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_emission.png" id="47"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask01.png" id="48"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask02.png" id="49"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask03.png" id="50"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/DemonKing_mask_albedo.png" id="51"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Knight.glb" id="52"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/Knight_knight_texture.png" id="53"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Mage.glb" id="54"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/Mage_mage_texture.png" id="55"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Ranger.glb" id="56"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/Ranger_ranger_texture.png" id="57"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Model/Rogue_Hooded.glb" id="58"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Model/Rogue_Hooded_rogue_texture.png" id="59"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_General.glb" id="60"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/Animations/gltf/Rig_Medium/Rig_Medium_MovementBasic.glb" id="61"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/assets/gltf/Skeleton_Blade.gltf" id="62"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Skelet/assets/gltf/skeleton_texture.png" id="63"]
+[ext_resource type="PackedScene" path="res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion.glb" id="64"]
+[ext_resource type="Texture2D" path="res://Model/Characters/Skelet/characters/gltf/Skeleton_Minion_skeleton_texture.png" id="65"]
+[ext_resource type="PackedScene" path="res://Model/Island/Isl.glb" id="66"]
+[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901.webp" id="67"]
+[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901_metallic-texture_pbr_20250901_roughness.webp" id="68"]
+[ext_resource type="Texture2D" path="res://Model/Island/Isl_texture_pbr_20250901_normal.webp" id="69"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/1.fbx" id="70"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/2.fbx" id="71"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/3.fbx" id="72"]
+[ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_albedo.png" id="73"]
+[ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_emit.png" id="74"]
+[ext_resource type="PackedScene" path="res://Model/Mine/1.glb" id="75"]
+[ext_resource type="Texture2D" path="res://Model/Mine/1_hexagons_medieval.png" id="76"]
+[ext_resource type="PackedScene" path="res://Model/Port/1.glb" id="77"]
+[ext_resource type="PackedScene" path="res://Model/Port/2.glb" id="78"]
+[ext_resource type="PackedScene" path="res://Model/Port/3.glb" id="79"]
+[ext_resource type="Texture2D" path="res://Model/Resources/gold_bar.png" id="80"]
+[ext_resource type="Texture2D" path="res://Model/Resources/stone_bar.png" id="81"]
+[ext_resource type="Texture2D" path="res://Model/Resources/wood_bar.png" id="82"]
+[ext_resource type="PackedScene" path="res://Model/Sawmill/1.glb" id="83"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00001.png" id="84"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00004.png" id="85"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00007.png" id="86"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00010.png" id="87"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00013.png" id="88"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00016.png" id="89"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00019.png" id="90"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00022.png" id="91"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00025.png" id="92"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00028.png" id="93"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00031.png" id="94"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00034.png" id="95"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00037.png" id="96"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00040.png" id="97"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00043.png" id="98"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00046.png" id="99"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00049.png" id="100"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00052.png" id="101"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00055.png" id="102"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00058.png" id="103"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00061.png" id="104"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00064.png" id="105"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00067.png" id="106"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00070.png" id="107"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00073.png" id="108"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00076.png" id="109"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00079.png" id="110"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00082.png" id="111"]
+[ext_resource type="Texture2D" path="res://Model/Ship/FootageCrate-Particle_Explosion_Small/FootageCrate-Particle_Explosion_Small-00085.png" id="112"]
+[ext_resource type="PackedScene" path="res://Model/Ship/MainShip/MainShip.glb" id="113"]
+[ext_resource type="Texture2D" path="res://Model/Ship/MainShip/MainShip_Atlas_Pirate.png" id="114"]
+[ext_resource type="Texture2D" path="res://Model/Ship/Ships/Textures/colormap.png" id="115"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-large_3.glb" id="116"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-medium_2.glb" id="117"]
+[ext_resource type="PackedScene" path="res://Model/Ship/Ships/ship-pirate-small_1.glb" id="118"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Business Building_3.glb" id="119"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Storage House_2.glb" id="120"]
+[ext_resource type="PackedScene" path="res://Model/Storage/Storage shed_1.glb" id="121"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/1.glb" id="122"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/2.glb" id="123"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/3.glb" id="124"]
+[ext_resource type="PackedScene" path="res://Model/Tombstone/GLB format/4.glb" id="125"]
+[ext_resource type="Texture2D" path="res://Model/Tombstone/GLB format/Textures/colormap.png" id="126"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/1.gltf" id="127"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/2.gltf" id="128"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/3.gltf" id="129"]
+[ext_resource type="PackedScene" path="res://Model/Town_Hall/4.glb" id="130"]
+[ext_resource type="Texture2D" path="res://Model/Town_Hall/hexagons_medieval.png" id="131"]
+[ext_resource type="PackedScene" path="res://Model/Turret/scene.gltf" id="132"]
+[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_000.png" id="133"]
+[ext_resource type="Texture2D" path="res://Model/Turret/splash/FootageCrate-Muzzle_Flash_6_Point_70_Degrees_2-LQ_001.png" id="134"]
+[ext_resource type="Texture2D" path="res://Model/Turret/textures/texture_baseColor.png" id="135"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (1).png" id="136"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (2).png" id="137"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (3).png" id="138"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (4).png" id="139"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505 (5).png" id="140"]
+[ext_resource type="Texture2D" path="res://Model/effeckt/boom/4833049_2540505.png" id="141"]
+[ext_resource type="PackedScene" path="res://Model/flag/pirate_flag_animated.glb" id="142"]
+[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_0.jpg" id="143"]
+[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_1.png" id="144"]
+[ext_resource type="Texture2D" path="res://Model/flag/pirate_flag_animated_2.png" id="145"]
+[ext_resource type="Resource" path="res://Musik/base/base_theme.mp3" id="146"]
+[ext_resource type="Resource" path="res://Musik/base/loading_the_game.mp3" id="147"]
+[ext_resource type="Resource" path="res://Musik/fight/comfort_before_attack.ogg" id="148"]
+[ext_resource type="Resource" path="res://Musik/fight/fight_1.mp3" id="149"]
+[ext_resource type="Resource" path="res://Musik/fight/fight_2.wav" id="150"]
+[ext_resource type="Resource" path="res://Musik/fight/result.mp3" id="151"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/DemonKingAttack.mp3" id="152"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/Turret/Turret_Attack1.mp3" id="153"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/Turret/Turret_Attack2.mp3" id="154"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/archer/attack.mp3" id="155"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/barbarian/attack.mp3" id="156"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/knight/attack.mp3" id="157"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/mage/attack.mp3" id="158"]
+[ext_resource type="Resource" path="res://Musik/sound_effects/ranger/attack.mp3" id="159"]
+[ext_resource type="Texture2D" path="res://clashofperpslogo.jpg" id="160"]
+[ext_resource type="PackedScene" path="res://scenes/Main.tscn" id="161"]
+[ext_resource type="Script" path="res://scripts/archer.gd" id="162"]
+[ext_resource type="Script" path="res://scripts/attack_system.gd" id="163"]
+[ext_resource type="Script" path="res://scripts/audio_manager.gd" id="164"]
+[ext_resource type="Script" path="res://scripts/barbarian.gd" id="165"]
+[ext_resource type="Script" path="res://scripts/base_troop.gd" id="166"]
+[ext_resource type="Script" path="res://scripts/bs_battle.gd" id="167"]
+[ext_resource type="Script" path="res://scripts/bs_cannon.gd" id="168"]
+[ext_resource type="Script" path="res://scripts/bs_port.gd" id="169"]
+[ext_resource type="Script" path="res://scripts/bs_production.gd" id="170"]
+[ext_resource type="Script" path="res://scripts/bs_rally.gd" id="171"]
+[ext_resource type="Script" path="res://scripts/building_system.gd" id="172"]
+[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="173"]
+[ext_resource type="Script" path="res://scripts/cloud_transition.gd" id="174"]
+[ext_resource type="Script" path="res://scripts/demon_king.gd" id="175"]
+[ext_resource type="Script" path="res://scripts/game_manager.gd" id="176"]
+[ext_resource type="Script" path="res://scripts/home_troop.gd" id="177"]
+[ext_resource type="Script" path="res://scripts/hud.gd" id="178"]
+[ext_resource type="Script" path="res://scripts/js_bridge.gd" id="179"]
+[ext_resource type="Script" path="res://scripts/knight.gd" id="180"]
+[ext_resource type="Script" path="res://scripts/mage.gd" id="181"]
+[ext_resource type="Script" path="res://scripts/map_islands.gd" id="182"]
+[ext_resource type="Script" path="res://scripts/mine_cart.gd" id="183"]
+[ext_resource type="Script" path="res://scripts/network_client.gd" id="184"]
+[ext_resource type="Script" path="res://scripts/ranger.gd" id="185"]
+[ext_resource type="Script" path="res://scripts/skeleton_guard.gd" id="186"]
+[ext_resource type="Script" path="res://scripts/test_scene_harness.gd" id="187"]
+[ext_resource type="Script" path="res://scripts/tower_archer.gd" id="188"]
+[ext_resource type="Script" path="res://scripts/tower_mage.gd" id="189"]
+[ext_resource type="Script" path="res://scripts/turret.gd" id="190"]
+[ext_resource type="Script" path="res://scripts/warmup.gd" id="191"]
+[ext_resource type="Script" path="res://scripts/world_map_camera.gd" id="192"]
+[ext_resource type="Shader" path="res://shaders/cloud.gdshader" id="193"]
+[ext_resource type="Shader" path="res://shaders/demon_mask_tint.gdshader" id="194"]
+[ext_resource type="Shader" path="res://shaders/hp_bar.gdshader" id="195"]
+[ext_resource type="Shader" path="res://shaders/magic_orb.gdshader" id="196"]
+[ext_resource type="Shader" path="res://shaders/upgrade_outline.gdshader" id="197"]
+[ext_resource type="Shader" path="res://shaders/water.gdshader" id="198"]
 
 [node name="ExportManifest" type="ResourcePreloader"]
-resources = {
-"res_001": ExtResource("1"),
-"res_002": ExtResource("2"),
-"res_003": ExtResource("3"),
-"res_004": ExtResource("4"),
-"res_005": ExtResource("5"),
-"res_006": ExtResource("6"),
-"res_007": ExtResource("7"),
-"res_008": ExtResource("8"),
-"res_009": ExtResource("9"),
-"res_010": ExtResource("10"),
-"res_011": ExtResource("11"),
-"res_012": ExtResource("12"),
-"res_013": ExtResource("13"),
-"res_014": ExtResource("14"),
-"res_015": ExtResource("15"),
-"res_016": ExtResource("16"),
-"res_017": ExtResource("17"),
-"res_018": ExtResource("18"),
-"res_019": ExtResource("19"),
-"res_020": ExtResource("20"),
-"res_021": ExtResource("21"),
-"res_022": ExtResource("22"),
-"res_023": ExtResource("23"),
-"res_024": ExtResource("24"),
-"res_025": ExtResource("25"),
-"res_026": ExtResource("26"),
-"res_027": ExtResource("27"),
-"res_028": ExtResource("28"),
-"res_029": ExtResource("29"),
-"res_030": ExtResource("30"),
-"res_031": ExtResource("31"),
-"res_032": ExtResource("32"),
-"res_033": ExtResource("33"),
-"res_034": ExtResource("34"),
-"res_035": ExtResource("35"),
-"res_036": ExtResource("36"),
-"res_037": ExtResource("37"),
-"res_038": ExtResource("38"),
-"res_039": ExtResource("39"),
-"res_040": ExtResource("40"),
-"res_041": ExtResource("41"),
-"res_042": ExtResource("42"),
-"res_043": ExtResource("43"),
-"res_044": ExtResource("44"),
-"res_045": ExtResource("45"),
-"res_046": ExtResource("46"),
-"res_047": ExtResource("47"),
-"res_048": ExtResource("48"),
-"res_049": ExtResource("49"),
-"res_050": ExtResource("50"),
-"res_051": ExtResource("51"),
-"res_052": ExtResource("52"),
-"res_053": ExtResource("53"),
-"res_054": ExtResource("54"),
-"res_055": ExtResource("55"),
-"res_056": ExtResource("56"),
-"res_057": ExtResource("57"),
-"res_058": ExtResource("58"),
-"res_059": ExtResource("59"),
-"res_060": ExtResource("60"),
-"res_061": ExtResource("61"),
-"res_062": ExtResource("62"),
-"res_063": ExtResource("63"),
-"res_064": ExtResource("64"),
-"res_065": ExtResource("65"),
-"res_066": ExtResource("66"),
-"res_067": ExtResource("67"),
-"res_068": ExtResource("68"),
-"res_069": ExtResource("69"),
-"res_070": ExtResource("70"),
-"res_071": ExtResource("71"),
-"res_072": ExtResource("72"),
-"res_073": ExtResource("73"),
-"res_074": ExtResource("74"),
-"res_075": ExtResource("75"),
-"res_076": ExtResource("76"),
-"res_077": ExtResource("77"),
-"res_078": ExtResource("78"),
-"res_079": ExtResource("79"),
-"res_080": ExtResource("80"),
-"res_081": ExtResource("81"),
-"res_082": ExtResource("82"),
-"res_083": ExtResource("83"),
-"res_084": ExtResource("84"),
-"res_085": ExtResource("85"),
-"res_086": ExtResource("86"),
-"res_087": ExtResource("87"),
-"res_088": ExtResource("88"),
-"res_089": ExtResource("89"),
-"res_090": ExtResource("90"),
-"res_091": ExtResource("91"),
-"res_092": ExtResource("92"),
-"res_093": ExtResource("93"),
-"res_094": ExtResource("94"),
-"res_095": ExtResource("95"),
-"res_096": ExtResource("96"),
-"res_097": ExtResource("97"),
-"res_098": ExtResource("98"),
-"res_099": ExtResource("99"),
-"res_100": ExtResource("100"),
-"res_101": ExtResource("101"),
-"res_102": ExtResource("102"),
-"res_103": ExtResource("103"),
-"res_104": ExtResource("104"),
-"res_105": ExtResource("105"),
-"res_106": ExtResource("106"),
-"res_107": ExtResource("107"),
-"res_108": ExtResource("108"),
-"res_109": ExtResource("109"),
-"res_110": ExtResource("110"),
-"res_111": ExtResource("111"),
-"res_112": ExtResource("112"),
-"res_113": ExtResource("113"),
-"res_114": ExtResource("114"),
-"res_115": ExtResource("115"),
-"res_116": ExtResource("116"),
-"res_117": ExtResource("117"),
-"res_118": ExtResource("118"),
-"res_119": ExtResource("119"),
-"res_120": ExtResource("120"),
-"res_121": ExtResource("121"),
-"res_122": ExtResource("122"),
-"res_123": ExtResource("123"),
-"res_124": ExtResource("124"),
-"res_125": ExtResource("125"),
-"res_126": ExtResource("126"),
-"res_127": ExtResource("127"),
-"res_128": ExtResource("128"),
-"res_129": ExtResource("129"),
-"res_130": ExtResource("130"),
-"res_131": ExtResource("131"),
-"res_132": ExtResource("132"),
-"res_133": ExtResource("133"),
-"res_134": ExtResource("134"),
-"res_135": ExtResource("135"),
-"res_136": ExtResource("136"),
-"res_137": ExtResource("137"),
-"res_138": ExtResource("138"),
-"res_139": ExtResource("139"),
-"res_140": ExtResource("140"),
-"res_141": ExtResource("141"),
-"res_142": ExtResource("142"),
-"res_143": ExtResource("143"),
-"res_144": ExtResource("144"),
-"res_145": ExtResource("145"),
-"res_146": ExtResource("146"),
-"res_147": ExtResource("147"),
-"res_148": ExtResource("148"),
-"res_149": ExtResource("149"),
-"res_150": ExtResource("150"),
-"res_151": ExtResource("151"),
-"res_152": ExtResource("152"),
-"res_153": ExtResource("153"),
-"res_154": ExtResource("154"),
-"res_155": ExtResource("155"),
-"res_156": ExtResource("156"),
-"res_157": ExtResource("157"),
-"res_158": ExtResource("158"),
-"res_159": ExtResource("159"),
-"res_160": ExtResource("160"),
-"res_161": ExtResource("161"),
-"res_162": ExtResource("162"),
-"res_163": ExtResource("163"),
-"res_164": ExtResource("164"),
-"res_165": ExtResource("165"),
-"res_166": ExtResource("166"),
-"res_167": ExtResource("167"),
-"res_168": ExtResource("168"),
-"res_169": ExtResource("169"),
-"res_170": ExtResource("170"),
-"res_171": ExtResource("171"),
-"res_172": ExtResource("172"),
-"res_173": ExtResource("173"),
-"res_174": ExtResource("174"),
-"res_175": ExtResource("175"),
-"res_176": ExtResource("176"),
-"res_177": ExtResource("177"),
-"res_178": ExtResource("178"),
-"res_179": ExtResource("179"),
-"res_180": ExtResource("180"),
-"res_181": ExtResource("181"),
-"res_182": ExtResource("182"),
-"res_183": ExtResource("183"),
-"res_184": ExtResource("184"),
-"res_185": ExtResource("185"),
-"res_186": ExtResource("186"),
-"res_187": ExtResource("187"),
-"res_188": ExtResource("188"),
-"res_189": ExtResource("189"),
-"res_190": ExtResource("190"),
-"res_191": ExtResource("191"),
-"res_192": ExtResource("192"),
-"res_193": ExtResource("193")
-}
+resources = [PackedStringArray("res_001", "res_002", "res_003", "res_004", "res_005", "res_006", "res_007", "res_008", "res_009", "res_010", "res_011", "res_012", "res_013", "res_014", "res_015", "res_016", "res_017", "res_018", "res_019", "res_020", "res_021", "res_022", "res_023", "res_024", "res_025", "res_026", "res_027", "res_028", "res_029", "res_030", "res_031", "res_032", "res_033", "res_034", "res_035", "res_036", "res_037", "res_038", "res_039", "res_040", "res_041", "res_042", "res_043", "res_044", "res_045", "res_046", "res_047", "res_048", "res_049", "res_050", "res_051", "res_052", "res_053", "res_054", "res_055", "res_056", "res_057", "res_058", "res_059", "res_060", "res_061", "res_062", "res_063", "res_064", "res_065", "res_066", "res_067", "res_068", "res_069", "res_070", "res_071", "res_072", "res_073", "res_074", "res_075", "res_076", "res_077", "res_078", "res_079", "res_080", "res_081", "res_082", "res_083", "res_084", "res_085", "res_086", "res_087", "res_088", "res_089", "res_090", "res_091", "res_092", "res_093", "res_094", "res_095", "res_096", "res_097", "res_098", "res_099", "res_100", "res_101", "res_102", "res_103", "res_104", "res_105", "res_106", "res_107", "res_108", "res_109", "res_110", "res_111", "res_112", "res_113", "res_114", "res_115", "res_116", "res_117", "res_118", "res_119", "res_120", "res_121", "res_122", "res_123", "res_124", "res_125", "res_126", "res_127", "res_128", "res_129", "res_130", "res_131", "res_132", "res_133", "res_134", "res_135", "res_136", "res_137", "res_138", "res_139", "res_140", "res_141", "res_142", "res_143", "res_144", "res_145", "res_146", "res_147", "res_148", "res_149", "res_150", "res_151", "res_152", "res_153", "res_154", "res_155", "res_156", "res_157", "res_158", "res_159", "res_160", "res_161", "res_162", "res_163", "res_164", "res_165", "res_166", "res_167", "res_168", "res_169", "res_170", "res_171", "res_172", "res_173", "res_174", "res_175", "res_176", "res_177", "res_178", "res_179", "res_180", "res_181", "res_182", "res_183", "res_184", "res_185", "res_186", "res_187", "res_188", "res_189", "res_190", "res_191", "res_192", "res_193", "res_194", "res_195", "res_196", "res_197", "res_198"), [ExtResource("1"), ExtResource("2"), ExtResource("3"), ExtResource("4"), ExtResource("5"), ExtResource("6"), ExtResource("7"), ExtResource("8"), ExtResource("9"), ExtResource("10"), ExtResource("11"), ExtResource("12"), ExtResource("13"), ExtResource("14"), ExtResource("15"), ExtResource("16"), ExtResource("17"), ExtResource("18"), ExtResource("19"), ExtResource("20"), ExtResource("21"), ExtResource("22"), ExtResource("23"), ExtResource("24"), ExtResource("25"), ExtResource("26"), ExtResource("27"), ExtResource("28"), ExtResource("29"), ExtResource("30"), ExtResource("31"), ExtResource("32"), ExtResource("33"), ExtResource("34"), ExtResource("35"), ExtResource("36"), ExtResource("37"), ExtResource("38"), ExtResource("39"), ExtResource("40"), ExtResource("41"), ExtResource("42"), ExtResource("43"), ExtResource("44"), ExtResource("45"), ExtResource("46"), ExtResource("47"), ExtResource("48"), ExtResource("49"), ExtResource("50"), ExtResource("51"), ExtResource("52"), ExtResource("53"), ExtResource("54"), ExtResource("55"), ExtResource("56"), ExtResource("57"), ExtResource("58"), ExtResource("59"), ExtResource("60"), ExtResource("61"), ExtResource("62"), ExtResource("63"), ExtResource("64"), ExtResource("65"), ExtResource("66"), ExtResource("67"), ExtResource("68"), ExtResource("69"), ExtResource("70"), ExtResource("71"), ExtResource("72"), ExtResource("73"), ExtResource("74"), ExtResource("75"), ExtResource("76"), ExtResource("77"), ExtResource("78"), ExtResource("79"), ExtResource("80"), ExtResource("81"), ExtResource("82"), ExtResource("83"), ExtResource("84"), ExtResource("85"), ExtResource("86"), ExtResource("87"), ExtResource("88"), ExtResource("89"), ExtResource("90"), ExtResource("91"), ExtResource("92"), ExtResource("93"), ExtResource("94"), ExtResource("95"), ExtResource("96"), ExtResource("97"), ExtResource("98"), ExtResource("99"), ExtResource("100"), ExtResource("101"), ExtResource("102"), ExtResource("103"), ExtResource("104"), ExtResource("105"), ExtResource("106"), ExtResource("107"), ExtResource("108"), ExtResource("109"), ExtResource("110"), ExtResource("111"), ExtResource("112"), ExtResource("113"), ExtResource("114"), ExtResource("115"), ExtResource("116"), ExtResource("117"), ExtResource("118"), ExtResource("119"), ExtResource("120"), ExtResource("121"), ExtResource("122"), ExtResource("123"), ExtResource("124"), ExtResource("125"), ExtResource("126"), ExtResource("127"), ExtResource("128"), ExtResource("129"), ExtResource("130"), ExtResource("131"), ExtResource("132"), ExtResource("133"), ExtResource("134"), ExtResource("135"), ExtResource("136"), ExtResource("137"), ExtResource("138"), ExtResource("139"), ExtResource("140"), ExtResource("141"), ExtResource("142"), ExtResource("143"), ExtResource("144"), ExtResource("145"), ExtResource("146"), ExtResource("147"), ExtResource("148"), ExtResource("149"), ExtResource("150"), ExtResource("151"), ExtResource("152"), ExtResource("153"), ExtResource("154"), ExtResource("155"), ExtResource("156"), ExtResource("157"), ExtResource("158"), ExtResource("159"), ExtResource("160"), ExtResource("161"), ExtResource("162"), ExtResource("163"), ExtResource("164"), ExtResource("165"), ExtResource("166"), ExtResource("167"), ExtResource("168"), ExtResource("169"), ExtResource("170"), ExtResource("171"), ExtResource("172"), ExtResource("173"), ExtResource("174"), ExtResource("175"), ExtResource("176"), ExtResource("177"), ExtResource("178"), ExtResource("179"), ExtResource("180"), ExtResource("181"), ExtResource("182"), ExtResource("183"), ExtResource("184"), ExtResource("185"), ExtResource("186"), ExtResource("187"), ExtResource("188"), ExtResource("189"), ExtResource("190"), ExtResource("191"), ExtResource("192"), ExtResource("193"), ExtResource("194"), ExtResource("195"), ExtResource("196"), ExtResource("197"), ExtResource("198")]]
