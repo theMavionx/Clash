@@ -489,10 +489,32 @@ export async function upgradeAptosNft({ aptosWallet, owner, tokenId, tokenAddres
 //          - returns a server-mediated Solana mint result (already done).
 // ====================================================================
 
-export async function bridgeInit({ sourceChain, destChain, sourceTokenId, sourceTokenAddress, sourceAsset, destAddress, sourceOwner }) {
+export async function bridgeInit({
+  sourceChain,
+  destChain,
+  sourceTokenId,
+  sourceTokenAddress,
+  sourceAsset,
+  destAddress,
+  sourceOwner,
+  batchId,
+  batchIndex,
+  batchTotal,
+}) {
   const r = await fetch('/api/bridge/init', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sourceChain, destChain, sourceTokenId, sourceTokenAddress, sourceAsset, destAddress, sourceOwner }),
+    body: JSON.stringify({
+      sourceChain,
+      destChain,
+      sourceTokenId,
+      sourceTokenAddress,
+      sourceAsset,
+      destAddress,
+      sourceOwner,
+      batchId,
+      batchIndex,
+      batchTotal,
+    }),
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error(j.error || `bridge/init failed (${r.status})`), { status: r.status, body: j });
@@ -512,10 +534,10 @@ export async function bridgeConfirm({ sourceChain, destChain, burnTxHash, destAd
 // /bridge/relay — server submits the destination mint itself. Player only
 // signs the source burn; everything after that is server-side, so no
 // wallet-drop / out-of-gas / dismissed-prompt risk between burn and mint.
-export async function bridgeRelay({ sourceChain, destChain, burnTxHash, destAddress }) {
+export async function bridgeRelay({ sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }) {
   const r = await fetch('/api/bridge/relay', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sourceChain, destChain, burnTxHash, destAddress }),
+    body: JSON.stringify({ sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }),
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error(j.error || `bridge/relay failed (${r.status})`), { status: r.status, body: j });

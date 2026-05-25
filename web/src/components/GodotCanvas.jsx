@@ -161,20 +161,6 @@ function describeGlobalError(event) {
   );
 }
 
-function formatGlobalError(event) {
-  const error = event?.error || event?.reason;
-  const source = event?.filename || event?.sourceURL;
-  const location = source
-    ? `${source}${event?.lineno ? `:${event.lineno}` : ''}${event?.colno ? `:${event.colno}` : ''}`
-    : '';
-  const message = describeGlobalError(event);
-  const stack = error?.stack && String(error.stack) !== message
-    ? String(error.stack)
-    : '';
-
-  return [message, location, stack].filter(Boolean).join('\n');
-}
-
 function isGodotWasmCacheMismatch(errorLike) {
   const error = errorLike?.error || errorLike?.reason || errorLike;
   const text = [
@@ -209,6 +195,24 @@ function recoverOnceFromGodotCacheMismatch(errorLike) {
     window.location.reload();
   });
   return true;
+}
+
+function reportGodotLoaderIssue(type, errorLike, extra = {}) {
+  const error = errorLike?.error || errorLike?.reason || errorLike;
+  const message = describeGlobalError(errorLike);
+  reportClientEvent(type, {
+    message,
+    filename: errorLike?.filename || errorLike?.sourceURL || null,
+    line: errorLike?.lineno || null,
+    column: errorLike?.colno || null,
+    user_agent: navigator.userAgent,
+    ...extra,
+  }, {
+    level: 'error',
+    source: 'godot.loader',
+    message,
+    stack: error?.stack || '',
+  });
 }
 
 const overlayStyle = {
@@ -286,7 +290,6 @@ function GodotCanvas({ onEngineReady }) {
   const [stageProgress, setStageProgress] = useState(0); // 0-100 within stage
   const [isLoaded, setIsLoaded] = useState(false);
   const [stuck, setStuck] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(null);
   const [webglReloading, setWebglReloading] = useState(false);
   const lastProgressRef = useRef({ value: 0, time: 0 });
   const onEngineReadyRef = useRef(onEngineReady);
@@ -364,7 +367,6 @@ function GodotCanvas({ onEngineReady }) {
 
       if (webglReloadStartedRef.current) return;
       webglReloadStartedRef.current = true;
-      setErrorMsg(null);
       setWebglReloading(true);
 
       let shouldReload = true;
@@ -380,7 +382,11 @@ function GodotCanvas({ onEngineReady }) {
       }
 
       if (!shouldReload) {
-        setErrorMsg('WebGL context was lost again. Reload the page to recover graphics.');
+        reportClientEvent('godot.webgl_context_reload_suppressed', payload, {
+          level: 'error',
+          source: 'godot.webgl',
+          message: 'WebGL context was lost again during reload cooldown',
+        });
         return;
       }
 
@@ -399,15 +405,15 @@ function GodotCanvas({ onEngineReady }) {
     contextCanvas?.addEventListener('webglcontextlost', handleWebglContextLost, false);
     contextCanvas?.addEventListener('webglcontextrestored', handleWebglContextRestored, false);
 
-    // Catch unhandled errors for mobile debug
+    // Keep loader errors in client logs without showing debug stacks to players.
     const errHandler = (e) => {
       if (disposed) return;
       if (recoverOnceFromGodotCacheMismatch(e)) return;
-      addClientBreadcrumb('godot.global_error', {
-        message: describeGlobalError(e),
+      reportGodotLoaderIssue('godot.global_error', e, {
         progress: lastProgressRef.current.value,
-      }, 'error');
-      setErrorMsg(prev => prev || formatGlobalError(e));
+        stage: stageStateRef.current,
+        loaded: isLoadedStateRef.current,
+      });
     };
     const rejectionHandler = (e) => errHandler(e);
     window.addEventListener('error', errHandler);
@@ -561,8 +567,12 @@ function GodotCanvas({ onEngineReady }) {
         addClientBreadcrumb('godot.start_error', {
           message: err?.message || String(err || ''),
         }, 'error');
+        reportGodotLoaderIssue('godot.start_error', err, {
+          progress: lastProgressRef.current.value,
+          stage: stageStateRef.current,
+          loaded: isLoadedStateRef.current,
+        });
         console.error('Godot start error:', err);
-        setErrorMsg(String(err?.message || err));
       });
     };
     clearGodotRuntimeCaches()
@@ -581,7 +591,11 @@ function GodotCanvas({ onEngineReady }) {
           addClientBreadcrumb('godot.script_load_error', {
             message: err?.message || String(err || ''),
           }, 'error');
-          setErrorMsg(String(err?.message || err));
+          reportGodotLoaderIssue('godot.script_load_error', err, {
+            progress: lastProgressRef.current.value,
+            stage: stageStateRef.current,
+            loaded: isLoadedStateRef.current,
+          });
         }
       });
     return () => {
@@ -621,17 +635,6 @@ function GodotCanvas({ onEngineReady }) {
               .godot-splash-logo { display: none !important; }
             }
           `}</style>
-
-          {errorMsg && (
-            <div style={{ position: 'absolute', top: 20, left: 20, right: 20, zIndex: 10, background: 'rgba(200,0,0,0.9)', color: '#fff', padding: 16, borderRadius: 10, fontSize: 13, fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: '40vh', overflow: 'auto' }}>
-              <div style={{ fontWeight: 900, marginBottom: 8 }}>Error loading game:</div>
-              {errorMsg}
-              <div style={{ marginTop: 12, fontSize: 11, opacity: 0.7 }}>
-                Stage {stage}: {stageProgress}% | UA: {navigator.userAgent.slice(0, 80)}
-              </div>
-              <button onClick={() => window.location.reload()} style={{ marginTop: 10, padding: '8px 20px', background: '#fff', color: '#000', border: 'none', borderRadius: 6, fontWeight: 700, cursor: 'pointer' }}>Reload</button>
-            </div>
-          )}
 
           <div style={progressWrapperStyle}>
             {/* Stage label */}

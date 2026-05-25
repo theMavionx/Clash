@@ -1921,10 +1921,15 @@ function mountNftV3Endpoints(router, ctx) {
     return s.length > max ? `${s.slice(0, max)}...` : s;
   }
 
-  function bridgeLogData(payload, httpStatus) {
+  function bridgeLogData(payload, httpStatus, req = null) {
     const body = jsonable(payload || {});
     const out = {
       httpStatus,
+      batch: req?.body?.batchId ? {
+        id: String(req.body.batchId).slice(0, 96),
+        index: Number(req.body.batchIndex) || null,
+        total: Number(req.body.batchTotal) || null,
+      } : null,
       mode: body.mode || null,
       destinationChainId: body.destinationChainId || body.destChainId || null,
       bridgeFee: body.bridgeFee || null,
@@ -2003,7 +2008,7 @@ function mountNftV3Endpoints(router, ctx) {
         dest_tx_or_asset: bridgeLogDestTxOrAsset(body),
         level: body.level || body.burned?.level || req.body?.level || null,
         error: res.statusCode >= 400 ? (body.error || `HTTP ${res.statusCode}`) : null,
-        data: bridgeLogData(body, res.statusCode),
+        data: bridgeLogData(body, res.statusCode, req),
         ip: req.ip || req.connection?.remoteAddress || null,
       });
     };

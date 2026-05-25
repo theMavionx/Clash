@@ -40,6 +40,7 @@ const CHAINS = [
   { id: 'aptos',    label: 'Aptos',    kind: 'aptos',  logo: '/tokens/APT.png' },
   { id: 'solana',   label: 'Solana',   kind: 'solana', logo: '/tokens/SOL.svg' },
 ];
+const MAX_BATCH_BRIDGE_NFTS = 10;
 
 function ChainLogo({ chain, size = 18 }) {
   const c = CHAIN_BY_ID[chain] || (typeof chain === 'object' ? chain : null);
@@ -117,6 +118,69 @@ function shortAddr(s, head = 6, tail = 4) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shortNftRef(value, head = 6, tail = 5) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (raw.length <= head + tail + 3) return raw;
+  return `${raw.slice(0, head)}...${raw.slice(-tail)}`;
+}
+
+function extractNftSerialFromText(text) {
+  const raw = String(text || '');
+  return raw.match(/(?:demon\s*king\s*)?#\s*(\d{1,8})/i)?.[1]
+    || raw.match(/(?:^|[/?&=_-])(?:token|id|nft|king)?[_-]?(\d{1,8})(?:\D|$)/i)?.[1]
+    || '';
+}
+
+function nftIdentifier(nft) {
+  return String(nft?.tokenAddress || nft?.asset || nft?.mint || nft?.tokenId || nft?.id || '').trim();
+}
+
+function parseSourceIdList(value) {
+  return Array.from(new Set(
+    String(value || '')
+      .split(/[\s,;]+/)
+      .map((part) => part.trim())
+      .filter(Boolean),
+  ));
+}
+
+function bridgeBatchId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `bridge-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function nftDisplaySerial(nft) {
+  const candidates = [
+    nft?.displayId,
+    nft?.tokenIndex,
+    nft?.token_index,
+    nft?.serial,
+    nft?.number,
+    nft?.edition,
+    nft?.nftId,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate || '').replace(/^#/, '').trim();
+    if (/^\d+$/.test(value)) return value;
+  }
+  return extractNftSerialFromText(nft?.name)
+    || extractNftSerialFromText(nft?.uri)
+    || extractNftSerialFromText(nft?.imageUrl);
+}
+
+function nftPickerLabel(nft, chainKey, fallbackInput = '') {
+  const chainKind = CHAIN_BY_ID[chainKey]?.kind;
+  const raw = nftIdentifier(nft) || String(fallbackInput || '').trim();
+  const serial = nftDisplaySerial(nft);
+  if (serial && raw && raw !== serial) return `#${serial} - ${shortNftRef(raw)}`;
+  if (serial) return `#${serial}`;
+  if (!raw) return '---';
+  if (chainKind === 'evm' && /^\d+$/.test(raw)) return `#${raw}`;
+  if (raw.startsWith('0x') || raw.length > 18) return shortNftRef(raw);
+  return `#${raw}`;
 }
 
 function isSolanaExpiryError(err) {
@@ -206,6 +270,8 @@ export default function NftBridgePanel({
   const [ownedNfts, setOwnedNfts] = useState(null);     // array | null = not loaded yet | [] = none
   const [ownedLoading, setOwnedLoading] = useState(false);
   const [ownedError, setOwnedError] = useState(null);
+  const [selectedSourceIds, setSelectedSourceIds] = useState([]);
+  const [batchItems, setBatchItems] = useState([]);
   // Horizontal-scroll ref for the NFT picker — arrows appear when the
   // collection is wider than the viewport (>4 cards visually). scrollBy
   // jumps roughly one card-width per click.
@@ -252,6 +318,8 @@ export default function NftBridgePanel({
     setOwnedNfts(null);
     setOwnedError(null);
     setSourceIdInput('');
+    setSelectedSourceIds([]);
+    setBatchItems([]);
     if (!sourceWalletAddr) return;
     let cancelled = false;
     const ctl = new AbortController();
@@ -264,7 +332,9 @@ export default function NftBridgePanel({
           // Auto-select if exactly one.
           if (res.tokens?.length === 1) {
             const t = res.tokens[0];
-            setSourceIdInput(t.tokenId || t.tokenAddress || t.asset || '');
+            const id = nftIdentifier(t);
+            setSourceIdInput(id);
+            setSelectedSourceIds(id ? [id] : []);
           }
         })
         .catch((err) => {
@@ -277,8 +347,34 @@ export default function NftBridgePanel({
   }, [sourceChain, sourceWalletAddr]);
 
   function selectNft(t) {
-    const id = t.tokenId || t.tokenAddress || t.asset || '';
-    setSourceIdInput(id);
+    const id = nftIdentifier(t);
+    if (!id) return;
+    setNotice(null);
+    setSelectedSourceIds((prev) => {
+      const exists = prev.includes(id);
+      const next = exists
+        ? prev.filter((item) => item !== id)
+        : [...prev, id].slice(0, MAX_BATCH_BRIDGE_NFTS);
+      setSourceIdInput(next.join(', '));
+      if (!exists && prev.length >= MAX_BATCH_BRIDGE_NFTS) {
+        setNotice(`Batch bridge supports up to ${MAX_BATCH_BRIDGE_NFTS} NFTs at once.`);
+      }
+      return next;
+    });
+  }
+
+  function selectAllVisibleNfts() {
+    const ids = (ownedNfts || []).map(nftIdentifier).filter(Boolean).slice(0, MAX_BATCH_BRIDGE_NFTS);
+    setSelectedSourceIds(ids);
+    setSourceIdInput(ids.join(', '));
+    setNotice((ownedNfts || []).length > MAX_BATCH_BRIDGE_NFTS
+      ? `Selected first ${MAX_BATCH_BRIDGE_NFTS} NFTs. Run another batch for the rest.`
+      : null);
+  }
+
+  function clearSelectedNfts() {
+    setSelectedSourceIds([]);
+    setSourceIdInput('');
     setNotice(null);
   }
 
@@ -568,7 +664,15 @@ export default function NftBridgePanel({
     throw new Error(`Unexpected confirm mode ${confirmRes.mode}`);
   }, [destChain, evmAddress, tradingEvmWallet, aptosWallet]);
 
-  async function relayBridgeWithRetries({ sourceChain: relaySource, destChain: relayDest, burnTxHash, destAddress }) {
+  async function relayBridgeWithRetries({
+    sourceChain: relaySource,
+    destChain: relayDest,
+    burnTxHash,
+    destAddress,
+    batchId,
+    batchIndex,
+    batchTotal,
+  }) {
     const maxAttempts = 10;
     for (let attempt = 1; ; attempt++) {
       try {
@@ -577,6 +681,9 @@ export default function NftBridgePanel({
           destChain: relayDest,
           burnTxHash,
           destAddress,
+          batchId,
+          batchIndex,
+          batchTotal,
         });
       } catch (e) {
         const tooEarly = e?.status === 425
@@ -589,10 +696,11 @@ export default function NftBridgePanel({
     }
   }
 
-  function bridgeSuccessResult({ relayRes, relaySource, relayDest, burnTxHash, destAddress }) {
+  function bridgeSuccessResult({ relayRes, relaySource, relayDest, burnTxHash, destAddress, sourceId = null }) {
     return {
       sourceChain: relaySource,
       destChain: relayDest,
+      sourceId,
       burnTxHash,
       sourceRef: relayRes.sourceRef,
       destAddress,
@@ -601,6 +709,13 @@ export default function NftBridgePanel({
         : { hash: relayRes.txSig, asset: relayRes.assetAddress },
       level: relayRes.level || relayRes.burned?.level || null,
     };
+  }
+
+  function setBatchItem(index, patch, fallbackItems = null) {
+    setBatchItems((items) => {
+      const base = items.length ? items : (fallbackItems || items);
+      return base.map((item, i) => (i === index ? { ...item, ...patch } : item));
+    });
   }
 
   const retryPendingRelay = useCallback(async () => {
@@ -612,13 +727,24 @@ export default function NftBridgePanel({
       const relayRes = await relayBridgeWithRetries(pendingRelay);
       setPendingRelay(null);
       setStatus('success');
-      setResult(bridgeSuccessResult({
+      const retryResult = bridgeSuccessResult({
         relayRes,
         relaySource: pendingRelay.sourceChain,
         relayDest: pendingRelay.destChain,
         burnTxHash: pendingRelay.burnTxHash,
         destAddress: pendingRelay.destAddress,
-      }));
+        sourceId: pendingRelay.sourceId || null,
+      });
+      if (pendingRelay.batchIndex) {
+        setBatchItem(Number(pendingRelay.batchIndex) - 1, {
+          phase: 'done',
+          sourceRef: relayRes.sourceRef,
+          destTxHash: retryResult.destResult?.hash || null,
+          assetAddress: retryResult.destResult?.asset || null,
+          level: retryResult.level,
+        });
+      }
+      setResult(retryResult);
       addClientBreadcrumb('bridge.relay.retry.success', {
         sourceChain: pendingRelay.sourceChain,
         destChain: pendingRelay.destChain,
@@ -644,68 +770,110 @@ export default function NftBridgePanel({
     setBusy(true);
     setResult(null);
     setPendingRelay(null);
+    setBatchItems([]);
+    let activeBatchIndex = -1;
     try {
       if (!sourceWalletReady) {
         setNotice(`Connect your ${CHAIN_BY_ID[sourceChain].label} wallet first.`);
         return;
       }
-      const srcId = sourceIdInput.trim();
-      if (!srcId) {
+      const rawSrcIds = (selectedSourceIds.length ? selectedSourceIds : parseSourceIdList(sourceIdInput))
+        .map((id) => id.trim())
+        .filter(Boolean);
+      if (!rawSrcIds.length) {
         setNotice('Enter the NFT identifier on the source chain.');
         return;
       }
+      if (rawSrcIds.length > MAX_BATCH_BRIDGE_NFTS) {
+        setNotice(`Batch bridge supports up to ${MAX_BATCH_BRIDGE_NFTS} NFTs at once.`);
+        return;
+      }
+      const srcIds = rawSrcIds.slice(0, MAX_BATCH_BRIDGE_NFTS);
       const destAddr = destAddrInput.trim();
       if (!destAddr) {
         setNotice('Enter (or connect) the destination wallet address.');
         return;
       }
 
-      // 1) /bridge/init
-      setStatus('burning');
       const kind = CHAIN_BY_ID[sourceChain].kind;
-      const initBody = { sourceChain, destChain, destAddress: destAddr, sourceOwner: sourceWalletAddr };
-      if (kind === 'evm')         initBody.sourceTokenId      = srcId;
-      else if (kind === 'aptos')  initBody.sourceTokenAddress = srcId;
-      else if (kind === 'solana') initBody.sourceAsset        = srcId;
-      const initRes = await bridgeInit(initBody);
-      addClientBreadcrumb('bridge.init', { sourceChain, destChain, mode: initRes.mode });
-
-      // 2) Submit burn on source.
-      const burnTxHash = await submitSourceBurn(initRes);
-      const pending = { sourceChain, destChain, burnTxHash, destAddress: destAddr };
-      setPendingRelay(pending);
-
-      // 3) /bridge/relay — server submits the dest tx itself. We only need
-      // ONE user-side tx (the source burn that already happened). The
-      // server retries internally on the "need 2 confirmations" race, so
-      // we just await the relay endpoint and don't need our own back-off
-      // loop. On EVM dest, the relayer pays gas with the deployer wallet;
-      // for Aptos and Solana destinations, the server has always been the
-      // one calling the dest function so this is just a UX consolidation.
-      setStatus('confirming');
-      const relayRes = await relayBridgeWithRetries(pending);
-      setPendingRelay(null);
-      setNotice(null);
-      addClientBreadcrumb('bridge.relay', { sourceChain, destChain, mode: relayRes.mode, sourceRef: relayRes.sourceRef });
-
-      setStatus('success');
-      setResult(bridgeSuccessResult({
-        relayRes,
-        relaySource: sourceChain,
-        relayDest: destChain,
-        burnTxHash,
-        destAddress: destAddr,
+      const batchId = srcIds.length > 1 ? bridgeBatchId() : null;
+      const initialItems = srcIds.map((id, index) => ({
+        id,
+        label: nftPickerLabel((ownedNfts || []).find((token) => nftIdentifier(token) === id), sourceChain, id),
+        index: index + 1,
+        phase: 'queued',
       }));
-      addClientBreadcrumb('bridge.success', { sourceChain, destChain, sourceRef: relayRes.sourceRef });
+      setBatchItems(initialItems);
+      const results = [];
+
+      for (let i = 0; i < srcIds.length; i += 1) {
+        activeBatchIndex = i;
+        const srcId = srcIds[i];
+        const batchMeta = { batchId, batchIndex: i + 1, batchTotal: srcIds.length };
+        setNotice(srcIds.length > 1 ? `Bridging ${i + 1}/${srcIds.length}: ${initialItems[i]?.label || srcId}` : null);
+
+        // 1) /bridge/init
+        setStatus('burning');
+        setBatchItem(i, { phase: 'init' }, initialItems);
+        const initBody = { sourceChain, destChain, destAddress: destAddr, sourceOwner: sourceWalletAddr, ...batchMeta };
+        if (kind === 'evm')         initBody.sourceTokenId      = srcId;
+        else if (kind === 'aptos')  initBody.sourceTokenAddress = srcId;
+        else if (kind === 'solana') initBody.sourceAsset        = srcId;
+        const initRes = await bridgeInit(initBody);
+        addClientBreadcrumb('bridge.init', { sourceChain, destChain, mode: initRes.mode, batchId, batchIndex: i + 1, batchTotal: srcIds.length });
+
+        // 2) Submit burn on source.
+        setBatchItem(i, { phase: 'burning' });
+        const burnTxHash = await submitSourceBurn(initRes);
+        const pending = { sourceChain, destChain, burnTxHash, destAddress: destAddr, sourceId: srcId, ...batchMeta };
+        setBatchItem(i, { phase: 'relay', burnTxHash });
+        setPendingRelay(pending);
+
+        // 3) /bridge/relay — server submits the destination mint. Batch
+        // mode is sequential so every burn is independently recoverable.
+        setStatus('confirming');
+        const relayRes = await relayBridgeWithRetries(pending);
+        const itemResult = bridgeSuccessResult({
+          relayRes,
+          relaySource: sourceChain,
+          relayDest: destChain,
+          burnTxHash,
+          destAddress: destAddr,
+          sourceId: srcId,
+        });
+        results.push(itemResult);
+        setBatchItem(i, {
+          phase: 'done',
+          burnTxHash,
+          sourceRef: relayRes.sourceRef,
+          destTxHash: itemResult.destResult?.hash || null,
+          assetAddress: itemResult.destResult?.asset || null,
+          level: itemResult.level,
+        });
+        setPendingRelay(null);
+        setNotice(null);
+        addClientBreadcrumb('bridge.relay', { sourceChain, destChain, mode: relayRes.mode, sourceRef: relayRes.sourceRef, batchId, batchIndex: i + 1, batchTotal: srcIds.length });
+        addClientBreadcrumb('bridge.success', { sourceChain, destChain, sourceRef: relayRes.sourceRef, batchId, batchIndex: i + 1, batchTotal: srcIds.length });
+      }
+      setStatus('success');
+      setResult(results.length === 1 ? results[0] : {
+        batch: true,
+        sourceChain,
+        destChain,
+        destAddress: destAddr,
+        count: results.length,
+        results,
+      });
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
+      if (activeBatchIndex >= 0) setBatchItem(activeBatchIndex, { phase: 'error', error: msg.slice(0, 160) });
       setNotice(msg.slice(0, 200));
       setStatus('error');
       addClientBreadcrumb('bridge.failed', { sourceChain, destChain, message: msg }, 'warn');
     } finally {
       setBusy(false);
     }
-  }, [sourceChain, destChain, sourceIdInput, destAddrInput, sourceWalletAddr, sourceWalletReady, submitSourceBurn]);
+  }, [sourceChain, destChain, sourceIdInput, selectedSourceIds, destAddrInput, sourceWalletAddr, sourceWalletReady, submitSourceBurn, ownedNfts]);
 
   // ── Render ─────────────────────────────────────────────────────────
   const statusLabel = {
@@ -725,17 +893,28 @@ export default function NftBridgePanel({
     return '';
   })();
 
+  const sourceIdsToBridge = useMemo(() => {
+    const ids = selectedSourceIds.length ? selectedSourceIds : parseSourceIdList(sourceIdInput);
+    return ids.slice(0, MAX_BATCH_BRIDGE_NFTS);
+  }, [selectedSourceIds, sourceIdInput]);
+  const selectedNfts = useMemo(() => {
+    if (!ownedNfts?.length || !sourceIdsToBridge.length) return [];
+    const byId = new Map(ownedNfts.map((token) => [nftIdentifier(token), token]));
+    return sourceIdsToBridge.map((id) => byId.get(id)).filter(Boolean);
+  }, [ownedNfts, sourceIdsToBridge]);
+  const bridgeBatchCount = sourceIdsToBridge.length;
+
   // Find the selected NFT object for preview rendering in steps 2/3. We
   // match on whichever identifier shape this chain uses (tokenId / token
   // address / asset pubkey). If the user pasted manually and the picker
   // didn't pre-select, `nftPreview` is null and we render a generic card.
   const nftPreview = (ownedNfts || []).find((t) => {
-    const id = t.tokenId || t.tokenAddress || t.asset;
+    const id = nftIdentifier(t);
     return id && id === sourceIdInput;
   }) || null;
 
   function canAdvanceFromStep1() {
-    return sourceWalletReady && !!sourceIdInput.trim();
+    return sourceWalletReady && bridgeBatchCount > 0 && bridgeBatchCount <= MAX_BATCH_BRIDGE_NFTS;
   }
   function canAdvanceFromStep2() {
     return !!destAddrInput.trim() && destChain !== sourceChain;
@@ -749,6 +928,8 @@ export default function NftBridgePanel({
     setPendingRelay(null);
     setNotice(null);
     setSourceIdInput('');
+    setSelectedSourceIds([]);
+    setBatchItems([]);
   }
 
   // The card pixel preview for an NFT — uses the indexer's imageUrl if
@@ -756,11 +937,8 @@ export default function NftBridgePanel({
   // step so the player sees their NFT travel through the wizard.
   function NftCardLarge({ nft, chainKey }) {
     const chain = CHAIN_BY_ID[chainKey];
-    const idShort = nft?.tokenId ? `#${nft.tokenId}`
-      : (nft?.tokenAddress || nft?.asset) ? shortAddr(nft.tokenAddress || nft.asset, 6, 4)
-      : sourceIdInput
-        ? (sourceIdInput.startsWith('0x') ? shortAddr(sourceIdInput, 6, 4) : `#${sourceIdInput}`)
-        : '—';
+    const rawId = nftIdentifier(nft) || String(sourceIdInput || '').trim();
+    const idShort = nftPickerLabel(nft, chainKey, sourceIdInput);
     const level = nft?.level ?? 1;
     const fallbackImage = nftLevelImageUrl(level);
     return (
@@ -780,12 +958,55 @@ export default function NftBridgePanel({
         </div>
         <div style={localStyles.nftCardLargeMeta}>
           <span style={localStyles.nftCardLargeTitle}>Demon King</span>
-          <span style={{ ...localStyles.nftCardLargeSub, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <span title={rawId}
+            style={{ ...localStyles.nftCardLargeSub, display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0, maxWidth: '100%' }}>
             <ChainLogo chain={chainKey} size={14} />
-            {chain?.label} • {idShort}
+            <span style={localStyles.nftCardLargeSubText}>{chain?.label} - {idShort}</span>
           </span>
           <span style={localStyles.nftCardLargeLevel}>
             Level {level} {'★'.repeat(level)}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  function BridgeBatchCard({ chainKey, mode = 'source' }) {
+    const chain = CHAIN_BY_ID[chainKey];
+    const first = selectedNfts[0] || nftPreview;
+    const firstLevel = first?.level ?? 1;
+    const fallbackImage = nftLevelImageUrl(firstLevel);
+    const count = Math.max(bridgeBatchCount, 1);
+    const ids = sourceIdsToBridge.slice(0, 4).map((id) => {
+      const nft = (ownedNfts || []).find((token) => nftIdentifier(token) === id);
+      return nftPickerLabel(nft, sourceChain, id);
+    });
+    return (
+      <div style={localStyles.batchCard}>
+        <div style={localStyles.batchThumbStack}>
+          <div style={{ ...localStyles.batchThumb, transform: 'translate(10px, 8px)', opacity: 0.35 }} />
+          <div style={{ ...localStyles.batchThumb, transform: 'translate(5px, 4px)', opacity: 0.55 }} />
+          <div style={localStyles.batchThumb}>
+            {first?.imageUrl
+              ? <img src={first.imageUrl} alt="" style={localStyles.nftCardLargeImg}
+                  onError={(e) => {
+                    if (!e.currentTarget.dataset.fallbackApplied) {
+                      e.currentTarget.dataset.fallbackApplied = '1';
+                      e.currentTarget.src = fallbackImage;
+                    }
+                  }} />
+              : <span style={{ fontSize: 38, lineHeight: 1 }}>NFT</span>}
+          </div>
+        </div>
+        <div style={localStyles.batchMeta}>
+          <span style={localStyles.nftCardLargeTitle}>
+            {count} Demon King NFT{count === 1 ? '' : 's'}
+          </span>
+          <span style={localStyles.nftCardLargeSub}>
+            <ChainLogo chain={chainKey} size={14} /> {chain?.label} - {mode === 'source' ? 'source burn' : 'destination mint'}
+          </span>
+          <span style={localStyles.batchIds} title={sourceIdsToBridge.join(', ')}>
+            {ids.join(', ')}{sourceIdsToBridge.length > ids.length ? ` +${sourceIdsToBridge.length - ids.length}` : ''}
           </span>
         </div>
       </div>
@@ -846,7 +1067,23 @@ export default function NftBridgePanel({
               // Horizontal carousel. Up to ~4 cards fit on a 360–420 px wide
               // shop modal; beyond that the row scrolls and we surface left/
               // right arrow chevrons so trackpad-less mice can advance.
-              <div style={localStyles.nftCarouselRow}>
+              <div style={localStyles.nftPickerBlock}>
+                <div style={localStyles.batchPickerBar}>
+                  <span style={localStyles.batchPickerText}>
+                    {bridgeBatchCount || 0} selected / {Math.min(ownedNfts.length, MAX_BATCH_BRIDGE_NFTS)} max
+                  </span>
+                  <div style={localStyles.batchPickerActions}>
+                    <button type="button" onClick={selectAllVisibleNfts} style={localStyles.miniBtn}>
+                      Select all
+                    </button>
+                    {bridgeBatchCount > 0 && (
+                      <button type="button" onClick={clearSelectedNfts} style={localStyles.miniBtnMuted}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div style={localStyles.nftCarouselRow}>
                 {ownedNfts.length > 4 && (
                   <button type="button"
                     onClick={() => scrollNfts(-1)}
@@ -859,9 +1096,9 @@ export default function NftBridgePanel({
                 )}
                 <div ref={nftScrollRef} style={localStyles.nftScroll}>
                   {ownedNfts.map((t) => {
-                    const id = t.tokenId || t.tokenAddress || t.asset;
-                    const selected = sourceIdInput === id;
-                    const idShort = t.tokenId ? `#${t.tokenId}` : shortAddr(t.tokenAddress || t.asset, 6, 4);
+                    const id = nftIdentifier(t);
+                    const selected = sourceIdsToBridge.includes(id);
+                    const idShort = nftPickerLabel(t, sourceChain);
                     const fallbackImage = nftLevelImageUrl(t.level ?? 1);
                     return (
                       <button key={id} type="button" onClick={() => selectNft(t)}
@@ -879,30 +1116,34 @@ export default function NftBridgePanel({
                             }} />
                         )}
                         <div style={localStyles.nftMeta}>
-                          <span style={localStyles.nftId}>{idShort}</span>
+                          <span style={localStyles.nftId} title={id}>{idShort}</span>
                           <span style={localStyles.nftLevel}>L{t.level ?? 1}</span>
                         </div>
                       </button>
                     );
                   })}
                 </div>
-                {ownedNfts.length > 4 && (
-                  <button type="button"
-                    onClick={() => scrollNfts(1)}
-                    style={localStyles.nftArrowBtn}
-                    aria-label="Next NFTs">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="m9 18 6-6-6-6" />
-                    </svg>
-                  </button>
-                )}
+                  {ownedNfts.length > 4 && (
+                    <button type="button"
+                      onClick={() => scrollNfts(1)}
+                      style={localStyles.nftArrowBtn}
+                      aria-label="Next NFTs">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m9 18 6-6-6-6" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
               </div>
             ) : null}
 
             <input type="text"
               value={sourceIdInput}
-              onChange={(e) => setSourceIdInput(e.target.value)}
-              placeholder={`Or paste: ${sourceIdLabel(sourceChain)}`}
+              onChange={(e) => {
+                setSelectedSourceIds([]);
+                setSourceIdInput(e.target.value);
+              }}
+              placeholder={`Or paste one or many: ${sourceIdLabel(sourceChain)}`}
               style={localStyles.input} />
           </div>
 
@@ -922,7 +1163,9 @@ export default function NftBridgePanel({
               flying. Tap to go back if it's the wrong one. */}
           <button type="button" onClick={() => setWizardStep(1)}
             style={localStyles.previewBtn} title="Change NFT">
-            <NftCardLarge nft={nftPreview} chainKey={sourceChain} />
+            {bridgeBatchCount > 1
+              ? <BridgeBatchCard chainKey={sourceChain} mode="source" />
+              : <NftCardLarge nft={nftPreview} chainKey={sourceChain} />}
             <span style={localStyles.previewBtnHint}>Tap to change</span>
           </button>
 
@@ -970,14 +1213,18 @@ export default function NftBridgePanel({
             <span style={localStyles.stepSubtitle}>Step 3 of 3 — review and sign</span>
           </div>
 
-          <NftCardLarge nft={nftPreview} chainKey={sourceChain} />
+          {bridgeBatchCount > 1
+            ? <BridgeBatchCard chainKey={sourceChain} mode="source" />
+            : <NftCardLarge nft={nftPreview} chainKey={sourceChain} />}
 
           <div style={localStyles.bridgeArrowRow}>
             <span style={localStyles.bridgeArrow}>⬇</span>
             <span style={localStyles.bridgeArrowLabel}>bridge • level preserved</span>
           </div>
 
-          <NftCardLarge nft={nftPreview} chainKey={destChain} />
+          {bridgeBatchCount > 1
+            ? <BridgeBatchCard chainKey={destChain} mode="dest" />
+            : <NftCardLarge nft={nftPreview} chainKey={destChain} />}
 
           <div style={localStyles.confirmMeta}>
             <div>
@@ -986,7 +1233,9 @@ export default function NftBridgePanel({
             </div>
             <div>
               <span style={localStyles.confirmLabel}>Steps</span>
-              <span style={localStyles.confirmValue}>burn → confirm → mint</span>
+              <span style={localStyles.confirmValue}>
+                {bridgeBatchCount > 1 ? `${bridgeBatchCount}x burn -> relay` : 'burn -> confirm -> mint'}
+              </span>
             </div>
           </div>
 
@@ -1047,7 +1296,15 @@ export default function NftBridgePanel({
               onClick={status === 'success' ? onBack : pendingRelay ? retryPendingRelay : handleBridge}
               disabled={busy}
               style={{ ...localStyles.bridgeBtn, ...(busy ? localStyles.bridgeBtnDisabled : null) }}>
-              {busy ? 'Bridging…' : status === 'success' ? 'Done — back to shop' : pendingRelay ? 'Retry mint →' : 'Bridge NFT →'}
+              {busy
+                ? (bridgeBatchCount > 1 ? `Bridging ${bridgeBatchCount} NFTs...` : 'Bridging...')
+                : status === 'success'
+                ? 'Done - back to shop'
+                : pendingRelay
+                ? 'Retry mint ->'
+                : bridgeBatchCount > 1
+                ? `Bridge ${bridgeBatchCount} NFTs ->`
+                : 'Bridge NFT ->'}
             </button>
           </>
         )}
@@ -1067,6 +1324,7 @@ export default function NftBridgePanel({
           busy={busy}
           sourceChain={sourceChain}
           destChain={destChain}
+          batchItems={batchItems}
           onRetry={retryPendingRelay}
           onAnother={resetWizard}
           onBackToShop={onBack}
@@ -1084,11 +1342,12 @@ export default function NftBridgePanel({
 // pile up under the confirm cards and force the user to scroll.
 function BridgeStatusModal({
   status, notice, result, pendingRelay, busy,
-  sourceChain, destChain,
+  sourceChain, destChain, batchItems = [],
   onRetry, onAnother, onBackToShop, onClose,
 }) {
   const isFinished = status === 'success' || status === 'error';
   const isWorking  = !isFinished;
+  const isBatch = batchItems.length > 1 || result?.batch;
   // Map each pipeline step to its current visual state. The "confirming"
   // status covers both server verification AND server-side relay (one
   // network step from the user's point of view), so we collapse steps
@@ -1114,9 +1373,10 @@ function BridgeStatusModal({
     { idx: 3, label: 'Mint on destination',    hint: `${CHAIN_BY_ID[destChain]?.label}` },
   ];
 
-  const title = status === 'success' ? 'Bridge complete'
-              : status === 'error'   ? 'Bridge failed'
-              : 'Bridging your NFT…';
+  const title = status === 'success' ? (isBatch ? 'Batch bridge complete' : 'Bridge complete')
+              : status === 'error'   ? (isBatch ? 'Batch bridge stopped' : 'Bridge failed')
+              : isBatch              ? `Bridging ${batchItems.length} NFTs...`
+              : 'Bridging your NFT...';
 
   return (
     <div
@@ -1162,11 +1422,34 @@ function BridgeStatusModal({
             })}
           </ol>
 
+          {batchItems.length > 1 && (
+            <div style={modalStyles.batchList}>
+              {batchItems.map((item) => (
+                <div key={`${item.index}-${item.id}`} style={modalStyles.batchItem}>
+                  <span style={modalStyles.batchIndex}>{item.index}</span>
+                  <span style={modalStyles.batchLabel} title={item.id}>{item.label || shortNftRef(item.id)}</span>
+                  <span style={{
+                    ...modalStyles.batchPill,
+                    ...(item.phase === 'done' ? modalStyles.batchPillDone : null),
+                    ...(item.phase === 'error' ? modalStyles.batchPillError : null),
+                  }}>
+                    {item.phase === 'done' ? 'done'
+                      : item.phase === 'error' ? 'error'
+                      : item.phase === 'relay' ? 'relay'
+                      : item.phase === 'burning' ? 'sign'
+                      : item.phase === 'init' ? 'prep'
+                      : 'queued'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {status === 'error' && notice && (
             <div style={modalStyles.errorBox}>{notice}</div>
           )}
 
-          {status === 'success' && result && (
+          {status === 'success' && result && !result.batch && (
             <div style={modalStyles.resultBox}>
               <div style={modalStyles.resultHeadline}>
                 <b>{CHAIN_BY_ID[result.sourceChain]?.label}</b>
@@ -1186,6 +1469,27 @@ function BridgeStatusModal({
             </div>
           )}
 
+          {status === 'success' && result?.batch && (
+            <div style={modalStyles.resultBox}>
+              <div style={modalStyles.resultHeadline}>
+                <b>{result.count} NFTs bridged</b>
+                <span style={{ opacity: 0.5, margin: '0 6px' }}>from</span>
+                <b>{CHAIN_BY_ID[result.sourceChain]?.label}</b>
+                <span style={{ opacity: 0.5, margin: '0 6px' }}>to</span>
+                <b>{CHAIN_BY_ID[result.destChain]?.label}</b>
+              </div>
+              <div style={modalStyles.batchResultGrid}>
+                {result.results.map((row, idx) => (
+                  <div key={`${row.sourceId || idx}-${row.burnTxHash}`} style={modalStyles.batchResultRow}>
+                    <span style={modalStyles.resultMono}>{shortNftRef(row.sourceId || row.sourceRef || String(idx + 1), 5, 4)}</span>
+                    <span>L{row.level || '?'}</span>
+                    <span style={modalStyles.resultMono}>{shortAddr(row.destResult?.hash || row.destResult?.asset || '', 6, 4)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {pendingRelay && status === 'error' && (
             <div style={modalStyles.pendingBox}>
               <div style={{ fontWeight: 900, marginBottom: 2 }}>Burn saved</div>
@@ -1198,7 +1502,7 @@ function BridgeStatusModal({
 
           {isWorking && (
             <div style={modalStyles.workingHint}>
-              Keep this window open until all three steps finish.
+              Keep this window open until {isBatch ? 'every selected NFT finishes' : 'all three steps finish'}.
             </div>
           )}
         </div>
@@ -1307,6 +1611,28 @@ const localStyles = {
   nftCarouselRow: {
     display: 'flex', alignItems: 'center', gap: 6,
   },
+  nftPickerBlock: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+  },
+  batchPickerBar: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, padding: '6px 8px', borderRadius: 10,
+    background: '#fff8e6', border: '1px solid #d4c8b0',
+  },
+  batchPickerText: { fontSize: 11, fontWeight: 900, color: '#5C3A21' },
+  batchPickerActions: { display: 'flex', gap: 6, flexShrink: 0 },
+  miniBtn: {
+    padding: '4px 8px', borderRadius: 8,
+    background: '#ffd97a', border: '1px solid #9f8759',
+    color: '#5C3A21', fontSize: 11, fontWeight: 900,
+    cursor: 'pointer',
+  },
+  miniBtnMuted: {
+    padding: '4px 8px', borderRadius: 8,
+    background: '#fff6dc', border: '1px solid #d4c8b0',
+    color: '#7a5a30', fontSize: 11, fontWeight: 900,
+    cursor: 'pointer',
+  },
   nftScroll: {
     display: 'flex', gap: 8,
     overflowX: 'auto', overflowY: 'hidden',
@@ -1343,10 +1669,18 @@ const localStyles = {
   },
   nftMeta: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    width: '100%', fontSize: 11, fontWeight: 700, color: '#5C3A21',
+    width: '100%', minWidth: 0, fontSize: 11, fontWeight: 700, color: '#5C3A21',
   },
-  nftId: { fontFamily: 'monospace', flex: 1, textAlign: 'left' },
-  nftLevel: { color: '#7a5a30' },
+  nftId: {
+    fontFamily: 'monospace',
+    flex: 1,
+    minWidth: 0,
+    textAlign: 'left',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  nftLevel: { color: '#7a5a30', flexShrink: 0 },
 
   // ── Wizard chrome ─────────────────────────────────────────────────
   stepHeader: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 },
@@ -1389,7 +1723,48 @@ const localStyles = {
   },
   nftCardLargeTitle: { fontSize: 15, fontWeight: 800, color: '#5C3A21' },
   nftCardLargeSub: { fontSize: 12, color: '#7a5a30', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  nftCardLargeSubText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   nftCardLargeLevel: { fontSize: 12, fontWeight: 700, color: '#b8860b' },
+  batchCard: {
+    display: 'flex', alignItems: 'center', gap: 12,
+    padding: 10, borderRadius: 14,
+    background: 'linear-gradient(180deg, #fff6dc 0%, #ffefc4 100%)',
+    border: '2px solid #d4c8b0',
+    boxShadow: '0 2px 6px rgba(95,58,33,0.08)',
+  },
+  batchThumbStack: {
+    position: 'relative',
+    width: 92,
+    height: 84,
+    flexShrink: 0,
+  },
+  batchThumb: {
+    position: 'absolute',
+    inset: 0,
+    width: 76,
+    height: 76,
+    borderRadius: 12,
+    background: '#fff',
+    border: '2px solid #d4c8b0',
+    overflow: 'hidden',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#5C3A21',
+    fontWeight: 900,
+  },
+  batchMeta: {
+    display: 'flex', flexDirection: 'column', gap: 3, flex: 1, minWidth: 0,
+  },
+  batchIds: {
+    fontSize: 11,
+    fontFamily: 'monospace',
+    color: '#5C3A21',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
 
   // Tap-to-edit wrapper around the NFT preview on step 2.
   previewBtn: {
@@ -1500,6 +1875,32 @@ const modalStyles = {
     animation: 'nft-mint-ring-spin 0.9s linear infinite',
   },
 
+  batchList: {
+    display: 'flex', flexDirection: 'column', gap: 6,
+    padding: 8, borderRadius: 10,
+    background: '#fff8e6', border: '1px solid #d4c8b0',
+  },
+  batchItem: {
+    display: 'grid', gridTemplateColumns: '22px minmax(0, 1fr) auto',
+    alignItems: 'center', gap: 7, fontSize: 11, color: '#5C3A21',
+  },
+  batchIndex: {
+    width: 20, height: 20, borderRadius: '50%',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    background: '#d4c8b0', color: '#5C3A21', fontWeight: 900,
+  },
+  batchLabel: {
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontFamily: 'monospace', fontWeight: 800,
+  },
+  batchPill: {
+    padding: '2px 6px', borderRadius: 999,
+    background: '#e8dfc8', color: '#7a5a30',
+    fontSize: 10, fontWeight: 900, textTransform: 'uppercase',
+  },
+  batchPillDone: { background: '#d9efc0', color: '#1f6d34' },
+  batchPillError: { background: '#ffd8d8', color: '#9d1e1e' },
+
   resultBox: {
     padding: '10px 12px', borderRadius: 10,
     background: 'linear-gradient(180deg, #f1fbe5 0%, #d9efc0 100%)',
@@ -1512,6 +1913,15 @@ const modalStyles = {
     fontSize: 12,
   },
   resultMono: { fontFamily: 'monospace', wordBreak: 'break-all' },
+  batchResultGrid: {
+    display: 'flex', flexDirection: 'column', gap: 4,
+    fontSize: 11,
+  },
+  batchResultRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
+    gap: 8, alignItems: 'center',
+    padding: '4px 0', borderTop: '1px solid rgba(31, 109, 52, 0.18)',
+  },
 
   pendingBox: {
     padding: '8px 10px', borderRadius: 10,
