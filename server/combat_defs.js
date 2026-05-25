@@ -36,9 +36,9 @@ const TROOP_STATS = {
     4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
-    1: { hp: 660,  damage: 70,  atkSpeed: 1.8,  moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    2: { hp: 880,  damage: 92,  atkSpeed: 1.65, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    3: { hp: 1150, damage: 120, atkSpeed: 1.5,  moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    1: { hp: 2400, damage: 220, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    2: { hp: 3200, damage: 300, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    3: { hp: 4300, damage: 410, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
 };
 

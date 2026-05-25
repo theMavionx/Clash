@@ -19,6 +19,7 @@ import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import { useSkrHandle } from '../hooks/useSkrHandle';
 import ChunkErrorBoundary from './ChunkErrorBoundary';
 import { addClientBreadcrumb, lazyWithClientReload } from '../lib/clientLogger';
+import { readSoundEnabled } from '../lib/soundSettings';
 
 // Heavy components are lazy-loaded — their JS only ships to the user
 // when they actually open the relevant UI. Saves ~600KB from the
@@ -53,6 +54,11 @@ export default function GameUI() {
   useEffect(() => {
     if (!selectedBuilding) setShowTroops(false);
   }, [selectedBuilding]);
+
+  useEffect(() => {
+    if (!ready) return;
+    sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
+  }, [ready, sendToGodot]);
 
   // Trigger attack tutorial on first enemy mode
   useEffect(() => {

@@ -248,6 +248,53 @@ func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) 
 			"ship_capacity": ship_level * 3,
 		})
 
+func _remove_troop_from_ship(slot: int) -> void:
+	var port_node: Node3D = bs.selected_building.get("node", null)
+	if not is_instance_valid(port_node) or not port_node.has_meta("has_ship"):
+		return
+	var ship_troops: Array = port_node.get_meta("ship_troops", [])
+	if slot < 0 or slot >= ship_troops.size():
+		return
+	var span: Dictionary = _troop_unit_span_at(ship_troops, slot)
+	if span.is_empty():
+		return
+	var ship_level: int = port_node.get_meta("ship_level", 1)
+	var sid: int = bs.selected_building.get("server_id", -1)
+	var net: Node = bs._net
+	if net and net.has_token() and sid >= 0:
+		var result: Dictionary = await net.remove_troop(sid, int(span.start))
+		if not is_instance_valid(port_node): return
+		if result.has("error"):
+			bs._show_error(str(result.error))
+			var bridge_err: Node = bs._bridge
+			if bridge_err:
+				bridge_err.send_to_react("ship_updated", {
+					"ship_level": ship_level,
+					"ship_troops": port_node.get_meta("ship_troops", []),
+					"ship_capacity": ship_level * 3,
+				})
+			return
+		var new_troops: Array = result.get("ship_troops", [])
+		port_node.set_meta("ship_troops", new_troops)
+		if result.has("resources"):
+			bs._apply_resources_from_server(result.resources)
+	else:
+		var start: int = int(span.start)
+		var remove_count: int = int(span.end) - start
+		for _i in range(remove_count):
+			ship_troops.remove_at(start)
+		port_node.set_meta("ship_troops", ship_troops)
+	if not is_instance_valid(port_node): return
+	bs._refresh_port_panel()
+	var updated_troops: Array = port_node.get_meta("ship_troops", [])
+	var bridge: Node = bs._bridge
+	if bridge:
+		bridge.send_to_react("ship_updated", {
+			"ship_level": ship_level,
+			"ship_troops": updated_troops,
+			"ship_capacity": ship_level * 3,
+		})
+
 # ---------------------------------------------------------------------------
 # Main ship animation
 # ---------------------------------------------------------------------------

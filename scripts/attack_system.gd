@@ -257,6 +257,8 @@ func enter_attack_mode(fleet: Array = []) -> void:
 		ships_data.append({
 			"level": ship.get("level", 1),
 			"troops": ship.get("troops", []),
+			"port_number": ship.get("port_number", i + 1),
+			"port_server_id": ship.get("port_server_id", -1),
 		})
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge:
@@ -512,6 +514,8 @@ func _try_place_ship(hit: Vector3) -> bool:
 			"t": t, "type": "place_ship",
 			"x": spawn_pos_for_log.x, "z": spawn_pos_for_log.z,
 			"shipLevel": ship_data.get("level", 1),
+			"port_number": ship_data.get("port_number", ship_idx + 1),
+			"port_server_id": ship_data.get("port_server_id", -1),
 			"troops": troop_names_for_log,
 			"troop_spawns": troop_spawns_for_log,
 			"troopLevels": troop_levels_for_log,
@@ -521,7 +525,13 @@ func _try_place_ship(hit: Vector3) -> bool:
 		var ships_update: Array = []
 		for i in mini(_fleet.size(), max_ships):
 			var s = _fleet[i]
-			ships_update.append({"level": s.get("level", 1), "troops": s.get("troops", []), "placed": s.get("_placed", false)})
+			ships_update.append({
+				"level": s.get("level", 1),
+				"troops": s.get("troops", []),
+				"placed": s.get("_placed", false),
+				"port_number": s.get("port_number", i + 1),
+				"port_server_id": s.get("port_server_id", -1),
+			})
 		bridge.send_to_react("fleet_info", {"total_ships": _fleet.size(), "placed": _ships_placed, "ships": ships_update})
 	return true
 

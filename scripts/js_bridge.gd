@@ -289,6 +289,16 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			var active_st = _get_active_building_system()
 			if active_st:
 				active_st._swap_troop_on_ship(int(data.get("slot", 0)), data.get("troop_name", ""), data)
+		"remove_troop":
+			var active_rt = _get_active_building_system()
+			if active_rt:
+				active_rt._remove_troop_from_ship(int(data.get("slot", 0)))
+		"set_sound_enabled":
+			var audio = get_node_or_null("/root/AudioManager")
+			if audio and audio.has_method("set_sound_enabled"):
+				audio.set_sound_enabled(bool(data.get("enabled", true)))
+				if audio.has_method("is_sound_enabled"):
+					send_to_react("sound_settings", {"enabled": audio.is_sound_enabled()})
 		"resource_bar_positions":
 			# React sends icon centers: {gold: {x, y}, wood: {x, y}, ore: {x, y}}
 			for bsys in _bs_cache:

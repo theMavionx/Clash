@@ -1949,6 +1949,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 
 
 func _sync_react_buildings() -> void:
+	_refresh_port_number_labels()
 	var bridge = _bridge
 	if bridge and bridge.has_method("send_to_react"):
 		var arr = []
@@ -2009,6 +2010,93 @@ func _sync_react_buildings() -> void:
 					if blvl >= lvl_i:
 						done_req += 1
 		bridge.send_to_react("th_info", {"level": th_lvl, "unlock": TH_UNLOCK, "max_counts": max_counts, "progress": done_req, "progress_total": total_req})
+
+func _port_number_sort(a: Dictionary, b: Dictionary) -> bool:
+	var ai: int = int(a.get("grid_index", 0))
+	var bi: int = int(b.get("grid_index", 0))
+	if ai != bi:
+		return ai < bi
+	var agp: Vector2i = a.get("grid_pos", Vector2i.ZERO)
+	var bgp: Vector2i = b.get("grid_pos", Vector2i.ZERO)
+	if agp.x != bgp.x:
+		return agp.x < bgp.x
+	if agp.y != bgp.y:
+		return agp.y < bgp.y
+	return int(a.get("server_id", -1)) < int(b.get("server_id", -1))
+
+
+func _collect_port_number_entries() -> Array:
+	var entries: Array = []
+	for bs_node in _building_systems:
+		for b in bs_node.placed_buildings:
+			if b.get("id", "") != "port":
+				continue
+			var pnode: Node3D = b.get("node", null)
+			if not is_instance_valid(pnode):
+				continue
+			entries.append({
+				"building": b,
+				"node": pnode,
+				"grid_index": int(bs_node.my_grid_index),
+				"grid_pos": b.get("grid_pos", Vector2i.ZERO),
+				"server_id": int(b.get("server_id", -1)),
+			})
+	entries.sort_custom(Callable(self, "_port_number_sort"))
+	return entries
+
+
+func _clear_port_number_labels() -> void:
+	for bs_node in _building_systems:
+		for b in bs_node.placed_buildings:
+			if b.get("id", "") != "port":
+				continue
+			var pnode: Node3D = b.get("node", null)
+			if not is_instance_valid(pnode):
+				continue
+			var label: Label3D = pnode.get_node_or_null("PortNumberLabel") as Label3D
+			if label != null:
+				label.queue_free()
+			if pnode.has_meta("port_number"):
+				pnode.remove_meta("port_number")
+
+
+func _refresh_port_number_labels() -> void:
+	if is_viewing_enemy:
+		_clear_port_number_labels()
+		return
+	var entries: Array = _collect_port_number_entries()
+	for i in entries.size():
+		var entry: Dictionary = entries[i]
+		var node: Node3D = entry.get("node", null)
+		if not is_instance_valid(node):
+			continue
+		var port_number: int = i + 1
+		node.set_meta("port_number", port_number)
+		var label: Label3D = node.get_node_or_null("PortNumberLabel") as Label3D
+		if label == null:
+			label = Label3D.new()
+			label.name = "PortNumberLabel"
+			label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			label.no_depth_test = true
+			label.render_priority = 12
+			label.outline_modulate = Color(0.08, 0.04, 0.02, 1.0)
+			label.modulate = Color(1.0, 0.92, 0.35, 1.0)
+			node.add_child(label)
+		label.outline_size = 3
+		label.font_size = 14
+		label.position = Vector3(0.0, 0.42, 0.0)
+		label.text = "P%d" % port_number
+
+
+func _port_display_number_for_building(target: Dictionary) -> int:
+	var target_node: Node3D = target.get("node", null)
+	if not is_instance_valid(target_node):
+		return 0
+	var entries: Array = _collect_port_number_entries()
+	for i in entries.size():
+		if entries[i].get("node", null) == target_node:
+			return i + 1
+	return int(target_node.get_meta("port_number", 0))
 
 func _local_troop_name_from_server(troop_type: String) -> String:
 	match troop_type:
@@ -2965,10 +3053,13 @@ func _select_building(b: Dictionary) -> void:
 		var bs_has_ship = false
 		var bs_ship_level: int = 0
 		var bs_ship_troops: Array = []
+		var bs_port_number: int = 0
 		if b.has("node") and is_instance_valid(b["node"]) and b["node"].has_meta("has_ship"):
 			bs_has_ship = true
 			bs_ship_level = b["node"].get_meta("ship_level", 1)
 			bs_ship_troops = b["node"].get_meta("ship_troops", [])
+		if b.id == "port":
+			bs_port_number = _port_display_number_for_building(b)
 
 		bridge.send_to_react("building_selected", {
 			"id": b.id, "name": def.name, "level": level,
@@ -2982,6 +3073,7 @@ func _select_building(b: Dictionary) -> void:
 			"ship_level": bs_ship_level,
 			"ship_troops": bs_ship_troops,
 			"ship_capacity": bs_ship_level * 3,
+			"port_number": bs_port_number,
 			"troop_levels": troop_levels,
 		})
 
@@ -3274,6 +3366,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			pnode.remove_meta("ship_node")
 			pnode.set_meta("ship_level", b.level)
 			_port._spawn_port_ship(b)
+		_refresh_port_number_labels()
 
 	# Mark upgrade complete before refreshing UI
 	b["is_upgrading"] = false
@@ -4348,6 +4441,9 @@ func _apply_ships_from_server(ships: Array) -> void:
 func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) -> void:
 	_port._swap_troop_on_ship(slot, troop_name, extra)
 
+func _remove_troop_from_ship(slot: int) -> void:
+	_port._remove_troop_from_ship(slot)
+
 func _animate_main_ship() -> void:
 	_port._animate_main_ship()
 
@@ -4887,6 +4983,7 @@ func _build_fleet() -> Array:
 	await _refresh_port_ship_meta_from_server()
 	if not is_instance_valid(self):
 		return []
+	_refresh_port_number_labels()
 	var fleet: Array = []
 	for bs_node in _building_systems:
 		for b in bs_node.placed_buildings:
@@ -4898,7 +4995,12 @@ func _build_fleet() -> Array:
 			var ship_level: int = pnode.get_meta("ship_level", 1)
 			var ship_troops: Array = pnode.get_meta("ship_troops", [])
 			if not ship_troops.is_empty():
-				fleet.append({"level": ship_level, "troops": ship_troops.duplicate()})
+				fleet.append({
+					"level": ship_level,
+					"troops": ship_troops.duplicate(),
+					"port_number": int(pnode.get_meta("port_number", _port_display_number_for_building(b))),
+					"port_server_id": int(b.get("server_id", -1)),
+				})
 	# Sandbox guarantee: every attack on TestMain ships a DemonKing + Knight so
 	# the player can iterate on demon combat without setting up a port/ship.
 	# "_SLOT_FILLER_" pads DemonKing's 2-slot footprint and is ignored at deploy.

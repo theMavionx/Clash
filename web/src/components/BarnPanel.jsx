@@ -139,11 +139,11 @@ const TROOP_STATS = {
   DemonKing: {
     display: "Demon King",
     stats: {
-      1: { hp: 660, damage: 70, atk_speed: 1.8 },
-      2: { hp: 880, damage: 92, atk_speed: 1.65 },
-      3: { hp: 1150, damage: 120, atk_speed: 1.5 },
+      1: { hp: 2400, damage: 220, atk_speed: 1.25 },
+      2: { hp: 3200, damage: 300, atk_speed: 1.15 },
+      3: { hp: 4300, damage: 410, atk_speed: 1.05 },
     },
-    maxStats: { hp: 1150, damage: 120, atk_speed: 1.8 }
+    maxStats: { hp: 4300, damage: 410, atk_speed: 1.25 }
   }
 };
 

@@ -21,6 +21,7 @@ import { useSkrHandle } from '../hooks/useSkrHandle';
 import { cartoonBtn } from '../styles/theme';
 import EvmWalletModal from './EvmWalletModal';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
+import { readSoundEnabled, writeSoundEnabled } from '../lib/soundSettings';
 import trophyIcon from '../assets/resources/free-icon-cup-with-star-109765.png';
 
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
@@ -72,6 +73,7 @@ function ProfileModal({ onClose }) {
   const [aiKeyBusy, setAiKeyBusy] = useState(false);
   const [aiKeyError, setAiKeyError] = useState('');
   const [aiKeyCopied, setAiKeyCopied] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(() => readSoundEnabled());
 
   // Privy logout — hook only called when provider is mounted (build-time flag).
   let privyLogout = null, privyAuthed = false;
@@ -154,6 +156,13 @@ function ProfileModal({ onClose }) {
   const openSolanaConnect = useCallback(() => {
     openSolanaWallet({ wallets, select, connect, openWalletModal, inFrame });
   }, [wallets, select, connect, openWalletModal, inFrame]);
+
+  const toggleSound = useCallback(() => {
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    writeSoundEnabled(next);
+    sendToGodot('set_sound_enabled', { enabled: next });
+  }, [sendToGodot, soundEnabled]);
 
   const { buildingDefs } = useBuildingDefs();
   // Use same source as HUD (PlayerInfo) — buildingDefs.th_level is authoritative.
@@ -399,6 +408,38 @@ function ProfileModal({ onClose }) {
               </div>
             </div>
           )}
+
+          <div style={S.soundBox}>
+            <div style={S.soundInfo}>
+              <div style={S.soundLabel}>Sound</div>
+              <div style={S.soundState}>{soundEnabled ? 'Music and effects enabled' : 'Muted for this browser'}</div>
+            </div>
+            <button
+              type="button"
+              onClick={toggleSound}
+              style={{
+                ...S.soundToggle,
+                ...(soundEnabled ? S.soundToggleOn : S.soundToggleOff),
+              }}
+              aria-pressed={!soundEnabled}
+              title={soundEnabled ? 'Mute game sound' : 'Turn game sound on'}
+            >
+              {soundEnabled ? (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="currentColor" />
+                  <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                  <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+                </svg>
+              ) : (
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.7" strokeLinecap="round" strokeLinejoin="round">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="currentColor" />
+                  <line x1="19" y1="9" x2="15" y2="13" />
+                  <line x1="15" y1="9" x2="19" y2="13" />
+                </svg>
+              )}
+              <span>{soundEnabled ? 'ON' : 'OFF'}</span>
+            </button>
+          </div>
 
           {/* Wallet */}
           {activeWallet ? (
@@ -735,6 +776,38 @@ const S = {
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
   },
   body: { flex: 1, padding: 16, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto', scrollbarWidth: 'none' },
+  soundBox: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '10px 12px', borderRadius: 14,
+    background: 'linear-gradient(180deg, #FFF5D6 0%, #E8DFC8 100%)',
+    border: '3px solid #c9b590',
+    boxShadow: '0 3px 0 #a98f63, inset 0 1px 0 rgba(255,255,255,0.55)',
+  },
+  soundInfo: { flex: 1, minWidth: 0 },
+  soundLabel: {
+    fontSize: 10, fontWeight: 900, color: '#a3906a',
+    letterSpacing: '0.7px', textTransform: 'uppercase',
+  },
+  soundState: {
+    marginTop: 2, fontSize: 12, fontWeight: 900, color: '#5C3A21',
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  soundToggle: {
+    minWidth: 84, height: 42, borderRadius: 12,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7,
+    cursor: 'pointer', color: '#fff',
+    fontSize: 12, fontWeight: 900, letterSpacing: '0.8px',
+    textShadow: '0 2px 0 rgba(0,0,0,0.25)',
+    boxShadow: '0 3px 0 rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.35)',
+  },
+  soundToggleOn: {
+    background: 'linear-gradient(180deg, #6AB344 0%, #4D7A2E 100%)',
+    border: '3px solid #3A5E22',
+  },
+  soundToggleOff: {
+    background: 'linear-gradient(180deg, #A3906A 0%, #6E5A3C 100%)',
+    border: '3px solid #4F3E28',
+  },
   connectedBox: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 14px',

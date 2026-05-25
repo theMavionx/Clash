@@ -160,6 +160,9 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
           const realTroops = troops.filter((troop) => String(troop || '') !== '_SLOT_FILLER_');
           const isSelected = !isPlaced && selectedTroopIdx === shipIdx;
           const sz = mobile ? 56 : 70;
+          const portNumber = Number(ship.port_number || shipIdx + 1);
+          const previewTroops = realTroops.slice(0, mobile ? 2 : 3);
+          const remainingTroops = Math.max(0, realTroops.length - previewTroops.length);
 
           return (
             <button
@@ -179,8 +182,22 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               }}
             >
               <img src={shipImg} alt="" style={{ width: '80%', height: '55%', objectFit: 'contain', filter: isPlaced ? 'grayscale(0.7) brightness(0.7)' : 'none' }} />
-              <div style={{ fontSize: 7, fontWeight: 800, color: '#8b6b3f', textTransform: 'uppercase' }}>
+              <div style={{ fontSize: 7, fontWeight: 800, color: '#8b6b3f', textTransform: 'uppercase', lineHeight: 1 }}>
                 {isPlaced ? 'DEPLOYED' : `Lv.${ship.level}`}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, height: mobile ? 13 : 15, marginTop: 1 }}>
+                {previewTroops.map((troop, index) => {
+                  const info = TROOP_IMG_MAP[normalizeTroopKey(troop)] || {};
+                  return (
+                    <span key={`${troop}-${index}`} style={{ width: mobile ? 11 : 13, height: mobile ? 11 : 13, borderRadius: 3, overflow: 'hidden', border: '1px solid rgba(92,58,33,0.45)', background: '#fff6dc' }}>
+                      {info.img && <img src={info.img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                    </span>
+                  );
+                })}
+                {remainingTroops > 0 && <span style={{ fontSize: mobile ? 7 : 8, fontWeight: 900, color: '#5C3A21' }}>+{remainingTroops}</span>}
+              </div>
+              <div style={{ position: 'absolute', top: -4, left: -4, background: '#2c83ba', color: '#fff7df', fontSize: mobile ? 9 : 10, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #15567f', boxShadow: '0 2px 3px rgba(0,0,0,0.25)' }}>
+                P{portNumber}
               </div>
               {/* Troop count badge */}
               <div style={{ position: 'absolute', top: -4, right: -4, background: '#5C3A21', color: '#fff7df', fontSize: 9, fontWeight: 900, borderRadius: 6, padding: '1px 5px', border: '1px solid #3d1f00' }}>
@@ -200,6 +217,7 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
             </div>
             {ships.map((ship, si) => {
               const troops = ship.troops || [];
+              const portNumber = Number(ship.port_number || si + 1);
               const groups = {};
               for (const t of troops) {
                 if (String(t || '') === '_SLOT_FILLER_') continue;
@@ -208,6 +226,9 @@ function AttackHUD({ onReturnHome, onSurrender, onCannon, onRally, cannonMode, r
               }
               return (
                 <div key={si} style={{ width: '100%', marginBottom: 8, padding: '8px 10px', background: '#fff6dc', borderRadius: 10, border: '2px solid #d4c8b0' }}>
+                  <div style={{ display: 'inline-flex', alignItems: 'center', marginBottom: 4, padding: '2px 7px', borderRadius: 7, background: '#2c83ba', color: '#fff7df', border: '1px solid #15567f', fontSize: 11, fontWeight: 900 }}>
+                    Port P{portNumber}
+                  </div>
                   <div style={{ fontSize: 11, fontWeight: 800, color: ship.placed ? '#9f8759' : '#5C3A21', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
                     Ship {si + 1} (Lv.{ship.level}) — {ship.placed ? 'DEPLOYED' : `${troops.length} troops`}
                   </div>

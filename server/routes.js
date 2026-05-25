@@ -7215,6 +7215,47 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
   }
 });
 
+// Remove a troop from a specific ship slot. This updates the saved template too:
+// explicit player edits should persist across reinforce/reload flows.
+router.post('/buildings/:id/remove-troop', auth, (req, res) => {
+  const buildingId = parseInt(req.params.id, 10);
+  if (isNaN(buildingId)) return res.status(400).json({ error: 'Invalid building ID' });
+  const slot = Number(req.body?.slot);
+  if (!Number.isInteger(slot)) return res.status(400).json({ error: 'Valid integer slot required' });
+
+  const txn = db.db.transaction(() => {
+    const building = db.db.prepare('SELECT * FROM buildings WHERE id = ? AND player_id = ?').get(buildingId, req.player.id);
+    if (!building) throw { status: 404, error: 'Building not found' };
+    if (building.type !== 'port' || !building.has_ship) throw { status: 400, error: 'No ship at this port' };
+
+    let shipTroops = [];
+    try { shipTroops = JSON.parse(building.ship_troops || '[]'); } catch { shipTroops = []; }
+    const span = _troopUnitSpanAt(shipTroops, slot);
+    if (!span) throw { status: 400, error: 'Invalid troop slot' };
+
+    const removedTroops = shipTroops.slice(span.start, span.end).filter(t => !_isSlotFiller(t));
+    shipTroops.splice(span.start, span.end - span.start);
+    const troopsJson = JSON.stringify(shipTroops);
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
+
+    const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
+    return {
+      ship_troops: shipTroops,
+      removed_troops: removedTroops,
+      ship_level: building.level,
+      ship_capacity: building.level * 3,
+      resources: updated,
+    };
+  });
+
+  try {
+    const result = txn();
+    res.json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.error || 'Server error' });
+  }
+});
+
 // Get current ship troops for all ports (used before attack to sync)
 router.get('/ships', auth, (req, res) => {
   const ports = db.db.prepare('SELECT id, level, ship_troops, ship_troops_template, has_ship FROM buildings WHERE player_id = ? AND type = ?').all(req.player.id, 'port');

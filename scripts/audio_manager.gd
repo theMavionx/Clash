@@ -16,11 +16,13 @@ var _music_player: AudioStreamPlayer
 var _current_state: String = ""
 var _fade_tween: Tween
 var _music_enabled: bool = true
+var _sound_enabled: bool = true
 
 
 func _ready() -> void:
 	randomize()
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_apply_master_mute()
 	_music_player = AudioStreamPlayer.new()
 	_music_player.name = "MusicPlayer"
 	_music_player.bus = "Master"
@@ -87,6 +89,21 @@ func set_music_enabled(enabled: bool) -> void:
 
 func is_music_enabled() -> bool:
 	return _music_enabled
+
+
+func set_sound_enabled(enabled: bool) -> void:
+	_sound_enabled = enabled
+	_apply_master_mute()
+
+
+func is_sound_enabled() -> bool:
+	return _sound_enabled
+
+
+func _apply_master_mute() -> void:
+	var master_idx: int = AudioServer.get_bus_index("Master")
+	if master_idx >= 0:
+		AudioServer.set_bus_mute(master_idx, not _sound_enabled)
 
 
 func stop_music() -> void:

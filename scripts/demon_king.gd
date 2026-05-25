@@ -1,7 +1,7 @@
 extends BaseTroop
 ## DemonKing — premium heavy melee, occupies 2 ship slots.
-## Designed at ~1.55x Knight on HP/DPS so 2 Knights still out-stat 1 DemonKing
-## but 1 DemonKing comfortably beats 1 Knight.
+## Designed as a premium 2-slot heavy melee unit. Level 1 is intentionally
+## stronger than two level 4 Knights on HP, hit damage, and DPS.
 ##
 ## Mesh: Model/Characters/Model/DemonKing_Body.fbx — actually a copy of
 ## DemonKing_RunFWD.fbx. We use an anim-FBX as the body because every anim
@@ -19,9 +19,9 @@ extends BaseTroop
 
 
 const LEVEL_STATS = {
-	1: {"hp": 660,  "damage": 70,  "atk_speed": 1.80},
-	2: {"hp": 880,  "damage": 92,  "atk_speed": 1.65},
-	3: {"hp": 1150, "damage": 120, "atk_speed": 1.50},
+	1: {"hp": 2400, "damage": 220, "atk_speed": 1.25},
+	2: {"hp": 3200, "damage": 300, "atk_speed": 1.15},
+	3: {"hp": 4300, "damage": 410, "atk_speed": 1.05},
 }
 
 const DEMON_ANIM_FILES: Array = [
