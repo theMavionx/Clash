@@ -615,6 +615,31 @@ router.get('/decibel/signer', auth, async (req, res) => {
   }
 });
 
+router.get('/decibel/positions', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const positions = await decibel.fetchAccountPositions(verified.subaccount);
+    res.json(positions);
+  } catch (e) {
+    console.error('[decibel] positions read error:', e);
+    res.status(500).json({ error: e.message || 'Failed to read Decibel positions' });
+  }
+});
+
+router.get('/decibel/orders', auth, async (req, res) => {
+  try {
+    const verified = await requireDecibelOwnerAndSubaccount(req, res);
+    if (!verified) return;
+    const limit = Math.max(1, Math.min(100, Number(req.query?.limit || 50)));
+    const orders = await decibel.fetchOpenOrders(verified.subaccount, { limit });
+    res.json(orders);
+  } catch (e) {
+    console.error('[decibel] open orders read error:', e);
+    res.status(500).json({ error: e.message || 'Failed to read Decibel open orders' });
+  }
+});
+
 router.post('/decibel/orders/place', auth, async (req, res) => {
   const startedAt = Date.now();
   try {

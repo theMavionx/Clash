@@ -1161,12 +1161,18 @@ export function useDecibel() {
     try {
       const sub = await ensureSubaccount();
       if (!sub) { setPositions([]); positionsRef.current = []; setDataReady(true); return; }
-      const read = await getReadClient();
-      const list = await withAbortableRead(
-        fetchOptions => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
-        READ_TIMEOUT_MS,
-        'positions'
-      );
+      let list;
+      try {
+        const read = await getReadClient();
+        list = await withAbortableRead(
+          fetchOptions => read.userPositions.getByAddr({ subAddr: sub, fetchOptions }),
+          READ_TIMEOUT_MS,
+          'positions'
+        );
+      } catch (readError) {
+        D.warn('fetchPositions direct Decibel read failed; falling back to server:', readError?.message || readError);
+        list = await decibelServerRequest(`/positions?subaccountAddr=${encodeURIComponent(sub)}`, null, 'GET');
+      }
       const raw = Array.isArray(list) ? list : (list?.data || []);
       const norm = mergeTpslOrdersIntoPositions(
         raw.map(p => normalizePosition(p, marketsRef.current)),
@@ -1183,19 +1189,25 @@ export function useDecibel() {
     } catch (e) {
       D.warn('fetchPositions failed:', e?.message || e);
     }
-  }, [address, ensureSubaccount]);
+  }, [address, ensureSubaccount, decibelServerRequest]);
 
   const fetchOrders = useCallback(async () => {
     if (!address) return;
     try {
       const sub = await ensureSubaccount();
       if (!sub) { setOrders([]); ordersRef.current = []; return; }
-      const read = await getReadClient();
-      const list = await withAbortableRead(
-        fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
-        READ_TIMEOUT_MS,
-        'orders'
-      );
+      let list;
+      try {
+        list = await decibelServerRequest(`/orders?subaccountAddr=${encodeURIComponent(sub)}&limit=100`, null, 'GET');
+      } catch (serverError) {
+        D.warn('fetchOrders server Decibel read failed; falling back to direct SDK:', serverError?.message || serverError);
+        const read = await getReadClient();
+        list = await withAbortableRead(
+          fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
+          READ_TIMEOUT_MS,
+          'orders'
+        );
+      }
       const raw = Array.isArray(list) ? list : (list?.data || []);
       const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
       ordersRef.current = norm;
@@ -1208,7 +1220,7 @@ export function useDecibel() {
     } catch (e) {
       console.warn('[useDecibel] fetchOrders:', e?.message || e);
     }
-  }, [address, ensureSubaccount]);
+  }, [address, ensureSubaccount, decibelServerRequest]);
 
   // Wallet-level balances:
   //   walletUsdc  ← USDC sitting on the MASTER wallet (= what user can
