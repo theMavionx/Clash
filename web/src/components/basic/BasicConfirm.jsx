@@ -21,9 +21,12 @@ function fmtUsd(n) {
 
 function BasicConfirm({
   symbol, direction, amount, leverage, price, busy, onConfirm, onBack,
+  estimatedPositionSize,
   showAgentBanner, bindAgent, bindingAgent, bindAgentError,
 }) {
-  const positionSize = amount * leverage;
+  const positionSize = Number.isFinite(Number(estimatedPositionSize)) && Number(estimatedPositionSize) > 0
+    ? Number(estimatedPositionSize)
+    : amount * leverage;
   const liqMovePct = 100 / leverage;
   const liqPrice = direction === 'long'
     ? price * (1 - liqMovePct / 100)

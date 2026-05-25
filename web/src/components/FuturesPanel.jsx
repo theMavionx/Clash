@@ -33,6 +33,7 @@ import TradeIdeaModal from './TradeIdeaModal';
 import { useElfaSignals } from '../hooks/useElfaSignals';
 import FilterPopup from './FilterPopup';
 import TokenIcon from './TokenIcon';
+import GoldRewardToast from './GoldRewardToast';
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import pacificaLogo from '../assets/pacifica.png';
 import elfaBadge from '../assets/photo_5976518637193465030_x.jpg';
@@ -50,6 +51,9 @@ const PACIFICA_MIN_NOTIONAL_USD = 10;
 const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
 const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
 const PACIFICA_FEE_BUFFER_RATE = 0.0001;
+const PACIFICA_MARGIN_SAFETY_RATE = 0.015;
+const PACIFICA_MARGIN_SAFETY_USD = 0.15;
+const PACIFICA_MAX_BALANCE_USAGE = 0.985;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for this account setting.';
 const PHOENIX_MARKET_SLIPPAGE_RATE = 0.02;
 const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
@@ -70,6 +74,41 @@ function pacificaQtyFromMargin({ margin, price, leverage, orderType, takerFeeRat
   const slippage = orderType === 'market' ? PACIFICA_MARKET_SLIPPAGE_RATE : 0;
   const feeRate = Math.max(Number(takerFeeRate) || 0, PACIFICA_DEFAULT_TAKER_FEE_RATE) + PACIFICA_FEE_BUFFER_RATE;
   return m / (p * (1 + slippage) * ((1 / lev) + feeRate));
+}
+
+function pacificaRequiredMarginForQty({ qty, price, leverage, orderType, takerFeeRate }) {
+  const q = Number(qty);
+  const p = Number(price);
+  const lev = Number(leverage);
+  if (!Number.isFinite(q) || !Number.isFinite(p) || !Number.isFinite(lev) || q <= 0 || p <= 0 || lev <= 0) {
+    return 0;
+  }
+  const slippage = orderType === 'market' ? PACIFICA_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PACIFICA_DEFAULT_TAKER_FEE_RATE) + PACIFICA_FEE_BUFFER_RATE;
+  return q * p * (1 + slippage) * ((1 / lev) + feeRate);
+}
+
+function pacificaMarginReserveDetails({ balance }) {
+  const b = Number(balance);
+  if (!Number.isFinite(b) || b <= 0) {
+    return {
+      free_balance: Number.isFinite(b) ? b : null,
+      safety_margin: 0,
+      max_balance_usage: PACIFICA_MAX_BALANCE_USAGE,
+      usable_margin: 0,
+    };
+  }
+  const safetyMargin = Math.max(PACIFICA_MARGIN_SAFETY_USD, b * PACIFICA_MARGIN_SAFETY_RATE);
+  return {
+    free_balance: b,
+    safety_margin: safetyMargin,
+    max_balance_usage: PACIFICA_MAX_BALANCE_USAGE,
+    usable_margin: Math.max(0, Math.min(b - safetyMargin, b * PACIFICA_MAX_BALANCE_USAGE)),
+  };
+}
+
+function pacificaUsableMargin({ balance }) {
+  return pacificaMarginReserveDetails({ balance }).usable_margin;
 }
 
 function phoenixUsableMargin({ balance, leverage, orderType, takerFeeRate }) {
@@ -136,6 +175,12 @@ function humanizeTradeError(message) {
     const need = Number(insufficient[1]);
     const available = Number(insufficient[2]);
     return `Insufficient Pacifica balance: need $${need.toFixed(2)}, available $${available.toFixed(2)}. Reduce margin a little.`;
+  }
+  const pacificaAccountValue = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+).*account value:\s*([0-9.]+)/i);
+  if (pacificaAccountValue) {
+    const need = Number(pacificaAccountValue[1]);
+    const available = Number(pacificaAccountValue[2]);
+    return `Insufficient Pacifica balance: need $${need.toFixed(2)}, account value $${available.toFixed(2)}. Use a little less than MAX.`;
   }
   const cannotMargin = text.match(/CannotUpdateMargin/i);
   if (cannotMargin) {
@@ -1663,7 +1708,16 @@ function FuturesPanel() {
         })
       : pacBalance
   ), [dex, pacBalance, leverage, orderType, phoenixTakerFeeRate]);
-  const sizePctMarginBase = dex === 'phoenix' ? phoenixMaxMargin : pacBalance;
+  const pacificaMaxMargin = useMemo(() => (
+    dex === 'pacifica'
+      ? pacificaUsableMargin({ balance: pacBalance })
+      : pacBalance
+  ), [dex, pacBalance]);
+  const sizePctMarginBase = dex === 'phoenix'
+    ? phoenixMaxMargin
+    : dex === 'pacifica'
+    ? pacificaMaxMargin
+    : pacBalance;
 
   // UX semantics (updated 2026-04):
   //   amount (USDC mode) = MARGIN / collateral the user deposits per trade.
@@ -1900,8 +1954,27 @@ function FuturesPanel() {
         if (!qty || !Number.isFinite(parseFloat(qty)) || parseFloat(qty) <= 0) return;
         if (dex === 'pacifica') {
           const enteredMargin = amountInUsdc ? parseFloat(amount) : null;
-          if (amountInUsdc && Number.isFinite(enteredMargin) && enteredMargin > pacBalance + 1e-6) {
-            setLocalAlert(`Not enough Pacifica balance: $${enteredMargin.toFixed(2)} margin requested, $${pacBalance.toFixed(2)} available.`);
+          const requiredMargin = amountInUsdc
+            ? enteredMargin
+            : pacificaRequiredMarginForQty({
+                qty,
+                price: orderType === 'limit' ? parseFloat(limitPrice) : markPrice,
+                leverage,
+                orderType,
+                takerFeeRate: pacificaTakerFeeRate,
+              });
+          if (Number.isFinite(requiredMargin) && requiredMargin > pacificaMaxMargin + 1e-6) {
+            const reserve = pacificaMarginReserveDetails({ balance: pacBalance });
+            console.warn('[Pacifica UI] margin blocked by account-value buffer', {
+              symbol,
+              orderType,
+              requested_side: side,
+              requested_margin: requiredMargin,
+              max_margin: pacificaMaxMargin,
+              amount_mode: amountInUsdc ? 'usdc_margin' : 'token_size',
+              ...reserve,
+            });
+            setLocalAlert(`Pacifica needs a small fee buffer. Use $${pacificaMaxMargin.toFixed(2)} margin or less from your $${pacBalance.toFixed(2)} free balance.`);
             return;
           }
           const orderPrice = orderType === 'limit' ? parseFloat(limitPrice) : markPrice;
@@ -1986,7 +2059,7 @@ function FuturesPanel() {
       setTradeBusy(false);
       setTradePhase(null);
     }
-  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, phoenixTakerFeeRate, positions]);
+  }, [amount, tokenAmount, positionUsdc, limitPrice, symbol, orderType, amountInUsdc, currentPrice, orderSizingPrice, currentMarket, placeMarketOrder, placeLimitOrder, leverage, leverageSettings, setLeverageApi, dex, pacAgent, bindAgent, bindingAgent, pacBalance, pacificaMaxMargin, pacificaTakerFeeRate, phoenixTakerFeeRate, positions]);
 
   // ==================== TRADE CONTROLS (reusable) ====================
   // Symbol info bar — token + market data (above chart)
@@ -2197,7 +2270,7 @@ function FuturesPanel() {
         <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
             <span style={{fontSize: 11, fontWeight: 700, color: '#a3906a'}}>
-              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {dex === 'phoenix' ? 'usable' : 'balance'}
+              {sizePct}% of ${sizePctMarginBase.toFixed(2)} {(dex === 'phoenix' || dex === 'pacifica') ? 'usable' : 'balance'}
             </span>
             <span style={{fontSize: 11, fontWeight: 700, color: '#5C3A21'}}>
               buying power ${maxUsdc.toFixed(0)}
@@ -4854,6 +4927,7 @@ function FuturesPanel() {
           prices={prices}
           account={account}
           walletUsdc={walletUsdc}
+          maxTradableMargin={dex === 'pacifica' ? pacificaMaxMargin : undefined}
           placeMarketOrder={placeMarketOrder}
           setLeverageApi={setLeverageApi}
           setMarginMode={setMarginMode}
@@ -5141,14 +5215,12 @@ function FuturesPanel() {
 
         {/* Gold earned notification */}
         {goldEarned && (
-          <div style={S.goldPopup}>
-            <div style={{...S.goldIcon, color: '#FFD700'}}>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-            </div>
-            <span style={S.goldText}>+{Number((typeof goldEarned === 'number' ? goldEarned : goldEarned.amount) || 0).toLocaleString()} Gold</span>
-            <span style={S.goldReason}>{typeof goldEarned === 'number' ? 'Trading rewards' : (goldEarned.reason || 'Trading rewards')}</span>
-            <button style={S.goldClose} onClick={() => clearGoldEarned()}>✕</button>
-          </div>
+          <GoldRewardToast
+            amount={typeof goldEarned === 'number' ? goldEarned : goldEarned.amount}
+            reason={typeof goldEarned === 'number' ? 'Trading rewards' : (goldEarned.reason || 'Trading rewards')}
+            onClose={() => clearGoldEarned()}
+            style={S.goldPopupPosition}
+          />
         )}
       </div>
       <ShareTradeModal
@@ -5625,17 +5697,9 @@ const S = {
     color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
     fontSize: 13, fontWeight: 900, padding: 0,
   },
-  goldPopup: {
+  goldPopupPosition: {
     position: 'absolute', bottom: 12, left: 12, right: 12,
-    background: 'linear-gradient(135deg, #FFD700 0%, #FFA000 100%)',
-    border: '3px solid #E65100', borderRadius: 14,
-    padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10,
-    boxShadow: '0 6px 20px rgba(255,160,0,0.4)',
-    animation: 'fadeIn 0.3s ease-out',
   },
-  goldIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center' },
-  goldText: { fontSize: 18, fontWeight: 900, color: '#5C3A21', textShadow: '0 1px 0 rgba(255,255,255,0.5)' },
-  goldReason: { fontSize: 11, fontWeight: 700, color: '#7B5B00', flex: 1, textAlign: 'right' },
   // Bottom panel (fullscreen)
   bottomPanel: {
     background: '#e8dfc8',
@@ -5682,10 +5746,5 @@ const S = {
   tblCloseBtn: {
     padding: '2px 8px', background: '#E53935', border: 'none', borderRadius: 4,
     color: '#fff', fontWeight: 800, fontSize: 10, cursor: 'pointer',
-  },
-  goldClose: {
-    width: 22, height: 22, borderRadius: '50%', background: 'rgba(0,0,0,0.15)',
-    border: 'none', color: '#5C3A21', fontWeight: 900, fontSize: 13,
-    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', marginLeft: 4,
   },
 };

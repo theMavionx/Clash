@@ -3,6 +3,7 @@ import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
 import stoneIcon from '../assets/resources/stone_bar.png';
 import { usePlayer } from '../hooks/useGodot';
+import GoldRewardToast from './GoldRewardToast';
 
 
 const GAME_API = import.meta.env.VITE_GAME_API || '/api';
@@ -265,7 +266,10 @@ function QuestsTab({ markets = [] }) {
       });
       const j = await r.json();
       if (j.ok && j.completed) {
-        setFlash(`+${(j.reward.gold || 0).toLocaleString()} Gold`);
+        setFlash({
+          amount: Number(j.reward.gold || 0),
+          reason: j.reward.reason || 'Quest reward',
+        });
         setTimeout(() => setFlash(null), 2500);
       } else if (j.ok === false) {
         setError('Not completed yet');
@@ -308,7 +312,14 @@ function QuestsTab({ markets = [] }) {
 
   return (
     <div style={S.wrap}>
-      {flash && <div style={S.flash}>{flash}</div>}
+      {flash && (
+        <GoldRewardToast
+          amount={flash.amount}
+          reason={flash.reason || 'Quest reward'}
+          onClose={() => setFlash(null)}
+          style={S.flash}
+        />
+      )}
       {error && <div style={S.error} onClick={() => setError(null)}>{error}</div>}
       {visibleTasks.map(t => (
         <QuestCard key={t.id} task={t} onStart={handleStart} onClaim={handleClaim} loading={loading} />
@@ -363,7 +374,7 @@ const S = {
   emptyIcon: { fontSize: 48, marginBottom: 10 },
   emptyTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21', marginBottom: 6 },
   emptyDesc: { fontSize: 12, fontWeight: 600 },
-  flash: { background: 'linear-gradient(180deg, #e8b830 0%, #b8860b 100%)', color: '#fff', fontWeight: 900, textAlign: 'center', padding: 10, borderRadius: 8, textShadow: '1px 1px 0 rgba(0,0,0,0.3)' },
+  flash: { marginBottom: 0 },
   error: { background: '#fee', border: '2px solid #c33', color: '#c33', padding: 8, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'center' },
 };
 

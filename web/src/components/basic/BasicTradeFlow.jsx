@@ -21,7 +21,43 @@ import { colors, shared } from './styles';
 
 const STEPS = ['token', 'direction', 'amount', 'leverage', 'confirm'];
 const PACIFICA_MIN_NOTIONAL_USD = 10;
+const PACIFICA_MARKET_SLIPPAGE_RATE = 0.005;
+const PACIFICA_DEFAULT_TAKER_FEE_RATE = 0.0004;
+const PACIFICA_FEE_BUFFER_RATE = 0.0001;
+const PACIFICA_MARGIN_SAFETY_RATE = 0.015;
+const PACIFICA_MARGIN_SAFETY_USD = 0.15;
+const PACIFICA_MAX_BALANCE_USAGE = 0.985;
 const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. Pacifica rejected the direct wallet signature for leverage and margin updates.';
+
+function pacificaQtyFromMargin({ margin, price, leverage, orderType = 'market', takerFeeRate }) {
+  const m = Number(margin);
+  const p = Number(price);
+  const lev = Number(leverage);
+  if (!Number.isFinite(m) || !Number.isFinite(p) || !Number.isFinite(lev) || m <= 0 || p <= 0 || lev <= 0) {
+    return 0;
+  }
+  const slippage = orderType === 'market' ? PACIFICA_MARKET_SLIPPAGE_RATE : 0;
+  const feeRate = Math.max(Number(takerFeeRate) || 0, PACIFICA_DEFAULT_TAKER_FEE_RATE) + PACIFICA_FEE_BUFFER_RATE;
+  return m / (p * (1 + slippage) * ((1 / lev) + feeRate));
+}
+
+function pacificaUsableMargin(balance) {
+  const b = Number(balance);
+  if (!Number.isFinite(b) || b <= 0) return 0;
+  const safetyMargin = Math.max(PACIFICA_MARGIN_SAFETY_USD, b * PACIFICA_MARGIN_SAFETY_RATE);
+  return Math.max(0, Math.min(b - safetyMargin, b * PACIFICA_MAX_BALANCE_USAGE));
+}
+
+function humanizeBasicTradeError(message) {
+  const text = String(message || '');
+  const pacificaAccountValue = text.match(/Insufficient balance for\s+\S+:\s*([0-9.]+).*account value:\s*([0-9.]+)/i);
+  if (pacificaAccountValue) {
+    const need = Number(pacificaAccountValue[1]);
+    const available = Number(pacificaAccountValue[2]);
+    return `Insufficient Pacifica balance: need $${need.toFixed(2)}, account value $${available.toFixed(2)}. Use a little less than MAX.`;
+  }
+  return text;
+}
 
 // Slide animation between steps. We slide horizontally to reinforce the
 // "checkout flow" mental model (forward = right, back = left).
@@ -54,6 +90,7 @@ function BasicTradeFlow({
   placeMarketOrder, setLeverageApi, setMarginMode,
   marginModes, leverageSettings,
   dex,
+  maxTradableMargin,
   setActiveTab,
   // Pacifica agent-wallet — silent-trade infra. Pro tab doesn't need it
   // because the user is already comfortable with multi-popup flow there.
@@ -106,6 +143,35 @@ function BasicTradeFlow({
     if (dex === 'pacifica' || dex === 'hyperliquid' || dex === 'risex' || dex === 'phoenix' || dex === 'nado') return 0;
     return Number(walletUsdc || 0);
   }, [account, walletUsdc, dex]);
+
+  const takerFeeRate = useMemo(() => {
+    const fee = Number(account?.taker_fee);
+    return Number.isFinite(fee) && fee > 0 ? fee : PACIFICA_DEFAULT_TAKER_FEE_RATE;
+  }, [account?.taker_fee]);
+
+  const tradeBalance = useMemo(() => {
+    if (dex !== 'pacifica') return balance;
+    const computed = pacificaUsableMargin(balance);
+    const provided = Number(maxTradableMargin);
+    return Math.max(0, Math.min(balance, Number.isFinite(provided) ? provided : computed, computed));
+  }, [balance, dex, maxTradableMargin]);
+
+  const estimatedPositionSize = useMemo(() => {
+    if (!pickedAmount || !pickedLev || !livePrice) return 0;
+    if (dex !== 'pacifica') return pickedAmount * pickedLev;
+    const lotSize = parseFloat(pickedToken?.lot_size) || 0;
+    const rawTokenAmt = pacificaQtyFromMargin({
+      margin: pickedAmount,
+      price: livePrice,
+      leverage: pickedLev,
+      orderType: 'market',
+      takerFeeRate,
+    });
+    const tokenAmt = lotSize > 0
+      ? Math.floor(rawTokenAmt / lotSize) * lotSize
+      : rawTokenAmt;
+    return tokenAmt > 0 ? tokenAmt * livePrice : 0;
+  }, [dex, livePrice, pickedAmount, pickedLev, pickedToken?.lot_size, takerFeeRate]);
 
   const goto = useCallback((next, dir = 1) => {
     setDirection(dir);
@@ -185,6 +251,13 @@ function BasicTradeFlow({
         // the calls when the symbol's current value already matches the
         // intent.
         const sym = pickedToken.symbol;
+        const maxMargin = tradeBalance;
+        if (Number.isFinite(maxMargin) && pickedAmount > maxMargin + 1e-6) {
+          setErrorMsg(`Pacifica needs a small fee buffer. Use $${maxMargin.toFixed(2)} margin or less.`);
+          submittedRef.current = false;
+          setSubmitting(false);
+          return;
+        }
         if (!pacAgent && bindAgent) {
           try {
             const bound = await bindAgent();
@@ -238,7 +311,13 @@ function BasicTradeFlow({
           }
         }
         const lotSize = parseFloat(pickedToken?.lot_size) || 0;
-        const rawTokenAmt = (pickedAmount * pickedLev) / livePrice;
+        const rawTokenAmt = pacificaQtyFromMargin({
+          margin: pickedAmount,
+          price: livePrice,
+          leverage: pickedLev,
+          orderType: 'market',
+          takerFeeRate,
+        });
         const tokenAmt = lotSize > 0
           ? Math.floor(rawTokenAmt / lotSize) * lotSize
           : rawTokenAmt;
@@ -292,7 +371,7 @@ function BasicTradeFlow({
       submittedRef.current = false;
       setSubmitting(false);
     }
-  }, [dex, placeMarketOrder, setLeverageApi, setMarginMode, marginModes, leverageSettings, pickedToken, pickedDir, pickedAmount, pickedLev, setActiveTab, livePrice, pacAgent, bindAgent]);
+  }, [dex, placeMarketOrder, setLeverageApi, setMarginMode, marginModes, leverageSettings, pickedToken, pickedDir, pickedAmount, pickedLev, setActiveTab, livePrice, pacAgent, bindAgent, takerFeeRate, tradeBalance]);
 
   const stepIdx = STEPS.indexOf(step);
   const back = useCallback(() => {
@@ -343,7 +422,7 @@ function BasicTradeFlow({
             style={S.errorBanner}
             onClick={() => setErrorMsg(null)}
           >
-            ⚠ {errorMsg}
+            ⚠ {humanizeBasicTradeError(errorMsg)}
             <span style={S.errorClose}>✕</span>
           </motion.div>
         )}
@@ -380,7 +459,7 @@ function BasicTradeFlow({
             {step === 'amount' && pickedToken && (
               <BasicAmountSlider
                 direction={pickedDir}
-                balance={balance}
+                balance={tradeBalance}
                 onPick={handlePickAmount}
                 onBack={back}
               />
@@ -401,6 +480,7 @@ function BasicTradeFlow({
                 amount={pickedAmount}
                 leverage={pickedLev}
                 price={livePrice}
+                estimatedPositionSize={estimatedPositionSize}
                 busy={submitting}
                 onConfirm={handleConfirm}
                 onBack={back}
