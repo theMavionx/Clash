@@ -67,6 +67,7 @@ function DexPicker({ onPick, isInFrame, isSolanaMobile }) {
                   cfg.id === 'gmx' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'hyperliquid' ? 'SELF-CUSTODY · EVM' :
                   cfg.id === 'risex' ? 'SELF-CUSTODY · RISE' :
+                  cfg.id === 'nado' ? 'SELF-CUSTODY · INK' :
                   cfg.id === 'monad' ? 'SELF-CUSTODY · MONAD' :
                   cfg.id === 'decibel' ? 'SELF-CUSTODY · APTOS' :
                   'SELF-CUSTODY · SOLANA'
@@ -217,11 +218,13 @@ function ConnectAvantis({ onOpenEvmModal, onPrivyLogin, privyEnabled, privyAuthe
     : dex === 'monad' ? 'PERPL'
     : dex === 'hyperliquid' ? 'HYPERLIQUID'
     : dex === 'risex' ? 'RISEX'
+    : dex === 'nado' ? 'NADO'
     : 'AVANTIS';
   const chainName = dex === 'gmx' ? 'Arbitrum'
     : dex === 'monad' ? 'Monad'
     : dex === 'hyperliquid' ? 'EVM'
     : dex === 'risex' ? 'RISE'
+    : dex === 'nado' ? 'Ink'
     : 'Base';
   return (
     <div style={S.bodyStack}>
@@ -336,6 +339,7 @@ function RegisterPanel() {
                   dex === 'monad' ? 'Perpl' :
                   dex === 'hyperliquid' ? 'Hyperliquid' :
                   dex === 'risex' ? 'RISEx' :
+                  dex === 'nado' ? 'Nado' :
                   dex === 'phoenix' ? 'Phoenix' :
                   'Pacifica'
                 } as ${fcUser.username || fcUser.displayName}…`
@@ -355,7 +359,7 @@ function RegisterPanel() {
         );
       case 'manual_connect':
       default:
-        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex') {
+        if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
           return (
             <ConnectAvantis
               dex={dex}
@@ -403,6 +407,7 @@ function RegisterPanel() {
     if (dex === 'monad') return 'PERPL LOGIN';
     if (dex === 'hyperliquid') return 'HYPERLIQUID LOGIN';
     if (dex === 'risex') return 'RISEX LOGIN';
+    if (dex === 'nado') return 'NADO LOGIN';
     if (dex === 'phoenix') return 'PHOENIX LOGIN';
     return 'PACIFICA LOGIN';
   })();
@@ -421,7 +426,7 @@ function RegisterPanel() {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : 'base'}
         onConnected={handleEvmConnected}
       />
     </div>

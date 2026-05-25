@@ -6,6 +6,7 @@ import { base, arbitrum } from 'viem/chains';
 import { monadChain } from '../lib/monadConfig';
 import { hyperEvmChain } from '../lib/hyperevmConfig';
 import { riseChain } from '../lib/risexConfig';
+import { inkChain } from '../lib/nadoConfig';
 import { DEFAULT_SOLANA_RPC_URL, solanaWsUrl } from '../lib/solanaRpc';
 // Perpl (Monad mainnet) is too new to ship in viem/chains, so we define it
 // locally in monadConfig and import the same object both here (Privy's
@@ -125,7 +126,7 @@ export default function PrivyAuthProvider({ children }) {
         // ensureChain() before the signing popup. Adding arbitrum unblocks
         // them; defaultChain stays Base so Avantis sessions don't change UX.
         defaultChain: base,
-        supportedChains: [base, arbitrum, monadChain, hyperEvmChain, riseChain],
+        supportedChains: [base, arbitrum, monadChain, hyperEvmChain, riseChain, inkChain],
         externalWallets: {
           // Privy still reads dashboard wallet-login settings even though our
           // UI uses email-only auth. Passing Solana standard connectors keeps

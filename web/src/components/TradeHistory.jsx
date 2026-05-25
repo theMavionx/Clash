@@ -191,6 +191,36 @@ function normalizeRisexTrade(fill, markets) {
   };
 }
 
+function normalizeNadoTrade(fill, markets) {
+  const productId = Number(fill?.market_id ?? fill?.pair_index ?? fill?.productId ?? fill?.product_id);
+  const m = (markets || []).find(x => Number(x.market_id ?? x.pair_index) === productId)
+    || (markets || []).find(x => String(x.symbol || '').toUpperCase() === String(fill?.symbol || '').toUpperCase());
+  const symbol = String(fill?.symbol || fill?.market_symbol || m?.symbol || '').toUpperCase().replace(/-PERP$/u, '');
+  if (!symbol) return null;
+  const amount = Math.abs(Number(fill?.amount ?? fill?.size ?? fill?.base_size ?? 0));
+  const price = Number(fill?.price ?? fill?.fill_price ?? fill?.execution_price ?? 0);
+  const sideRaw = String(fill?.side || fill?.action || '').toLowerCase();
+  const side = sideRaw.includes('close_long') ? 'close_long'
+    : sideRaw.includes('close_short') ? 'close_short'
+    : sideRaw.includes('open_long') || sideRaw === 'long' || sideRaw === 'bid' || sideRaw === 'buy' ? 'open_long'
+    : sideRaw.includes('open_short') || sideRaw === 'short' || sideRaw === 'ask' || sideRaw === 'sell' ? 'open_short'
+    : 'open_long';
+  const ts = fill?.created_at ?? fill?.timestamp ?? fill?.time ?? fill?.createdAt;
+  return {
+    ...fill,
+    _dex: 'nado',
+    id: fill?.id || fill?.fill_id || fill?.trade_id || fill?.order_id || `${symbol}:${ts}:${price}:${amount}`,
+    symbol,
+    side,
+    action: side,
+    amount,
+    price,
+    fee: Math.abs(Number(fill?.fee ?? fill?.fee_amount ?? 0)),
+    created_at: ts,
+    realized_pnl_amount: fill?.realized_pnl ?? fill?.realizedPnl ?? fill?.closed_pnl ?? fill?.realized_pnl_amount,
+  };
+}
+
 function displayNumber(value, digits = 6) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -283,6 +313,21 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
           if (!cancelled) setTrades(rows.map(t => normalizeRisexTrade(t, markets)).filter(Boolean));
           return;
         }
+        if (dex === 'nado') {
+          const token = typeof window !== 'undefined' ? window._playerToken : null;
+          const r = await fetch(`/api/futures/nado/trade-history?dex=nado&account=${encodeURIComponent(addr)}&limit=100`, {
+            headers: {
+              ...(token ? { 'x-token': token } : {}),
+              'x-dex': 'nado',
+            },
+            signal: controller.signal,
+          });
+          if (!r.ok) throw new Error(`Nado history error ${r.status}`);
+          const d = await r.json();
+          const rows = Array.isArray(d?.data) ? d.data : Array.isArray(d) ? d : Array.isArray(d?.fills) ? d.fills : [];
+          if (!cancelled) setTrades(rows.map(t => normalizeNadoTrade(t, markets)).filter(Boolean));
+          return;
+        }
 
         const r = await fetch(`${PACIFICA_API}/trades/history?account=${addr}`, {
           signal: controller.signal,
@@ -340,12 +385,12 @@ function TradeHistory({ walletAddr, accountAddr, dex = 'pacifica', markets = [],
     return <div style={{ padding: 20, textAlign: 'center', color: '#B71C1C', fontWeight: 800 }}>{error}</div>;
   }
   if (!filtered.length) {
-    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : '';
+    const name = dex === 'decibel' ? 'Decibel ' : dex === 'monad' ? 'Perpl ' : dex === 'phoenix' ? 'Phoenix ' : dex === 'hyperliquid' ? 'Hyperliquid ' : dex === 'risex' ? 'RISEx ' : dex === 'nado' ? 'Nado ' : '';
     return <div style={{ padding: 20, textAlign: 'center', color: '#a3906a' }}>No {name}trade history</div>;
   }
 
   const isDecibel = dex === 'decibel';
-  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex';
+  const showPnl = dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado';
 
   return (
     <table style={S.table}>

@@ -25,6 +25,7 @@ const DEX_LABELS = {
   monad: 'Perpl',
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
+  nado: 'Nado',
 };
 
 function fmtUsd(n) {

@@ -606,9 +606,10 @@ async function fetchAllEarnings({ force = false } = {}) {
     phoenix:  { ...wrap('phoenix',  phx), source: 'phoenix_flight_collateral_transfers' },
     monad:    { ...wrap('monad',    mon), source: 'perpl_builder_fee_not_configured' },
     hyperliquid: { ...wrap('hyperliquid', hl), source: 'hyperliquid_referral_builder_rewards' },
+    nado: { ok: true, earned_usd: 0, volume_usd: 0, trades: 0, model: 'nado_builder_not_configured', source: 'nado_builder_not_configured' },
     last_updated: new Date(now).toISOString(),
   };
-  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid'].reduce(
+  out.total_usd = ['pacifica','decibel','avantis','gmx','phoenix','monad','hyperliquid','nado'].reduce(
     (s, k) => s + (out[k].ok && Number.isFinite(out[k].earned_usd) ? out[k].earned_usd : 0), 0,
   );
   _cache = out;

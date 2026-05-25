@@ -40,6 +40,7 @@ const DEMON_KING_CHAIN_BY_DEX = {
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
   risex: 'arbitrum',
+  nado: 'base',
   monad: 'monad',
   pacifica: 'solana',
   phoenix: 'solana',

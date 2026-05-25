@@ -11,6 +11,7 @@ import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
+import { useNado } from '../hooks/useNado';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useFuturesMode } from '../contexts/FuturesModeContext';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
@@ -43,6 +44,7 @@ function ProfileModal({ onClose }) {
   const phoenixHook = usePhoenix();
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
+  const nadoHook = useNado();
   const tradingHook = dex === 'avantis'
     ? avantisHook
     : dex === 'decibel'
@@ -57,6 +59,8 @@ function ProfileModal({ onClose }) {
     ? hyperliquidHook
     : dex === 'risex'
     ? risexHook
+    : dex === 'nado'
+    ? nadoHook
     : pacificaHook;
   const { account, walletAddr } = tradingHook;
   const [tradingStats, setTradingStats] = useState(null);
@@ -85,7 +89,7 @@ function ProfileModal({ onClose }) {
   // though the Avantis account is registered with an EVM wallet. Resolve
   // to the chain-correct address for the active DEX.
   const adapterAddr = (connected && publicKey) ? publicKey.toBase58() : null;
-  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex')
+  const liveWallet = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado')
     ? (walletAddr || null)            // EVM from useAvantis/useGmx/useMonad
     : dex === 'decibel'
     ? (walletAddr || null)            // Aptos from useDecibel
@@ -94,7 +98,7 @@ function ProfileModal({ onClose }) {
     : (adapterAddr || walletAddr || null); // Solana adapter / Privy
   const linkedWallet = player?.wallet || null;
   const activeWallet = liveWallet || linkedWallet;
-  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex')
+  const walletSource = (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado')
     ? (liveWallet ? 'evm' : null)
     : dex === 'decibel'
     ? (liveWallet ? 'aptos' : null)
@@ -494,6 +498,11 @@ function ProfileModal({ onClose }) {
               style={{...cartoonBtn('#04DF83', '#047857'), width: '100%', textAlign: 'center', padding: '14px'}}
               onClick={() => setEvmModalOpen(true)}
             >CONNECT RISE WALLET</button>
+          ) : dex === 'nado' ? (
+            <button
+              style={{...cartoonBtn('#00B8D9', '#075985'), width: '100%', textAlign: 'center', padding: '14px'}}
+              onClick={() => setEvmModalOpen(true)}
+            >CONNECT INK WALLET</button>
           ) : (
             <button
               style={{...cartoonBtn('#9945FF', '#7B36CC'), width: '100%', textAlign: 'center', padding: '14px'}}
@@ -510,7 +519,7 @@ function ProfileModal({ onClose }) {
                 <button
                   style={S.walletRepairBtn}
                   onClick={() => {
-                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex') setEvmModalOpen(true);
+                    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') setEvmModalOpen(true);
                     else if (dex === 'decibel') aptosConnect?.();
                     else openSolanaConnect();
                   }}
@@ -691,7 +700,7 @@ function ProfileModal({ onClose }) {
       <EvmWalletModal
         open={evmModalOpen}
         onClose={() => setEvmModalOpen(false)}
-        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : 'base'}
+        targetChain={dex === 'gmx' || dex === 'hyperliquid' ? 'arbitrum' : dex === 'monad' ? 'monad' : dex === 'risex' ? 'rise' : dex === 'nado' ? 'ink' : 'base'}
         onConnected={handleEvmConnected}
       />
     </>

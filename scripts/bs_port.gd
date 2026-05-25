@@ -164,6 +164,13 @@ func _load_troop_to_ship(troop_name: String, extra: Dictionary = {}) -> void:
 		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
+			var bridge_err: Node = bs._bridge
+			if bridge_err:
+				bridge_err.send_to_react("ship_updated", {
+					"ship_level": ship_level,
+					"ship_troops": port_node.get_meta("ship_troops", []),
+					"ship_capacity": ship_level * 3,
+				})
 			return
 		var new_troops: Array = result.get("ship_troops", [])
 		port_node.set_meta("ship_troops", new_troops)
@@ -206,6 +213,13 @@ func _swap_troop_on_ship(slot: int, troop_name: String, extra: Dictionary = {}) 
 		if not is_instance_valid(port_node): return
 		if result.has("error"):
 			bs._show_error(str(result.error))
+			var bridge_err: Node = bs._bridge
+			if bridge_err:
+				bridge_err.send_to_react("ship_updated", {
+					"ship_level": ship_level,
+					"ship_troops": port_node.get_meta("ship_troops", []),
+					"ship_capacity": ship_level * 3,
+				})
 			return
 		var new_troops: Array = result.get("ship_troops", [])
 		port_node.set_meta("ship_troops", new_troops)

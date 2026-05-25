@@ -17,6 +17,7 @@ import { ARBITRUM_CHAIN_ID, ARBITRUM_RPC_URLS, ensureArbitrumChain } from '../li
 import { MONAD_CHAIN_ID, MONAD_RPC_URLS, ensureMonadChain, monadChain } from '../lib/monadConfig';
 import { HYPEREVM_CHAIN_ID, HYPEREVM_RPC_URLS, ensureHyperEvmChain, hyperEvmChain } from '../lib/hyperevmConfig';
 import { RISE_CHAIN_ID, RISE_RPC_URLS, ensureRiseChain, riseChain } from '../lib/risexConfig';
+import { INK_CHAIN_ID, INK_RPC_URLS, ensureInkChain, inkChain } from '../lib/nadoConfig';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
 import { useOptionalPrivy } from '../components/PrivyAuthProvider';
 
@@ -91,6 +92,13 @@ const risePublicClient = createPublicClient({
     { rank: false, retryCount: 0 },
   ),
 });
+const inkPublicClient = createPublicClient({
+  chain: inkChain,
+  transport: fallback(
+    INK_RPC_URLS.map(u => http(u, { retryCount: 1, retryDelay: 250, timeout: 15_000 })),
+    { rank: false, retryCount: 0 },
+  ),
+});
 
 // chainId → viem chain object map. Centralized so adding the next EVM DEX is
 // a single-line edit instead of a hunt through the codebase.
@@ -101,6 +109,7 @@ const CHAIN_BY_ID = {
   [MONAD_CHAIN_ID]: monadChain,
   [HYPEREVM_CHAIN_ID]: hyperEvmChain,
   [RISE_CHAIN_ID]: riseChain,
+  [INK_CHAIN_ID]: inkChain,
 };
 
 const PUBLIC_CLIENT_BY_ID = {
@@ -110,6 +119,7 @@ const PUBLIC_CLIENT_BY_ID = {
   [MONAD_CHAIN_ID]: monadPublicClient,
   [HYPEREVM_CHAIN_ID]: hyperEvmPublicClient,
   [RISE_CHAIN_ID]: risePublicClient,
+  [INK_CHAIN_ID]: inkPublicClient,
 };
 
 const CHAIN_LABEL_BY_ID = {
@@ -119,6 +129,7 @@ const CHAIN_LABEL_BY_ID = {
   [MONAD_CHAIN_ID]: 'Monad',
   [HYPEREVM_CHAIN_ID]: 'HyperEVM',
   [RISE_CHAIN_ID]: 'RISE',
+  [INK_CHAIN_ID]: 'Ink',
 };
 
 function normalizeProviderChainId(value) {
@@ -461,6 +472,8 @@ export function EvmWalletProvider({ children }) {
       await ensureHyperEvmChain(provider);
     } else if (id === RISE_CHAIN_ID) {
       await ensureRiseChain(provider);
+    } else if (id === INK_CHAIN_ID) {
+      await ensureInkChain(provider);
     } else {
       await ensureBaseChain(provider);
     }

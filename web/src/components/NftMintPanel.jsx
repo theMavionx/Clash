@@ -150,6 +150,7 @@ const DEX_LABELS = {
   phoenix: 'Phoenix / Solana',
   monad: 'Perpl / Monad',
   hyperliquid: 'Hyperliquid / Arbitrum',
+  nado: 'Nado / Ink',
 };
 
 function shortAddress(address) {
@@ -229,6 +230,7 @@ const DEX_TO_NFT_CHAIN = {
   monad:    'monad',
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
+  nado:     'base',
 };
 // All five chains now have a direct NFT mint endpoint:
 //   - base    /nft/base/quote   (CoP / ETH / USDC)
@@ -343,6 +345,7 @@ const DEX_TO_SHOP_CHAIN = {
   monad:    'monad',
   decibel:  'aptos',
   hyperliquid: 'arbitrum',
+  nado:     'base',
 };
 
 function shopChainForDex(dex) {

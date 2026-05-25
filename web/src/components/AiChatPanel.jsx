@@ -658,6 +658,7 @@ const DEX_TO_AI_SHOP_CHAIN = {
   phoenix: 'solana',
   gmx: 'arbitrum',
   hyperliquid: 'arbitrum',
+  nado: 'base',
   monad: 'monad',
   decibel: 'aptos',
 };

@@ -11,6 +11,7 @@ const phoenixRewards = require('./phoenix-rewards-worker');
 const hyperliquid = require('./hyperliquid');
 const hyperliquidRewards = require('./hyperliquid-rewards-worker');
 const risex = require('./risex');
+const nado = require('./nado');
 const { createPublicClient, decodeFunctionData, formatUnits, http } = require('viem');
 const { base } = require('viem/chains');
 
@@ -232,6 +233,22 @@ async function fetchPythHistory(query) {
 
 const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
 const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
+const DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS = 35;
+const DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS = 5;
+const DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW = Number(
+  process.env.DECIBEL_TPSL_LIMIT_BUFFER_BPS || DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS
+);
+const DECIBEL_TPSL_LIMIT_BUFFER_BPS = Number.isFinite(DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW)
+  && DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW > 0
+  ? DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW
+  : DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS;
+const DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW = Number(
+  process.env.DECIBEL_TPSL_MIN_LIMIT_TICKS || DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS
+);
+const DECIBEL_TPSL_MIN_LIMIT_TICKS = Number.isFinite(DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW)
+  && DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW > 0
+  ? DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW
+  : DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS;
 // 5 bps = 0.05%. Must match web/src/lib/decibel.js BUILDER_FEE_BPS — the
 // signed order's builderFee field is validated against this exact value
 // (see assertBuilderFeeAllowed below). Env override allowed for staging.
@@ -425,7 +442,7 @@ function auth(req, res, next) {
   // Trust the SERVER-stored dex, not whatever the client asks for. The client
   // header/query is still useful as a best-effort sanity check: if it explicitly
   // asks for the wrong dex, reject so the UI can prompt the user to /set-dex.
-  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
+  const SUPPORTED_DEXES = new Set(['avantis', 'pacifica', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
   const storedDex = SUPPORTED_DEXES.has(player.dex) ? player.dex : 'pacifica';
   const askedDex = (req.query.dex || req.headers['x-dex'] || storedDex).toLowerCase();
   const normalizedAsked = SUPPORTED_DEXES.has(askedDex) ? askedDex : 'pacifica';
@@ -445,7 +462,7 @@ function auth(req, res, next) {
 // Get or create custodial wallet for player
 router.post('/wallet', auth, (req, res) => {
   try {
-    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex') {
+    if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
       return res.status(410).json({
         error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
       });
@@ -475,7 +492,7 @@ router.post('/wallet', auth, (req, res) => {
 
 // Get wallet info (public key only — never expose secret)
 router.get('/wallet', auth, (req, res) => {
-  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex') {
+  if (req.dex === 'avantis' || req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'phoenix' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
     return res.status(410).json({
       error: `${req.dex} is self-custody. Connect the chain wallet in the client instead.`,
     });
@@ -524,6 +541,14 @@ router.get('/account', async (req, res) => {
         return res.status(400).json({ error: 'address query param required (0x...)' });
       }
       const info = await risex.getAccountByAddress(address);
+      return res.json(info);
+    }
+    if (dex === 'nado') {
+      const address = String(req.query.address || '').trim();
+      if (!nado.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required (0x...)' });
+      }
+      const info = await nado.getAccountByAddress(address);
       return res.json(info);
     }
     // Pacifica (custodial) — keep legacy auth-gated flow.
@@ -602,6 +627,62 @@ function requireDecibelBuilderFee(req, res) {
   return { builderAddr, builderFee: DECIBEL_BUILDER_FEE_BPS };
 }
 
+function decibelRoundToTick(price, tickSize) {
+  const p = Number(price);
+  const t = Number(tickSize);
+  if (!Number.isFinite(p)) return p;
+  if (!Number.isFinite(t) || t <= 0) return Math.max(1, Math.round(p));
+  if (Number.isSafeInteger(p) && Number.isSafeInteger(t)) {
+    return Math.max(t, Number((BigInt(p) / BigInt(t)) * BigInt(t)));
+  }
+  return Math.max(t, Math.floor(p / t) * t);
+}
+
+function decibelBufferedTpslLimit(triggerPrice, tickSize, isLong) {
+  const tick = Math.max(1, Number(tickSize) || 1);
+  const trigger = decibelRoundToTick(triggerPrice, tick);
+  const pctBuffer = Math.ceil(trigger * DECIBEL_TPSL_LIMIT_BUFFER_BPS / 10000);
+  const minBuffer = tick * DECIBEL_TPSL_MIN_LIMIT_TICKS;
+  const buffer = Math.max(minBuffer, pctBuffer);
+  return decibelRoundToTick(isLong ? trigger - buffer : trigger + buffer, tick);
+}
+
+function decibelSameAddress(a, b) {
+  const aa = normalizeAptosAddress(a);
+  const bb = normalizeAptosAddress(b);
+  return aa && bb && aa === bb;
+}
+
+async function sanitizeDecibelTpslBody(body, subaccountAddr) {
+  const next = { ...(body || {}) };
+  const marketAddr = next.marketAddr || next.market_addr;
+  if (!marketAddr) return next;
+  let positions = [];
+  try {
+    positions = await decibel.fetchAccountPositions(subaccountAddr);
+  } catch {
+    return next;
+  }
+  const position = positions.find(p => decibelSameAddress(p?.market || p?.market_addr, marketAddr));
+  const size = Number(position?.size);
+  if (!position || !Number.isFinite(size) || size === 0) return next;
+  const isLong = size > 0;
+  const tickSize = next.tickSize ?? next.tick_size ?? 1;
+  if (next.tpTriggerPrice != null) {
+    const trigger = Number(next.tpTriggerPrice);
+    if (Number.isFinite(trigger)) {
+      next.tpLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong);
+    }
+  }
+  if (next.slTriggerPrice != null) {
+    const trigger = Number(next.slTriggerPrice);
+    if (Number.isFinite(trigger)) {
+      next.slLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong);
+    }
+  }
+  return next;
+}
+
 // ==================== DECIBEL SERVER-SIDE SIGNER ====================
 
 router.get('/decibel/signer', auth, async (req, res) => {
@@ -668,21 +749,19 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
     const side = orderPayload.isReduceOnly
       ? (orderPayload.isBuy ? 'short' : 'long')
       : (orderPayload.isBuy ? 'long' : 'short');
-    const verification = orderPayload.isReduceOnly
-      ? { verified: true, effect: 'reduce_only_tx_confirmed' }
-      : await decibel.waitForPlacedOrderEffect({
-        subaccountAddr: verified.subaccount,
-        marketName: orderPayload.marketName,
-        marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
-        symbol: orderPayload.symbol,
-        side,
-        clientOrderId: orderPayload.clientOrderId,
-        orderType,
-        reduceOnly: false,
-        txResult: result,
-        attempts: 6,
-        delayMs: 900,
-      });
+    const verification = await decibel.waitForPlacedOrderEffect({
+      subaccountAddr: verified.subaccount,
+      marketName: orderPayload.marketName,
+      marketAddr: orderPayload.marketAddr || orderPayload.market_addr,
+      symbol: orderPayload.symbol,
+      side,
+      clientOrderId: orderPayload.clientOrderId,
+      orderType,
+      reduceOnly: !!orderPayload.isReduceOnly,
+      txResult: result,
+      attempts: 6,
+      delayMs: 900,
+    });
     if (!verification.verified) {
       return res.status(409).json({
         success: false,
@@ -762,7 +841,7 @@ router.post('/decibel/tpsl', auth, async (req, res) => {
   try {
     const verified = await requireDecibelOwnerAndSubaccount(req, res);
     if (!verified) return;
-    const body = req.body || {};
+    const body = await sanitizeDecibelTpslBody(req.body || {}, verified.subaccount);
     const hasTp = body.tpTriggerPrice != null || body.tpLimitPrice != null || body.tpSize != null;
     const hasSl = body.slTriggerPrice != null || body.slLimitPrice != null || body.slSize != null;
     const tpOrderId = body.tpOrderId || body.tp_order_id;
@@ -857,6 +936,7 @@ router.get('/markets', async (req, res) => {
       : dex === 'gmx' ? await gmx.getMarketInfo()
       : dex === 'hyperliquid' ? await hyperliquid.getMarketInfo()
       : dex === 'risex' ? await risex.getMarketInfo()
+      : dex === 'nado' ? await nado.getMarketInfo()
       : await pacifica.getMarketInfo();
     res.json(info);
   } catch (e) {
@@ -871,6 +951,7 @@ router.get('/prices', async (req, res) => {
       : dex === 'gmx' ? await gmx.getPrices()
       : dex === 'hyperliquid' ? await hyperliquid.getPrices()
       : dex === 'risex' ? await risex.getPrices()
+      : dex === 'nado' ? await nado.getPrices()
       : await pacifica.getPrices();
     res.json(prices);
   } catch (e) {
@@ -1013,6 +1094,14 @@ router.get('/positions', async (req, res) => {
       const positions = await risex.getPositionsByAddress(address);
       return res.json(positions);
     }
+    if (dex === 'nado') {
+      const address = String(req.query.address || '').trim();
+      if (!nado.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const positions = await nado.getPositionsByAddress(address);
+      return res.json(positions);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1062,6 +1151,14 @@ router.get('/orders', async (req, res) => {
       const orders = await risex.getOrdersByAddress(address);
       return res.json(orders);
     }
+    if (dex === 'nado') {
+      const address = String(req.query.address || '').trim();
+      if (!nado.isEvmAddress(address)) {
+        return res.status(400).json({ error: 'address query param required' });
+      }
+      const orders = await nado.getOrdersByAddress(address);
+      return res.json(orders);
+    }
     return authGate(req, res, async () => {
       const wallet = db.getWallet(req.playerId, 'pacifica');
       if (!wallet) return res.status(404).json({ error: 'No wallet' });
@@ -1076,7 +1173,7 @@ router.get('/orders', async (req, res) => {
 
 // Reject self-custody writes on legacy Pacifica server endpoints. These
 // venues sign in the browser or use their dedicated route groups.
-const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
+const CLIENT_SIGNED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
 
 function avantisMigratedGuard(req, res, next) {
   if (CLIENT_SIGNED_DEXES.has(req.dex)) {
@@ -2113,6 +2210,61 @@ router.get('/risex/trade-history', auth, async (req, res) => {
   }
 });
 
+function requireNadoOwner(req, res) {
+  if (req.dex !== 'nado') {
+    res.status(409).json({
+      error: `Account is registered for '${req.dex}'. Switch DEX to nado before calling Nado endpoints.`,
+      stored_dex: req.dex,
+      requested_dex: 'nado',
+    });
+    return null;
+  }
+  const account = nado.normalizeAddress(req.body?.account || req.query?.account || req.playerWallet);
+  const playerWallet = nado.normalizeAddress(req.playerWallet);
+  if (!account) {
+    res.status(400).json({ error: 'account required (0x...)' });
+    return null;
+  }
+  if (playerWallet && account !== playerWallet) {
+    res.status(403).json({ error: 'account must match the wallet registered to this game account' });
+    return null;
+  }
+  return { account };
+}
+
+router.post('/nado/import-fills', auth, async (req, res) => {
+  try {
+    const verified = requireNadoOwner(req, res);
+    if (!verified) return;
+    const result = await nado.importFillsForPlayer(req.playerId, verified.account, {
+      attempts: req.body?.attempts,
+      delayMs: req.body?.delay_ms,
+      limit: req.body?.limit,
+    });
+    if (result.imported > 0) {
+      console.log(`[nado] imported ${result.imported} fill(s) for player=${req.playerName} wallet=${verified.account.slice(0, 10)}...`);
+    }
+    res.json(result);
+  } catch (e) {
+    console.warn('[nado] import-fills failed:', e.message);
+    res.status(502).json({ error: 'Failed to import Nado fills', detail: e.message });
+  }
+});
+
+router.get('/nado/trade-history', auth, async (req, res) => {
+  try {
+    const verified = requireNadoOwner(req, res);
+    if (!verified) return;
+    const rows = await nado.getAccountTradeHistory(verified.account, {
+      limit: req.query?.limit,
+    });
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (e) {
+    console.warn('[nado] trade-history failed:', e.message);
+    res.status(502).json({ error: 'Failed to load Nado trade history', detail: e.message });
+  }
+});
+
 router.post('/trade-report', auth, async (req, res) => {
   try {
     if (!TRADE_REPORT_DEXES.has(req.dex)) {
@@ -2199,7 +2351,7 @@ router.get('/deposits', auth, (req, res) => {
 // Get USDC & native balance on custodial wallet
 const balanceCache = new Map();
 router.get('/balance', auth, async (req, res) => {
-  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex') {
+  if (req.dex === 'gmx' || req.dex === 'monad' || req.dex === 'hyperliquid' || req.dex === 'risex' || req.dex === 'nado') {
     return res.status(410).json({ error: `${req.dex} balances are read directly by the client wallet.` });
   }
   const wallet = db.getWallet(req.playerId, req.dex);

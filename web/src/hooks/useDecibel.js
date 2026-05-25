@@ -247,13 +247,18 @@ function roundPriceUnitsToTick(priceUnits, market) {
   if (!Number.isFinite(t) || t <= 0) return Math.max(1, Math.round(p));
   return Math.max(1, Math.floor(p / t) * t);
 }
-function tpslLimitPriceUnits(triggerUnits, market, isLong, kind) {
+const DECIBEL_TPSL_LIMIT_BUFFER_BPS = 35;
+const DECIBEL_TPSL_MIN_LIMIT_TICKS = 5;
+function tpslLimitPriceUnits(triggerUnits, market, isLong) {
   const tick = Math.max(1, Number(tickSizeChainUnits(market)) || 1);
   const trigger = roundPriceUnitsToTick(triggerUnits, market);
-  const dir = kind === 'tp'
-    ? (isLong ? 1 : -1)
-    : (isLong ? -1 : 1);
-  return Math.max(tick, trigger + dir * tick);
+  const pctBuffer = Math.ceil(trigger * DECIBEL_TPSL_LIMIT_BUFFER_BPS / 10000);
+  const minBuffer = tick * DECIBEL_TPSL_MIN_LIMIT_TICKS;
+  const buffer = Math.max(minBuffer, pctBuffer);
+  // Close-long orders sell, so their limit must be below the trigger. Close-short
+  // orders buy, so their limit must be above the trigger. This keeps triggered
+  // TP/SL orders fillable instead of leaving a stale reduce-only limit behind.
+  return Math.max(tick, roundPriceUnitsToTick(isLong ? trigger - buffer : trigger + buffer, market));
 }
 function sizeToChainUnits(human, market) {
   const d = Number(market?.sz_decimals ?? market?.szDecimals ?? 6);
@@ -449,7 +454,7 @@ function normalizeOrder(o, markets) {
   const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? 0;
   const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
   const kind = tpslKindFromOrder({ ...o, order_type: type });
-  const triggerPrice = tpslPriceFromOrder(o);
+  const triggerPrice = kind ? tpslPriceFromOrder(o) : null;
   const price = positiveNumberOrNull(o.price)
     ?? normalizeMaybeChainPrice(o.limit_price ?? o.limitPrice, m)
     ?? triggerPrice
@@ -464,6 +469,7 @@ function normalizeOrder(o, markets) {
     stop_price: triggerPrice == null ? '' : String(triggerPrice),
     leverage: String(o.leverage ?? 1),
     order_type: type,
+    reduce_only: !!(o.reduce_only ?? o.reduceOnly ?? o.is_reduce_only),
     is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,
     trigger_condition: o.trigger_condition ?? o.triggerCondition ?? '',
     order_direction: o.order_direction ?? o.orderDirection ?? '',
@@ -1953,12 +1959,12 @@ export function useDecibel() {
         slOrderId: position?.sl_order_id || undefined,
         ...(tp > 0 ? {
           tpTriggerPrice: tpTrigger,
-          tpLimitPrice: tpslLimitPriceUnits(tpTrigger, market, isLong, 'tp'),
+          tpLimitPrice: tpslLimitPriceUnits(tpTrigger, market, isLong),
           tpSize: sizeStr,
         } : {}),
         ...(sl > 0 ? {
           slTriggerPrice: slTrigger,
-          slLimitPrice: tpslLimitPriceUnits(slTrigger, market, isLong, 'sl'),
+          slLimitPrice: tpslLimitPriceUnits(slTrigger, market, isLong),
           slSize: sizeStr,
         } : {}),
         tickSize: tickSizeChainUnits(market),

@@ -232,7 +232,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
   // Reset optimistic troops when server data arrives. Compare full content
   // (not just length) so swaps also trigger a reset — otherwise a failed swap
   // leaves optimistic state visible forever.
-  const serverTroopsKey = (building?.id || '') + ':' + (building?.ship_troops ? building.ship_troops.join('|') : '');
+  const serverTroopsKey = `${building?.server_id ?? building?.id ?? ''}:${building?.ship_troops ? building.ship_troops.join('|') : ''}:${building?.ship_update_nonce || 0}`;
   useEffect(() => {
     setLocalTroops(null);
   }, [serverTroopsKey]);
@@ -567,7 +567,26 @@ function BuildingInfoPanel({ onOpenTroops }) {
       return troopLvls[base] || troopLvls[base.toLowerCase()] || troopLvls[name] || troopLvls[String(name || '').toLowerCase()] || 1;
     };
     const allTroops = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
-    const loadedDemonEntries = new Set(shipTroops.map(demonKingEntryTokenKey).filter(Boolean));
+    const selectedSpan = swapSlot !== null ? troopUnitSpanAt(shipTroops, swapSlot) : null;
+    const demonKeysFromTroops = (troops, skipSpan = null) => {
+      const keys = [];
+      (Array.isArray(troops) ? troops : []).forEach((entry, index) => {
+        if (skipSpan && index >= skipSpan.start && index < skipSpan.end) return;
+        const key = demonKingEntryTokenKey(entry);
+        if (key) keys.push(key);
+      });
+      return keys;
+    };
+    const currentShipId = building.server_id ?? building.id;
+    const fleetShipTroops = Array.isArray(building.fleet_ship_troops) ? building.fleet_ship_troops : [];
+    const loadedDemonEntries = new Set([
+      ...demonKeysFromTroops(shipTroops, selectedSpan),
+      ...fleetShipTroops.flatMap((ship) => {
+        const shipId = ship?.server_id ?? ship?.id;
+        if (String(shipId) === String(currentShipId)) return [];
+        return demonKeysFromTroops(ship?.ship_troops);
+      }),
+    ]);
     const availableDemonNfts = demonKingNfts.filter((token) => !loadedDemonEntries.has(demonKingTokenKey(token)));
     const demonKingOwnerForEntry = (entry) => {
       const key = demonKingEntryTokenKey(entry);

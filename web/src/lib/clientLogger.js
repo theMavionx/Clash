@@ -260,7 +260,7 @@ function classifyActionStatus(type, level) {
   if (/(?:^|[._-])(submitted|sent|pending)$/.test(t)) return 'submitted';
   if (/(?:^|[._-])(success|succeeded|confirmed|complete|completed|done|ready|landed)$/.test(t)) return 'succeeded';
   if (/(?:^|[._-])(failed|fail|error|timeout|rejected|denied|expired_without_status)$/.test(t)) return 'failed';
-  if (level === 'error' && /(wallet|auth|nft|shop|bridge|order|trade|solana|phoenix|decibel|risex|hyperliquid|agent)/i.test(t)) return 'failed';
+  if (level === 'error' && /(wallet|auth|nft|shop|bridge|order|trade|solana|phoenix|decibel|risex|nado|hyperliquid|agent)/i.test(t)) return 'failed';
   return null;
 }
 

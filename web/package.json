@@ -28,6 +28,8 @@
     "@metaplex-foundation/umi-bundle-defaults": "^1.5.1",
     "@metaplex-foundation/umi-signer-wallet-adapters": "^1.5.1",
     "@metaplex-foundation/umi-web3js-adapters": "^1.5.1",
+    "@nadohq/client": "0.15.0",
+    "@nadohq/shared": "0.15.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "@onsol/tldparser": "^1.2.1",
     "@privy-io/react-auth": "^3.21.2",
@@ -43,6 +45,7 @@
     "@solana/web3.js": "^1.98.4",
     "@telegram-apps/bridge": "^2.11.0",
     "@wallet-standard/core": "^1.1.1",
+    "bignumber.js": "10.0.2",
     "bs58": "^6.0.0",
     "buffer": "^6.0.3",
     "canvas-confetti": "^1.9.4",
@@ -51,6 +54,7 @@
     "lightweight-charts": "^5.1.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "viem": "2.45.3",
     "zod": "^3.25.62"
   },
   "devDependencies": {

@@ -206,7 +206,11 @@ export function GodotProvider({ children }) {
           setSelectedBuilding(data);
           break;
         case 'ship_updated':
-          setSelectedBuilding(prev => prev ? { ...prev, ...data } : prev);
+          setSelectedBuilding(prev => prev ? {
+            ...prev,
+            ...data,
+            ship_update_nonce: (Number(prev.ship_update_nonce) || 0) + 1,
+          } : prev);
           break;
         case 'building_deselected':
           setSelectedBuilding(null);

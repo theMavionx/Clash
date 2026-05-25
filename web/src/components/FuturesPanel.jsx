@@ -11,6 +11,7 @@ import { useMonad } from '../hooks/useMonad';
 import { usePhoenix } from '../hooks/usePhoenix';
 import { useHyperliquid } from '../hooks/useHyperliquid';
 import { useRisex } from '../hooks/useRisex';
+import { useNado } from '../hooks/useNado';
 import { RISEX_BRIDGE_CHAINS } from '../lib/risexConfig';
 import { useDex, DEX_CONFIG } from '../contexts/DexContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -1179,6 +1180,8 @@ function FuturesPanel() {
     ? 'monad'
     : dex === 'risex'
     ? 'rise'
+    : dex === 'nado'
+    ? 'ink'
     : 'base';
   const { enabled: privyEnabled, ready: privyReady, authenticated: privyAuthed, login: privyLogin } = useOptionalPrivy();
   // Per-account UI mode (basic/pro). NULL until the user picks on first
@@ -1206,6 +1209,7 @@ function FuturesPanel() {
   const phoenixHook = usePhoenix();
   const hyperliquidHook = useHyperliquid();
   const risexHook = useRisex();
+  const nadoHook = useNado();
   // Aptos wallet handle — used for the "Connect Petra" CTA on the Decibel
   // pre-connect screen. Lives outside the trading hooks because the
   // wallet context is shared with future Aptos-using features.
@@ -1224,6 +1228,8 @@ function FuturesPanel() {
     ? hyperliquidHook
     : dex === 'risex'
     ? risexHook
+    : dex === 'nado'
+    ? nadoHook
     : pacificaHook;
   const {
     walletAddr, account, positions, orders, prices, markets, walletUsdc, leverageSettings, marginModes, dataReady, accountReady,
@@ -1231,7 +1237,7 @@ function FuturesPanel() {
     loading, error, clearError, goldEarned, clearGoldEarned, depositStatus, walletUsdcStatus,
     bridgeSourceBalances, bridgeSourceBalanceStatus,
     placeMarketOrder, placeLimitOrder, cancelOrder, setLeverage: setLeverageApi,
-    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp, switchToRise,
+    closePosition, depositToPacifica, withdraw, activate, setTpsl, setMarginMode, moveSpotToPerp, switchToRise, switchToInk,
     // Avantis-only — undefined on the Pacifica branch.
     hasReferrer, linkOurReferrer, oneTapTrading, setOneTapTradingEnabled, connectPerpl, walletMismatch, registeredEvmWallet,
     // Pacifica agent-wallet — undefined on Avantis (Pacifica-only feature)
@@ -1385,7 +1391,7 @@ function FuturesPanel() {
     // under a wallet they only ever used to peek at the orderbook.
     // The legitimate use case (connecting an Avantis wallet from the
     // FuturesPanel) is still allowed: dex === 'avantis'.
-    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex') {
+    if (dex !== 'avantis' && dex !== 'gmx' && dex !== 'monad' && dex !== 'hyperliquid' && dex !== 'risex' && dex !== 'nado') {
       console.warn('[futures] Ignoring EVM connect: active DEX is', dex);
       return;
     }
@@ -1775,7 +1781,7 @@ function FuturesPanel() {
     setLeverage(v);
     // Avantis + GMX take leverage per-trade (passed in placeOrder call),
     // so no leverage tx ever runs from the slider. Skip cleanly.
-    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') return;
+    if (dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') return;
     // Pacifica leverage updates should use the agent key. If the user has
     // not enabled it yet, keep this UI-only and flush after auto-bind on
     // trade submit.
@@ -1815,7 +1821,7 @@ function FuturesPanel() {
       // Guard against missing/NaN currentPrice (feed blip).
       const markPrice = parseFloat(currentPrice);
       const tradePrice = parseFloat(orderSizingPrice || currentPrice);
-      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex';
+      const isCollateralDex = dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado';
       let qty;
       if (isCollateralDex) {
         if (!Number.isFinite(positionUsdc) || positionUsdc <= 0) {
@@ -2025,7 +2031,7 @@ function FuturesPanel() {
           </>
         )}
         <div style={{marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: (isMobile || !fullscreen) ? 4 : 8, flexShrink: 0}}>
-          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' ? (
+          {dex === 'avantis' || dex === 'gmx' || dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado' ? (
             // Read-only badge for venues where the production margin mode is
             // not user-toggleable in our integration.
             <div
@@ -2042,10 +2048,12 @@ function FuturesPanel() {
                 ? 'Hyperliquid uses cross margin in your Hyperliquid account'
                 : dex === 'risex'
                 ? 'RISEx uses cross margin in your RISE account'
+                : dex === 'nado'
+                ? 'Nado uses cross margin in your Ink account'
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
-              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? 'Cross' : 'Isolated'}
+              <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
+                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (
@@ -2364,7 +2372,7 @@ function FuturesPanel() {
   }
 
   // ==================== WRONG SELF-CUSTODY WALLET ====================
-  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') && walletMismatch) {
+  if ((dex === 'avantis' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') && walletMismatch) {
     return (
       <>
         <style>{animCSS}</style>
@@ -2389,7 +2397,7 @@ function FuturesPanel() {
               boxShadow: '0 5px 0 #B45309, 0 8px 16px rgba(0,0,0,0.25)',
             }}>!</div>
             <div style={{color: '#5C3A21', fontSize: 18, fontWeight: 900}}>
-              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
+              Wrong {dex === 'gmx' || dex === 'hyperliquid' ? 'Arbitrum' : dex === 'monad' ? 'Monad' : dex === 'risex' ? 'RISE' : dex === 'nado' ? 'Ink' : dex === 'phoenix' ? 'Solana' : 'Base'} wallet
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 340, lineHeight: 1.45}}>
               This game account is linked to {registeredEvmWallet?.slice(0, 6)}...{registeredEvmWallet?.slice(-4)}, but the connected wallet is {walletAddr?.slice(0, 6)}...{walletAddr?.slice(-4)}.
@@ -2691,6 +2699,48 @@ function FuturesPanel() {
                   letterSpacing: '0.5px', marginTop: 4,
                 }}>
                   <span>RISEX - RISE MAINNET</span>
+                </div>
+              </>
+            ) : dex === 'nado' ? (
+              <>
+                <div style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  background: 'linear-gradient(180deg, #00B8D9 0%, #075985 100%)',
+                  border: '4px solid #0891B2',
+                  boxShadow: '0 5px 0 #075985, 0 8px 16px rgba(0,0,0,0.25)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  filter: 'drop-shadow(0 2px 0 rgba(0,0,0,0.35))',
+                }}>
+                  <img src={DEX_CONFIG.nado.logo} alt="" style={{width: 48, height: 48, objectFit: 'contain'}} />
+                </div>
+                <div style={{
+                  color: '#5C3A21', fontSize: 18, fontWeight: 900,
+                  textAlign: 'center', letterSpacing: '0.5px',
+                }}>Connect your Ink wallet</div>
+                <div style={{
+                  color: '#8a7252', fontSize: 12, fontWeight: 600,
+                  textAlign: 'center', maxWidth: 280, lineHeight: 1.4,
+                }}>
+                  Nado trades are signed by your EVM wallet on Ink. You need USDt0 collateral and a little ETH on Ink for gas.
+                </div>
+                {renderPrivyEmailButton('#00B8D9', '#075985')}
+                <button
+                  style={{...cartoonBtn(privyEnabled ? '#8A7252' : '#00B8D9', privyEnabled ? '#6B573E' : '#075985'), padding: '14px 32px', display: 'flex', alignItems: 'center', gap: 10}}
+                  onClick={() => setEvmModalOpen(true)}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="2" y="6" width="20" height="14" rx="3"/>
+                    <path d="M16 14h.01"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <span>CONNECT INK WALLET</span>
+                </button>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#075985', fontSize: 11, fontWeight: 800,
+                  letterSpacing: '0.5px', marginTop: 4,
+                }}>
+                  <span>NADO - INK MAINNET</span>
                 </div>
               </>
             ) : dex === 'phoenix' ? (
@@ -4269,6 +4319,36 @@ function FuturesPanel() {
       if (res?.error) setLocalAlert(res.error);
       else setLocalAlert('Wallet switched to RISE. Balance is refreshing.');
     };
+    const nadoWalletState = dex === 'nado'
+      ? (walletUsdcStatus?.status || (walletUsdc == null ? 'checking' : 'ready'))
+      : null;
+    const nadoWalletBusy = nadoWalletState === 'checking' || nadoWalletState === 'switching';
+    const nadoWalletError = nadoWalletState === 'wrong_chain' || nadoWalletState === 'error';
+    const nadoWalletMessage = dex === 'nado' ? walletUsdcStatus?.message : null;
+    const nadoWalletValue = (() => {
+      if (dex !== 'nado') return walletUsdc !== null ? `$${walletUsdc.toFixed(2)}` : '$--';
+      if (walletUsdc !== null && !nadoWalletError) return `$${walletUsdc.toFixed(2)}`;
+      if (nadoWalletState === 'wrong_chain') return 'Switch to Ink';
+      if (nadoWalletState === 'error') return 'Unavailable';
+      return nadoWalletState === 'switching' ? 'Switching...' : 'Checking...';
+    })();
+    const nadoWalletValueColor = nadoWalletError ? '#B91C1C' : '#5C3A21';
+    const handleSwitchToInk = async () => {
+      const fn = switchToInk || activate;
+      if (!fn) return;
+      const res = await fn();
+      if (res?.error) setLocalAlert(res.error);
+      else setLocalAlert('Wallet switched to Ink. Balance is refreshing.');
+    };
+    const walletBalanceLabel = dex === 'hyperliquid'
+      ? 'Arbitrum Wallet USDC'
+      : dex === 'risex'
+      ? 'RISE Wallet USDC'
+      : dex === 'nado'
+      ? 'Ink Wallet USDt0'
+      : 'Wallet USDC';
+    const walletBalanceValue = dex === 'risex' ? risexWalletValue : dex === 'nado' ? nadoWalletValue : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`;
+    const walletBalanceColor = dex === 'risex' ? risexWalletValueColor : dex === 'nado' ? nadoWalletValueColor : '#5C3A21';
 
     return (
       <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
@@ -4315,10 +4395,10 @@ function FuturesPanel() {
         {/* Wallet USDC */}
         <div style={S.fullCard}>
           <div style={S.row}>
-            <span style={S.label}>{dex === 'hyperliquid' ? 'Arbitrum Wallet USDC' : dex === 'risex' ? 'RISE Wallet USDC' : 'Wallet USDC'}</span>
+            <span style={S.label}>{walletBalanceLabel}</span>
             <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
-              <span style={{fontSize: 18, fontWeight: 900, color: dex === 'risex' ? risexWalletValueColor : '#5C3A21'}}>
-                {dex === 'risex' ? risexWalletValue : `$${walletUsdc !== null ? walletUsdc.toFixed(2) : '--'}`}
+              <span style={{fontSize: 18, fontWeight: 900, color: walletBalanceColor}}>
+                {walletBalanceValue}
               </span>
               {dex === 'risex' && (risexWalletNeedsSwitch || risexWalletError) && (
                 <button
@@ -4339,11 +4419,35 @@ function FuturesPanel() {
                   {risexWalletState === 'switching' ? 'Switching...' : 'Switch'}
                 </button>
               )}
+              {dex === 'nado' && nadoWalletError && (
+                <button
+                  type="button"
+                  onClick={handleSwitchToInk}
+                  disabled={nadoWalletBusy || loading}
+                  style={{
+                    ...S.btnSmall,
+                    padding: '5px 9px',
+                    fontSize: 10,
+                    background: '#0891B2',
+                    color: '#fff',
+                    border: '2px solid #075985',
+                    opacity: (nadoWalletBusy || loading) ? 0.65 : 1,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {nadoWalletState === 'switching' ? 'Switching...' : 'Switch'}
+                </button>
+              )}
             </div>
           </div>
           {dex === 'risex' && risexWalletMessage && (
             <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: risexWalletNeedsSwitch ? '#B45309' : '#B91C1C', fontWeight: 800}}>
               {risexWalletMessage}
+            </div>
+          )}
+          {dex === 'nado' && nadoWalletMessage && (
+            <div style={{marginTop: 6, fontSize: 10, lineHeight: 1.35, color: nadoWalletError ? '#B91C1C' : '#075985', fontWeight: 800}}>
+              {nadoWalletMessage}
             </div>
           )}
         </div>
@@ -4541,14 +4645,14 @@ function FuturesPanel() {
         })() : (
           <div style={S.fullCard}>
             <div style={S.row}>
-              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : 'Deposit USDC'}</span>
+              <span style={{...S.label, color: '#4CAF50'}}>{dex === 'monad' ? 'Deposit AUSD' : dex === 'nado' ? 'Deposit USDt0' : 'Deposit USDC'}</span>
               {dex === 'risex'
                 ? (
                   <span style={{...S.detail, color: '#15803D'}}>
                     {risexDepositSource?.name || 'Arbitrum'} USDC: {risexSourceBalanceText}
                   </span>
                 )
-                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : 'USDC'}</span>}
+                : walletUsdc !== null && <span style={S.detail}>Wallet: ${walletUsdc.toFixed(2)} {dex === 'monad' ? 'AUSD' : dex === 'nado' ? 'USDt0' : 'USDC'}</span>}
             </div>
             <div style={{display: 'flex', gap: 6, alignItems: 'stretch'}}>
               {dex === 'risex' && (
@@ -4574,7 +4678,7 @@ function FuturesPanel() {
                   do not have this fixed UI floor here (per-market minSize
                   matters for trading; deposits are free-form). */}
               <input type="number"
-                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
+                placeholder={dex === 'monad' ? 'Amount (AUSD)' : dex === 'pacifica' ? 'Min 10 USDC' : dex === 'nado' ? 'Amount (USDt0)' : dex === 'risex' ? 'Amount (USDC)' : 'Amount (USDC)'}
                 value={depositAmt} onChange={e => setDepositAmt(e.target.value)}
                 style={{...S.input, flex: 3, minWidth: 0, padding: '8px 10px', fontSize: 13}} />
               <button style={{...S.depositBtn, flex: 1, whiteSpace: 'nowrap', padding: '8px 4px'}} onClick={async () => {
@@ -4594,6 +4698,10 @@ function FuturesPanel() {
                     return;
                   }
                 }
+                if (dex === 'nado' && walletUsdc !== null && v > walletUsdc + 0.000001) {
+                  setLocalAlert(`Ink wallet has ${walletUsdc.toFixed(2)} USDt0`);
+                  return;
+                }
                 const r = await depositToPacifica(depositAmt, dex === 'risex' ? { sourceChainId: risexDepositSource?.id } : undefined);
                 if (!r?.error) {
                   setDepositAmt('');
@@ -4610,6 +4718,8 @@ function FuturesPanel() {
                 ? 'Sends AUSD from your Monad wallet to your Perpl account. Needs a small MON float for gas.'
                 : dex === 'phoenix'
                 ? 'Sends USDC from your Solana wallet to your Phoenix trader account. Needs a small SOL float for gas.'
+                : dex === 'nado'
+                ? 'Approves USDt0 on Ink, then deposits it into your Nado default subaccount. Needs a small ETH float on Ink for gas.'
                 : dex === 'risex'
                 ? (
                   <>
@@ -4625,7 +4735,7 @@ function FuturesPanel() {
             Pacifica shows when there's something to take out. Decibel ALWAYS
             shows it so the user sees the action exists from day one (button
             disables when available=0 instead of hiding the whole card). */}
-        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
+        {dex !== 'avantis' && dex !== 'gmx' && dex !== 'risex' && dex !== 'nado' && (dex === 'decibel' || dex === 'hyperliquid' || available > 0) && (
           <div style={S.fullCard}>
             <div style={S.row}>
               <span style={{...S.label, color: '#9945FF'}}>{dex === 'monad' ? 'Withdraw AUSD' : 'Withdraw USDC'}</span>
@@ -4974,6 +5084,18 @@ function FuturesPanel() {
               <span style={S.pacificaText}>Powered by</span>
               <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.risex.colorDark }}>
                 RISEx
+              </span>
+            </>
+          ) : dex === 'nado' ? (
+            <>
+              <img
+                src={DEX_CONFIG.nado.logo}
+                alt="Nado"
+                style={{ height: 16, width: 'auto', objectFit: 'contain' }}
+              />
+              <span style={S.pacificaText}>Powered by</span>
+              <span style={{ ...S.pacificaBrand, color: DEX_CONFIG.nado.colorDark }}>
+                Nado
               </span>
             </>
           ) : (

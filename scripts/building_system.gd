@@ -4113,6 +4113,19 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 	# Set selected_building so swap/load can find server_id
 	selected_building = port_building
 
+	var fleet_ship_troops: Array = []
+	for bsys in _building_systems:
+		for b in bsys.placed_buildings:
+			if b.get("id") != "port":
+				continue
+			var fleet_port: Node3D = b.get("node", null)
+			if not is_instance_valid(fleet_port) or not fleet_port.get_meta("has_ship", false):
+				continue
+			fleet_ship_troops.append({
+				"server_id": b.get("server_id", -1),
+				"ship_troops": fleet_port.get_meta("ship_troops", []),
+			})
+
 	# Send to React as a building_selected with LOAD_TROOPS view hint
 	var bridge = _bridge
 	if bridge:
@@ -4132,6 +4145,7 @@ func _show_ship_panel(ship_data: Dictionary) -> void:
 			"has_ship": true,
 			"ship_level": ship_level,
 			"ship_troops": ship_troops,
+			"fleet_ship_troops": fleet_ship_troops,
 			"ship_capacity": ship_level * 3,
 			"ship_cost": def.get("ship_cost", {}),
 			"troop_levels": troop_levels,

@@ -1179,7 +1179,9 @@ function orderEventMatchesExpected(event, expected = {}) {
   if (expectedMarket && event.market && normalizeAptosAddress(event.market) !== expectedMarket) return false;
   const side = String(expected.side || '').toLowerCase();
   if (side && event.isBid != null) {
-    const eventSide = event.isBid ? 'long' : 'short';
+    const eventSide = expected.reduceOnly
+      ? (event.isBid ? 'short' : 'long')
+      : (event.isBid ? 'long' : 'short');
     if (eventSide !== side) return false;
   }
   const expectedClientId = expected.clientOrderId ? String(expected.clientOrderId) : '';
@@ -1275,8 +1277,10 @@ async function waitForPlacedOrderEffect(options = {}) {
     symbol: options.symbol,
     side: String(options.side || '').toLowerCase(),
     clientOrderId: options.clientOrderId,
+    reduceOnly: !!options.reduceOnly,
   };
   const isMarket = String(options.orderType || options.order_type || '').toLowerCase() === 'market';
+  const reduceOnly = !!options.reduceOnly;
   const attempts = Math.max(1, Math.min(12, Number(options.attempts || 6)));
   const delayMs = Math.max(100, Math.min(5000, Number(options.delayMs || 900)));
   const orderEvents = Array.isArray(options.txResult?.orderEvents) ? options.txResult.orderEvents : [];
@@ -1296,12 +1300,19 @@ async function waitForPlacedOrderEffect(options = {}) {
     lastOpenOrders = openOrders;
 
     const position = findMatchingPosition(positions, expected);
-    if (!options.reduceOnly && position) {
+    if (!reduceOnly && position) {
       return {
         verified: true,
         effect: 'position',
         attempts: i + 1,
         position: summarizePosition(position),
+      };
+    }
+    if (reduceOnly && isMarket && !position) {
+      return {
+        verified: true,
+        effect: 'position_closed',
+        attempts: i + 1,
       };
     }
 

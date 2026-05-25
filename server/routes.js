@@ -4588,13 +4588,13 @@ router.post('/replay-telemetry', (req, res) => {
 // 'pacifica' — which is exactly the bug that produced phantom Pacifica
 // accounts whenever a user picked GMX in the picker (the chosen DEX never
 // reached the database).
-const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
+const VALID_DEXES = new Set(['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
 // DEXes whose trade history is indexed by the futures rewards worker into
 // the trade_history table (server-futures/futures.db). GMX joined Phase 3
 // once gmx-rewards-worker.js shipped (subsquid GraphQL → trade_history
 // rows with verified_source='worker'); we now include it in this set so
 // quest progression and per-DEX baselines pick up GMX trades.
-const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
+const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
 // (Removed: `currentFuturesRewardBaseline` and `ensureTradingRewardRow`
 // helpers — dead code surfaced by audit. The intended use was to seed
 // `trading_rewards.last_trade_id` from MAX(trade_history.id) so a fresh
@@ -4614,7 +4614,7 @@ const REWARD_INDEXED_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'pho
 router.post('/players/set-dex', auth, (req, res) => {
   const { dex } = req.body;
   if (!VALID_DEXES.has(dex)) {
-    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid" or "risex"' });
+    return res.status(400).json({ error: 'dex must be "pacifica", "avantis", "decibel", "gmx", "monad", "phoenix", "hyperliquid", "risex" or "nado"' });
   }
   if (dex !== req.player.dex) {
     logAuth('set-dex no-op (DEX is now per-account; client should switch via login-wallet)', {
@@ -6492,6 +6492,70 @@ function _loadedDemonKingTokenKeys(playerId) {
   }
   return keys;
 }
+function _findLoadedDemonKingToken(playerId, tokenKey, options = {}) {
+  const expectedKey = String(tokenKey || '').toLowerCase();
+  if (!expectedKey) return null;
+  const exceptBuildingId = Number(options.exceptBuildingId || 0);
+  const exceptStart = Number.isInteger(options.exceptStart) ? options.exceptStart : null;
+  const exceptEnd = Number.isInteger(options.exceptEnd) ? options.exceptEnd : null;
+  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      if (port.id === exceptBuildingId && exceptStart !== null && exceptEnd !== null && index >= exceptStart && index < exceptEnd) {
+        continue;
+      }
+      const parsed = parseDemonKingTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      if (key === expectedKey) return { buildingId: port.id, slot: index };
+    }
+  }
+  return null;
+}
+function _firstDuplicateLoadedDemonKingToken(playerId) {
+  const seen = new Map();
+  const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
+  for (const port of ports) {
+    let troops = [];
+    try { troops = JSON.parse(port.ship_troops || '[]'); } catch { troops = []; }
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseDemonKingTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      const previous = seen.get(key);
+      if (previous) return { key, first: previous, duplicate: { buildingId: port.id, slot: index } };
+      seen.set(key, { buildingId: port.id, slot: index });
+    }
+  }
+  return null;
+}
+function _firstDuplicateDemonKingTokenInShipActions(actions = []) {
+  const seen = new Map();
+  for (const action of Array.isArray(actions) ? actions : []) {
+    if (action?.type !== 'place_ship') continue;
+    const troops = Array.isArray(action.troops)
+      ? action.troops
+      : (action.troopType ? [action.troopType] : []);
+    for (let index = 0; index < troops.length; index++) {
+      const troop = troops[index];
+      if (_isSlotFiller(troop)) continue;
+      const parsed = parseDemonKingTroopEntry(troop);
+      if (parsed.error) continue;
+      const key = `${parsed.chainKey}:${parsed.tokenIdRaw}`.toLowerCase();
+      const previous = seen.get(key);
+      const current = { shipIndex: action.ship_index ?? action.shipIndex ?? null, troopIndex: index };
+      if (previous) return { key, first: previous, duplicate: current };
+      seen.set(key, current);
+    }
+  }
+  return null;
+}
 function _demonKingWinTokensFromActions(actions, playerId) {
   const loadedKeys = _loadedDemonKingTokenKeys(playerId);
   const tokens = new Map();
@@ -6693,6 +6757,15 @@ router.post('/attack/result', auth, (req, res) => {
       db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Too many ships', null, null);
       return res.status(403).json({ error: 'Too many ships in replay' });
     }
+  }
+  const duplicateReplayDemonKing = _firstDuplicateDemonKingTokenInShipActions(gameActions);
+  if (duplicateReplayDemonKing) {
+    releaseBattleSession('cancelled');
+    db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'rejected', 'Duplicate Demon King NFT in replay', null, null);
+    return res.status(403).json({
+      error: 'Each Demon King NFT can only be deployed once per battle',
+      code: 'DEMON_KING_NFT_DUPLICATE_REPLAY',
+    });
   }
 
   // Cap troop levels to server-verified values (prevent level spoofing)
@@ -6897,6 +6970,13 @@ router.get('/find-enemy', auth, (req, res) => {
   if (totalTroopsLoaded === 0) {
     return res.status(400).json({ error: 'No troops loaded on your ships. Train troops at the Barn first.' });
   }
+  const duplicateDemonKing = _firstDuplicateLoadedDemonKingToken(req.player.id);
+  if (duplicateDemonKing) {
+    return res.status(409).json({
+      error: 'One Demon King NFT is loaded on multiple ships. Unload the duplicate before attacking.',
+      code: 'DEMON_KING_NFT_DUPLICATE_LOADED',
+    });
+  }
 
   const result = db.findEnemy(req.player.id);
   if (result.error) {
@@ -7032,8 +7112,16 @@ router.post('/buildings/:id/load-troop', auth, async (req, res) => {
     const slotCost = _troopSlotCost(normalizedTroop);
     if (shipTroops.length + slotCost > capacity) throw { status: 400, error: 'Ship is full' };
     const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
-    if (normalizedTroop === 'DemonKing' && shipTroops.some((row) => _demonKingEntryKey(row) === _demonKingEntryKey(troopEntry))) {
-      throw { status: 400, error: 'This Demon King NFT is already loaded' };
+    if (normalizedTroop === 'DemonKing') {
+      const loaded = _findLoadedDemonKingToken(req.player.id, _demonKingEntryKey(troopEntry));
+      if (loaded) {
+        throw {
+          status: 409,
+          error: 'This Demon King NFT is already loaded on a ship',
+          code: 'DEMON_KING_NFT_ALREADY_LOADED',
+          building_id: loaded.buildingId,
+        };
+      }
     }
 
     const player = db.db.prepare('SELECT gold FROM players WHERE id = ?').get(req.player.id);
@@ -7089,9 +7177,18 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     const troopEntry = verifiedDemonKing?.troopEntry || _canonicalTroopEntry(troop_name);
     _appendTroopSlots(replacement, troopEntry);
     if (normalizedTroop === 'DemonKing') {
-      const keptTroops = shipTroops.filter((_, index) => index < span.start || index >= span.end);
-      if (keptTroops.some((row) => _demonKingEntryKey(row) === _demonKingEntryKey(troopEntry))) {
-        throw { status: 400, error: 'This Demon King NFT is already loaded' };
+      const loaded = _findLoadedDemonKingToken(req.player.id, _demonKingEntryKey(troopEntry), {
+        exceptBuildingId: buildingId,
+        exceptStart: span.start,
+        exceptEnd: span.end,
+      });
+      if (loaded) {
+        throw {
+          status: 409,
+          error: 'This Demon King NFT is already loaded on a ship',
+          code: 'DEMON_KING_NFT_ALREADY_LOADED',
+          building_id: loaded.buildingId,
+        };
       }
     }
 
@@ -8259,7 +8356,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
   // simply gets "No new trades" — that's the desired no-op, NOT a fall-
   // through to the Pacifica branch which would 400 with "wallet required"
   // or worse, hit Pacifica's REST with a non-Solana address.
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
     const fdb = futuresDbReadonly();
     if (!fdb) {
       return res.json({ gold: 0, reason: 'Futures service unavailable — try again later' });
@@ -8273,7 +8370,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // had a similar early-rollout risk while we were tuning import timing.
     // If a row has never paid anything, rewind the cursor once so verified
     // rows can be credited under the current rules.
-    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex')
+    if ((dex === 'gmx' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado')
       && Number(reward.last_trade_id || 0) > 0
       && Number(reward.total_volume || 0) === 0
       && Number(reward.total_gold || 0) === 0) {
@@ -8298,6 +8395,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
             ? "AND verified_source = 'hyperliquid_api'"
           : dex === 'risex'
             ? "AND verified_source = 'risex_api'"
+          : dex === 'nado'
+            ? "AND verified_source = 'nado_api'"
           : "AND verified_source = 'worker'";
       const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
         ? `hyperliquid:${String(wallet).toLowerCase()}:%`
@@ -8413,7 +8512,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     // a sensible micro-trade floor across all four DEXes.
     const SANE_MIN_NOTIONAL = dex === 'gmx'
       ? 0
-      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') ? 10 : 50;
+      : (dex === 'decibel' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 10 : 50;
     const SANE_MAX_NOTIONAL = 10_000_000;
 
     let totalGold = 0;
@@ -8791,7 +8890,7 @@ router.get('/trading/stats', auth, async (req, res) => {
   // (trade_history). We normalise both into the same { symbol, price,
   // amount, fee, created_at } shape so ProfileModal renders uniformly.
   let trades = [];
-  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex') {
+  if (dex === 'avantis' || dex === 'decibel' || dex === 'gmx' || dex === 'monad' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') {
     const fdb = futuresDbReadonly();
     if (fdb) {
       try {
@@ -8803,6 +8902,8 @@ router.get('/trading/stats', auth, async (req, res) => {
               ? "AND verified_source = 'hyperliquid_api'"
             : dex === 'risex'
               ? "AND verified_source = 'risex_api'"
+            : dex === 'nado'
+              ? "AND verified_source = 'nado_api'"
             : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
@@ -8845,7 +8946,7 @@ router.get('/trading/stats', auth, async (req, res) => {
 
 // ==================== TASKS (QUESTS) ====================
 
-const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex']);
+const LIVE_TASK_PROGRESS_DEXES = new Set(['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado']);
 
 async function maybeRefreshTaskProgress(player, task, playerTask) {
   if (!playerTask || playerTask.claimed_at) return playerTask;
@@ -10035,7 +10136,7 @@ router.get('/admin/players/:id/trading-debug', adminAuth, (req, res) => {
   let futuresTrades = [];
   try {
     const fdb = futuresDbReadonly();
-    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex')) {
+    if (fdb && (player.dex === 'avantis' || player.dex === 'decibel' || player.dex === 'gmx' || player.dex === 'monad' || player.dex === 'phoenix' || player.dex === 'hyperliquid' || player.dex === 'risex' || player.dex === 'nado')) {
       futuresTrades = fdb.prepare(
         `SELECT id, symbol, side, amount, price, notional_usd, pnl, status, verified_source, dex, created_at
          FROM trade_history WHERE player_id = ? AND dex = ?
@@ -10257,7 +10358,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
   // Pacifica is intentionally absent from this set — it's custodial and
   // the futures worker doesn't index its trades the same way; Pacifica
   // activity comes through the on-chain Solana RPC path elsewhere.
-  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
+  const ACTIVITY_DEXES = ['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
   const dexActivity = {};   // { avantis: {...}, decibel: {...}, gmx: {...} }
   const dexTop = {};        // { avantis: [...], decibel: [...], gmx: [...] }
   try {
@@ -10269,6 +10370,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           ? "verified_source = 'hyperliquid_api'"
         : dex === 'risex'
           ? "verified_source = 'risex_api'"
+        : dex === 'nado'
+          ? "verified_source = 'nado_api'"
         : dex === 'decibel'
           ? "verified_source IN ('worker', 'server')"
           : "verified_source = 'worker'";
@@ -10667,7 +10770,7 @@ function parseBool(v) {
 const TOURNAMENT_POINTS_SORT = 'points';
 const TOURNAMENT_COMBINED_SORT = 'volume_trophies_50_50';
 const TOURNAMENT_SORT_KEYS = ['pnl_usd', 'trophies', 'volume_usd', 'gold', TOURNAMENT_POINTS_SORT, TOURNAMENT_COMBINED_SORT];
-const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
+const TOURNAMENT_DEXES = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
 const TOURNAMENT_DEX_LABELS = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -10677,6 +10780,7 @@ const TOURNAMENT_DEX_LABELS = {
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
+  nado: 'Nado',
 };
 const TOURNAMENT_MODES = ['individual', 'dex_vs_dex'];
 const TOURNAMENT_TEAM_PRIZE_MODES = ['winner_takes_all', 'custom_split'];
@@ -11345,6 +11449,7 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
+  if (dex === 'nado') return "verified_source = 'nado_api'";
   if (dex === 'phoenix') return "verified_source = 'worker'";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
   return "verified_source = 'worker'";
@@ -11352,7 +11457,7 @@ function tournamentTradeSourceWhere(dex) {
 
 function syncFuturesTournamentRows(playerId, dex) {
   const normalizedDex = String(dex || '').toLowerCase();
-  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'].includes(normalizedDex)) {
+  if (!playerId || !['avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'].includes(normalizedDex)) {
     return { ok: true, skipped: true };
   }
   const fdb = futuresDbReadonly();

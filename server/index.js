@@ -546,6 +546,7 @@ app.get('/api/admin/panel', (req, res) => {
               <option value="phoenix">Phoenix</option>
               <option value="hyperliquid">Hyperliquid</option>
               <option value="risex">RISEx</option>
+              <option value="nado">Nado</option>
             </select>
           </label>
           <label style="font-size:11px;color:#9ca3af">DEX scope
@@ -566,6 +567,7 @@ app.get('/api/admin/panel', (req, res) => {
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="phoenix" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Phoenix</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="hyperliquid" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Hyperliquid</label>
               <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="risex" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">RISEx</label>
+              <label style="font-size:11px;color:#d1d5db;display:flex;align-items:center;gap:6px"><input data-tn-dex-check value="nado" type="checkbox" onchange="updateTournamentDexScopeUi();updateTournamentTeamUi()" style="width:auto;margin:0">Nado</label>
             </div>
             <div id="tn_dex_hint" style="font-size:11px;color:#9ca3af;margin-top:6px">Pick at least one DEX.</div>
           </div>
@@ -1015,6 +1017,7 @@ function renderPlayers() {
   const monCount   = players.filter(p => p.dex === 'monad').length;
   const phxCount   = players.filter(p => p.dex === 'phoenix').length;
   const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
+  const ndoCount   = players.filter(p => p.dex === 'nado').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
   // payload so the badges agree with the per-row "ONLINE" rendering.
@@ -1033,6 +1036,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#8b5cf6"><div class="v" style="color:#c4b5fd;font-size:22px">' + monCount + '</div><div class="l">Perpl</div></div>' +
     '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + phxCount + '</div><div class="l">Phoenix</div></div>' +
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
+    '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
     '<div class="stat"><div class="v">' + players.reduce((s,p) => s + p.buildings_count, 0) + '</div><div class="l">Buildings</div></div>' +
@@ -1047,6 +1051,7 @@ function renderPlayers() {
     if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
     if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
     if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
+    if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
     return '<span class="badge badge-off">—</span>';
   }
   function statusBadge(p) {
@@ -1293,6 +1298,7 @@ function clientDexBadge(dex) {
     : d === 'monad' ? '#c4b5fd'
     : d === 'phoenix' ? '#fb923c'
     : d === 'hyperliquid' ? '#86efac'
+    : d === 'nado' ? '#67e8f9'
     : '#9ca3af';
   return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
 }
@@ -1539,6 +1545,7 @@ async function loadStats() {
     const monCount = (byDex.find(x => x.dex === 'monad')    || {}).n || 0;
     const phxCount = (byDex.find(x => x.dex === 'phoenix')  || {}).n || 0;
     const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
+    const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
     const avtRew = rewardsMap.avantis  || {};
@@ -1547,6 +1554,7 @@ async function loadStats() {
     const monRew = rewardsMap.monad    || {};
     const phxRew = rewardsMap.phoenix  || {};
     const hplRew = rewardsMap.hyperliquid || {};
+    const ndoRew = rewardsMap.nado || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
       dexCard('avantis',  'Avantis · Base',    '#0EA5E9', avtCount, avtRew.total_gold || 0, avtRew.total_volume || 0, activityLines('avantis')) +
@@ -1555,6 +1563,7 @@ async function loadStats() {
       dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
       dexCard('monad',    'Perpl / Monad',     '#8b5cf6', monCount, monRew.total_gold || 0, monRew.total_volume || 0, activityLines('monad')) +
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
+      dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
     // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
@@ -1611,7 +1620,8 @@ async function loadStats() {
       topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5') +
       topTraderTable('monad',   'Perpl / Monad',   '#8b5cf6') +
       topTraderTable('hyperliquid', 'Hyperliquid', '#16a34a') +
-      topTraderTable('phoenix', 'Phoenix · Solana', '#f97316');
+      topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
+      topTraderTable('nado',    'Nado · Ink',       '#00b8d9');
 
     function dexBadge(d) {
       if (d === 'pacifica') return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PAC</span>';
@@ -1621,6 +1631,7 @@ async function loadStats() {
       if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
       if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
       if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
+      if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
       return '<span class="badge badge-off">—</span>';
     }
     document.getElementById('topPlayersBody').innerHTML = (s.topPlayers||[]).map(p =>
@@ -1855,7 +1866,7 @@ async function deleteTask(id) {
 let TOURNAMENTS_CACHE = [];
 let TOURNAMENT_LB_ID = null;
 let TOURNAMENT_EDIT_ID = null;
-const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex'];
+const TOURNAMENT_DEXES_ADMIN = ['pacifica', 'avantis', 'decibel', 'gmx', 'monad', 'phoenix', 'hyperliquid', 'risex', 'nado'];
 const TOURNAMENT_DEX_LABELS_ADMIN = {
   pacifica: 'Pacifica',
   avantis: 'Avantis',
@@ -1865,6 +1876,7 @@ const TOURNAMENT_DEX_LABELS_ADMIN = {
   phoenix: 'Phoenix',
   hyperliquid: 'Hyperliquid',
   risex: 'RISEx',
+  nado: 'Nado',
 };
 const TOURNAMENT_TEAM_METRIC_LABELS_ADMIN = {
   volume_usd: 'Volume',
@@ -2816,6 +2828,7 @@ async function loadEarnings(force) {
       ['phoenix',  'Phoenix',  '#fb923c', '#f97316'],
       ['monad',    'Perpl',    '#c4b5fd', '#8b5cf6'],
       ['hyperliquid', 'Hyperliquid', '#86efac', '#16a34a'],
+      ['nado',     'Nado',     '#67e8f9', '#00b8d9'],
     ];
     const total = Number(data.total_usd) || 0;
     document.getElementById('earningsTotals').innerHTML =
@@ -2857,6 +2870,9 @@ async function loadEarnings(force) {
             ? ' · hypothetical ' + pct + '% $' + Number(d.estimated_fee_usd).toFixed(4)
             : '';
           return '<span style="color:#9ca3af;font-size:11px">' + d.trades + ' indexed fills · $' + Number(d.volume_usd || 0).toFixed(0) + ' vol · no builder-fee source' + estimate + '</span>';
+        }
+        if (d.model === 'nado_builder_not_configured') {
+          return '<span style="color:#9ca3af;font-size:11px">builder code not configured</span>';
         }
         if (d.volume_usd != null) {
           if (d.model === 'single_builder_fee' || d.builder_fee_pct != null) {

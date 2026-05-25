@@ -67,6 +67,18 @@ const NETWORKS = {
       blockExplorerUrls: ['https://explorer.risechain.com'],
     },
   },
+  ink: {
+    chainId: '0xdef1',
+    label: 'Ink',
+    cta: 'Ink network',
+    addParams: {
+      chainId: '0xdef1',
+      chainName: 'Ink',
+      nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
+      rpcUrls: ['https://rpc-gel.inkonchain.com', 'https://rpc-qnd.inkonchain.com', 'https://ink.drpc.org'],
+      blockExplorerUrls: ['https://explorer.inkonchain.com'],
+    },
+  },
 };
 
 // EIP-6963 provider discovery. Modern wallets (MetaMask, Rabby, Coinbase,

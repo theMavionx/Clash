@@ -147,12 +147,28 @@ export const DEX_CONFIG = {
     chainShort: 'RISE',
     description: 'Perps on RISE',
   },
+  nado: {
+    id: 'nado',
+    label: 'NADO',
+    shortLabel: 'NDO',
+    emoji: 'ND',
+    logo: '/nado.png',
+    logoIsWordmark: false,
+    color: '#00B8D9',
+    colorDark: '#075985',
+    colorLight: 'rgba(0,184,217,0.15)',
+    borderColor: '#0891B2',
+    chain: 'Ink',
+    chainShort: 'INK',
+    description: 'Perps on Ink',
+  },
 };
 
 export const DEX_ORDER = [
   'phoenix',
   'hyperliquid',
   'risex',
+  'nado',
   'decibel',
   'pacifica',
   'avantis',
@@ -246,7 +262,7 @@ export function DexProvider({ children }) {
         // this a stale /api/state response from account A could land under
         // account B's context and reset the DEX selector to the wrong value.
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado') {
           // Compare against current React state, not localStorage — localStorage
           // was the previous account's setting and we want the authoritative
           // server value for THIS token to win even if it matches what's
@@ -282,7 +298,7 @@ export function DexServerSync() {
         if (cancelled || !r.ok) return;
         const j = await r.json();
         if (cancelled) return;
-        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex') {
+        if (j.dex === 'pacifica' || j.dex === 'avantis' || j.dex === 'decibel' || j.dex === 'gmx' || j.dex === 'monad' || j.dex === 'phoenix' || j.dex === 'hyperliquid' || j.dex === 'risex' || j.dex === 'nado') {
           setDex(j.dex);
         }
       } catch { /* network error - keep local dex */ }
