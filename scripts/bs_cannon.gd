@@ -395,7 +395,7 @@ func _update_ship_cannonballs(delta: float) -> void:
 	while i >= 0:
 		var c = _ship_cannonballs[i]
 		if not is_instance_valid(c.node):
-			_ship_cannonballs.remove_at(i)
+			_remove_ship_cannonball_at(i)
 			i -= 1
 			continue
 		c.elapsed += delta
@@ -418,8 +418,13 @@ func _update_ship_cannonballs(delta: float) -> void:
 			var cam_rig = bs.get_tree().current_scene.find_child("CameraRig", true, false)
 			if cam_rig and cam_rig.has_method("add_trauma"):
 				cam_rig.add_trauma(0.4)
-			_ship_cannonballs.remove_at(i)
+			_remove_ship_cannonball_at(i)
 		i -= 1
+
+
+func _remove_ship_cannonball_at(index: int) -> void:
+	if index >= 0 and index < _ship_cannonballs.size():
+		_ship_cannonballs.remove_at(index)
 
 # ---------------------------------------------------------------------------
 # Energy

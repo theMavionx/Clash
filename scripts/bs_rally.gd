@@ -290,7 +290,7 @@ func _update_rally_grenades(delta: float) -> void:
 	while i >= 0:
 		var g: Dictionary = _rally_grenades[i]
 		if not is_instance_valid(g.node):
-			_rally_grenades.remove_at(i)
+			_remove_rally_grenade_at(i)
 			i -= 1
 			continue
 		g.elapsed += delta
@@ -308,8 +308,13 @@ func _update_rally_grenades(delta: float) -> void:
 			payload["flight_time"] = snappedf(float(g.get("flight_time", 0.0)), 0.001)
 			payload["source"] = "impact"
 			_record_rally_telemetry("rally_impact", payload)
-			_rally_grenades.remove_at(i)
+			_remove_rally_grenade_at(i)
 		i -= 1
+
+
+func _remove_rally_grenade_at(index: int) -> void:
+	if index >= 0 and index < _rally_grenades.size():
+		_rally_grenades.remove_at(index)
 
 
 # ---------------------------------------------------------------------------

@@ -413,7 +413,7 @@ func _update_bullets(delta: float) -> void:
 		# Target died — return to pool
 		if not BaseTroop.is_live_troop(b.target):
 			_return_to_pool(b)
-			_active_bullets.remove_at(i)
+			_remove_active_bullet_at(i)
 			i -= 1
 			continue
 
@@ -464,8 +464,13 @@ func _update_bullets(delta: float) -> void:
 				"hit_dist_sq": snappedf(hit_diff.length_squared(), 0.0001),
 			})
 			_return_to_pool(b)
-			_active_bullets.remove_at(i)
+			_remove_active_bullet_at(i)
 		i -= 1
+
+
+func _remove_active_bullet_at(index: int) -> void:
+	if index >= 0 and index < _active_bullets.size():
+		_active_bullets.remove_at(index)
 
 
 func _return_to_pool(b: Dictionary) -> void:

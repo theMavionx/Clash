@@ -323,13 +323,13 @@ func _update_arrows(delta: float) -> void:
 	while i >= 0:
 		var b = _active[i]
 		if not is_instance_valid(b.node):
-			_active.remove_at(i)
+			_remove_active_arrow_at(i)
 			i -= 1
 			continue
 		# Target died
 		if not BaseTroop.is_live_troop(b.target):
 			_return_to_pool(b)
-			_active.remove_at(i)
+			_remove_active_arrow_at(i)
 			i -= 1
 			continue
 		var target_pos = b.target.global_position + Vector3(0, 0.05, 0)
@@ -354,8 +354,13 @@ func _update_arrows(delta: float) -> void:
 				"hit_dist_sq": snappedf(dp.x * dp.x + dp.y * dp.y + dp.z * dp.z, 0.0001),
 			})
 			_return_to_pool(b)
-			_active.remove_at(i)
+			_remove_active_arrow_at(i)
 		i -= 1
+
+
+func _remove_active_arrow_at(index: int) -> void:
+	if index >= 0 and index < _active.size():
+		_active.remove_at(index)
 
 
 func _return_to_pool(b: Dictionary) -> void:

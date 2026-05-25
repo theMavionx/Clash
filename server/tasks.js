@@ -138,6 +138,50 @@ function matchesSide(tradeSide, wantSide) {
   return true;
 }
 
+function decibelTradeMs(row) {
+  const ms = Date.parse(`${String(row?.created_at || '').replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function decibelTradesProbablyDuplicate(a, b) {
+  if (!a || !b) return false;
+  if (String(a.symbol || '').toUpperCase() !== String(b.symbol || '').toUpperCase()) return false;
+  if (String(a.side || '').toLowerCase() !== String(b.side || '').toLowerCase()) return false;
+  const av = Number(a.notional_usd);
+  const bv = Number(b.notional_usd);
+  if (!Number.isFinite(av) || !Number.isFinite(bv) || av <= 0 || bv <= 0) return false;
+  const drift = Math.abs(av - bv) / Math.max(av, bv, 1);
+  if (drift > 0.35) return false;
+  const ams = decibelTradeMs(a);
+  const bms = decibelTradeMs(b);
+  return ams > 0 && bms > 0 && Math.abs(ams - bms) <= 5 * 60 * 1000;
+}
+
+function isDecibelLimitFillTaskRow(row) {
+  return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
+}
+
+function filterDuplicateDecibelTaskRows(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
+  const kept = [];
+  for (const row of rows) {
+    if (row.verified_source === 'worker') {
+      const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
+      const duplicate = kept.some((candidate) => {
+        if (candidate.verified_source === 'server') {
+          return decibelTradesProbablyDuplicate(candidate, row);
+        }
+        const candidateIsLimitFill = isDecibelLimitFillTaskRow(candidate);
+        if (candidateIsLimitFill && rowIsLimitFill) return false;
+        return decibelTradesProbablyDuplicate(candidate, row);
+      });
+      if (duplicate) continue;
+    }
+    kept.push(row);
+  }
+  return kept;
+}
+
 // ---------- Snapshots ----------
 // Captured when the player starts (or auto-starts) a task.
 async function buildSnapshot(player, task) {
@@ -290,25 +334,26 @@ async function fetchWalletTrades(player, opts = {}) {
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
-      // Avantis/GMX stay worker-only. Decibel uses server rows as the
-      // instant source of truth: they are inserted only after our server-side
-      // signer waits for Aptos transaction success. The Decibel worker polls
-      // positions and can miss fast open+close cycles, and including both
-      // sources would double-count when the worker later writes a duplicate.
+      // Avantis/GMX stay worker-only. Decibel uses server rows for immediate
+      // market/close fills and worker rows for delayed limit fills. Worker can
+      // later see the same market fill, so Decibel rows are deduped below.
       const sourceWhere = dexFilter === 'decibel'
-        ? "AND verified_source = 'server'"
+        ? "AND verified_source IN ('server', 'worker')"
         : dexFilter === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dexFilter === 'hyperliquid'
             ? "AND verified_source = 'hyperliquid_api'"
           : "AND verified_source = 'worker'";
-      const rows = fdb.prepare(`
-        SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, created_at
+      let rows = fdb.prepare(`
+        SELECT id, symbol, side, amount, price, notional_usd, order_type, order_id, client_order_id, verified_source, created_at
         FROM trade_history
         WHERE player_id = ? AND dex = ? AND status = 'filled'
           ${sourceWhere}
         ORDER BY id ASC
       `).all(player.id, dexFilter);
+      if (dexFilter === 'decibel') {
+        rows = filterDuplicateDecibelTaskRows(rows);
+      }
       return rows.map(r => {
         const notional = Number(r.notional_usd) || 0;
         const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);
@@ -323,6 +368,7 @@ async function fetchWalletTrades(player, opts = {}) {
           _order_type: r.order_type,
           order_id: r.order_id,
           client_order_id: r.client_order_id,
+          verified_source: r.verified_source,
         };
       });
     } catch (e) {

@@ -377,6 +377,8 @@ app.get('/api/admin/panel', (req, res) => {
   .log-row-info, .log-row-log { border-left: 3px solid #38bdf8; }
   .log-msg { max-width: 420px; white-space: pre-wrap; word-break: break-word; line-height: 1.35; }
   .log-url { max-width: 240px; word-break: break-all; color: #93c5fd; font-size: 11px; }
+  .log-action { margin-top: 6px; padding: 6px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #cbd5e1; font-size: 11px; line-height: 1.35; }
+  .log-action strong { color: #fbbf24; }
   .log-meta { color: #6b7280; font-size: 11px; line-height: 1.35; }
   details.log-details { margin-top: 6px; }
   details.log-details summary { cursor: pointer; color: #fbbf24; font-size: 11px; }
@@ -1244,6 +1246,38 @@ function detailsBlock(label, value) {
   return '<details class="log-details"><summary>' + label + '</summary><pre class="log-pre mono">' + esc(text) + '</pre></details>';
 }
 
+function fmtDurationMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1000) return Math.round(n) + 'ms';
+  if (n < 60_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0) + 's';
+  return Math.round(n / 60_000) + 'm';
+}
+
+function actionSummaryBlock(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  const recovery = payload.fetch_recovery;
+  const action = payload.action || payload.actions?.last || payload.actions?.recent_failures?.[0] || payload.actions?.recovered?.[0];
+  const bits = [];
+  if (action?.key) {
+    bits.push('<strong>Action</strong> ' + esc(action.key));
+    if (action.status) bits.push('status=' + esc(action.status));
+    if (action.duration_ms != null) bits.push('duration=' + esc(fmtDurationMs(action.duration_ms)));
+    if (action.had_error) bits.push('<span style="color:#fca5a5">had error</span>');
+    if (action.recovered_after_error) bits.push('<span style="color:#86efac">recovered</span>');
+    if (action.last_error) bits.push('last=' + esc(String(action.last_error).slice(0, 120)));
+  }
+  if (recovery?.path) {
+    bits.push('<strong>Fetch recovered</strong> ' + esc(recovery.method || '') + ' ' + esc(recovery.path));
+    if (recovery.recovered_after_ms != null) bits.push('after=' + esc(fmtDurationMs(recovery.recovered_after_ms)));
+    if (recovery.previous_status || recovery.previous_error) {
+      bits.push('from=' + esc(recovery.previous_status || recovery.previous_error));
+    }
+  }
+  if (!bits.length) return '';
+  return '<div class="log-action">' + bits.join(' &middot; ') + '</div>';
+}
+
 function shortWallet(wallet) {
   const s = String(wallet || '');
   if (!s) return 'no wallet';
@@ -1342,7 +1376,8 @@ async function loadClientLogs() {
         const color = levelColor(r.level);
         const cls = 'log-row-' + String(r.level || 'info').toLowerCase().replace(/[^a-z0-9_-]/g, '');
         const urlText = compactUrl(r.url);
-        const details = detailsBlock('Stack', r.stack) + detailsBlock('Payload', r.payload);
+        const actionSummary = actionSummaryBlock(r.payload);
+        const details = actionSummary + detailsBlock('Stack', r.stack) + detailsBlock('Payload', r.payload);
         return '<tr class="' + cls + '">' +
           '<td class="log-meta">' + (r.player_id ? 'player ' + esc(String(r.player_id).slice(0, 8)) : esc(r.ip || 'anonymous')) + '</td>' +
           '<td class="mono" style="white-space:nowrap">' + formatClientLogTime(r.created_at) + '</td>' +

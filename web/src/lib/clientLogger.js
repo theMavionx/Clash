@@ -8,6 +8,10 @@ const MAX_BREADCRUMBS = 90;
 const CLIENT_MAX_PER_MINUTE = 120;
 const FETCH_SNIPPET_MAX = 900;
 const PAYLOAD_JSON_MAX = 7600;
+const ACTION_STEP_MAX = 12;
+const ACTION_RECENT_MAX = 18;
+const ACTION_CONTEXT_MAX_AGE_MS = 30 * 60_000;
+const FETCH_RECOVERY_WINDOW_MS = 10 * 60_000;
 const REDACT_KEY_RE = /(token|secret|private|password|authorization|signature|signedmessage|signed_message|x-token|cookie)/i;
 const IMPORTANT_BREADCRUMB_RE = /(Phoenix|phoenix|solana|wallet|rpc|transaction|fetch)/i;
 const NOISY_LOG_RE = /^\[load\] stage(1 download|2 signal)/;
@@ -20,9 +24,12 @@ let installed = false;
 let flushing = false;
 let timer = null;
 let fetchSeq = 0;
+let actionSeq = 0;
 const queue = [];
 const recentAt = [];
 const breadcrumbs = [];
+const trackedActions = new Map();
+const fetchFailures = new Map();
 const original = {};
 const runtimeContext = {
   session_id: null,
@@ -197,6 +204,7 @@ function addBreadcrumbInternal(type, data = {}, level = 'info') {
   if (breadcrumbs.length > MAX_BREADCRUMBS) {
     breadcrumbs.splice(0, breadcrumbs.length - MAX_BREADCRUMBS);
   }
+  recordActionBreadcrumb(crumb);
 }
 
 export function addClientBreadcrumb(type, data = {}, level = 'info') {
@@ -243,6 +251,144 @@ function compactBreadcrumbsForPayload(list, max) {
     if (!merged.includes(crumb)) merged.push(crumb);
   }
   return merged.slice(-max);
+}
+
+function classifyActionStatus(type, level) {
+  const t = String(type || '').toLowerCase();
+  if (!t || !/[._-]/.test(t)) return null;
+  if (/(?:^|[._-])(start|begin|init|requested|connect_start|register_start)$/.test(t)) return 'started';
+  if (/(?:^|[._-])(submitted|sent|pending)$/.test(t)) return 'submitted';
+  if (/(?:^|[._-])(success|succeeded|confirmed|complete|completed|done|ready|landed)$/.test(t)) return 'succeeded';
+  if (/(?:^|[._-])(failed|fail|error|timeout|rejected|denied|expired_without_status)$/.test(t)) return 'failed';
+  if (level === 'error' && /(wallet|auth|nft|shop|bridge|order|trade|solana|phoenix|decibel|risex|hyperliquid|agent)/i.test(t)) return 'failed';
+  return null;
+}
+
+function actionKeyFromType(type, status) {
+  const suffixes = {
+    started: /([._-])(?:start|begin|init|requested|connect_start|register_start)$/i,
+    submitted: /([._-])(?:submitted|sent|pending)$/i,
+    succeeded: /([._-])(?:success|succeeded|confirmed|complete|completed|done|ready|landed)$/i,
+    failed: /([._-])(?:failed|fail|error|timeout|rejected|denied|expired_without_status)$/i,
+  };
+  const re = suffixes[status];
+  const key = String(type || '').replace(re || /$/, '');
+  return truncate(key || type || 'client.action', 96);
+}
+
+function actionMessage(data = {}) {
+  return truncate(data.message || data.error || data.reason || data.detail || data.status || '', 500) || null;
+}
+
+function serializeAction(action, includeSteps = false) {
+  if (!action) return null;
+  const out = {
+    id: action.id,
+    key: action.key,
+    status: action.status,
+    started_at: action.started_at,
+    last_at: action.last_at,
+    duration_ms: Math.max(0, action.last_ms - action.started_ms),
+    attempts: action.attempts,
+    had_error: !!action.had_error,
+    recovered_after_error: !!action.recovered_after_error,
+    last_error: action.last_error || null,
+    last_step: action.steps[action.steps.length - 1] || null,
+  };
+  if (action.recovered_at) out.recovered_at = action.recovered_at;
+  if (includeSteps) out.steps = action.steps.slice(-ACTION_STEP_MAX);
+  return out;
+}
+
+function pruneTrackedActions(now = Date.now()) {
+  for (const [key, action] of trackedActions.entries()) {
+    if (now - action.last_ms > ACTION_CONTEXT_MAX_AGE_MS) trackedActions.delete(key);
+  }
+  for (const [key, failure] of fetchFailures.entries()) {
+    if (now - failure.at_ms > FETCH_RECOVERY_WINDOW_MS) fetchFailures.delete(key);
+  }
+}
+
+function recordActionBreadcrumb(crumb) {
+  const status = classifyActionStatus(crumb?.type, crumb?.level);
+  if (!status) return;
+  const now = Date.now();
+  pruneTrackedActions(now);
+  const key = actionKeyFromType(crumb.type, status);
+  let action = trackedActions.get(key);
+  const step = {
+    ts: crumb.ts,
+    t: crumb.t,
+    type: crumb.type,
+    status,
+    level: crumb.level,
+    data: crumb.data || {},
+  };
+  if (!action || status === 'started') {
+    action = {
+      id: `act_${++actionSeq}_${now.toString(36)}`,
+      key,
+      status: status === 'started' ? 'running' : status,
+      started_at: crumb.ts,
+      started_ms: now,
+      last_at: crumb.ts,
+      last_ms: now,
+      attempts: 1,
+      had_error: false,
+      recovered_after_error: false,
+      recovered_at: null,
+      last_error: null,
+      steps: [],
+    };
+    trackedActions.set(key, action);
+  } else if (status === 'submitted') {
+    action.attempts += 1;
+  }
+
+  const wasFailed = action.had_error || action.status === 'failed';
+  action.status = status === 'started' ? 'running' : status;
+  action.last_at = crumb.ts;
+  action.last_ms = now;
+  action.steps.push(step);
+  if (action.steps.length > ACTION_STEP_MAX) action.steps.splice(0, action.steps.length - ACTION_STEP_MAX);
+
+  if (status === 'failed') {
+    action.had_error = true;
+    action.last_error = actionMessage(crumb.data) || crumb.type;
+  } else if (status === 'succeeded' && wasFailed) {
+    action.recovered_after_error = true;
+    action.recovered_at = crumb.ts;
+    enqueue(makeEvent('info', [`action ${key} recovered after error`], 'action.recovered', '', {
+      payload: { action: serializeAction(action, true) },
+    }));
+  }
+}
+
+function actionsForPayload() {
+  const now = Date.now();
+  pruneTrackedActions(now);
+  const actions = Array.from(trackedActions.values())
+    .sort((a, b) => b.last_ms - a.last_ms)
+    .slice(0, ACTION_RECENT_MAX);
+  const active = actions
+    .filter((a) => ['running', 'submitted'].includes(a.status))
+    .slice(0, 5)
+    .map((a) => serializeAction(a));
+  const recentFailures = actions
+    .filter((a) => a.had_error && !a.recovered_after_error)
+    .slice(0, 5)
+    .map((a) => serializeAction(a, true));
+  const recovered = actions
+    .filter((a) => a.recovered_after_error)
+    .slice(0, 5)
+    .map((a) => serializeAction(a, true));
+  const last = actions[0] ? serializeAction(actions[0], true) : null;
+  return {
+    active,
+    recent_failures: recentFailures,
+    recovered,
+    last,
+  };
 }
 
 function payloadString(payload) {
@@ -314,6 +460,7 @@ function makeEvent(level, args, source, stack, extra = {}) {
   const payload = {
     args: safeArgs,
     context: currentContext(extra.context || {}),
+    actions: actionsForPayload(),
     breadcrumbs: breadcrumbs.slice(-MAX_BREADCRUMBS),
     ...(extra.rawPayload || sanitize(extra.payload || {})),
   };
@@ -391,6 +538,50 @@ function shouldStoreFetchFailure(path, status) {
   return true;
 }
 
+function fetchFailureKey(req) {
+  return `${req.method} ${req.path || req.url || ''}`;
+}
+
+function rememberFetchFailure(req, failure) {
+  const key = fetchFailureKey(req);
+  if (!key.trim()) return;
+  fetchFailures.set(key, {
+    ...failure,
+    key,
+    at_ms: Date.now(),
+    at: new Date().toISOString(),
+  });
+}
+
+function reportFetchRecovery(req, response, requestId, durationMs) {
+  const key = fetchFailureKey(req);
+  const previous = fetchFailures.get(key);
+  if (!previous) return;
+  const now = Date.now();
+  if (now - previous.at_ms > FETCH_RECOVERY_WINDOW_MS) {
+    fetchFailures.delete(key);
+    return;
+  }
+  fetchFailures.delete(key);
+  const recovery = {
+    request_id: requestId,
+    method: req.method,
+    path: req.path,
+    status: response.status,
+    duration_ms: durationMs,
+    previous_status: previous.status || null,
+    previous_error: previous.error || null,
+    previous_request_id: previous.request_id || null,
+    recovered_after_ms: now - previous.at_ms,
+  };
+  addBreadcrumbInternal('fetch.recovered', recovery, 'info');
+  enqueue(makeEvent('info', [
+    `fetch ${req.method} ${req.path} recovered after ${previous.status || previous.error || 'failure'}`,
+  ], 'fetch.recovered', '', {
+    payload: { fetch_recovery: recovery },
+  }));
+}
+
 function readResponseSnippet(response) {
   const type = response.headers?.get?.('content-type') || '';
   if (type && !/(json|text|javascript|xml|html|plain)/i.test(type)) {
@@ -420,6 +611,7 @@ function patchFetch() {
           status: response.status,
           duration_ms,
         };
+        rememberFetchFailure(req, base);
         addBreadcrumbInternal(storeFailure ? 'fetch.http_error' : 'fetch.expected_http_status', base, storeFailure ? (response.status >= 500 ? 'error' : 'warn') : 'debug');
         if (storeFailure) {
           readResponseSnippet(response).then((snippet) => {
@@ -430,6 +622,8 @@ function patchFetch() {
             }));
           });
         }
+      } else if (!shouldIgnoreFetch(req.path) && response.status < 400) {
+        reportFetchRecovery(req, response, requestId, duration_ms);
       }
       return response;
     }).catch((err) => {
@@ -442,6 +636,7 @@ function patchFetch() {
           duration_ms,
           error: err?.message || String(err),
         };
+        rememberFetchFailure(req, { ...data, status: null });
         addBreadcrumbInternal('fetch.network_error', data, 'error');
         enqueue(makeEvent('error', [
           `fetch ${req.method} ${req.path} failed: ${data.error}`,
