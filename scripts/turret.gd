@@ -22,6 +22,12 @@ const TRAIL_COLOR: Color    = Color(1.0, 0.88, 0.15, 1.0)
 const TRAIL_EMISSION: float = 6.0
 const POOL_SIZE: int        = 6
 const POOL_BATCH: int       = 2   # build this many per frame to avoid spike
+const ATTACK_SFX_PATHS: Array[String] = [
+	"res://Musik/sound_effects/Turret/Turret_Attack1.mp3",
+	"res://Musik/sound_effects/Turret/Turret_Attack2.mp3",
+]
+const ATTACK_SFX_VOLUME_DB: float = -8.0
+const ATTACK_SFX_PITCH_JITTER: float = 0.04
 
 @export var detect_range: float = 0.95   # just below Archer range (1.0): kiting needs positioning, not free
 @export var bullet_speed: float = 4.0
@@ -39,12 +45,15 @@ var _stand: Node3D = null
 var _stand_base_rot_y: float = 0.0
 var _barrel: Node3D = null
 var _target_search_timer: float = 0.0
+var _attack_sfx_player: AudioStreamPlayer = null
 const TARGET_SEARCH_INTERVAL: float = 0.15
 
 ## Shared materials — one for all turrets
 static var _shared_trail_mat: StandardMaterial3D = null
 static var _flash_textures: Array[Texture2D] = []  # loaded Texture2D frames
 static var _flash_textures_preloaded: bool = false
+static var _attack_sfx_streams: Array[AudioStream] = []
+static var _attack_sfx_preloaded: bool = false
 
 ## Loads muzzle-flash textures once. Called at class-level cheap enough to run
 ## from every turret `_ready()`; the flag guards against re-loading.
@@ -56,6 +65,18 @@ static func _preload_flash_textures() -> void:
 		var tex = load(path)
 		if tex:
 			_flash_textures.append(tex)
+
+
+static func _preload_attack_sfx() -> void:
+	if _attack_sfx_preloaded:
+		return
+	_attack_sfx_preloaded = true
+	for path in ATTACK_SFX_PATHS:
+		var stream: AudioStream = ResourceLoader.load(path) as AudioStream
+		if stream:
+			_attack_sfx_streams.append(stream)
+		else:
+			push_warning("Turret: missing attack sound '%s'" % path)
 
 ## Per-turret flash material — shared by all 6 pool slots of THIS turret only.
 ## (Cannot be global-static: concurrent turrets animate their fades independently.)
@@ -74,6 +95,8 @@ func _ready() -> void:
 	# Preload muzzle-flash textures before the pool builder runs — moves the
 	# I/O off the first-fire frame.
 	_preload_flash_textures()
+	_preload_attack_sfx()
+	_setup_attack_sfx_player()
 	# Find actual turret model (has "RootNode"), skip base outline
 	for child in get_children():
 		if child is Node3D and not (child is AnimationPlayer):
@@ -111,6 +134,27 @@ func _ready() -> void:
 	# is stable. Builds all POOL_SIZE entries at once; startup cost is negligible
 	# compared to the spike that previously hit on the first enemy troop appearance.
 	call_deferred("_build_pool_full")
+
+
+func _setup_attack_sfx_player() -> void:
+	if _attack_sfx_player != null:
+		return
+	_attack_sfx_player = AudioStreamPlayer.new()
+	_attack_sfx_player.name = "AttackSFX"
+	_attack_sfx_player.volume_db = ATTACK_SFX_VOLUME_DB
+	add_child(_attack_sfx_player)
+
+
+func _play_attack_sfx() -> void:
+	if _attack_sfx_streams.is_empty():
+		_preload_attack_sfx()
+	if _attack_sfx_streams.is_empty():
+		return
+	if _attack_sfx_player == null:
+		_setup_attack_sfx_player()
+	_attack_sfx_player.stream = _attack_sfx_streams.pick_random()
+	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
+	_attack_sfx_player.play()
 
 
 func _build_pool() -> void:
@@ -379,6 +423,7 @@ func _spawn_bullet() -> void:
 		_flash_mat.albedo_texture = _flash_textures[0]
 
 	_active_bullets.append(b)
+	_play_attack_sfx()
 	_record_defense_telemetry("defense_fire", _target, {
 		"damage": damage,
 		"projectile_x": snappedf(spawn_pos.x, 0.001),

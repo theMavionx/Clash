@@ -757,7 +757,8 @@ function verifyReplay({ defenderBuildings, actions, claimedResult, gridConfig, g
       });
     }
     if (b.type === 'mage_tower') {
-      const s = DEFENSE_STATS.mage_tower[b.level] || DEFENSE_STATS.mage_tower[1];
+      const mageLevel = Math.max(1, Math.min(Number(b.level) || 1, 3));
+      const s = DEFENSE_STATS.mage_tower[mageLevel] || DEFENSE_STATS.mage_tower[1];
       defenses.push({
         buildingId: b.id, type: 'mage_tower',
         damage: s.damage, fireRate: s.fireRate, detectRange: s.detectRange,

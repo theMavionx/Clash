@@ -21,6 +21,7 @@ config/icon="res://clashofperpslogo.jpg"
 
 Net="*res://scripts/network_client.gd"
 Bridge="*res://scripts/js_bridge.gd"
+AudioManager="*res://scripts/audio_manager.gd"
 
 [editor_plugins]
 

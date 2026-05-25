@@ -5,8 +5,9 @@ extends Node3D
 
 @export var move_speed: float = 0.5
 @export var attack_range: float = 0.15
-@export var separation_radius: float = 0.0
-@export var separation_force: float = 0.0
+@export var separation_radius: float = 0.14
+@export var separation_force: float = 0.6
+@export var attack_sfx_path: String = ""
 
 var level: int = 1
 var hp: int = 100
@@ -26,12 +27,17 @@ var anim_files: Array = []
 var attack_anim: String = ""
 var _hp_bar: Node3D
 var _hp_fill: MeshInstance3D
+var _attack_sfx_player: AudioStreamPlayer = null
 const TROOP_MESH_CULL_MARGIN: float = 0.75
 const TROOP_MESH_LOD_BIAS: float = 4.0
+const ATTACK_SFX_VOLUME_DB: float = -8.0
+const ATTACK_SFX_PITCH_JITTER: float = 0.06
 
 ## Cached troop list — shared across all BaseTroop instances via static
 static var _cached_troops: Array = []
 static var _troops_cache_frame: int = -1
+static var _attack_sfx_cache: Dictionary = {}
+static var _attack_sfx_missing: Dictionary = {}
 
 ## Rally pointer — set by BSRally when the player drops a marker. The visual
 ## marker expires quickly, but the command target stays sticky until that
@@ -451,6 +457,7 @@ static func _get_camera_cached() -> Camera3D:
 func _ready() -> void:
 	_init_stats()
 	max_hp = hp
+	_setup_attack_sfx()
 	_setup_animations()
 	_setup_weapons()
 	_stabilize_render_meshes()
@@ -470,11 +477,42 @@ func _init_stats() -> void:
 func upgrade_to(lvl: int) -> void:
 	level = lvl
 	_init_stats()
+	_setup_attack_sfx()
 
 
 ## Override to attach weapons via _attach_to_bone()
 func _setup_weapons() -> void:
 	pass
+
+
+func _setup_attack_sfx() -> void:
+	if attack_sfx_path == "":
+		return
+	if _attack_sfx_player == null:
+		_attack_sfx_player = AudioStreamPlayer.new()
+		_attack_sfx_player.name = "AttackSFX"
+		_attack_sfx_player.volume_db = ATTACK_SFX_VOLUME_DB
+		add_child(_attack_sfx_player)
+	if not _attack_sfx_cache.has(attack_sfx_path) and not _attack_sfx_missing.has(attack_sfx_path):
+		var stream: AudioStream = ResourceLoader.load(attack_sfx_path) as AudioStream
+		if stream:
+			_attack_sfx_cache[attack_sfx_path] = stream
+		else:
+			_attack_sfx_missing[attack_sfx_path] = true
+			push_warning("%s: missing attack sound '%s'" % [name, attack_sfx_path])
+	if _attack_sfx_cache.has(attack_sfx_path):
+		_attack_sfx_player.stream = _attack_sfx_cache[attack_sfx_path]
+
+
+func _play_attack_sfx() -> void:
+	if attack_sfx_path == "":
+		return
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		_setup_attack_sfx()
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		return
+	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
+	_attack_sfx_player.play()
 
 
 ## Transitions the troop from INACTIVE to IDLE, makes it visible, registers it
@@ -1136,7 +1174,7 @@ func _record_projectile_payload(kind: String, payload: Dictionary, projectile_po
 	_record_replay_telemetry(kind, payload)
 
 
-func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref: Node3D, projectile_pos: Vector3, extra: Dictionary = {}) -> void:
+func _record_projectile_telemetry(kind: String, target_ref: Dictionary, guard_ref = null, projectile_pos: Vector3 = Vector3.ZERO, extra: Dictionary = {}) -> void:
 	_record_projectile_payload(kind, _target_payload_from_refs(target_ref, guard_ref), projectile_pos, extra)
 
 
@@ -1302,6 +1340,9 @@ func _compute_attack_slot(target_pos: Vector3, my_angle: float, delta: float) ->
 func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: float) -> Vector3:
 	var sep = Vector3.ZERO
 	var sep_range_sq = separation_radius * separation_radius * 4.0
+	var move_len: float = move_dir.length()
+	var forward: Vector3 = move_dir / move_len if move_len > 0.0001 else Vector3.ZERO
+	var lateral: Vector3 = Vector3.UP.cross(forward).normalized() if forward.length_squared() > 0.0001 else Vector3.ZERO
 
 	# Troop-to-troop separation
 	for other in _get_troops_cached():
@@ -1328,7 +1369,16 @@ func _apply_separation_steering(move_dir: Vector3, target_pos: Vector3, delta: f
 			if gd < separation_radius:
 				sep -= (to_guard / gd) * (separation_radius - gd) / separation_radius * 0.5
 
-	# Building avoidance — push out of non-target buildings using footprint radius
+			# Lateral steer prevents troops from trying to walk through guards.
+			if gd < separation_radius * 2.0 and lateral.length_squared() > 0.0001:
+				var guard_dir: Vector3 = to_guard / gd
+				var ahead: float = guard_dir.dot(forward)
+				if ahead > 0.15:
+					var side: float = guard_dir.dot(lateral)
+					var steer_strength: float = ahead * (1.0 - gd / (separation_radius * 2.0)) * 0.65
+					sep += (-lateral if side >= 0.0 else lateral) * steer_strength
+
+	# Building avoidance: push out of non-target buildings using footprint radius.
 	var target_node = target_building.get("node")
 	for entry in _get_buildings_cached():
 		if entry.b.get("node") == target_node:
@@ -1479,6 +1529,7 @@ func _do_attack(delta: float) -> void:
 		if attack_anim != "" and anim_player.has_animation(attack_anim):
 			anim_player.stop()
 			anim_player.play(attack_anim)
+		_play_attack_sfx()
 		_deal_target_damage()
 
 

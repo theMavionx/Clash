@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cuqani764kdlw"
-path="res://.godot/imported/4.glb-c563489d8e5c92e7f163792fc4d77320.scn"
+uid="uid://cw5wl6j3x0fq7"
+path="res://.godot/imported/3,4,5.glb-00d6771c24ccb78c1b6565a1e6907545.scn"
 
 [deps]
 
-source_file="res://Model/Archer_towers/4.glb"
-dest_files=["res://.godot/imported/4.glb-c563489d8e5c92e7f163792fc4d77320.scn"]
+source_file="res://Model/Archer_towers/3,4,5.glb"
+dest_files=["res://.godot/imported/3,4,5.glb-00d6771c24ccb78c1b6565a1e6907545.scn"]
 
 [params]
 

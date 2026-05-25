@@ -1,6 +1,6 @@
-[gd_scene load_steps=182 format=3]
+[gd_scene load_steps=194 format=3]
 
-[ext_resource type="PackedScene" path="res://Model/Archer_towers/4.glb" id="1"]
+[ext_resource type="PackedScene" path="res://Model/Archer_towers/3,4,5.glb" id="1"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/tower2plus_3.glb" id="2"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/tower_1.glb" id="3"]
 [ext_resource type="PackedScene" path="res://Model/Archer_towers/towerplus_2.fbx" id="4"]
@@ -73,6 +73,8 @@
 [ext_resource type="PackedScene" path="res://Model/MageTower/1.fbx" id="71"]
 [ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_albedo.png" id="72"]
 [ext_resource type="Texture2D" path="res://Model/MageTower/mage_tower_emit.png" id="73"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/2.fbx" id="182"]
+[ext_resource type="PackedScene" path="res://Model/MageTower/3.fbx" id="183"]
 [ext_resource type="PackedScene" path="res://Model/Mine/1.glb" id="74"]
 [ext_resource type="Texture2D" path="res://Model/Mine/1_hexagons_medieval.png" id="75"]
 [ext_resource type="PackedScene" path="res://Model/Port/1.glb" id="76"]
@@ -181,6 +183,16 @@
 [ext_resource type="Texture2D" path="res://web/src/assets/resources/gold_bar.png" id="179"]
 [ext_resource type="Texture2D" path="res://web/src/assets/resources/stone_bar.png" id="180"]
 [ext_resource type="Texture2D" path="res://web/src/assets/resources/wood_bar.png" id="181"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/archer/attack.mp3" id="184"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/barbarian/attack.mp3" id="185"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/knight/attack.mp3" id="186"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/mage/attack.mp3" id="187"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/ranger/attack.mp3" id="188"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/DemonKingAttack.mp3" id="189"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/Turret/Turret_Attack1.mp3" id="190"]
+[ext_resource type="AudioStream" path="res://Musik/sound_effects/Turret/Turret_Attack2.mp3" id="191"]
+[ext_resource type="AudioStream" path="res://Musik/fight/fight_1.mp3" id="192"]
+[ext_resource type="AudioStream" path="res://Musik/fight/fight_2.wav" id="193"]
 
 [node name="ExportManifest" type="ResourcePreloader"]
 resources = {
@@ -364,5 +376,17 @@ resources = {
 "res_178": ExtResource("178"),
 "res_179": ExtResource("179"),
 "res_180": ExtResource("180"),
-"res_181": ExtResource("181")
+"res_181": ExtResource("181"),
+"res_182": ExtResource("182"),
+"res_183": ExtResource("183"),
+"res_184": ExtResource("184"),
+"res_185": ExtResource("185"),
+"res_186": ExtResource("186"),
+"res_187": ExtResource("187"),
+"res_188": ExtResource("188"),
+"res_189": ExtResource("189"),
+"res_190": ExtResource("190"),
+"res_191": ExtResource("191"),
+"res_192": ExtResource("192"),
+"res_193": ExtResource("193")
 }

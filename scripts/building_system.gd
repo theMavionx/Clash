@@ -92,6 +92,7 @@ var building_defs: Dictionary = {
 		"height": 0.45,
 		"scene": "res://Model/Turret/scene.gltf",
 		"model_scale": 0.25,
+		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3],
 		"hp_levels": [900, 1600, 2800, 4500],
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
@@ -114,11 +115,11 @@ var building_defs: Dictionary = {
 		"color": Color(0.5, 0.45, 0.55, 0.5),
 		"height": 0.45,
 		"scene": "res://Model/Archer_towers/tower_1.glb",
-		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/tower2plus_3.glb", "res://Model/Archer_towers/4.glb"],
+		"scenes": ["res://Model/Archer_towers/tower_1.glb", "res://Model/Archer_towers/towerplus_2.fbx", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb", "res://Model/Archer_towers/3,4,5.glb"],
 		"model_scale": 0.03,
 		"model_offset": Vector3(0.11, 0, -0.02),
-		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0)],
-		"hp_levels": [800, 1500, 2500, 3800],
+		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
+		"hp_levels": [800, 1500, 2500, 3800, 5600],
 		"cost": {"gold": 400, "wood": 1500},
 		"hp_bar_height": 0.5,
 		"tower_unit": {
@@ -133,10 +134,10 @@ var building_defs: Dictionary = {
 		"color": Color(0.55, 0.3, 0.7, 0.5),  # purple magic theme
 		"height": 0.5,
 		"scene": "res://Model/MageTower/1.fbx",
-		"scenes": ["res://Model/MageTower/1.fbx"],
+		"scenes": ["res://Model/MageTower/1.fbx", "res://Model/MageTower/2.fbx", "res://Model/MageTower/3.fbx"],
 		"model_scale": 0.039,  # TARBO FBX scale (0.02 base +50%, then +30% size)
 		"model_rotation_y": 0.0,
-		"hp_levels": [700],
+		"hp_levels": [700, 1200, 2000],
 		"cost": {"gold": 2500, "ore": 4000},
 		"max_count": 2,
 		"hp_bar_height": 0.5,
@@ -187,6 +188,7 @@ const BUILDING_UPGRADE_COST_MULTIPLIERS: Dictionary = {
 	2: 2,
 	3: 3,
 	4: 20,
+	5: 35,
 }
 
 # ── Resources ─────────────────────────────────────────────────
@@ -1084,6 +1086,46 @@ func _apply_building_albedo(model: Node, def: Dictionary) -> void:
 	_assign_albedo_recursive(model, mat)
 
 
+func _apply_archer_tower_level_visuals(model: Node, level: int) -> void:
+	if model == null:
+		return
+	var show_mannequin: bool = level >= 5
+	var show_target: bool = level >= 4
+	_set_archer_tower_extra_visible(model, show_mannequin, ["RootNode", "Dummy.002"], ["Leather"])
+	_set_archer_tower_extra_visible(model, show_target, ["RootNode.001", "Cylinder.003"], ["White", "Celing"])
+
+
+func _set_archer_tower_extra_visible(root: Node, is_visible: bool, node_names: Array[String], material_markers: Array[String]) -> void:
+	if root == null:
+		return
+	if root is Node3D:
+		var node_3d := root as Node3D
+		if node_names.has(str(root.name)) or _mesh_uses_material_marker(root, material_markers):
+			node_3d.visible = is_visible
+	for child in root.get_children():
+		_set_archer_tower_extra_visible(child, is_visible, node_names, material_markers)
+
+
+func _mesh_uses_material_marker(node: Node, markers: Array[String]) -> bool:
+	if markers.is_empty() or not (node is MeshInstance3D):
+		return false
+	var mesh_inst := node as MeshInstance3D
+	var mesh: Mesh = mesh_inst.mesh
+	if mesh == null:
+		return false
+	for surface_idx in mesh.get_surface_count():
+		var mat: Material = mesh_inst.get_surface_override_material(surface_idx)
+		if mat == null:
+			mat = mesh.surface_get_material(surface_idx)
+		if mat == null:
+			continue
+		var mat_name := str(mat.resource_name)
+		for marker in markers:
+			if mat_name.findn(marker) != -1:
+				return true
+	return false
+
+
 func _assign_albedo_recursive(node: Node, mat: Material) -> void:
 	if node is MeshInstance3D:
 		var mi: MeshInstance3D = node as MeshInstance3D
@@ -1532,11 +1574,11 @@ func _apply_resources_from_server(res: Dictionary) -> void:
 
 
 func _update_resource_ui() -> void:
-	if wood_label:
+	if is_instance_valid(wood_label):
 		wood_label.text = str(resources.wood)
-	if gold_label:
+	if is_instance_valid(gold_label):
 		gold_label.text = str(resources.gold)
-	if ore_label:
+	if is_instance_valid(ore_label):
 		ore_label.text = str(resources.ore)
 	# Send to React
 	var bridge = _bridge
@@ -1548,7 +1590,10 @@ func _update_resource_ui() -> void:
 
 func _on_add_resource(res_name: String) -> void:
 	var net = _net
-	if net and net.has_token():
+	if test_mode:
+		resources[res_name] += 1000
+		_update_resource_ui()
+	elif net and net.has_token():
 		var bridge = _bridge
 		if bridge:
 			bridge.send_to_react("shop_toggled", {"open": true, "reason": "resource_topup"})
@@ -1721,6 +1766,9 @@ func _reveal_initial_cover() -> void:
 	if not create_ui or _initial_load_done:
 		return
 	_initial_load_done = true
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_base"):
+		audio.play_base()
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
 
@@ -1823,6 +1871,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				var model = scene_res.instantiate()
 				var s = _get_model_scale(def, level)
 				model.scale = Vector3(s, s, s)
+				model.set_meta("building_visual_model", true)
 				model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 				var offsets = def.get("model_offsets", [])
 				if offsets.size() >= level:
@@ -1839,6 +1888,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
+				if building_type == "archer_tower":
+					_apply_archer_tower_level_visuals(model, level)
 
 		# Position on grid
 		var sx = def.cells.x * cell_size
@@ -2291,7 +2342,13 @@ func _precompute_building_aabbs() -> void:
 			for lvl in range(2, def.scenes.size() + 1):
 				var key = _aabb_cache_key(id, lvl)
 				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
-		# Buildings without scenes array — same model at all levels, reuse level 1 AABB
+		# Buildings with per-level scale need per-level AABBs even if they
+		# reuse the same scene. Otherwise outlines keep the level-1 footprint.
+		if def.has("model_scales"):
+			for lvl in range(2, max_lvl + 1):
+				var key = _aabb_cache_key(id, lvl)
+				_building_aabb_cache[key] = _compute_model_aabb(def, lvl)
+		# Buildings without scenes or per-level scale reuse level 1 AABB.
 		for lvl in range(2, max_lvl + 1):
 			var key = _aabb_cache_key(id, lvl)
 			if not _building_aabb_cache.has(key):
@@ -2342,6 +2399,8 @@ func _get_cached_aabb(building_id: String) -> Dictionary:
 
 func _create_building_base(def: Dictionary, building_id: String = "") -> MeshInstance3D:
 	var mesh_inst = MeshInstance3D.new()
+	mesh_inst.name = "BuildingBase"
+	mesh_inst.set_meta("building_base", true)
 	var quad = QuadMesh.new()
 
 	var sx: float
@@ -2413,13 +2472,16 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			scene_res = _load_packed_scene_resource(_scene_path)
 		if scene_res:
 			var model = scene_res.instantiate()
-			var s = def.get("model_scale", 0.2)
+			var s = _get_model_scale(def, 1)
 			model.scale = Vector3(s, s, s)
+			model.set_meta("building_visual_model", true)
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			model.position = def.get("model_offset", Vector3.ZERO)
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
+			if current_building_id == "archer_tower":
+				_apply_archer_tower_level_visuals(model, 1)
 			return node
 	# Fallback: cube if no model
 	var mesh_inst = MeshInstance3D.new()
@@ -3166,6 +3228,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 			var new_model = scene_res.instantiate()
 			var s = _get_model_scale(def, b.level)
 			new_model.scale = Vector3(s, s, s)
+			new_model.set_meta("building_visual_model", true)
 			new_model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			var offsets = def.get("model_offsets", [])
 			if offsets.size() >= b.level:
@@ -3174,10 +3237,18 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 				new_model.position = def.get("model_offset", Vector3.ZERO)
 			model.add_child(new_model)
 			_apply_building_albedo(new_model, def)
+			if b.id == "archer_tower":
+				_apply_archer_tower_level_visuals(new_model, b.level)
 			# Recreate HP bar (old one was freed with model children)
 			var hp_bar_data = _create_building_hp_bar(model, def)
 			b["hp_bar"] = hp_bar_data.bar
 			b["hp_fill"] = hp_bar_data.fill
+	elif def.has("model_scales"):
+		var visual_model := _get_building_visual_model(model)
+		if is_instance_valid(visual_model):
+			var s = _get_model_scale(def, b.level)
+			visual_model.scale = Vector3(s, s, s)
+		_refresh_building_base_for_level(model, def, b.id, b.level)
 
 	# Respawn tower unit after model swap
 	if def.has("tower_unit"):
@@ -3264,6 +3335,29 @@ func _get_model_scale(def: Dictionary, level: int = 1) -> float:
 	if level >= 1 and scales.size() >= level:
 		return float(scales[level - 1])
 	return float(def.get("model_scale", 0.2))
+
+
+func _get_building_visual_model(building_node: Node3D) -> Node3D:
+	for child in building_node.get_children():
+		if child is Node3D and child.has_meta("building_visual_model"):
+			return child
+	for child in building_node.get_children():
+		if child is Node3D and not child.has_meta("building_base") and child.name != "BuildingHpBar":
+			if child is OmniLight3D or child is AnimationPlayer:
+				continue
+			return child
+	return null
+
+
+func _refresh_building_base_for_level(building_node: Node3D, def: Dictionary, building_id: String, level: int) -> void:
+	for child in building_node.get_children():
+		if child.has_meta("building_base"):
+			child.queue_free()
+	var cache_key = _aabb_cache_key(building_id, level)
+	if not _building_aabb_cache.has(cache_key):
+		_building_aabb_cache[cache_key] = _compute_model_aabb(def, level)
+	if not def.get("no_outline", false):
+		building_node.add_child(_create_building_base(def, cache_key))
 
 
 func _auto_center_model(model: Node3D) -> void:
@@ -3588,7 +3682,25 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	b["tower_unit_node"] = unit
 
 
-func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
+func _tombstone_skeleton_offset(index: int, target_count: int) -> Vector3:
+	if target_count == 4:
+		const DIAMOND_POINTS: Array[Vector3] = [
+			Vector3(0, 0,  0.21),
+			Vector3( 0.21, 0, 0),
+			Vector3(0, 0, -0.21),
+			Vector3(-0.21, 0, 0),
+		]
+		return DIAMOND_POINTS[index]
+	var angle := (TAU * float(index)) / maxf(float(target_count), 1.0)
+	var radius: float = maxf(0.18, 0.04 * float(target_count))
+	return Vector3(cos(angle) * radius, 0, sin(angle) * radius)
+
+
+func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_existing: bool = true) -> void:
+	var tomb_node: Node3D = b.get("node", null)
+	if not is_instance_valid(tomb_node):
+		b["skeletons"] = []
+		return
 	# Keep alive skeletons, remove invalid references
 	var alive: Array = []
 	for skel in b.get("skeletons", []):
@@ -3599,8 +3711,9 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 		var skel = alive.pop_back()
 		if is_instance_valid(skel):
 			skel.queue_free()
+	var existing_count := alive.size()
 	# Spawn missing
-	var tomb_pos = b.node.global_position
+	var tomb_pos: Vector3 = tomb_node.global_position
 	# Use preloaded cache (populated in _ready → _preload_defense_resources).
 	# Defensive lazy init if something else called us before _ready ran.
 	if _skeleton_model_res == null or _skeleton_script_res == null:
@@ -3610,33 +3723,26 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int) -> void:
 	if not model_res or not script_res:
 		b["skeletons"] = alive
 		return
-	# Diamond layout for 4 skeletons: front of cross / behind / both sides.
-	const DIAMOND_POINTS: Array[Vector3] = [
-		Vector3(0, 0,  0.18),  # front (south)
-		Vector3( 0.18, 0, 0),  # right (east)
-		Vector3(0, 0, -0.18),  # back (north)
-		Vector3(-0.18, 0, 0),  # left (west)
-	]
 	while alive.size() < target_count:
+		var spawn_index := alive.size()
 		var skel = model_res.instantiate()
 		skel.set_script(script_res)
 		skel.scale = Vector3(SKELETON_SCALE, SKELETON_SCALE, SKELETON_SCALE)
 		get_tree().current_scene.add_child(skel)
 		skel.tombstone_pos = tomb_pos
+		skel.global_position = tomb_pos + _tombstone_skeleton_offset(spawn_index, target_count)
+		skel.global_rotation = Vector3.ZERO
 		_apply_cel_shader(skel)
 		alive.append(skel)
 	# Reposition every guard to the current target_count layout so that an
 	# upgrade (e.g. L3 circle → L4 diamond) re-anchors existing skeletons
 	# instead of dropping the new one onto a stale spot.
 	for i in range(alive.size()):
-		var offset: Vector3
-		if target_count == 4:
-			offset = DIAMOND_POINTS[i]
-		else:
-			var angle := (TAU * float(i)) / maxf(float(target_count), 1.0)
-			offset = Vector3(cos(angle) * 0.15, 0, sin(angle) * 0.15)
 		if is_instance_valid(alive[i]):
-			alive[i].global_position = tomb_pos + offset
+			alive[i].tombstone_pos = tomb_pos
+			if reposition_existing or i >= existing_count:
+				alive[i].global_position = tomb_pos + _tombstone_skeleton_offset(i, target_count)
+				alive[i].global_rotation = Vector3.ZERO
 	b["skeletons"] = alive
 
 
@@ -3666,6 +3772,7 @@ func _make_bldg_hp_mat(color: Color, size: Vector2, priority: int) -> ShaderMate
 
 func _create_building_hp_bar(building: Node3D, def: Dictionary) -> Dictionary:
 	var bar = Node3D.new()
+	bar.name = "BuildingHpBar"
 	bar.top_level = true
 	building.add_child(bar)
 	var bg = MeshInstance3D.new()
@@ -3752,6 +3859,8 @@ func _replace_with_ruins(node: Node3D) -> void:
 	if _ruins_res == null:
 		return
 	# Stop defense scripts (turret/archer tower) so they don't keep firing
+	if node.has_method("cleanup_defense_visuals"):
+		node.cleanup_defense_visuals()
 	node.set_process(false)
 	node.set_physics_process(false)
 	# Clean up active bullets/projectiles/flashes from turrets and archer towers
@@ -5118,11 +5227,22 @@ func _confirm_move() -> void:
 	# b.node is already at the new position (moved by _update_move_building)
 	# Tombstone: respawn dead skeletons and relocate alive ones
 	if b.id == "tombstone":
-		_spawn_tombstone_skeletons(b, b.get("level", 1))
-		var tomb_world = b["node"].global_position
+		var existing_skeletons: Array = []
 		for skel in b.get("skeletons", []):
-			if is_instance_valid(skel) and skel.has_method("relocate_to"):
-				skel.relocate_to(tomb_world)
+			if is_instance_valid(skel):
+				existing_skeletons.append(skel)
+		_spawn_tombstone_skeletons(b, b.get("level", 1), false)
+		var tomb_world = b["node"].global_position
+		var skeletons: Array = b.get("skeletons", [])
+		for i in range(skeletons.size()):
+			var skel = skeletons[i]
+			if not is_instance_valid(skel):
+				continue
+			if skel in existing_skeletons and skel.has_method("relocate_to"):
+				skel.relocate_to(tomb_world, tomb_world + _tombstone_skeleton_offset(i, int(b.get("level", 1))), 0.0)
+			else:
+				skel.tombstone_pos = tomb_world
+				skel.global_rotation = Vector3.ZERO
 	# Sync with server
 	var net = _net
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
