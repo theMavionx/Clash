@@ -291,6 +291,45 @@ function sizeFromChainUnits(raw, market) {
   return Number(raw) / Math.pow(10, d);
 }
 
+function positiveNumberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function normalizeMaybeChainPrice(value, market) {
+  const n = positiveNumberOrNull(value);
+  if (n == null) return null;
+  if (!market) return n;
+  const d = Number(market?.px_decimals ?? market?.pxDecimals ?? 6);
+  const threshold = Math.pow(10, Math.max(1, d - 1));
+  return Number.isInteger(n) && n >= threshold ? priceFromChainUnits(n, market) : n;
+}
+
+function triggerPriceFromCondition(condition) {
+  const matches = String(condition || '').match(/\d+(?:\.\d+)?/g);
+  if (!matches || !matches.length) return null;
+  return positiveNumberOrNull(matches[matches.length - 1]);
+}
+
+function orderTypeText(order) {
+  return String(order?.order_type ?? order?.orderType ?? order?.ot ?? '');
+}
+
+function tpslKindFromOrder(order) {
+  const text = `${orderTypeText(order)} ${order?.trigger_condition || order?.triggerCondition || ''}`.toLowerCase();
+  if (/\b(take\s*profit|take-profit|tp)\b/.test(text)) return 'tp';
+  if (/\b(stop\s*loss|stop-loss|stop|sl)\b/.test(text)) return 'sl';
+  return null;
+}
+
+function tpslPriceFromOrder(order) {
+  const trigger = triggerPriceFromCondition(order?.trigger_condition ?? order?.triggerCondition);
+  return trigger
+    ?? positiveNumberOrNull(order?.take_profit ?? order?.takeProfit ?? order?.tp)
+    ?? positiveNumberOrNull(order?.stop_loss ?? order?.stopLoss ?? order?.sl)
+    ?? positiveNumberOrNull(order?.price);
+}
+
 // Reads APT balance for an Aptos address as raw octa (1 APT = 1e8 octa).
 // Uses the FA `primary_fungible_store::balance` view with metadata 0xa,
 // which is correct for both legacy CoinStore and FA-only wallets after
@@ -365,6 +404,10 @@ function normalizePosition(p, markets) {
   const lev = Number(p.user_leverage ?? 1) || 1;
   const notional = sizeAbs * entry;
   const margin = lev > 0 ? notional / lev : 0;
+  const tpTrigger = normalizeMaybeChainPrice(p.tp_trigger_price ?? p.tpTriggerPrice ?? p.take_profit ?? p.takeProfit ?? p.tp, m);
+  const tpLimit = normalizeMaybeChainPrice(p.tp_limit_price ?? p.tpLimitPrice, m);
+  const slTrigger = normalizeMaybeChainPrice(p.sl_trigger_price ?? p.slTriggerPrice ?? p.stop_loss ?? p.stopLoss ?? p.sl, m);
+  const slLimit = normalizeMaybeChainPrice(p.sl_limit_price ?? p.slLimitPrice, m);
   // Mark-mark pnl will be filled by the consumer (FuturesPanel reads
   // `prices` separately) — we leave 0 here so the UI doesn't lock to a
   // stale figure derived from a missing field.
@@ -381,11 +424,15 @@ function normalizePosition(p, markets) {
     market_addr: marketAddr || (m && m.market_addr) || null,
     is_isolated: !!p.is_isolated,
     tp_order_id: p.tp_order_id ?? p.tpOrderId ?? null,
-    tp_trigger_price: p.tp_trigger_price == null ? null : String(p.tp_trigger_price),
-    tp_limit_price: p.tp_limit_price == null ? null : String(p.tp_limit_price),
+    tp_trigger_price: tpTrigger == null ? null : String(tpTrigger),
+    tp_limit_price: tpLimit == null ? null : String(tpLimit),
+    take_profit: tpTrigger == null ? null : String(tpTrigger),
+    tp: tpTrigger == null ? null : String(tpTrigger),
     sl_order_id: p.sl_order_id ?? p.slOrderId ?? null,
-    sl_trigger_price: p.sl_trigger_price == null ? null : String(p.sl_trigger_price),
-    sl_limit_price: p.sl_limit_price == null ? null : String(p.sl_limit_price),
+    sl_trigger_price: slTrigger == null ? null : String(slTrigger),
+    sl_limit_price: slLimit == null ? null : String(slLimit),
+    stop_loss: slTrigger == null ? null : String(slTrigger),
+    sl: slTrigger == null ? null : String(slTrigger),
     has_fixed_sized_tpsls: !!p.has_fixed_sized_tpsls,
   };
 }
@@ -396,24 +443,76 @@ function normalizeOrder(o, markets) {
   const m = findMarket(markets, marketId) || findMarket(markets, marketName);
   const symbol = m
     ? m.symbol
-    : String(marketName || '').split(/[-/]/)[0].toUpperCase();
+    : (String(o.symbol || o.s || marketName || '').split(/[-/]/)[0].toUpperCase()
+      || String(marketId || '').slice(0, 8).toUpperCase());
   const isBuy = o.isBuy ?? o.is_buy ?? false;
   const sizeRaw = o.remaining_size ?? o.orig_size ?? o.size_delta ?? o.size ?? 0;
-  const priceRaw = o.price ?? 0;
-  const size = m ? sizeFromChainUnits(sizeRaw, m) : Number(sizeRaw);
-  const price = m ? priceFromChainUnits(priceRaw, m) : Number(priceRaw);
+  const type = orderTypeText(o) || (o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT');
+  const kind = tpslKindFromOrder({ ...o, order_type: type });
+  const triggerPrice = tpslPriceFromOrder(o);
+  const price = positiveNumberOrNull(o.price)
+    ?? normalizeMaybeChainPrice(o.limit_price ?? o.limitPrice, m)
+    ?? triggerPrice
+    ?? 0;
+  const size = positiveNumberOrNull(sizeRaw) ?? 0;
   return {
     symbol,
     side: isBuy ? 'bid' : 'ask',
     amount: String(size),
+    initial_amount: String(size),
     price: String(price),
+    stop_price: triggerPrice == null ? '' : String(triggerPrice),
     leverage: String(o.leverage ?? 1),
-    order_type: o.isTrigger || o.is_trigger ? 'STOP_LIMIT' : 'LIMIT',
+    order_type: type,
+    is_tpsl: !!(o.is_tpsl ?? o.isTpsl) || !!kind,
+    trigger_condition: o.trigger_condition ?? o.triggerCondition ?? '',
+    order_direction: o.order_direction ?? o.orderDirection ?? '',
+    take_profit: kind === 'tp' && triggerPrice != null ? String(triggerPrice) : null,
+    stop_loss: kind === 'sl' && triggerPrice != null ? String(triggerPrice) : null,
     tif: String(o.timeInForce || o.time_in_force || 'GTC'),
     order_id: String(o.orderId ?? o.order_id ?? o.id ?? ''),
     market_addr: marketId || (m && m.market_addr) || null,
     market_name: marketName || (m && m.market_name) || '',
+    client_order_id: o.client_order_id ?? o.clientOrderId ?? null,
   };
+}
+
+function orderMatchesPosition(order, position) {
+  if (!order || !position || !tpslKindFromOrder(order)) return false;
+  if (order.symbol && position.symbol && order.symbol !== position.symbol) return false;
+  if (order.market_addr && position.market_addr && !sameAptosAddress(order.market_addr, position.market_addr)) return false;
+  const direction = String(order.order_direction || '').toLowerCase();
+  if (direction.includes('close long') && position.side !== 'bid') return false;
+  if (direction.includes('close short') && position.side !== 'ask') return false;
+  return true;
+}
+
+function mergeTpslOrdersIntoPositions(positions, orders) {
+  if (!Array.isArray(positions) || !positions.length || !Array.isArray(orders) || !orders.length) {
+    return positions;
+  }
+  return positions.map(position => {
+    let next = position;
+    for (const order of orders) {
+      if (!orderMatchesPosition(order, position)) continue;
+      const kind = tpslKindFromOrder(order);
+      const price = tpslPriceFromOrder(order);
+      if (price == null) continue;
+      if (next === position) next = { ...position };
+      if (kind === 'tp') {
+        next.tp_order_id = order.order_id || next.tp_order_id || null;
+        next.tp_trigger_price = String(price);
+        next.take_profit = String(price);
+        next.tp = String(price);
+      } else if (kind === 'sl') {
+        next.sl_order_id = order.order_id || next.sl_order_id || null;
+        next.sl_trigger_price = String(price);
+        next.stop_loss = String(price);
+        next.sl = String(price);
+      }
+    }
+    return next;
+  });
 }
 
 function normalizeMarket(raw, idx) {
@@ -711,6 +810,8 @@ export function useDecibel() {
   const [activationStep, setActivationStep] = useState(null);
 
   const marketsRef = useRef([]);
+  const positionsRef = useRef([]);
+  const ordersRef = useRef([]);
   const claimGoldRef = useRef(null);
   const activationInFlightRef = useRef(false);
   // Builder subaccount cache (deterministic, but resolution touches REST +
@@ -849,6 +950,8 @@ export function useDecibel() {
     setSubaccountAddr(null);
     setPositions([]);
     setOrders([]);
+    positionsRef.current = [];
+    ordersRef.current = [];
     setPrices([]);
     setWalletUsdc(null);
     setWalletApt(null);
@@ -1053,7 +1156,6 @@ export function useDecibel() {
   // setMarginMode can read current state without inflating their dep
   // array (and the consequent re-creation chain). Updated alongside
   // setPositions inside fetchPositions.
-  const positionsRef = useRef([]);
   const fetchPositions = useCallback(async () => {
     if (!address) return;
     try {
@@ -1066,7 +1168,10 @@ export function useDecibel() {
         'positions'
       );
       const raw = Array.isArray(list) ? list : (list?.data || []);
-      const norm = raw.map(p => normalizePosition(p, marketsRef.current));
+      const norm = mergeTpslOrdersIntoPositions(
+        raw.map(p => normalizePosition(p, marketsRef.current)),
+        ordersRef.current
+      );
       if (norm.length) {
         D.log(`fetchPositions: ${norm.length} open`,
           norm.map(p => `${p.symbol} ${p.side} ${p.amount}@$${p.entry_price}`).join(' | '));
@@ -1084,7 +1189,7 @@ export function useDecibel() {
     if (!address) return;
     try {
       const sub = await ensureSubaccount();
-      if (!sub) { setOrders([]); return; }
+      if (!sub) { setOrders([]); ordersRef.current = []; return; }
       const read = await getReadClient();
       const list = await withAbortableRead(
         fetchOptions => read.userOpenOrders.getByAddr({ subAddr: sub, fetchOptions }),
@@ -1092,7 +1197,14 @@ export function useDecibel() {
         'orders'
       );
       const raw = Array.isArray(list) ? list : (list?.data || []);
-      setOrders(raw.map(o => normalizeOrder(o, marketsRef.current)));
+      const norm = raw.map(o => normalizeOrder(o, marketsRef.current));
+      ordersRef.current = norm;
+      setOrders(norm);
+      setPositions(prev => {
+        const merged = mergeTpslOrdersIntoPositions(prev, norm);
+        positionsRef.current = merged;
+        return merged;
+      });
     } catch (e) {
       console.warn('[useDecibel] fetchOrders:', e?.message || e);
     }

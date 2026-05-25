@@ -220,8 +220,8 @@ function getPositionMetrics(pos, prices, leverageSettings = {}) {
 }
 
 function getPositionTpsl(pos) {
-  const tp = numOrNull(pos?.take_profit ?? pos?.takeProfit ?? pos?.tp);
-  const sl = numOrNull(pos?.stop_loss ?? pos?.stopLoss ?? pos?.sl);
+  const tp = numOrNull(pos?.take_profit ?? pos?.takeProfit ?? pos?.tp ?? pos?.tp_trigger_price ?? pos?.tpTriggerPrice ?? pos?.tp_limit_price ?? pos?.tpLimitPrice);
+  const sl = numOrNull(pos?.stop_loss ?? pos?.stopLoss ?? pos?.sl ?? pos?.sl_trigger_price ?? pos?.slTriggerPrice ?? pos?.sl_limit_price ?? pos?.slLimitPrice);
   return {
     tp: tp && tp > 0 ? tp : 0,
     sl: sl && sl > 0 ? sl : 0,
@@ -303,6 +303,20 @@ function orderStableKey(order, index) {
   const price = order?.price ?? order?.ip ?? order?.stop_price ?? order?.sp ?? '';
   const parts = [id, sym, side, type, pair, trade, price];
   return parts.some(part => part !== '' && part != null) ? parts.join('|') : `order:${index}`;
+}
+
+function orderPositionSide(order) {
+  const direction = String(order?.order_direction || order?.orderDirection || '').toLowerCase();
+  if (direction.includes('long')) return 'bid';
+  if (direction.includes('short')) return 'ask';
+  return order?.side || order?.d || '';
+}
+
+function orderSideLabel(order) {
+  const direction = String(order?.order_direction || order?.orderDirection || '').trim();
+  if (direction) return direction;
+  const side = order?.side || order?.d;
+  return side === 'bid' ? 'BUY' : 'SELL';
 }
 
 function useOpenedSortedPositions(positions) {
@@ -856,9 +870,10 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
         const rawAmt = o.initial_amount || o.amount || o.a;
         const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
         const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
-        const isBid = side === 'bid';
+        const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
+        const sideLabel = orderSideLabel(o);
         const isTP = type.includes('TAKE') || type.includes('TP');
-        const isSL = type.includes('STOP LOSS') || type.includes('SL');
+        const isSL = type.includes('STOP') || type.includes('SL');
         const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
         return (
           <div key={orderStableKey(o, i)} style={S.posCard}>
@@ -866,7 +881,7 @@ const OrdersList = memo(function OrdersList({ orders, cancelOrder }) {
               <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
               <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
               <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
-                {isBid ? 'BUY' : 'SELL'}
+                {sideLabel}
               </span>
               <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
             </div>
@@ -1102,20 +1117,21 @@ const BottomPanel = memo(function BottomPanel({
               </tr></thead>
               <tbody>{filteredOrders.map((o, i) => {
                 const sym = o.symbol || o.s;
-                const side = o.side || o.d;
                 const rawPrice = parseFloat(o.price || o.ip || 0);
                 const stopPrice = parseFloat(o.stop_price || o.sp || 0);
                 const price = rawPrice > 0 ? rawPrice : stopPrice;
                 const rawAmt = o.initial_amount || o.amount || o.a;
                 const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full';
                 const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
+                const positionSide = orderPositionSide(o);
+                const sideLabel = orderSideLabel(o);
                 const isTP = type.includes('TAKE') || type.includes('TP');
-                const isSL = type.includes('STOP LOSS') || type.includes('SL');
+                const isSL = type.includes('STOP') || type.includes('SL');
                 const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
                 return (
                   <tr key={orderStableKey(o, i)} style={S.tr}>
                     <td style={S.td}>{sym}</td>
-                    <td style={{...S.td, color: side === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{side === 'bid' ? 'BUY' : 'SELL'}</td>
+                    <td style={{...S.td, color: positionSide === 'bid' ? '#4CAF50' : '#E53935', fontWeight: 900}}>{sideLabel}</td>
                     <td style={{...S.td, color: typeColor, fontWeight: 700}}>{type}</td>
                     <td style={S.td}>${fmtPrice(price)}</td>
                     <td style={S.td}>{amt}</td>
@@ -2284,7 +2300,7 @@ function FuturesPanel() {
     if (btmFilters.symbol !== 'All') list = list.filter(o => (o.symbol || o.s) === btmFilters.symbol);
     if (btmFilters.side !== 'All') {
       const wantBid = btmFilters.side === 'Long';
-      list = list.filter(o => { const s = o.side || o.d; return wantBid ? s === 'bid' : s === 'ask'; });
+      list = list.filter(o => { const s = orderPositionSide(o); return wantBid ? s === 'bid' : s === 'ask'; });
     }
     const dir = btmFilters.sortDir === 'asc' ? 1 : -1;
     if (btmFilters.sortBy === 'symbol') list = [...list].sort((a, b) => dir * (a.symbol || a.s || '').localeCompare(b.symbol || b.s || ''));
@@ -4126,9 +4142,10 @@ function FuturesPanel() {
           const rawAmt = o.initial_amount || o.amount || o.a;
           const amt = parseFloat(rawAmt || 0) > 0 ? rawAmt : 'Full position';
           const type = (o.order_type || o.ot || (stopPrice > 0 ? 'stop' : 'limit')).toUpperCase().replace(/_/g, ' ');
-          const isBid = side === 'bid';
+          const isBid = orderPositionSide(o) === 'bid' || side === 'bid';
+          const sideLabel = orderSideLabel(o);
           const isTP = type.includes('TAKE') || type.includes('TP');
-          const isSL = type.includes('STOP LOSS') || type.includes('SL');
+          const isSL = type.includes('STOP') || type.includes('SL');
           const typeColor = isTP ? '#4CAF50' : isSL ? '#E53935' : '#a3906a';
           return (
             <div key={orderStableKey(o, i)} style={S.posCard}>
@@ -4136,7 +4153,7 @@ function FuturesPanel() {
                 <span style={{fontSize: 16, fontWeight: 900}}>{sym}</span>
                 <span style={{fontSize: 10, fontWeight: 800, color: typeColor, background: '#fdf8e7', padding: '2px 6px', borderRadius: 5, border: '1px solid #d4c8b0'}}>{type}</span>
                 <span style={{fontSize: 13, fontWeight: 900, color: isBid ? '#4CAF50' : '#E53935'}}>
-                  {isBid ? 'BUY' : 'SELL'}
+                  {sideLabel}
                 </span>
                 <button style={S.cancelBtn} onClick={() => cancelOrder(sym, o.order_id || o.i, o.pair_index, o.trade_index)}>✕</button>
               </div>
