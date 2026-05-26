@@ -5145,6 +5145,11 @@ func _get_random_grid_world_pos() -> Vector3:
 
 
 func _on_attack_pressed() -> void:
+	var warmup_script: Script = load("res://scripts/warmup.gd")
+	if warmup_script != null:
+		var warmup: Node = warmup_script.start_combat_warmup(self)
+		if warmup != null and is_instance_valid(warmup):
+			await warmup.finished
 	var attack_system = get_node_or_null("../AttackSystem")
 	if attack_system and attack_system.has_method("enter_attack_mode"):
 		attack_system.enter_attack_mode(await _build_fleet())

@@ -40,6 +40,7 @@ var _frames_left: int = HOME_WARMUP_FRAMES
 var _finished_emitted: bool = false
 var _started_ticks: int = 0
 var _last_report_ticks: int = 0
+var _runtime_warmup_nodes: Array[Node] = []
 
 
 static func start_combat_warmup(parent: Node) -> Node:
@@ -88,6 +89,7 @@ func _process(_delta: float) -> void:
 			_combat_warmup_done = true
 		else:
 			_report_loading_progress(88, "home_warmup_done")
+		_clear_runtime_warmup_nodes()
 		if not _finished_emitted:
 			_finished_emitted = true
 			finished.emit()
@@ -597,8 +599,8 @@ func _make_mage_tower_impact_sphere(mat: StandardMaterial3D) -> MeshInstance3D:
 
 
 ## Pre-draws the pirate flag marker used by attack_system when a ship is
-## placed. Also pre-mutates the animation loop_mode here so the attack-time
-## spawn path doesn't trigger Animation resource CoW (re-upload) per flag.
+## placed. It also starts the waving animation and runs the real marker spawn
+## path once so the first player click does not pay the AnimationPlayer setup.
 func _warmup_flag_glb() -> void:
 	var flag_res: Resource = ResourceLoader.load("res://Model/flag/pirate_flag_animated.glb", "PackedScene")
 	if flag_res == null:
@@ -608,11 +610,13 @@ func _warmup_flag_glb() -> void:
 	inst.scale = Vector3(1.0, 1.0, 1.0)
 	_force_shadow_casting(inst)
 	add_child(inst)
-	# Touch the animation so its loop_mode mutation happens now (during
-	# loading), not on first flag spawn (during gameplay).
-	var ap := _find_anim_player(inst)
-	if ap and ap.has_animation("flag|Action"):
-		ap.get_animation("flag|Action").loop_mode = Animation.LOOP_LINEAR
+	_warmup_flag_animation(inst)
+
+	var attack_system := _find_attack_system()
+	if attack_system and attack_system.has_method("prewarm_flag_marker"):
+		var marker = attack_system.call("prewarm_flag_marker")
+		if marker is Node:
+			_runtime_warmup_nodes.append(marker)
 
 
 ## Pre-draws one instance of each ship level so the "first cannon-ship
@@ -660,6 +664,51 @@ func _warmup_building_destruction() -> void:
 	ruins.position = Vector3(0.08, 0.0, 0.0)
 	_force_shadow_casting(ruins)
 	add_child(ruins)
+
+
+func _warmup_flag_animation(root: Node) -> void:
+	var ap := _find_anim_player(root)
+	if ap == null:
+		return
+	var anim_name := "flag|Action"
+	if not ap.has_animation(anim_name):
+		var anims := ap.get_animation_list()
+		if anims.is_empty():
+			return
+		anim_name = String(anims[0])
+	var anim := ap.get_animation(anim_name)
+	if anim != null:
+		anim.loop_mode = Animation.LOOP_LINEAR
+	ap.speed_scale = 0.4
+	ap.play(anim_name)
+	ap.advance(0.033)
+
+
+func _find_attack_system() -> Node:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return null
+	var attack_system := scene.get_node_or_null("AttackSystem")
+	if attack_system != null:
+		return attack_system
+	return _find_named_node(scene, "AttackSystem")
+
+
+func _find_named_node(node: Node, target_name: String) -> Node:
+	if node.name == target_name:
+		return node
+	for child in node.get_children():
+		var found := _find_named_node(child, target_name)
+		if found != null:
+			return found
+	return null
+
+
+func _clear_runtime_warmup_nodes() -> void:
+	for node in _runtime_warmup_nodes:
+		if is_instance_valid(node):
+			node.queue_free()
+	_runtime_warmup_nodes.clear()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────

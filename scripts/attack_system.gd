@@ -129,6 +129,18 @@ func ensure_combat_resources_loaded() -> void:
 		_flag_scene_res = _load_packed_scene_resource("res://Model/flag/pirate_flag_animated.glb")
 	_preload_combat_resources()
 
+
+func prewarm_flag_marker() -> Node3D:
+	ensure_combat_resources_loaded()
+	if _flag_scene_res == null:
+		return null
+	_refresh_placement_bounds()
+	var warm_pos := Vector3.ZERO
+	warm_pos.y = water_y
+	var flag := _create_x_marker(warm_pos)
+	flag.name = "WarmupPirateFlagMarker"
+	return flag
+
 # ---------------------------------------------------------------------------
 # Per-frame ships group cache — matches BaseTroop caching pattern
 # ---------------------------------------------------------------------------
