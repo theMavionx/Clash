@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const pacifica = require('./pacifica');
@@ -25,16 +27,111 @@ const pythHistoryCache = new Map();
 const pythHistoryInflight = new Map();
 const PHOENIX_API_BASE = process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 const PHOENIX_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_PROXY_TIMEOUT_MS || 4500)));
-const PHOENIX_PROXY_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_PROXY_STALE_MS || 2 * 60_000)));
+const PHOENIX_PROXY_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_STALE_MS', 24 * 60 * 60_000, 30_000);
+const PHOENIX_PROXY_ERROR_COOLDOWN_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_ERROR_COOLDOWN_MS', 15_000, 1000);
+const PHOENIX_PROXY_DISK_CACHE_FILE = process.env.PHOENIX_PROXY_CACHE_FILE
+  || path.join(path.dirname(process.env.CLASH_FUTURES_DB || path.join(__dirname, 'futures.db')), 'phoenix-proxy-cache.json');
 const phoenixProxyCache = new Map();
 const phoenixProxyInflight = new Map();
+let phoenixProxyDiskCacheLoaded = false;
+let phoenixProxyDiskCacheFlushTimer = null;
 const basePublicClient = createPublicClient({
   chain: base,
   transport: http(avantis.BASE_RPC),
 });
 
+function phoenixProxyDurationEnv(name, fallbackMs, minMs) {
+  const n = Number(process.env[name] || fallbackMs);
+  return Number.isFinite(n) ? Math.max(minMs, n) : fallbackMs;
+}
+
+function phoenixProxyPathname(pathWithQuery) {
+  return String(pathWithQuery || '').split('?')[0];
+}
+
+function shouldPersistPhoenixProxyCache(cacheKey) {
+  return /^GET:\/(?:exchange|v1\/exchange)(?:\/|$)/.test(cacheKey)
+    || /^GET:\/v1\/funding\/overview(?:\?|:|$)/.test(cacheKey);
+}
+
+function loadPhoenixProxyDiskCache() {
+  if (phoenixProxyDiskCacheLoaded) return;
+  phoenixProxyDiskCacheLoaded = true;
+  try {
+    if (!fs.existsSync(PHOENIX_PROXY_DISK_CACHE_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(PHOENIX_PROXY_DISK_CACHE_FILE, 'utf8'));
+    const entries = parsed && typeof parsed === 'object' ? parsed.entries : null;
+    if (!entries || typeof entries !== 'object') return;
+    for (const [key, value] of Object.entries(entries)) {
+      if (!shouldPersistPhoenixProxyCache(key)) continue;
+      if (!value || typeof value !== 'object' || !value.at || !('data' in value)) continue;
+      if (value.soft) continue;
+      phoenixProxyCache.set(key, value);
+    }
+  } catch (e) {
+    console.warn('[phoenix/proxy] disk cache load failed:', e.message);
+  }
+}
+
+function schedulePhoenixProxyDiskCacheFlush() {
+  if (phoenixProxyDiskCacheFlushTimer) return;
+  phoenixProxyDiskCacheFlushTimer = setTimeout(() => {
+    phoenixProxyDiskCacheFlushTimer = null;
+    try {
+      const entries = {};
+      for (const [key, value] of phoenixProxyCache) {
+        if (shouldPersistPhoenixProxyCache(key)) entries[key] = value;
+      }
+      fs.mkdirSync(path.dirname(PHOENIX_PROXY_DISK_CACHE_FILE), { recursive: true });
+      fs.writeFileSync(PHOENIX_PROXY_DISK_CACHE_FILE, JSON.stringify({ entries }, null, 2));
+    } catch (e) {
+      console.warn('[phoenix/proxy] disk cache write failed:', e.message);
+    }
+  }, 1000);
+  phoenixProxyDiskCacheFlushTimer.unref?.();
+}
+
+function phoenixProxySoftRateLimitData(pathWithQuery) {
+  const pathname = phoenixProxyPathname(pathWithQuery);
+  if (/^\/(?:exchange|v1\/exchange)(?:\/|$)/.test(pathname)) {
+    return {
+      markets: [],
+      data: [],
+      rate_limited: true,
+      retryable: true,
+      source: 'phoenix_proxy_soft_429',
+    };
+  }
+  if (/^\/v1\/funding\/overview(?:\?|$)/.test(pathWithQuery)) {
+    return {
+      series: [],
+      rate_limited: true,
+      retryable: true,
+      source: 'phoenix_proxy_soft_429',
+    };
+  }
+  if (/^\/v1\/candles\//.test(pathname)) {
+    return {
+      candles: [],
+      data: [],
+      rate_limited: true,
+      retryable: true,
+      source: 'phoenix_proxy_soft_429',
+    };
+  }
+  if (/^\/v1\/invite\/check\//.test(pathname)) {
+    return {
+      whitelisted: null,
+      rate_limited: true,
+      retryable: true,
+      source: 'phoenix_proxy_soft_429',
+    };
+  }
+  return null;
+}
+
 function normalizePhoenixProxyPath(rawPath) {
-  const pathname = String(rawPath || '').split('?')[0];
+  const pathname = phoenixProxyPathname(rawPath);
   if (!pathname.startsWith('/') || pathname.includes('..') || pathname.includes('\\')) {
     throw new Error('invalid Phoenix API path');
   }
@@ -49,13 +146,14 @@ function normalizePhoenixProxyPath(rawPath) {
 
 function phoenixProxyCacheTtl(pathname, method) {
   if (method !== 'GET') return 0;
-  if (/^\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/exchange(?:\/|$)/.test(pathname)) return 5 * 60_000;
+  if (/^\/exchange(?:\/|$)/.test(pathname) || /^\/v1\/exchange(?:\/|$)/.test(pathname)) return 12 * 60 * 60_000;
   if (/^\/v1\/view\/orderbook\//.test(pathname)) return 1200;
-  if (/^\/v1\/candles\//.test(pathname)) return 15_000;
-  if (/^\/v1\/funding\/overview(?:\?|$)/.test(pathname)) return 15_000;
+  if (/^\/v1\/candles\//.test(pathname)) return 30_000;
+  if (/^\/v1\/funding\/overview(?:\?|$)/.test(pathname)) return 20_000;
+  if (/^\/v1\/invite\/check\//.test(pathname)) return 60_000;
   if (/^\/trader\/[^/]+\/(?:trades-history|funding-history)(?:\?|$)/.test(pathname)) return 20_000;
-  if (/^\/trader\/[^/]+\/state(?:\?|$)/.test(pathname) || /^\/v1\/trader\/state\//.test(pathname)) return 3500;
-  return 5000;
+  if (/^\/trader\/[^/]+\/state(?:\?|$)/.test(pathname) || /^\/v1\/trader\/state\//.test(pathname)) return 0;
+  return 15_000;
 }
 
 async function fetchPhoenixProxy(pathWithQuery, options = {}) {
@@ -105,12 +203,14 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
     return res.status(405).json({ error: 'method not allowed' });
   }
 
+  loadPhoenixProxyDiskCache();
   const ttl = phoenixProxyCacheTtl(cleanPath, method);
   const cacheKey = `${method}:${cleanPath}:${method === 'GET' ? '' : JSON.stringify(req.body || {})}`;
   const now = Date.now();
   const cached = ttl > 0 ? phoenixProxyCache.get(cacheKey) : null;
-  if (cached && now - cached.at < ttl) {
-    res.set('Cache-Control', `public, max-age=${Math.max(1, Math.floor(ttl / 1000))}`);
+  const freshMs = cached?.soft ? PHOENIX_PROXY_ERROR_COOLDOWN_MS : ttl;
+  if (cached && now - cached.at < freshMs) {
+    res.set('Cache-Control', `public, max-age=${Math.max(1, Math.floor(freshMs / 1000))}`);
     res.set('X-Phoenix-Proxy-Cache', 'hit');
     return res.json(cached.data);
   }
@@ -126,6 +226,7 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
     const data = await pending;
     if (ttl > 0) {
       phoenixProxyCache.set(cacheKey, { at: now, data });
+      if (shouldPersistPhoenixProxyCache(cacheKey)) schedulePhoenixProxyDiskCacheFlush();
       if (phoenixProxyCache.size > 750) {
         const cutoff = Date.now() - PHOENIX_PROXY_STALE_MS;
         for (const [key, value] of phoenixProxyCache) {
@@ -137,18 +238,27 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
     res.set('X-Phoenix-Proxy-Cache', cached ? 'refresh' : 'miss');
     return res.json(data);
   } catch (e) {
-    if (cached && now - cached.at < PHOENIX_PROXY_STALE_MS) {
+    if (cached && !cached.soft && now - cached.at < PHOENIX_PROXY_STALE_MS) {
       console.warn('[phoenix/proxy] upstream failed, serving stale:', e.message);
       res.set('Cache-Control', 'public, max-age=3');
       res.set('X-Phoenix-Proxy-Cache', 'stale');
       return res.json(cached.data);
     }
-    const status = e.name === 'AbortError' ? 504 : (e.status === 429 ? 429 : 502);
+    if (method === 'GET' && e.status === 429) {
+      const data = phoenixProxySoftRateLimitData(cleanPath);
+      if (data) {
+        phoenixProxyCache.set(cacheKey, { at: now, data, soft: true });
+        res.set('Cache-Control', `public, max-age=${Math.max(1, Math.floor(PHOENIX_PROXY_ERROR_COOLDOWN_MS / 1000))}`);
+        res.set('X-Phoenix-Proxy-Cache', 'soft-429');
+        return res.json(data);
+      }
+    }
+    const status = e.name === 'AbortError' ? 504 : (e.status === 429 ? 503 : 502);
     console.warn('[phoenix/proxy] failed:', cleanPath, e.message);
     res.set('Cache-Control', ttl > 0 ? 'public, max-age=3' : 'no-store');
     res.set('X-Phoenix-Proxy-Cache', 'error');
     return res.status(status).json({
-      error: status === 504 ? 'Phoenix API timeout' : 'Phoenix API request failed',
+      error: status === 504 ? 'Phoenix API timeout' : (status === 503 ? 'Phoenix API temporarily unavailable' : 'Phoenix API request failed'),
       detail: e.message,
     });
   }
@@ -433,7 +543,6 @@ function normalizePerplFill(fill, markets) {
 // Both services run on the same host so cross-SQLite-file reads are cheap
 // and avoid an HTTP round-trip per futures request. Read-only, no writes.
 const Database = require('better-sqlite3');
-const path = require('path');
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');

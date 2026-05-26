@@ -26,12 +26,14 @@ var trophies: int = 0
 var wallet: String = ""
 
 func _ready() -> void:
+	WebLoadLogger.report("autoload_net_ready_start")
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
 	SERVER_URL = _resolve_server_url()
 	var cfg = ConfigFile.new()
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")
 		display_name = cfg.get_value("auth", "name", "")
+	WebLoadLogger.report("autoload_net_ready_done", {"has_token": token != ""})
 
 # Returns the API base URL appropriate for the current runtime.
 #   • Web build (browser): use `window.location.origin + "/api"`. Vite dev

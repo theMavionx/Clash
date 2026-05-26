@@ -57,51 +57,10 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '64kb' })); // clamp request body size
 
-// ---------- Lightweight per-token rate limiter (no new deps) ----------
-// Token-bucket: each authed player gets N requests per window per endpoint
-// group. Keys are derived from `x-token` header (anon clients share a bucket
-// keyed by IP, which is handled by nginx upstream in prod).
-function makeRateLimiter({ windowMs, max, group }) {
-  const buckets = new Map(); // key → { count, resetAt }
-  // Janitor: drop expired buckets every minute so the map doesn't grow.
-  setInterval(() => {
-    const now = Date.now();
-    for (const [k, v] of buckets) if (v.resetAt < now) buckets.delete(k);
-  }, 60_000).unref?.();
-  return (req, res, next) => {
-    const key = (req.headers['x-token'] || req.ip || 'anon') + ':' + group;
-    const now = Date.now();
-    const b = buckets.get(key);
-    if (!b || b.resetAt < now) {
-      buckets.set(key, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-    if (b.count >= max) {
-      const retryAfter = Math.ceil((b.resetAt - now) / 1000);
-      res.set('Retry-After', String(retryAfter));
-      return res.status(429).json({ error: 'Too many requests — slow down.', retry_after_s: retryAfter });
-    }
-    b.count++;
-    next();
-  };
-}
-// Trade endpoints: bumped 30 → 3000 per minute (100×) per user request.
-// Withdraw: bumped 5 → 500 per minute. The on-chain layer still has its
-// own quota (RPC rate limits, gas costs) and the trading hooks debounce
-// on the client, so these are now mostly defence-in-depth against
-// runaway loops rather than a per-user gate.
-const tradeLimiter = makeRateLimiter({ windowMs: 60_000, max: 3000, group: 'trade' });
-const withdrawLimiter = makeRateLimiter({ windowMs: 60_000, max: 500, group: 'withdraw' });
-app.use([
-  '/api/orders',
-  '/api/positions/close',
-  '/api/tpsl',
-  '/api/decibel/orders/place',
-  '/api/decibel/orders/cancel',
-  '/api/decibel/tpsl',
-  '/api/decibel/leverage',
-], tradeLimiter);
-app.use('/api/withdraw', withdrawLimiter);
+// No in-process futures rate limiter. Trading, withdraw, and Phoenix proxy
+// routes should not return app-level 429s; idempotency guards, wallet signing,
+// RPC/provider limits, and exchange-side validation remain the actual safety
+// boundaries.
 
 // Request logger
 app.use((req, res, next) => {

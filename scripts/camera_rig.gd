@@ -63,6 +63,7 @@ func add_trauma(amount: float) -> void:
 
 
 func _ready() -> void:
+	WebLoadLogger.report("camera_ready_start")
 	_pitch_pivot = $PitchPivot
 	_camera = $PitchPivot/Camera3D
 
@@ -77,6 +78,7 @@ func _ready() -> void:
 		_target_zoom = (min_zoom + max_zoom) / 2.0
 	_current_zoom = _target_zoom
 	_camera.position.z = _current_zoom
+	WebLoadLogger.report("camera_ready_done", {"zoom": _current_zoom})
 
 
 func _unhandled_input(event: InputEvent) -> void:

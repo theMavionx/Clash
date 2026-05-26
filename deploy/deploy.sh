@@ -43,6 +43,7 @@ export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
 
 BOOTSTRAPPED_LEGACY_DBS=0
 SWITCHED=0
+LOCK_DIR=""
 
 log() {
     echo "[$(date -u +%H:%M:%S)] $*"
@@ -50,6 +51,9 @@ log() {
 
 die() {
     echo "ERROR: $*" >&2
+    if declare -F cleanup_failed_release >/dev/null 2>&1; then
+        cleanup_failed_release || true
+    fi
     exit 1
 }
 
@@ -80,7 +84,37 @@ cleanup_failed_release() {
         rm -rf "$RELEASE_DIR"
     fi
 }
-trap cleanup_failed_release ERR
+
+cleanup_deploy_lock() {
+    if [ -n "${LOCK_DIR:-}" ] && [ -d "$LOCK_DIR" ]; then
+        rmdir "$LOCK_DIR" 2>/dev/null || true
+    fi
+}
+
+on_deploy_error() {
+    cleanup_failed_release
+}
+
+on_deploy_interrupt() {
+    cleanup_failed_release
+    exit 130
+}
+
+trap on_deploy_error ERR
+trap on_deploy_interrupt INT TERM
+trap cleanup_deploy_lock EXIT
+
+acquire_deploy_lock() {
+    mkdir -p "$DEPLOY_ROOT"
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$DEPLOY_ROOT/.deploy.lock"
+        flock -n 9 || die "Another deploy is already running. Stop it first or wait for it to finish."
+        return
+    fi
+
+    LOCK_DIR="$DEPLOY_ROOT/.deploy.lock.d"
+    mkdir "$LOCK_DIR" 2>/dev/null || die "Another deploy is already running. Stop it first or wait for it to finish."
+}
 
 set_env_value() {
     local key="$1"
@@ -1129,6 +1163,7 @@ cleanup_old_releases() {
 
 main() {
     require_root
+    acquire_deploy_lock
     validate_source_dir
     log "=== Atomic deploy $DOMAIN ($RELEASE_ID) ==="
     log "Source: $SOURCE_DIR"

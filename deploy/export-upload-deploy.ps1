@@ -50,7 +50,7 @@ try {
   if (-not (Test-Path (Join-Path $localGodotDir "Work.pck"))) { throw "Godot export did not produce Work.pck" }
 
   Write-Host "==> Writing Godot runtime manifest"
-  node (Join-Path $webDir "write-godot-runtime-manifest.cjs")
+  node (Join-Path $webDir "write-godot-runtime-manifest.cjs") $localGodotDir "local-export"
   if ($LASTEXITCODE -ne 0) { throw "Godot runtime manifest failed with exit code $LASTEXITCODE" }
 
   $remoteGodotDir = "$RemoteSourceDir/web/public/godot"

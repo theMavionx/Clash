@@ -12,6 +12,7 @@ const EXPORT_PATH = path.resolve(__dirname, 'public/godot/Work.html');
 const EXPORT_PRESET = 'Web';
 const EXPORT_MODE = process.env.GODOT_EXPORT_MODE === 'debug' ? '--export-debug' : '--export-release';
 const MANIFEST_SCRIPT = path.resolve(__dirname, 'generate-godot-export-manifest.cjs');
+const RUNTIME_MANIFEST_SCRIPT = path.resolve(__dirname, 'write-godot-runtime-manifest.cjs');
 
 // Directories to watch
 const WATCH_DIRS = [
@@ -38,6 +39,10 @@ function doExport() {
       `"${GODOT}" --headless --path "${PROJECT}" ${EXPORT_MODE} "${EXPORT_PRESET}" "${EXPORT_PATH}"`,
       { stdio: 'inherit', timeout: 600000 }
     );
+    execSync(`node "${RUNTIME_MANIFEST_SCRIPT}" "${path.dirname(EXPORT_PATH)}" "local-export"`, {
+      stdio: 'inherit',
+      timeout: 30000,
+    });
     console.log(`\x1b[32m[watch]\x1b[0m Export done in ${((Date.now() - start) / 1000).toFixed(1)}s`);
   } catch (e) {
     console.error(`\x1b[31m[watch]\x1b[0m Export failed`);

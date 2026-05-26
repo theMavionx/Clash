@@ -23,6 +23,7 @@ func _refresh_cache() -> void:
 
 
 func _ready() -> void:
+	WebLoadLogger.report("autoload_bridge_ready_start")
 	_is_web = OS.has_feature("web")
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep bridge alive during tree pause
 	call_deferred("_refresh_cache")
@@ -32,6 +33,7 @@ func _ready() -> void:
 	var cb: JavaScriptObject = JavaScriptBridge.create_callback(_on_react_call)
 	_callbacks["_on_react_call"] = cb
 	JavaScriptBridge.get_interface("window").set("godotBridge", cb)
+	WebLoadLogger.report("autoload_bridge_ready_done")
 
 	await get_tree().create_timer(0.5).timeout
 	_send_initial_state()

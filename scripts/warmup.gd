@@ -38,6 +38,8 @@ static var _combat_warmup_done: bool = false
 
 var _frames_left: int = HOME_WARMUP_FRAMES
 var _finished_emitted: bool = false
+var _started_ticks: int = 0
+var _last_report_ticks: int = 0
 
 
 static func start_combat_warmup(parent: Node) -> Node:
@@ -55,6 +57,8 @@ static func start_combat_warmup(parent: Node) -> Node:
 
 
 func _ready() -> void:
+	_started_ticks = Time.get_ticks_msec()
+	_last_report_ticks = _started_ticks
 	position = WARMUP_POS
 	scale = WARMUP_SCALE
 	if mode == "combat":
@@ -95,21 +99,24 @@ func _process(_delta: float) -> void:
 ## Adding these to the tree inside the camera frustum forces the Compatibility
 ## renderer to compile their pipelines during loading, not during first use.
 func _spawn_home_warmup_nodes() -> void:
+	_report_loading_progress(77, "home_warmup_grid")
+	_warmup_grid_material()
+	_report_loading_progress(78, "home_warmup_ghost")
+	_warmup_ghost_material()
+	_report_loading_progress(79, "home_warmup_outline")
+	_warmup_upgrade_outline()
+	_report_loading_progress(80, "home_warmup_clicks")
+	_warmup_click_indicators()
+
+
+func _spawn_combat_warmup_nodes() -> void:
+	BuildingSystem._preload_defense_resources()
 	_warmup_hp_bar()
 	_warmup_additive_billboard_plain()
 	_warmup_additive_billboard_textured()
 	_warmup_turret_trail()
 	_warmup_target_ring()
 	_warmup_rally_marker()
-	_warmup_mage_tower()
-	_warmup_ship_glbs()
-	_warmup_grid_material()
-	_warmup_ghost_material()
-	_warmup_upgrade_outline()
-	_warmup_click_indicators()
-
-
-func _spawn_combat_warmup_nodes() -> void:
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
 	_warmup_demon_king()
@@ -122,10 +129,21 @@ func _spawn_combat_warmup_nodes() -> void:
 	_warmup_building_destruction()
 
 
-func _report_loading_progress(progress: int, phase: String) -> void:
+func _report_loading_progress(progress: int, phase: String, meta: Dictionary = {}) -> void:
 	if not OS.has_feature("web"):
 		return
-	JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(%d, '%s');" % [progress, phase])
+	var now := Time.get_ticks_msec()
+	var payload := meta.duplicate()
+	payload["mode"] = mode
+	payload["ticks_ms"] = now
+	payload["warmup_elapsed_ms"] = now - _started_ticks if _started_ticks > 0 else 0
+	payload["warmup_dt_ms"] = now - _last_report_ticks if _last_report_ticks > 0 else 0
+	payload["frames_left"] = _frames_left
+	_last_report_ticks = now
+	JavaScriptBridge.eval(
+		"if(window.godotLoadingProgress) window.godotLoadingProgress(%d, %s, %s);" %
+		[progress, JSON.stringify(phase), JSON.stringify(payload)]
+	)
 
 
 func _warmup_grid_material() -> void:
@@ -600,8 +618,7 @@ func _warmup_flag_glb() -> void:
 ## Pre-draws one instance of each ship level so the "first cannon-ship
 ## placement" no longer stalls on shader compile for the ship-hull variant.
 func _warmup_ship_glbs() -> void:
-	if AttackSystem._ship_model_cache.is_empty():
-		AttackSystem._preload_ship_resources()
+	AttackSystem._preload_ship_resources()
 	var spawned := 0
 	for i in range(AttackSystem._ship_model_cache.size()):
 		var ship_res: Resource = AttackSystem._ship_model_cache[i]

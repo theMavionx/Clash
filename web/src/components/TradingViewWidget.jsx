@@ -176,6 +176,20 @@ function fmtBaseAmount(value) {
   return n.toFixed(6).replace(/0+$/u, '').replace(/\.$/u, '');
 }
 
+function finiteLineNumber(value) {
+  if (value == null || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function positionLineIsLong(pos) {
+  const side = String(pos?.side || '').toLowerCase();
+  if (side === 'bid' || side === 'long' || side === 'buy') return true;
+  if (side === 'ask' || side === 'short' || side === 'sell') return false;
+  const amount = finiteLineNumber(pos?.amount);
+  return amount == null ? true : amount >= 0;
+}
+
 function displayPositionAmount(pos, mark, entry) {
   const raw = Math.abs(Number(pos?.amount || 0));
   const sizeUsd = Math.abs(Number(pos?.size_usd || pos?.notional || 0));
@@ -187,6 +201,13 @@ function displayPositionAmount(pos, mark, entry) {
     }
   }
   return raw;
+}
+
+function positionLinePnl(pos, liveMark, entry, amount, isLong) {
+  const provided = finiteLineNumber(pos?.pnl_usd);
+  if (provided != null) return provided;
+  const mark = finiteLineNumber(pos?.mark_price) ?? finiteLineNumber(liveMark);
+  return mark ? (mark - entry) * amount * (isLong ? 1 : -1) : 0;
 }
 
 async function fetchDecibelCandles(symbol, interval, startMs, endMs) {
@@ -388,9 +409,9 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       for (const pos of symPositions) {
         const entry = parseFloat(pos.entry_price);
         if (!entry) continue;
-        const isLong = pos.side === 'bid';
+        const isLong = positionLineIsLong(pos);
         const amount = displayPositionAmount(pos, mark, entry);
-        const pnl = mark ? ((mark - entry) * amount * (isLong ? 1 : -1)) : 0;
+        const pnl = positionLinePnl(pos, mark, entry, amount, isLong);
         const pnlStr = fmtLineUsd(pnl);
         const line = seriesRef.current.createPriceLine({
           price: entry,

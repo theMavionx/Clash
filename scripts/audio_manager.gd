@@ -44,6 +44,7 @@ var _sfx_token: int = 0
 
 
 func _ready() -> void:
+	WebLoadLogger.report("autoload_audio_ready_start")
 	randomize()
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_apply_master_mute()
@@ -67,6 +68,7 @@ func _ready() -> void:
 		add_child(player)
 		_sfx_players.append(player)
 	play_loading()
+	WebLoadLogger.report("autoload_audio_ready_done")
 
 
 func _exit_tree() -> void:

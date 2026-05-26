@@ -432,6 +432,18 @@ static func _load_packed_scene_resource(path: String) -> PackedScene:
 	return ResourceLoader.load(path, "PackedScene") as PackedScene
 
 
+static func _get_packed_scene_resource(path: String) -> PackedScene:
+	if path == "":
+		return null
+	var cached: Resource = _scene_res_cache.get(path, null)
+	if cached != null:
+		return cached as PackedScene
+	var res := _load_packed_scene_resource(path)
+	if res != null:
+		_scene_res_cache[path] = res
+	return res
+
+
 static func _load_script_resource(path: String) -> Script:
 	if path == "":
 		return null
@@ -447,9 +459,15 @@ var _saved_ship_transforms: Array = []
 var _saved_port_ships: Array = []
 var _home_troops: Array = []
 var _initial_load_done: bool = false
+var _has_applied_buildings_state: bool = false
+var _last_applied_buildings_signature: String = ""
+var _last_applied_buildings_ticks: int = 0
+const DUPLICATE_BUILDING_STATE_SKIP_MS: int = 2500
 
 # ── AABB Cache for precise outlines ──────────────────────────
 var _building_aabb_cache: Dictionary = {}  # {building_id: {size: Vector2, center: Vector2}}
+static var _shared_building_aabb_cache: Dictionary = {}
+static var _building_aabb_precompute_done: bool = false
 
 # ── UI ────────────────────────────────────────────────────────
 var canvas: CanvasLayer
@@ -645,10 +663,8 @@ func _exit_tree() -> void:
 
 
 func _ready() -> void:
+	WebLoadLogger.report("building_system_ready_start", {"node": name, "create_ui": create_ui})
 	add_to_group("building_systems")
-	# Preload defense-unit resources up front so the first skeleton spawn or
-	# first archer-tower load during gameplay doesn't stall the main thread.
-	_preload_defense_resources()
 	_net = get_node_or_null("/root/Net")
 	_bridge = get_node_or_null("/root/Bridge")
 	if test_mode:
@@ -659,15 +675,20 @@ func _ready() -> void:
 	_battle = BSBattle.new().init(self)
 	_port = BSPort.new().init(self)
 	_production = BSProduction.new().init(self)
+	WebLoadLogger.report("building_system_helpers_ready", {"node": name, "create_ui": create_ui})
 	call_deferred("_refresh_bs_cache")
 	grid.resize(grid_width * grid_height)
 	grid.fill(false)
 	_setup_from_grid_plane()
-	_precompute_building_aabbs()
-	_preload_building_scenes()
-	# Cover with clouds before first render — revealed once buildings are placed.
-	# Non-UI grids still pre-warm the cloud for transition performance.
-	call_deferred("_initial_cover")
+	WebLoadLogger.report("building_system_grid_ready", {"node": name, "create_ui": create_ui})
+	_report_web_loading_progress(73, "building_system_ready")
+	# Precise outline AABBs are expensive on Web because they instantiate many
+	# GLB/FBX resources. Build them lazily when an outline is actually needed so
+	# first paint is not blocked by every possible building level.
+	# Cover the main UI grid before first render; secondary grids reuse the
+	# same scene state and must not create duplicate loading phases.
+	if create_ui:
+		call_deferred("_initial_cover")
 	# Auto-configure grid restrictions based on grid plane
 	var plane_name = ""
 	var plane = get_node_or_null(grid_plane_path)
@@ -709,10 +730,12 @@ func _ready() -> void:
 	var net = _net
 	if net:
 		net.auth_ok.connect(_on_server_auth_ok)
-	# Auto-login (always, not just when UI is created)
-	if net and net.has_token():
+	# Only the main UI grid owns auto-login. Secondary grids listen to the same
+	# auth_ok state and load their own grid slice without issuing duplicate
+	# /state requests.
+	if create_ui and net and net.has_token():
 		_auto_login()
-	else:
+	elif create_ui:
 		# No login will happen — reveal cloud cover so the island is visible
 		call_deferred("_reveal_initial_cover")
 
@@ -1793,10 +1816,26 @@ func _auto_login() -> void:
 ## Called deferred from _ready() so the viewport size is stable.
 ## Pre-warm cloud for island-transition performance.
 ## Also signals React that Godot scene + preload is done (loading stage 88%).
+func _report_web_loading_progress(progress: int, phase: String, meta: Dictionary = {}) -> void:
+	if not OS.has_feature("web"):
+		return
+	if not create_ui:
+		return
+	var payload := meta.duplicate()
+	payload["node"] = name
+	payload["grid_index"] = _get_grid_index()
+	payload["create_ui"] = create_ui
+	payload["ticks_ms"] = Time.get_ticks_msec()
+	JavaScriptBridge.eval(
+		"if(window.godotLoadingProgress) window.godotLoadingProgress(%d, %s, %s);" %
+		[progress, JSON.stringify(phase), JSON.stringify(payload)]
+	)
+
+
 func _initial_cover() -> void:
+	_report_web_loading_progress(74, "scene_init_start")
 	_get_or_create_cloud()
-	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(74, 'scene_init');")
+	_report_web_loading_progress(75, "scene_init_cloud_ready")
 
 
 ## Tell the HTML page to hide its loading screen — safe to call multiple times.
@@ -1809,7 +1848,8 @@ func _reveal_initial_cover() -> void:
 	if audio and audio.has_method("play_base"):
 		audio.play_base()
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(100, 'ready'); if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
+		_report_web_loading_progress(100, "ready")
+		JavaScriptBridge.eval("if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
 
 
 func _apply_server_state(state: Dictionary) -> void:
@@ -1826,16 +1866,52 @@ func _apply_server_state(state: Dictionary) -> void:
 		_load_troop_levels_from_server(state.troop_levels)
 
 
+func _server_buildings_signature(server_buildings: Array) -> String:
+	var net = _net
+	var player_key := ""
+	if net:
+		player_key = "%s:%s" % [String(net.player_id), String(net.wallet)]
+	var my_grid_index = _get_grid_index()
+	var parts: Array = []
+	for b in server_buildings:
+		if int(b.get("grid_index", 0)) != my_grid_index:
+			continue
+		parts.append("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s" % [
+			String(b.get("id", "")),
+			String(b.get("type", "")),
+			String(b.get("level", 1)),
+			String(b.get("grid_x", 0)),
+			String(b.get("grid_z", 0)),
+			String(b.get("hp", "")),
+			String(b.get("max_hp", "")),
+			String(b.get("stored", "")),
+			String(b.get("has_ship", "")),
+			String(b.get("ship_troops", "")),
+			String(b.get("grid_index", 0)),
+		])
+	parts.sort()
+	return "%s|%s" % [player_key, "|".join(PackedStringArray(parts))]
+
+
 func _load_buildings_from_server(server_buildings: Array) -> void:
+	var state_signature := _server_buildings_signature(server_buildings)
+	var now := Time.get_ticks_msec()
+	if _has_applied_buildings_state \
+			and state_signature == _last_applied_buildings_signature \
+			and now - _last_applied_buildings_ticks < DUPLICATE_BUILDING_STATE_SKIP_MS:
+		return
+	_has_applied_buildings_state = true
+	_last_applied_buildings_signature = state_signature
+	_last_applied_buildings_ticks = now
 	# Signal React: server responded, now placing buildings (loading stage 94%)
-	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(92, 'home_scene_apply');")
+	_report_web_loading_progress(92, "home_scene_apply", {"server_buildings": server_buildings.size()})
 	var my_grid_index = _get_grid_index()
 	# Filter buildings for this grid
 	var my_buildings: Array = []
 	for b in server_buildings:
 		if b.get("grid_index", 0) == my_grid_index:
 			my_buildings.append(b)
+	_report_web_loading_progress(93, "home_scene_filtered", {"grid_buildings": my_buildings.size()})
 	# Reset the ships counter before walking the new account's buildings.
 	# Without this, logging out of Alice (3 ports with ships → owned_ships=3)
 	# and back in as Bob (1 port with ship) would leave owned_ships=4 because
@@ -1855,6 +1931,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		# push — BS2/BS3 share React state via the same send_to_react.
 		if create_ui:
 			_sync_react_buildings()
+			_report_web_loading_progress(97, "home_ready", {"grid_buildings": 0})
 		_reveal_initial_cover()
 		return
 	for b in my_buildings:
@@ -1905,7 +1982,7 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 		if scene_path != "":
 			var scene_res = _scene_res_cache.get(scene_path, null)
 			if scene_res == null:
-				scene_res = _load_packed_scene_resource(scene_path)
+				scene_res = _get_packed_scene_resource(scene_path)
 			if scene_res:
 				var model = scene_res.instantiate()
 				var s = _get_model_scale(def, level)
@@ -1982,8 +2059,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 			if is_instance_valid(b_data.get("node")):
 				b_data.node.set_meta("ship_troops", server_troops)
 	_sync_react_buildings()
-	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(97, 'home_ready');")
+	_report_web_loading_progress(95, "home_scene_models_done", {"grid_buildings": my_buildings.size()})
+	_report_web_loading_progress(97, "home_ready", {"grid_buildings": my_buildings.size()})
 	# Reveal cloud cover now that buildings are placed — first load only
 	_reveal_initial_cover()
 
@@ -2363,7 +2440,7 @@ func _create_ghost() -> void:
 	if def.has("scene"):
 		var scene_res: Resource = _scene_res_cache.get(def.scene, null)
 		if scene_res == null:
-			scene_res = _load_packed_scene_resource(def.scene)
+			scene_res = _get_packed_scene_resource(def.scene)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = def.get("model_scale", 0.2)
@@ -2402,7 +2479,9 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 		var sz = def.cells.y * cell_size
 		return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
 
-	var scene_res = _load_packed_scene_resource(scene_path)
+	var scene_res = _scene_res_cache.get(scene_path, null)
+	if scene_res == null:
+		scene_res = _get_packed_scene_resource(scene_path)
 	if not scene_res:
 		var sx = def.cells.x * cell_size
 		var sz = def.cells.y * cell_size
@@ -2471,6 +2550,10 @@ func _compute_model_aabb(def: Dictionary, level: int = 1) -> Dictionary:
 
 ## Pre-compute and cache AABBs for all building types at startup (all levels).
 func _precompute_building_aabbs() -> void:
+	if _building_aabb_precompute_done:
+		_building_aabb_cache = _shared_building_aabb_cache
+		return
+
 	for id in building_defs:
 		var def = building_defs[id]
 		# Level 1
@@ -2493,6 +2576,9 @@ func _precompute_building_aabbs() -> void:
 			if not _building_aabb_cache.has(key):
 				_building_aabb_cache[key] = _building_aabb_cache[id]
 
+	_shared_building_aabb_cache = _building_aabb_cache
+	_building_aabb_precompute_done = true
+
 
 ## Pre-load every building scene into _scene_res_cache so that
 ## _load_buildings_from_server() never calls load() at transition time.
@@ -2502,13 +2588,13 @@ func _preload_building_scenes() -> void:
 		if def.has("scenes"):
 			for path in def.scenes:
 				if path != "" and not _scene_res_cache.has(path):
-					var res = _load_packed_scene_resource(path)
+					var res = _get_packed_scene_resource(path)
 					if res:
 						_scene_res_cache[path] = res
 		elif def.has("scene"):
 			var path: String = def.scene
 			if path != "" and not _scene_res_cache.has(path):
-				var res = _load_packed_scene_resource(path)
+				var res = _get_packed_scene_resource(path)
 				if res:
 					_scene_res_cache[path] = res
 	# Pre-load turret script so set_script() at transition time is instant
@@ -2529,8 +2615,22 @@ func _aabb_cache_key(building_id: String, level: int) -> String:
 func _get_cached_aabb(building_id: String) -> Dictionary:
 	if _building_aabb_cache.has(building_id):
 		return _building_aabb_cache[building_id]
-	# Fallback
-	var def = building_defs.get(building_id, {})
+
+	var base_id: String = building_id
+	var level: int = 1
+	var level_marker := "_lv"
+	var level_idx := building_id.rfind(level_marker)
+	if level_idx > 0:
+		base_id = building_id.substr(0, level_idx)
+		level = int(building_id.substr(level_idx + level_marker.length()))
+
+	var def = building_defs.get(base_id, {})
+	if not def.is_empty():
+		var computed := _compute_model_aabb(def, level)
+		_building_aabb_cache[building_id] = computed
+		_shared_building_aabb_cache[building_id] = computed
+		return computed
+
 	var sx = def.get("cells", Vector2i(2, 2)).x * cell_size
 	var sz = def.get("cells", Vector2i(2, 2)).y * cell_size
 	return {"size": Vector2(sx, sz), "center": Vector2.ZERO}
@@ -2608,7 +2708,7 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 		var _scene_path: String = def.scene
 		var scene_res = _scene_res_cache.get(_scene_path, null)
 		if scene_res == null:
-			scene_res = _load_packed_scene_resource(_scene_path)
+			scene_res = _get_packed_scene_resource(_scene_path)
 		if scene_res:
 			var model = scene_res.instantiate()
 			var s = _get_model_scale(def, 1)
@@ -3351,7 +3451,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 	if def.has("scenes"):
 		var scene_idx = clampi(b.level - 1, 0, def.scenes.size() - 1)
 		var scene_path = def.scenes[scene_idx]
-		var scene_res = _load_packed_scene_resource(scene_path)
+		var scene_res = _get_packed_scene_resource(scene_path)
 		if scene_res:
 			for child in model.get_children():
 				child.queue_free()
@@ -3850,9 +3950,8 @@ func _spawn_tower_unit(b: Dictionary, def: Dictionary) -> void:
 	var model_path = tu.get("model", "")
 	var unit_scale = tu.get("scale", 0.07)
 	var offset_y = tu.get("offset_y", 0.3)
-	# Cache tower-unit GLBs per unique path. First access pays load() cost at boot
-	# (via _preload_defense_resources warm-up in _ready), every subsequent spawn
-	# is a dictionary lookup — no main-thread stall on WASM.
+	# Cache tower-unit GLBs per unique path. The first visible tower pays the
+	# model load; combat-only defense scripts are warmed behind the attack clouds.
 	var model_res: Resource = _tower_unit_model_cache.get(model_path, null)
 	if model_res == null:
 		model_res = _load_packed_scene_resource(model_path)
@@ -3912,8 +4011,8 @@ func _spawn_tombstone_skeletons(b: Dictionary, target_count: int, reposition_exi
 	var existing_count := alive.size()
 	# Spawn missing
 	var tomb_pos: Vector3 = tomb_node.global_position
-	# Use preloaded cache (populated in _ready → _preload_defense_resources).
-	# Defensive lazy init if something else called us before _ready ran.
+	# Combat warmup preloads this before attacks; home tombstones lazy-load it
+	# only when they actually exist on the island.
 	if _skeleton_model_res == null or _skeleton_script_res == null:
 		_preload_defense_resources()
 	var script_res: Resource = _skeleton_script_res

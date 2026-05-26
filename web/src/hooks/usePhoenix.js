@@ -511,6 +511,34 @@ function collateralForTraderView(traderView) {
   ) || 0;
 }
 
+function phoenixTraderFreeCollateral(traderView, fallbackCollateral = 0, fallbackMargin = 0) {
+  const effectiveCollateral = firstFinite(
+    tokenAmountValue(traderView?.effectiveCollateral),
+    fallbackCollateral
+  ) || 0;
+  const initialMargin = firstFinite(
+    tokenAmountValue(traderView?.initialMargin),
+    fallbackMargin,
+    0
+  ) || 0;
+  return Math.max(0, effectiveCollateral - initialMargin);
+}
+
+function phoenixTraderWithdrawableCollateral(traderView, fallbackCollateral = 0, fallbackMargin = 0) {
+  const effectiveCollateral = firstFinite(
+    tokenAmountValue(traderView?.effectiveCollateralForWithdrawals),
+    tokenAmountValue(traderView?.effectiveCollateral),
+    fallbackCollateral
+  ) || 0;
+  const initialMargin = firstFinite(
+    tokenAmountValue(traderView?.initialMarginForWithdrawals),
+    tokenAmountValue(traderView?.initialMargin),
+    fallbackMargin,
+    0
+  ) || 0;
+  return Math.max(0, effectiveCollateral - initialMargin);
+}
+
 function positionFromSnapshot(p, marketsBySymbol, collateral, subaccountIndex = 0) {
   const symbol = phoenixSymbol(p?.symbol);
   if (!symbol) return null;
@@ -1364,7 +1392,12 @@ export function usePhoenix() {
       const crossMarginUsed = pos
         .filter(p => !p.is_isolated)
         .reduce((sum, p) => sum + Number(p.margin || 0), 0);
-      const available = Math.max(0, firstFinite(tokenAmountValue(crossView?.effectiveCollateralForWithdrawals), crossCollateral - crossMarginUsed) || 0);
+      const availableToSpend = phoenixTraderFreeCollateral(crossView, crossCollateral, crossMarginUsed);
+      const availableToWithdraw = phoenixTraderWithdrawableCollateral(crossView, crossCollateral, crossMarginUsed);
+      const totalInitialMargin = viewTraders.length
+        ? viewTraders.reduce((sum, t) => sum + (tokenAmountValue(t?.initialMargin) || 0), 0)
+        : marginUsed;
+      const totalMarginUsed = Math.max(0, totalInitialMargin || marginUsed);
       const firstMarket = marketsRef.current[0] || {};
       setPositions(pos);
       setOrders(ord);
@@ -1372,9 +1405,9 @@ export function usePhoenix() {
         authority: walletAddr,
         balance: String(crossCollateral),
         account_equity: String(equity),
-        available_to_spend: String(available),
-        available_to_withdraw: String(available),
-        total_margin_used: String(Math.min(marginUsed, notional)),
+        available_to_spend: String(availableToSpend),
+        available_to_withdraw: String(availableToWithdraw),
+        total_margin_used: String(totalMarginUsed),
         positions_count: pos.length,
         orders_count: ord.length,
         maker_fee: firstMarket.maker_fee ?? 0.00005,
@@ -1448,6 +1481,23 @@ export function usePhoenix() {
       }, delay);
     }
   }, [refreshTraderState]);
+
+  const applyOptimisticMarginUse = useCallback((marginAmount) => {
+    const margin = Number(marginAmount);
+    if (!Number.isFinite(margin) || margin <= 0) return;
+    setPhoenixAccount(prev => {
+      if (!prev) return prev;
+      const availableToSpend = Math.max(0, Number(prev.available_to_spend ?? prev.balance ?? 0) - margin);
+      const availableToWithdraw = Math.max(0, Number(prev.available_to_withdraw ?? prev.available_to_spend ?? prev.balance ?? 0) - margin);
+      const totalMarginUsed = Math.max(0, Number(prev.total_margin_used || 0) + margin);
+      return {
+        ...prev,
+        available_to_spend: String(availableToSpend),
+        available_to_withdraw: String(availableToWithdraw),
+        total_margin_used: String(totalMarginUsed),
+      };
+    });
+  }, [setPhoenixAccount]);
 
   const checkInviteStatus = useCallback(async () => {
     if (!isActiveDex || !walletAddr || walletMismatch) {
@@ -1729,7 +1779,8 @@ export function usePhoenix() {
           });
           return sendIxs(ix, 'phoenix.market', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
-        refreshTraderStateSoon();
+        applyOptimisticMarginUse(amount);
+        refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
         setTimeout(() => claimGold({ force: true }), 3000);
         setTimeout(() => claimGold({ force: true }), 12000);
         return { success: true, signature };
@@ -1751,7 +1802,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -1784,7 +1835,8 @@ export function usePhoenix() {
           });
           return sendIxs(ix, 'phoenix.limit', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
-        refreshTraderStateSoon();
+        applyOptimisticMarginUse(amount);
+        refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix limit order failed';
@@ -1794,7 +1846,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;

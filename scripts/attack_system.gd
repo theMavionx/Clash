@@ -92,8 +92,8 @@ static func _load_script_resource(path: String) -> Script:
 	return ResourceLoader.load(path, "Script") as Script
 
 ## Preloads every ship model and troop (model + script) used in combat.
-## Safe to call multiple times; only runs once. Called from `_ready()`,
-## but also defensively re-callable from a loading screen if needed.
+## Safe to call multiple times; used by the hidden combat warmup and as a
+## defensive fallback when entering attack/replay mode.
 static func _preload_combat_resources() -> void:
 	if _combat_preload_done:
 		return
@@ -107,11 +107,21 @@ static func _preload_combat_resources() -> void:
 		}
 
 
+static func _get_ship_model_resource(model_idx: int) -> Resource:
+	if model_idx < 0 or model_idx >= SHIP_MODELS.size():
+		return null
+	while _ship_model_cache.size() < SHIP_MODELS.size():
+		_ship_model_cache.append(null)
+	var cached: Resource = _ship_model_cache[model_idx]
+	if cached == null:
+		cached = _load_packed_scene_resource(SHIP_MODELS[model_idx])
+		_ship_model_cache[model_idx] = cached
+	return cached
+
+
 static func _preload_ship_resources() -> void:
-	if not _ship_model_cache.is_empty():
-		return
-	for path in SHIP_MODELS:
-		_ship_model_cache.append(_load_packed_scene_resource(path))
+	for i in range(SHIP_MODELS.size()):
+		_get_ship_model_resource(i)
 
 
 func ensure_combat_resources_loaded() -> void:
@@ -183,13 +193,15 @@ func _wait_combat_delay(seconds: float, spawn_generation: int) -> bool:
 
 
 func _ready() -> void:
-	_preload_ship_resources()
+	WebLoadLogger.report("attack_system_ready_start")
 	ship_plane = get_node_or_null(grid_plane_path)
 	if ship_plane == null:
 		push_warning("AttackSystem: shipPlane not found")
+		WebLoadLogger.report("attack_system_ready_missing_plane")
 		return
 	ship_plane.visible = false
 	_refresh_placement_bounds()
+	WebLoadLogger.report("attack_system_ready_done")
 
 
 func _refresh_placement_bounds() -> void:
