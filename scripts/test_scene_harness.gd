@@ -6,6 +6,32 @@ var _status: Label
 var _spawn_list: VBoxContainer
 var _build_generation: int = 0
 
+const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
+	"town_hall",
+	"mine",
+	"sawmill",
+	"barn",
+	"storage",
+	"tombstone",
+	"archer_tower",
+	"turret",
+	"mage_tower",
+	"port",
+]
+
+const TEST_TH_MAX_COUNT: Dictionary = {
+	"mine": [1, 2, 3, 3],
+	"sawmill": [1, 2, 3, 3],
+	"barn": [1, 1, 1, 1],
+	"port": [1, 2, 5, 5],
+	"archer_tower": [1, 2, 3, 3],
+	"tombstone": [0, 1, 3, 3],
+	"turret": [0, 0, 3, 3],
+	"storage": [0, 1, 2, 3],
+	"mage_tower": [0, 0, 0, 2],
+	"town_hall": [1, 1, 1, 1],
+}
+
 
 func _core_layout() -> Array:
 	return [
@@ -101,6 +127,25 @@ func _create_panel() -> void:
 	_status.text = "Ready"
 	_status.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(_status)
+
+	var max_label := Label.new()
+	max_label.text = "Max Village by Town Hall"
+	max_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(max_label)
+
+	var max_row := HBoxContainer.new()
+	max_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	max_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(max_row)
+	for th_level in range(1, 5):
+		var btn := Button.new()
+		btn.text = str(th_level)
+		btn.custom_minimum_size = Vector2(42, 38)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", 16)
+		btn.tooltip_text = "Build max TH%d village" % th_level
+		btn.pressed.connect(Callable(self, "build_max_village_for_town_hall").bind(th_level))
+		max_row.add_child(btn)
 
 	var spawn_label := Label.new()
 	spawn_label.text = "Spawn Any Building"
@@ -337,6 +382,57 @@ func build_working_village() -> void:
 	_set_status("Random working village with random levels built.")
 
 
+func build_max_village_for_town_hall(th_level: int) -> void:
+	th_level = clampi(th_level, 1, 4)
+	_build_generation += 1
+	var generation := _build_generation
+	reset_sandbox(false)
+	await get_tree().process_frame
+	if generation != _build_generation:
+		return
+
+	var spawned_count: int = 0
+	randomize()
+	for building_id in MAX_VILLAGE_BUILD_ORDER:
+		var bs := _building_system_for_building(building_id)
+		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+			continue
+		var max_count: int = _max_building_count_for_th(building_id, th_level)
+		if max_count <= 0:
+			continue
+		var def: Dictionary = bs.building_defs[building_id]
+		var target_level: int = _target_building_level_for_th(building_id, def, th_level)
+		for _i in range(max_count):
+			var grid_pos: Vector2i = _random_free_grid_pos(bs, def)
+			if grid_pos == Vector2i(-1, -1):
+				_set_status("TH%d max village stopped: no free place for %s." % [th_level, building_id])
+				_sync_all_building_systems()
+				_select_first_town_hall()
+				return
+			bs._spawn_building_locally(building_id, grid_pos, def, -1)
+			await get_tree().process_frame
+			if generation != _build_generation:
+				return
+			var b: Dictionary = _last_building_at(bs, building_id, grid_pos)
+			if b.is_empty():
+				continue
+			_set_building_level_immediate(bs, b, def, target_level)
+			if bs.has_method("_apply_building_level_visuals_for_test"):
+				bs._apply_building_level_visuals_for_test(b, def)
+			if generation != _build_generation or not is_instance_valid(b.get("node", null)):
+				return
+			if building_id == "port":
+				_configure_test_ship(bs, b, mini(target_level, 3))
+			elif building_id == "tombstone":
+				bs._spawn_tombstone_skeletons(b, int(b.get("level", 1)))
+			spawned_count += 1
+
+	_give_test_resources()
+	_sync_all_building_systems()
+	_select_first_town_hall()
+	_set_status("Built max TH%d village: %d buildings." % [th_level, spawned_count])
+
+
 func reset_sandbox(cancel_active_build: bool = true) -> void:
 	if cancel_active_build:
 		_build_generation += 1
@@ -464,6 +560,22 @@ func _set_random_building_level(bs: Node, b: Dictionary, def: Dictionary) -> voi
 	await bs._run_upgrade_sequence(b, def, target_level)
 
 
+func _max_building_count_for_th(building_id: String, th_level: int) -> int:
+	if building_id == "town_hall":
+		return 1
+	var limits: Array = TEST_TH_MAX_COUNT.get(building_id, [])
+	if limits.is_empty():
+		return 0
+	var idx: int = clampi(th_level - 1, 0, limits.size() - 1)
+	return int(limits[idx])
+
+
+func _target_building_level_for_th(building_id: String, def: Dictionary, th_level: int) -> int:
+	if building_id == "town_hall":
+		return clampi(th_level, 1, _max_level_for_def(def))
+	return mini(th_level, _max_level_for_def(def))
+
+
 func _max_level_for_def(def: Dictionary) -> int:
 	var max_level: int = 1
 	for key in ["hp_levels", "scenes", "model_scales", "model_offsets"]:
@@ -494,6 +606,23 @@ func _select_first_town_hall() -> void:
 		if b.get("id", "") == "town_hall":
 			bs._select_building(b)
 			return
+
+
+func _give_test_resources() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("resources" in bs):
+			continue
+		bs.resources = {"gold": 100000, "wood": 100000, "ore": 100000}
+		if bs.has_method("_update_resource_ui"):
+			bs._update_resource_ui()
+		if bs.has_method("_send_resource_caps"):
+			bs._send_resource_caps()
+
+
+func _sync_all_building_systems() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if bs.has_method("_sync_react_buildings"):
+			bs._sync_react_buildings()
 
 
 func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:

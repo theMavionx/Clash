@@ -3764,6 +3764,63 @@ func _apply_building_runtime_level(b: Dictionary) -> void:
 	if is_instance_valid(tower_unit) and tower_unit.has_method("set_level"):
 		tower_unit.set_level(lvl)
 
+
+func _apply_building_level_visuals_for_test(b: Dictionary, def: Dictionary) -> void:
+	if not test_mode:
+		return
+	var lvl: int = int(b.get("level", 1))
+	var building_id := String(b.get("id", ""))
+	var node: Node3D = b.get("node", null)
+	if not is_instance_valid(node):
+		return
+
+	if def.has("scenes"):
+		var scene_idx := clampi(lvl - 1, 0, def.scenes.size() - 1)
+		var scene_path: String = def.scenes[scene_idx]
+		var scene_res := _load_packed_scene_resource(scene_path)
+		if scene_res:
+			for child in node.get_children():
+				child.queue_free()
+			var cache_key = _aabb_cache_key(building_id, lvl)
+			if not _building_aabb_cache.has(cache_key):
+				_building_aabb_cache[cache_key] = _compute_model_aabb(def, lvl)
+			if not def.get("no_outline", false):
+				node.add_child(_create_building_base(def, cache_key))
+
+			var model: Node3D = scene_res.instantiate()
+			var s := _get_model_scale(def, lvl)
+			model.scale = Vector3(s, s, s)
+			model.set_meta("building_visual_model", true)
+			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
+			var offsets: Array = def.get("model_offsets", [])
+			if offsets.size() >= lvl:
+				model.position = offsets[lvl - 1]
+			else:
+				model.position = def.get("model_offset", Vector3.ZERO)
+			if building_id == "mine":
+				var mine_cart_script := _load_script_resource("res://scripts/mine_cart.gd")
+				if mine_cart_script != null:
+					model.set_script(mine_cart_script)
+			node.add_child(model)
+			_apply_cel_shader(model)
+			_apply_building_albedo(model, def)
+			if building_id == "archer_tower":
+				_apply_archer_tower_level_visuals(model, lvl)
+
+			var hp_bar_data = _create_building_hp_bar(node, def)
+			b["hp_bar"] = hp_bar_data.bar
+			b["hp_fill"] = hp_bar_data.fill
+	elif def.has("model_scales"):
+		var visual_model := _get_building_visual_model(node)
+		if is_instance_valid(visual_model):
+			var s := _get_model_scale(def, lvl)
+			visual_model.scale = Vector3(s, s, s)
+		_refresh_building_base_for_level(node, def, building_id, lvl)
+
+	if def.has("tower_unit"):
+		_spawn_tower_unit(b, def)
+	_apply_building_runtime_level(b)
+
 # ---------------------------------------------------------------------------
 # Defense unit resource cache — loaded once at boot so the first skeleton
 # spawn or first archer-tower load never triggers a synchronous `load()`
