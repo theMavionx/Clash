@@ -1451,8 +1451,10 @@ func _move_to_target(delta: float) -> void:
 	# Enter attack when close to slot or within attack range
 	if slot_dist < 0.05 or dist <= attack_range:
 		if state != State.ATTACKING:
-			# Only reset timer on first entry — not on re-entry from oscillation
-			attack_timer = 0.0
+			# Prime the first attack so a troop that already reached range lands
+			# its opening hit instead of waiting a full cooldown cycle.
+			attack_timer = _initial_attack_timer()
+			_on_enter_attack_state()
 			if attack_anim != "" and anim_player.has_animation(attack_anim):
 				anim_player.play(attack_anim)
 		state = State.ATTACKING
@@ -1527,6 +1529,14 @@ func _do_attack(delta: float) -> void:
 			anim_player.play(attack_anim)
 		_play_attack_sfx()
 		_deal_target_damage()
+
+
+func _initial_attack_timer() -> float:
+	return atk_speed
+
+
+func _on_enter_attack_state() -> void:
+	pass
 
 
 func _destroy_target() -> void:

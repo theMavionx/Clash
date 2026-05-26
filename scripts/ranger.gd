@@ -48,6 +48,14 @@ func _setup_weapons() -> void:
 	_attach_to_bone("handslot.r", "CrossbowAttachment", crossbow_scene, "Crossbow", Vector3(0, 90, 0))
 
 
+func _initial_attack_timer() -> float:
+	return atk_speed * shoot_threshold
+
+
+func _on_enter_attack_state() -> void:
+	_shot_this_cycle = false
+
+
 ## Builds the bolt pool on first activation, then delegates to super and
 ## advances all in-flight projectiles on the fixed combat tick.
 func _physics_process(delta: float) -> void:

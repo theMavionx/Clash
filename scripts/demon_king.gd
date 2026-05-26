@@ -460,6 +460,14 @@ static func _assign_material_recursive(node: Node, mat: Material) -> void:
 var _hit_this_swing: bool = false
 
 
+func _initial_attack_timer() -> float:
+	return atk_speed * hit_anim_threshold
+
+
+func _on_enter_attack_state() -> void:
+	_hit_this_swing = false
+
+
 func _do_attack(delta: float) -> void:
 	if _resume_chase_if_target_far():
 		_hit_this_swing = false

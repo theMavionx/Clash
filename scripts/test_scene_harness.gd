@@ -9,6 +9,7 @@ var _attack_counts: Dictionary = {}
 var _attack_levels: Dictionary = {}
 var _attack_count_labels: Dictionary = {}
 var _attack_level_labels: Dictionary = {}
+var _speed_label: Label
 
 const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"town_hall",
@@ -46,6 +47,10 @@ const TEST_ATTACK_MAX_LEVEL: Dictionary = {
 	"DemonKing": 3,
 }
 const TEST_ATTACK_SHIP_LEVEL: int = 3
+const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
+const TEST_SPEED_STEP: float = 0.25
+const TEST_SPEED_MIN: float = 0.25
+const TEST_SPEED_MAX: float = 8.0
 
 
 func _core_layout() -> Array:
@@ -71,6 +76,10 @@ func _ready() -> void:
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
 
 
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
@@ -89,6 +98,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		KEY_3:
 			toggle_music()
+			get_viewport().set_input_as_handled()
+		KEY_RIGHT, KEY_UP:
+			change_test_speed(TEST_SPEED_STEP)
+			get_viewport().set_input_as_handled()
+		KEY_LEFT, KEY_DOWN:
+			change_test_speed(-TEST_SPEED_STEP)
 			get_viewport().set_input_as_handled()
 		KEY_D:
 			if key.ctrl_pressed:
@@ -163,6 +178,7 @@ func _create_panel() -> void:
 		max_row.add_child(btn)
 
 	_add_attack_loadout_controls(vbox)
+	_add_speed_controls(vbox)
 
 	var spawn_label := Label.new()
 	spawn_label.text = "Spawn Any Building"
@@ -182,7 +198,7 @@ func _create_panel() -> void:
 
 	var hint := Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music."
+	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music, arrows speed."
 	hint.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(hint)
 
@@ -265,6 +281,35 @@ func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
 	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
 	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
 	presets.add_child(_small_button("Start", start_test_attack))
+
+
+func _add_speed_controls(vbox: VBoxContainer) -> void:
+	var speed_label := Label.new()
+	speed_label.text = "Test Game Speed"
+	speed_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(speed_label)
+
+	var speed_row := HBoxContainer.new()
+	speed_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	speed_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(speed_row)
+
+	speed_row.add_child(_small_button("-", Callable(self, "change_test_speed").bind(-TEST_SPEED_STEP)))
+	_speed_label = Label.new()
+	_speed_label.custom_minimum_size = Vector2(62, 34)
+	_speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_speed_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_speed_label.add_theme_font_size_override("font_size", 15)
+	speed_row.add_child(_speed_label)
+	speed_row.add_child(_small_button("+", Callable(self, "change_test_speed").bind(TEST_SPEED_STEP)))
+
+	var presets_row := HBoxContainer.new()
+	presets_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	presets_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(presets_row)
+	for speed in TEST_SPEED_PRESETS:
+		presets_row.add_child(_small_button(_format_test_speed(speed), Callable(self, "set_test_speed").bind(speed)))
+	_refresh_test_speed_label()
 
 
 func _populate_spawn_list() -> void:
@@ -615,6 +660,27 @@ func _apply_test_troop_levels() -> void:
 			continue
 		for troop_name in TEST_ATTACK_TROOPS:
 			bs.troop_levels[troop_name] = int(_attack_levels.get(troop_name, 1))
+
+
+func set_test_speed(speed: float) -> void:
+	Engine.time_scale = clampf(speed, TEST_SPEED_MIN, TEST_SPEED_MAX)
+	_refresh_test_speed_label()
+	_set_status("Game speed set to %s." % _format_test_speed(Engine.time_scale))
+
+
+func change_test_speed(delta: float) -> void:
+	set_test_speed(Engine.time_scale + delta)
+
+
+func _refresh_test_speed_label() -> void:
+	if _speed_label:
+		_speed_label.text = _format_test_speed(Engine.time_scale)
+
+
+func _format_test_speed(speed: float) -> String:
+	if is_equal_approx(speed, roundf(speed)):
+		return "%dx" % int(roundf(speed))
+	return "%.2fx" % speed
 
 
 func reset_sandbox(cancel_active_build: bool = true) -> void:
