@@ -14,13 +14,65 @@ const GODOT_BUILD_TOKEN = String(
   Date.now()
 );
 const CACHE_BUST = '?v=' + encodeURIComponent(GODOT_BUILD_TOKEN); // Force fresh load after deploy
+const GODOT_RUNTIME_MANIFEST = `${GODOT_FILES}/godot-runtime-manifest.json${CACHE_BUST}`;
 const GODOT_DOWNLOAD_FALLBACK_BYTES = 130000000;
-const GODOT_CACHE_PREFIXES = ['clash-godot-', 'clash-godot-resource-icons-'];
+const GODOT_CACHE_PREFIXES = [
+  'clash-runtime-',
+  'clash-godot-',
+  'clash-godot-resource-icons-',
+  'Clash of Perps-sw-cache-',
+];
 const GODOT_RUNTIME_RELOAD_KEY = `clash_godot_runtime_reloaded_${GODOT_BUILD_TOKEN}`;
 const GODOT_WEBGL_CONTEXT_RELOAD_KEY = `clash_godot_webgl_context_reloaded_at_${GODOT_BUILD_TOKEN}`;
 const GODOT_WEBGL_CONTEXT_RELOAD_COOLDOWN_MS = 15000;
 const GODOT_WEBGL_CONTEXT_RELOAD_DELAY_MS = 650;
+const GODOT_DOWNLOAD_PROGRESS_WEIGHT = 72;
+const GODOT_STAGE2_HOLD_PROGRESS = 96;
+const GODOT_STAGE2_MIN_MS = 1100;
+const GODOT_LOADED_HIDE_DELAY_MS = 120;
+const GODOT_ENGINE_READY_EASE_MS = 250;
 const APP_TITLE = 'Clash of Perps';
+const GODOT_PHASE_PROGRESS = {
+  scene_init: 74,
+  home_warmup_start: 76,
+  home_warmup_assets: 82,
+  home_warmup_done: 88,
+  home_scene_apply: 92,
+  home_ready: 97,
+  ready: 100,
+};
+let godotRuntimeManifestPromise = null;
+
+function isCrawlerUserAgent(ua = navigator.userAgent || '') {
+  return /applebot|googlebot|bingbot|duckduckbot|baiduspider|yandexbot|facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|whatsapp|crawler|spider|bot\b/i.test(ua);
+}
+
+function clampProgress(value, min = 0, max = 100) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function mapGodotLoadingProgress(rawPct, phase = 'godot') {
+  const pct = Number(rawPct);
+  const key = String(phase || '').trim();
+  if (key === 'home_warmup_frames') {
+    return clampProgress(Math.round(pct), 82, 88);
+  }
+  if (Object.prototype.hasOwnProperty.call(GODOT_PHASE_PROGRESS, key)) {
+    return GODOT_PHASE_PROGRESS[key];
+  }
+  if (!Number.isFinite(pct)) return null;
+
+  // Backward compatibility for already-exported Godot builds that still send
+  // raw progress numbers below the download budget.
+  if (pct >= 100) return 100;
+  if (pct >= 96) return 97;
+  if (pct >= 82) return 92;
+  if (pct >= 74) return 84;
+  if (pct >= 68) return 78;
+  if (pct >= 62) return 74;
+  return clampProgress(Math.round(pct), GODOT_DOWNLOAD_PROGRESS_WEIGHT, 100);
+}
 
 function keepAppTitle() {
   if (typeof document !== 'undefined' && document.title !== APP_TITLE) {
@@ -37,6 +89,65 @@ function isGodotRuntimeAsset(rawUrl) {
   }
 }
 
+function godotAssetName(rawUrl) {
+  try {
+    return new URL(String(rawUrl), window.location.href).pathname.split('/').pop();
+  } catch {
+    return '';
+  }
+}
+
+function bytesToHex(bytes) {
+  return Array.from(new Uint8Array(bytes))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function verifiedGodotHeaders(headersLike) {
+  const headers = new Headers(headersLike || {});
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+  headers.delete('content-range');
+  headers.set('x-clash-godot-verified', '1');
+  return headers;
+}
+
+function loadGodotRuntimeManifest() {
+  if (!godotRuntimeManifestPromise) {
+    godotRuntimeManifestPromise = fetch(GODOT_RUNTIME_MANIFEST, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+  return godotRuntimeManifestPromise;
+}
+
+async function validateGodotAssetResponse(rawUrl, response) {
+  if (!response?.ok) return response;
+  const manifest = await loadGodotRuntimeManifest();
+  const expected = manifest?.files?.[godotAssetName(rawUrl)];
+  if (!expected?.size && !expected?.sha256) return response;
+
+  const buffer = await response.arrayBuffer();
+  if (expected.size && buffer.byteLength !== Number(expected.size)) {
+    throw new Error(`Godot asset size mismatch for ${godotAssetName(rawUrl)}: ${buffer.byteLength} != ${expected.size}`);
+  }
+  if (expected.sha256 && window.crypto?.subtle) {
+    const actual = bytesToHex(await window.crypto.subtle.digest('SHA-256', buffer));
+    if (actual !== String(expected.sha256).toLowerCase()) {
+      throw new Error(`Godot asset hash mismatch for ${godotAssetName(rawUrl)}`);
+    }
+  }
+
+  return new Response(buffer, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: verifiedGodotHeaders(response.headers),
+  });
+}
+
 function withGodotCacheBust(rawUrl) {
   const url = new URL(String(rawUrl), window.location.href);
   url.searchParams.set('v', GODOT_BUILD_TOKEN);
@@ -48,20 +159,25 @@ function installGodotFetchCacheBust() {
 
   const originalFetch = window.fetch;
   const boundFetch = originalFetch.bind(window);
-  const patchedFetch = (input, init) => {
+  const patchedFetch = async (input, init) => {
+    let rawUrl = null;
     try {
-      const rawUrl = typeof input === 'string' || input instanceof URL ? input : input?.url;
-      if (rawUrl && isGodotRuntimeAsset(rawUrl)) {
-        const bustedUrl = withGodotCacheBust(rawUrl);
-        const nextInit = { ...(init || {}), cache: 'reload' };
-        if (typeof Request !== 'undefined' && input instanceof Request) {
-          return boundFetch(new Request(bustedUrl, input), nextInit);
-        }
-        return boundFetch(bustedUrl, nextInit);
-      }
+      rawUrl = typeof input === 'string' || input instanceof URL ? input : input?.url;
     } catch {
       // Fall through to the original fetch.
     }
+
+    if (rawUrl && isGodotRuntimeAsset(rawUrl)) {
+      const bustedUrl = withGodotCacheBust(rawUrl);
+      const nextInit = { ...(init || {}), cache: 'reload' };
+      if (typeof Request !== 'undefined' && input instanceof Request) {
+        const response = await boundFetch(new Request(bustedUrl, input), nextInit);
+        return validateGodotAssetResponse(bustedUrl, response);
+      }
+      const response = await boundFetch(bustedUrl, nextInit);
+      return validateGodotAssetResponse(bustedUrl, response);
+    }
+
     return boundFetch(input, init);
   };
 
@@ -73,6 +189,12 @@ function installGodotFetchCacheBust() {
 
 function clearGodotRuntimeCaches() {
   const tasks = [];
+
+  try {
+    navigator.serviceWorker?.controller?.postMessage?.({ type: 'CLASH_CLEAR_GODOT_CACHES' });
+  } catch {
+    // Best-effort only.
+  }
 
   if (window.caches?.keys) {
     tasks.push(
@@ -95,12 +217,19 @@ function clearGodotRuntimeCaches() {
               if (!scriptUrl) return false;
               try {
                 const url = new URL(scriptUrl);
-                return url.origin === window.location.origin && url.pathname === '/sw.js';
+                return url.origin === window.location.origin
+                  && (url.pathname === '/sw.js' || url.pathname === '/godot/Work.service.worker.js');
               } catch {
                 return false;
               }
             })
-            .map((registration) => registration.update().catch(() => {}))
+            .map((registration) => {
+              const scriptUrl = registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL || '';
+              if (scriptUrl.includes('/godot/Work.service.worker.js')) {
+                return registration.unregister().catch(() => {});
+              }
+              return registration.update().catch(() => {});
+            })
         ))
     );
   }
@@ -126,7 +255,7 @@ function loadGodotEngineScript() {
     script.onload = resolve;
     script.onerror = () => {
       window.__clashGodotScriptPromise = null;
-      reject(new Error('Failed to load Godot engine script'));
+      reject(new Error('Godot Work.js failed to load'));
     };
     document.body.appendChild(script);
   });
@@ -174,7 +303,7 @@ function isGodotWasmCacheMismatch(errorLike) {
       && /Import #0/i.test(text)
       && /env/i.test(text)
       && /module is not an object or function/i.test(text)
-  ) || /WebAssembly\.Module doesn't parse|Code function's size .* exceeds module's remaining size|wasm streaming compile failed|failed to asynchronously prepare wasm|\/godot\/Work\.(?:wasm|pck).*failed|Work\.(?:wasm|pck).*Failed to fetch/i.test(text);
+  ) || /WebAssembly\.Module doesn't parse|Code function's size .* exceeds module's remaining size|wasm streaming compile failed|failed to asynchronously prepare wasm|Godot asset (?:size|hash) mismatch|\/godot\/Work\.(?:js|wasm|pck).*failed|Work\.(?:js|wasm|pck).*(?:Failed to fetch|failed to load)/i.test(text);
 }
 
 function recoverOnceFromGodotCacheMismatch(errorLike) {
@@ -285,12 +414,14 @@ const barContainerStyle = {
 function GodotCanvas({ onEngineReady }) {
   const canvasRef = useRef(null);
   const loadedRef = useRef(false);
-  // Two-stage loading: stage 1 = download engine files (wasm/pck/js), stage 2 = scene init + server data + buildings.
+  // Single visual loader. Internally we still keep the phase for diagnostics,
+  // but the player sees one yellow progress bar from download through home ready.
   const [stage, setStage] = useState(1);           // 1 | 2
-  const [stageProgress, setStageProgress] = useState(0); // 0-100 within stage
+  const [stageProgress, setStageProgress] = useState(0); // 0-100 total
   const [isLoaded, setIsLoaded] = useState(false);
-  const [stuck, setStuck] = useState(false);
+  const [, setStuck] = useState(false);
   const [webglReloading, setWebglReloading] = useState(false);
+  const [godotSkipped, setGodotSkipped] = useState(false);
   const lastProgressRef = useRef({ value: 0, time: 0 });
   const onEngineReadyRef = useRef(onEngineReady);
   const isLoadedStateRef = useRef(false);
@@ -327,11 +458,21 @@ function GodotCanvas({ onEngineReady }) {
     loadedRef.current = true;
     lastProgressRef.current = { value: 0, time: Date.now() };
 
+    if (isCrawlerUserAgent()) {
+      setGodotSkipped(true);
+      setIsLoaded(true);
+      setStageProgress(100);
+      lastProgressRef.current = { value: 100, time: Date.now() };
+      addClientBreadcrumb('godot.skip_crawler', { user_agent: navigator.userAgent }, 'info');
+      return;
+    }
+
     let disposed = false;
     let engine = null;
     let resizeCanvas = null;
     let stage2RafId = null;
     let easeRafId = null;
+    let progressRafId = null;
     let loadedTimeoutId = null;
     let stage2DelayId = null;
     let titleGuardId = null;
@@ -438,24 +579,75 @@ function GodotCanvas({ onEngineReady }) {
       // We scale by max-observed current so the bar fills smoothly regardless.
       let maxDownload = GODOT_DOWNLOAD_FALLBACK_BYTES;
 
+      const setProgressValue = (value) => {
+        if (disposed) return;
+        const next = Math.max(
+          lastProgressRef.current.value || 0,
+          clampProgress(Math.round(value))
+        );
+        setStageProgress((prev) => Math.max(prev, next));
+        lastProgressRef.current = { value: next, time: Date.now() };
+      };
+
+      const finishLoadingOverlay = () => {
+        if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
+        loadedTimeoutId = setTimeout(() => {
+          if (!disposed) setIsLoaded(true);
+        }, GODOT_LOADED_HIDE_DELAY_MS);
+      };
+
+      const animateStageProgress = (target, durationMs = 240, onDone = null) => {
+        if (disposed) return;
+        const safeTarget = Math.max(
+          lastProgressRef.current.value || 0,
+          clampProgress(Math.round(target))
+        );
+        if (progressRafId) cancelAnimationFrame(progressRafId);
+        const from = Math.max(
+          stageProgressStateRef.current || 0,
+          lastProgressRef.current.value || 0
+        );
+        if (safeTarget <= from || durationMs <= 0) {
+          setProgressValue(safeTarget);
+          if (onDone) onDone();
+          return;
+        }
+        const startedAt = Date.now();
+        const tick = () => {
+          if (disposed) return;
+          const t = Math.min(1, (Date.now() - startedAt) / durationMs);
+          const eased = 1 - Math.pow(1 - t, 3);
+          setProgressValue(from + (safeTarget - from) * eased);
+          if (t < 1) {
+            progressRafId = requestAnimationFrame(tick);
+            return;
+          }
+          progressRafId = null;
+          if (onDone) onDone();
+        };
+        progressRafId = requestAnimationFrame(tick);
+      };
+
       // Stage 2: pure linear time-based ramp 0 → 100 over STAGE2_MIN_MS.
       // If Godot signals "buildings loaded" before ramp finishes — we still
       // finish the ramp (otherwise it looks janky). If ramp finishes before
       // buildings loaded — we hold at 99% until the signal.
-      const STAGE2_MIN_MS = 1800;
       let stage2StartTime = null;
       let stage2BuildingsDone = false;
+      let engineReadyDone = false;
       const tickStage2 = () => {
         if (disposed || stage2StartTime == null) return;
         const elapsed = Date.now() - stage2StartTime;
-        const rampValue = Math.min(100, (elapsed / STAGE2_MIN_MS) * 100);
-        // Hold at 99 until buildings confirm, then allow 100.
-        const value = (rampValue >= 100 && !stage2BuildingsDone) ? 99 : rampValue;
-        setStageProgress(Math.round(value));
-        if (value >= 100) {
-          loadedTimeoutId = setTimeout(() => {
-            if (!disposed) setIsLoaded(true);
-          }, 300);
+        const target = stage2BuildingsDone ? 100 : GODOT_STAGE2_HOLD_PROGRESS;
+        const t = Math.min(1, elapsed / GODOT_STAGE2_MIN_MS);
+        const value = GODOT_DOWNLOAD_PROGRESS_WEIGHT + ((target - GODOT_DOWNLOAD_PROGRESS_WEIGHT) * t);
+        setProgressValue(value);
+        if (stage2BuildingsDone && value >= 100) {
+          finishLoadingOverlay();
+          stage2RafId = null;
+          return;
+        }
+        if (!stage2BuildingsDone && value >= GODOT_STAGE2_HOLD_PROGRESS) {
           stage2RafId = null;
           return;
         }
@@ -464,10 +656,9 @@ function GodotCanvas({ onEngineReady }) {
       const startStage2 = () => {
         if (disposed || stage2StartTime != null) return;
         addClientBreadcrumb('godot.stage2_start');
-        console.log('[load] stage2 ramp starting');
         stage2StartTime = Date.now();
         setStage(2);
-        setStageProgress(0);
+        setProgressValue(GODOT_DOWNLOAD_PROGRESS_WEIGHT);
         stage2RafId = requestAnimationFrame(tickStage2);
       };
 
@@ -483,21 +674,25 @@ function GodotCanvas({ onEngineReady }) {
           if (current > maxDownload * 0.99) maxDownload = current / 0.99;
           pct = Math.min(99, Math.round((current / maxDownload) * 100));
         }
-        console.log('[load] stage1 download', { current, total, maxDownload, pct });
+        const weightedPct = Math.min(GODOT_DOWNLOAD_PROGRESS_WEIGHT, Math.round(pct * (GODOT_DOWNLOAD_PROGRESS_WEIGHT / 100)));
         const bucket = Math.floor(pct / 25);
         if (bucket !== lastProgressBucket) {
           lastProgressBucket = bucket;
           addClientBreadcrumb('godot.stage1_progress', { pct, total: total || null });
         }
-        setStage(1);
-        setStageProgress(pct);
-        lastProgressRef.current = { value: pct, time: Date.now() };
+        const nextProgress = Math.max(lastProgressRef.current.value || 0, weightedPct);
+        if (nextProgress < 100) setStage(1);
+        setProgressValue(nextProgress);
       };
 
       // Godot's stage-2 signals are noisy and fire BEFORE startGame resolves,
       // so we don't use them to drive progress — only log for diagnostics.
-      const godotLoadingProgress = (rawPct) => {
-        console.log('[load] stage2 signal (ignored for progress)', { rawPct });
+      const godotLoadingProgress = (rawPct, phase = 'godot') => {
+        const pct = mapGodotLoadingProgress(rawPct, phase);
+        if (!Number.isFinite(pct)) return;
+        setStage(2);
+        animateStageProgress(pct, pct >= 100 ? 520 : 220, pct >= 100 && engineReadyDone ? finishLoadingOverlay : null);
+        addClientBreadcrumb('godot.loading_phase', { pct, raw_pct: rawPct, phase });
       };
       window.godotLoadingProgress = godotLoadingProgress;
 
@@ -506,8 +701,10 @@ function GodotCanvas({ onEngineReady }) {
         if (disposed) return;
         if (stage2BuildingsDone) return;
         addClientBreadcrumb('godot.stage2_complete');
-        console.log('[load] stage2 complete (godotBuildingsLoaded)');
-        stage2BuildingsDone = Date.now();
+        stage2BuildingsDone = true;
+        setStage(2);
+        if (!engineReadyDone) return;
+        animateStageProgress(100, 520, finishLoadingOverlay);
       };
       window.godotBuildingsLoaded = godotBuildingsLoaded;
 
@@ -536,10 +733,10 @@ function GodotCanvas({ onEngineReady }) {
           engine?.requestQuit?.();
           return;
         }
-        // Download finished → ease stage 1 from current% up to 100 over 500ms,
-        // pause 450ms at 100%, then start stage 2.
-        console.log('[load] engine.startGame resolved → easing stage 1 → 100');
+        // Download finished: quickly ease to the download budget, then let
+        // Godot scene/server/home-ready signals finish the same yellow bar.
         addClientBreadcrumb('godot.engine_ready');
+        engineReadyDone = true;
         if (restoreGodotFetch) {
           restoreGodotFetch();
           restoreGodotFetch = null;
@@ -547,14 +744,23 @@ function GodotCanvas({ onEngineReady }) {
         resizeCanvas();
         if (onEngineReadyRef.current) onEngineReadyRef.current(engine);
         const from = lastProgressRef.current.value;
+        const downloadTarget = Math.max(from, GODOT_DOWNLOAD_PROGRESS_WEIGHT);
         const easeStart = Date.now();
         const easeTick = () => {
           if (disposed) return;
-          const t = Math.min(1, (Date.now() - easeStart) / 500);
-          const v = Math.round(from + (100 - from) * t);
-          setStageProgress(v);
+          const t = Math.min(1, (Date.now() - easeStart) / GODOT_ENGINE_READY_EASE_MS);
+          const v = Math.round(from + (downloadTarget - from) * t);
+          setProgressValue(v);
           if (t < 1) easeRafId = requestAnimationFrame(easeTick);
-          else stage2DelayId = setTimeout(() => startStage2(), 450);
+          else {
+            setStage(2);
+            setProgressValue(GODOT_DOWNLOAD_PROGRESS_WEIGHT);
+            if (stage2BuildingsDone) {
+              animateStageProgress(100, 520, finishLoadingOverlay);
+            } else {
+              stage2DelayId = setTimeout(() => startStage2(), 120);
+            }
+          }
         };
         easeRafId = requestAnimationFrame(easeTick);
       }).catch(err => {
@@ -608,6 +814,7 @@ function GodotCanvas({ onEngineReady }) {
       if (resizeCanvas) window.removeEventListener('resize', resizeCanvas);
       if (stage2RafId) cancelAnimationFrame(stage2RafId);
       if (easeRafId) cancelAnimationFrame(easeRafId);
+      if (progressRafId) cancelAnimationFrame(progressRafId);
       if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
       if (stage2DelayId) clearTimeout(stage2DelayId);
       if (titleGuardId) clearInterval(titleGuardId);
@@ -622,7 +829,16 @@ function GodotCanvas({ onEngineReady }) {
   const displayedProgress = webglReloading ? 100 : stageProgress;
   const progressLabel = webglReloading
     ? 'RELOADING GAME'
-    : stage === 1 ? 'DOWNLOADING GAME' : 'LOADING WORLD';
+    : 'LOADING GAME';
+
+  if (godotSkipped) {
+    return (
+      <div style={overlayStyle} aria-label="Clash of Perps">
+        <img src={splashBg} alt="" style={bgStyle} />
+        <img src={splashLogo} alt="Clash of Perps" style={logoStyle} />
+      </div>
+    );
+  }
 
   return (
     <>
@@ -657,14 +873,10 @@ function GodotCanvas({ onEngineReady }) {
                 style={{
                   width: `${displayedProgress}%`,
                   height: '100%',
-                  background: webglReloading
-                    ? 'linear-gradient(to bottom, #8be3ff, #35a8e0)'
-                    : stage === 1
-                    ? 'linear-gradient(to bottom, #ffe066, #e6b800)'
-                    : 'linear-gradient(to bottom, #8be3ff, #35a8e0)',
+                  background: 'linear-gradient(to bottom, #ffe066, #e6b800)',
                   borderRight: '2px solid #fff8dc',
                   boxShadow: 'inset 0 2px 4px rgba(255,255,255,0.4)',
-                  transition: 'width 0.1s linear, background 0.3s ease',
+                  transition: 'width 0.1s linear',
                 }}
               />
             </div>
@@ -683,25 +895,7 @@ function GodotCanvas({ onEngineReady }) {
               {webglReloading ? 'Restoring graphics...' : `${stageProgress}%`}
             </div>
 
-            {/* Stage indicators — 1 • 2 */}
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              gap: 10, marginTop: 16,
-            }}>
-              {[1, 2].map(s => (
-                <div key={s} style={{
-                  width: s === stage ? 28 : 10,
-                  height: 10,
-                  borderRadius: 5,
-                  background: s < stage ? '#8be3ff' : s === stage ? '#ffe066' : 'rgba(255,255,255,0.25)',
-                  boxShadow: s === stage ? '0 0 8px rgba(255,224,102,0.8)' : 'none',
-                  transition: 'all 0.3s ease',
-                }} />
-              ))}
-            </div>
-
-            {/* Substage hint (stage 2 only) */}
-            {webglReloading ? (
+            {webglReloading && (
               <div style={{
                 color: 'rgba(255,255,255,0.75)',
                 marginTop: '10px',
@@ -711,20 +905,6 @@ function GodotCanvas({ onEngineReady }) {
                 textAlign: 'center',
               }}>
                 Reloading after WebGL context loss...
-              </div>
-            ) : stage === 2 && (
-              <div style={{
-                color: 'rgba(255,255,255,0.75)',
-                marginTop: '10px',
-                fontFamily: '"Inter", "Segoe UI", sans-serif',
-                fontSize: '13px',
-                fontWeight: 700,
-                textAlign: 'center',
-              }}>
-                {stageProgress < 30 ? 'Initializing scene…'
-                  : stageProgress < 70 ? 'Connecting to server…'
-                  : stageProgress < 100 ? 'Placing buildings…'
-                  : 'Ready!'}
               </div>
             )}
           </div>

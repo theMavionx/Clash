@@ -20,7 +20,8 @@ extends Node3D
 ## WebGL2 shader compile is async and can take 3-8 frames per variant on
 ## first compile (browser/driver-dependent). 16 gives real headroom; the
 ## nodes are already invisible, so extra frames cost nothing visually.
-const WARMUP_FRAMES: int = 16
+const HOME_WARMUP_FRAMES: int = 4
+const COMBAT_WARMUP_FRAMES: int = 16
 ## Sub-pixel scales (< ~0.005) are frustum-culled by both renderers — the draw
 ## call never reaches the GPU and the pipeline isn't compiled. 0.02 is small
 ## enough to be invisible against the water/sky but big enough to rasterize.
@@ -29,23 +30,63 @@ const WARMUP_SCALE: Vector3 = Vector3(0.02, 0.02, 0.02)
 ## main camera's frustum on the very first rendered frame.
 const WARMUP_POS: Vector3 = Vector3(0.0, 0.1, 0.0)
 
-var _frames_left: int = WARMUP_FRAMES
+signal finished
+
+static var _combat_warmup_done: bool = false
+
+@export_enum("home", "combat") var mode: String = "home"
+
+var _frames_left: int = HOME_WARMUP_FRAMES
+var _finished_emitted: bool = false
+
+
+static func start_combat_warmup(parent: Node) -> Node:
+	if _combat_warmup_done:
+		return null
+	if parent == null or not parent.is_inside_tree():
+		return null
+	var script: Script = load("res://scripts/warmup.gd")
+	if script == null:
+		return null
+	var node: Node = script.new()
+	node.set("mode", "combat")
+	parent.add_child(node)
+	return node
 
 
 func _ready() -> void:
-	# Instrumentation — helps diagnose "did warmup actually run?" from the
-	# browser console. Remove once first-use lag is resolved across builds.
-	print("[WARMUP] _ready fired — spawning warmup variants")
 	position = WARMUP_POS
 	scale = WARMUP_SCALE
-	_spawn_warmup_nodes()
+	if mode == "combat":
+		_frames_left = COMBAT_WARMUP_FRAMES
+		_spawn_combat_warmup_nodes()
+	else:
+		_frames_left = HOME_WARMUP_FRAMES
+		_report_loading_progress(76, "home_warmup_start")
+		_spawn_home_warmup_nodes()
+		_report_loading_progress(82, "home_warmup_assets")
 	set_process(true)
 
 
 func _process(_delta: float) -> void:
 	_frames_left -= 1
+	if mode != "combat":
+		var total: int = HOME_WARMUP_FRAMES if HOME_WARMUP_FRAMES > 0 else 1
+		var completed: int = total - _frames_left
+		if completed < 0:
+			completed = 0
+		if completed > total:
+			completed = total
+		var progress: int = 82 + int(round((float(completed) / float(total)) * 6.0))
+		_report_loading_progress(progress, "home_warmup_frames")
 	if _frames_left <= 0:
-		print("[WARMUP] complete — freeing")
+		if mode == "combat":
+			_combat_warmup_done = true
+		else:
+			_report_loading_progress(88, "home_warmup_done")
+		if not _finished_emitted:
+			_finished_emitted = true
+			finished.emit()
 		set_process(false)
 		queue_free()
 
@@ -53,33 +94,50 @@ func _process(_delta: float) -> void:
 ## Instantiates one of each material variant that gameplay code will use later.
 ## Adding these to the tree inside the camera frustum forces the Compatibility
 ## renderer to compile their pipelines during loading, not during first use.
-func _spawn_warmup_nodes() -> void:
+func _spawn_home_warmup_nodes() -> void:
 	_warmup_hp_bar()
 	_warmup_additive_billboard_plain()
 	_warmup_additive_billboard_textured()
 	_warmup_turret_trail()
 	_warmup_target_ring()
 	_warmup_rally_marker()
+	_warmup_mage_tower()
+	_warmup_ship_glbs()
+	_warmup_grid_material()
+	_warmup_ghost_material()
+	_warmup_upgrade_outline()
+	_warmup_click_indicators()
+
+
+func _spawn_combat_warmup_nodes() -> void:
 	_warmup_magic_orb()
 	_warmup_one_troop_glb()
 	_warmup_demon_king()
 	_warmup_mage_tower()
 	_warmup_flag_glb()
 	_warmup_ship_glbs()
-	_warmup_ghost_material()
-	_warmup_upgrade_outline()
-	_warmup_click_indicators()
-	# Build the shared AnimationLibrary ONCE at boot so the first troop deployed
-	# during an attack skips the "load 5 GLBs + duplicate every track + strip
-	# scale/pos tracks" work that otherwise stalls the first landing.
 	_prewarm_troop_anim_libraries()
-	# Warm every weapon/projectile scene used by _setup_weapons so the FIRST
-	# troop of each type doesn't pay a fresh GLB load during disembark.
 	_prewarm_weapon_scenes()
-	# Fire-bomb explosion textures — if a mage/archer lands their first shot,
-	# this avoids 6 synchronous PNG loads on the explosion frame.
 	BaseTroop._preload_fire_bomb()
-	print("[WARMUP] fire bomb textures preloaded")
+	_warmup_building_destruction()
+
+
+func _report_loading_progress(progress: int, phase: String) -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(%d, '%s');" % [progress, phase])
+
+
+func _warmup_grid_material() -> void:
+	var mat := BuildingSystem._get_grid_material()
+	if mat == null:
+		return
+	var mi := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.08, 0.001, 0.08)
+	mi.mesh = box
+	mi.material_override = mat
+	add_child(mi)
 
 
 ## Pre-draws a mesh with BuildingSystem's ghost placement material (unshaded
@@ -96,7 +154,6 @@ func _warmup_ghost_material() -> void:
 	mi.mesh = box
 	mi.material_override = mat
 	add_child(mi)
-	print("[WARMUP] ghost_material OK")
 
 
 ## Pre-draws the range indicator fill/ring materials and the move-arrow
@@ -118,7 +175,6 @@ func _warmup_click_indicators() -> void:
 		mi.mesh = box
 		mi.material_override = mat
 		add_child(mi)
-	print("[WARMUP] click indicators OK")
 
 
 ## `material_overlay` triggers a second render pass with its own pipeline
@@ -142,7 +198,6 @@ func _warmup_upgrade_outline() -> void:
 	mi.material_override = base
 	mi.material_overlay = mat
 	add_child(mi)
-	print("[WARMUP] upgrade_outline OK")
 
 
 ## Warm Godot's internal load() cache with every weapon/projectile scene used
@@ -162,7 +217,6 @@ func _prewarm_weapon_scenes() -> void:
 	for path in WEAPON_PATHS:
 		if ResourceLoader.load(path, "PackedScene") != null:
 			loaded += 1
-	print("[WARMUP] weapon/projectile scenes cached: ", loaded, "/", WEAPON_PATHS.size())
 
 
 ## Parses every troop rig's GLB set into a cached AnimationLibrary. Covers the
@@ -184,7 +238,6 @@ func _prewarm_troop_anim_libraries() -> void:
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_CombatRanged.glb",
 		"res://Model/Characters/Animations/Rig_Medium/Rig_Medium_Simulation.glb",
 	])
-	print("[WARMUP] anim libraries prewarmed in ", Time.get_ticks_msec() - t0, " ms")
 
 
 func _warmup_hp_bar() -> void:
@@ -198,7 +251,6 @@ func _warmup_hp_bar() -> void:
 	mat.set_shader_parameter("bar_size", Vector2(BaseTroop.HP_BAR_W, BaseTroop.HP_BAR_H))
 	mi.material_override = mat
 	add_child(mi)
-	print("[WARMUP] hp_bar OK")
 
 
 ## Additive billboard WITHOUT a texture. Covers the rare variants where the
@@ -208,7 +260,6 @@ func _warmup_additive_billboard_plain() -> void:
 	mi.mesh = QuadMesh.new()
 	mi.material_override = _make_additive_billboard(null, Color(1.0, 1.0, 1.0, 0.01))
 	add_child(mi)
-	print("[WARMUP] additive_billboard_plain OK")
 
 
 ## Additive billboard WITH a texture — this is what bs_cannon flash, turret
@@ -228,7 +279,6 @@ func _warmup_additive_billboard_textured() -> void:
 	mi.mesh = QuadMesh.new()
 	mi.material_override = _make_additive_billboard(tex, Color(1.5, 1.2, 0.8, 1.0))
 	add_child(mi)
-	print("[WARMUP] additive_billboard_textured OK")
 
 
 func _warmup_turret_trail() -> void:
@@ -250,7 +300,6 @@ func _warmup_turret_trail() -> void:
 	mat.no_depth_test = false
 	mi.material_override = mat
 	add_child(mi)
-	print("[WARMUP] turret_trail OK")
 
 
 ## Covers bs_cannon._spawn_target_ring — unshaded + ALPHA + cull_disabled on
@@ -271,7 +320,6 @@ func _warmup_target_ring() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mi.material_override = mat
 	add_child(mi)
-	print("[WARMUP] target_ring OK")
 
 
 ## Covers BSRally's four pipeline variants in one pass: the flying grenade
@@ -350,7 +398,6 @@ func _warmup_rally_marker() -> void:
 	spark_mat.albedo_color = Color(1.0, 0.35, 0.2, 1.0)
 	spark.material_override = spark_mat
 	add_child(spark)
-	print("[WARMUP] rally_marker OK")
 
 
 ## Covers mage.gd's magic_orb.gdshader ShaderMaterial on a SphereMesh.
@@ -380,7 +427,6 @@ func _warmup_magic_orb() -> void:
 	mat.set_shader_parameter("noise2", placeholder)
 	mi.material_override = mat
 	add_child(mi)
-	print("[WARMUP] magic_orb OK")
 
 
 func _warmup_one_troop_glb() -> void:
@@ -398,7 +444,6 @@ func _warmup_one_troop_glb() -> void:
 	# compiled (DirectionalLight3D in Main.tscn has shadow_enabled=true).
 	_force_shadow_casting(inst)
 	add_child(inst)
-	print("[WARMUP] knight GLB OK")
 
 
 ## DemonKing uses a separate FBX body, custom mask-tint shader, and FBX
@@ -444,7 +489,6 @@ func _warmup_demon_king() -> void:
 	for path in DEMON_ANIM_FILES:
 		if ResourceLoader.load(path, "PackedScene") != null:
 			loaded_anims += 1
-	print("[WARMUP] DemonKing OK, anims cached: ", loaded_anims, "/", DEMON_ANIM_FILES.size())
 
 
 ## Mage Tower is an FBX with runtime-applied albedo/emission textures and a
@@ -481,7 +525,6 @@ func _warmup_mage_tower() -> void:
 	orb.material_override = orb_mat
 	add_child(orb)
 	_warmup_mage_tower_beam_visuals()
-	print("[WARMUP] MageTower OK")
 
 
 func _warmup_mage_tower_beam_visuals() -> void:
@@ -552,14 +595,13 @@ func _warmup_flag_glb() -> void:
 	var ap := _find_anim_player(inst)
 	if ap and ap.has_animation("flag|Action"):
 		ap.get_animation("flag|Action").loop_mode = Animation.LOOP_LINEAR
-	print("[WARMUP] flag GLB OK")
 
 
 ## Pre-draws one instance of each ship level so the "first cannon-ship
 ## placement" no longer stalls on shader compile for the ship-hull variant.
 func _warmup_ship_glbs() -> void:
 	if AttackSystem._ship_model_cache.is_empty():
-		AttackSystem._preload_combat_resources()
+		AttackSystem._preload_ship_resources()
 	var spawned := 0
 	for i in range(AttackSystem._ship_model_cache.size()):
 		var ship_res: Resource = AttackSystem._ship_model_cache[i]
@@ -571,7 +613,36 @@ func _warmup_ship_glbs() -> void:
 		_force_shadow_casting(inst)
 		add_child(inst)
 		spawned += 1
-	print("[WARMUP] ships OK, count=", spawned)
+
+
+func _warmup_building_destruction() -> void:
+	if not BaseTroop._fire_bomb_textures.is_empty():
+		var explosion := MeshInstance3D.new()
+		var quad := QuadMesh.new()
+		quad.size = Vector2(BaseTroop.FIRE_BOMB_SCALE, BaseTroop.FIRE_BOMB_SCALE)
+		explosion.mesh = quad
+		explosion.position = Vector3(0.0, 0.15, 0.0)
+		explosion.material_override = _make_additive_billboard(BaseTroop._fire_bomb_textures[0], Color.WHITE)
+		add_child(explosion)
+
+	if BuildingSystem._ruins_res == null:
+		var cached = BuildingSystem._scene_res_cache.get(BuildingSystem.RUINS_MODEL, null)
+		if cached == null:
+			cached = BuildingSystem._load_packed_scene_resource(BuildingSystem.RUINS_MODEL)
+			if cached != null:
+				BuildingSystem._scene_res_cache[BuildingSystem.RUINS_MODEL] = cached
+		BuildingSystem._ruins_res = cached
+
+	var ruins_res: PackedScene = BuildingSystem._ruins_res as PackedScene
+	if ruins_res == null:
+		return
+	var ruins := ruins_res.instantiate() as Node3D
+	if ruins == null:
+		return
+	ruins.scale = WARMUP_SCALE
+	ruins.position = Vector3(0.08, 0.0, 0.0)
+	_force_shadow_casting(ruins)
+	add_child(ruins)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────

@@ -501,6 +501,23 @@ app.get('/api/admin/panel', (req, res) => {
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">DEX Breakdown</h2>
     <div id="dexStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
 
+    <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Device Breakdown</h2>
+    <div id="deviceStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:360px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Platforms</h3>
+        <table><thead><tr>
+          <th>Platform</th><th>Players</th><th>Active 24h</th><th>Online</th>
+        </tr></thead><tbody id="devicePlatformBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:420px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Devices by DEX</h3>
+        <table><thead><tr>
+          <th>DEX</th><th>Device</th><th>Players</th><th>Active 24h</th>
+        </tr></thead><tbody id="deviceDexBody"></tbody></table>
+      </div>
+    </div>
+
     <h2 style="color:#f59e0b;font-size:18px;margin:24px 0 12px">Futures UI Mode</h2>
     <div id="uiModeStats" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px"></div>
 
@@ -1021,6 +1038,7 @@ function renderPlayers() {
   const monCount   = players.filter(p => p.dex === 'monad').length;
   const phxCount   = players.filter(p => p.dex === 'phoenix').length;
   const hplCount   = players.filter(p => p.dex === 'hyperliquid').length;
+  const risCount   = players.filter(p => p.dex === 'risex').length;
   const ndoCount   = players.filter(p => p.dex === 'nado').length;
   const noDex      = players.filter(p => !p.dex).length;
   // Heartbeat-based presence — counted client-side from /admin/players
@@ -1040,6 +1058,7 @@ function renderPlayers() {
     '<div class="stat" style="border-color:#8b5cf6"><div class="v" style="color:#c4b5fd;font-size:22px">' + monCount + '</div><div class="l">Perpl</div></div>' +
     '<div class="stat" style="border-color:#f97316"><div class="v" style="color:#fb923c;font-size:22px">' + phxCount + '</div><div class="l">Phoenix</div></div>' +
     '<div class="stat" style="border-color:#16a34a"><div class="v" style="color:#86efac;font-size:22px">' + hplCount + '</div><div class="l">Hyperliquid</div></div>' +
+    '<div class="stat" style="border-color:#e11d48"><div class="v" style="color:#fb7185;font-size:22px">' + risCount + '</div><div class="l">RISEx</div></div>' +
     '<div class="stat" style="border-color:#00b8d9"><div class="v" style="color:#67e8f9;font-size:22px">' + ndoCount + '</div><div class="l">Nado</div></div>' +
     (noDex > 0 ? '<div class="stat"><div class="v" style="font-size:18px;color:#9ca3af">' + noDex + '</div><div class="l">No DEX set</div></div>' : '') +
     '<div class="stat"><div class="v">' + shielded + '</div><div class="l">Shielded</div></div>' +
@@ -1055,6 +1074,7 @@ function renderPlayers() {
     if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
     if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
     if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
+    if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
     if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
     return '<span class="badge badge-off">—</span>';
   }
@@ -1302,6 +1322,7 @@ function clientDexBadge(dex) {
     : d === 'monad' ? '#c4b5fd'
     : d === 'phoenix' ? '#fb923c'
     : d === 'hyperliquid' ? '#86efac'
+    : d === 'risex' ? '#fb7185'
     : d === 'nado' ? '#67e8f9'
     : '#9ca3af';
   return '<span class="badge" style="background:' + color + '22;color:' + color + '">' + esc(d) + '</span>';
@@ -1549,6 +1570,7 @@ async function loadStats() {
     const monCount = (byDex.find(x => x.dex === 'monad')    || {}).n || 0;
     const phxCount = (byDex.find(x => x.dex === 'phoenix')  || {}).n || 0;
     const hplCount = (byDex.find(x => x.dex === 'hyperliquid') || {}).n || 0;
+    const risCount = (byDex.find(x => x.dex === 'risex') || {}).n || 0;
     const ndoCount = (byDex.find(x => x.dex === 'nado') || {}).n || 0;
     const noneCount = (byDex.find(x => x.dex === 'unknown') || {}).n || 0;
     const pacRew = rewardsMap.pacifica || {};
@@ -1558,6 +1580,7 @@ async function loadStats() {
     const monRew = rewardsMap.monad    || {};
     const phxRew = rewardsMap.phoenix  || {};
     const hplRew = rewardsMap.hyperliquid || {};
+    const risRew = rewardsMap.risex || {};
     const ndoRew = rewardsMap.nado || {};
     document.getElementById('dexStats').innerHTML =
       dexCard('pacifica', 'Pacifica · Solana', '#7C3AED', pacCount, pacRew.total_gold || 0, pacRew.total_volume || 0, activityLines('pacifica')) +
@@ -1567,10 +1590,61 @@ async function loadStats() {
       dexCard('phoenix',  'Phoenix · Solana',  '#f97316', phxCount, phxRew.total_gold || 0, phxRew.total_volume || 0, activityLines('phoenix')) +
       dexCard('monad',    'Perpl / Monad',     '#8b5cf6', monCount, monRew.total_gold || 0, monRew.total_volume || 0, activityLines('monad')) +
       dexCard('hyperliquid', 'Hyperliquid',     '#16a34a', hplCount, hplRew.total_gold || 0, hplRew.total_volume || 0, activityLines('hyperliquid')) +
+      dexCard('risex',    'RISEx',             '#e11d48', risCount, risRew.total_gold || 0, risRew.total_volume || 0, activityLines('risex')) +
       dexCard('nado',     'Nado · Ink',        '#00b8d9', ndoCount, ndoRew.total_gold || 0, ndoRew.total_volume || 0, activityLines('nado')) +
       (noneCount > 0 ? '<div style="flex:1;min-width:180px;background:#1f2937;border:1px dashed #6b7280;border-radius:12px;padding:16px;display:flex;align-items:center;justify-content:center"><div style="text-align:center"><div style="font-size:28px;font-weight:800;color:#9ca3af">' + noneCount + '</div><div style="font-size:11px;color:#6b7280;margin-top:4px">No DEX set<br/>(legacy accounts)</div></div></div>' : '');
 
-    // Futures UI mode breakdown — comes from /admin/stats (s.ui_modes).
+    // Device breakdown comes from /admin/stats (s.devices). Solana Mobile
+    // is server-counted from seeker flags plus UA/payload fallback.
+    const devices = s.devices || {};
+    const deviceSummary = devices.summary || [];
+    const devicePlatforms = devices.platforms || [];
+    const deviceByDex = devices.by_dex || [];
+    function deviceColor(key) {
+      return key === 'solana_mobile' ? '#14f195'
+        : key === 'mobile_web' ? '#38bdf8'
+        : key === 'tablet_web' ? '#a78bfa'
+        : key === 'desktop_web' ? '#f59e0b'
+        : key === 'android' ? '#34d399'
+        : key === 'ios' ? '#60a5fa'
+        : key === 'windows' ? '#38bdf8'
+        : key === 'macos' ? '#cbd5e1'
+        : key === 'linux' ? '#fbbf24'
+        : key === 'bot' ? '#f87171'
+        : '#9ca3af';
+    }
+    function deviceCard(row) {
+      const color = deviceColor(row.key);
+      return '<div style="flex:1;min-width:210px;background:linear-gradient(180deg,' + color + '1f,' + color + '08);border:1px solid ' + color + ';border-radius:12px;padding:16px">' +
+        '<div style="font-size:13px;color:' + color + ';font-weight:800;letter-spacing:0.4px;text-transform:uppercase">' + esc(row.label || row.key) + '</div>' +
+        '<div style="font-size:32px;font-weight:900;color:#fff;margin:6px 0 2px">' + (row.players || 0) + '</div>' +
+        '<div style="font-size:11px;color:#9ca3af;line-height:1.5">' +
+          'Active 24h: <strong style="color:#e5e7eb">' + (row.active_24h || 0) + '</strong><br>' +
+          'Online: <strong style="color:#4ade80">' + (row.online_now || 0) + '</strong>' +
+        '</div>' +
+      '</div>';
+    }
+    document.getElementById('deviceStats').innerHTML = deviceSummary.length
+      ? deviceSummary.map(deviceCard).join('')
+      : '<div style="color:#6b7280;padding:16px">No device data yet</div>';
+    document.getElementById('devicePlatformBody').innerHTML = devicePlatforms.length
+      ? devicePlatforms.map(row => '<tr>' +
+          '<td><span class="badge" style="background:' + deviceColor(row.key) + '22;color:' + deviceColor(row.key) + '">' + esc(row.label || row.key) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.players || 0) + '</td>' +
+          '<td>' + (row.active_24h || 0) + '</td>' +
+          '<td style="color:#4ade80">' + (row.online_now || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:20px">No platform data yet</td></tr>';
+    document.getElementById('deviceDexBody').innerHTML = deviceByDex.length
+      ? deviceByDex.map(row => '<tr>' +
+          '<td>' + dexBadge(row.dex) + ' <span style="color:#9ca3af">' + esc(row.dex || 'unknown') + '</span></td>' +
+          '<td><span class="badge" style="background:' + deviceColor(row.device) + '22;color:' + deviceColor(row.device) + '">' + esc(row.label || row.device) + '</span></td>' +
+          '<td style="font-weight:800">' + (row.players || 0) + '</td>' +
+          '<td>' + (row.active_24h || 0) + '</td>' +
+        '</tr>').join('')
+      : '<tr><td colspan="4" style="color:#6b7280;text-align:center;padding:20px">No device by DEX data yet</td></tr>';
+
+    // Futures UI mode breakdown comes from /admin/stats (s.ui_modes).
     // Server returns an array like [{mode:'pro',n:5}, {mode:'basic',n:12},
     // {mode:'none',n:107}]. Sourcing from the API guarantees stats work
     // even if the user opens this tab before the players list loaded.
@@ -1624,6 +1698,7 @@ async function loadStats() {
       topTraderTable('gmx',     'GMX · Arbitrum',  '#4f46e5') +
       topTraderTable('monad',   'Perpl / Monad',   '#8b5cf6') +
       topTraderTable('hyperliquid', 'Hyperliquid', '#16a34a') +
+      topTraderTable('risex',   'RISEx',           '#e11d48') +
       topTraderTable('phoenix', 'Phoenix · Solana', '#f97316') +
       topTraderTable('nado',    'Nado · Ink',       '#00b8d9');
 
@@ -1635,6 +1710,7 @@ async function loadStats() {
       if (d === 'monad')    return '<span class="badge" style="background:#4c1d95;color:#ddd6fe">PER</span>';
       if (d === 'phoenix')  return '<span class="badge" style="background:#7c2d12;color:#fed7aa">PHX</span>';
       if (d === 'hyperliquid') return '<span class="badge" style="background:#14532d;color:#bbf7d0">HL</span>';
+      if (d === 'risex') return '<span class="badge" style="background:#7f1d1d;color:#fecdd3">RIS</span>';
       if (d === 'nado') return '<span class="badge" style="background:#164e63;color:#cffafe">NDO</span>';
       return '<span class="badge badge-off">—</span>';
     }

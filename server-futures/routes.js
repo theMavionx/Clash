@@ -231,24 +231,48 @@ async function fetchPythHistory(query) {
   }
 }
 
-const DECIBEL_MIN_REWARD_NOTIONAL_USD = 1;
+// Record every verified Decibel fill that is economically non-zero. Gold
+// payouts are still clamped in the main server's /claim-gold path ($10 floor);
+// this lower floor keeps quests/audits from missing tiny meme-market fills
+// like CHIP where a valid position task can use <$1 notional per open.
+const DECIBEL_MIN_RECORDED_NOTIONAL_USD = 0.000001;
 const DECIBEL_MAX_REWARD_NOTIONAL_USD = 10_000_000;
-const DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS = 35;
-const DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS = 5;
-const DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW = Number(
-  process.env.DECIBEL_TPSL_LIMIT_BUFFER_BPS || DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS
+const DEFAULT_DECIBEL_TP_LIMIT_BUFFER_BPS = 35;
+const DEFAULT_DECIBEL_TP_MIN_LIMIT_TICKS = 5;
+const DEFAULT_DECIBEL_SL_LIMIT_BUFFER_BPS = 500;
+const DEFAULT_DECIBEL_SL_MIN_LIMIT_TICKS = 50;
+const DECIBEL_TP_LIMIT_BUFFER_BPS_RAW = Number(
+  process.env.DECIBEL_TP_LIMIT_BUFFER_BPS
+  || process.env.DECIBEL_TPSL_LIMIT_BUFFER_BPS
+  || DEFAULT_DECIBEL_TP_LIMIT_BUFFER_BPS
 );
-const DECIBEL_TPSL_LIMIT_BUFFER_BPS = Number.isFinite(DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW)
-  && DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW > 0
-  ? DECIBEL_TPSL_LIMIT_BUFFER_BPS_RAW
-  : DEFAULT_DECIBEL_TPSL_LIMIT_BUFFER_BPS;
-const DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW = Number(
-  process.env.DECIBEL_TPSL_MIN_LIMIT_TICKS || DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS
+const DECIBEL_TP_LIMIT_BUFFER_BPS = Number.isFinite(DECIBEL_TP_LIMIT_BUFFER_BPS_RAW)
+  && DECIBEL_TP_LIMIT_BUFFER_BPS_RAW > 0
+  ? DECIBEL_TP_LIMIT_BUFFER_BPS_RAW
+  : DEFAULT_DECIBEL_TP_LIMIT_BUFFER_BPS;
+const DECIBEL_TP_MIN_LIMIT_TICKS_RAW = Number(
+  process.env.DECIBEL_TP_MIN_LIMIT_TICKS
+  || process.env.DECIBEL_TPSL_MIN_LIMIT_TICKS
+  || DEFAULT_DECIBEL_TP_MIN_LIMIT_TICKS
 );
-const DECIBEL_TPSL_MIN_LIMIT_TICKS = Number.isFinite(DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW)
-  && DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW > 0
-  ? DECIBEL_TPSL_MIN_LIMIT_TICKS_RAW
-  : DEFAULT_DECIBEL_TPSL_MIN_LIMIT_TICKS;
+const DECIBEL_TP_MIN_LIMIT_TICKS = Number.isFinite(DECIBEL_TP_MIN_LIMIT_TICKS_RAW)
+  && DECIBEL_TP_MIN_LIMIT_TICKS_RAW > 0
+  ? DECIBEL_TP_MIN_LIMIT_TICKS_RAW
+  : DEFAULT_DECIBEL_TP_MIN_LIMIT_TICKS;
+const DECIBEL_SL_LIMIT_BUFFER_BPS_RAW = Number(
+  process.env.DECIBEL_SL_LIMIT_BUFFER_BPS || DEFAULT_DECIBEL_SL_LIMIT_BUFFER_BPS
+);
+const DECIBEL_SL_LIMIT_BUFFER_BPS = Number.isFinite(DECIBEL_SL_LIMIT_BUFFER_BPS_RAW)
+  && DECIBEL_SL_LIMIT_BUFFER_BPS_RAW > 0
+  ? DECIBEL_SL_LIMIT_BUFFER_BPS_RAW
+  : DEFAULT_DECIBEL_SL_LIMIT_BUFFER_BPS;
+const DECIBEL_SL_MIN_LIMIT_TICKS_RAW = Number(
+  process.env.DECIBEL_SL_MIN_LIMIT_TICKS || DEFAULT_DECIBEL_SL_MIN_LIMIT_TICKS
+);
+const DECIBEL_SL_MIN_LIMIT_TICKS = Number.isFinite(DECIBEL_SL_MIN_LIMIT_TICKS_RAW)
+  && DECIBEL_SL_MIN_LIMIT_TICKS_RAW > 0
+  ? DECIBEL_SL_MIN_LIMIT_TICKS_RAW
+  : DEFAULT_DECIBEL_SL_MIN_LIMIT_TICKS;
 // 5 bps = 0.05%. Must match web/src/lib/decibel.js BUILDER_FEE_BPS — the
 // signed order's builderFee field is validated against this exact value
 // (see assertBuilderFeeAllowed below). Env override allowed for staging.
@@ -638,11 +662,14 @@ function decibelRoundToTick(price, tickSize) {
   return Math.max(t, Math.floor(p / t) * t);
 }
 
-function decibelBufferedTpslLimit(triggerPrice, tickSize, isLong) {
+function decibelBufferedTpslLimit(triggerPrice, tickSize, isLong, kind = 'tp') {
   const tick = Math.max(1, Number(tickSize) || 1);
   const trigger = decibelRoundToTick(triggerPrice, tick);
-  const pctBuffer = Math.ceil(trigger * DECIBEL_TPSL_LIMIT_BUFFER_BPS / 10000);
-  const minBuffer = tick * DECIBEL_TPSL_MIN_LIMIT_TICKS;
+  const isStopLoss = kind === 'sl';
+  const bufferBps = isStopLoss ? DECIBEL_SL_LIMIT_BUFFER_BPS : DECIBEL_TP_LIMIT_BUFFER_BPS;
+  const minTicks = isStopLoss ? DECIBEL_SL_MIN_LIMIT_TICKS : DECIBEL_TP_MIN_LIMIT_TICKS;
+  const pctBuffer = Math.ceil(trigger * bufferBps / 10000);
+  const minBuffer = tick * minTicks;
   const buffer = Math.max(minBuffer, pctBuffer);
   return decibelRoundToTick(isLong ? trigger - buffer : trigger + buffer, tick);
 }
@@ -651,6 +678,31 @@ function decibelSameAddress(a, b) {
   const aa = normalizeAptosAddress(a);
   const bb = normalizeAptosAddress(b);
   return aa && bb && aa === bb;
+}
+
+function decibelMarketSizeToChainUnits(sizeHuman, market) {
+  const n = Math.abs(Number(sizeHuman));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const decimals = Number(market?.sz_decimals ?? market?.szDecimals ?? 6);
+  if (!Number.isFinite(decimals) || decimals < 0 || decimals > 18) return null;
+  let raw = BigInt(Math.round(n * Math.pow(10, decimals)));
+  const lot = market?.lot_size ?? market?.lotSize;
+  if (lot != null) {
+    const lotN = BigInt(Math.max(0, Math.round(Number(lot))));
+    if (lotN > 0n) raw = (raw / lotN) * lotN;
+  }
+  const min = market?.min_size ?? market?.minSize;
+  if (min != null) {
+    const minN = BigInt(Math.max(0, Math.round(Number(min))));
+    if (minN > 0n && raw < minN) return null;
+  }
+  return raw > 0n ? raw : null;
+}
+
+function findDecibelMarketByAddress(markets, marketAddr) {
+  return (Array.isArray(markets) ? markets : []).find(m => (
+    decibelSameAddress(m?.market_addr || m?.marketAddr || m?.market, marketAddr)
+  )) || null;
 }
 
 async function sanitizeDecibelTpslBody(body, subaccountAddr) {
@@ -668,16 +720,35 @@ async function sanitizeDecibelTpslBody(body, subaccountAddr) {
   if (!position || !Number.isFinite(size) || size === 0) return next;
   const isLong = size > 0;
   const tickSize = next.tickSize ?? next.tick_size ?? 1;
+  if (next.fullPosition !== false) {
+    try {
+      const markets = await decibel.fetchMarkets();
+      const market = findDecibelMarketByAddress(markets, marketAddr) || {
+        sz_decimals: next.szDecimals ?? next.sz_decimals,
+        lot_size: next.lotSize ?? next.lot_size,
+        min_size: next.minSize ?? next.min_size,
+      };
+      const currentSize = decibelMarketSizeToChainUnits(size, market);
+      if (currentSize != null) {
+        if (next.tpTriggerPrice != null || next.tpLimitPrice != null || next.tpSize != null) {
+          next.tpSize = currentSize;
+        }
+        if (next.slTriggerPrice != null || next.slLimitPrice != null || next.slSize != null) {
+          next.slSize = currentSize;
+        }
+      }
+    } catch {}
+  }
   if (next.tpTriggerPrice != null) {
     const trigger = Number(next.tpTriggerPrice);
     if (Number.isFinite(trigger)) {
-      next.tpLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong);
+      next.tpLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong, 'tp');
     }
   }
   if (next.slTriggerPrice != null) {
     const trigger = Number(next.slTriggerPrice);
     if (Number.isFinite(trigger)) {
-      next.slLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong);
+      next.slLimitPrice = decibelBufferedTpslLimit(trigger, tickSize, isLong, 'sl');
     }
   }
   return next;
@@ -790,7 +861,7 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
           const n = Number(reward.notional_usd);
           if (
             Number.isFinite(n)
-            && n >= DECIBEL_MIN_REWARD_NOTIONAL_USD
+            && n >= DECIBEL_MIN_RECORDED_NOTIONAL_USD
             && n <= DECIBEL_MAX_REWARD_NOTIONAL_USD
           ) {
             db.addTrade(req.playerId, {
@@ -807,7 +878,7 @@ router.post('/decibel/orders/place', auth, async (req, res) => {
               verifiedSource: 'server',
             });
           } else {
-            console.log(`[decibel] reward row skipped: notional ${Number.isFinite(n) ? n.toFixed(4) : String(n)} outside reward range`);
+            console.log(`[decibel] verified fill row skipped: notional ${Number.isFinite(n) ? n.toFixed(6) : String(n)} outside recorded range`);
           }
         }
       } catch (e) {

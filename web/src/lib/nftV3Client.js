@@ -861,6 +861,34 @@ export function resolveDemonKingConnectedSyncTarget({
   return targetForChain('solana') || targetForChain('aptos') || targetForChain('base');
 }
 
+export function resolveDemonKingInventorySyncTarget({
+  evmAddress = null,
+  solAddress = null,
+  aptosAddress = null,
+} = {}) {
+  const evm = String(evmAddress || '').trim();
+  const sol = String(solAddress || '').trim();
+  const apt = String(aptosAddress || '').trim();
+  const wallets = {};
+  const chains = [];
+
+  if (isEvmWalletAddress(evm)) {
+    wallets.evm = evm;
+    chains.push(...DEMON_KING_EVM_CHAINS);
+  }
+  if (isSolanaWalletAddress(sol)) {
+    wallets.solana = sol;
+    chains.push('solana');
+  }
+  if (isAptosWalletAddress(apt) && !isEvmWalletAddress(apt)) {
+    wallets.aptos = apt;
+    chains.push('aptos');
+  }
+
+  if (!chains.length) return null;
+  return { wallets, chains: [...new Set(chains)] };
+}
+
 function normalizeDemonKingSyncJobs({ wallet, wallets, chains }) {
   const requested = normalizeDemonKingChains(chains);
   const jobs = [];

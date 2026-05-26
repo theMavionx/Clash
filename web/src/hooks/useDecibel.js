@@ -264,17 +264,23 @@ function roundPriceUnitsToTick(priceUnits, market) {
   if (!Number.isFinite(t) || t <= 0) return Math.max(1, Math.round(p));
   return Math.max(1, Math.floor(p / t) * t);
 }
-const DECIBEL_TPSL_LIMIT_BUFFER_BPS = 35;
-const DECIBEL_TPSL_MIN_LIMIT_TICKS = 5;
-function tpslLimitPriceUnits(triggerUnits, market, isLong) {
+const DECIBEL_TP_LIMIT_BUFFER_BPS = 35;
+const DECIBEL_TP_MIN_LIMIT_TICKS = 5;
+const DECIBEL_SL_LIMIT_BUFFER_BPS = 500;
+const DECIBEL_SL_MIN_LIMIT_TICKS = 50;
+function tpslLimitPriceUnits(triggerUnits, market, isLong, kind = 'tp') {
   const tick = Math.max(1, Number(tickSizeChainUnits(market)) || 1);
   const trigger = roundPriceUnitsToTick(triggerUnits, market);
-  const pctBuffer = Math.ceil(trigger * DECIBEL_TPSL_LIMIT_BUFFER_BPS / 10000);
-  const minBuffer = tick * DECIBEL_TPSL_MIN_LIMIT_TICKS;
+  const isStopLoss = kind === 'sl';
+  const bufferBps = isStopLoss ? DECIBEL_SL_LIMIT_BUFFER_BPS : DECIBEL_TP_LIMIT_BUFFER_BPS;
+  const minTicks = isStopLoss ? DECIBEL_SL_MIN_LIMIT_TICKS : DECIBEL_TP_MIN_LIMIT_TICKS;
+  const pctBuffer = Math.ceil(trigger * bufferBps / 10000);
+  const minBuffer = tick * minTicks;
   const buffer = Math.max(minBuffer, pctBuffer);
   // Close-long orders sell, so their limit must be below the trigger. Close-short
-  // orders buy, so their limit must be above the trigger. This keeps triggered
-  // TP/SL orders fillable instead of leaving a stale reduce-only limit behind.
+  // orders buy, so their limit must be above the trigger. Stop-loss gets a much
+  // wider buffer so it behaves closer to a market stop and is less likely to
+  // leave a partially-filled position unprotected during a fast move.
   return Math.max(tick, roundPriceUnitsToTick(isLong ? trigger - buffer : trigger + buffer, market));
 }
 function sizeToChainUnits(human, market) {
@@ -2030,15 +2036,19 @@ export function useDecibel() {
         slOrderId: position?.sl_order_id || undefined,
         ...(tp > 0 ? {
           tpTriggerPrice: tpTrigger,
-          tpLimitPrice: tpslLimitPriceUnits(tpTrigger, market, isLong),
+          tpLimitPrice: tpslLimitPriceUnits(tpTrigger, market, isLong, 'tp'),
           tpSize: sizeStr,
         } : {}),
         ...(sl > 0 ? {
           slTriggerPrice: slTrigger,
-          slLimitPrice: tpslLimitPriceUnits(slTrigger, market, isLong),
+          slLimitPrice: tpslLimitPriceUnits(slTrigger, market, isLong, 'sl'),
           slSize: sizeStr,
         } : {}),
         tickSize: tickSizeChainUnits(market),
+        szDecimals: market.sz_decimals ?? market.szDecimals,
+        lotSize: market.lot_size ?? market.lotSize,
+        minSize: market.min_size ?? market.minSize,
+        fullPosition: true,
         ...(sub ? { subaccountAddr: sub } : {}),
       });
       const txHash = assertWriteSuccess(res, 'TP/SL update');

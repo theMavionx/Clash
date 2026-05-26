@@ -98,14 +98,26 @@ static func _preload_combat_resources() -> void:
 	if _combat_preload_done:
 		return
 	_combat_preload_done = true
-	for path in SHIP_MODELS:
-		_ship_model_cache.append(_load_packed_scene_resource(path))
+	_preload_ship_resources()
 	for troop_name in TROOP_DEFS.keys():
 		var tdef: Dictionary = TROOP_DEFS[troop_name]
 		_troop_res_cache[troop_name] = {
 			"model": _load_packed_scene_resource(tdef.model),
 			"script": _load_script_resource(tdef.script),
 		}
+
+
+static func _preload_ship_resources() -> void:
+	if not _ship_model_cache.is_empty():
+		return
+	for path in SHIP_MODELS:
+		_ship_model_cache.append(_load_packed_scene_resource(path))
+
+
+func ensure_combat_resources_loaded() -> void:
+	if _flag_scene_res == null:
+		_flag_scene_res = _load_packed_scene_resource("res://Model/flag/pirate_flag_animated.glb")
+	_preload_combat_resources()
 
 # ---------------------------------------------------------------------------
 # Per-frame ships group cache — matches BaseTroop caching pattern
@@ -171,19 +183,13 @@ func _wait_combat_delay(seconds: float, spawn_generation: int) -> bool:
 
 
 func _ready() -> void:
-	# Preload all combat GLBs and scripts before the player can trigger an attack.
-	# Running at _ready() means this cost is paid during the loading screen, not
-	# during the first ship placement or first troop deploy.
-	if _flag_scene_res == null:
-		_flag_scene_res = _load_packed_scene_resource("res://Model/flag/pirate_flag_animated.glb")
-	_preload_combat_resources()
+	_preload_ship_resources()
 	ship_plane = get_node_or_null(grid_plane_path)
 	if ship_plane == null:
 		push_warning("AttackSystem: shipPlane not found")
 		return
 	ship_plane.visible = false
 	_refresh_placement_bounds()
-	print("AttackSystem ready. center: ", plane_center, " extent_x: ", plane_extent_x, " extent_z: ", plane_extent_z)
 
 
 func _refresh_placement_bounds() -> void:
@@ -235,6 +241,7 @@ func _separate_ships(delta: float) -> void:
 ## [fleet] is an Array of {level: int, troops: Array[String]} — one entry per ship.
 ## If fleet is empty, falls back to legacy mode (no ships to place).
 func enter_attack_mode(fleet: Array = []) -> void:
+	ensure_combat_resources_loaded()
 	_cancel_pending_combat_spawns()
 	_refresh_placement_bounds()
 	is_attack_mode = true
@@ -276,6 +283,7 @@ func enter_attack_mode(fleet: Array = []) -> void:
 ## Replay setup: same fleet data as attack mode, but no interactive placement
 ## plane. Replay actions drive placement directly from recorded coordinates.
 func enter_replay_mode(fleet: Array = []) -> void:
+	ensure_combat_resources_loaded()
 	_refresh_placement_bounds()
 	exit_attack_mode()
 	_fleet = fleet.duplicate(true)

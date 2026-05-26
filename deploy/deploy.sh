@@ -546,6 +546,8 @@ build_frontend() {
         log "Patched Work.js runtime guards"
     fi
 
+    node "$WEB_DIR/write-godot-runtime-manifest.cjs" "$WEB_DIST/godot" "$RELEASE_ID"
+
     log "Compressing static assets..."
     STATIC_COMPRESSED=0
     STATIC_REUSED=0
@@ -576,6 +578,7 @@ validate_release() {
     [ -f "$WEB_DIST/godot/Work.pck" ] || die "Missing web/dist/godot/Work.pck"
     [ -f "$WEB_DIST/godot/Work.wasm" ] || die "Missing web/dist/godot/Work.wasm"
     [ -f "$WEB_DIST/godot/Work.js" ] || die "Missing web/dist/godot/Work.js"
+    [ -f "$WEB_DIST/godot/godot-runtime-manifest.json" ] || die "Missing web/dist/godot/godot-runtime-manifest.json"
     node --check "$SERVER_DIR/db.js"
     node --check "$SERVER_DIR/routes.js"
     if [ -f "$MCP_DIR/src/server.mjs" ]; then

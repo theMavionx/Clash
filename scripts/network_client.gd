@@ -28,7 +28,6 @@ var wallet: String = ""
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS  # keep network alive during tree pause
 	SERVER_URL = _resolve_server_url()
-	print("[net] SERVER_URL=", SERVER_URL)
 	var cfg = ConfigFile.new()
 	if cfg.load("user://auth.cfg") == OK:
 		token = cfg.get_value("auth", "token", "")

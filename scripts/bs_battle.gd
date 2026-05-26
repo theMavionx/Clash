@@ -255,7 +255,7 @@ func _freeze_combat_runtime_nodes() -> void:
 			node.set_physics_process(false)
 
 
-func _stop_attacker_combat_after_town_hall_destroyed() -> void:
+func _stop_attacker_combat_after_town_hall_destroyed(play_victory: bool = true) -> void:
 	if not is_instance_valid(bs):
 		return
 	if bs._cannon:
@@ -279,10 +279,11 @@ func _stop_attacker_combat_after_town_hall_destroyed() -> void:
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if not is_instance_valid(troop):
 			continue
-		if troop.has_method("_play_victory"):
-			troop.call("_play_victory")
-		elif "state" in troop:
-			troop.state = troop.State.VICTORY
+		if play_victory:
+			if troop.has_method("_play_victory"):
+				troop.call("_play_victory")
+			elif "state" in troop:
+				troop.state = troop.State.VICTORY
 		if troop.has_method("_clear_owned_projectiles"):
 			troop.call("_clear_owned_projectiles")
 
@@ -574,6 +575,17 @@ func _free_home_troops_and_ships() -> void:
 # Public API
 # ---------------------------------------------------------------------------
 
+func _start_hidden_combat_warmup() -> Node:
+	var script: Script = load("res://scripts/warmup.gd")
+	if script == null:
+		return null
+	return script.start_combat_warmup(bs)
+
+
+func _await_hidden_combat_warmup(warmup: Node) -> void:
+	if warmup != null and is_instance_valid(warmup):
+		await warmup.finished
+
 ## Kicks off the enemy search flow: boards home troops, sails ships, closes
 ## the cloud transition, fetches an enemy from the server, then switches to
 ## the enemy island. Called when the Find Enemy button is pressed.
@@ -633,6 +645,8 @@ func _on_find_pressed() -> void:
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_hidden_combat_warmup(combat_warmup)
 	if bs.find_button:
 		bs.find_button.text = "Searching..."
 	var result: Dictionary = await net.find_enemy()
@@ -790,6 +804,8 @@ func _switch_to_enemy_island() -> void:
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_hidden_combat_warmup(combat_warmup)
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
@@ -894,6 +910,8 @@ func _switch_to_enemy_island_after_sail() -> void:
 			"attack_cost_gold": enemy_info.get("attack_cost_gold", 0),
 		})
 	bs._cannon._preload_explosion_textures()
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_hidden_combat_warmup(combat_warmup)
 	for bsys in bs.get_tree().get_nodes_in_group("building_systems"):
 		bsys._destroy_all_buildings()
 	if enemy_info.has("buildings") and enemy_info.buildings is Array:
@@ -1084,9 +1102,11 @@ func _on_town_hall_destroyed() -> void:
 	if not _replay_active:
 		_record_battle_end("victory")
 	_stop_defensive_combat_after_town_hall_destroyed()
-	_stop_attacker_combat_after_town_hall_destroyed()
+	_stop_attacker_combat_after_town_hall_destroyed(false)
+	if is_instance_valid(bs):
+		await bs.get_tree().process_frame
 
-	# 1. Set all troops to VICTORY immediately (they stop fighting)
+	# 1. Set all troops to VICTORY after cleanup (they stop fighting)
 	var deployed_troops: Dictionary = {}
 	var attack_sys: Node = bs.get_node_or_null("../AttackSystem")
 	var fleet_ref: Array = attack_sys._fleet if attack_sys else _saved_fleet
@@ -1099,7 +1119,8 @@ func _on_town_hall_destroyed() -> void:
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop) and "state" in troop:
 			if troop.has_method("_play_victory"):
-				troop._play_victory()
+				if troop.state != troop.State.VICTORY:
+					troop._play_victory()
 			else:
 				troop.state = troop.State.VICTORY
 			var t_key: String = _troop_script_to_name(troop)
@@ -1254,12 +1275,15 @@ func _on_replay_town_hall_destroyed() -> void:
 		audio.play_result()
 	record_replay_telemetry("chain_destroy_start", {"reason": "town_hall_destroyed"})
 	_stop_defensive_combat_after_town_hall_destroyed()
-	_stop_attacker_combat_after_town_hall_destroyed()
+	_stop_attacker_combat_after_town_hall_destroyed(false)
+	if is_instance_valid(bs):
+		await bs.get_tree().process_frame
 
 	for troop in bs.get_tree().get_nodes_in_group("troops"):
 		if is_instance_valid(troop) and "state" in troop:
 			if troop.has_method("_play_victory"):
-				troop._play_victory()
+				if troop.state != troop.State.VICTORY:
+					troop._play_victory()
 			else:
 				troop.state = troop.State.VICTORY
 
@@ -1508,6 +1532,8 @@ func _start_replay(replay_data: Array, buildings_snapshot: Array, attacker_name:
 	var cloud = bs._get_or_create_cloud()
 	cloud.close()
 	await cloud.close_finished
+	var combat_warmup: Node = _start_hidden_combat_warmup()
+	await _await_hidden_combat_warmup(combat_warmup)
 	bs._cannon._preload_explosion_textures()
 	for bsys in bs._building_systems:
 		bsys._destroy_all_buildings()
@@ -1846,16 +1872,32 @@ func _force_defeat(reason: String) -> void:
 	var audio = bs.get_node_or_null("/root/AudioManager")
 	if audio and audio.has_method("play_result"):
 		audio.play_result()
-	# Casualties already reported to server via /troop-died in real-time
-	# Just send the defeat result with empty casualties (server already has the data)
+	var deployed_troops: Dictionary = {}
+	for ship in _saved_fleet:
+		if not ship.get("_placed", false):
+			continue
+		for t_name in ship.get("troops", []):
+			deployed_troops[t_name] = deployed_troops.get(t_name, 0) + 1
+	var surviving_troops: Dictionary = {}
+	for troop in bs.get_tree().get_nodes_in_group("troops"):
+		if is_instance_valid(troop) and "state" in troop:
+			var t_key: String = _troop_script_to_name(troop)
+			if t_key != "":
+				surviving_troops[t_key] = surviving_troops.get(t_key, 0) + 1
+	var defeat_casualties: Dictionary = {}
+	for t_name in deployed_troops:
+		var lost_count: int = deployed_troops[t_name] - surviving_troops.get(t_name, 0)
+		if lost_count > 0:
+			defeat_casualties[t_name] = lost_count
+
 	var net_def: Node = bs._net
 	var def_id: String = enemy_info.get("id", "")
 	if net_def and net_def.has_token() and def_id != "":
 		var defeat_session_id: String = str(enemy_info.get("battle_session_id", ""))
-		net_def.submit_battle_result(def_id, _battle_replay, "defeat", {}, defeat_session_id)
+		net_def.submit_battle_result(def_id, _battle_replay, "defeat", defeat_casualties, defeat_session_id)
 	var bridge_def: Node = bs._bridge
 	if bridge_def:
-		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason})
+		bridge_def.send_to_react("battle_result", {"type": "defeat", "reason": reason, "casualties": defeat_casualties})
 
 
 ## Called every frame from BuildingSystem._process while on the home island.

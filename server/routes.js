@@ -6686,7 +6686,8 @@ function _resolvePlayerShipEditBuilding(playerId, buildingId, body = {}) {
 }
 
 function _applyCasualties(playerId, casualties) {
-  if (!casualties || typeof casualties !== 'object') return;
+  const applied = {};
+  if (!casualties || typeof casualties !== 'object') return applied;
 
   // Count total deployed troops across all ships
   const ports = db.db.prepare('SELECT id, ship_troops, ship_troops_template FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(playerId, 'port');
@@ -6730,6 +6731,7 @@ function _applyCasualties(playerId, casualties) {
       const name = _normalizeTroopName(t);
       if (remaining[name] && remaining[name] > 0) {
         remaining[name]--;
+        applied[name] = (applied[name] || 0) + 1;
         if (_troopSlotCost(name) > 1) skipNextFiller = true;
       } else {
         filtered.push(t);
@@ -6746,6 +6748,7 @@ function _applyCasualties(playerId, casualties) {
   if (leftover.length > 0) {
     console.log(`[CASUALTIES] Player ${playerId} had ${leftover.length} casualty types not applied (already removed or desync):`, leftover);
   }
+  return applied;
 }
 
 function _paidCasualties(casualties) {
@@ -6918,15 +6921,15 @@ router.post('/attack/result', auth, (req, res) => {
     } catch (err) {
       console.warn('[BATTLE] Demon King NFT win record failed:', err?.message || err);
     }
-    // Remove server-simulated casualties from attacker's ships. Real-time
-    // /troop-died may already have removed some; _applyCasualties caps against
-    // the current ship state, so the final submit is idempotent.
-    _applyCasualties(req.player.id, verification.casualties);
+    // Apply casualties exactly once from the authoritative replay result.
+    // /troop-died is now telemetry-only; mutating ships there caused double
+    // removal when the final replay result was submitted.
+    const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
     // Return authoritative post-casualty ship state so client can sync immediately
     return res.json({
       ...battleResult,
       ships: _getShipsPayload(req.player.id),
-      casualties: _paidCasualties(verification.casualties),
+      casualties: _paidCasualties(appliedCasualties),
       demon_king_nft_wins: demonKingNftWins,
     });
   }
@@ -6936,14 +6939,14 @@ router.post('/attack/result', auth, (req, res) => {
   db.storeReplay(req.player.id, defender_id, actions, defenderBuildings, claimedResult, 'accepted', replayStatus === 'ACCEPTED' ? 'Defeat' : storedAcceptReason, null, verification);
 
   // Remove server-simulated casualties from attacker's ships.
-  _applyCasualties(req.player.id, verification.casualties);
+  const appliedCasualties = _applyCasualties(req.player.id, verification.casualties);
 
   res.json({
     success: true,
     loot: { gold: 0, wood: 0, ore: 0 },
     trophies: defeatResult.attackerTrophies,
     ships: _getShipsPayload(req.player.id),
-    casualties: _paidCasualties(verification.casualties),
+    casualties: _paidCasualties(appliedCasualties),
   });
 });
 
@@ -7258,9 +7261,8 @@ router.post('/buildings/:id/swap-troop', auth, async (req, res) => {
     if (swapCost > 0) db.db.prepare('UPDATE players SET gold = gold - ? WHERE id = ?').run(swapCost, req.player.id);
     shipTroops.splice(span.start, slotsToReplace, ...replacement);
     const troopsJson = JSON.stringify(shipTroops);
-    // Update ship_troops only — template stays as the last full loadout so /reinforce
-    // can still restore the original slot count after casualties.
-    db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(troopsJson, buildingId);
+    // Persist explicit swaps as the new reinforce template.
+    db.db.prepare('UPDATE buildings SET ship_troops = ?, ship_troops_template = ? WHERE id = ?').run(troopsJson, troopsJson, buildingId);
 
     const updated = db.db.prepare('SELECT gold, wood, ore FROM players WHERE id = ?').get(req.player.id);
     return { ship_troops: shipTroops, ship_level: building.level, ship_capacity: building.level * 3, resources: updated };
@@ -7337,8 +7339,11 @@ router.get('/ships', auth, (req, res) => {
   res.json({ ships });
 });
 
-// Report a single troop death during battle. Troops can die in bursts during one
-// physics frame, so use a short token bucket instead of a per-request cooldown.
+// Report a single troop death during battle. This endpoint is telemetry-only:
+// ship state is mutated once by /attack/result from the authoritative replay.
+// Older clients still call this endpoint, so keep accepting it without removing
+// troops. Mutating here caused duplicate reinforcement costs when /attack/result
+// later applied the same casualty again.
 const TROOP_DIED_RATE_WINDOW_MS = 1000;
 const TROOP_DIED_RATE_MAX = 120;
 const _troopDiedBuckets = new Map();
@@ -7369,25 +7374,16 @@ router.post('/troop-died', auth, (req, res) => {
   const normalizedTroop = _normalizeTroopName(troop_name);
   if (!troop_name || !VALID_TROOPS.includes(normalizedTroop)) return res.status(400).json({ error: 'Invalid troop' });
   if (normalizedTroop === 'DemonKing') {
-    return res.json({ success: true, removed: null, persistent: true, troop_name: 'DemonKing' });
+    return res.json({ success: true, recorded: true, removed: null, persistent: true, troop_name: 'DemonKing' });
   }
 
-  // Find first port that has this troop and remove one instance (atomic)
-  const result = db.db.transaction(() => {
-    const ports = db.db.prepare('SELECT id, ship_troops FROM buildings WHERE player_id = ? AND type = ? AND has_ship = 1').all(req.player.id, 'port');
-    for (const port of ports) {
-      const troops = JSON.parse(port.ship_troops || '[]');
-      const idx = troops.findIndex((t) => _normalizeTroopName(t) === normalizedTroop);
-      if (idx !== -1) {
-        const removeCount = Math.min(_troopSlotCost(normalizedTroop), troops.length - idx);
-        troops.splice(idx, removeCount);
-        db.db.prepare('UPDATE buildings SET ship_troops = ? WHERE id = ?').run(JSON.stringify(troops), port.id);
-        return { removed: normalizedTroop, port_id: port.id };
-      }
-    }
-    return { removed: null };
-  })();
-  res.json({ success: true, ...result });
+  res.json({
+    success: true,
+    recorded: true,
+    removed: null,
+    troop_name: normalizedTroop,
+    applied_by: 'attack_result',
+  });
 });
 
 // Get casualties: compare ship_troops vs ship_troops_template to find missing troops
@@ -7399,6 +7395,8 @@ router.get('/casualties', auth, (req, res) => {
   for (const port of ports) {
     const current = JSON.parse(port.ship_troops || '[]');
     const template = JSON.parse(port.ship_troops_template || '[]');
+    const missingSlots = Math.max(0, template.length - current.length);
+    if (missingSlots <= 0) continue;
     // Count how many of each troop type are missing
     const currentCounts = {};
     for (const t of current) {
@@ -7406,7 +7404,9 @@ router.get('/casualties', auth, (req, res) => {
       const normalized = _normalizeTroopName(t);
       currentCounts[normalized] = (currentCounts[normalized] || 0) + 1;
     }
+    let portMissing = 0;
     for (const t of template) {
+      if (portMissing >= missingSlots) break;
       if (_isSlotFiller(t)) continue;
       const normalized = _normalizeTroopName(t);
       if (normalized === 'DemonKing') continue;
@@ -7415,6 +7415,7 @@ router.get('/casualties', auth, (req, res) => {
       } else {
         casualties[normalized] = (casualties[normalized] || 0) + 1;
         totalMissing++;
+        portMissing++;
       }
     }
   }
@@ -7438,6 +7439,8 @@ router.post('/reinforce', auth, (req, res) => {
       const current = JSON.parse(port.ship_troops || '[]');
       const template = JSON.parse(port.ship_troops_template || '[]');
       if (template.length === 0) continue;
+      const missingSlots = Math.max(0, template.length - current.length);
+      if (missingSlots <= 0) continue;
       // Count missing troops by type (template - current)
       const currentCounts = {};
       for (const t of current) {
@@ -7447,6 +7450,7 @@ router.post('/reinforce', auth, (req, res) => {
       }
       const toAdd = [];
       for (const t of template) {
+        if (toAdd.length >= missingSlots) break;
         if (_isSlotFiller(t)) continue;
         const normalized = _normalizeTroopName(t);
         if (normalized === 'DemonKing') continue;
@@ -10518,6 +10522,164 @@ router.get('/admin/client-logs', adminAuth, (req, res) => {
   res.json({ rows, total: rows.length, retention_days: CLIENT_LOG_RETENTION_DAYS });
 });
 
+function parseDevicePayloadText(payload) {
+  if (!payload) return '';
+  if (typeof payload !== 'string') return JSON.stringify(payload).slice(0, 2000);
+  try {
+    return JSON.stringify(JSON.parse(payload)).slice(0, 2000);
+  } catch {
+    return payload.slice(0, 2000);
+  }
+}
+
+function rowDeviceText(row) {
+  return [
+    row?.ua,
+    row?.seeker_source,
+    row?.seeker_id,
+    parseDevicePayloadText(row?.payload),
+  ].filter(Boolean).join(' ');
+}
+
+function isSolanaMobileDevice(row) {
+  if (Number(row?.is_seeker || 0) === 1 || row?.seeker_id) return true;
+  return /solana\s*mobile|solanamobile|\bseeker\b|\bsaga\b|mobile wallet adapter|\bmwa\b/i.test(rowDeviceText(row));
+}
+
+function classifyDeviceFamily(row) {
+  const text = rowDeviceText(row);
+  if (/bot|crawler|spider|headless|playwright|puppeteer|lighthouse/i.test(text)) return 'bot';
+  if (isSolanaMobileDevice(row)) return 'solana_mobile';
+  if (!text) return 'unknown';
+  if (/ipad|tablet|kindle|silk/i.test(text)) return 'tablet_web';
+  if (/mobile|android|iphone|ipod|windows phone/i.test(text)) return 'mobile_web';
+  if (/windows nt|macintosh|mac os x|x11|linux/i.test(text)) return 'desktop_web';
+  return 'unknown';
+}
+
+function classifyDevicePlatform(row) {
+  const text = rowDeviceText(row);
+  if (/bot|crawler|spider|headless|playwright|puppeteer|lighthouse/i.test(text)) return 'bot';
+  if (isSolanaMobileDevice(row)) return 'solana_mobile';
+  if (/iphone|ipad|ipod|\bios\b/i.test(text)) return 'ios';
+  if (/android/i.test(text)) return 'android';
+  if (/windows nt|windows/i.test(text)) return 'windows';
+  if (/macintosh|mac os x/i.test(text)) return 'macos';
+  if (/linux|x11/i.test(text)) return 'linux';
+  return 'unknown';
+}
+
+const DEVICE_LABELS = {
+  solana_mobile: 'Solana Mobile',
+  mobile_web: 'Mobile web',
+  tablet_web: 'Tablet web',
+  desktop_web: 'Desktop web',
+  bot: 'Bot / automation',
+  unknown: 'Unknown',
+};
+
+const PLATFORM_LABELS = {
+  solana_mobile: 'Solana Mobile',
+  android: 'Android',
+  ios: 'iOS / iPadOS',
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux',
+  bot: 'Bot / automation',
+  unknown: 'Unknown',
+};
+
+function rowLatestAt(row) {
+  return row?.last_seen_at || row?.log_created_at || row?.seeker_detected_at || null;
+}
+
+function isDateWithin(value, ms) {
+  if (!value) return false;
+  const t = new Date(String(value).replace(' ', 'T') + 'Z').getTime();
+  return Number.isFinite(t) && (Date.now() - t) <= ms;
+}
+
+function aggregateDeviceRows(rows, classifier, labels) {
+  const map = {};
+  for (const row of rows) {
+    const key = classifier(row);
+    if (!map[key]) {
+      map[key] = {
+        key,
+        label: labels[key] || key,
+        players: 0,
+        active_24h: 0,
+        online_now: 0,
+        latest_at: null,
+      };
+    }
+    const bucket = map[key];
+    bucket.players += 1;
+    if (isDateWithin(row.last_seen_at || row.log_created_at, 24 * 60 * 60 * 1000)) bucket.active_24h += 1;
+    if (isDateWithin(row.last_seen_at || row.log_created_at, 5 * 60 * 1000)) bucket.online_now += 1;
+    const latest = rowLatestAt(row);
+    if (latest && (!bucket.latest_at || String(latest) > String(bucket.latest_at))) bucket.latest_at = latest;
+  }
+  return Object.values(map).sort((a, b) => b.players - a.players || a.label.localeCompare(b.label));
+}
+
+function buildDeviceStats() {
+  try {
+    const rows = db.db.prepare(`
+      SELECT
+        p.id, COALESCE(NULLIF(p.dex, ''), 'unknown') AS dex,
+        p.is_seeker, p.seeker_id, p.seeker_source, p.seeker_detected_at,
+        p.last_seen_at,
+        cl.ua, cl.payload, cl.created_at AS log_created_at
+      FROM players p
+      LEFT JOIN (
+        SELECT player_id, MAX(id) AS latest_log_id
+        FROM client_logs
+        WHERE player_id IS NOT NULL
+        GROUP BY player_id
+      ) latest ON latest.player_id = p.id
+      LEFT JOIN client_logs cl ON cl.id = latest.latest_log_id
+    `).all();
+
+    const byDexMap = {};
+    for (const row of rows) {
+      const dex = row.dex || 'unknown';
+      const family = classifyDeviceFamily(row);
+      const key = dex + '|' + family;
+      if (!byDexMap[key]) {
+        byDexMap[key] = {
+          dex,
+          device: family,
+          label: DEVICE_LABELS[family] || family,
+          players: 0,
+          active_24h: 0,
+        };
+      }
+      byDexMap[key].players += 1;
+      if (isDateWithin(row.last_seen_at || row.log_created_at, 24 * 60 * 60 * 1000)) byDexMap[key].active_24h += 1;
+    }
+
+    const seekerSources = db.db.prepare(`
+      SELECT COALESCE(NULLIF(seeker_source, ''), 'client') AS source,
+             COUNT(*) AS players
+      FROM players
+      WHERE COALESCE(is_seeker, 0) = 1 OR seeker_id IS NOT NULL
+      GROUP BY COALESCE(NULLIF(seeker_source, ''), 'client')
+      ORDER BY players DESC, source ASC
+    `).all();
+
+    return {
+      summary: aggregateDeviceRows(rows, classifyDeviceFamily, DEVICE_LABELS),
+      platforms: aggregateDeviceRows(rows, classifyDevicePlatform, PLATFORM_LABELS),
+      by_dex: Object.values(byDexMap).sort((a, b) => b.players - a.players || a.dex.localeCompare(b.dex) || a.label.localeCompare(b.label)),
+      seeker_sources: seekerSources,
+      solana_mobile_players: rows.filter(isSolanaMobileDevice).length,
+    };
+  } catch (e) {
+    return { summary: [], platforms: [], by_dex: [], seeker_sources: [], solana_mobile_players: 0, error: e.message };
+  }
+}
+
 // Server stats
 router.get('/admin/stats', adminAuth, (req, res) => {
   const playerCount = db.db.prepare('SELECT COUNT(*) as c FROM players').get().c;
@@ -10729,6 +10891,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
       avantis_top: dexTop.avantis || [],
     },
     ui_modes: byUiMode,
+    devices: buildDeviceStats(),
     mcp: {
       summary: {
         day: mcpSummaryFor("WHERE created_at > datetime('now', '-24 hours')"),

@@ -655,6 +655,42 @@ function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
   });
 }
 
+function ordersFromTraderView(traderView, marketsBySymbol) {
+  const subaccountIndex = Number(traderView?.traderSubaccountIndex) || 0;
+  const byMarket = traderView?.limitOrders && typeof traderView.limitOrders === 'object'
+    ? traderView.limitOrders
+    : {};
+  return Object.entries(byMarket).flatMap(([marketSymbol, rows]) => {
+    const symbol = phoenixSymbol(marketSymbol);
+    if (!symbol || !Array.isArray(rows)) return [];
+    const m = marketsBySymbol.current[symbol];
+    return rows.map(o => {
+      const amount = firstFinite(
+        tokenAmountValue(o?.tradeSizeRemaining),
+        tokenAmountValue(o?.initialTradeSize),
+        tokenAmountValue(o?.size),
+        0
+      ) || 0;
+      const price = firstFinite(tokenAmountValue(o?.price), o?.price, 0) || 0;
+      return {
+        symbol,
+        side: sideToUi(o?.side),
+        amount: String(Math.abs(amount || 0)),
+        price: String(price),
+        order_type: o?.isStopLoss ? 'STOP' : 'LIMIT',
+        tif: 'GTC',
+        order_id: String(o?.orderSequenceNumber ?? o?.id ?? ''),
+        orderSequenceNumber: o?.orderSequenceNumber,
+        reduce_only: !!o?.isReduceOnly || !!o?.reduceOnly,
+        market_addr: m?.market_addr || null,
+        market_name: symbol,
+        _phoenixSubaccountIndex: subaccountIndex,
+        _raw: o,
+      };
+    });
+  });
+}
+
 function tpslOrdersFromPositions(positions) {
   return (positions || []).flatMap(position => {
     const symbol = phoenixSymbol(position?.symbol);
@@ -1234,16 +1270,17 @@ export function usePhoenix() {
 
     const promise = (async () => {
       try {
-      const [state, viewState] = await Promise.all([
-        client.api.traders().getTraderStateSnapshot(walletAddr, { traderPdaIndex: 0 }),
-        client.api.traders().getTraderState(walletAddr, { pdaIndex: 0 }).catch(e => {
-          console.warn('[Phoenix] trader view unavailable; falling back to snapshot math', e?.message || e);
-          return null;
-        }),
-      ]);
-      traderRegisteredRef.current = true;
-      setTraderRegistered(true);
-      cachePhoenixSetup(walletAddr, { source: 'trader_state' });
+      const viewState = await client.api.traders().getTraderState(walletAddr, { pdaIndex: 0 });
+      const state = {
+        authority: viewState?.authority || walletAddr,
+        traderPdaIndex: Number(viewState?.pdaIndex ?? viewState?.traderPdaIndex ?? 0),
+        slot: Number(viewState?.slot ?? 0),
+        slotIndex: Number(viewState?.slotIndex ?? 0),
+        snapshot: {
+          subaccounts: [],
+        },
+        view: viewState,
+      };
       const subaccounts = Array.isArray(state?.snapshot?.subaccounts) ? state.snapshot.subaccounts : [];
       subaccountsRef.current = subaccounts;
       const cross = subaccounts.find(s => Number(s.subaccountIndex) === 0) || subaccounts[0] || null;
@@ -1256,6 +1293,12 @@ export function usePhoenix() {
         }
       }
       const viewTraders = Array.isArray(viewState?.traders) ? viewState.traders : [];
+      const hasTraderState = viewTraders.length > 0 || !!cachedPhoenixSetup(walletAddr);
+      traderRegisteredRef.current = hasTraderState;
+      setTraderRegistered(hasTraderState);
+      if (hasTraderState) {
+        cachePhoenixSetup(walletAddr, { source: 'trader_state' });
+      }
       const viewPositions = viewTraders
         .flatMap(trader => {
           const subIndex = Number(trader?.traderSubaccountIndex) || 0;
@@ -1306,7 +1349,8 @@ export function usePhoenix() {
         const subIndex = Number(sub?.subaccountIndex) || 0;
         return (sub?.orders || []).flatMap(group => ordersFromSnapshot(group, marketsBySymbolRef, subIndex));
       });
-      const ord = [...limitOrders, ...tpslOrdersFromPositions(pos)];
+      const viewLimitOrders = viewTraders.flatMap(trader => ordersFromTraderView(trader, marketsBySymbolRef));
+      const ord = [...(viewLimitOrders.length ? viewLimitOrders : limitOrders), ...tpslOrdersFromPositions(pos)];
       const notional = pos.reduce((sum, p) => sum + Number(p.size_usd || 0), 0);
       const marginUsed = pos.reduce((sum, p) => sum + Number(p.margin || 0), 0);
       const pnl = pos.reduce((sum, p) => sum + Number(p.pnl_usd || 0), 0);
@@ -1340,10 +1384,12 @@ export function usePhoenix() {
       });
       setAccountReady(true);
       setDataReady(true);
-      refreshTraderStateLastResultRef.current = state;
+      refreshTraderStateLastResultRef.current = hasTraderState ? state : null;
       refreshTraderStateCachedAtRef.current = Date.now();
-      refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
-      return state;
+      refreshTraderStateRetryMsRef.current = hasTraderState
+        ? PHOENIX_TRADER_STATE_DEDUP_MS
+        : PHOENIX_UNREGISTERED_RETRY_MS;
+      return hasTraderState ? state : null;
     } catch (e) {
       const msg = String(e?.message || e || '');
       const looksUnregistered = /404|not found|no trader|not registered|does not exist/i.test(msg);

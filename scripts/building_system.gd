@@ -1757,7 +1757,7 @@ func _auto_login() -> void:
 func _initial_cover() -> void:
 	_get_or_create_cloud()
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(88);")
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(74, 'scene_init');")
 
 
 ## Tell the HTML page to hide its loading screen — safe to call multiple times.
@@ -1770,7 +1770,7 @@ func _reveal_initial_cover() -> void:
 	if audio and audio.has_method("play_base"):
 		audio.play_base()
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(100, 'ready'); if(window.godotBuildingsLoaded) window.godotBuildingsLoaded();")
 
 
 func _apply_server_state(state: Dictionary) -> void:
@@ -1790,7 +1790,7 @@ func _apply_server_state(state: Dictionary) -> void:
 func _load_buildings_from_server(server_buildings: Array) -> void:
 	# Signal React: server responded, now placing buildings (loading stage 94%)
 	if OS.has_feature("web"):
-		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(94);")
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(92, 'home_scene_apply');")
 	var my_grid_index = _get_grid_index()
 	# Filter buildings for this grid
 	var my_buildings: Array = []
@@ -1942,8 +1942,9 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					server_troops = []
 			if is_instance_valid(b_data.get("node")):
 				b_data.node.set_meta("ship_troops", server_troops)
-	print("Loaded %d buildings from server (grid %d)" % [my_buildings.size(), my_grid_index])
 	_sync_react_buildings()
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("if(window.godotLoadingProgress) window.godotLoadingProgress(97, 'home_ready');")
 	# Reveal cloud cover now that buildings are placed — first load only
 	_reveal_initial_cover()
 
@@ -2265,6 +2266,7 @@ func _begin_placement(building_id: String) -> void:
 ## placement preview. Previously re-allocated per ghost (which meant first
 ## placement compiled its pipeline variant cold on WASM).
 static var _shared_ghost_material: StandardMaterial3D = null
+static var _shared_grid_material: StandardMaterial3D = null
 
 static func _get_ghost_material() -> StandardMaterial3D:
 	if _shared_ghost_material == null:
@@ -2274,6 +2276,16 @@ static func _get_ghost_material() -> StandardMaterial3D:
 		_shared_ghost_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_shared_ghost_material.no_depth_test = true
 	return _shared_ghost_material
+
+
+static func _get_grid_material() -> StandardMaterial3D:
+	if _shared_grid_material == null:
+		_shared_grid_material = StandardMaterial3D.new()
+		_shared_grid_material.albedo_color = Color(0, 0, 0, 0.25)
+		_shared_grid_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_shared_grid_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_shared_grid_material.no_depth_test = false
+	return _shared_grid_material
 
 
 ## Shared upgrade outline shader + material. `material_overlay` on a mesh
@@ -2984,12 +2996,7 @@ func _show_grid() -> void:
 	grid_visual = MeshInstance3D.new()
 	grid_visual.mesh = im
 
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0, 0, 0, 0.25)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.no_depth_test = false
-	grid_visual.material_override = mat
+	grid_visual.material_override = _get_grid_material()
 
 	var half_x = grid_extent_x / 2.0
 	var half_z = grid_extent_z / 2.0
@@ -4409,17 +4416,9 @@ func _reinforce_troops() -> void:
 						"ship_capacity": pnode.get_meta("ship_level", 1) * 3,
 					})
 
-## Called when a troop dies in battle — removes one instance from ship_troops on server.
+## Legacy live-death hook. Casualties are applied once from /attack/result.
 func _on_troop_died(troop_name: String) -> void:
-	if not is_viewing_enemy:
-		return
-	if _replay_active:
-		return
-	if _troop_entry_base_name(troop_name) == "DemonKing":
-		return
-	var net: Node = _net
-	if net and net.has_token():
-		net.report_troop_death(troop_name)
+	return
 
 
 ## Applies authoritative ship_troops data returned by the server (e.g. from

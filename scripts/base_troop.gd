@@ -1018,8 +1018,9 @@ func take_damage(dmg: int) -> void:
 		queue_free()
 
 
-## Reports this troop's death to the server via Bridge so casualties persist
-## even if the player quits mid-battle.
+## Reports this troop's death to React for immediate UI feedback. Persistent
+## casualties are applied once from the final battle result so troops are not
+## removed twice by live death telemetry and replay verification.
 func _report_death() -> void:
 	var troop_name: String = _get_troop_name()
 	if troop_name == "":
@@ -1030,12 +1031,6 @@ func _report_death() -> void:
 	var bridge: Node = get_node_or_null("/root/Bridge")
 	if bridge and bridge.has_method("send_to_react"):
 		bridge.send_to_react("troop_died", {"troop_name": troop_name})
-	# Also notify server directly (use per-frame cache; rapid death waves
-	# would otherwise rescan the scene tree once per corpse).
-	for bs_node in _get_building_systems_cached():
-		if bs_node.has_method("_on_troop_died"):
-			bs_node._on_troop_died(troop_name)
-			break
 
 
 ## Returns the canonical troop name from this script's path.

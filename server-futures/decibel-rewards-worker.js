@@ -22,10 +22,11 @@ const db = require('./db');
 const decibel = require('./decibel');
 
 const POLL_MS = 2 * 60 * 1000; // 2 minutes
-// Bumped from $1 → $10 to match server/routes.js SANE_MIN_NOTIONAL.
-// $1 trades on Decibel are cheap enough that a script could self-trade
-// $1 in a loop and farm gold; $10 is the floor across all four DEXes.
-const MIN_NOTIONAL_USD = 10;
+// Record every economically non-zero verified fill. Gold farming protection
+// lives in the main server's /claim-gold path, which clamps Decibel rewards
+// below $10. Keeping this floor low lets position quests count tiny but real
+// meme-market fills such as CHIP without paying gold for them.
+const MIN_RECORDED_NOTIONAL_USD = 0.000001;
 
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
@@ -135,7 +136,7 @@ function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
     const price = Number(fill?.price ?? fill?.fill_price ?? fill?.avg_price ?? 0);
     const sizeAbs = Math.abs(Number(fill?.size ?? fill?.filled_size ?? fill?.base_size ?? 0));
     const notional = Number.isFinite(price) && Number.isFinite(sizeAbs) ? price * sizeAbs : 0;
-    if (!Number.isFinite(notional) || notional < MIN_NOTIONAL_USD) continue;
+    if (!Number.isFinite(notional) || notional < MIN_RECORDED_NOTIONAL_USD) continue;
 
     const side = sideFromFill(fill);
     const key = `${matchingKey}:${side}`;
@@ -156,7 +157,7 @@ function aggregateLimitFills(trades, limitOrderKeySet, marketMap) {
     current.pnl += fillPnl(fill);
     groups.set(key, current);
   }
-  return Array.from(groups.values()).filter(g => g.notional >= MIN_NOTIONAL_USD);
+  return Array.from(groups.values()).filter(g => g.notional >= MIN_RECORDED_NOTIONAL_USD);
 }
 
 async function recordRecentLimitFills(playerId, subAddr) {
@@ -246,7 +247,7 @@ async function pollOnce(mainDb) {
       const sizeAbs = Math.abs(Number(p?.size ?? 0));
 
       const openKey = `decibel:open:${addr}:${market}:${isLong ? 'L' : 'S'}`;
-      if (Number.isFinite(notional) && notional >= MIN_NOTIONAL_USD) {
+      if (Number.isFinite(notional) && notional >= MIN_RECORDED_NOTIONAL_USD) {
         try {
           db.addTrade(row.id, {
             symbol,
@@ -292,7 +293,7 @@ async function pollOnce(mainDb) {
       if (currentKeys.has(k)) continue;
       const info = richPrev.get(k);
       richPrev.delete(k);
-      if (!info || !Number.isFinite(info.notional) || info.notional < MIN_NOTIONAL_USD) continue;
+      if (!info || !Number.isFinite(info.notional) || info.notional < MIN_RECORDED_NOTIONAL_USD) continue;
       const closeKey = `decibel:close:${addr}:${info.market}:${info.isLong ? 'L' : 'S'}`;
       const closeSide = info.side === 'long' ? 'close_long' : 'close_short';
       // Best-effort PnL estimate: sizeAbs * (mark - entry), signed.

@@ -4,9 +4,8 @@ import { useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
-import { useDex } from '../contexts/DexContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { nftLevelImageUrl, resolveDemonKingConnectedSyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { nftLevelImageUrl, resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -293,10 +292,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
   const { isMobile } = useLayout();
-  const { dex } = useDex();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
-  const evmChainId = evmWallet?.chainId || null;
   const solWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
@@ -304,13 +301,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
-    dex,
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
     evmAddress,
-    evmChainId,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  }), [aptosAddress, evmAddress, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
   
   const [view, setView] = useState('ACTIONS');
@@ -360,7 +355,12 @@ function BuildingInfoPanel({ onOpenTroops }) {
       ));
       setDemonKingNfts(tokens.filter((token) => token.tokenId));
     };
-    const syncKey = `${demonKingSyncTarget?.wallet || ''}:${(demonKingSyncTarget?.chains || []).join(',')}`;
+    const syncWalletKey = demonKingSyncTarget?.wallets
+      ? Object.entries(demonKingSyncTarget.wallets)
+        .map(([key, value]) => `${key}:${value}`)
+        .join('|')
+      : demonKingSyncTarget?.wallet || '';
+    const syncKey = `${syncWalletKey}:${(demonKingSyncTarget?.chains || []).join(',')}`;
     const lastForcedAt = demonKingPortForceSyncRef.current.get(syncKey) || 0;
     const shouldForceRefresh = syncKey && Date.now() - lastForcedAt > DEMON_KING_PORT_FORCE_SYNC_MS;
     const controller = new AbortController();

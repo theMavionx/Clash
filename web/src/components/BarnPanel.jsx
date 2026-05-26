@@ -4,9 +4,8 @@ import { useSend, useBuildingDefs } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
-import { useDex } from '../contexts/DexContext';
 import { useOptionalPrivy } from './PrivyAuthProvider';
-import { resolveDemonKingConnectedSyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
+import { resolveDemonKingInventorySyncTarget, syncDemonKingNfts } from '../lib/nftV3Client';
 
 import goldIcon from '../assets/resources/gold_bar.png';
 import woodIcon from '../assets/resources/wood_bar.png';
@@ -312,10 +311,8 @@ function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
-  const { dex } = useDex();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
-  const evmChainId = evmWallet?.chainId || null;
   const solWallet = useSolWallet();
   const optionalPrivy = useOptionalPrivy();
   const solAddress = solWallet?.publicKey?.toBase58?.()
@@ -323,13 +320,11 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
-  const demonKingSyncTarget = useMemo(() => resolveDemonKingConnectedSyncTarget({
-    dex,
+  const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
     evmAddress,
-    evmChainId,
     solAddress,
     aptosAddress,
-  }), [aptosAddress, dex, evmAddress, evmChainId, solAddress]);
+  }), [aptosAddress, evmAddress, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);
