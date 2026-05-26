@@ -40,6 +40,11 @@ const BEAM_GLOW_RADIUS_MIN: float = 0.030
 const BEAM_GLOW_RADIUS_MAX: float = 0.075
 const IMPACT_RADIUS_MIN: float = 0.045
 const IMPACT_RADIUS_MAX: float = 0.100
+const ATTACK_SFX_PATH := "res://Musik/base/MagikTowerAttack.mp3"
+const ATTACK_SFX_VOLUME_DB := -1.0
+const ATTACK_SFX_PITCH_JITTER := 0.04
+static var _attack_sfx_stream: AudioStream = null
+static var _attack_sfx_loaded: bool = false
 
 var level: int = 1
 var base_damage: int = 4
@@ -82,10 +87,12 @@ var _impact: MeshInstance3D = null
 var _beam_core_mat: StandardMaterial3D = null
 var _beam_glow_mat: StandardMaterial3D = null
 var _impact_mat: StandardMaterial3D = null
+var _attack_sfx_player: AudioStreamPlayer = null
 
 
 func _ready() -> void:
 	_apply_stats()
+	_setup_attack_sfx()
 	call_deferred("_build_beam_visuals")
 	# Model is added as a child after set_script(), so defer the crystal lookup.
 	call_deferred("_find_crystal")
@@ -199,6 +206,7 @@ func _exit_tree() -> void:
 
 func cleanup_defense_visuals() -> void:
 	_drop_target()
+	_stop_attack_sfx()
 	if is_instance_valid(_beam_core):
 		_beam_core.queue_free()
 	if is_instance_valid(_beam_glow):
@@ -228,6 +236,7 @@ func _physics_process(delta: float) -> void:
 		_find_target()
 
 	if _target and BaseTroop.is_live_troop(_target):
+		_start_attack_sfx()
 		_process_beam_damage(delta)
 		_update_beam_visuals()
 	else:
@@ -251,6 +260,48 @@ func _process_beam_damage(delta: float) -> void:
 		if not BaseTroop.is_live_troop(_target):
 			_drop_target()
 			return
+
+
+func _setup_attack_sfx() -> void:
+	if _attack_sfx_player == null:
+		_attack_sfx_player = AudioStreamPlayer.new()
+		_attack_sfx_player.name = "MageTowerAttackSFX"
+		_attack_sfx_player.bus = "Master"
+		_attack_sfx_player.volume_db = ATTACK_SFX_VOLUME_DB
+		add_child(_attack_sfx_player)
+	if not _attack_sfx_loaded:
+		_attack_sfx_loaded = true
+		_attack_sfx_stream = ResourceLoader.load(ATTACK_SFX_PATH) as AudioStream
+		if _attack_sfx_stream == null:
+			push_warning("MageTower: missing attack sound '%s'" % ATTACK_SFX_PATH)
+	if _attack_sfx_stream != null:
+		_set_stream_loop(_attack_sfx_stream, true)
+		_attack_sfx_player.stream = _attack_sfx_stream
+
+
+func _start_attack_sfx() -> void:
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		_setup_attack_sfx()
+	if _attack_sfx_player == null or _attack_sfx_player.stream == null:
+		return
+	if _attack_sfx_player.playing:
+		return
+	_attack_sfx_player.pitch_scale = randf_range(1.0 - ATTACK_SFX_PITCH_JITTER, 1.0 + ATTACK_SFX_PITCH_JITTER)
+	_attack_sfx_player.play()
+
+
+func _stop_attack_sfx() -> void:
+	if _attack_sfx_player and _attack_sfx_player.playing:
+		_attack_sfx_player.stop()
+
+
+func _set_stream_loop(stream: AudioStream, loop: bool) -> void:
+	if stream is AudioStreamMP3:
+		stream.loop = loop
+	elif stream is AudioStreamOggVorbis:
+		stream.loop = loop
+	elif stream is AudioStreamWAV:
+		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD if loop else AudioStreamWAV.LOOP_DISABLED
 
 
 func _current_damage() -> int:
@@ -285,6 +336,7 @@ func _drop_target() -> void:
 	_target = null
 	_charge = 0.0
 	_damage_tick = 0.0
+	_stop_attack_sfx()
 
 
 func _beam_start_position() -> Vector3:

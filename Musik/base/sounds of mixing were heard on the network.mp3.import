@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://fvv2luyv652w"
+path="res://.godot/imported/sounds of mixing were heard on the network.mp3-aad436081d8c06e7186169de04096ecd.mp3str"
+
+[deps]
+
+source_file="res://Musik/base/sounds of mixing were heard on the network.mp3"
+dest_files=["res://.godot/imported/sounds of mixing were heard on the network.mp3-aad436081d8c06e7186169de04096ecd.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

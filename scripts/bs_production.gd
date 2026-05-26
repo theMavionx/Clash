@@ -227,8 +227,16 @@ func _click_collect_icon(btn: Control, b: Dictionary, res_type: String) -> void:
 	var start_pos: Vector2 = btn.global_position + btn.size / 2.0
 	btn.visible = false
 	btn.set_meta("anim_scale", 0.0)
+	_play_collect_sfx(res_type)
 	_spawn_collection_flying_icon(start_pos, res_type)
 	_collect_and_animate(b, res_type)
+
+
+func _play_collect_sfx(res_type: String) -> void:
+	var audio := bs.get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_resource_claim"):
+		audio.play_resource_claim(res_type)
+
 
 ## Spawn multiple flying resource icons that travel from the building toward the
 ## matching HUD counter label.
@@ -354,6 +362,7 @@ func _animate_agent_collection(b: Dictionary, result: Dictionary) -> void:
 			start_pos = cam.unproject_position(node.global_position)
 		else:
 			start_pos = bs.get_viewport().get_visible_rect().size / 2.0
+	_play_collect_sfx(res_type)
 	_spawn_collection_flying_icon(start_pos, res_type)
 	b["stored"] = 0.0
 

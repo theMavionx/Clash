@@ -400,6 +400,7 @@ var _move_arrows: Node3D = null
 var _is_moving: bool = false
 var _move_source_gp: Vector2i = Vector2i.ZERO
 var _move_source_pos: Vector3 = Vector3.ZERO
+var _move_last_grid_step_gp: Vector2i = Vector2i(-9999, -9999)
 var _move_indicator: MeshInstance3D = null
 
 # ── Placement State ───────────────────────────────────────────
@@ -1487,6 +1488,44 @@ func _style_button(btn: Button, normal_color: Color, hover_color: Color) -> void
 	btn.add_theme_color_override("font_color", Color.WHITE)
 	btn.add_theme_color_override("font_hover_color", Color.WHITE)
 	btn.add_theme_color_override("font_pressed_color", Color(0.8, 0.8, 0.8))
+	if not btn.pressed.is_connected(_play_ui_click_sfx):
+		btn.pressed.connect(_play_ui_click_sfx)
+
+
+func _play_ui_click_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_ui_click"):
+		audio.play_ui_click()
+
+
+func _play_troop_level_up_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_troop_level_up"):
+		audio.play_troop_level_up()
+
+
+func _play_building_level_up_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_building_level_up"):
+		audio.play_building_level_up()
+
+
+func _play_building_destruction_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_building_destruction"):
+		audio.play_building_destruction()
+
+
+func _play_building_move_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_building_move"):
+		audio.play_building_move()
+
+
+func _play_building_grid_step_sfx() -> void:
+	var audio = get_node_or_null("/root/AudioManager")
+	if audio and audio.has_method("play_building_grid_step"):
+		audio.play_building_grid_step()
 
 
 func _create_resource_label(parent: Control, res_name: String, amount: int, color: Color) -> Label:
@@ -2038,7 +2077,7 @@ func _collect_port_number_entries() -> Array:
 			entries.append({
 				"building": b,
 				"node": pnode,
-				"grid_index": int(bs_node.my_grid_index),
+				"grid_index": int(bs_node._get_grid_index()),
 				"grid_pos": b.get("grid_pos", Vector2i.ZERO),
 				"server_id": int(b.get("server_id", -1)),
 			})
@@ -3386,6 +3425,7 @@ func _run_upgrade_sequence(b: Dictionary, def: Dictionary, server_new_level: int
 		_select_building(b)
 
 	# Show leveled up text
+	_play_building_level_up_sfx()
 	var lbl = Label3D.new()
 	lbl.text = "Your " + def.name + "\nleveled up!"
 	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -3639,6 +3679,7 @@ func explode_building_with_swell(bnode: Node3D, building_id: String) -> void:
 		var target_node: Node3D = bnode_ref.get_ref() as Node3D
 		if not is_instance_valid(target_node):
 			return
+		_play_building_destruction_sfx()
 		_spawn_fire_bomb_explosion(target_node)
 		if building_id == "port":
 			target_node.queue_free()
@@ -4795,6 +4836,7 @@ func _upgrade_troop(troop_name: String) -> void:
 	var troop = get_tree().current_scene.find_child(troop_name, true, false)
 	if troop and troop.has_method("upgrade_to"):
 		troop.upgrade_to(next_lvl)
+	_play_troop_level_up_sfx()
 	_refresh_barn_panel()
 	# Refetch from server to ensure React shows authoritative data
 	_refresh_troop_levels_from_server()
@@ -5259,6 +5301,7 @@ func _start_move(b: Dictionary) -> void:
 			bs._cancel_move(false)
 	_is_moving = true
 	_move_source_gp = b.grid_pos
+	_move_last_grid_step_gp = _move_source_gp
 	_move_source_pos = b["node"].position
 	var def = building_defs[b.id]
 	# Free grid cells temporarily so validity check works while dragging
@@ -5281,6 +5324,9 @@ func _update_move_building() -> void:
 	var gp = _local_to_grid(local_hit)
 	gp.x = clampi(gp.x, 0, grid_width - def.cells.x)
 	gp.y = clampi(gp.y, 0, grid_height - def.cells.y)
+	if gp != _move_last_grid_step_gp:
+		_play_building_grid_step_sfx()
+		_move_last_grid_step_gp = gp
 	current_grid_pos = gp
 	var sx = def.cells.x * cell_size
 	var sz = def.cells.y * cell_size
@@ -5348,6 +5394,7 @@ func _confirm_move() -> void:
 	var net = _net
 	if net and net.has_token() and b.get("server_id", -1) >= 0:
 		net.move_building(b.server_id, current_grid_pos.x, current_grid_pos.y)
+	_play_building_move_sfx()
 	_end_move()
 	_select_building(b)
 
@@ -5375,6 +5422,7 @@ func _cancel_move(reselect: bool = true) -> void:
 func _end_move() -> void:
 	_is_moving = false
 	current_building_id = ""
+	_move_last_grid_step_gp = Vector2i(-9999, -9999)
 	if not always_show_grid:
 		_hide_grid()
 	if _move_indicator and is_instance_valid(_move_indicator):
