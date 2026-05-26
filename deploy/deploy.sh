@@ -38,6 +38,8 @@ OWNED_ASSETS_MANIFEST="$WEB_DIST/.clash-owned-assets"
 SHARED_SERVER_DIR="$SHARED_DIR/server"
 SHARED_FUTURES_DIR="$SHARED_DIR/server-futures"
 ENV_FILE="$SHARED_DIR/.env"
+NPM_CACHE_DIR="${CLASH_NPM_CACHE_DIR:-$SHARED_DIR/npm-cache}"
+export NPM_CONFIG_CACHE="$NPM_CACHE_DIR"
 
 BOOTSTRAPPED_LEGACY_DBS=0
 SWITCHED=0
@@ -193,6 +195,7 @@ install_system_dependencies() {
     fi
 
     if ! command -v pm2 >/dev/null 2>&1; then
+        mkdir -p "$NPM_CACHE_DIR"
         npm install -g pm2
     fi
 
@@ -204,7 +207,7 @@ install_system_dependencies() {
 
 prepare_shared_runtime() {
     log "[2/9] Preparing shared runtime..."
-    mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups"
+    mkdir -p "$RELEASES_DIR" "$SHARED_SERVER_DIR" "$SHARED_FUTURES_DIR" "$SHARED_DIR/backups" "$NPM_CACHE_DIR"
     local hermes_model_chain="openai/gpt-oss-120b,qwen/qwen3-30b-a3b-instruct-2507:nitro,google/gemma-4-26b-a4b-it:nitro"
     local hermes_primary_model="openai/gpt-oss-120b"
     local hermes_fallback_model="qwen/qwen3-30b-a3b-instruct-2507:nitro"
