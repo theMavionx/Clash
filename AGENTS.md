@@ -1,4 +1,4 @@
-# Clash — Game Studio Agent Architecture
+# Clash - Game Studio Agent Architecture
 
 Clash of Clans style game built with Godot 4.6.1, managed through coordinated Codex subagents.
 
@@ -12,7 +12,7 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 ## Project Structure
 
-@.Codex/docs/directory-structure.md
+@.codex/docs/directory-structure.md
 
 ## Scene Workflow
 
@@ -20,11 +20,11 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 ## Technical Preferences
 
-@.Codex/docs/technical-preferences.md
+@.codex/docs/technical-preferences.md
 
 ## Coordination Rules
 
-@.Codex/docs/coordination-rules.md
+@.codex/docs/coordination-rules.md
 
 ## Collaboration Protocol
 
@@ -37,11 +37,11 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 
 ## Coding Standards
 
-@.Codex/docs/coding-standards.md
+@.codex/docs/coding-standards.md
 
 ## Context Management
 
-@.Codex/docs/context-management.md
+@.codex/docs/context-management.md
 
 ## Engine Version Reference
 
@@ -50,8 +50,8 @@ Clash of Clans style game built with Godot 4.6.1, managed through coordinated Co
 ## Game Systems
 
 ### Buildings
-Defined in `scripts/building_system.gd` → `building_defs` dictionary.
-Server definitions in `server/db.js` → `BUILDING_DEFS`.
+Defined in `scripts/building_system.gd` -> `building_defs` dictionary.
+Server definitions in `server/db.js` -> `BUILDING_DEFS`.
 Types: Town Hall, Mine, Barn, Port, Sawmill, Turret, Storage, Archer Tower, Tombstone.
 
 ### Troops
