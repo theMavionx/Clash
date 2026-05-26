@@ -1021,6 +1021,6 @@ static func _troop_entry_level(troop_name: String, fallback_level: int = 1) -> i
 		var text: String = String(part).strip_edges()
 		if text.length() >= 2 and text.substr(0, 1).to_lower() == "l":
 			var parsed: int = int(text.substr(1))
-			if parsed >= 1 and parsed <= 3:
+			if parsed >= 1 and parsed <= 4:
 				return parsed
 	return fallback_level

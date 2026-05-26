@@ -5,6 +5,10 @@ var _panel: PanelContainer
 var _status: Label
 var _spawn_list: VBoxContainer
 var _build_generation: int = 0
+var _attack_counts: Dictionary = {}
+var _attack_levels: Dictionary = {}
+var _attack_count_labels: Dictionary = {}
+var _attack_level_labels: Dictionary = {}
 
 const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
 	"town_hall",
@@ -31,6 +35,17 @@ const TEST_TH_MAX_COUNT: Dictionary = {
 	"mage_tower": [0, 0, 0, 2],
 	"town_hall": [1, 1, 1, 1],
 }
+
+const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Barbarian", "Archer", "Ranger", "DemonKing"]
+const TEST_ATTACK_MAX_LEVEL: Dictionary = {
+	"Knight": 4,
+	"Mage": 4,
+	"Barbarian": 4,
+	"Archer": 4,
+	"Ranger": 4,
+	"DemonKing": 3,
+}
+const TEST_ATTACK_SHIP_LEVEL: int = 3
 
 
 func _core_layout() -> Array:
@@ -95,7 +110,7 @@ func _create_panel() -> void:
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = 8
 	_panel.offset_top = 8
-	_panel.offset_right = 308
+	_panel.offset_right = 392
 	_panel.offset_bottom = -8
 	canvas.add_child(_panel)
 
@@ -147,6 +162,8 @@ func _create_panel() -> void:
 		btn.pressed.connect(Callable(self, "build_max_village_for_town_hall").bind(th_level))
 		max_row.add_child(btn)
 
+	_add_attack_loadout_controls(vbox)
+
 	var spawn_label := Label.new()
 	spawn_label.text = "Spawn Any Building"
 	spawn_label.add_theme_font_size_override("font_size", 17)
@@ -182,6 +199,72 @@ func _button(text: String, callback: Callable) -> Button:
 	btn.add_theme_constant_override("content_margin_bottom", 8)
 	btn.pressed.connect(callback)
 	return btn
+
+
+func _small_button(text: String, callback: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(34, 34)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.add_theme_font_size_override("font_size", 15)
+	btn.pressed.connect(callback)
+	return btn
+
+
+func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
+	var attack_label := Label.new()
+	attack_label.text = "Test Attack Loadout"
+	attack_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(attack_label)
+
+	var attack_box := VBoxContainer.new()
+	attack_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	attack_box.add_theme_constant_override("separation", 5)
+	vbox.add_child(attack_box)
+
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 0
+		_attack_levels[troop_name] = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 4)
+		attack_box.add_child(row)
+
+		var name_label := Label.new()
+		name_label.text = troop_name
+		name_label.custom_minimum_size = Vector2(96, 32)
+		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(name_label)
+
+		row.add_child(_small_button("-", Callable(self, "_change_attack_count").bind(troop_name, -1)))
+		var count_label := Label.new()
+		count_label.custom_minimum_size = Vector2(42, 32)
+		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		count_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(count_label)
+		_attack_count_labels[troop_name] = count_label
+		row.add_child(_small_button("+", Callable(self, "_change_attack_count").bind(troop_name, 1)))
+
+		row.add_child(_small_button("L-", Callable(self, "_change_attack_level").bind(troop_name, -1)))
+		var level_label := Label.new()
+		level_label.custom_minimum_size = Vector2(42, 32)
+		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		level_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(level_label)
+		_attack_level_labels[troop_name] = level_label
+		row.add_child(_small_button("L+", Callable(self, "_change_attack_level").bind(troop_name, 1)))
+		_refresh_attack_row(troop_name)
+
+	var presets := HBoxContainer.new()
+	presets.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	presets.add_theme_constant_override("separation", 6)
+	vbox.add_child(presets)
+	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
+	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
+	presets.add_child(_small_button("Start", start_test_attack))
 
 
 func _populate_spawn_list() -> void:
@@ -431,6 +514,107 @@ func build_max_village_for_town_hall(th_level: int) -> void:
 	_sync_all_building_systems()
 	_select_first_town_hall()
 	_set_status("Built max TH%d village: %d buildings." % [th_level, spawned_count])
+
+
+func _change_attack_count(troop_name: String, delta: int) -> void:
+	var current: int = int(_attack_counts.get(troop_name, 0))
+	_attack_counts[troop_name] = clampi(current + delta, 0, 45)
+	_refresh_attack_row(troop_name)
+
+
+func _change_attack_level(troop_name: String, delta: int) -> void:
+	var max_level: int = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+	var current: int = int(_attack_levels.get(troop_name, max_level))
+	_attack_levels[troop_name] = clampi(current + delta, 1, max_level)
+	_refresh_attack_row(troop_name)
+
+
+func _refresh_attack_row(troop_name: String) -> void:
+	var count_label: Label = _attack_count_labels.get(troop_name, null)
+	if count_label:
+		count_label.text = str(int(_attack_counts.get(troop_name, 0)))
+	var level_label: Label = _attack_level_labels.get(troop_name, null)
+	if level_label:
+		level_label.text = "L%d" % int(_attack_levels.get(troop_name, 1))
+
+
+func clear_test_attack_loadout() -> void:
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 0
+		_refresh_attack_row(troop_name)
+	_set_status("Attack loadout cleared.")
+
+
+func mixed_test_attack_loadout() -> void:
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 1
+		_refresh_attack_row(troop_name)
+	_set_status("Mixed attack loadout: one of each troop.")
+
+
+func start_test_attack() -> void:
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("enter_attack_mode"):
+		_set_status("AttackSystem not found.")
+		return
+	var fleet: Array = _build_test_attack_fleet()
+	if fleet.is_empty():
+		_set_status("Choose at least one attacker.")
+		return
+	_apply_test_troop_levels()
+	attack.enter_attack_mode(fleet)
+	var total_troops: int = 0
+	for ship in fleet:
+		for troop_name in ship.get("troops", []):
+			if troop_name != "_SLOT_FILLER_":
+				total_troops += 1
+	_set_status("Attack ready: %d troops on %d ships. Click ship water." % [total_troops, fleet.size()])
+
+
+func _build_test_attack_fleet() -> Array:
+	var attack := get_node_or_null("../AttackSystem")
+	var max_ships: int = int(attack.max_ships) if attack and ("max_ships" in attack) else 5
+	var ship_capacity: int = TEST_ATTACK_SHIP_LEVEL * 3
+	var fleet: Array = []
+	var current_ship: Dictionary = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
+	var used_slots: int = 0
+
+	for troop_name in TEST_ATTACK_TROOPS:
+		var count: int = int(_attack_counts.get(troop_name, 0))
+		var level: int = int(_attack_levels.get(troop_name, 1))
+		var slot_cost: int = _attack_troop_slot_cost(troop_name)
+		for _i in range(count):
+			if used_slots + slot_cost > ship_capacity:
+				fleet.append(current_ship)
+				if fleet.size() >= max_ships:
+					return fleet
+				current_ship = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
+				used_slots = 0
+			var troops: Array = current_ship["troops"]
+			troops.append(_attack_troop_entry(troop_name, level))
+			for _slot in range(slot_cost - 1):
+				troops.append("_SLOT_FILLER_")
+			used_slots += slot_cost
+
+	if not current_ship.get("troops", []).is_empty() and fleet.size() < max_ships:
+		fleet.append(current_ship)
+	return fleet
+
+
+func _attack_troop_entry(troop_name: String, level: int) -> String:
+	return "%s:L%d" % [troop_name, level]
+
+
+func _attack_troop_slot_cost(troop_name: String) -> int:
+	return 2 if troop_name == "DemonKing" else 1
+
+
+func _apply_test_troop_levels() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("troop_levels" in bs):
+			continue
+		for troop_name in TEST_ATTACK_TROOPS:
+			bs.troop_levels[troop_name] = int(_attack_levels.get(troop_name, 1))
 
 
 func reset_sandbox(cancel_active_build: bool = true) -> void:
