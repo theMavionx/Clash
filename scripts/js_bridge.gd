@@ -123,6 +123,20 @@ func send_to_react(action: String, data: Dictionary) -> void:
 	JavaScriptBridge.eval("window.onGodotMessage && window.onGodotMessage(%s)" % payload)
 
 
+func _local_guest_mode_enabled() -> bool:
+	if not _is_web:
+		return false
+	var origin_value = JavaScriptBridge.eval("window.location.origin", true)
+	var href_value = JavaScriptBridge.eval("window.location.href", true)
+	var storage_value = JavaScriptBridge.eval("window.localStorage && window.localStorage.getItem('clash.localGuest')", true)
+	var origin: String = String(origin_value)
+	var href: String = String(href_value)
+	var storage: String = String(storage_value)
+	var is_local: bool = origin.contains("localhost") or origin.contains("127.0.0.1")
+	var requested: bool = href.contains("guest=1") or href.contains("guest=true") or storage == "1"
+	return is_local and requested
+
+
 func _send_initial_state() -> void:
 	send_to_react("godot_ready", {})
 	# Send building/troop definitions so React can render shop & barn panel
@@ -164,7 +178,10 @@ func _send_initial_state() -> void:
 	# Check if need to register
 	var net = get_node_or_null("/root/Net")
 	if net and not net.has_token():
-		send_to_react("show_register", {})
+		if _local_guest_mode_enabled():
+			call_deferred("_do_register", "LocalTester", "", "pacifica", 0)
+		else:
+			send_to_react("show_register", {})
 	elif net:
 		send_to_react("state", {
 			"player_name": net.display_name,

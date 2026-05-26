@@ -5,6 +5,52 @@ var _panel: PanelContainer
 var _status: Label
 var _spawn_list: VBoxContainer
 var _build_generation: int = 0
+var _attack_counts: Dictionary = {}
+var _attack_levels: Dictionary = {}
+var _attack_count_labels: Dictionary = {}
+var _attack_level_labels: Dictionary = {}
+var _speed_label: Label
+
+const MAX_VILLAGE_BUILD_ORDER: Array[String] = [
+	"town_hall",
+	"mine",
+	"sawmill",
+	"barn",
+	"storage",
+	"tombstone",
+	"archer_tower",
+	"turret",
+	"mage_tower",
+	"port",
+]
+
+const TEST_TH_MAX_COUNT: Dictionary = {
+	"mine": [1, 2, 3, 3],
+	"sawmill": [1, 2, 3, 3],
+	"barn": [1, 1, 1, 1],
+	"port": [1, 2, 5, 5],
+	"archer_tower": [1, 2, 3, 3],
+	"tombstone": [0, 1, 3, 3],
+	"turret": [0, 0, 3, 3],
+	"storage": [0, 1, 2, 3],
+	"mage_tower": [0, 0, 0, 2],
+	"town_hall": [1, 1, 1, 1],
+}
+
+const TEST_ATTACK_TROOPS: Array[String] = ["Knight", "Mage", "Barbarian", "Archer", "Ranger", "DemonKing"]
+const TEST_ATTACK_MAX_LEVEL: Dictionary = {
+	"Knight": 4,
+	"Mage": 4,
+	"Barbarian": 4,
+	"Archer": 4,
+	"Ranger": 4,
+	"DemonKing": 3,
+}
+const TEST_ATTACK_SHIP_LEVEL: int = 3
+const TEST_SPEED_PRESETS: Array[float] = [0.5, 1.0, 2.0, 4.0]
+const TEST_SPEED_STEP: float = 0.25
+const TEST_SPEED_MIN: float = 0.25
+const TEST_SPEED_MAX: float = 8.0
 
 
 func _core_layout() -> Array:
@@ -30,6 +76,10 @@ func _ready() -> void:
 	call_deferred("_set_status", "Scene ready. F1 panel, 1 build random village.")
 
 
+func _exit_tree() -> void:
+	Engine.time_scale = 1.0
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
@@ -48,6 +98,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		KEY_3:
 			toggle_music()
+			get_viewport().set_input_as_handled()
+		KEY_RIGHT, KEY_UP:
+			change_test_speed(TEST_SPEED_STEP)
+			get_viewport().set_input_as_handled()
+		KEY_LEFT, KEY_DOWN:
+			change_test_speed(-TEST_SPEED_STEP)
 			get_viewport().set_input_as_handled()
 		KEY_D:
 			if key.ctrl_pressed:
@@ -69,7 +125,7 @@ func _create_panel() -> void:
 	_panel.anchor_bottom = 1.0
 	_panel.offset_left = 8
 	_panel.offset_top = 8
-	_panel.offset_right = 308
+	_panel.offset_right = 392
 	_panel.offset_bottom = -8
 	canvas.add_child(_panel)
 
@@ -102,6 +158,28 @@ func _create_panel() -> void:
 	_status.add_theme_font_size_override("font_size", 16)
 	vbox.add_child(_status)
 
+	var max_label := Label.new()
+	max_label.text = "Max Village by Town Hall"
+	max_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(max_label)
+
+	var max_row := HBoxContainer.new()
+	max_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	max_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(max_row)
+	for th_level in range(1, 5):
+		var btn := Button.new()
+		btn.text = str(th_level)
+		btn.custom_minimum_size = Vector2(42, 38)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", 16)
+		btn.tooltip_text = "Build max TH%d village" % th_level
+		btn.pressed.connect(Callable(self, "build_max_village_for_town_hall").bind(th_level))
+		max_row.add_child(btn)
+
+	_add_attack_loadout_controls(vbox)
+	_add_speed_controls(vbox)
+
 	var spawn_label := Label.new()
 	spawn_label.text = "Spawn Any Building"
 	spawn_label.add_theme_font_size_override("font_size", 17)
@@ -120,7 +198,7 @@ func _create_panel() -> void:
 
 	var hint := Label.new()
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music."
+	hint.text = "Hotkeys: F1 panel, 1 build random village, 2 clear all, 3 toggle music, arrows speed."
 	hint.add_theme_font_size_override("font_size", 15)
 	vbox.add_child(hint)
 
@@ -137,6 +215,101 @@ func _button(text: String, callback: Callable) -> Button:
 	btn.add_theme_constant_override("content_margin_bottom", 8)
 	btn.pressed.connect(callback)
 	return btn
+
+
+func _small_button(text: String, callback: Callable) -> Button:
+	var btn := Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(34, 34)
+	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	btn.add_theme_font_size_override("font_size", 15)
+	btn.pressed.connect(callback)
+	return btn
+
+
+func _add_attack_loadout_controls(vbox: VBoxContainer) -> void:
+	var attack_label := Label.new()
+	attack_label.text = "Test Attack Loadout"
+	attack_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(attack_label)
+
+	var attack_box := VBoxContainer.new()
+	attack_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	attack_box.add_theme_constant_override("separation", 5)
+	vbox.add_child(attack_box)
+
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 0
+		_attack_levels[troop_name] = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 4)
+		attack_box.add_child(row)
+
+		var name_label := Label.new()
+		name_label.text = troop_name
+		name_label.custom_minimum_size = Vector2(96, 32)
+		name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		name_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(name_label)
+
+		row.add_child(_small_button("-", Callable(self, "_change_attack_count").bind(troop_name, -1)))
+		var count_label := Label.new()
+		count_label.custom_minimum_size = Vector2(42, 32)
+		count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		count_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(count_label)
+		_attack_count_labels[troop_name] = count_label
+		row.add_child(_small_button("+", Callable(self, "_change_attack_count").bind(troop_name, 1)))
+
+		row.add_child(_small_button("L-", Callable(self, "_change_attack_level").bind(troop_name, -1)))
+		var level_label := Label.new()
+		level_label.custom_minimum_size = Vector2(42, 32)
+		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		level_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(level_label)
+		_attack_level_labels[troop_name] = level_label
+		row.add_child(_small_button("L+", Callable(self, "_change_attack_level").bind(troop_name, 1)))
+		_refresh_attack_row(troop_name)
+
+	var presets := HBoxContainer.new()
+	presets.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	presets.add_theme_constant_override("separation", 6)
+	vbox.add_child(presets)
+	presets.add_child(_small_button("Clear", clear_test_attack_loadout))
+	presets.add_child(_small_button("Mixed x1", mixed_test_attack_loadout))
+	presets.add_child(_small_button("Start", start_test_attack))
+
+
+func _add_speed_controls(vbox: VBoxContainer) -> void:
+	var speed_label := Label.new()
+	speed_label.text = "Test Game Speed"
+	speed_label.add_theme_font_size_override("font_size", 17)
+	vbox.add_child(speed_label)
+
+	var speed_row := HBoxContainer.new()
+	speed_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	speed_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(speed_row)
+
+	speed_row.add_child(_small_button("-", Callable(self, "change_test_speed").bind(-TEST_SPEED_STEP)))
+	_speed_label = Label.new()
+	_speed_label.custom_minimum_size = Vector2(62, 34)
+	_speed_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_speed_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_speed_label.add_theme_font_size_override("font_size", 15)
+	speed_row.add_child(_speed_label)
+	speed_row.add_child(_small_button("+", Callable(self, "change_test_speed").bind(TEST_SPEED_STEP)))
+
+	var presets_row := HBoxContainer.new()
+	presets_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	presets_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(presets_row)
+	for speed in TEST_SPEED_PRESETS:
+		presets_row.add_child(_small_button(_format_test_speed(speed), Callable(self, "set_test_speed").bind(speed)))
+	_refresh_test_speed_label()
 
 
 func _populate_spawn_list() -> void:
@@ -337,6 +510,179 @@ func build_working_village() -> void:
 	_set_status("Random working village with random levels built.")
 
 
+func build_max_village_for_town_hall(th_level: int) -> void:
+	th_level = clampi(th_level, 1, 4)
+	_build_generation += 1
+	var generation := _build_generation
+	reset_sandbox(false)
+	await get_tree().process_frame
+	if generation != _build_generation:
+		return
+
+	var spawned_count: int = 0
+	randomize()
+	for building_id in MAX_VILLAGE_BUILD_ORDER:
+		var bs := _building_system_for_building(building_id)
+		if not bs or not ("building_defs" in bs) or not bs.building_defs.has(building_id):
+			continue
+		var max_count: int = _max_building_count_for_th(building_id, th_level)
+		if max_count <= 0:
+			continue
+		var def: Dictionary = bs.building_defs[building_id]
+		var target_level: int = _target_building_level_for_th(building_id, def, th_level)
+		for _i in range(max_count):
+			var grid_pos: Vector2i = _random_free_grid_pos(bs, def)
+			if grid_pos == Vector2i(-1, -1):
+				_set_status("TH%d max village stopped: no free place for %s." % [th_level, building_id])
+				_sync_all_building_systems()
+				_select_first_town_hall()
+				return
+			bs._spawn_building_locally(building_id, grid_pos, def, -1)
+			await get_tree().process_frame
+			if generation != _build_generation:
+				return
+			var b: Dictionary = _last_building_at(bs, building_id, grid_pos)
+			if b.is_empty():
+				continue
+			_set_building_level_immediate(bs, b, def, target_level)
+			if bs.has_method("_apply_building_level_visuals_for_test"):
+				bs._apply_building_level_visuals_for_test(b, def)
+			if generation != _build_generation or not is_instance_valid(b.get("node", null)):
+				return
+			if building_id == "port":
+				_configure_test_ship(bs, b, mini(target_level, 3))
+			elif building_id == "tombstone":
+				bs._spawn_tombstone_skeletons(b, int(b.get("level", 1)))
+			spawned_count += 1
+
+	_give_test_resources()
+	_sync_all_building_systems()
+	_select_first_town_hall()
+	_set_status("Built max TH%d village: %d buildings." % [th_level, spawned_count])
+
+
+func _change_attack_count(troop_name: String, delta: int) -> void:
+	var current: int = int(_attack_counts.get(troop_name, 0))
+	_attack_counts[troop_name] = clampi(current + delta, 0, 45)
+	_refresh_attack_row(troop_name)
+
+
+func _change_attack_level(troop_name: String, delta: int) -> void:
+	var max_level: int = int(TEST_ATTACK_MAX_LEVEL.get(troop_name, 4))
+	var current: int = int(_attack_levels.get(troop_name, max_level))
+	_attack_levels[troop_name] = clampi(current + delta, 1, max_level)
+	_refresh_attack_row(troop_name)
+
+
+func _refresh_attack_row(troop_name: String) -> void:
+	var count_label: Label = _attack_count_labels.get(troop_name, null)
+	if count_label:
+		count_label.text = str(int(_attack_counts.get(troop_name, 0)))
+	var level_label: Label = _attack_level_labels.get(troop_name, null)
+	if level_label:
+		level_label.text = "L%d" % int(_attack_levels.get(troop_name, 1))
+
+
+func clear_test_attack_loadout() -> void:
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 0
+		_refresh_attack_row(troop_name)
+	_set_status("Attack loadout cleared.")
+
+
+func mixed_test_attack_loadout() -> void:
+	for troop_name in TEST_ATTACK_TROOPS:
+		_attack_counts[troop_name] = 1
+		_refresh_attack_row(troop_name)
+	_set_status("Mixed attack loadout: one of each troop.")
+
+
+func start_test_attack() -> void:
+	var attack := get_node_or_null("../AttackSystem")
+	if not attack or not attack.has_method("enter_attack_mode"):
+		_set_status("AttackSystem not found.")
+		return
+	var fleet: Array = _build_test_attack_fleet()
+	if fleet.is_empty():
+		_set_status("Choose at least one attacker.")
+		return
+	_apply_test_troop_levels()
+	attack.enter_attack_mode(fleet)
+	var total_troops: int = 0
+	for ship in fleet:
+		for troop_name in ship.get("troops", []):
+			if troop_name != "_SLOT_FILLER_":
+				total_troops += 1
+	_set_status("Attack ready: %d troops on %d ships. Click ship water." % [total_troops, fleet.size()])
+
+
+func _build_test_attack_fleet() -> Array:
+	var attack := get_node_or_null("../AttackSystem")
+	var max_ships: int = int(attack.max_ships) if attack and ("max_ships" in attack) else 5
+	var ship_capacity: int = TEST_ATTACK_SHIP_LEVEL * 3
+	var fleet: Array = []
+	var current_ship: Dictionary = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
+	var used_slots: int = 0
+
+	for troop_name in TEST_ATTACK_TROOPS:
+		var count: int = int(_attack_counts.get(troop_name, 0))
+		var level: int = int(_attack_levels.get(troop_name, 1))
+		var slot_cost: int = _attack_troop_slot_cost(troop_name)
+		for _i in range(count):
+			if used_slots + slot_cost > ship_capacity:
+				fleet.append(current_ship)
+				if fleet.size() >= max_ships:
+					return fleet
+				current_ship = {"level": TEST_ATTACK_SHIP_LEVEL, "troops": []}
+				used_slots = 0
+			var troops: Array = current_ship["troops"]
+			troops.append(_attack_troop_entry(troop_name, level))
+			for _slot in range(slot_cost - 1):
+				troops.append("_SLOT_FILLER_")
+			used_slots += slot_cost
+
+	if not current_ship.get("troops", []).is_empty() and fleet.size() < max_ships:
+		fleet.append(current_ship)
+	return fleet
+
+
+func _attack_troop_entry(troop_name: String, level: int) -> String:
+	return "%s:L%d" % [troop_name, level]
+
+
+func _attack_troop_slot_cost(troop_name: String) -> int:
+	return 2 if troop_name == "DemonKing" else 1
+
+
+func _apply_test_troop_levels() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("troop_levels" in bs):
+			continue
+		for troop_name in TEST_ATTACK_TROOPS:
+			bs.troop_levels[troop_name] = int(_attack_levels.get(troop_name, 1))
+
+
+func set_test_speed(speed: float) -> void:
+	Engine.time_scale = clampf(speed, TEST_SPEED_MIN, TEST_SPEED_MAX)
+	_refresh_test_speed_label()
+	_set_status("Game speed set to %s." % _format_test_speed(Engine.time_scale))
+
+
+func change_test_speed(delta: float) -> void:
+	set_test_speed(Engine.time_scale + delta)
+
+
+func _refresh_test_speed_label() -> void:
+	if _speed_label:
+		_speed_label.text = _format_test_speed(Engine.time_scale)
+
+
+func _format_test_speed(speed: float) -> String:
+	if is_equal_approx(speed, roundf(speed)):
+		return "%dx" % int(roundf(speed))
+	return "%.2fx" % speed
+
+
 func reset_sandbox(cancel_active_build: bool = true) -> void:
 	if cancel_active_build:
 		_build_generation += 1
@@ -464,6 +810,22 @@ func _set_random_building_level(bs: Node, b: Dictionary, def: Dictionary) -> voi
 	await bs._run_upgrade_sequence(b, def, target_level)
 
 
+func _max_building_count_for_th(building_id: String, th_level: int) -> int:
+	if building_id == "town_hall":
+		return 1
+	var limits: Array = TEST_TH_MAX_COUNT.get(building_id, [])
+	if limits.is_empty():
+		return 0
+	var idx: int = clampi(th_level - 1, 0, limits.size() - 1)
+	return int(limits[idx])
+
+
+func _target_building_level_for_th(building_id: String, def: Dictionary, th_level: int) -> int:
+	if building_id == "town_hall":
+		return clampi(th_level, 1, _max_level_for_def(def))
+	return mini(th_level, _max_level_for_def(def))
+
+
 func _max_level_for_def(def: Dictionary) -> int:
 	var max_level: int = 1
 	for key in ["hp_levels", "scenes", "model_scales", "model_offsets"]:
@@ -494,6 +856,23 @@ func _select_first_town_hall() -> void:
 		if b.get("id", "") == "town_hall":
 			bs._select_building(b)
 			return
+
+
+func _give_test_resources() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if not ("resources" in bs):
+			continue
+		bs.resources = {"gold": 100000, "wood": 100000, "ore": 100000}
+		if bs.has_method("_update_resource_ui"):
+			bs._update_resource_ui()
+		if bs.has_method("_send_resource_caps"):
+			bs._send_resource_caps()
+
+
+func _sync_all_building_systems() -> void:
+	for bs in get_tree().get_nodes_in_group("building_systems"):
+		if bs.has_method("_sync_react_buildings"):
+			bs._sync_react_buildings()
 
 
 func _configure_test_ship(bs: Node, b: Dictionary, ship_level: int) -> void:

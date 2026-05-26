@@ -26,7 +26,7 @@ const ATTACK_SFX_PATHS: Array[String] = [
 	"res://Musik/sound_effects/Turret/Turret_Attack1.mp3",
 	"res://Musik/sound_effects/Turret/Turret_Attack2.mp3",
 ]
-const ATTACK_SFX_VOLUME_DB: float = -8.0
+const ATTACK_SFX_VOLUME_DB: float = -1.0
 const ATTACK_SFX_PITCH_JITTER: float = 0.04
 
 @export var detect_range: float = 0.95   # just below Archer range (1.0): kiting needs positioning, not free

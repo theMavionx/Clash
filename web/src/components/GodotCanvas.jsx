@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
+import { readSoundEnabled } from '../lib/soundSettings';
 // Loading splash — served from `web/public/splash-bg.png` + splash-logo.png.
 // Layered so the logo can be hidden on narrow / portrait screens while the
 // background art still fills the viewport. Public-path reference means art
 // swaps need no JS rebuild.
 const splashBg = '/splash-bg.png';
 const splashLogo = '/splash-logo.png?v=splash-art';
+const loadingMusicSrc = '/audio/loading_the_game.mp3';
+const uiClickSrc = '/audio/UaClick.mp3';
+const LOADING_MUSIC_VOLUME = 0.42;
+const LOADING_MUSIC_FADE_MS = 1600;
 
 const GODOT_FILES = '/godot'; // Path to exported Godot files
 const GODOT_BUILD_TOKEN = String(
@@ -42,6 +47,138 @@ const GODOT_PHASE_PROGRESS = {
   ready: 100,
 };
 let godotRuntimeManifestPromise = null;
+
+function createWebLoadingAudio() {
+  if (typeof Audio === 'undefined') {
+    return {
+      startLoading: () => {},
+      stopLoading: () => {},
+      playClick: () => {},
+      dispose: () => {},
+    };
+  }
+
+  const loading = new Audio(loadingMusicSrc);
+  loading.loop = true;
+  loading.preload = 'auto';
+  loading.volume = LOADING_MUSIC_VOLUME;
+
+  const clickPool = Array.from({ length: 4 }, () => {
+    const audio = new Audio(uiClickSrc);
+    audio.preload = 'auto';
+    audio.volume = 0.65;
+    return audio;
+  });
+  let clickIdx = 0;
+  let loadingWanted = false;
+  let disposed = false;
+  let unlocked = false;
+  let loadingFadeRaf = null;
+
+  const canPlaySound = () => !disposed && readSoundEnabled();
+
+  const tryPlayLoading = () => {
+    if (!loadingWanted || !canPlaySound()) return;
+    if (loadingFadeRaf) {
+      cancelAnimationFrame(loadingFadeRaf);
+      loadingFadeRaf = null;
+    }
+    loading.volume = LOADING_MUSIC_VOLUME;
+    const promise = loading.play();
+    if (promise?.catch) {
+      promise.catch(() => {
+        // Browser autoplay lock. The next pointer/key gesture retries.
+      });
+    }
+  };
+
+  const unlock = () => {
+    if (disposed || unlocked) return;
+    unlocked = true;
+    tryPlayLoading();
+  };
+
+  const onGesture = () => unlock();
+  window.addEventListener('pointerdown', onGesture, { capture: true });
+  window.addEventListener('keydown', onGesture, { capture: true });
+
+  return {
+    startLoading() {
+      loadingWanted = true;
+      tryPlayLoading();
+    },
+    stopLoading(immediate = false) {
+      loadingWanted = false;
+      if (loadingFadeRaf) {
+        cancelAnimationFrame(loadingFadeRaf);
+        loadingFadeRaf = null;
+      }
+      if (immediate || loading.paused || loading.volume <= 0.001) {
+        loading.pause();
+        loading.currentTime = 0;
+        loading.volume = LOADING_MUSIC_VOLUME;
+        return;
+      }
+      const fromVolume = loading.volume;
+      const startedAt = performance.now();
+      const fade = (now) => {
+        if (disposed) return;
+        const t = Math.min(1, (now - startedAt) / LOADING_MUSIC_FADE_MS);
+        loading.volume = fromVolume * (1 - t);
+        if (t < 1) {
+          loadingFadeRaf = requestAnimationFrame(fade);
+          return;
+        }
+        loadingFadeRaf = null;
+        loading.pause();
+        loading.currentTime = 0;
+        loading.volume = LOADING_MUSIC_VOLUME;
+      };
+      loadingFadeRaf = requestAnimationFrame(fade);
+    },
+    silenceLoadingNow() {
+      loadingWanted = false;
+      if (loadingFadeRaf) {
+        cancelAnimationFrame(loadingFadeRaf);
+        loadingFadeRaf = null;
+      }
+      loading.pause();
+      loading.currentTime = 0;
+      loading.volume = LOADING_MUSIC_VOLUME;
+    },
+    playClick() {
+      if (!canPlaySound()) return;
+      const audio = clickPool[clickIdx % clickPool.length];
+      clickIdx += 1;
+      try {
+        audio.currentTime = 0;
+        const promise = audio.play();
+        if (promise?.catch) promise.catch(() => {});
+      } catch {
+        // Ignore blocked or interrupted click playback.
+      }
+    },
+    dispose() {
+      disposed = true;
+      if (loadingFadeRaf) cancelAnimationFrame(loadingFadeRaf);
+      window.removeEventListener('pointerdown', onGesture, { capture: true });
+      window.removeEventListener('keydown', onGesture, { capture: true });
+      loading.pause();
+      loading.src = '';
+      for (const audio of clickPool) {
+        audio.pause();
+        audio.src = '';
+      }
+    },
+  };
+}
+
+function shouldPlayWebClick(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest('[data-no-web-click-sound="true"]')) return false;
+  if (target.closest('button, a, input, select, textarea, [role="button"], [data-click-sound="true"]')) return true;
+  return false;
+}
 
 function isCrawlerUserAgent(ua = navigator.userAgent || '') {
   return /applebot|googlebot|bingbot|duckduckbot|baiduspider|yandexbot|facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|whatsapp|crawler|spider|bot\b/i.test(ua);
@@ -428,6 +565,7 @@ function GodotCanvas({ onEngineReady }) {
   const stageStateRef = useRef(1);
   const stageProgressStateRef = useRef(0);
   const webglReloadStartedRef = useRef(false);
+  const webAudioRef = useRef(null);
 
   useEffect(() => {
     onEngineReadyRef.current = onEngineReady;
@@ -456,9 +594,15 @@ function GodotCanvas({ onEngineReady }) {
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
+    const webAudio = createWebLoadingAudio();
+    webAudioRef.current = webAudio;
+    webAudio.startLoading();
     lastProgressRef.current = { value: 0, time: Date.now() };
 
     if (isCrawlerUserAgent()) {
+      webAudio.stopLoading(true);
+      webAudio.dispose();
+      if (webAudioRef.current === webAudio) webAudioRef.current = null;
       setGodotSkipped(true);
       setIsLoaded(true);
       setStageProgress(100);
@@ -481,6 +625,11 @@ function GodotCanvas({ onEngineReady }) {
     let contextCanvas = null;
     keepAppTitle();
     titleGuardId = window.setInterval(keepAppTitle, 500);
+
+    const webClickHandler = (event) => {
+      if (shouldPlayWebClick(event.target)) webAudio.playClick();
+    };
+    window.addEventListener('pointerdown', webClickHandler, { capture: true });
 
     const getWebglContextPayload = (event) => ({
       loaded: isLoadedStateRef.current,
@@ -590,6 +739,7 @@ function GodotCanvas({ onEngineReady }) {
       };
 
       const finishLoadingOverlay = () => {
+        webAudio.stopLoading();
         if (loadedTimeoutId) clearTimeout(loadedTimeoutId);
         loadedTimeoutId = setTimeout(() => {
           if (!disposed) setIsLoaded(true);
@@ -809,6 +959,7 @@ function GodotCanvas({ onEngineReady }) {
       loadedRef.current = false;
       window.removeEventListener('error', errHandler);
       window.removeEventListener('unhandledrejection', rejectionHandler);
+      window.removeEventListener('pointerdown', webClickHandler, { capture: true });
       contextCanvas?.removeEventListener('webglcontextlost', handleWebglContextLost, false);
       contextCanvas?.removeEventListener('webglcontextrestored', handleWebglContextRestored, false);
       if (resizeCanvas) window.removeEventListener('resize', resizeCanvas);
@@ -821,6 +972,8 @@ function GodotCanvas({ onEngineReady }) {
       if (window.godotLoadingProgress) window.godotLoadingProgress = null;
       if (window.godotBuildingsLoaded) window.godotBuildingsLoaded = null;
       if (restoreGodotFetch) restoreGodotFetch();
+      webAudio.dispose();
+      if (webAudioRef.current === webAudio) webAudioRef.current = null;
       try { engine?.requestQuit?.(); } catch { /* best-effort cleanup */ }
     };
   }, []);

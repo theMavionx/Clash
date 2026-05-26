@@ -1920,7 +1920,7 @@ func check_skeleton_respawn(delta: float) -> void:
 			for bsys in bs._building_systems:
 				for b in bsys.placed_buildings:
 					if b.get("id", "") == "tombstone" and is_instance_valid(b.get("node")):
-						bsys._spawn_tombstone_skeletons(b, b.get("level", 1))
+						bsys._spawn_tombstone_skeletons(b, b.get("level", 1), false)
 
 
 ## Maps a troop node's script to its canonical name.

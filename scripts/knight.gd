@@ -36,6 +36,14 @@ func _setup_weapons() -> void:
 	_sword_attachment = _attach_to_bone("handslot.r", "SwordAttachment", sword_scene, "Sword")
 
 
+func _initial_attack_timer() -> float:
+	return atk_speed * hit_anim_threshold
+
+
+func _on_enter_attack_state() -> void:
+	_hit_this_swing = false
+
+
 ## Advances the attack timer and deals damage once the sword animation passes
 ## hit_anim_threshold and the weapon is within hit_distance of the target.
 func _do_attack(delta: float) -> void:

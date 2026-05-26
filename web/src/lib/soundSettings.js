@@ -1,4 +1,4 @@
-export const SOUND_ENABLED_STORAGE_KEY = 'clash_sound_enabled_v1';
+export const SOUND_ENABLED_STORAGE_KEY = 'clash_sound_enabled_v2';
 
 export function readSoundEnabled() {
   if (typeof window === 'undefined') return true;
