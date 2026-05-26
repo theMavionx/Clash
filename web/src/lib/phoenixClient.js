@@ -1,4 +1,4 @@
-import { createPhoenixClient } from '@ellipsis-labs/rise';
+import { createPhoenixClient, createPhoenixWsClient } from '@ellipsis-labs/rise';
 import { DEFAULT_SOLANA_RPC_URL } from './solanaRpc';
 
 function defaultPhoenixApiUrl() {
@@ -11,6 +11,9 @@ function defaultPhoenixApiUrl() {
 
 export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_BROWSER_API_URL || defaultPhoenixApiUrl();
+
+export const PHOENIX_WS_URL =
+  import.meta.env.VITE_PHOENIX_BROWSER_WS_URL || 'wss://perp-api.phoenix.trade/v1/ws';
 
 export const PHOENIX_FLIGHT_BUILDER_AUTHORITY =
   import.meta.env.VITE_PHOENIX_FLIGHT_BUILDER_AUTHORITY || '';
@@ -29,6 +32,7 @@ const EXCHANGE_METADATA_RPC_TTL_MS = 5 * 60_000;
 const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 
 const clients = new Map();
+let publicWsClient = null;
 
 export function isPhoenixFlightEnabled() {
   return PHOENIX_FLIGHT_ENABLED && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
@@ -105,6 +109,30 @@ export function getFreshPhoenixClient(rpcUrl) {
 
 export function createPhoenixTransactionClient(rpcUrl, options = {}) {
   return createClient(rpcUrl, options);
+}
+
+export function createPhoenixPublicWsClient(options = {}) {
+  if (Object.keys(options || {}).length) {
+    return createPhoenixWsClient({
+      url: PHOENIX_WS_URL,
+      authMode: 'anonymous',
+      connectMode: 'lazy',
+      ...options,
+    });
+  }
+  if (!publicWsClient) {
+    publicWsClient = createPhoenixWsClient({
+      url: PHOENIX_WS_URL,
+      authMode: 'anonymous',
+      connectMode: 'lazy',
+    });
+  }
+  return publicWsClient;
+}
+
+export function disposePhoenixPublicWsClient() {
+  try { publicWsClient?.close?.(); } catch {}
+  publicWsClient = null;
 }
 
 export function phoenixSymbol(symbol) {

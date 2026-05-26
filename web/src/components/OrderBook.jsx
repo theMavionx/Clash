@@ -1,5 +1,29 @@
 import { memo, useState, useEffect, useRef } from 'react';
-import { phoenixFetch, phoenixSymbol } from '../lib/phoenixClient';
+import { createPhoenixPublicWsClient, phoenixSymbol } from '../lib/phoenixClient';
+
+function normalizePhoenixLevel(level, index) {
+  const price = Array.isArray(level) ? level[0] : level?.price ?? level?.p;
+  const amount = Array.isArray(level) ? level[1] : level?.size ?? level?.amount ?? level?.a;
+  return {
+    price: Number(price),
+    amount: Number(amount),
+    count: Array.isArray(level) ? index + 1 : level?.count ?? level?.n ?? index + 1,
+  };
+}
+
+function normalizePhoenixLevels(levels) {
+  return (Array.isArray(levels) ? levels : [])
+    .slice(0, 12)
+    .map(normalizePhoenixLevel)
+    .filter(level => Number.isFinite(level.price) && Number.isFinite(level.amount));
+}
+
+function normalizePhoenixBook(update) {
+  return {
+    bids: normalizePhoenixLevels(update?.bids),
+    asks: normalizePhoenixLevels(update?.asks),
+  };
+}
 
 function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
   const [book, setBook] = useState({ bids: [], asks: [] });
@@ -8,25 +32,41 @@ function OrderBook({ symbol = 'BTC', dex = 'pacifica' }) {
   useEffect(() => {
     if (dex === 'phoenix') {
       let cancelled = false;
-      let timer = null;
-      async function load() {
+      let flushTimer = null;
+      let latestBook = null;
+      const controller = new AbortController();
+      const streams = createPhoenixPublicWsClient();
+      wsRef.current = streams;
+      const market = phoenixSymbol(symbol);
+
+      function flushBook() {
+        if (latestBook && !cancelled) {
+          setBook(latestBook);
+          latestBook = null;
+        }
+        flushTimer = null;
+      }
+
+      async function streamOrderBook() {
         try {
-          const d = await phoenixFetch(`/v1/view/orderbook/${encodeURIComponent(phoenixSymbol(symbol))}`);
-          if (cancelled) return;
-          setBook({
-            bids: (d?.bids || []).slice(0, 12).map((b, i) => ({ price: Number(b[0]), amount: Number(b[1]), count: b[2] ?? i + 1 })),
-            asks: (d?.asks || []).slice(0, 12).map((a, i) => ({ price: Number(a[0]), amount: Number(a[1]), count: a[2] ?? i + 1 })),
-          });
-        } catch {
-          if (!cancelled) setBook({ bids: [], asks: [] });
-        } finally {
-          if (!cancelled) timer = setTimeout(load, 1500);
+          for await (const update of streams.l2Book(market, controller.signal)) {
+            if (cancelled) break;
+            latestBook = normalizePhoenixBook(update);
+            if (!flushTimer) flushTimer = setTimeout(flushBook, 100);
+          }
+        } catch (e) {
+          if (!cancelled && !controller.signal.aborted) {
+            console.warn('[Phoenix] orderbook stream failed', e?.message || e);
+          }
         }
       }
-      load();
+
+      streamOrderBook();
       return () => {
         cancelled = true;
-        clearTimeout(timer);
+        controller.abort();
+        clearTimeout(flushTimer);
+        if (wsRef.current === streams) wsRef.current = null;
       };
     }
 

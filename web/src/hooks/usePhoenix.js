@@ -7,6 +7,7 @@ import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
   asPhoenixArray,
+  createPhoenixPublicWsClient,
   createPhoenixTransactionClient,
   disposePhoenixClient,
   getPhoenixClient,
@@ -20,6 +21,7 @@ const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const POLL_MS = 10_000;
 const PHOENIX_PRICE_CACHE_MS = 15_000;
 const PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS = 60_000;
+const PHOENIX_MARKET_STATS_WS_FLUSH_MS = 100;
 const USDC_DECIMALS = 6;
 const PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL = '0';
 const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
@@ -360,6 +362,13 @@ function phoenixFundingToDecimal(row) {
   return fundingBasisPointsToDecimal(row.fundingRate);
 }
 
+function phoenixMarketStatsFundingToDecimal(stats) {
+  const percentage = firstFinite(stats?.currentFundingRatePercentage, stats?.currentFundingRate);
+  if (percentage != null) return fundingPercentageToDecimal(percentage);
+  const bps = firstFinite(stats?.fundingRate, stats?.funding_rate);
+  return bps != null ? fundingBasisPointsToDecimal(bps) : null;
+}
+
 function phoenixTickSizeUsd(m) {
   const tickSizeRaw = Number(m?.tickSize ?? m?.units?.tickSizeInQuoteLotsPerBaseLot ?? 0);
   const baseLotsDecimals = Number(m?.baseLotsDecimals ?? m?.units?.baseLotsDecimals ?? 4);
@@ -445,6 +454,25 @@ function pricesFromFundingOverview(markets, fundingOverview) {
       };
     })
     .filter(Boolean);
+}
+
+function priceRowFromMarketStats(update, market = {}) {
+  const symbol = phoenixSymbol(update?.symbol);
+  const stats = update?.stats || {};
+  const mark = firstFinite(stats.markPrice, stats.mark_price);
+  if (!symbol || mark == null || mark <= 0) return null;
+  const oracle = firstFinite(stats.oraclePrice, stats.oracle_price, mark);
+  const previous = firstFinite(stats.prevDayMarkPrice, stats.prev_day_mark_price, mark);
+  const volume = firstFinite(stats.dayVolumeUsd, stats.day_volume_usd, market?.volume_24h, 0);
+  const openInterest = firstFinite(stats.openInterest, stats.open_interest, market?.open_interest, 0);
+  return {
+    symbol,
+    mark: String(mark),
+    oracle: String(oracle ?? mark),
+    yesterday_price: previous != null && previous > 0 ? String(previous) : String(mark),
+    volume_24h: String(volume ?? 0),
+    open_interest: String(openInterest ?? 0),
+  };
 }
 
 function ticksToUsd(value, market) {
@@ -1221,6 +1249,102 @@ export function usePhoenix() {
     return next;
   }, []);
 
+  const mergePriceRows = useCallback((rows) => {
+    const incoming = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!incoming.length) return pricesRef.current;
+    const marketSymbols = new Set(marketsRef.current.map(m => m.symbol));
+    const priceBySymbol = new Map(pricesRef.current.map(p => [p.symbol, p]));
+    const marketBySymbol = { ...marketsBySymbolRef.current };
+
+    for (const raw of incoming) {
+      const symbol = phoenixSymbol(raw?.symbol);
+      if (!symbol) continue;
+      const row = { ...(priceBySymbol.get(symbol) || {}), ...raw, symbol };
+      priceBySymbol.set(symbol, row);
+      if (marketBySymbol[symbol]) {
+        const mark = Number(row.mark || 0);
+        marketBySymbol[symbol] = {
+          ...marketBySymbol[symbol],
+          ...(Number.isFinite(mark) && mark > 0 ? { _mark: mark } : {}),
+          ...(row.volume_24h != null ? { volume_24h: row.volume_24h } : {}),
+          ...(row.open_interest != null ? { open_interest: row.open_interest } : {}),
+        };
+      }
+    }
+
+    const next = [];
+    for (const market of marketsRef.current) {
+      const row = priceBySymbol.get(market.symbol);
+      if (row) next.push(row);
+    }
+    for (const row of priceBySymbol.values()) {
+      if (!marketSymbols.has(row.symbol)) next.push(row);
+    }
+
+    marketsBySymbolRef.current = marketBySymbol;
+    pricesRef.current = next;
+    pricesFetchedAtRef.current = Date.now();
+    priceBackoffUntilRef.current = 0;
+    setPrices(next);
+    return next;
+  }, []);
+
+  const applyMarketStatsUpdates = useCallback((updates) => {
+    const batch = Array.isArray(updates) ? updates.filter(Boolean) : [];
+    if (!batch.length) return;
+    const byUpdate = new Map();
+    const priceRows = [];
+    for (const update of batch) {
+      const symbol = phoenixSymbol(update?.symbol);
+      if (!symbol) continue;
+      byUpdate.set(symbol, update);
+      const row = priceRowFromMarketStats(update, marketsBySymbolRef.current[symbol]);
+      if (row) priceRows.push(row);
+    }
+
+    let marketsChanged = false;
+    const nextMarkets = marketsRef.current.map(market => {
+      const update = byUpdate.get(market.symbol);
+      if (!update) return market;
+      const stats = update.stats || {};
+      const mark = firstFinite(stats.markPrice, stats.mark_price);
+      const funding = phoenixMarketStatsFundingToDecimal(stats);
+      const volume = firstFinite(stats.dayVolumeUsd, stats.day_volume_usd);
+      const openInterest = firstFinite(stats.openInterest, stats.open_interest);
+      let changed = false;
+      const next = { ...market };
+      if (mark != null && mark > 0 && Number(next._mark || 0) !== mark) {
+        next._mark = mark;
+        changed = true;
+      }
+      if (volume != null && String(next.volume_24h ?? '') !== String(volume)) {
+        next.volume_24h = volume;
+        changed = true;
+      }
+      if (openInterest != null && String(next.open_interest ?? '') !== String(openInterest)) {
+        next.open_interest = openInterest;
+        changed = true;
+      }
+      if (funding != null && Number.isFinite(funding) && Number(next.funding_rate || 0) !== funding) {
+        next.funding_rate = funding;
+        next.next_funding_rate = funding;
+        changed = true;
+      }
+      if (changed) marketsChanged = true;
+      return changed ? next : market;
+    });
+
+    if (marketsChanged) {
+      marketsRef.current = nextMarkets;
+      marketsBySymbolRef.current = {
+        ...marketsBySymbolRef.current,
+        ...Object.fromEntries(nextMarkets.map(m => [m.symbol, m])),
+      };
+      setMarkets(nextMarkets);
+    }
+    mergePriceRows(priceRows);
+  }, [mergePriceRows]);
+
   const fetchPrices = useCallback(async (marketList = marketsRef.current, options = {}) => {
     if (!isActiveDex || !marketList.length) return [];
     if (options.overview) {
@@ -1257,7 +1381,11 @@ export function usePhoenix() {
       try {
         overview = await client.api.funding().getFundingOverview({ perMarketLimit: 2 });
         list = enrichMarketsWithFunding(baseList, overview);
-      } catch {
+      } catch (e) {
+        const text = String(e?.message || e || '');
+        if (/429|Too Many Requests/i.test(text) || Number(e?.status) === 429) {
+          priceBackoffUntilRef.current = Date.now() + PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS;
+        }
         list = baseList;
       }
       marketsRef.current = list;
@@ -1268,13 +1396,54 @@ export function usePhoenix() {
         maker_fee: list[0]?.maker_fee ?? prev.maker_fee,
         taker_fee: list[0]?.taker_fee ?? prev.taker_fee,
       } : prev);
-      fetchPrices(list, overview ? { overview } : {});
+      if (overview) fetchPrices(list, { overview });
       return list;
     } catch (e) {
       setError(e?.message || 'Could not load Phoenix markets');
       return [];
     }
   }, [client, fetchPrices, isActiveDex, setPhoenixAccount]);
+
+  useEffect(() => {
+    if (!isActiveDex) return undefined;
+    let cancelled = false;
+    const controller = new AbortController();
+    const streams = createPhoenixPublicWsClient();
+    const pending = new Map();
+    let flushTimer = null;
+
+    const flush = () => {
+      flushTimer = null;
+      if (cancelled || !pending.size) return;
+      const batch = Array.from(pending.values());
+      pending.clear();
+      applyMarketStatsUpdates(batch);
+    };
+
+    (async () => {
+      try {
+        for await (const update of streams.marketStats(undefined, controller.signal)) {
+          if (cancelled) break;
+          const symbol = phoenixSymbol(update?.symbol);
+          if (!symbol) continue;
+          pending.set(symbol, update);
+          if (!flushTimer) flushTimer = setTimeout(flush, PHOENIX_MARKET_STATS_WS_FLUSH_MS);
+        }
+      } catch (e) {
+        if (!cancelled && e?.name !== 'AbortError') {
+          console.warn('[Phoenix] marketStats WS failed; REST fallback remains active', e);
+        }
+      } finally {
+        flush();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (flushTimer) clearTimeout(flushTimer);
+    };
+  }, [applyMarketStatsUpdates, isActiveDex]);
 
   const refreshTraderState = useCallback(async (options = {}) => {
     if (!isActiveDex || !walletAddr || walletMismatch) {

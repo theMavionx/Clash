@@ -28,6 +28,7 @@ const pythHistoryInflight = new Map();
 const PHOENIX_API_BASE = process.env.PHOENIX_API_URL || 'https://perp-api.phoenix.trade';
 const PHOENIX_PROXY_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_PROXY_TIMEOUT_MS || 4500)));
 const PHOENIX_PROXY_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_STALE_MS', 24 * 60 * 60_000, 30_000);
+const PHOENIX_PROXY_TRADER_STATE_STALE_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_TRADER_STATE_STALE_MS', 45_000, 1000);
 const PHOENIX_PROXY_ERROR_COOLDOWN_MS = phoenixProxyDurationEnv('PHOENIX_PROXY_ERROR_COOLDOWN_MS', 15_000, 1000);
 const PHOENIX_PROXY_DISK_CACHE_FILE = process.env.PHOENIX_PROXY_CACHE_FILE
   || path.join(path.dirname(process.env.CLASH_FUTURES_DB || path.join(__dirname, 'futures.db')), 'phoenix-proxy-cache.json');
@@ -156,6 +157,18 @@ function phoenixProxyCacheTtl(pathname, method) {
   return 15_000;
 }
 
+function isPhoenixTraderStatePath(pathWithQuery) {
+  const pathname = phoenixProxyPathname(pathWithQuery);
+  return /^\/trader\/[^/]+\/state$/.test(pathname)
+    || /^\/v1\/trader\/state\/[^/]+$/.test(pathname);
+}
+
+function phoenixProxyStaleMs(pathWithQuery, method) {
+  if (method !== 'GET') return 0;
+  if (isPhoenixTraderStatePath(pathWithQuery)) return PHOENIX_PROXY_TRADER_STATE_STALE_MS;
+  return phoenixProxyCacheTtl(pathWithQuery, method) > 0 ? PHOENIX_PROXY_STALE_MS : 0;
+}
+
 async function fetchPhoenixProxy(pathWithQuery, options = {}) {
   const method = String(options.method || 'GET').toUpperCase();
   const body = options.body;
@@ -205,11 +218,12 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
 
   loadPhoenixProxyDiskCache();
   const ttl = phoenixProxyCacheTtl(cleanPath, method);
+  const staleMs = phoenixProxyStaleMs(cleanPath, method);
   const cacheKey = `${method}:${cleanPath}:${method === 'GET' ? '' : JSON.stringify(req.body || {})}`;
   const now = Date.now();
-  const cached = ttl > 0 ? phoenixProxyCache.get(cacheKey) : null;
+  const cached = (ttl > 0 || staleMs > 0) ? phoenixProxyCache.get(cacheKey) : null;
   const freshMs = cached?.soft ? PHOENIX_PROXY_ERROR_COOLDOWN_MS : ttl;
-  if (cached && now - cached.at < freshMs) {
+  if (ttl > 0 && cached && now - cached.at < freshMs) {
     res.set('Cache-Control', `public, max-age=${Math.max(1, Math.floor(freshMs / 1000))}`);
     res.set('X-Phoenix-Proxy-Cache', 'hit');
     return res.json(cached.data);
@@ -224,7 +238,7 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
       phoenixProxyInflight.set(cacheKey, pending);
     }
     const data = await pending;
-    if (ttl > 0) {
+    if (ttl > 0 || staleMs > 0) {
       phoenixProxyCache.set(cacheKey, { at: now, data });
       if (shouldPersistPhoenixProxyCache(cacheKey)) schedulePhoenixProxyDiskCacheFlush();
       if (phoenixProxyCache.size > 750) {
@@ -238,10 +252,11 @@ async function handlePhoenixApiProxy(req, res, pathWithQuery) {
     res.set('X-Phoenix-Proxy-Cache', cached ? 'refresh' : 'miss');
     return res.json(data);
   } catch (e) {
-    if (cached && !cached.soft && now - cached.at < PHOENIX_PROXY_STALE_MS) {
+    if (cached && !cached.soft && staleMs > 0 && now - cached.at < staleMs) {
       console.warn('[phoenix/proxy] upstream failed, serving stale:', e.message);
-      res.set('Cache-Control', 'public, max-age=3');
+      res.set('Cache-Control', ttl > 0 ? 'public, max-age=3' : 'no-store');
       res.set('X-Phoenix-Proxy-Cache', 'stale');
+      res.set('X-Phoenix-Proxy-Stale-Age', String(Math.max(0, now - cached.at)));
       return res.json(cached.data);
     }
     if (method === 'GET' && e.status === 429) {

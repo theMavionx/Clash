@@ -1849,6 +1849,10 @@ function fallbackNftSupply(source = 'fallback') {
 // while the SUM of live NFTs across chains is under this global limit.
 // Set via env so we can lift it later without a code change.
 const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || NFT_DEFAULT_GLOBAL_SUPPLY_CAP);
+const NFT_SUPPLY_CACHE_SETTING_KEY = 'nft.global_supply_snapshot.v1';
+const NFT_SUPPLY_CHAINS = ['base', 'solana', 'arbitrum', 'monad', 'aptos'];
+const NFT_SUPPLY_CACHE_TTL_MS = Math.max(1000, Number(process.env.NFT_SUPPLY_CACHE_TTL_MS || 10_000));
+const NFT_SUPPLY_REFRESH_INTERVAL_MS = Math.max(60_000, Number(process.env.NFT_SUPPLY_REFRESH_INTERVAL_MS || 5 * 60_000));
 
 // Light-weight in-memory cache for the most recent per-chain supply read
 // so a flood of quote requests doesn't fan out RPC calls to every chain.
@@ -1856,7 +1860,131 @@ const NFT_GLOBAL_SUPPLY_CAP = Number(process.env.NFT_GLOBAL_SUPPLY_CAP || NFT_DE
 // re-read on demand. Cache misses fall back to "unknown" which we treat
 // as "let the quote through" to avoid blocking buyers when an RPC is
 // flaky; primary mint contracts still gate their own sale/admin mints.
-let _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
+let _nftGlobalSupplyCache = {
+  fetchedAt: 0,
+  syncedAt: 0,
+  perChain: {},
+  perChainRaw: {},
+  total: 0,
+  cap: NFT_GLOBAL_SUPPLY_CAP,
+  source: 'empty',
+};
+let _nftGlobalSupplyRefreshTimer = null;
+let _nftGlobalSupplyRefreshInFlight = null;
+
+function finiteNftSupplyCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.floor(n);
+}
+
+function parseNftSupplyTime(value) {
+  if (Number.isFinite(Number(value)) && Number(value) > 0) return Number(value);
+  if (typeof value === 'string' && value.trim()) {
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : 0;
+  }
+  return 0;
+}
+
+function normalizeNftSupplySnapshot(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const perChainSource = raw.perChain || raw.per_chain || {};
+  const perChain = {};
+  for (const chain of NFT_SUPPLY_CHAINS) {
+    const n = finiteNftSupplyCount(perChainSource[chain]);
+    if (n != null) perChain[chain] = n;
+  }
+  if (!Object.keys(perChain).length) return null;
+
+  const fetchedAt = parseNftSupplyTime(raw.fetchedAt ?? raw.fetched_at ?? raw.cachedAt ?? raw.cached_at);
+  const syncedAt = parseNftSupplyTime(raw.syncedAt ?? raw.synced_at) || fetchedAt;
+  const chainSyncedAt = {};
+  const rawChainSyncedAt = raw.chainSyncedAt || raw.chain_synced_at || {};
+  for (const chain of NFT_SUPPLY_CHAINS) {
+    chainSyncedAt[chain] = parseNftSupplyTime(rawChainSyncedAt[chain]) || syncedAt || 0;
+  }
+
+  const total = finiteNftSupplyCount(raw.total)
+    ?? Object.values(perChain).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+  const sourceByChain = raw.sourceByChain || raw.source_by_chain || {};
+  const fallbackSourceByChain = raw.fallbackSourceByChain || raw.fallback_source_by_chain || {};
+
+  return {
+    fetchedAt,
+    syncedAt,
+    chainSyncedAt,
+    perChain,
+    perChainRaw: raw.perChainRaw || raw.per_chain_raw || {},
+    total,
+    cap: finiteNftSupplyCount(raw.cap) ?? NFT_GLOBAL_SUPPLY_CAP,
+    source: raw.source || 'persisted',
+    liveChains: Array.isArray(raw.liveChains) ? raw.liveChains.filter((chain) => NFT_SUPPLY_CHAINS.includes(chain)) : [],
+    fallbackChains: Array.isArray(raw.fallbackChains) ? raw.fallbackChains.filter((chain) => NFT_SUPPLY_CHAINS.includes(chain)) : [],
+    sourceByChain,
+    fallbackSourceByChain,
+  };
+}
+
+function readPersistedNftSupplySnapshot() {
+  try {
+    return normalizeNftSupplySnapshot(readAppSettingJson(NFT_SUPPLY_CACHE_SETTING_KEY, null));
+  } catch (err) {
+    console.warn('[NFT] failed to read persisted supply snapshot', err?.message || err);
+    return null;
+  }
+}
+
+function persistNftSupplySnapshot(snapshot) {
+  const normalized = normalizeNftSupplySnapshot(snapshot);
+  if (!normalized) return null;
+  try {
+    const value = {
+      fetchedAt: normalized.fetchedAt,
+      syncedAt: normalized.syncedAt,
+      chainSyncedAt: normalized.chainSyncedAt,
+      perChain: normalized.perChain,
+      total: normalized.total,
+      cap: normalized.cap,
+      source: normalized.source,
+      sourceByChain: normalized.sourceByChain,
+      fallbackSourceByChain: normalized.fallbackSourceByChain,
+      liveChains: normalized.liveChains,
+      fallbackChains: normalized.fallbackChains,
+    };
+    writeAppSettingJson(NFT_SUPPLY_CACHE_SETTING_KEY, value);
+    return value;
+  } catch (err) {
+    console.warn('[NFT] failed to persist supply snapshot', err?.message || err);
+    return null;
+  }
+}
+
+function nftSupplyIso(ms) {
+  return ms ? new Date(ms).toISOString() : null;
+}
+
+function cachedNftChainSupply(chain, maxSupply = NFT_MAX_SUPPLY, source = 'cached_fallback') {
+  const max = finiteNftSupplyCount(maxSupply) ?? NFT_MAX_SUPPLY;
+  const snapshots = [
+    normalizeNftSupplySnapshot(_nftGlobalSupplyCache),
+    readPersistedNftSupplySnapshot(),
+  ];
+  for (const snapshot of snapshots) {
+    const minted = finiteNftSupplyCount(snapshot?.perChain?.[chain]);
+    if (minted == null) continue;
+    return {
+      totalMinted: minted,
+      maxSupply: max,
+      remaining: Math.max(0, max - minted),
+      source,
+      cachedAt: nftSupplyIso(snapshot.fetchedAt),
+      syncedAt: nftSupplyIso(snapshot.chainSyncedAt?.[chain] || snapshot.syncedAt),
+      stale: true,
+    };
+  }
+  return null;
+}
 
 // Generic EVM "live tokens on this chain" reader. Prefers the V3.2+
 // `currentSupply()` view (totalMinted - totalBurned, so a bridge_burn
@@ -2146,11 +2274,15 @@ function nftBaselinePerChain() {
   };
 }
 
-async function readGlobalNftSupply() {
+async function readGlobalNftSupply(options = {}) {
+  const force = !!options.force;
+  const shouldPersist = options.persist !== false;
   const now = Date.now();
-  if (now - _nftGlobalSupplyCache.fetchedAt < 10_000 && Object.keys(_nftGlobalSupplyCache.perChain).length > 0) {
+  if (!force && now - _nftGlobalSupplyCache.fetchedAt < NFT_SUPPLY_CACHE_TTL_MS && Object.keys(_nftGlobalSupplyCache.perChain).length > 0) {
     return _nftGlobalSupplyCache;
   }
+  const previous = normalizeNftSupplySnapshot(_nftGlobalSupplyCache);
+  const persisted = readPersistedNftSupplySnapshot();
   const baseConfig = baseNftConfig();
   const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
   const [base, solana, arbitrum, monad, aptos] = await Promise.all([
@@ -2165,34 +2297,133 @@ async function readGlobalNftSupply() {
   // Fallback ladder for each chain:
   //   1) live RPC reading (preferred)
   //   2) last known value from previous cache snapshot
-  //   3) baseline from deployment JSON (fresh-boot fallback only)
+  //   3) persisted server snapshot from app_settings
+  //   4) baseline from deployment JSON (fresh-boot fallback only)
   //
   // Do not ratchet counts upward here. V3 currentSupply() and the Solana/
   // Aptos collection readers are net-of-bridge-burn, so a legitimate bridge
   // can make a source chain decrease before the destination mint lands.
-  const prevPerChain = _nftGlobalSupplyCache.perChain || {};
   const baseline = nftBaselinePerChain();
   const resolvedPerChain = {};
-  for (const k of Object.keys(perChainRaw)) {
-    const live = Number.isFinite(perChainRaw[k]) ? perChainRaw[k] : null;
-    const prev = Number.isFinite(prevPerChain[k]) ? prevPerChain[k] : null;
-    const floor = baseline[k] || 0;
-    resolvedPerChain[k] = live != null ? live
-      : prev != null ? prev
-      : floor;
+  const sourceByChain = {};
+  const fallbackSourceByChain = {};
+  const liveChains = [];
+  const fallbackChains = [];
+  const chainSyncedAt = {};
+  for (const k of NFT_SUPPLY_CHAINS) {
+    const live = finiteNftSupplyCount(perChainRaw[k]);
+    const prev = finiteNftSupplyCount(previous?.perChain?.[k]);
+    const prevSource = previous?.sourceByChain?.[k]
+      || previous?.fallbackSourceByChain?.[k]
+      || previous?.source
+      || 'empty';
+    const stored = finiteNftSupplyCount(persisted?.perChain?.[k]);
+    const storedSource = persisted?.sourceByChain?.[k]
+      || persisted?.fallbackSourceByChain?.[k]
+      || persisted?.source
+      || 'persisted';
+    const floor = finiteNftSupplyCount(baseline[k]) ?? 0;
+
+    if (live != null) {
+      resolvedPerChain[k] = live;
+      sourceByChain[k] = 'rpc';
+      chainSyncedAt[k] = now;
+      liveChains.push(k);
+      continue;
+    }
+    if (prev != null && prevSource !== 'baseline') {
+      resolvedPerChain[k] = prev;
+      sourceByChain[k] = prevSource === 'rpc' ? 'memory' : prevSource;
+      fallbackSourceByChain[k] = sourceByChain[k];
+      chainSyncedAt[k] = previous?.chainSyncedAt?.[k] || previous?.syncedAt || 0;
+      fallbackChains.push(k);
+      continue;
+    }
+    if (stored != null && storedSource !== 'baseline') {
+      resolvedPerChain[k] = stored;
+      sourceByChain[k] = 'persisted';
+      fallbackSourceByChain[k] = 'persisted';
+      chainSyncedAt[k] = persisted?.chainSyncedAt?.[k] || persisted?.syncedAt || 0;
+      fallbackChains.push(k);
+      continue;
+    }
+    if (prev != null) {
+      resolvedPerChain[k] = prev;
+      sourceByChain[k] = prevSource || 'memory';
+      fallbackSourceByChain[k] = sourceByChain[k];
+      chainSyncedAt[k] = previous?.chainSyncedAt?.[k] || previous?.syncedAt || 0;
+      fallbackChains.push(k);
+      continue;
+    }
+    if (stored != null) {
+      resolvedPerChain[k] = stored;
+      sourceByChain[k] = storedSource || 'persisted';
+      fallbackSourceByChain[k] = sourceByChain[k];
+      chainSyncedAt[k] = persisted?.chainSyncedAt?.[k] || persisted?.syncedAt || 0;
+      fallbackChains.push(k);
+      continue;
+    }
+
+    resolvedPerChain[k] = floor;
+    sourceByChain[k] = 'baseline';
+    fallbackSourceByChain[k] = 'baseline';
+    chainSyncedAt[k] = 0;
+    fallbackChains.push(k);
   }
   const total = Object.values(resolvedPerChain).reduce((sum, n) => sum + (Number.isFinite(n) ? n : 0), 0);
+  const syncedAt = Object.values(chainSyncedAt).reduce((max, t) => Math.max(max, Number(t) || 0), 0);
+  const chainSources = Object.values(sourceByChain);
+  const source = liveChains.length === NFT_SUPPLY_CHAINS.length ? 'rpc'
+    : liveChains.length > 0 ? 'mixed'
+    : chainSources.length > 0 && chainSources.every((item) => item === 'persisted') ? 'persisted'
+    : chainSources.some((item) => item && item !== 'baseline') ? 'cached'
+    : 'baseline';
   _nftGlobalSupplyCache = {
     fetchedAt: now,
+    syncedAt,
+    chainSyncedAt,
     perChain: resolvedPerChain,
     perChainRaw,
     total,
     cap: NFT_GLOBAL_SUPPLY_CAP,
+    source,
+    sourceByChain,
+    fallbackSourceByChain,
+    liveChains,
+    fallbackChains,
   };
+  if (shouldPersist && liveChains.length > 0) {
+    persistNftSupplySnapshot(_nftGlobalSupplyCache);
+  }
   return _nftGlobalSupplyCache;
 }
 
 // Reusable gate — every quote endpoint calls this before signing.
+async function refreshNftSupplyCache(reason = 'timer') {
+  if (_nftGlobalSupplyRefreshInFlight) return _nftGlobalSupplyRefreshInFlight;
+  _nftGlobalSupplyRefreshInFlight = readGlobalNftSupply({ force: true })
+    .catch((err) => {
+      console.warn(`[NFT] background supply refresh failed (${reason})`, err?.message || err);
+      return null;
+    })
+    .finally(() => {
+      _nftGlobalSupplyRefreshInFlight = null;
+    });
+  return _nftGlobalSupplyRefreshInFlight;
+}
+
+function startNftSupplyBackgroundRefresh() {
+  if (_nftGlobalSupplyRefreshTimer || process.env.NFT_SUPPLY_REFRESH_DISABLE === '1') return;
+  const startupTimer = setTimeout(() => { refreshNftSupplyCache('startup'); }, 15_000);
+  if (typeof startupTimer.unref === 'function') startupTimer.unref();
+  _nftGlobalSupplyRefreshTimer = setInterval(() => {
+    refreshNftSupplyCache('interval');
+  }, NFT_SUPPLY_REFRESH_INTERVAL_MS);
+  if (typeof _nftGlobalSupplyRefreshTimer.unref === 'function') _nftGlobalSupplyRefreshTimer.unref();
+}
+
+startNftSupplyBackgroundRefresh();
+
 async function assertGlobalSupplyAvailable(quantity) {
   const supply = await readGlobalNftSupply();
   const wanted = Number(quantity) || 1;
@@ -2263,20 +2494,21 @@ async function readSolanaNftSupply(deployment) {
 router.get('/nft/mint/config', async (req, res) => {
   const solanaDeployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
   const baseConfig = baseNftConfig();
+  const solanaMaxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || solanaDeployment.maxSupply || NFT_MAX_SUPPLY);
   let baseSupply = fallbackNftSupply();
   let solanaSupply = fallbackNftSupply();
   try {
     baseSupply = await readBaseNftSupply(baseConfig);
   } catch (err) {
     console.warn('[NFT] failed to read Base supply', err?.message || err);
+    baseSupply = cachedNftChainSupply('base', NFT_MAX_SUPPLY, 'cached_fallback') || baseSupply;
   }
   try {
     solanaSupply = await readSolanaNftSupply(solanaDeployment);
   } catch (err) {
     console.warn('[NFT] failed to read Solana supply', err?.message || err);
-    const solanaMaxSupply = Number(process.env.NFT_SOLANA_MAX_SUPPLY || solanaDeployment.maxSupply || NFT_MAX_SUPPLY);
     const solanaMinted = Number(solanaDeployment.totalMinted ?? solanaDeployment.minted ?? 0);
-    solanaSupply = {
+    solanaSupply = cachedNftChainSupply('solana', solanaMaxSupply, 'cached_fallback') || {
       totalMinted: solanaMinted,
       maxSupply: solanaMaxSupply,
       remaining: solanaDeployment.remaining ?? Math.max(0, solanaMaxSupply - solanaMinted),
@@ -2294,10 +2526,22 @@ router.get('/nft/mint/config', async (req, res) => {
     const s = await readGlobalNftSupply();
     globalSupply = {
       totalMinted: s.total,
-      cap: NFT_GLOBAL_SUPPLY_CAP,
-      remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - s.total),
+      cap: s.cap || NFT_GLOBAL_SUPPLY_CAP,
+      remaining: Math.max(0, (s.cap || NFT_GLOBAL_SUPPLY_CAP) - s.total),
       perChain: s.perChain,
+      source: s.source,
+      cachedAt: nftSupplyIso(s.fetchedAt),
+      syncedAt: nftSupplyIso(s.syncedAt),
+      liveChains: s.liveChains || [],
+      fallbackChains: s.fallbackChains || [],
+      sourceByChain: s.sourceByChain || {},
     };
+    if (finiteNftSupplyCount(baseSupply?.totalMinted) == null) {
+      baseSupply = cachedNftChainSupply('base', baseSupply?.maxSupply || NFT_MAX_SUPPLY, 'global_cache_fallback') || baseSupply;
+    }
+    if (finiteNftSupplyCount(solanaSupply?.totalMinted) == null || solanaSupply?.source !== 'rpc') {
+      solanaSupply = cachedNftChainSupply('solana', solanaSupply?.maxSupply || solanaMaxSupply, 'global_cache_fallback') || solanaSupply;
+    }
   } catch (err) {
     console.warn('[NFT] failed to read global supply', err?.message || err);
   }
@@ -10081,8 +10325,7 @@ router.get('/admin/nft-supply', adminAuth, async (req, res) => {
   try {
     // Force-refresh ignores the in-memory 10s cache the quote endpoints
     // hit — admins want the on-chain truth, not stale data.
-    _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
-    const supply = await readGlobalNftSupply();
+    const supply = await readGlobalNftSupply({ force: true });
     res.set('Cache-Control', 'no-store');
     res.json({
       cap: NFT_GLOBAL_SUPPLY_CAP,
@@ -10090,6 +10333,11 @@ router.get('/admin/nft-supply', adminAuth, async (req, res) => {
       remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - supply.total),
       perChain: supply.perChain,
       fetched_at: new Date(supply.fetchedAt).toISOString(),
+      synced_at: nftSupplyIso(supply.syncedAt),
+      source: supply.source,
+      live_chains: supply.liveChains || [],
+      fallback_chains: supply.fallbackChains || [],
+      source_by_chain: supply.sourceByChain || {},
     });
   } catch (err) {
     res.status(500).json({ error: err?.message || 'nft supply read failed' });
@@ -10098,14 +10346,15 @@ router.get('/admin/nft-supply', adminAuth, async (req, res) => {
 
 router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
   try {
-    _nftGlobalSupplyCache = { fetchedAt: 0, perChain: {}, total: 0 };
-    const supply = await readGlobalNftSupply();
+    const supply = await readGlobalNftSupply({ force: true });
     const chainOrder = ['base', 'arbitrum', 'monad', 'aptos', 'solana'];
     const perChainSupply = chainOrder.map((chain) => ({
       chain,
       count: Number(supply.perChain?.[chain]) || 0,
       live: supply.perChainRaw?.[chain] != null,
       raw: supply.perChainRaw?.[chain] ?? null,
+      source: supply.sourceByChain?.[chain] || null,
+      synced_at: nftSupplyIso(supply.chainSyncedAt?.[chain]),
     }));
 
     const bridgeSummary = db.db.prepare(`
@@ -10234,6 +10483,10 @@ router.get('/admin/nft-analytics', adminAuth, async (req, res) => {
         total: supply.total,
         remaining: Math.max(0, NFT_GLOBAL_SUPPLY_CAP - supply.total),
         per_chain: perChainSupply,
+        source: supply.source,
+        synced_at: nftSupplyIso(supply.syncedAt),
+        live_chains: supply.liveChains || [],
+        fallback_chains: supply.fallbackChains || [],
       },
       bridges: {
         summary: {
