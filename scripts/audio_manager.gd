@@ -2,6 +2,7 @@ extends Node
 
 const LOADING_TRACK := "res://Musik/base/loading_the_game.mp3"
 const BASE_TRACK := "res://Musik/base/base_theme.mp3"
+const BASE_AMBIENT_TRACK := "res://Musik/base/Abient.mp3"
 const PRE_ATTACK_TRACK := "res://Musik/fight/comfort_before_attack.ogg"
 const FIGHT_TRACKS := [
 	"res://Musik/fight/fight_1.mp3",
@@ -10,9 +11,11 @@ const FIGHT_TRACKS := [
 const RESULT_TRACK := "res://Musik/fight/result.mp3"
 
 const MUSIC_VOLUME_DB := -9.0
+const BASE_AMBIENT_VOLUME_DB := MUSIC_VOLUME_DB - 6.0
 const FADE_SECONDS := 0.45
 
 var _music_player: AudioStreamPlayer
+var _base_ambient_player: AudioStreamPlayer
 var _current_state: String = ""
 var _fade_tween: Tween
 var _music_enabled: bool = true
@@ -28,6 +31,11 @@ func _ready() -> void:
 	_music_player.bus = "Master"
 	_music_player.volume_db = MUSIC_VOLUME_DB
 	add_child(_music_player)
+	_base_ambient_player = AudioStreamPlayer.new()
+	_base_ambient_player.name = "BaseAmbientPlayer"
+	_base_ambient_player.bus = "Master"
+	_base_ambient_player.volume_db = BASE_AMBIENT_VOLUME_DB
+	add_child(_base_ambient_player)
 	play_loading()
 
 
@@ -37,11 +45,15 @@ func _exit_tree() -> void:
 	if _music_player:
 		_music_player.stop()
 		_music_player.stream = null
+	if _base_ambient_player:
+		_base_ambient_player.stop()
+		_base_ambient_player.stream = null
 
 
 func play_loading() -> void:
 	if not _music_enabled:
 		return
+	_stop_base_ambient()
 	_play_state("loading", LOADING_TRACK, false)
 
 
@@ -49,11 +61,13 @@ func play_base() -> void:
 	if not _music_enabled:
 		return
 	_play_state("base", BASE_TRACK, true)
+	_play_base_ambient()
 
 
 func play_pre_attack() -> void:
 	if not _music_enabled:
 		return
+	_stop_base_ambient()
 	_play_state("pre_attack", PRE_ATTACK_TRACK, true)
 
 
@@ -62,6 +76,7 @@ func play_fight() -> void:
 		return
 	if _current_state == "fight":
 		return
+	_stop_base_ambient()
 	var fight_track := _pick_fight_track()
 	if fight_track == "":
 		return
@@ -71,6 +86,7 @@ func play_fight() -> void:
 func play_result() -> void:
 	if not _music_enabled:
 		return
+	_stop_base_ambient()
 	_play_state("result", RESULT_TRACK, false)
 
 
@@ -111,6 +127,7 @@ func stop_music() -> void:
 	if _fade_tween and _fade_tween.is_valid():
 		_fade_tween.kill()
 	_music_player.stop()
+	_stop_base_ambient()
 
 
 func _play_state(state: String, path: String, loop: bool) -> void:
@@ -130,6 +147,24 @@ func _pick_fight_track() -> String:
 		push_warning("AudioManager: no fight tracks configured")
 		return ""
 	return FIGHT_TRACKS.pick_random()
+
+
+func _play_base_ambient() -> void:
+	if _base_ambient_player.playing:
+		return
+	var stream: AudioStream = load(BASE_AMBIENT_TRACK) as AudioStream
+	if stream == null:
+		push_warning("AudioManager: missing base ambient track %s" % BASE_AMBIENT_TRACK)
+		return
+	_set_stream_loop(stream, true)
+	_base_ambient_player.stream = stream
+	_base_ambient_player.volume_db = BASE_AMBIENT_VOLUME_DB
+	_base_ambient_player.play()
+
+
+func _stop_base_ambient() -> void:
+	if _base_ambient_player:
+		_base_ambient_player.stop()
 
 
 func _fade_to_stream(stream: AudioStream) -> void:
