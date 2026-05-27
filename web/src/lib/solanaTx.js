@@ -96,13 +96,29 @@ function isPhoenixTpslDiagnostic(label, type) {
     && /^(attempt_start|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
 }
 
+function isMarketplaceSeekerListingDiagnostic(label, type) {
+  return /^custodial_marketplace\.deposit_solana/i.test(String(label || ''))
+    && /^(attempt_start|attempt_error|signed|confirmed|status_ok|rebroadcast|late_status_check)$/i.test(String(type || ''));
+}
+
 function logTx(label, type, data = {}, level = 'info') {
-  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type)) return;
+  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type) && !isMarketplaceSeekerListingDiagnostic(label, type)) return;
   const payload = { label, ...data };
   if (/^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || '')) && payload.signature_short && !payload.txid_short) {
     payload.txid_short = payload.signature_short;
   }
+  const reportMarketplaceSeeker = isMarketplaceSeekerListingDiagnostic(label, type)
+    && /^(attempt_start|attempt_error|signed|confirmed)$/i.test(String(type || ''));
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
+  if (reportMarketplaceSeeker) {
+    try {
+      reportClientEvent(`marketplace.seeker.tx.${type}`, payload, {
+        level,
+        source: 'marketplace.seeker.tx',
+        message: `marketplace.seeker.tx.${type}`,
+      });
+    } catch {}
+  }
   try {
     const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
     console[method](`[solana-tx] ${label} ${type}`, payload);

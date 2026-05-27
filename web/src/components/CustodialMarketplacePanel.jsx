@@ -14,8 +14,13 @@ import {
   releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
 import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
-import { addClientBreadcrumb } from '../lib/clientLogger';
-import { isSolanaMobileWalletAdapter } from '../lib/solanaSeekerTx';
+import { addClientBreadcrumb, reportClientEvent } from '../lib/clientLogger';
+import {
+  isSolanaMobileWalletAdapter,
+  solanaWalletAdapterIdentity,
+  solanaWalletAdapterName,
+  solanaWalletAdapterUrl,
+} from '../lib/solanaSeekerTx';
 
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
@@ -41,6 +46,83 @@ function rawErrorMessage(err) {
   return err?.shortMessage || err?.message || String(err || '');
 }
 
+function errorDebug(err) {
+  const body = err?.body || {};
+  return {
+    name: err?.name || null,
+    status: err?.status || body?.status || null,
+    code: err?.code || err?.cause?.code || null,
+    message: rawErrorMessage(err),
+    bodyError: body?.error || null,
+    causeName: err?.cause?.name || null,
+    causeMessage: err?.cause?.message || null,
+  };
+}
+
+function browserDebugSnapshot() {
+  if (typeof window === 'undefined') return {};
+  const nav = window.navigator || {};
+  const doc = window.document || {};
+  return {
+    online: nav.onLine,
+    platform: nav.platform || null,
+    userAgent: nav.userAgent || null,
+    visibility: doc.visibilityState || null,
+    standalone: !!window.matchMedia?.('(display-mode: standalone)')?.matches,
+    width: window.innerWidth || null,
+    height: window.innerHeight || null,
+    devicePixelRatio: window.devicePixelRatio || null,
+  };
+}
+
+function solanaWalletDebugSnapshot(solWallet) {
+  return {
+    isMobileWalletAdapter: isSolanaMobileWalletAdapter(solWallet),
+    adapterName: solanaWalletAdapterName(solWallet) || null,
+    adapterUrl: solanaWalletAdapterUrl(solWallet) || null,
+    adapterIdentity: solanaWalletAdapterIdentity(solWallet) || null,
+    publicKey: solWallet?.publicKey?.toBase58?.() || null,
+    connected: solWallet?.connected ?? null,
+    connecting: solWallet?.connecting ?? null,
+    readyState: solWallet?.readyState || solWallet?.wallet?.adapter?.readyState || null,
+    walletClientType: solWallet?.walletClientType || null,
+    source: solWallet?.source || null,
+    supportedTransactionVersions: solWallet?.supportedTransactionVersions
+      ? Array.from(solWallet.supportedTransactionVersions).map(String)
+      : null,
+  };
+}
+
+function nftDebugSnapshot(nft) {
+  return {
+    chain: nft?.chain || null,
+    standard: nft?.standard || nft?.tokenStandard || null,
+    assetId: tokenAssetId(nft) || null,
+    tokenId: nft?.tokenId || null,
+    mint: nft?.mint || null,
+    tokenAddress: nft?.tokenAddress || null,
+    tokenAccount: nft?.tokenAccount || null,
+    ownerHint: tokenOwnerHint(nft) || null,
+    collection: nft?.collection || nft?.collectionAddress || null,
+    level: nft?.level || null,
+    source: nft?.source || null,
+    cached: nft?.cached ?? null,
+  };
+}
+
+function reportSeekerListingEvent(type, data = {}, solWallet, level = 'info') {
+  if (!isSolanaMobileWalletAdapter(solWallet)) return;
+  reportClientEvent(`marketplace.seeker.list.${type}`, {
+    ...data,
+    solanaWallet: solanaWalletDebugSnapshot(solWallet),
+    browser: browserDebugSnapshot(),
+  }, {
+    level,
+    source: 'marketplace.seeker.list',
+    message: `marketplace.seeker.list.${type}`,
+  });
+}
+
 function listingErrorMessage(err, solWallet) {
   const base = rawErrorMessage(err);
   const text = [
@@ -51,7 +133,7 @@ function listingErrorMessage(err, solWallet) {
   ].filter(Boolean).join('\n');
   if (!isSolanaMobileWalletAdapter(solWallet)) return base;
   if (/user rejected|rejected the request|denied|cancelled|canceled|declined/i.test(text)) return base;
-  if (!/mobile wallet adapter|seeker|seed vault|local network|network access|wallet not found|browser not supported|unknown|simulate|simulation|signandsend|sign and send|authorization|association/i.test(text)) return base;
+  if (!/mobile wallet adapter|seeker|seed vault|local network|network access|wallet not found|browser not supported|unknown|simulate|simulation|signandsend|sign and send|authorization|association|signature verification failed|missing signature/i.test(text)) return base;
   return 'Seeker wallet could not finish this Solana listing. Use Android Chrome/PWA, allow Local Network Access, and if the wallet shows Unknown, enable "I trust this site" before confirming.';
 }
 
@@ -501,6 +583,18 @@ export default function CustodialMarketplacePanel({
     const sellerWallet = walletForChain(assetChain, walletMap);
     if (!sellerWallet) throw new Error(`Connect ${CHAIN_LABEL[assetChain] || assetChain} wallet to transfer this NFT.`);
     const nft = nftOverride || ownedNftForOrder(order) || null;
+    reportSeekerListingEvent('deposit_start', {
+      orderId: order?.id || null,
+      orderStatus: order?.status || null,
+      assetChain,
+      assetId: order?.assetId || tokenAssetId(nft),
+      assetStandard: order?.assetStandard || nft?.standard || null,
+      vaultChain: order?.vaultChain || null,
+      vaultAddress: order?.vaultAddress || null,
+      sellerWallet,
+      nft: nftDebugSnapshot(nft),
+      trackFlow,
+    }, solWallet);
     if (trackFlow) {
       updateListingFlow({
         open: true,
@@ -512,15 +606,38 @@ export default function CustodialMarketplacePanel({
         error: null,
       });
     }
-    const deposited = await depositNftToCustody({
-      evmWallet,
-      solWallet,
-      aptosWallet,
-      token: sessionToken,
-      order,
-      nft,
-      owner: sellerWallet,
-    });
+    let deposited;
+    try {
+      deposited = await depositNftToCustody({
+        evmWallet,
+        solWallet,
+        aptosWallet,
+        token: sessionToken,
+        order,
+        nft,
+        owner: sellerWallet,
+      });
+    } catch (err) {
+      reportSeekerListingEvent('deposit_failed', {
+        orderId: order?.id || null,
+        assetChain,
+        assetId: order?.assetId || tokenAssetId(nft),
+        assetStandard: order?.assetStandard || nft?.standard || null,
+        vaultAddress: order?.vaultAddress || null,
+        sellerWallet,
+        nft: nftDebugSnapshot(nft),
+        error: errorDebug(err),
+      }, solWallet, 'warn');
+      throw err;
+    }
+    reportSeekerListingEvent('deposit_tx_ok', {
+      orderId: order?.id || null,
+      assetChain,
+      assetId: order?.assetId || tokenAssetId(nft),
+      txHash: deposited?.txHash || null,
+      confirmedStatus: deposited?.confirmed?.order?.status || null,
+      sellerWallet,
+    }, solWallet);
     const confirmedOrder = deposited?.confirmed?.order || order;
     if (trackFlow) {
       updateListingFlow({
@@ -541,6 +658,13 @@ export default function CustodialMarketplacePanel({
         message: 'Your NFT is live in the marketplace.',
       });
     }
+    reportSeekerListingEvent('active_ok', {
+      orderId: activeOrder?.id || order?.id || null,
+      assetChain,
+      assetId: activeOrder?.assetId || order?.assetId || tokenAssetId(nft),
+      txHash: deposited?.txHash || null,
+      status: activeOrder?.status || null,
+    }, solWallet);
     addClientBreadcrumb('marketplace.custodial.deposit.success', {
       orderId: order?.id,
       assetChain,
@@ -585,11 +709,35 @@ export default function CustodialMarketplacePanel({
     const connectedSellerWallet = walletForChain(assetChain, walletMap);
     if (!connectedSellerWallet) { setNotice(`Connect ${CHAIN_LABEL[assetChain] || assetChain} wallet to sell.`); return; }
     const ownerHint = tokenOwnerHint(selectedNft);
+    reportSeekerListingEvent('start', {
+      assetChain,
+      assetId,
+      connectedSellerWallet,
+      ownerHint: ownerHint || null,
+      nft: nftDebugSnapshot(selectedNft),
+      priceUsdc: priceInput,
+      supportedPayments,
+    }, solWallet);
     if (ownerHint && !chainAddressEqual(assetChain, ownerHint, connectedSellerWallet)) {
-      setNotice(`Connected ${CHAIN_LABEL[assetChain] || assetChain} wallet ${shortAddr(connectedSellerWallet, 6, 4)} is not the NFT owner ${shortAddr(ownerHint, 6, 4)}.`);
-      return;
+      addClientBreadcrumb('marketplace.custodial.owner_hint_mismatch', {
+        assetChain,
+        assetId,
+        connectedSellerWallet: shortAddr(connectedSellerWallet, 8, 6),
+        ownerHint: shortAddr(ownerHint, 8, 6),
+      }, 'warn');
+      reportSeekerListingEvent('owner_hint_mismatch', {
+        assetChain,
+        assetId,
+        connectedSellerWallet,
+        ownerHint,
+        nft: nftDebugSnapshot(selectedNft),
+      }, solWallet, 'warn');
+      if (assetChain !== 'solana') {
+        setNotice(`Connected ${CHAIN_LABEL[assetChain] || assetChain} wallet ${shortAddr(connectedSellerWallet, 6, 4)} is not the NFT owner ${shortAddr(ownerHint, 6, 4)}.`);
+        return;
+      }
     }
-    const sellerWallet = ownerHint || connectedSellerWallet;
+    const sellerWallet = connectedSellerWallet;
     const payoutChain = supportedPayments.includes(assetChain) ? assetChain : supportedPayments[0] || 'base';
     const payoutAddress = walletForChain(payoutChain, walletMap);
     if (!payoutAddress) { setNotice(`Connect ${CHAIN_LABEL[payoutChain] || payoutChain} wallet for payout.`); return; }
@@ -610,15 +758,49 @@ export default function CustodialMarketplacePanel({
     try {
       let created;
       try {
+        addClientBreadcrumb('marketplace.custodial.list.prepare', {
+          assetChain,
+          assetId: shortAddr(assetId, 8, 6),
+          connectedSellerWallet: shortAddr(connectedSellerWallet, 8, 6),
+          ownerHint: ownerHint ? shortAddr(ownerHint, 8, 6) : null,
+          sellerWallet: shortAddr(sellerWallet, 8, 6),
+          payoutChain,
+        });
+        reportSeekerListingEvent('server_create_start', {
+          assetChain,
+          assetId,
+          connectedSellerWallet,
+          ownerHint: ownerHint || null,
+          sellerWallet,
+          payoutChain,
+          payoutAddress,
+          priceUsdc: priceInput,
+          nft: nftDebugSnapshot(selectedNft),
+        }, solWallet);
         created = await createCustodialListing({
           token: sessionToken,
           assetChain,
           assetId,
           sellerWallet,
+          connectedSellerWallet,
           sellerPayoutChain: payoutChain,
           sellerPayoutAddress: payoutAddress,
           priceUsdc: priceInput,
         });
+        reportSeekerListingEvent('server_create_ok', {
+          orderId: created?.order?.id || null,
+          orderStatus: created?.order?.status || null,
+          assetChain,
+          assetId,
+          sellerWallet,
+          onServerSellerWallet: created?.order?.sellerWallet || null,
+          vaultAddress: created?.order?.vaultAddress || null,
+          assetStandard: created?.order?.assetStandard || null,
+          level: created?.order?.level || null,
+          resumed: !!created?.resumed,
+          recovered: !!created?.recovered,
+          alreadyListed: !!created?.alreadyListed,
+        }, solWallet);
         updateListingFlow({
           order: created?.order || null,
           steps: { details: 'complete', transfer: 'active' },
@@ -629,6 +811,14 @@ export default function CustodialMarketplacePanel({
       } catch (err) {
         const pendingOrder = err?.body?.order;
         if (Number(err?.status) === 409 && pendingOrder?.status === 'awaiting_deposit') {
+          reportSeekerListingEvent('server_pending_listing', {
+            orderId: pendingOrder?.id || null,
+            assetChain,
+            assetId,
+            sellerWallet,
+            orderStatus: pendingOrder?.status || null,
+            error: errorDebug(err),
+          }, solWallet, 'warn');
           updateListingFlow({
             order: pendingOrder,
             steps: { details: 'complete', transfer: 'active' },
@@ -678,6 +868,15 @@ export default function CustodialMarketplacePanel({
       failListingFlow(msg, err?.order || null);
       setNotice(msg.slice(0, 240));
       addClientBreadcrumb('marketplace.custodial.list.failed', { message: rawErrorMessage(err), displayed: msg }, 'warn');
+      reportSeekerListingEvent('failed', {
+        assetChain: selectedNft?.chain || null,
+        assetId: selectedNft ? tokenAssetId(selectedNft) : null,
+        ownerHint: selectedNft ? tokenOwnerHint(selectedNft) || null : null,
+        connectedSellerWallet: selectedNft ? walletForChain(selectedNft.chain, walletMap) : null,
+        displayedMessage: msg,
+        nft: nftDebugSnapshot(selectedNft),
+        error: errorDebug(err),
+      }, solWallet, 'warn');
     } finally {
       setBusy(null);
     }

@@ -1896,7 +1896,7 @@ function FuturesPanel() {
       return;
     }
     if (dex === 'phoenix') {
-      setLocalAlert('Phoenix new orders use cross margin here; existing isolated subaccounts are shown on positions.');
+      setLocalAlert('Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets.');
       return;
     }
     if (dex === 'pacifica' && !pacAgent && bindAgent) {
@@ -2268,7 +2268,7 @@ function FuturesPanel() {
                 : dex === 'monad'
                 ? 'Perpl uses isolated margin per position in this integration'
                 : dex === 'phoenix'
-                ? 'Phoenix new orders use cross margin; existing isolated subaccounts are shown on positions'
+                ? 'Phoenix uses cross margin for normal markets and isolated subaccounts automatically for isolated-only markets'
                 : dex === 'hyperliquid'
                 ? 'Hyperliquid uses cross margin in your Hyperliquid account'
                 : dex === 'risex'
@@ -2278,7 +2278,7 @@ function FuturesPanel() {
                 : 'Avantis uses isolated margin per trade (no cross mode)'}
             >
               <span style={{color: (dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? '#4CAF50' : '#FF9800', fontWeight: 900}}>
-                {(dex === 'decibel' || dex === 'phoenix' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 'Cross' : 'Isolated'}
+                {dex === 'phoenix' ? 'Auto' : (dex === 'decibel' || dex === 'hyperliquid' || dex === 'risex' || dex === 'nado') ? 'Cross' : 'Isolated'}
               </span>
             </div>
           ) : (

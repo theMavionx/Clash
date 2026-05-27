@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
+import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MAX_SUBACCOUNTS, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
@@ -37,6 +37,9 @@ const PHOENIX_TRADER_STATE_POST_TX_REST_FALLBACK_MS = 8_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
+const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
+const PHOENIX_ISOLATED_FEE_BUFFER_RATE = 0.0001;
+const PHOENIX_ISOLATED_TRANSFER_BUFFER_USDC = 0.005;
 const PHOENIX_CONDITIONAL_ORDER_CAPACITY = 16;
 const PHOENIX_CONDITIONAL_ORDER_ACCOUNT_BASE_BYTES = 224;
 const PHOENIX_CONDITIONAL_ORDER_BYTES = 112;
@@ -328,6 +331,14 @@ function toRawUsdc(amount) {
   return raw;
 }
 
+function toRawUsdcCeil(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive USDC amount');
+  const raw = BigInt(Math.ceil((n * 10 ** USDC_DECIMALS) - 1e-9));
+  if (raw <= 0n) throw new Error(`Minimum amount is ${1 / 10 ** USDC_DECIMALS} USDC`);
+  return raw;
+}
+
 function formatUsdcAmount(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '0';
@@ -380,6 +391,54 @@ function marketOrderPriceLimitUsd(side, mark) {
     ? 1 + DEFAULT_MARKET_ORDER_SLIPPAGE
     : 1 - DEFAULT_MARKET_ORDER_SLIPPAGE;
   return String(Math.max(0, n * multiplier));
+}
+
+function isPhoenixIsolatedOnlyMarket(market) {
+  return !!(market?.isolated_only ?? market?._phoenix?.isolatedOnly);
+}
+
+function phoenixTakerFeeRate(market) {
+  const fee = Number(market?.taker_fee ?? market?._phoenix?.takerFee ?? market?._phoenix?.fees?.takerFee);
+  return Number.isFinite(fee) && fee >= 0 ? fee : PHOENIX_DEFAULT_TAKER_FEE_RATE;
+}
+
+function phoenixRequiredIsolatedTransferUsdc({ baseUnits, priceUsd, leverage, market }) {
+  const qty = Number(baseUnits);
+  const price = Number(priceUsd);
+  const lev = Math.max(1, Number(leverage) || 1);
+  if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(price) || price <= 0) return 0;
+  const notional = qty * price;
+  const feeRate = Math.max(phoenixTakerFeeRate(market), PHOENIX_DEFAULT_TAKER_FEE_RATE)
+    + PHOENIX_ISOLATED_FEE_BUFFER_RATE;
+  return (notional / lev) + (notional * feeRate) + PHOENIX_ISOLATED_TRANSFER_BUFFER_USDC;
+}
+
+function phoenixSubaccountIndex(value) {
+  const n = Number(value?.subaccountIndex ?? value?.traderSubaccountIndex ?? value?._phoenixSubaccountIndex);
+  return Number.isInteger(n) && n >= 0 ? n : 0;
+}
+
+function phoenixSubaccountSymbols(subaccount) {
+  const symbols = new Set();
+  for (const position of subaccount?.positions || []) {
+    const symbol = phoenixSymbol(position?.symbol);
+    const base = firstFinite(position?.basePositionUnits, position?.basePositionLots, 0);
+    if (symbol && Number(base || 0) !== 0) symbols.add(symbol);
+  }
+  for (const group of subaccount?.orders || []) {
+    const groupSymbol = phoenixSymbol(group?.symbol);
+    const rows = Array.isArray(group?.orders) ? group.orders : [];
+    if (groupSymbol && rows.length) symbols.add(groupSymbol);
+    for (const order of rows) {
+      const orderSymbol = phoenixSymbol(order?.symbol || group?.symbol);
+      if (orderSymbol) symbols.add(orderSymbol);
+    }
+  }
+  return symbols;
+}
+
+function phoenixSubaccountIsEmpty(subaccount) {
+  return phoenixSubaccountSymbols(subaccount).size === 0;
 }
 
 function rawPhoenixPositionAmount(position, market) {
@@ -1446,6 +1505,71 @@ export function usePhoenix() {
       maxAttempts,
     });
   }, [ownerPk, walletMismatch, walletMismatchMessage, connection, sendTransaction, signTransaction, solWallet, privyActive, privySendTx, privySignTx, privyWalletObj]);
+
+  const resolvePhoenixIsolatedSubaccount = useCallback(async (orderClient, symbol) => {
+    if (!walletAddr) throw new Error('Wallet not connected');
+    const target = phoenixSymbol(symbol);
+    const positionMatch = positionsRef.current.find(position => (
+      phoenixSymbol(position?.symbol) === target
+      && phoenixSubaccountIndex(position) > 0
+    ));
+    if (positionMatch) {
+      return { subaccountIndex: phoenixSubaccountIndex(positionMatch), registerIx: null, source: 'position' };
+    }
+
+    const orderMatch = ordersRef.current.find(order => (
+      phoenixSymbol(order?.symbol) === target
+      && phoenixSubaccountIndex(order) > 0
+    ));
+    if (orderMatch) {
+      return { subaccountIndex: phoenixSubaccountIndex(orderMatch), registerIx: null, source: 'order' };
+    }
+
+    const subaccounts = Array.isArray(subaccountsRef.current) ? subaccountsRef.current : [];
+    const symbolMatch = subaccounts.find(subaccount => (
+      phoenixSubaccountIndex(subaccount) > 0
+      && phoenixSubaccountSymbols(subaccount).has(target)
+    ));
+    if (symbolMatch) {
+      return { subaccountIndex: phoenixSubaccountIndex(symbolMatch), registerIx: null, source: 'snapshot' };
+    }
+
+    const emptyMatch = subaccounts.find(subaccount => (
+      phoenixSubaccountIndex(subaccount) > 0
+      && phoenixSubaccountIsEmpty(subaccount)
+    ));
+    if (emptyMatch) {
+      return { subaccountIndex: phoenixSubaccountIndex(emptyMatch), registerIx: null, source: 'empty' };
+    }
+
+    const used = new Set([
+      ...subaccounts.map(phoenixSubaccountIndex),
+      ...positionsRef.current.map(phoenixSubaccountIndex),
+      ...ordersRef.current.map(phoenixSubaccountIndex),
+    ].filter(index => index > 0));
+    const maxSubaccounts = Math.max(2, Number(MAX_SUBACCOUNTS) || 100);
+    for (let index = 1; index < maxSubaccounts; index += 1) {
+      if (used.has(index)) continue;
+      try {
+        const registerIx = await orderClient.ixs.buildRegisterTrader({
+          authority: walletAddr,
+          marginType: MarginType.Isolated,
+          traderPdaIndex: 0,
+          traderSubaccountIndex: index,
+        });
+        return { subaccountIndex: index, registerIx, source: 'new' };
+      } catch (error) {
+        const text = String(error?.message || error || '');
+        if (/already|exist|initialized/i.test(text)) {
+          used.add(index);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error(`No Phoenix isolated subaccount slot available for ${target}`);
+  }, [walletAddr]);
 
   const ensureConditionalOrdersAccountIx = useCallback(async (subaccountIndex = 0, orderClient = client) => {
     if (!walletAddr) throw new Error('Wallet not connected');
@@ -2667,6 +2791,7 @@ export function usePhoenix() {
         const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage);
         const priceLimitUsd = marketOrderPriceLimitUsd(sideEnum, mark);
         const signature = await withFreshPhoenixMetadataRetry('phoenix.market', phx, async (orderClient) => {
+          const market = marketsBySymbolRef.current[phx];
           const packet = await orderClient.orderPackets.buildMarketOrderPacket({
             symbol: phx,
             side: sideEnum,
@@ -2675,6 +2800,48 @@ export function usePhoenix() {
             minBaseUnitsToFill: PHOENIX_MARKET_MIN_BASE_UNITS_TO_FILL,
             minQuoteLotsToFill: PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL,
           });
+          if (isPhoenixIsolatedOnlyMarket(market)) {
+            const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx);
+            const transferUsdc = Math.max(
+              Number(amount),
+              phoenixRequiredIsolatedTransferUsdc({
+                baseUnits,
+                priceUsd: priceLimitUsd || mark,
+                leverage,
+                market,
+              })
+            );
+            const transferIx = await orderClient.ixs.buildTransferCollateral({
+              authority: walletAddr,
+              traderPdaIndex: 0,
+              srcSubaccountIndex: 0,
+              dstSubaccountIndex: isolated.subaccountIndex,
+              amount: toRawUsdcCeil(transferUsdc),
+            });
+            const orderIx = await orderClient.ixs.placeMarketOrder({
+              authority: walletAddr,
+              symbol: phx,
+              orderPacket: packet,
+              traderPdaIndex: 0,
+              traderSubaccountIndex: isolated.subaccountIndex,
+            });
+            const sweepIx = await orderClient.ixs.buildTransferCollateralChildToParent({
+              authority: walletAddr,
+              traderPdaIndex: 0,
+              childSubaccountIndex: isolated.subaccountIndex,
+            });
+            console.info('[Phoenix] isolated market order path', {
+              symbol: phx,
+              subaccount_index: isolated.subaccountIndex,
+              subaccount_source: isolated.source,
+              transfer_usdc: formatUsdcAmount(transferUsdc),
+            });
+            return sendIxs(
+              [isolated.registerIx, transferIx, orderIx, sweepIx].filter(Boolean),
+              'phoenix.market.isolated',
+              { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT }
+            );
+          }
           const ix = await orderClient.ixs.placeMarketOrder({
             authority: walletAddr,
             symbol: phx,
@@ -2717,7 +2884,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, reportPhoenixTradeTx, resolvePhoenixIsolatedSubaccount, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -2735,12 +2902,56 @@ export function usePhoenix() {
         const ok = await activate();
         if (!ok) throw new Error('Phoenix account is not ready');
         const signature = await withFreshPhoenixMetadataRetry('phoenix.limit', phx, async (orderClient) => {
+          const market = marketsBySymbolRef.current[phx];
+          const baseUnits = buildBaseUnitsFromMargin(phx, amount, leverage, Number(price));
           const packet = await orderClient.orderPackets.buildLimitOrderPacket({
             symbol: phx,
             side: sideToPhoenix(side),
             priceUsd: String(price),
-            baseUnits: buildBaseUnitsFromMargin(phx, amount, leverage, Number(price)),
+            baseUnits,
           });
+          if (isPhoenixIsolatedOnlyMarket(market)) {
+            const isolated = await resolvePhoenixIsolatedSubaccount(orderClient, phx);
+            const transferUsdc = Math.max(
+              Number(amount),
+              phoenixRequiredIsolatedTransferUsdc({
+                baseUnits,
+                priceUsd: price,
+                leverage,
+                market,
+              })
+            );
+            const transferIx = await orderClient.ixs.buildTransferCollateral({
+              authority: walletAddr,
+              traderPdaIndex: 0,
+              srcSubaccountIndex: 0,
+              dstSubaccountIndex: isolated.subaccountIndex,
+              amount: toRawUsdcCeil(transferUsdc),
+            });
+            const orderIx = await orderClient.ixs.buildPlaceLimitOrder({
+              authority: walletAddr,
+              symbol: phx,
+              orderPacket: packet,
+              traderPdaIndex: 0,
+              traderSubaccountIndex: isolated.subaccountIndex,
+            });
+            const sweepIx = await orderClient.ixs.buildTransferCollateralChildToParent({
+              authority: walletAddr,
+              traderPdaIndex: 0,
+              childSubaccountIndex: isolated.subaccountIndex,
+            });
+            console.info('[Phoenix] isolated limit order path', {
+              symbol: phx,
+              subaccount_index: isolated.subaccountIndex,
+              subaccount_source: isolated.source,
+              transfer_usdc: formatUsdcAmount(transferUsdc),
+            });
+            return sendIxs(
+              [isolated.registerIx, transferIx, orderIx, sweepIx].filter(Boolean),
+              'phoenix.limit.isolated',
+              { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT }
+            );
+          }
           const ix = await orderClient.ixs.buildPlaceLimitOrder({
             authority: walletAddr,
             symbol: phx,
@@ -2761,7 +2972,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, refreshTraderStateSoon, resolvePhoenixIsolatedSubaccount, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const closePosition = useCallback(async (symbol, side, amount, _pairIndex = null, _tradeIndex = null, fullClose = false) => {
     void _pairIndex;

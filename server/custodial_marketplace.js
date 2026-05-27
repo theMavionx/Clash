@@ -2012,6 +2012,10 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const vault = config.vaults[assetChain];
       if (!vault?.address) throw httpError(503, `${shortLabel(assetChain)} custody vault is not configured`);
       let sellerWallet = normalizeAddressForChain(assetChain, req.body?.sellerWallet || req.body?.owner || req.player.wallet, 'Seller wallet');
+      const connectedSellerWallet = normalizeAddressForChainSafe(
+        assetChain,
+        req.body?.connectedSellerWallet || req.body?.connectedWallet || req.body?.walletAddress,
+      );
       const assetId = normalizeAssetIdForChain(assetChain, req.body?.assetId || req.body?.mint || req.body?.tokenId || req.body?.tokenAddress || '', 'assetId');
       const payoutChain = normalizeChain(req.body?.sellerPayoutChain || assetChain, 'sellerPayoutChain');
       const payoutAddress = normalizeAddressForChain(payoutChain, req.body?.sellerPayoutAddress || sellerWallet, 'Seller payout wallet');
@@ -2054,6 +2058,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
             onChainOwner
             && (
               sameChainAddress(assetChain, onChainOwner, sellerWallet)
+              || sameChainAddress(assetChain, onChainOwner, connectedSellerWallet)
               || sameChainAddress(assetChain, onChainOwner, playerWallet)
             )
           ) {

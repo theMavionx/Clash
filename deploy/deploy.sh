@@ -585,6 +585,13 @@ build_frontend() {
 
     node "$WEB_DIR/write-godot-runtime-manifest.cjs" "$WEB_DIST/godot" "$RELEASE_ID"
 
+    if [ "${CLASH_SKIP_STATIC_COMPRESSION:-0}" = "1" ]; then
+        log "Static compression skipped by CLASH_SKIP_STATIC_COMPRESSION=1"
+        write_owned_assets_manifest
+        preserve_previous_frontend_assets
+        return
+    fi
+
     log "Compressing static assets..."
     STATIC_COMPRESSED=0
     STATIC_REUSED=0

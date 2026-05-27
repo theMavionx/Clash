@@ -85,6 +85,7 @@ export async function createCustodialListing({
   assetChain,
   assetId,
   sellerWallet,
+  connectedSellerWallet,
   sellerPayoutChain,
   sellerPayoutAddress,
   priceUsdc,
@@ -92,7 +93,7 @@ export async function createCustodialListing({
   return apiJson('/api/marketplace/custodial/listings', {
     method: 'POST',
     token,
-    body: { assetChain, assetId, sellerWallet, sellerPayoutChain, sellerPayoutAddress, priceUsdc },
+    body: { assetChain, assetId, sellerWallet, connectedSellerWallet, sellerPayoutChain, sellerPayoutAddress, priceUsdc },
   });
 }
 

@@ -1,6 +1,6 @@
 import { PublicKey } from '@solana/web3.js';
 import { Buffer } from 'buffer';
-import { addClientBreadcrumb } from './clientLogger';
+import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 
 export function shortSolanaAddress(address) {
   const text = String(address || '');
@@ -65,8 +65,34 @@ function base64AddressToBase58(address) {
   }
 }
 
+const MARKETPLACE_SEEKER_LABEL_RE = /^custodial_marketplace\.deposit_solana/i;
+const MARKETPLACE_SEEKER_REPORT_TYPES = new Set([
+  'mwa_open',
+  'mwa_capabilities_failed',
+  'mwa_capabilities',
+  'mwa_authorized',
+  'mwa_sign_and_send_ok',
+  'mwa_sign_and_send_failed',
+  'mwa_sign_and_send_skipped',
+  'mwa_sign_fallback_start',
+  'mwa_signed_fallback_sent',
+]);
+
+function shouldReportMarketplaceSeekerLog(type, data = {}) {
+  return MARKETPLACE_SEEKER_REPORT_TYPES.has(type)
+    && MARKETPLACE_SEEKER_LABEL_RE.test(String(data?.label || ''));
+}
+
 function defaultLog(type, data = {}, level = 'info') {
-  addClientBreadcrumb(`solana.seeker.${type}`, data, level);
+  if (shouldReportMarketplaceSeekerLog(type, data)) {
+    reportClientEvent(`marketplace.seeker.${type}`, data, {
+      level,
+      source: 'marketplace.seeker',
+      message: `marketplace.seeker.${type}`,
+    });
+  } else {
+    addClientBreadcrumb(`solana.seeker.${type}`, data, level);
+  }
   try {
     const method = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
     console[method](`[solana-seeker] ${type}`, data);
@@ -97,7 +123,7 @@ function isSolanaMobileFallbackCandidate(error) {
   const text = solanaMobileErrorText(error);
   if (isUserRejectedSolanaMobileError(error)) return false;
   if (/insufficient|simulation failed|custom program error|instruction error|blockhash|already processed/i.test(text)) return false;
-  return /walletconfig|walletnotready|not implemented|does not support|wallet not found|browser not supported|local network|network access|permission|association|authorization|failed to fetch|networkerror|websocket|signandsend/i
+  return /walletconfig|walletnotready|not implemented|does not support|wallet not found|browser not supported|local network|network access|permission|association|authorization|failed to fetch|networkerror|websocket|signandsend|signature verification failed|missing signature/i
     .test(text);
 }
 
@@ -173,70 +199,85 @@ export async function sendSolanaMobileProtocolTransaction({
       features: Array.isArray(capabilities?.features) ? capabilities.features.slice(0, 12) : null,
     });
 
-    const authorization = await wallet.authorize({
-      chain: 'solana:mainnet',
-      identity: solanaMobileAppIdentity(),
-      features: ['solana:signAndSendTransactions'],
-    });
-    const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address);
-    log('mwa_authorized', {
+    const canSignAndSend = capabilities?.supports_sign_and_send_transactions !== false;
+    let signAndSendError = null;
+    if (canSignAndSend) {
+      try {
+        const authorization = await wallet.authorize({
+          chain: 'solana:mainnet',
+          identity: solanaMobileAppIdentity(),
+          features: ['solana:signAndSendTransactions'],
+        });
+        const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address);
+        log('mwa_authorized', {
+          label,
+          venue: venueLabel,
+          expected_wallet: shortSolanaAddress(expectedAddress),
+          authorized_wallet: shortSolanaAddress(authorizedAddress),
+          account_count: Array.isArray(authorization?.accounts) ? authorization.accounts.length : null,
+          has_auth_token: !!authorization?.auth_token,
+          wallet_uri_base: authorization?.wallet_uri_base || null,
+        });
+        if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
+          throw new Error(`Mobile wallet authorized ${authorizedAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
+        }
+
+        const [signature] = await wallet.signAndSendTransactions({
+          auth_token: authorization.auth_token,
+          transactions: [transaction],
+          commitment: options?.preflightCommitment || 'confirmed',
+          skipPreflight: !!options?.skipPreflight,
+          maxRetries: options?.maxRetries,
+        });
+        log('mwa_sign_and_send_ok', {
+          label,
+          venue: venueLabel,
+          signature_short: shortSolanaAddress(signature),
+        });
+        return signature;
+      } catch (error) {
+        signAndSendError = error;
+        const fallbackCandidate = isSolanaMobileFallbackCandidate(error);
+        log('mwa_sign_and_send_failed', {
+          label,
+          venue: venueLabel,
+          name: error?.name || null,
+          code: error?.code || error?.cause?.code || null,
+          message: error?.message || String(error || ''),
+          fallback_candidate: fallbackCandidate,
+        }, fallbackCandidate ? 'warn' : 'error');
+        if (!connection || !fallbackCandidate) throw error;
+      }
+    } else {
+      log('mwa_sign_and_send_skipped', {
+        label,
+        venue: venueLabel,
+        reason: 'wallet_capability_disabled',
+      }, 'warn');
+    }
+
+    if (!connection) {
+      throw signAndSendError || new Error('Solana connection is not available for Mobile Wallet Adapter signed fallback');
+    }
+    log('mwa_sign_fallback_start', {
       label,
       venue: venueLabel,
-      expected_wallet: shortSolanaAddress(expectedAddress),
-      authorized_wallet: shortSolanaAddress(authorizedAddress),
-      account_count: Array.isArray(authorization?.accounts) ? authorization.accounts.length : null,
-      has_auth_token: !!authorization?.auth_token,
-      wallet_uri_base: authorization?.wallet_uri_base || null,
+      tx_version: txVersion(transaction),
+    }, 'warn');
+    const signAuthorization = await wallet.authorize({
+      chain: 'solana:mainnet',
+      identity: solanaMobileAppIdentity(),
+      features: ['solana:signTransactions'],
     });
-    if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
-      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
+    const signAddress = base64AddressToBase58(signAuthorization?.accounts?.[0]?.address);
+    if (expectedAddress && signAddress && signAddress !== expectedAddress) {
+      throw new Error(`Mobile wallet authorized ${signAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
     }
-
-    try {
-      const [signature] = await wallet.signAndSendTransactions({
-        auth_token: authorization.auth_token,
-        transactions: [transaction],
-        commitment: options?.preflightCommitment || 'confirmed',
-        skipPreflight: !!options?.skipPreflight,
-        maxRetries: options?.maxRetries,
-      });
-      log('mwa_sign_and_send_ok', {
-        label,
-        venue: venueLabel,
-        signature_short: shortSolanaAddress(signature),
-      });
-      return signature;
-    } catch (error) {
-      log('mwa_sign_and_send_failed', {
-        label,
-        venue: venueLabel,
-        name: error?.name || null,
-        code: error?.code || error?.cause?.code || null,
-        message: error?.message || String(error || ''),
-        fallback_candidate: isSolanaMobileFallbackCandidate(error),
-      }, isSolanaMobileFallbackCandidate(error) ? 'warn' : 'error');
-      if (!connection || !isSolanaMobileFallbackCandidate(error)) throw error;
-
-      log('mwa_sign_fallback_start', {
-        label,
-        venue: venueLabel,
-        tx_version: txVersion(transaction),
-      }, 'warn');
-      const signAuthorization = await wallet.authorize({
-        chain: 'solana:mainnet',
-        identity: solanaMobileAppIdentity(),
-        features: ['solana:signTransactions'],
-      });
-      const signAddress = base64AddressToBase58(signAuthorization?.accounts?.[0]?.address);
-      if (expectedAddress && signAddress && signAddress !== expectedAddress) {
-        throw new Error(`Mobile wallet authorized ${signAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
-      }
-      const [signed] = await wallet.signTransactions({
-        auth_token: signAuthorization.auth_token,
-        transactions: [transaction],
-      });
-      return sendSignedTransactionFallback({ signed, connection, options, label, venueLabel, log });
-    }
+    const [signed] = await wallet.signTransactions({
+      auth_token: signAuthorization.auth_token,
+      transactions: [transaction],
+    });
+    return sendSignedTransactionFallback({ signed, connection, options, label, venueLabel, log });
   });
 }
 
@@ -294,7 +335,7 @@ export function buildSolanaWalletTxOptions({
   venueLabel = 'Solana',
   log = defaultLog,
   forceMobileVersionedTransaction = true,
-  preferMobileAdapterSend = true,
+  preferMobileAdapterSend = false,
   preferMobileSignTransaction = false,
   allowMobileProtocolFallback = true,
 }) {
