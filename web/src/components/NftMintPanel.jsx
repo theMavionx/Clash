@@ -32,6 +32,8 @@ const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport:
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const MAX_BATCH_QUANTITY = 10;
+const DEMON_KING_MINT_SOLD_OUT = true;
+const DEMON_KING_DISPLAY_SUPPLY_CAP = 333;
 
 const EVM_CHAIN_ID_BY_NFT_CHAIN = {
   base: BASE_CHAIN_ID,
@@ -355,6 +357,19 @@ function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   };
 }
 
+function getSoldOutDisplaySupplyInfo(supply) {
+  return {
+    ...(supply || {}),
+    title: supply?.title || 'Total Genesis',
+    totalMinted: DEMON_KING_DISPLAY_SUPPLY_CAP,
+    maxSupply: DEMON_KING_DISPLAY_SUPPLY_CAP,
+    remaining: 0,
+    progress: 100,
+    loaded: true,
+    fractionLabel: `${DEMON_KING_DISPLAY_SUPPLY_CAP}/${DEMON_KING_DISPLAY_SUPPLY_CAP}`,
+  };
+}
+
 // Map the player's chosen DEX (set at register time, drives the trading
 // flow) to the chain we'll route their shop purchases through. One DEX
 // per chain — players don't pick the shop chain explicitly; they pay on
@@ -569,6 +584,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const totalSupplyInfo = useMemo(
     () => getTotalSupplyInfo(mintConfig?.global, baseSupplyInfo, solanaSupplyInfo),
     [mintConfig?.global, baseSupplyInfo, solanaSupplyInfo],
+  );
+  const displayedTotalSupplyInfo = useMemo(
+    () => DEMON_KING_MINT_SOLD_OUT ? getSoldOutDisplaySupplyInfo(totalSupplyInfo) : totalSupplyInfo,
+    [totalSupplyInfo],
   );
   const supplyInfo = selectedChain === 'solana' ? solanaSupplyInfo : baseSupplyInfo;
   const solanaConfigured = !!mintConfig?.solana?.candyMachine;
@@ -795,6 +814,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
   const handlePrimary = useCallback(() => {
     const quantity = clampQuantity(mintQuantity);
+    if (DEMON_KING_MINT_SOLD_OUT) {
+      setNotice('Demon King fresh mint is sold out. Bridge and upgrades remain available.');
+      return;
+    }
     if (selected.soon) {
       setNotice('CoP mint opens after token launch.');
       return;
@@ -1046,6 +1069,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
   const primaryState = getPrimaryState({
     selected,
+    soldOut: DEMON_KING_MINT_SOLD_OUT,
     evmAddress,
     evmOnBase,
     solAddress,
@@ -1068,6 +1092,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const evmModalTargetLabel = SHOP_CHAIN_LABEL[evmModalTargetEvmChain] || 'Base';
 
   const contextLine = getContextLine(dex);
+  const demonKingMintSoldOut = DEMON_KING_MINT_SOLD_OUT;
   const canSwitchPaymentChain = activeShopTab === 'resources' || activeShopTab === 'nft';
   const activePaymentChain = activeShopTab === 'resources'
     ? shopChain
@@ -1305,8 +1330,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Demon King</span>
                       <span style={styles.editionTag}>
-                        Genesis supply {formatCount(totalSupplyInfo.maxSupply)}
+                        Genesis supply {formatCount(displayedTotalSupplyInfo.maxSupply)}
                       </span>
+                      {demonKingMintSoldOut && (
+                        <span style={styles.soldOutPill}>SOLD OUT</span>
+                      )}
                       {view === 'shop' && (
                         <button
                           type="button"
@@ -1324,7 +1352,12 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     </div>
                   </div>
 
-                  <SupplyProgress supply={totalSupplyInfo} />
+                  <SupplyProgress supply={displayedTotalSupplyInfo} />
+                  {demonKingMintSoldOut && (
+                    <div style={styles.soldOutBox}>
+                      Demon King fresh mint is sold out. Existing NFTs can still be bridged or upgraded.
+                    </div>
+                  )}
 
                   {NFT_MINT_SUPPORTED.has(selectedChain) ? (
                     <>
@@ -1336,11 +1369,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                               key={option.id}
                               type="button"
                               onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
-                              disabled={option.soon}
+                              disabled={demonKingMintSoldOut || option.soon}
                               style={{
                                 ...styles.optionBtn,
                                 ...(active ? styles.optionBtnActive : null),
-                                ...(option.soon ? styles.optionBtnDisabled : null),
+                                ...((demonKingMintSoldOut || option.soon) ? styles.optionBtnDisabled : null),
                               }}
                             >
                               <span style={styles.optionBadge}>
@@ -1357,7 +1390,9 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                                 )}
                               </span>
                               <span style={styles.optionPrice}>{option.price}</span>
-                              {option.soon && <span style={styles.soonBadge}>SOON</span>}
+                              {demonKingMintSoldOut
+                                ? <span style={styles.soonBadge}>SOLD OUT</span>
+                                : option.soon && <span style={styles.soonBadge}>SOON</span>}
                             </button>
                           );
                         })}
@@ -1368,21 +1403,21 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         value={mintQuantity}
                         onChange={setMintQuantity}
                         max={MAX_BATCH_QUANTITY}
-                        disabled={!!busy}
+                        disabled={demonKingMintSoldOut || !!busy}
                       />
 
                       <button
                         style={{
                           ...styles.mintBtn,
                           ...(primaryState.ready ? styles.mintBtnReady : null),
-                          ...(selected.soon ? styles.mintBtnDisabled : null),
-                          cursor: busy || selected.soon ? 'not-allowed' : 'pointer',
+                          ...((demonKingMintSoldOut || selected.soon) ? styles.mintBtnDisabled : null),
+                          cursor: busy || demonKingMintSoldOut || selected.soon ? 'not-allowed' : 'pointer',
                         }}
                         onClick={handlePrimary}
-                        disabled={!!busy || selected.soon}
+                        disabled={!!busy || demonKingMintSoldOut || selected.soon}
                       >
                         <span style={styles.mintBtnGlyph}>
-                          {tokenLogo(selected.token)
+                          {!demonKingMintSoldOut && tokenLogo(selected.token)
                             ? <img src={tokenLogo(selected.token)} alt={selected.token} style={styles.mintBtnGlyphImg} />
                             : primaryState.glyph}
                         </span>
@@ -2732,7 +2767,8 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
   }
 }
 
-function getPrimaryState({ selected, evmAddress, evmOnBase, solAddress, aptosAddress, preparingPrivySolWallet, solanaConfigured, solanaSaleActive, busy }) {
+function getPrimaryState({ selected, soldOut = false, evmAddress, evmOnBase, solAddress, aptosAddress, preparingPrivySolWallet, solanaConfigured, solanaSaleActive, busy }) {
+  if (soldOut) return { label: 'SOLD OUT', glyph: '!', ready: false };
   if (selected?.soon) return { label: 'CoP soon', glyph: 'C', ready: false };
   if (busy === 'mint') return { label: 'Minting...', glyph: '...', ready: false };
   if (busy === selected.chain) return { label: 'Preparing...', glyph: '...', ready: false };
@@ -2796,7 +2832,9 @@ function SupplyProgress({ supply }) {
   const loaded = !!supply?.loaded;
   const barWidth = loaded ? Math.max(2, Math.min(100, supply.progress)) : 12;
   const remainingText = loaded ? `${formatCount(supply.remaining)} left` : 'Checking chain';
-  const mintedText = loaded ? `${formatCount(supply.totalMinted)} minted` : 'Syncing';
+  const mintedText = loaded
+    ? (supply.fractionLabel || `${formatCount(supply.totalMinted)} minted`)
+    : 'Syncing';
   return (
     <div style={styles.supplyBox}>
       <div style={styles.supplyTop}>
@@ -3874,6 +3912,33 @@ const styles = {
   editionTag: {
     fontSize: 11, fontWeight: 900, color: '#8b6b3f',
     textTransform: 'uppercase', letterSpacing: 0,
+  },
+  soldOutPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 'fit-content',
+    marginTop: 2,
+    padding: '5px 10px',
+    borderRadius: 8,
+    background: '#5C3A21',
+    color: '#fff7df',
+    border: '2px solid #2d1706',
+    fontSize: 11,
+    fontWeight: 900,
+    letterSpacing: 0,
+    boxShadow: '0 2px 5px rgba(0,0,0,0.25)',
+  },
+  soldOutBox: {
+    borderRadius: 8,
+    border: '2px solid #5C3A21',
+    background: '#f2e0ba',
+    color: '#5C3A21',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1.35,
+    textAlign: 'center',
+    padding: '10px 12px',
   },
   contextChip: {
     alignSelf: 'flex-start',
