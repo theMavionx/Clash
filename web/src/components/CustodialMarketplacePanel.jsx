@@ -5,6 +5,7 @@ import {
   cancelCustodialListing,
   createCustodialListing,
   depositNftToCustody,
+  fetchCustodialOrder,
   fetchCustodialListings,
   fetchCustodialMarketplaceConfig,
   fetchMyCustodialOrders,
@@ -17,6 +18,18 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
+const SORT_OPTIONS = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'price_asc', label: 'Lowest' },
+  { value: 'price_desc', label: 'Highest' },
+];
+const LEVEL_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: '1', label: 'L1' },
+  { value: '2', label: 'L2' },
+  { value: '3', label: 'L3' },
+];
 function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
   if (!s) return '';
@@ -71,6 +84,62 @@ function isPaymentPreSubmitError(message) {
   return /reject|denied|cancel|signature verification failed|missing signature|cannot sign|wallet cannot|not enough|insufficient|connect .*wallet|failed to sign/i.test(String(message || ''));
 }
 
+const PURCHASE_STEPS = [
+  { key: 'reservation', label: 'Reservation' },
+  { key: 'payment', label: 'Payment' },
+  { key: 'transfer', label: 'Transfer' },
+  { key: 'received', label: 'NFT received' },
+];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function deliveryAssetId(order) {
+  return String(
+    order?.deliveryAssetId
+    || order?.deliveryAsset?.assetId
+    || (order?.buyerDestChain && order?.assetChain === order?.buyerDestChain ? order?.assetId : '')
+    || ''
+  ).trim();
+}
+
+function ownedTokenMatchesOrder(token, order) {
+  const wantedChain = String(order?.buyerDestChain || '').toLowerCase();
+  const tokenChain = String(token?.chain || wantedChain || '').toLowerCase();
+  if (wantedChain && tokenChain && wantedChain !== tokenChain) return false;
+  const wanted = deliveryAssetId(order);
+  if (!wanted) return false;
+  return tokenAssetId(token).toLowerCase() === wanted.toLowerCase();
+}
+
+function mergePurchaseFlow(prev, patch) {
+  return {
+    ...(prev || {}),
+    ...patch,
+    steps: {
+      ...(prev?.steps || {}),
+      ...(patch.steps || {}),
+    },
+  };
+}
+
+function useCompactMarketplaceLayout() {
+  const read = () => (typeof window !== 'undefined' ? window.innerWidth <= 640 : false);
+  const [compact, setCompact] = useState(read);
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const onResize = () => setCompact(read());
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+  return compact;
+}
+
 export default function CustodialMarketplacePanel({
   evmAddress,
   evmWallet,
@@ -100,12 +169,16 @@ export default function CustodialMarketplacePanel({
   const [buyTarget, setBuyTarget] = useState(null);
   const [paymentChain, setPaymentChain] = useState('base');
   const [deliveryChain, setDeliveryChain] = useState('base');
+  const [purchaseFlow, setPurchaseFlow] = useState(null);
+  const [browseSort, setBrowseSort] = useState('newest');
+  const [browseLevel, setBrowseLevel] = useState('all');
 
   const ready = !!config?.ready;
   const supportedAssets = config?.supportedAssets || [];
   const supportedPayments = config?.supportedPaymentChains || [];
   const supportedDestinations = config?.supportedDestinationChains || [];
   const canUsePortal = typeof document !== 'undefined' && !!document.body;
+  const compact = useCompactMarketplaceLayout();
   const selectedNft = useMemo(() => owned.find((nft) => `${nft.chain}:${tokenAssetId(nft)}` === selectedAsset) || null, [owned, selectedAsset]);
   const walletMap = useMemo(() => ({ evmAddress, solAddress, aptosAddress }), [aptosAddress, evmAddress, solAddress]);
   const stats = useMemo(() => {
@@ -151,7 +224,12 @@ export default function CustodialMarketplacePanel({
   const loadListings = useCallback(async () => {
     setLoading(true);
     try {
-      const json = await fetchCustodialListings({ status: 'active', limit: PAGE_SIZE });
+      const json = await fetchCustodialListings({
+        status: 'active',
+        level: browseLevel,
+        sort: browseSort,
+        limit: PAGE_SIZE,
+      });
       setListings(Array.isArray(json?.listings) ? json.listings : []);
       setRemoteStats(json?.stats || null);
     } catch (err) {
@@ -160,7 +238,7 @@ export default function CustodialMarketplacePanel({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [browseLevel, browseSort]);
 
   const loadOrders = useCallback(async () => {
     if (!sessionToken) { setOrders([]); return; }
@@ -252,6 +330,50 @@ export default function CustodialMarketplacePanel({
     }
   }, [aptosWallet, evmAddress, onConnectAptos, onConnectBase, onConnectSolana, onOpenEvmModal]);
 
+  const updatePurchaseFlow = useCallback((patch) => {
+    setPurchaseFlow((prev) => mergePurchaseFlow(prev, patch));
+  }, []);
+
+  const waitForPurchasedNftReceipt = useCallback(async ({ order, destChain, destAddress }) => {
+    let latestOrder = order;
+    for (let attempt = 0; attempt < 36; attempt += 1) {
+      if (sessionToken && latestOrder?.id && (!deliveryAssetId(latestOrder) || attempt % 4 === 0)) {
+        try {
+          const json = await fetchCustodialOrder({ token: sessionToken, orderId: latestOrder.id });
+          if (json?.order) {
+            latestOrder = json.order;
+            updatePurchaseFlow({ order: latestOrder });
+          }
+        } catch {
+          // Ownership polling below is the source of truth for the last step.
+        }
+      }
+      const wantedAssetId = deliveryAssetId(latestOrder);
+      if (wantedAssetId) {
+        try {
+          clearDemonKingNftCache(destAddress);
+          const json = await fetchOwnedNfts({ chain: destChain, address: destAddress });
+          const tokens = Array.isArray(json?.tokens) ? json.tokens : [];
+          const token = tokens.find((row) => ownedTokenMatchesOrder({ ...row, chain: row.chain || destChain }, latestOrder));
+          if (token) return { order: latestOrder, token };
+        } catch {
+          // Indexers can lag right after a Solana/Core mint. Keep polling.
+        }
+      }
+      updatePurchaseFlow({
+        order: latestOrder,
+        steps: { received: 'active' },
+        message: wantedAssetId
+          ? 'Waiting for the NFT to appear in your wallet.'
+          : 'Waiting for destination asset details.',
+      });
+      await sleep(attempt < 6 ? 2500 : 4000);
+    }
+    const err = new Error('NFT was delivered on-chain, but the wallet/indexer has not shown it yet. It should appear after indexing catches up.');
+    err.order = latestOrder;
+    throw err;
+  }, [sessionToken, updatePurchaseFlow]);
+
   const openBuyModal = useCallback((order) => {
     if (!order) return;
     addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
@@ -333,6 +455,42 @@ export default function CustodialMarketplacePanel({
     if (!destAddress) { await connectForChain(deliveryChain); setNotice(`Connect ${CHAIN_LABEL[deliveryChain] || deliveryChain} wallet for delivery.`); return; }
     setBusy('buy');
     setNotice(null);
+    setPurchaseFlow({
+      open: true,
+      orderId: buyTarget.id,
+      order: buyTarget,
+      paymentChain,
+      deliveryChain,
+      destAddress,
+      steps: { reservation: 'active', payment: 'pending', transfer: 'pending', received: 'pending' },
+      message: 'Reserving this NFT for your wallet.',
+      error: null,
+    });
+    const onProgress = ({ step, status, order, txHash }) => {
+      const steps = {};
+      if (step === 'reservation' && status === 'complete') {
+        steps.reservation = 'complete';
+        steps.payment = 'active';
+      } else if (step === 'payment' && status === 'complete') {
+        steps.payment = 'complete';
+      } else if (step === 'transfer' && status === 'complete') {
+        steps.transfer = 'complete';
+        steps.received = 'active';
+      } else {
+        steps[step] = status === 'submitted' ? 'active' : status;
+      }
+      const messages = {
+        reservation: status === 'complete' ? 'Reservation confirmed. Waiting for payment signature.' : 'Reserving this NFT for your wallet.',
+        payment: status === 'submitted' ? 'Payment submitted. Waiting for confirmation.' : status === 'complete' ? 'Payment confirmed. Preparing NFT transfer.' : 'Waiting for wallet payment signature.',
+        transfer: status === 'complete' ? 'NFT transfer confirmed on-chain. Checking your wallet.' : 'Transferring NFT to your selected wallet.',
+      };
+      updatePurchaseFlow({
+        order: order || undefined,
+        txHash,
+        steps,
+        message: messages[step] || 'Processing purchase.',
+      });
+    };
     try {
       const result = await payCustodialOrder({
         evmWallet,
@@ -344,11 +502,38 @@ export default function CustodialMarketplacePanel({
         paymentChain,
         destChain: deliveryChain,
         destAddress,
+        onProgress,
       });
-      const finalStatus = result?.confirmed?.order?.status || 'paid';
-      setNotice(finalStatus === 'delivered'
-        ? 'Purchase complete. NFT delivered.'
-        : `Payment confirmed. Settlement status: ${finalStatus}.`);
+      let finalOrder = result?.confirmed?.order || result?.intent?.order || buyTarget;
+      let finalStatus = finalOrder?.status || 'paid';
+      for (let attempt = 0; finalStatus !== 'delivered' && attempt < 30; attempt += 1) {
+        updatePurchaseFlow({
+          order: finalOrder,
+          steps: { transfer: 'active' },
+          message: `Settlement status: ${finalStatus}. Waiting for NFT transfer.`,
+        });
+        await sleep(attempt < 5 ? 2000 : 4000);
+        const json = await fetchCustodialOrder({ token: sessionToken, orderId: buyTarget.id });
+        finalOrder = json?.order || finalOrder;
+        finalStatus = finalOrder?.status || finalStatus;
+      }
+      if (finalStatus !== 'delivered') {
+        throw Object.assign(new Error(`Payment confirmed, but NFT transfer is still ${finalStatus}. Keep this order open in My orders.`), { order: finalOrder });
+      }
+      updatePurchaseFlow({
+        order: finalOrder,
+        txHash: result?.txHash,
+        steps: { reservation: 'complete', payment: 'complete', transfer: 'complete', received: 'active' },
+        message: 'NFT transfer confirmed on-chain. Checking your wallet.',
+      });
+      const receipt = await waitForPurchasedNftReceipt({ order: finalOrder, destChain: deliveryChain, destAddress });
+      updatePurchaseFlow({
+        order: receipt.order || finalOrder,
+        receivedToken: receipt.token,
+        steps: { reservation: 'complete', payment: 'complete', transfer: 'complete', received: 'complete' },
+        message: 'NFT received in your wallet.',
+      });
+      setNotice('Purchase complete. NFT received in your wallet.');
       addClientBreadcrumb('marketplace.custodial.buy.success', { orderId: buyTarget.id, txHash: result?.txHash, status: finalStatus });
       setBuyTarget(null);
       await Promise.all([loadListings(), loadOrders()]);
@@ -362,18 +547,35 @@ export default function CustodialMarketplacePanel({
             reason: msg.slice(0, 140),
           });
           await Promise.all([loadListings(), loadOrders()]);
+          updatePurchaseFlow({
+            steps: { reservation: 'complete', payment: 'error', transfer: 'pending', received: 'pending' },
+            message: 'Payment was not submitted. Reservation released.',
+            error: msg.slice(0, 180),
+          });
           setNotice(`${msg.slice(0, 180)} Reservation released.`);
         } catch {
+          updatePurchaseFlow({
+            steps: { payment: 'error' },
+            message: 'Payment failed.',
+            error: msg.slice(0, 220),
+          });
           setNotice(msg.slice(0, 240));
         }
       } else {
+        const failedStep = /wallet\/indexer|NFT was delivered|appear after indexing/i.test(msg) ? 'received' : 'transfer';
+        updatePurchaseFlow({
+          order: err?.order || undefined,
+          steps: { [failedStep]: 'error' },
+          message: 'Purchase needs attention.',
+          error: msg.slice(0, 220),
+        });
         setNotice(msg.slice(0, 240));
       }
       addClientBreadcrumb('marketplace.custodial.buy.failed', { orderId: buyTarget?.id, message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [aptosWallet, buyTarget, connectForChain, deliveryChain, evmWallet, loadListings, loadOrders, paymentChain, sessionToken, solWallet, walletMap]);
+  }, [aptosWallet, buyTarget, connectForChain, deliveryChain, evmWallet, loadListings, loadOrders, paymentChain, sessionToken, solWallet, updatePurchaseFlow, waitForPurchasedNftReceipt, walletMap]);
 
   const handleReleaseReservation = useCallback(async (orderId) => {
     if (!sessionToken) return;
@@ -429,6 +631,11 @@ export default function CustodialMarketplacePanel({
           listings={listings}
           loading={loading}
           walletMap={walletMap}
+          compact={compact}
+          sort={browseSort}
+          setSort={setBrowseSort}
+          level={browseLevel}
+          setLevel={setBrowseLevel}
           onBuy={(order) => {
             addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
             openBuyModal(order);
@@ -470,7 +677,7 @@ export default function CustodialMarketplacePanel({
         />
       )}
 
-      {buyTarget && canUsePortal && createPortal((
+      {buyTarget && !purchaseFlow?.open && canUsePortal && createPortal((
         <div style={s.modalOverlay} onClick={busy === 'buy' ? undefined : () => setBuyTarget(null)}>
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <div style={s.modalHeader}>
@@ -516,6 +723,18 @@ export default function CustodialMarketplacePanel({
             </button>
           </div>
         </div>
+      ), document.body)}
+
+      {purchaseFlow?.open && canUsePortal && createPortal((
+        <PurchaseProgressModal
+          flow={purchaseFlow}
+          busy={busy === 'buy'}
+          onClose={() => {
+            if (busy === 'buy') return;
+            setPurchaseFlow(null);
+            if (purchaseFlow?.steps?.received === 'complete') setBuyTarget(null);
+          }}
+        />
       ), document.body)}
 
       {notice && <div style={/^(Listed|Payment|Purchase|Listing cancelled)/.test(notice) ? s.noticeOk : s.notice}>{notice}</div>}
@@ -567,25 +786,120 @@ function ConnectChainPrompt({ chain, purpose, onConnect, busy }) {
   );
 }
 
-function BrowseView({ listings, loading, walletMap, onBuy, onOwnListing }) {
+function stepGlyph(status) {
+  if (status === 'complete') return 'OK';
+  if (status === 'error') return '!';
+  if (status === 'active') return '...';
+  return '';
+}
+
+function PurchaseProgressModal({ flow, busy, onClose }) {
+  const order = flow?.order || {};
+  const assetId = deliveryAssetId(order);
+  const paymentTx = order.paymentTxHash || flow?.txHash;
+  const deliveryTx = order.deliveryTxHash;
+  return (
+    <div style={s.modalOverlay} onClick={busy ? undefined : onClose}>
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={s.modalHeader}>
+          <span style={s.modalTitle}>Purchase progress</span>
+          <button type="button" style={s.closeBtn} onClick={onClose} disabled={busy}>x</button>
+        </div>
+        <div style={s.progressHead}>
+          <img src={orderImage(order)} alt="" style={s.progressImg} />
+          <div style={s.progressMeta}>
+            <b>{orderPrice(order)}</b>
+            <span>Pay with {CHAIN_LABEL[flow?.paymentChain] || flow?.paymentChain || 'USDC'}</span>
+            <span>Receive on {CHAIN_LABEL[flow?.deliveryChain] || flow?.deliveryChain || '-'}</span>
+          </div>
+        </div>
+        <div style={s.stepList}>
+          {PURCHASE_STEPS.map((step) => {
+            const status = flow?.steps?.[step.key] || 'pending';
+            return (
+              <div key={step.key} style={{ ...s.stepRow, ...(status === 'active' ? s.stepRowActive : null), ...(status === 'error' ? s.stepRowError : null) }}>
+                <span style={{ ...s.stepDot, ...(status === 'complete' ? s.stepDotDone : null), ...(status === 'active' ? s.stepDotActive : null), ...(status === 'error' ? s.stepDotError : null) }}>
+                  {stepGlyph(status)}
+                </span>
+                <span>{step.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        {flow?.message && <div style={s.progressMessage}>{flow.message}</div>}
+        {flow?.error && <div style={s.progressError}>{flow.error}</div>}
+        <div style={s.progressLinks}>
+          {paymentTx && <span>payment {shortAddr(paymentTx, 8, 6)}</span>}
+          {deliveryTx && <span>delivery {shortAddr(deliveryTx, 8, 6)}</span>}
+          {assetId && <span>NFT {shortAddr(assetId, 8, 6)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterButton({ active, disabled, children, onClick }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{ ...s.filterBtn, ...(active ? s.filterBtnActive : null), ...(disabled ? s.disabledBtn : null) }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function BrowseFilters({ sort, setSort, level, setLevel, loading }) {
+  return (
+    <div style={s.filterPanel}>
+      <div style={s.filterRow}>
+        <span style={s.filterLabel}>Sort</span>
+        <div style={s.filterChips}>
+          {SORT_OPTIONS.map((option) => (
+            <FilterButton key={option.value} active={sort === option.value} disabled={loading} onClick={() => setSort(option.value)}>
+              {option.label}
+            </FilterButton>
+          ))}
+        </div>
+      </div>
+      <div style={s.filterRow}>
+        <span style={s.filterLabel}>Level</span>
+        <div style={s.filterChips}>
+          {LEVEL_OPTIONS.map((option) => (
+            <FilterButton key={option.value} active={level === option.value} disabled={loading} onClick={() => setLevel(option.value)}>
+              {option.label}
+            </FilterButton>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrowseView({ listings, loading, walletMap, compact, sort, setSort, level, setLevel, onBuy, onOwnListing }) {
   return (
     <div style={s.stack}>
+      <BrowseFilters sort={sort} setSort={setSort} level={level} setLevel={setLevel} loading={loading} />
       {loading ? <div style={s.meta}>Loading listings...</div> : !listings.length ? <div style={s.empty}>No active listings yet.</div> : (
-        <div style={s.grid}>
+        <div style={compact ? s.gridMobile : s.grid}>
           {listings.map((order) => {
             const ownWallet = walletForChain(order.assetChain, walletMap);
             const isOwn = ownWallet && String(order.sellerWallet || '').toLowerCase() === String(ownWallet || '').toLowerCase();
             return (
-              <div key={order.id} style={s.card}>
-                <div style={s.imgWrap}>
+              <div key={order.id} style={compact ? s.cardMobile : s.card}>
+                <div style={compact ? s.imgWrapMobile : s.imgWrap}>
                   <img src={orderImage(order)} alt="" style={s.img} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
                   <span style={s.level}>L{order.level || 1}</span>
                 </div>
-                <div style={s.cardLine}><b>{shortAddr(order.assetId, 4, 4)}</b><span>{orderPrice(order)}</span></div>
-                <div style={s.cardSub}>Seller {shortAddr(order.sellerWallet, 4, 4)}</div>
-                <button type="button" onClick={() => (isOwn ? onOwnListing(order) : onBuy(order))} style={{ ...s.cardBtn, ...(isOwn ? s.manageBtn : null) }}>
-                  {isOwn ? 'Manage' : 'Buy'}
-                </button>
+                <div style={s.cardBody}>
+                  <div style={s.cardLine}><b>{shortAddr(order.assetId, compact ? 5 : 4, 4)}</b><span>{orderPrice(order)}</span></div>
+                  <div style={s.cardSub}>Seller {shortAddr(order.sellerWallet, compact ? 6 : 4, 4)}</div>
+                  <button type="button" onClick={() => (isOwn ? onOwnListing(order) : onBuy(order))} style={{ ...s.cardBtn, ...(compact ? s.cardBtnMobile : null), ...(isOwn ? s.manageBtn : null) }}>
+                    {isOwn ? 'Manage' : 'Buy'}
+                  </button>
+                </div>
               </div>
             );
           })}
@@ -716,14 +1030,25 @@ const s = {
   meta: { fontSize: 12, color: '#7a5a30', fontWeight: 800 },
   empty: { padding: 20, borderRadius: 10, border: '2px dashed #d4c8b0', background: '#fffaf0', color: '#5C3A21', textAlign: 'center', fontWeight: 800 },
   emptyInline: { padding: 12, color: '#7a5a30', fontWeight: 800, fontSize: 12 },
+  filterPanel: { display: 'flex', flexDirection: 'column', gap: 6, padding: 7, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
+  filterRow: { display: 'grid', gridTemplateColumns: '46px 1fr', alignItems: 'center', gap: 6 },
+  filterLabel: { color: '#7a5a30', fontSize: 11, fontWeight: 900, textTransform: 'uppercase' },
+  filterChips: { display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'thin', paddingBottom: 1 },
+  filterBtn: { flex: '0 0 auto', minWidth: 52, minHeight: 30, padding: '5px 8px', borderRadius: 8, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontSize: 11, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' },
+  filterBtnActive: { border: '2px solid #9f8759', background: '#ffd97a' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 },
+  gridMobile: { display: 'grid', gridTemplateColumns: '1fr', gap: 8 },
   card: { display: 'flex', flexDirection: 'column', gap: 5, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc' },
+  cardMobile: { display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', alignItems: 'stretch', gap: 8, padding: 7, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', minHeight: 110 },
+  cardBody: { minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 5 },
   imgWrap: { position: 'relative', aspectRatio: '1 / 1', borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
+  imgWrapMobile: { position: 'relative', width: 92, height: 92, borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
   img: { width: '100%', height: '100%', objectFit: 'cover' },
   level: { position: 'absolute', top: 4, right: 4, padding: '2px 5px', borderRadius: 5, background: '#5C3A21', color: '#fff7df', fontSize: 10, fontWeight: 900 },
   cardLine: { display: 'flex', justifyContent: 'space-between', gap: 4, fontSize: 12, color: '#5C3A21' },
   cardSub: { fontSize: 10, color: '#7a5a30', fontWeight: 700 },
   cardBtn: { padding: '7px 10px', borderRadius: 8, border: '2px solid #4a8f2c', background: '#7ce04a', color: '#1a3d0a', fontWeight: 900, cursor: 'pointer' },
+  cardBtnMobile: { minHeight: 34, padding: '7px 8px' },
   manageBtn: { border: '2px solid #9f8759', background: '#fff6dc', color: '#5C3A21' },
   disabledBtn: { opacity: 0.55, cursor: 'not-allowed' },
   form: { display: 'flex', flexDirection: 'column', gap: 10 },
@@ -753,6 +1078,20 @@ const s = {
   modalTitle: { fontSize: 16, fontWeight: 900, color: '#5C3A21' },
   closeBtn: { width: 24, height: 24, borderRadius: 12, border: '2px solid #fff', background: '#E53935', color: '#fff', fontWeight: 900, cursor: 'pointer' },
   modalImg: { width: '100%', aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff' },
+  progressHead: { display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
+  progressImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff' },
+  progressMeta: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3, color: '#5C3A21', fontSize: 12, fontWeight: 800 },
+  stepList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  stepRow: { display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff6dc', color: '#7a5a30', fontSize: 12, fontWeight: 900 },
+  stepRowActive: { background: '#fff0bd', color: '#5C3A21' },
+  stepRowError: { background: '#ffe1d8', color: '#9b2d1c' },
+  stepDot: { width: 28, height: 22, borderRadius: 7, border: '2px solid #d4c8b0', background: '#fff', color: '#7a5a30', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 900 },
+  stepDotDone: { border: '2px solid #4a8f2c', background: '#7ce04a', color: '#1a3d0a' },
+  stepDotActive: { border: '2px solid #9f8759', background: '#ffd97a', color: '#5C3A21' },
+  stepDotError: { border: '2px solid #c5523c', background: '#f26d5b', color: '#fff' },
+  progressMessage: { padding: '7px 8px', borderRadius: 8, background: '#fff8e6', color: '#5C3A21', fontSize: 12, fontWeight: 800 },
+  progressError: { padding: '7px 8px', borderRadius: 8, background: '#ffe1d8', color: '#9b2d1c', fontSize: 12, fontWeight: 900 },
+  progressLinks: { display: 'flex', flexDirection: 'column', gap: 2, color: '#7a5a30', fontSize: 11, fontWeight: 800 },
   breakdown: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 6, padding: 8, borderRadius: 8, border: '1px solid #d4c8b0', background: '#fff8e6', color: '#5C3A21', fontSize: 12 },
   deliveryChips: { display: 'flex', gap: 5, flexWrap: 'wrap' },
   chip: { minWidth: 72, minHeight: 34, padding: '4px 8px', borderRadius: 7, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontWeight: 900, cursor: 'pointer', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, lineHeight: 1.05 },

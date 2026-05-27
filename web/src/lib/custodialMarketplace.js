@@ -143,14 +143,20 @@ export async function fetchCustodialMarketplaceConfig({ signal } = {}) {
   return apiJson('/api/marketplace/custodial/config', { signal });
 }
 
-export async function fetchCustodialListings({ status = 'active', assetChain = '', limit = 50, offset = 0, signal } = {}) {
+export async function fetchCustodialListings({ status = 'active', assetChain = '', level = 'all', sort = 'newest', limit = 50, offset = 0, signal } = {}) {
   const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
   if (assetChain) params.set('assetChain', assetChain);
+  if (level && level !== 'all') params.set('level', String(level));
+  if (sort) params.set('sort', String(sort));
   return apiJson(`/api/marketplace/custodial/listings?${params.toString()}`, { signal });
 }
 
 export async function fetchMyCustodialOrders({ token, signal } = {}) {
   return apiJson('/api/marketplace/custodial/orders/mine', { token, signal });
+}
+
+export async function fetchCustodialOrder({ token, orderId, signal } = {}) {
+  return apiJson(`/api/marketplace/custodial/orders/${encodeURIComponent(orderId)}`, { token, signal });
 }
 
 export async function createCustodialListing({
@@ -256,9 +262,11 @@ export async function payCustodialOrderOnEvm({
   paymentChain = 'base',
   destChain = 'base',
   destAddress,
+  onProgress,
 }) {
   if (!token) throw new Error('Game session is not ready');
   if (!evmWallet || !buyerWallet) throw new Error('EVM wallet is not connected');
+  onProgress?.({ step: 'reservation', status: 'active' });
   const intent = await createCustodialBuyIntent({
     token,
     orderId,
@@ -269,6 +277,7 @@ export async function payCustodialOrderOnEvm({
   });
   const order = intent.order;
   const payment = order?.payment;
+  onProgress?.({ step: 'reservation', status: 'complete', order });
   const chainId = CUSTODIAL_EVM_CHAIN_IDS[payment?.chain || paymentChain];
   if (!payment?.treasury || !payment?.tokenAddress || !payment?.amountTokenUnits || !chainId) {
     throw new Error('Payment intent is incomplete');
@@ -292,14 +301,19 @@ export async function payCustodialOrderOnEvm({
   if (BigInt(balance) < amount) {
     throw new Error(`Not enough USDC. Need ${formatCustodialUnits(amount, payment.decimals)}, wallet has ${formatCustodialUnits(balance, payment.decimals)}.`);
   }
+  onProgress?.({ step: 'payment', status: 'active', order });
   const txHash = await walletClient.writeContract({
     address: usdc,
     abi: ERC20_TRANSFER_ABI,
     functionName: 'transfer',
     args: [treasury, amount],
   });
+  onProgress?.({ step: 'payment', status: 'submitted', order, txHash });
   await publicClient.waitForTransactionReceipt({ hash: txHash });
+  onProgress?.({ step: 'payment', status: 'complete', order, txHash });
+  onProgress?.({ step: 'transfer', status: 'active', order, txHash });
   const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
+  onProgress?.({ step: 'transfer', status: confirmed?.order?.status === 'delivered' ? 'complete' : 'active', order: confirmed?.order, txHash });
   return { intent, txHash, confirmed };
 }
 
@@ -310,10 +324,12 @@ export async function payCustodialOrderOnSolana({
   orderId,
   destChain,
   destAddress,
+  onProgress,
 }) {
   if (!token) throw new Error('Game session is not ready');
   const owner = buyerWallet || solWallet?.publicKey?.toBase58?.();
   if (!owner) throw new Error('Solana wallet is not connected');
+  onProgress?.({ step: 'reservation', status: 'active' });
   const intent = await createCustodialBuyIntent({
     token,
     orderId,
@@ -323,6 +339,7 @@ export async function payCustodialOrderOnSolana({
     destAddress: destAddress || owner,
   });
   const payment = intent.order?.payment;
+  onProgress?.({ step: 'reservation', status: 'complete', order: intent.order });
   if (!payment?.treasury || !payment?.tokenAddress || !payment?.amountTokenUnits) throw new Error('Payment intent is incomplete');
 
   const [
@@ -363,6 +380,7 @@ export async function payCustodialOrderOnSolana({
       splToken.TOKEN_PROGRAM_ID,
     ),
   ];
+  onProgress?.({ step: 'payment', status: 'active', order: intent.order });
   const txHash = await sendSolanaTransactionWithRetry({
     instructions,
     ownerPk,
@@ -376,7 +394,10 @@ export async function payCustodialOrderOnSolana({
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
   });
+  onProgress?.({ step: 'payment', status: 'complete', order: intent.order, txHash });
+  onProgress?.({ step: 'transfer', status: 'active', order: intent.order, txHash });
   const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
+  onProgress?.({ step: 'transfer', status: confirmed?.order?.status === 'delivered' ? 'complete' : 'active', order: confirmed?.order, txHash });
   return { intent, txHash, confirmed };
 }
 
@@ -387,10 +408,12 @@ export async function payCustodialOrderOnAptos({
   orderId,
   destChain,
   destAddress,
+  onProgress,
 }) {
   if (!token) throw new Error('Game session is not ready');
   const buyer = buyerWallet || aptosWallet?.address;
   if (!buyer) throw new Error('Aptos wallet is not connected');
+  onProgress?.({ step: 'reservation', status: 'active' });
   const intent = await createCustodialBuyIntent({
     token,
     orderId,
@@ -400,9 +423,11 @@ export async function payCustodialOrderOnAptos({
     destAddress: destAddress || buyer,
   });
   const payment = intent.order?.payment;
+  onProgress?.({ step: 'reservation', status: 'complete', order: intent.order });
   if (!payment?.treasury || !payment?.tokenAddress || !payment?.amountTokenUnits) throw new Error('Payment intent is incomplete');
   const submitFn = aptosWallet?.loginSignAndSubmit || aptosWallet?.signAndSubmitTransaction || aptosWallet?.signAndSubmit;
   if (typeof submitFn !== 'function') throw new Error('Connected Aptos wallet cannot sign transactions');
+  onProgress?.({ step: 'payment', status: 'active', order: intent.order });
   const result = await submitFn.call(aptosWallet, {
     data: {
       function: '0x1::primary_fungible_store::transfer',
@@ -412,8 +437,12 @@ export async function payCustodialOrderOnAptos({
   });
   const txHash = aptosSubmitHash(result);
   if (!txHash) throw new Error('Aptos tx submission returned no hash');
+  onProgress?.({ step: 'payment', status: 'submitted', order: intent.order, txHash });
   await waitForAptosTx(txHash, 'Aptos marketplace payment');
+  onProgress?.({ step: 'payment', status: 'complete', order: intent.order, txHash });
+  onProgress?.({ step: 'transfer', status: 'active', order: intent.order, txHash });
   const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
+  onProgress?.({ step: 'transfer', status: confirmed?.order?.status === 'delivered' ? 'complete' : 'active', order: confirmed?.order, txHash });
   return { intent, txHash, confirmed };
 }
 
@@ -427,15 +456,16 @@ export async function payCustodialOrder({
   paymentChain = 'base',
   destChain,
   destAddress,
+  onProgress,
 }) {
   if (CUSTODIAL_EVM_CHAIN_IDS[paymentChain]) {
-    return payCustodialOrderOnEvm({ evmWallet, buyerWallet, token, orderId, paymentChain, destChain, destAddress });
+    return payCustodialOrderOnEvm({ evmWallet, buyerWallet, token, orderId, paymentChain, destChain, destAddress, onProgress });
   }
   if (paymentChain === 'solana') {
-    return payCustodialOrderOnSolana({ solWallet, buyerWallet, token, orderId, destChain, destAddress });
+    return payCustodialOrderOnSolana({ solWallet, buyerWallet, token, orderId, destChain, destAddress, onProgress });
   }
   if (paymentChain === 'aptos') {
-    return payCustodialOrderOnAptos({ aptosWallet, buyerWallet, token, orderId, destChain, destAddress });
+    return payCustodialOrderOnAptos({ aptosWallet, buyerWallet, token, orderId, destChain, destAddress, onProgress });
   }
   throw new Error(`Unsupported payment chain ${paymentChain}`);
 }

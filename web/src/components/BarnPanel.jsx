@@ -1,6 +1,6 @@
 import { memo, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
-import { useSend, useBuildingDefs } from '../hooks/useGodot';
+import { useSend, useBuildingDefs, usePlayer } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -72,6 +72,35 @@ const RES_ICONS = {
 };
 
 const stopPropagation = (e) => e.stopPropagation();
+
+function isEvmWalletAddress(value) {
+  return /^0x[0-9a-fA-F]{40}$/.test(String(value || '').trim());
+}
+
+function isSolanaWalletAddress(value) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value || '').trim());
+}
+
+function isAptosWalletAddress(value) {
+  const text = String(value || '').trim();
+  return /^0x[0-9a-fA-F]{1,64}$/.test(text) && !isEvmWalletAddress(text);
+}
+
+function linkedDemonKingWalletHints(playerState) {
+  const hints = { evmAddress: null, solAddress: null, aptosAddress: null };
+  const candidates = [
+    playerState?.wallet,
+    playerState?.nft_gold_boost_wallet,
+  ];
+  for (const raw of candidates) {
+    const wallet = String(raw || '').trim();
+    if (!wallet) continue;
+    if (!hints.evmAddress && isEvmWalletAddress(wallet)) hints.evmAddress = wallet;
+    else if (!hints.solAddress && isSolanaWalletAddress(wallet)) hints.solAddress = wallet;
+    else if (!hints.aptosAddress && isAptosWalletAddress(wallet)) hints.aptosAddress = wallet;
+  }
+  return hints;
+}
 
 function demonKingShipEntry(token) {
   if (!token) return 'DemonKing';
@@ -309,6 +338,7 @@ const ProgressBar = ({ label, value, max, gradient, showAsTime = false, valueTex
 
 function BarnPanel({ building, onClose }) {
   const { sendToGodot } = useSend();
+  const playerState = usePlayer();
   const { buildingDefs, troopLevels } = useBuildingDefs();
   const { isMobile: mobile } = useLayout();
   const evmWallet = useEvmWallet();
@@ -320,11 +350,15 @@ function BarnPanel({ building, onClose }) {
     || null;
   const aptosWallet = useAptosWallet();
   const aptosAddress = aptosWallet?.address || null;
+  const linkedWalletHints = useMemo(
+    () => linkedDemonKingWalletHints(playerState),
+    [playerState?.wallet, playerState?.nft_gold_boost_wallet],
+  );
   const demonKingSyncTarget = useMemo(() => resolveDemonKingInventorySyncTarget({
-    evmAddress,
-    solAddress,
-    aptosAddress,
-  }), [aptosAddress, evmAddress, solAddress]);
+    evmAddress: linkedWalletHints.evmAddress || evmAddress,
+    solAddress: linkedWalletHints.solAddress || solAddress,
+    aptosAddress: linkedWalletHints.aptosAddress || aptosAddress,
+  }), [aptosAddress, evmAddress, linkedWalletHints, solAddress]);
   const hasDemonKingWallet = !!demonKingSyncTarget;
 
   const [currentIndex, setCurrentIndex] = useState(0);

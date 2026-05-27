@@ -347,11 +347,40 @@ function latestBridgeBurnEvent(orderId, { sourceChain, destChain, destAddress } 
   }) || null;
 }
 
+function deliveryAssetFromBridge(row) {
+  if (!row?.delivery_tx_hash) return null;
+  const destChain = String(row.buyer_dest_chain || '').toLowerCase();
+  const deliveryTxHash = String(row.delivery_tx_hash || '');
+  try {
+    const bridgeRow = gameDb.db.prepare(`
+      SELECT dest_tx_or_asset
+      FROM used_bridge_refs
+      WHERE dest_chain = ?
+        AND dest_tx_or_asset IS NOT NULL
+        AND (dest_tx_or_asset = ? OR dest_tx_or_asset LIKE ?)
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).get(destChain, deliveryTxHash, `%@${deliveryTxHash}`);
+    const raw = String(bridgeRow?.dest_tx_or_asset || '');
+    if (!raw) return null;
+    const [assetAddress, txHash] = raw.includes('@') ? raw.split('@') : [null, raw];
+    return {
+      chain: destChain,
+      assetId: assetAddress || null,
+      txHash: txHash || raw,
+      raw,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function publicOrder(row, { includePrivate = false } = {}) {
   if (!row) return null;
   const meta = safeJsonParse(row.metadata_json, {});
   const paymentDecimals = Number(row.payment_decimals || meta.paymentDecimals || 6);
   const buyerPlayerName = includePrivate ? playerNameById(row.buyer_player_id) : null;
+  const deliveryAsset = deliveryAssetFromBridge(row);
   const out = {
     id: row.id,
     status: row.status,
@@ -392,6 +421,10 @@ function publicOrder(row, { includePrivate = false } = {}) {
     paymentTxHash: row.payment_tx_hash,
     paymentVerifiedAt: row.payment_verified_at,
     deliveryTxHash: row.delivery_tx_hash,
+    deliveryAssetId: deliveryAsset?.assetId || (
+      row.delivery_tx_hash && row.asset_chain === row.buyer_dest_chain ? row.asset_id : undefined
+    ),
+    deliveryAsset: deliveryAsset || undefined,
     deliveredAt: row.delivered_at,
     payoutTxHash: row.payout_tx_hash,
     paidOutAt: row.paid_out_at,
@@ -1573,10 +1606,22 @@ function mountCustodialMarketplace(router, ctx = {}) {
       releaseExpiredReservations();
       const status = String(req.query.status || 'active').toLowerCase();
       const assetChain = String(req.query.assetChain || req.query.chain || '').toLowerCase();
+      const level = String(req.query.level || '').toLowerCase();
+      const sort = String(req.query.sort || req.query.order || 'newest').toLowerCase();
       const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
       const offset = Math.max(0, Number(req.query.offset) || 0);
       const allowed = new Set(['active', 'reserved', 'paid', 'delivered', 'cancelled', 'all']);
       if (!allowed.has(status)) throw httpError(400, 'Unsupported status filter');
+      const sortSql = {
+        newest: 'created_at DESC',
+        date_desc: 'created_at DESC',
+        oldest: 'created_at ASC',
+        date_asc: 'created_at ASC',
+        price_asc: 'CAST(price_usdc_units AS INTEGER) ASC, created_at DESC',
+        lowest: 'CAST(price_usdc_units AS INTEGER) ASC, created_at DESC',
+        price_desc: 'CAST(price_usdc_units AS INTEGER) DESC, created_at DESC',
+        highest: 'CAST(price_usdc_units AS INTEGER) DESC, created_at DESC',
+      }[sort] || 'created_at DESC';
       const where = [];
       const params = [];
       if (status !== 'all') {
@@ -1590,34 +1635,55 @@ function mountCustodialMarketplace(router, ctx = {}) {
         where.push('asset_chain = ?');
         params.push(assetChain);
       }
+      if (level && level !== 'all') {
+        const lvl = Number(level);
+        if (![1, 2, 3].includes(lvl)) throw httpError(400, 'Unsupported level filter');
+        where.push('level = ?');
+        params.push(lvl);
+      }
       const sqlWhere = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const rows = gameDb.db.prepare(`
         SELECT * FROM custodial_marketplace_orders
         ${sqlWhere}
-        ORDER BY created_at DESC
+        ORDER BY ${sortSql}
         LIMIT ? OFFSET ?
       `).all(...params, limit, offset);
       const total = gameDb.db.prepare(`SELECT COUNT(*) AS c FROM custodial_marketplace_orders ${sqlWhere}`).get(...params)?.c || 0;
-      const assetStatsSql = assetChain ? 'AND asset_chain = ?' : '';
-      const assetStatsParams = assetChain ? [assetChain] : [];
+      const statsWhere = [];
+      const statsParams = [];
+      if (assetChain) {
+        statsWhere.push('asset_chain = ?');
+        statsParams.push(assetChain);
+      }
+      if (level && level !== 'all') {
+        statsWhere.push('level = ?');
+        statsParams.push(Number(level));
+      }
+      const statsSql = statsWhere.length ? `AND ${statsWhere.join(' AND ')}` : '';
       const activeStats = gameDb.db.prepare(`
         SELECT
           COUNT(*) AS listed_count,
           MIN(CAST(price_usdc_units AS INTEGER)) AS floor_usdc_units
         FROM custodial_marketplace_orders
-        WHERE status = 'active' ${assetStatsSql}
-      `).get(...assetStatsParams) || {};
+        WHERE status = 'active' ${statsSql}
+      `).get(...statsParams) || {};
       const salesStats = gameDb.db.prepare(`
         SELECT COALESCE(SUM(CAST(price_usdc_units AS INTEGER)), 0) AS volume_usdc_units
         FROM custodial_marketplace_orders
-        WHERE status = 'delivered' ${assetStatsSql}
-      `).get(...assetStatsParams) || {};
+        WHERE status = 'delivered' ${statsSql}
+      `).get(...statsParams) || {};
       res.set('Cache-Control', 'no-store');
       res.json({
         listings: rows.map((r) => publicOrder(r)),
         total,
         limit,
         offset,
+        filters: {
+          status,
+          assetChain: assetChain || null,
+          level: level || 'all',
+          sort,
+        },
         stats: {
           listedCount: Number(activeStats.listed_count || 0),
           volumeUsdcUnits: String(salesStats.volume_usdc_units || '0'),
@@ -1642,6 +1708,21 @@ function mountCustodialMarketplace(router, ctx = {}) {
       res.json({ orders: rows.map((r) => publicOrder(r, { includePrivate: true })) });
     } catch (err) {
       res.status(err?.status || 500).json({ error: err?.message || 'orders query failed' });
+    }
+  });
+
+  router.get('/marketplace/custodial/orders/:id', auth, (req, res) => {
+    try {
+      releaseExpiredReservations();
+      const order = getOrder(req.params.id);
+      if (!order) throw httpError(404, 'Order not found');
+      const isParty = String(order.seller_player_id || '') === String(req.player.id || '')
+        || String(order.buyer_player_id || '') === String(req.player.id || '');
+      if (!isParty) throw httpError(403, 'This order belongs to another player');
+      res.set('Cache-Control', 'no-store');
+      res.json({ success: true, order: publicOrder(order, { includePrivate: true }) });
+    } catch (err) {
+      res.status(err?.status || 500).json({ error: err?.message || 'order query failed' });
     }
   });
 

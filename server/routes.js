@@ -1,7 +1,9 @@
 const express = require('express');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const nacl = require('tweetnacl');
 const bs58 = require('bs58').default || require('bs58');
 const db = require('./db');
@@ -13847,6 +13849,68 @@ router.post('/admin/tournaments/:id/daily-points/finalize', adminAuth, (req, res
     res.json(result);
   } catch (err) {
     res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily final award failed').slice(0, 180) });
+  }
+});
+
+router.post('/admin/tournaments/:id/participants/:playerId/adjust-trophies', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  const playerId = String(req.params.playerId || '').trim();
+  const delta = Math.trunc(Number(req.body?.delta ?? req.body?.trophies ?? req.body?.amount));
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid tournament id' });
+  if (!playerId) return res.status(400).json({ error: 'player id required' });
+  if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 100000) {
+    return res.status(400).json({ error: 'non-zero trophies delta required' });
+  }
+  try {
+    const result = db.db.transaction(() => {
+      const t = db.db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+      if (!t) {
+        const err = new Error('tournament not found');
+        err.status = 404;
+        throw err;
+      }
+      const row = db.db.prepare(`
+        SELECT tp.*, p.name, p.dex AS player_dex
+        FROM tournament_participants tp
+        JOIN players p ON p.id = tp.player_id
+        WHERE tp.tournament_id = ? AND tp.player_id = ? AND tp.left_at IS NULL
+      `).get(tid, playerId);
+      if (!row) {
+        const err = new Error('active tournament participant not found');
+        err.status = 404;
+        throw err;
+      }
+      const before = Number(row.trophies || 0);
+      const after = Math.max(0, before + delta);
+      const applied = after - before;
+      db.db.prepare(`
+        UPDATE tournament_participants
+           SET trophies = ?, last_activity_at = datetime('now')
+         WHERE tournament_id = ? AND player_id = ?
+      `).run(after, tid, playerId);
+      if (applied !== 0) {
+        const eventId = `admin_trophy_adjustment:${tid}:${playerId}:${Date.now()}`;
+        const dayUtc = new Date().toISOString().slice(0, 10);
+        db.db.prepare(`
+          INSERT OR IGNORE INTO tournament_daily_activity (
+            tournament_id, day_utc, player_id, source, event_id, dex,
+            trades_count, volume_usd, pnl_usd, trophies, gold
+          ) VALUES (?, ?, ?, 'admin_trophy_adjustment', ?, ?, 0, 0, 0, ?, 0)
+        `).run(tid, dayUtc, playerId, eventId, row.team_dex || row.player_dex || t.dex, applied);
+      }
+      return {
+        ok: true,
+        tournament_id: tid,
+        player_id: playerId,
+        name: row.name,
+        before,
+        delta: applied,
+        trophies: after,
+      };
+    })();
+    res.json(result);
+  } catch (err) {
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'adjust failed').slice(0, 180) });
   }
 });
 
