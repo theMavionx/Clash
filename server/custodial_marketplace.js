@@ -204,6 +204,10 @@ function publicOrder(row, { includePrivate = false } = {}) {
     priceUsdc: formatUnits(row.price_usdc_units, 6),
     feeBps: Number(row.fee_bps || 0),
     feeUsdcUnits: row.fee_usdc_units,
+    feeUsdc: formatUnits(row.fee_usdc_units || '0', 6),
+    royaltyBps: Number(row.royalty_bps || 0),
+    royaltyUsdcUnits: row.royalty_usdc_units || '0',
+    royaltyUsdc: formatUnits(row.royalty_usdc_units || '0', 6),
     sellerAmountUsdcUnits: row.seller_amount_usdc_units,
     sellerAmountUsdc: formatUnits(row.seller_amount_usdc_units, 6),
     paymentChain: row.payment_chain,
@@ -488,7 +492,8 @@ async function marketplaceRuntimeConfig(ctx) {
   const vaults = await vaultsConfig(ctx);
   const payments = paymentConfigs(ctx);
   const deliveryReady = await destinationDeliveryReadiness(ctx);
-  const feeBps = Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '0') || 0));
+  const feeBps = Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100') || 0));
+  const royaltyBps = Math.max(0, Math.min(1000, Number(process.env.CUSTODIAL_MARKETPLACE_ROYALTY_BPS || process.env.NFT_COLLECTION_ROYALTY_BPS || process.env.NFT_SELLER_FEE_BASIS_POINTS || '250') || 0));
   const allowExternalVault = process.env.CUSTODIAL_MARKETPLACE_ALLOW_EXTERNAL_VAULT === '1';
   const supportedChains = ALL_CHAINS.filter((chain) => isVaultUsable(vaults[chain], allowExternalVault));
   const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready);
@@ -496,6 +501,7 @@ async function marketplaceRuntimeConfig(ctx) {
   return {
     enabled: process.env.CUSTODIAL_MARKETPLACE_ENABLED !== '0',
     feeBps,
+    royaltyBps,
     supportedAssets: supportedChains,
     supportedPaymentChains,
     supportedDestinationChains,
@@ -1431,8 +1437,9 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const payoutAddress = normalizeAddressForChain(payoutChain, req.body?.sellerPayoutAddress || sellerWallet, 'Seller payout wallet');
       const priceUnits = parseUsdcUnits(req.body?.priceUsdc ?? req.body?.price, 'Listing price');
       const fee = priceUnits * BigInt(config.feeBps) / 10_000n;
-      const sellerAmount = priceUnits - fee;
-      if (sellerAmount <= 0n) throw httpError(400, 'Listing price is too small after fee');
+      const royalty = priceUnits * BigInt(config.royaltyBps) / 10_000n;
+      const sellerAmount = priceUnits - fee - royalty;
+      if (sellerAmount <= 0n) throw httpError(400, 'Listing price is too small after marketplace fee and royalty');
       const assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
@@ -1441,11 +1448,11 @@ function mountCustodialMarketplace(router, ctx = {}) {
           INSERT INTO custodial_marketplace_orders
             (id, status, seller_player_id, seller_wallet, seller_payout_chain, seller_payout_address,
              asset_chain, asset_id, asset_standard, asset_collection, level,
-             price_usdc_units, fee_bps, fee_usdc_units, seller_amount_usdc_units,
+             price_usdc_units, fee_bps, fee_usdc_units, royalty_bps, royalty_usdc_units, seller_amount_usdc_units,
              payment_chain, payment_token, payment_token_address, payment_decimals, payment_label, payment_treasury,
              vault_chain, vault_address, metadata_json)
           VALUES (?, 'awaiting_deposit', ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?, ?, ?, 'base', 'usdc', NULL, 6, 'USDC', NULL, ?, ?, ?)
+                  ?, ?, ?, ?, ?, ?, 'base', 'usdc', NULL, 6, 'USDC', NULL, ?, ?, ?)
         `).run(
           id,
           req.player.id,
@@ -1460,6 +1467,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
           priceUnits.toString(),
           config.feeBps,
           fee.toString(),
+          config.royaltyBps,
+          royalty.toString(),
           sellerAmount.toString(),
           assetChain,
           vault.address,
@@ -1467,7 +1476,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
         );
         insertEvent(id, 'listing_created', {
           actorPlayerId: req.player.id,
-          data: { assetChain, assetId, sellerWallet, priceUsdcUnits: priceUnits.toString(), vault: vault.address },
+          data: { assetChain, assetId, sellerWallet, priceUsdcUnits: priceUnits.toString(), marketplaceFeeUsdcUnits: fee.toString(), royaltyUsdcUnits: royalty.toString(), vault: vault.address },
         });
       })();
       res.status(201).json({ success: true, order: publicOrder(getOrder(id), { includePrivate: true }) });
@@ -1714,6 +1723,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
             COALESCE(SUM(CASE WHEN status = 'delivered' THEN CAST(price_usdc_units AS INTEGER) ELSE 0 END), 0) AS sales_volume_usdc_units,
             COALESCE(SUM(CASE WHEN status IN ('awaiting_deposit', 'active', 'reserved', 'paid', 'delivering', 'delivered') THEN CAST(price_usdc_units AS INTEGER) ELSE 0 END), 0) AS gross_volume_usdc_units,
             COALESCE(SUM(CASE WHEN status = 'delivered' THEN CAST(fee_usdc_units AS INTEGER) ELSE 0 END), 0) AS fee_usdc_units,
+            COALESCE(SUM(CASE WHEN status = 'delivered' THEN CAST(royalty_usdc_units AS INTEGER) ELSE 0 END), 0) AS royalty_usdc_units,
+            COALESCE(SUM(CASE WHEN status = 'delivered' THEN CAST(fee_usdc_units AS INTEGER) + CAST(royalty_usdc_units AS INTEGER) ELSE 0 END), 0) AS project_revenue_usdc_units,
             COALESCE(SUM(CASE WHEN status = 'delivered' THEN CAST(seller_amount_usdc_units AS INTEGER) ELSE 0 END), 0) AS seller_payout_usdc_units,
             COALESCE(SUM(CASE WHEN status = 'delivered' AND TRIM(COALESCE(payout_tx_hash, '')) = '' THEN CAST(seller_amount_usdc_units AS INTEGER) ELSE 0 END), 0) AS payout_due_usdc_units,
             MAX(updated_at) AS latest_at
@@ -1818,6 +1829,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
             salesVolumeUsdcUnits: toUnits(summary.sales_volume_usdc_units),
             grossVolumeUsdcUnits: toUnits(summary.gross_volume_usdc_units),
             feeUsdcUnits: toUnits(summary.fee_usdc_units),
+            royaltyUsdcUnits: toUnits(summary.royalty_usdc_units),
+            projectRevenueUsdcUnits: toUnits(summary.project_revenue_usdc_units),
             sellerPayoutUsdcUnits: toUnits(summary.seller_payout_usdc_units),
             payoutDueUsdcUnits: toUnits(summary.payout_due_usdc_units),
             latestAt: summary.latest_at || null,

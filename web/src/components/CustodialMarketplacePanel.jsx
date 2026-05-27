@@ -375,6 +375,7 @@ export default function CustodialMarketplacePanel({
       {view === 'sell' && (
         <SellView
           ready={ready}
+          config={config}
           owned={owned}
           loading={ownedLoading}
           supportedAssets={supportedAssets}
@@ -530,8 +531,12 @@ function BrowseView({ listings, loading, walletMap, onBuy, onOwnListing }) {
   );
 }
 
-function SellView({ ready, owned, loading, supportedAssets, walletMap, selectedAsset, setSelectedAsset, priceInput, setPriceInput, busy, onSubmit, onRefresh }) {
+function SellView({ ready, config, owned, loading, supportedAssets, walletMap, selectedAsset, setSelectedAsset, priceInput, setPriceInput, busy, onSubmit, onRefresh }) {
   const connectedChains = (supportedAssets || []).filter((chain) => walletForChain(chain, walletMap));
+  const feeBps = Number(config?.feeBps || 0);
+  const royaltyBps = Number(config?.royaltyBps || 0);
+  const sellerBps = Math.max(0, 10000 - feeBps - royaltyBps);
+  const percent = (bps) => `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 1)}%`;
   if (!ready) return <div style={s.empty}>Marketplace vaults are not ready.</div>;
   return (
     <div style={s.form}>
@@ -565,6 +570,9 @@ function SellView({ ready, owned, loading, supportedAssets, walletMap, selectedA
         Price in USDC
         <input value={priceInput} onChange={(e) => setPriceInput(e.target.value)} placeholder="e.g. 50" style={s.input} />
       </label>
+      <div style={s.feeLine}>
+        Marketplace fee {percent(feeBps)} - Royalty {percent(royaltyBps)} - Seller receives {percent(sellerBps)}
+      </div>
       <button type="button" onClick={onSubmit} disabled={busy || !selectedAsset || !priceInput} style={{ ...s.primaryBtn, ...(busy ? s.disabledBtn : null) }}>
         {busy ? 'Listing...' : 'List and transfer to escrow'}
       </button>
@@ -640,6 +648,7 @@ const s = {
   nftPickImg: { width: 72, height: 72, objectFit: 'cover', borderRadius: 6 },
   nftPickChain: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, flexWrap: 'wrap', minHeight: 18 },
   connectedLine: { fontSize: 11, color: '#7a5a30', fontWeight: 800 },
+  feeLine: { fontSize: 11, color: '#7a5a30', fontWeight: 800, background: '#fff8e6', border: '1px solid #d4c8b0', borderRadius: 8, padding: '7px 9px' },
   label: { display: 'flex', flexDirection: 'column', gap: 5, fontSize: 12, color: '#5C3A21', fontWeight: 900 },
   input: { padding: '9px 10px', borderRadius: 8, border: '2px solid #d4c8b0', background: '#fff', color: '#3a2810', fontWeight: 800 },
   primaryBtn: { width: '100%', padding: 11, borderRadius: 10, border: '3px solid #1f6d34', background: 'linear-gradient(180deg, #91df7d 0%, #3b9b41 100%)', color: '#fff', fontWeight: 900, cursor: 'pointer' },

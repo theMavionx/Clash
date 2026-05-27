@@ -88,6 +88,7 @@ if (onChainId !== spec.chain.id) {
 const balance = await publicClient.getBalance({ address: account.address });
 const treasury = getAddress(env.NFT_MARKETPLACE_TREASURY || env.NFT_ROYALTY_RECEIVER || TREASURY);
 const fallbackRoyaltyBps = Number(env.NFT_MARKETPLACE_FALLBACK_ROYALTY_BPS || '250');
+const platformFeeBps = Number(env.NFT_MARKETPLACE_FEE_BPS || env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100');
 const usdcToken = getAddress(env[`NFT_${chainKey.toUpperCase()}_USDC_TOKEN`] || spec.usdcDefault);
 const copTokenRaw = env[`NFT_${chainKey.toUpperCase()}_CLASH_TOKEN`] || env.NFT_CLASH_TOKEN || env.GAME_SHOP_COP_TOKEN || '';
 const copToken = copTokenRaw && /^0x[0-9a-fA-F]{40}$/.test(copTokenRaw) ? getAddress(copTokenRaw) : null;
@@ -100,6 +101,7 @@ console.log(`  Native balance : ${formatEther(balance)} ${spec.chain.nativeCurre
 console.log(`  NFT (proxy)    : ${nftAddress}`);
 console.log(`  Treasury       : ${treasury}`);
 console.log(`  Fallback bps   : ${fallbackRoyaltyBps}   (${fallbackRoyaltyBps / 100}%)`);
+console.log(`  Platform fee   : ${platformFeeBps}   (${platformFeeBps / 100}%)`);
 console.log(`  Whitelist USDC : ${usdcToken}`);
 console.log(`  Whitelist CoP  : ${copToken || '(skip — set via setAcceptedPaymentToken later)'}`);
 console.log('');
@@ -137,7 +139,7 @@ console.log('\n[2/3] Deploying proxy with initialize(...)…');
 const initData = encodeFunctionData({
   abi: marketArtifact.abi,
   functionName: 'initialize',
-  args: [account.address, nftAddress, treasury, fallbackRoyaltyBps],
+  args: [account.address, nftAddress, treasury, fallbackRoyaltyBps, platformFeeBps],
 });
 const proxyHash = await walletClient.deployContract({
   abi: proxyArtifact.abi, bytecode: proxyArtifact.bytecode,
@@ -170,18 +172,21 @@ const MARKET_VIEW_ABI = [
   { name: 'demonKing', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   { name: 'treasury',  type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'address' }] },
   { name: 'defaultRoyaltyBps', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint16' }] },
+  { name: 'platformFeeBps', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint16' }] },
   { name: 'acceptedPaymentToken', type: 'function', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'bool' }] },
 ];
-const [nftRead, treasuryRead, bpsRead, ethAccepted, usdcAccepted] = await Promise.all([
+const [nftRead, treasuryRead, bpsRead, platformFeeRead, ethAccepted, usdcAccepted] = await Promise.all([
   publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'demonKing' }),
   publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'treasury' }),
   publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'defaultRoyaltyBps' }),
+  publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'platformFeeBps' }),
   publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: ['0x0000000000000000000000000000000000000000'] }),
   publicClient.readContract({ address: marketAddress, abi: MARKET_VIEW_ABI, functionName: 'acceptedPaymentToken', args: [usdcToken] }),
 ]);
 if (getAddress(nftRead) !== nftAddress) throw new Error(`demonKing mismatch: ${nftRead}`);
 if (getAddress(treasuryRead) !== treasury) throw new Error(`treasury mismatch: ${treasuryRead}`);
 if (bpsRead !== fallbackRoyaltyBps) throw new Error(`bps mismatch: ${bpsRead}`);
+if (platformFeeRead !== platformFeeBps) throw new Error(`platform fee mismatch: ${platformFeeRead}`);
 if (!ethAccepted) throw new Error('ETH should be accepted by default');
 if (!usdcAccepted) throw new Error('USDC whitelist failed');
 console.log('  ✓ Marketplace state verified.');
@@ -196,6 +201,7 @@ const deployment = {
   demonKing: nftAddress,
   treasury,
   defaultRoyaltyBps: fallbackRoyaltyBps,
+  platformFeeBps,
   acceptedPaymentTokens: {
     eth: '0x0000000000000000000000000000000000000000',
     usdc: usdcToken,

@@ -219,6 +219,8 @@ try {
       price_usdc_units           TEXT NOT NULL,
       fee_bps                    INTEGER NOT NULL DEFAULT 0,
       fee_usdc_units             TEXT NOT NULL DEFAULT '0',
+      royalty_bps                INTEGER NOT NULL DEFAULT 0,
+      royalty_usdc_units         TEXT NOT NULL DEFAULT '0',
       seller_amount_usdc_units   TEXT NOT NULL,
       payment_chain              TEXT NOT NULL DEFAULT 'base',
       payment_token              TEXT NOT NULL DEFAULT 'usdc',
@@ -288,6 +290,10 @@ try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN payment_decim
 catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace payment_decimals migration:', e.message); }
 try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN payment_label TEXT NOT NULL DEFAULT 'USDC'`); }
 catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace payment_label migration:', e.message); }
+try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN royalty_bps INTEGER NOT NULL DEFAULT 0`); }
+catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace royalty_bps migration:', e.message); }
+try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN royalty_usdc_units TEXT NOT NULL DEFAULT '0'`); }
+catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace royalty_usdc_units migration:', e.message); }
 
 // Cross-chain bridge ledger. One row per consumed (sourceRef, destChain) tuple
 // so the orchestrator can refuse to re-sign / re-mint receipts for an asset

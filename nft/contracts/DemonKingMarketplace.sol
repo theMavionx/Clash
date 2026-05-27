@@ -46,9 +46,10 @@ contract DemonKingMarketplace is
         bool    active;
     }
     mapping(uint256 => Listing) public listings;
+    uint16 public platformFeeBps;                              // marketplace fee paid to treasury on every fill
 
     // ---- Future-proof gap ----
-    uint256[40] private __gap;
+    uint256[39] private __gap;
 
     // ---- Events ----
     event Listed(uint256 indexed tokenId, address indexed seller, address paymentToken, uint256 price, uint64 expiresAt);
@@ -65,6 +66,7 @@ contract DemonKingMarketplace is
     event AcceptedPaymentTokenUpdated(address indexed token, bool accepted);
     event TreasuryUpdated(address oldTreasury, address newTreasury);
     event DefaultRoyaltyBpsUpdated(uint16 oldBps, uint16 newBps);
+    event PlatformFeeBpsUpdated(uint16 oldBps, uint16 newBps);
     event DemonKingUpdated(address oldAddr, address newAddr);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -76,12 +78,14 @@ contract DemonKingMarketplace is
         address initialOwner,
         address nftAddress,
         address treasuryAddress,
-        uint16  fallbackRoyaltyBps
+        uint16  fallbackRoyaltyBps,
+        uint16  initialPlatformFeeBps
     ) public initializer {
         require(initialOwner != address(0), "Zero owner");
         require(nftAddress != address(0), "Zero NFT");
         require(treasuryAddress != address(0), "Zero treasury");
         require(fallbackRoyaltyBps <= 1_000, "Royalty cap 10%");
+        require(initialPlatformFeeBps <= 1_000, "Fee cap 10%");
 
         __Ownable_init(initialOwner);
         __Pausable_init();
@@ -90,6 +94,7 @@ contract DemonKingMarketplace is
         demonKing = IERC721(nftAddress);
         treasury = treasuryAddress;
         defaultRoyaltyBps = fallbackRoyaltyBps;
+        platformFeeBps = initialPlatformFeeBps;
 
         // ETH always accepted by default.
         acceptedPaymentToken[address(0)] = true;
@@ -143,11 +148,16 @@ contract DemonKingMarketplace is
         delete listings[tokenId];
 
         (address royaltyReceiver, uint256 royaltyAmount) = _royaltyOf(tokenId, l.price);
-        uint256 sellerProceeds = l.price - royaltyAmount;
+        uint256 platformFeeAmount = _platformFeeOf(l.price);
+        uint256 sellerProceeds = l.price - royaltyAmount - platformFeeAmount;
 
         if (royaltyAmount > 0) {
             (bool ok, ) = payable(royaltyReceiver).call{value: royaltyAmount}("");
             require(ok, "Royalty xfer failed");
+        }
+        if (platformFeeAmount > 0) {
+            (bool okFee, ) = payable(treasury).call{value: platformFeeAmount}("");
+            require(okFee, "Fee xfer failed");
         }
         (bool okSeller, ) = payable(l.seller).call{value: sellerProceeds}("");
         require(okSeller, "Seller xfer failed");
@@ -163,11 +173,15 @@ contract DemonKingMarketplace is
         delete listings[tokenId];
 
         (address royaltyReceiver, uint256 royaltyAmount) = _royaltyOf(tokenId, l.price);
-        uint256 sellerProceeds = l.price - royaltyAmount;
+        uint256 platformFeeAmount = _platformFeeOf(l.price);
+        uint256 sellerProceeds = l.price - royaltyAmount - platformFeeAmount;
 
         IERC20 token = IERC20(l.paymentToken);
         if (royaltyAmount > 0) {
             token.safeTransferFrom(msg.sender, royaltyReceiver, royaltyAmount);
+        }
+        if (platformFeeAmount > 0) {
+            token.safeTransferFrom(msg.sender, treasury, platformFeeAmount);
         }
         token.safeTransferFrom(msg.sender, l.seller, sellerProceeds);
 
@@ -192,6 +206,12 @@ contract DemonKingMarketplace is
         require(newBps <= 1_000, "Cap 10%");
         emit DefaultRoyaltyBpsUpdated(defaultRoyaltyBps, newBps);
         defaultRoyaltyBps = newBps;
+    }
+
+    function setPlatformFeeBps(uint16 newBps) external onlyOwner {
+        require(newBps <= 1_000, "Cap 10%");
+        emit PlatformFeeBpsUpdated(platformFeeBps, newBps);
+        platformFeeBps = newBps;
     }
 
     function setDemonKing(address newAddr) external onlyOwner {
@@ -250,6 +270,10 @@ contract DemonKingMarketplace is
         receiver = treasury;
         amount = (salePrice * defaultRoyaltyBps) / 10_000;
         if (amount > salePrice) amount = 0;
+    }
+
+    function _platformFeeOf(uint256 salePrice) internal view returns (uint256) {
+        return (salePrice * platformFeeBps) / 10_000;
     }
 
     receive() external payable {

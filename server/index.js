@@ -3561,7 +3561,9 @@ function renderMarketplace() {
     '<div class="stat"><div class="v">' + (s.activeListings || 0) + '</div><div class="l">Active listings</div></div>' +
     '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + ((s.reservedOrders || 0) + (s.paidOrders || 0) + (s.deliveringOrders || 0)) + '</div><div class="l">Pending buyers</div></div>' +
     '<div class="stat" style="border-color:' + ((s.errorOrders || 0) ? '#ef4444' : '#22c55e') + '"><div class="v" style="color:' + ((s.errorOrders || 0) ? '#f87171' : '#4ade80') + '">' + (s.errorOrders || 0) + '</div><div class="l">Orders with errors</div></div>' +
-    '<div class="stat"><div class="v">' + marketUsdc(s.feeUsdcUnits) + '</div><div class="l">Fees earned</div></div>' +
+    '<div class="stat"><div class="v">' + marketUsdc(s.feeUsdcUnits) + '</div><div class="l">Marketplace fee</div></div>' +
+    '<div class="stat"><div class="v">' + marketUsdc(s.royaltyUsdcUnits) + '</div><div class="l">Royalty</div></div>' +
+    '<div class="stat"><div class="v">' + marketUsdc(s.projectRevenueUsdcUnits) + '</div><div class="l">Project revenue</div></div>' +
     '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#38bdf8">' + marketUsdc(s.payoutDueUsdcUnits) + '</div><div class="l">Payout due</div></div>' +
     '<div class="stat"><div class="v">' + (s.sales24h || 0) + '</div><div class="l">Sales 24h</div></div>' +
     '<div class="stat"><div class="v" style="font-size:14px;color:#9ca3af">' + esc(fmtAdminTime(s.latestAt)) + '</div><div class="l">Latest update</div></div>';
@@ -3599,7 +3601,10 @@ function renderMarketplace() {
         '<td>' + marketAssetCell(order) + '</td>' +
         '<td>' + marketChainBadge(order.sellerPayoutChain || order.assetChain) + '<div>' + marketWallet(order.sellerWallet) + '</div></td>' +
         '<td>' + marketChainBadge(order.buyerDestChain || order.paymentChain) + '<div>' + marketWallet(order.buyerWallet || order.buyerDestAddress) + '</div></td>' +
-        '<td style="color:#4ade80;font-weight:700">' + marketUsdc(order.priceUsdcUnits) + '<div style="font-size:10px;color:#64748b">fee ' + marketUsdc(order.feeUsdcUnits) + '</div></td>' +
+        '<td style="color:#4ade80;font-weight:700">' + marketUsdc(order.priceUsdcUnits) +
+          '<div style="font-size:10px;color:#64748b">fee ' + marketUsdc(order.feeUsdcUnits) + '</div>' +
+          '<div style="font-size:10px;color:#64748b">royalty ' + marketUsdc(order.royaltyUsdcUnits) + '</div>' +
+        '</td>' +
         '<td>' + marketPaymentCell(order) + '</td>' +
         '<td><div>Delivery: ' + marketTxLink(order.buyerDestChain || order.assetChain, order.deliveryTxHash) + '</div><div style="margin-top:4px">Payout: ' + marketTxLink(order.sellerPayoutChain, order.payoutTxHash) + '</div></td>' +
         '<td>' + marketErrorCell(order) + '</td>' +
