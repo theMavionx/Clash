@@ -143,6 +143,27 @@ function envFlag(name, defaultValue = false) {
   return !/^(0|false|no|off)$/i.test(String(raw).trim());
 }
 
+function marketplaceFeeBps() {
+  return Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100') || 0));
+}
+
+function marketplaceRoyaltyBps() {
+  return Math.max(0, Math.min(1000, Number(
+    process.env.CUSTODIAL_MARKETPLACE_ROYALTY_BPS
+      || process.env.NFT_COLLECTION_ROYALTY_BPS
+      || process.env.NFT_SELLER_FEE_BASIS_POINTS
+      || '250'
+  ) || 0));
+}
+
+function quoteMarketplaceSplit(priceUnits, feeBps = marketplaceFeeBps(), royaltyBps = marketplaceRoyaltyBps()) {
+  const price = BigInt(String(priceUnits || '0'));
+  const fee = price * BigInt(feeBps) / 10_000n;
+  const royalty = price * BigInt(royaltyBps) / 10_000n;
+  const sellerAmount = price - fee - royalty;
+  return { feeBps, royaltyBps, fee, royalty, sellerAmount };
+}
+
 function insertEvent(orderId, eventType, { actorPlayerId = null, txHash = null, data = {} } = {}) {
   gameDb.db.prepare(`
     INSERT INTO custodial_marketplace_events
@@ -153,6 +174,61 @@ function insertEvent(orderId, eventType, { actorPlayerId = null, txHash = null, 
 
 function getOrder(orderId) {
   return gameDb.db.prepare('SELECT * FROM custodial_marketplace_orders WHERE id = ?').get(String(orderId || '')) || null;
+}
+
+function backfillOpenOrderFees() {
+  const rows = gameDb.db.prepare(`
+    SELECT id, price_usdc_units, fee_bps, royalty_bps, seller_amount_usdc_units
+    FROM custodial_marketplace_orders
+    WHERE status IN ('awaiting_deposit', 'active', 'reserved')
+      AND (
+        COALESCE(fee_bps, 0) <> ?
+        OR COALESCE(royalty_bps, 0) <> ?
+        OR COALESCE(fee_usdc_units, '0') = '0'
+        OR COALESCE(royalty_usdc_units, '0') = '0'
+      )
+  `).all(marketplaceFeeBps(), marketplaceRoyaltyBps());
+  if (!rows.length) return;
+  const update = gameDb.db.prepare(`
+    UPDATE custodial_marketplace_orders
+    SET fee_bps = ?,
+        fee_usdc_units = ?,
+        royalty_bps = ?,
+        royalty_usdc_units = ?,
+        seller_amount_usdc_units = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  let changed = 0;
+  const tx = gameDb.db.transaction(() => {
+    for (const row of rows) {
+      const split = quoteMarketplaceSplit(row.price_usdc_units);
+      if (split.sellerAmount <= 0n) {
+        console.warn(`[custodial-marketplace] skipped fee backfill for ${row.id}: seller amount <= 0`);
+        continue;
+      }
+      update.run(
+        split.feeBps,
+        split.fee.toString(),
+        split.royaltyBps,
+        split.royalty.toString(),
+        split.sellerAmount.toString(),
+        row.id
+      );
+      insertEvent(row.id, 'fees_backfilled', {
+        data: {
+          feeBps: split.feeBps,
+          feeUsdcUnits: split.fee.toString(),
+          royaltyBps: split.royaltyBps,
+          royaltyUsdcUnits: split.royalty.toString(),
+          sellerAmountUsdcUnits: split.sellerAmount.toString(),
+        },
+      });
+      changed += 1;
+    }
+  });
+  tx();
+  if (changed) console.log(`[custodial-marketplace] backfilled marketplace fees for ${changed} open order(s)`);
 }
 
 function listEvents(orderId) {
@@ -492,8 +568,8 @@ async function marketplaceRuntimeConfig(ctx) {
   const vaults = await vaultsConfig(ctx);
   const payments = paymentConfigs(ctx);
   const deliveryReady = await destinationDeliveryReadiness(ctx);
-  const feeBps = Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100') || 0));
-  const royaltyBps = Math.max(0, Math.min(1000, Number(process.env.CUSTODIAL_MARKETPLACE_ROYALTY_BPS || process.env.NFT_COLLECTION_ROYALTY_BPS || process.env.NFT_SELLER_FEE_BASIS_POINTS || '250') || 0));
+  const feeBps = marketplaceFeeBps();
+  const royaltyBps = marketplaceRoyaltyBps();
   const allowExternalVault = process.env.CUSTODIAL_MARKETPLACE_ALLOW_EXTERNAL_VAULT === '1';
   const supportedChains = ALL_CHAINS.filter((chain) => isVaultUsable(vaults[chain], allowExternalVault));
   const supportedPaymentChains = ALL_CHAINS.filter((chain) => payments[chain]?.ready);
@@ -1340,6 +1416,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   const auth = ctx.auth;
   const adminAuth = ctx.adminAuth;
   if (!auth) throw new Error('auth middleware required');
+  backfillOpenOrderFees();
   startSettlementWorker(ctx);
 
   router.get('/marketplace/custodial/config', async (req, res) => {
@@ -1436,9 +1513,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const payoutChain = normalizeChain(req.body?.sellerPayoutChain || assetChain, 'sellerPayoutChain');
       const payoutAddress = normalizeAddressForChain(payoutChain, req.body?.sellerPayoutAddress || sellerWallet, 'Seller payout wallet');
       const priceUnits = parseUsdcUnits(req.body?.priceUsdc ?? req.body?.price, 'Listing price');
-      const fee = priceUnits * BigInt(config.feeBps) / 10_000n;
-      const royalty = priceUnits * BigInt(config.royaltyBps) / 10_000n;
-      const sellerAmount = priceUnits - fee - royalty;
+      const { fee, royalty, sellerAmount } = quoteMarketplaceSplit(priceUnits, config.feeBps, config.royaltyBps);
       if (sellerAmount <= 0n) throw httpError(400, 'Listing price is too small after marketplace fee and royalty');
       const assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
       const id = crypto.randomUUID();
