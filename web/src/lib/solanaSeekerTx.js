@@ -295,15 +295,27 @@ export function buildSolanaWalletTxOptions({
   log = defaultLog,
   forceMobileVersionedTransaction = true,
   preferMobileAdapterSend = true,
+  preferMobileSignTransaction = false,
   allowMobileProtocolFallback = true,
 }) {
   const adapterName = solanaWalletAdapterName(solWallet) || 'wallet';
   const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
   const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function' || mobileWalletAdapter;
-  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
+  const canAdapterSignSolanaTx = typeof solWallet?.signTransaction === 'function';
+  const canSignSolanaTx = canAdapterSignSolanaTx || (mobileWalletAdapter && preferMobileSignTransaction);
   if (!canSendSolanaTx && !canSignSolanaTx) {
     throw new Error('This Solana wallet cannot sign transactions');
   }
+  const mobileSignTransaction = mobileWalletAdapter && preferMobileSignTransaction
+    ? (tx) => signSolanaMobileProtocolTransaction({
+        transaction: tx,
+        expectedAddress: owner,
+        label,
+        venueLabel,
+        log,
+      })
+    : null;
+  const adapterSignTransaction = canAdapterSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null;
 
   return {
     adapterName,
@@ -357,13 +369,17 @@ export function buildSolanaWalletTxOptions({
       : null,
     // Seeker/MWA must avoid the adapter raw-sign path. The protocol helper
     // serializes unsigned txs correctly and lets Seed Vault add the signature.
-    signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
+    signTransaction: mobileSignTransaction || (canSendSolanaTx && solWallet?.source !== 'privy'
       ? null
-      : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
-    preferWalletSendTransaction: canSendSolanaTx,
+      : adapterSignTransaction),
+    preferWalletSendTransaction: mobileSignTransaction ? false : canSendSolanaTx,
     forceVersionedTransaction: mobileWalletAdapter && forceMobileVersionedTransaction,
     walletPathOverride: mobileWalletAdapter
-      ? (forceMobileVersionedTransaction ? 'mwa_sign_and_send_v0' : 'mwa_sign_and_send_legacy')
+      ? (
+          mobileSignTransaction
+            ? (forceMobileVersionedTransaction ? 'mwa_sign_raw_v0' : 'mwa_sign_raw_legacy')
+            : (forceMobileVersionedTransaction ? 'mwa_sign_and_send_v0' : 'mwa_sign_and_send_legacy')
+        )
       : null,
     label: `${label}.${adapterName}`,
   };

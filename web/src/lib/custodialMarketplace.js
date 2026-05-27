@@ -493,8 +493,9 @@ export async function depositToken2022NftToCustody({
       label: 'custodial_marketplace.deposit_solana_token2022',
       venueLabel: 'Marketplace',
       // Seeker wallet simulates and displays simple escrow transfers more
-      // reliably as legacy transactions. No address lookup table is needed.
+      // reliably as legacy sign-only transactions. No address lookup table is needed.
       forceMobileVersionedTransaction: false,
+      preferMobileSignTransaction: true,
     }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
@@ -563,8 +564,9 @@ export async function depositCoreNftToCustody({
       label: 'custodial_marketplace.deposit_solana_core',
       venueLabel: 'Marketplace',
       // Seeker wallet simulates and displays simple escrow transfers more
-      // reliably as legacy transactions. No address lookup table is needed.
+      // reliably as legacy sign-only transactions. No address lookup table is needed.
       forceMobileVersionedTransaction: false,
+      preferMobileSignTransaction: true,
     }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
