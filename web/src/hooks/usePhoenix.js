@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useSignAndSendTransaction as usePrivySignAndSend, useSignTransaction as usePrivySignTransaction, useWallets as usePrivyWallets } from '@privy-io/react-auth/solana';
-import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildWithdrawIxsResolved, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
+import { DEFAULT_MARKET_ORDER_SLIPPAGE, Direction, MarginType, OrderFlags, SelfTradeBehavior, Side, StopLossOrderKind, buildDepositIxsResolved, buildNormalizedMarketParamsBySymbol, buildWithdrawIxsResolved, computeTraderMarginFromInputs, createPhoenixTraderStateManager, priceUsdToTicks, quoteLots } from '@ellipsis-labs/rise';
 import { useDex } from '../contexts/DexContext';
 import { usePlayer } from './useGodot';
 import {
@@ -10,7 +10,9 @@ import {
   createPhoenixPublicWsClient,
   createPhoenixTransactionClient,
   disposePhoenixClient,
+  getPhoenixBrowserRestClient,
   getPhoenixClient,
+  getPhoenixProxyRestClient,
   phoenixSymbol,
   shouldBypassPhoenixFlightForAuthority,
 } from '../lib/phoenixClient';
@@ -28,6 +30,8 @@ const PHOENIX_MARKET_MIN_QUOTE_LOTS_TO_FILL = quoteLots(0n);
 const PHOENIX_TX_METADATA_TTL_MS = 5 * 60_000;
 const PHOENIX_TRADER_STATE_DEDUP_MS = 1_200;
 const PHOENIX_TRADER_STATE_ERROR_RETRY_MS = 15_000;
+const PHOENIX_TRADER_STATE_REST_FALLBACK_MS = 60_000;
+const PHOENIX_TRADER_STATE_POST_TX_REST_FALLBACK_MS = 8_000;
 const PHOENIX_UNREGISTERED_RETRY_MS = 10 * 60_000;
 const PHOENIX_WITHDRAW_RISK_BUFFER_USDC = 0.01;
 const PHOENIX_ORDER_COMPUTE_UNIT_LIMIT = 1_000_000;
@@ -267,6 +271,21 @@ function tokenAmountValue(value) {
   return raw;
 }
 
+function quoteLotsToUsd(value) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return 0;
+  return n / 10 ** USDC_DECIMALS;
+}
+
+function negateIntegerString(value) {
+  try {
+    return String(-BigInt(value ?? '0'));
+  } catch {
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? String(-Math.trunc(n)) : '0';
+  }
+}
+
 function toRawUsdc(amount) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) throw new Error('Enter a positive USDC amount');
@@ -404,6 +423,142 @@ function normalizeMarket(m) {
     _phoenix: m,
     _phoenixBaseLotsDecimals: baseLotsDecimals,
     _phoenixTickSizeRaw: tickSizeRaw,
+  };
+}
+
+function phoenixMarketToMarginParams(market, priceRow = null) {
+  const raw = market?._phoenix || market;
+  const symbol = phoenixSymbol(raw?.symbol || market?.symbol);
+  const mark = firstFinite(
+    priceRow?.mark,
+    priceRow?.price,
+    market?._mark,
+    raw?.markPrice?.price,
+    raw?.markPrice,
+    raw?.price
+  );
+  const tickSizeRaw = Number(
+    raw?.units?.tickSizeInQuoteLotsPerBaseLot
+    ?? raw?.tickSize
+    ?? market?._phoenixTickSizeRaw
+    ?? 0
+  );
+  const baseLotsDecimals = Number(
+    raw?.units?.baseLotsDecimals
+    ?? raw?.baseLotsDecimals
+    ?? raw?.baseLotDecimals
+    ?? market?._phoenixBaseLotsDecimals
+    ?? 4
+  );
+  const assetId = Number(raw?.assetId ?? market?.assetId);
+  if (!symbol || mark == null || mark <= 0 || !Number.isFinite(tickSizeRaw) || tickSizeRaw <= 0) {
+    return null;
+  }
+  const leverageTiers = (Array.isArray(raw?.leverageTiers) ? raw.leverageTiers : [])
+    .map(tier => ({
+      upperBoundSize: String(tier?.maxSizeBaseLots ?? tier?.upperBoundSize ?? 0),
+      maxLeverage: String(tier?.maxLeverage ?? 1),
+      limitOrderRiskFactorBps: String(tier?.limitOrderRiskFactor ?? tier?.limitOrderRiskFactorBps ?? 100),
+    }))
+    .filter(tier => Number(tier.upperBoundSize) > 0);
+  if (!leverageTiers.length) {
+    leverageTiers.push({
+      upperBoundSize: '9007199254740991',
+      maxLeverage: String(market?.max_leverage || 1),
+      limitOrderRiskFactorBps: '100',
+    });
+  }
+  return {
+    symbol,
+    assetId: Number.isFinite(assetId) ? assetId : 0,
+    markPriceTicks: priceUsdToTicks(String(mark), {
+      baseLotsDecimals,
+      tickSizeInQuoteLotsPerBaseLot: tickSizeRaw,
+    }),
+    tickSize: String(tickSizeRaw),
+    baseLotDecimals: Number.isFinite(baseLotsDecimals) ? baseLotsDecimals : 4,
+    leverageTiers,
+    riskFactors: {
+      maintenanceMarginFactorBps: String(raw?.riskFactors?.maintenance ?? raw?.riskFactors?.maintenanceMarginFactorBps ?? 0),
+      backstopMarginFactorBps: String(raw?.riskFactors?.backstop ?? raw?.riskFactors?.backstopMarginFactorBps ?? 0),
+      highRiskMarginFactorBps: String(raw?.riskFactors?.highRisk ?? raw?.riskFactors?.highRiskMarginFactorBps ?? 0),
+    },
+    cancelOrderRiskFactorBps: String(raw?.riskFactors?.cancelOrder ?? raw?.cancelOrderRiskFactorBps ?? 0),
+    upnlRiskFactor: String(raw?.riskFactors?.upnl ?? raw?.upnlRiskFactor ?? 100),
+    upnlRiskFactorForWithdrawals: String(raw?.riskFactors?.upnlForWithdrawals ?? raw?.upnlRiskFactorForWithdrawals ?? 100),
+    isolatedOnly: !!(raw?.isolatedOnly ?? market?.isolated_only),
+  };
+}
+
+function computePhoenixMarginResult(marginInputs, markets, prices) {
+  if (!marginInputs || !Array.isArray(marginInputs.subaccounts)) return null;
+  const priceBySymbol = new Map((prices || []).map(row => [phoenixSymbol(row?.symbol), row]));
+  const symbols = new Set();
+  for (const sub of marginInputs.subaccounts) {
+    for (const market of sub?.markets || []) {
+      const symbol = phoenixSymbol(market?.symbol);
+      if (symbol) symbols.add(symbol);
+    }
+  }
+  const params = (markets || [])
+    .filter(market => symbols.has(phoenixSymbol(market?.symbol)))
+    .map(market => phoenixMarketToMarginParams(market, priceBySymbol.get(phoenixSymbol(market?.symbol))))
+    .filter(Boolean);
+  if (!params.length) return null;
+  try {
+    return computeTraderMarginFromInputs(marginInputs, buildNormalizedMarketParamsBySymbol(params));
+  } catch (error) {
+    console.warn('[Phoenix] WS margin compute failed', error?.message || error);
+    return null;
+  }
+}
+
+function buildPhoenixMarginInputsFromSnapshot(authority, traderPdaIndex, subaccounts) {
+  return {
+    authority,
+    traderPdaIndex: Number(traderPdaIndex) || 0,
+    subaccounts: (subaccounts || []).map(sub => {
+      const positionsBySymbol = new Map();
+      for (const position of sub?.positions || []) {
+        const symbol = phoenixSymbol(position?.symbol);
+        if (symbol) positionsBySymbol.set(symbol, position);
+      }
+      const ordersBySymbol = new Map();
+      for (const event of sub?.orders || []) {
+        const symbol = phoenixSymbol(event?.symbol);
+        if (symbol) ordersBySymbol.set(symbol, Array.isArray(event?.orders) ? event.orders : []);
+      }
+      const symbols = new Set([...positionsBySymbol.keys(), ...ordersBySymbol.keys()]);
+      return {
+        subaccountIndex: Number(sub?.subaccountIndex) || 0,
+        collateralBalanceQuoteLots: String(sub?.collateral ?? '0'),
+        markets: Array.from(symbols).map(symbol => {
+          const position = positionsBySymbol.get(symbol);
+          const orders = ordersBySymbol.get(symbol) || [];
+          return {
+            symbol,
+            position: position ? {
+              basePositionLots: String(position.basePositionLots ?? '0'),
+              virtualQuotePositionLots: String(position.virtualQuotePositionLots ?? '0'),
+              entryPriceTicks: String(position.entryPriceTicks ?? '0'),
+              unsettledFundingQuoteLots: negateIntegerString(position.unsettledFundingQuoteLots ?? '0'),
+              accumulatedFundingQuoteLots: String(position.accumulatedFundingQuoteLots ?? '0'),
+            } : undefined,
+            limitOrders: orders.map(order => ({
+              orderSequenceNumber: String(order?.orderSequenceNumber ?? ''),
+              side: sideToUi(order?.side),
+              priceTicks: String(order?.priceTicks ?? '0'),
+              sizeRemainingLots: String(order?.sizeRemainingLots ?? '0'),
+              initialSizeLots: String(order?.initialSizeLots ?? order?.sizeRemainingLots ?? '0'),
+              reduceOnly: !!order?.reduceOnly,
+              isStopLoss: !!order?.isStopLoss,
+              isStopLossDirection: !!order?.isStopLossDirection,
+              status: String(order?.status || 'active'),
+            })).filter(order => order.orderSequenceNumber),
+          };
+        }),
+      };
+    }),
   };
 }
 
@@ -684,6 +839,37 @@ function positionFromTraderView(vp, traderView, snapshotRow, marketsBySymbol) {
   };
 }
 
+function phoenixUiPositionKey(position) {
+  if (!position) return '';
+  return [
+    Number(position._phoenixSubaccountIndex || 0),
+    phoenixSymbol(position.symbol),
+    String(position.side || '').toLowerCase(),
+  ].join(':');
+}
+
+function mergeSnapshotPositionMargin(position, marketMargin, previousPosition = null) {
+  if (!position || !marketMargin) {
+    return previousPosition?.liquidation_price
+      ? { ...position, liquidation_price: previousPosition.liquidation_price }
+      : position;
+  }
+  const margin = quoteLotsToUsd(marketMargin.positionInitialMarginQuoteLots ?? marketMargin.initialMarginQuoteLots);
+  const pnl = quoteLotsToUsd(marketMargin.unrealizedPnlQuoteLots);
+  const positionValue = Math.abs(quoteLotsToUsd(marketMargin.positionValueQuoteLots));
+  const next = {
+    ...position,
+    size_usd: positionValue > 0 ? positionValue : position.size_usd,
+    margin: margin > 0 ? margin : position.margin,
+    pnl_usd: pnl,
+    pnl_pct: margin > 0 ? (pnl / margin) * 100 : position.pnl_pct,
+    leverage: margin > 0 && positionValue > 0 ? Math.round((positionValue / margin) * 10) / 10 : position.leverage,
+    liquidation_price: previousPosition?.liquidation_price ?? position.liquidation_price,
+    _phoenixMargin: marketMargin,
+  };
+  return next;
+}
+
 function ordersFromSnapshot(group, marketsBySymbol, subaccountIndex = 0) {
   const symbol = phoenixSymbol(group?.symbol);
   if (!symbol) return [];
@@ -852,7 +1038,16 @@ export function usePhoenix() {
   const pricesFetchedAtRef = useRef(0);
   const priceBackoffUntilRef = useRef(0);
   const subaccountsRef = useRef([]);
+  const positionsRef = useRef([]);
+  const ordersRef = useRef([]);
   const traderRegisteredRef = useRef(false);
+  const traderStateWsReadyRef = useRef(false);
+  const traderStateResourceRef = useRef(null);
+  const traderStateReleaseRef = useRef(null);
+  const lastTraderStateRestAtRef = useRef(0);
+  const lastTraderStatePostTxRestAtRef = useRef(0);
+  const lastTraderStateRiskRestAtRef = useRef(0);
+  const refreshTraderStateRef = useRef(null);
   const tokenRef = useRef(null);
   const claimGoldRef = useRef(null);
   const claimInFlightRef = useRef(null);
@@ -877,8 +1072,42 @@ export function usePhoenix() {
   }, [player?.token]);
 
   const client = getPhoenixClient(connection?.rpcEndpoint);
+  const phoenixBrowserRestClient = useMemo(
+    () => getPhoenixBrowserRestClient(connection?.rpcEndpoint),
+    [connection?.rpcEndpoint],
+  );
+  const phoenixProxyRestClient = useMemo(
+    () => getPhoenixProxyRestClient(connection?.rpcEndpoint),
+    [connection?.rpcEndpoint],
+  );
+  const phoenixRestSources = useMemo(() => {
+    const rows = [
+      { name: 'browser', client: phoenixBrowserRestClient },
+      { name: 'proxy', client: phoenixProxyRestClient },
+    ];
+    const seen = new Set();
+    return rows.filter(row => {
+      if (!row.client || seen.has(row.client)) return false;
+      seen.add(row.client);
+      return true;
+    });
+  }, [phoenixBrowserRestClient, phoenixProxyRestClient]);
   const clearError = useCallback(() => setError(null), []);
   const clearGoldEarned = useCallback(() => setGoldEarned(null), []);
+  const setPhoenixPositions = useCallback((nextOrUpdater) => {
+    setPositions(prev => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      positionsRef.current = Array.isArray(next) ? next : [];
+      return positionsRef.current;
+    });
+  }, []);
+  const setPhoenixOrders = useCallback((nextOrUpdater) => {
+    setOrders(prev => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      ordersRef.current = Array.isArray(next) ? next : [];
+      return ordersRef.current;
+    });
+  }, []);
   const setPhoenixAccount = useCallback((nextOrUpdater) => {
     setAccount(prev => {
       const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
@@ -896,17 +1125,23 @@ export function usePhoenix() {
     refreshTraderStateCachedAtRef.current = 0;
     refreshTraderStateLastResultRef.current = undefined;
     refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
+    traderStateWsReadyRef.current = false;
+    lastTraderStateRestAtRef.current = 0;
+    lastTraderStatePostTxRestAtRef.current = 0;
+    lastTraderStateRiskRestAtRef.current = 0;
     tpslOptimisticRef.current.clear();
     subaccountsRef.current = [];
+    positionsRef.current = [];
+    ordersRef.current = [];
     setTraderRegistered(false);
     setAccountReady(false);
     setDataReady(false);
-    setPositions([]);
-    setOrders([]);
+    setPhoenixPositions([]);
+    setPhoenixOrders([]);
     setPhoenixAccount(null);
     setDepositStatus(null);
     setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
-  }, [setPhoenixAccount, walletAddr, walletMismatch]);
+  }, [setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch) return;
@@ -1071,6 +1306,42 @@ export function usePhoenix() {
     map.set(key, p);
     return p;
   }, []);
+
+  const readPhoenixRestFallback = useCallback(async (label, reader) => {
+    const errors = [];
+    for (const source of phoenixRestSources) {
+      try {
+        const data = await reader(source.client);
+        if (errors.length) {
+          console.info(`[Phoenix] REST fallback recovered via ${source.name}`, {
+            label,
+            previous: errors.map(row => `${row.name}: ${row.message}`).slice(0, 2),
+          });
+        }
+        return data;
+      } catch (error) {
+        errors.push({
+          name: source.name,
+          error,
+          message: error?.message || String(error),
+        });
+      }
+    }
+    const detail = errors.map(row => `${row.name}: ${row.message}`).join(' | ');
+    throw new Error(detail || `Phoenix REST ${label} failed`);
+  }, [phoenixRestSources]);
+
+  const getTraderStateViewWithFallback = useCallback((authority, request) => (
+    readPhoenixRestFallback('trader-state-view', restClient => (
+      restClient.api.traders().getTraderState(authority, request)
+    ))
+  ), [readPhoenixRestFallback]);
+
+  const getTraderStateSnapshotWithFallback = useCallback((authority, request) => (
+    readPhoenixRestFallback('trader-state-snapshot', restClient => (
+      restClient.api.traders().getTraderStateSnapshot(authority, request)
+    ))
+  ), [readPhoenixRestFallback]);
 
   const sendIxs = useCallback((instructions, label = 'phoenix', options = {}) => {
     if (!ownerPk) throw new Error('Wallet not connected');
@@ -1446,6 +1717,204 @@ export function usePhoenix() {
     };
   }, [applyMarketStatsUpdates, isActiveDex]);
 
+  const applyTraderSnapshotState = useCallback((storeState, options = {}) => {
+    const snapshot = storeState?.snapshot;
+    const authority = snapshot?.authority || walletAddr;
+    if (!authority || !snapshot) return false;
+
+    const traderPdaIndex = Number(snapshot?.traderPdaIndex ?? 0) || 0;
+    const subaccounts = Array.isArray(snapshot?.subaccounts) ? snapshot.subaccounts : [];
+    const marginInputs = storeState?.marginInputs
+      || buildPhoenixMarginInputsFromSnapshot(authority, traderPdaIndex, subaccounts);
+    const marginResult = computePhoenixMarginResult(marginInputs, marketsRef.current, pricesRef.current);
+    const marginBySubaccount = new Map(
+      (marginResult?.subaccounts || []).map(row => [Number(row?.subaccountIndex) || 0, row])
+    );
+    const previousByKey = new Map(
+      positionsRef.current.map(position => [phoenixUiPositionKey(position), position])
+    );
+
+    subaccountsRef.current = subaccounts;
+    const positionsFromSnapshot = subaccounts.flatMap(sub => {
+      const subIndex = Number(sub?.subaccountIndex) || 0;
+      const collateral = quoteLotsToUsd(sub?.collateral);
+      const subMargin = marginBySubaccount.get(subIndex);
+      const marketMarginBySymbol = new Map(
+        (subMargin?.marketMargins || []).map(row => [phoenixSymbol(row?.symbol), row])
+      );
+      return (sub?.positions || [])
+        .map(row => {
+          const position = positionFromSnapshot(row, marketsBySymbolRef, collateral, subIndex);
+          if (!position) return null;
+          return mergeSnapshotPositionMargin(
+            position,
+            marketMarginBySymbol.get(position.symbol),
+            previousByKey.get(phoenixUiPositionKey(position))
+          );
+        })
+        .filter(Boolean);
+    });
+    const limitOrders = subaccounts.flatMap(sub => {
+      const subIndex = Number(sub?.subaccountIndex) || 0;
+      return (sub?.orders || []).flatMap(group => ordersFromSnapshot(group, marketsBySymbolRef, subIndex));
+    });
+    const nextOrders = [...limitOrders, ...tpslOrdersFromPositions(positionsFromSnapshot)];
+
+    const crossSubaccount = subaccounts.find(sub => Number(sub?.subaccountIndex) === 0) || subaccounts[0] || null;
+    const crossMargin = marginBySubaccount.get(0) || marginResult?.subaccounts?.[0] || null;
+    const totalMarginUsed = marginResult
+      ? marginResult.subaccounts.reduce((sum, sub) => sum + quoteLotsToUsd(sub?.margin?.initialMarginQuoteLots), 0)
+      : positionsFromSnapshot.reduce((sum, position) => sum + Number(position.margin || 0), 0);
+    const equity = marginResult
+      ? marginResult.subaccounts.reduce((sum, sub) => sum + quoteLotsToUsd(sub?.margin?.portfolioValueQuoteLots), 0)
+      : Math.max(0,
+        subaccounts.reduce((sum, sub) => sum + quoteLotsToUsd(sub?.collateral), 0)
+        + positionsFromSnapshot.reduce((sum, position) => sum + Number(position.pnl_usd || 0), 0)
+      );
+    const crossCollateral = crossMargin
+      ? quoteLotsToUsd(crossMargin?.margin?.collateralBalanceQuoteLots)
+      : quoteLotsToUsd(crossSubaccount?.collateral);
+    const availableToSpend = crossMargin
+      ? Math.max(0,
+        quoteLotsToUsd(crossMargin?.margin?.effectiveCollateralQuoteLots)
+        - quoteLotsToUsd(crossMargin?.margin?.initialMarginQuoteLots)
+      )
+      : Math.max(0, crossCollateral - totalMarginUsed);
+    const availableToWithdraw = crossMargin
+      ? Math.max(0,
+        quoteLotsToUsd(crossMargin?.margin?.effectiveCollateralForWithdrawalsQuoteLots)
+        - quoteLotsToUsd(crossMargin?.margin?.initialMarginForWithdrawalsQuoteLots)
+      )
+      : availableToSpend;
+    const firstMarket = marketsRef.current[0] || {};
+    const hasTraderState = !!snapshot;
+    traderRegisteredRef.current = hasTraderState;
+    setTraderRegistered(hasTraderState);
+    if (hasTraderState) {
+      cachePhoenixSetup(authority, { source: options.source || 'trader_state_ws' });
+    }
+    setPhoenixPositions(positionsFromSnapshot);
+    setPhoenixOrders(nextOrders);
+    setPhoenixAccount({
+      authority,
+      balance: String(crossCollateral),
+      account_equity: String(equity),
+      available_to_spend: String(availableToSpend),
+      available_to_withdraw: String(availableToWithdraw),
+      total_margin_used: String(Math.max(0, totalMarginUsed)),
+      positions_count: positionsFromSnapshot.length,
+      orders_count: nextOrders.length,
+      maker_fee: firstMarket.maker_fee ?? 0.00005,
+      taker_fee: firstMarket.taker_fee ?? 0.00035,
+      fee_level: '0',
+      _raw: {
+        authority,
+        traderPdaIndex,
+        slot: Number(snapshot?.slot ?? 0),
+        snapshot: { subaccounts },
+        margin: marginResult,
+        source: options.source || 'trader_state_ws',
+        status: storeState?.status || null,
+      },
+    });
+    setAccountReady(true);
+    setDataReady(true);
+    traderStateWsReadyRef.current = !!(
+      storeState?.status?.isConnected
+      || storeState?.status?.health === 'live'
+    );
+    refreshTraderStateLastResultRef.current = {
+      authority,
+      traderPdaIndex,
+      slot: Number(snapshot?.slot ?? 0),
+      snapshot: { subaccounts },
+      margin: marginResult,
+      source: options.source || 'trader_state_ws',
+    };
+    refreshTraderStateCachedAtRef.current = Date.now();
+    refreshTraderStateRetryMsRef.current = PHOENIX_TRADER_STATE_DEDUP_MS;
+    const needsRiskReconcile = positionsFromSnapshot.some(position => !(Number(position?.liquidation_price) > 0));
+    if (needsRiskReconcile && Date.now() - lastTraderStateRiskRestAtRef.current > PHOENIX_TRADER_STATE_REST_FALLBACK_MS) {
+      lastTraderStateRiskRestAtRef.current = Date.now();
+      setTimeout(() => {
+        refreshTraderStateRef.current?.({ force: true }).catch(error => {
+          console.warn('[Phoenix] trader risk REST reconcile failed', error?.message || error);
+        });
+      }, 0);
+    }
+    return true;
+  }, [setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr]);
+
+  useEffect(() => {
+    if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
+    let cancelled = false;
+    const streams = createPhoenixPublicWsClient();
+    const manager = createPhoenixTraderStateManager({
+      api: {
+        getTraderStateSnapshot: getTraderStateSnapshotWithFallback,
+      },
+      traderState: streams.traderState,
+      onBackgroundError: error => {
+        if (!cancelled) console.warn('[Phoenix] traderState WS background error', error?.message || error);
+      },
+    });
+    const resource = manager.resource({ authority: walletAddr, traderPdaIndex: 0 });
+    traderStateResourceRef.current = resource;
+    const release = resource.retain();
+    traderStateReleaseRef.current = release;
+    const unsubscribe = resource.subscribe(state => {
+      if (cancelled) return;
+      if (state?.snapshot) {
+        applyTraderSnapshotState(state, { source: 'trader_state_ws' });
+      }
+    });
+
+    (async () => {
+      try {
+        if (!marketsRef.current.length) {
+          await fetchMarkets();
+        }
+        if (cancelled) return;
+        await resource.ready();
+        if (!cancelled) {
+          applyTraderSnapshotState(resource.store.getState(), { source: 'trader_state_ws' });
+        }
+      } catch (error) {
+        if (cancelled) return;
+        traderStateWsReadyRef.current = false;
+        const msg = String(error?.message || error || '');
+        const looksUnregistered = /404|not found|no trader|not registered|does not exist/i.test(msg);
+        if (looksUnregistered) {
+          clearPhoenixSetup(walletAddr);
+          traderRegisteredRef.current = false;
+          subaccountsRef.current = [];
+          setTraderRegistered(false);
+          setPhoenixPositions([]);
+          setPhoenixOrders([]);
+          setPhoenixAccount(phoenixEmptyAccount(walletAddr, marketsRef.current[0] || {}));
+          setAccountReady(true);
+          setDataReady(true);
+          refreshTraderStateLastResultRef.current = null;
+          refreshTraderStateCachedAtRef.current = Date.now();
+          refreshTraderStateRetryMsRef.current = PHOENIX_UNREGISTERED_RETRY_MS;
+          return;
+        }
+        console.warn('[Phoenix] traderState WS bootstrap failed; REST fallback remains available', msg);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      try { release(); } catch {}
+      try { resource.close(); } catch {}
+      try { manager.close(); } catch {}
+      if (traderStateResourceRef.current === resource) traderStateResourceRef.current = null;
+      if (traderStateReleaseRef.current === release) traderStateReleaseRef.current = null;
+      traderStateWsReadyRef.current = false;
+    };
+  }, [applyTraderSnapshotState, fetchMarkets, getTraderStateSnapshotWithFallback, isActiveDex, setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch]);
+
   const refreshTraderState = useCallback(async (options = {}) => {
     if (!isActiveDex || !walletAddr || walletMismatch) {
       setAccountReady(false);
@@ -1468,7 +1937,8 @@ export function usePhoenix() {
 
     const promise = (async () => {
       try {
-      const viewState = await client.api.traders().getTraderState(walletAddr, { pdaIndex: 0 });
+      lastTraderStateRestAtRef.current = Date.now();
+      const viewState = await getTraderStateViewWithFallback(walletAddr, { pdaIndex: 0 });
       const state = {
         authority: viewState?.authority || walletAddr,
         traderPdaIndex: Number(viewState?.pdaIndex ?? viewState?.traderPdaIndex ?? 0),
@@ -1569,8 +2039,8 @@ export function usePhoenix() {
         : marginUsed;
       const totalMarginUsed = Math.max(0, totalInitialMargin || marginUsed);
       const firstMarket = marketsRef.current[0] || {};
-      setPositions(pos);
-      setOrders(ord);
+      setPhoenixPositions(pos);
+      setPhoenixOrders(ord);
       setPhoenixAccount({
         authority: walletAddr,
         balance: String(crossCollateral),
@@ -1609,8 +2079,8 @@ export function usePhoenix() {
       traderRegisteredRef.current = false;
       setTraderRegistered(false);
       subaccountsRef.current = [];
-      setPositions([]);
-      setOrders([]);
+      setPhoenixPositions([]);
+      setPhoenixOrders([]);
       setPhoenixAccount(phoenixEmptyAccount(walletAddr, marketsRef.current[0] || {}));
       setAccountReady(true);
       setDataReady(true);
@@ -1631,7 +2101,16 @@ export function usePhoenix() {
         refreshTraderStateInFlightRef.current = null;
       }
     }
-  }, [client, isActiveDex, setPhoenixAccount, walletAddr, walletMismatch]);
+  }, [getTraderStateViewWithFallback, isActiveDex, setPhoenixAccount, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch]);
+
+  useEffect(() => {
+    refreshTraderStateRef.current = refreshTraderState;
+    return () => {
+      if (refreshTraderStateRef.current === refreshTraderState) {
+        refreshTraderStateRef.current = null;
+      }
+    };
+  }, [refreshTraderState]);
 
   const waitForTraderState = useCallback(async (attempts = 8) => {
     for (let i = 0; i < attempts; i += 1) {
@@ -1645,6 +2124,14 @@ export function usePhoenix() {
   const refreshTraderStateSoon = useCallback((delays = [800, 3_500]) => {
     for (const delay of delays) {
       setTimeout(() => {
+        const status = traderStateResourceRef.current?.status?.();
+        const wsReady = traderStateWsReadyRef.current || status?.isConnected || status?.health === 'live';
+        if (wsReady && Number(delay) < 2_500) return;
+        const now = Date.now();
+        if (now - lastTraderStatePostTxRestAtRef.current < PHOENIX_TRADER_STATE_POST_TX_REST_FALLBACK_MS) {
+          return;
+        }
+        lastTraderStatePostTxRestAtRef.current = now;
         refreshTraderState({ force: true }).catch(e => {
           console.warn('[Phoenix] background trader refresh failed', e?.message || e);
         });
@@ -2298,7 +2785,7 @@ export function usePhoenix() {
           stopLoss: sl,
           at: Date.now(),
         });
-        setPositions(prev => prev.map(p => {
+        setPhoenixPositions(prev => prev.map(p => {
           const samePosition = p?.symbol === phx
             && p?.side === position.side
             && Number(p?._phoenixSubaccountIndex || 0) === subaccountIndex;
@@ -2320,7 +2807,7 @@ export function usePhoenix() {
           _phoenixOptimisticStopLossPrice: sl != null ? sl : position._phoenixOptimisticStopLossPrice,
           _phoenixTpslPendingRefresh: true,
         };
-        setOrders(prev => [
+        setPhoenixOrders(prev => [
           ...prev.filter(o => !(
             o?._phoenixSyntheticTpsl
             && o?.symbol === phx
@@ -2350,7 +2837,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [ensureConditionalOrdersAccountIx, positions, refreshTraderStateSoon, runOnce, sendIxs, setPhoenixOrders, setPhoenixPositions, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;
@@ -2360,7 +2847,17 @@ export function usePhoenix() {
       if (!marketsRef.current.length) await fetchMarkets();
       else await fetchPrices();
       if (walletAddr && !walletMismatch) {
-        await Promise.all([refreshTraderState(), fetchWalletUsdc()]);
+        await fetchWalletUsdc();
+        const status = traderStateResourceRef.current?.status?.();
+        const wsHealthy = traderStateWsReadyRef.current || status?.isConnected || status?.health === 'live';
+        const needsRestFallback = !wsHealthy
+          && Date.now() - lastTraderStateRestAtRef.current > PHOENIX_TRADER_STATE_REST_FALLBACK_MS;
+        if (needsRestFallback) {
+          await refreshTraderState().catch(e => {
+            console.warn('[Phoenix] periodic REST trader fallback failed', e?.message || e);
+            return null;
+          });
+        }
       } else {
         setAccountReady(false);
         setDataReady(true);

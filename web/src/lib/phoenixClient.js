@@ -12,6 +12,11 @@ function defaultPhoenixApiUrl() {
 export const PHOENIX_API_URL =
   import.meta.env.VITE_PHOENIX_BROWSER_API_URL || defaultPhoenixApiUrl();
 
+export const PHOENIX_PROXY_API_URL = defaultPhoenixApiUrl();
+
+export const PHOENIX_DIRECT_API_URL =
+  import.meta.env.VITE_PHOENIX_DIRECT_API_URL || 'https://perp-api.phoenix.trade';
+
 export const PHOENIX_WS_URL =
   import.meta.env.VITE_PHOENIX_BROWSER_WS_URL || 'wss://perp-api.phoenix.trade/v1/ws';
 
@@ -32,6 +37,7 @@ const EXCHANGE_METADATA_RPC_TTL_MS = 5 * 60_000;
 const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 
 const clients = new Map();
+const readClients = new Map();
 let publicWsClient = null;
 
 export function isPhoenixFlightEnabled() {
@@ -58,11 +64,16 @@ function phoenixFlightConfig(options = {}) {
 
 function createClient(rpcUrl, options = {}) {
   const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
+  const {
+    apiUrl = PHOENIX_API_URL,
+    ws = false,
+    ...clientOptions
+  } = options || {};
   return createPhoenixClient({
-    apiUrl: PHOENIX_API_URL,
+    apiUrl,
     rpcUrl: resolvedRpc,
-    ws: false,
-    flight: phoenixFlightConfig(options),
+    ws,
+    flight: phoenixFlightConfig(clientOptions),
     pdaCache: { maxEntries: 1024 },
     exchangeMetadata: {
       // The public API snapshot can lag on-chain state by many slots. Order
@@ -87,6 +98,28 @@ export function getPhoenixClient(rpcUrl) {
     clients.set(key, createClient(resolvedRpc));
   }
   return clients.get(key);
+}
+
+export function getPhoenixReadClient(apiUrl, rpcUrl) {
+  const resolvedApi = apiUrl || PHOENIX_API_URL;
+  const resolvedRpc = rpcUrl || DEFAULT_RPC_URL;
+  const key = `${resolvedApi}|${resolvedRpc}`;
+  if (!readClients.has(key)) {
+    readClients.set(key, createClient(resolvedRpc, {
+      apiUrl: resolvedApi,
+      ws: false,
+      disableFlight: true,
+    }));
+  }
+  return readClients.get(key);
+}
+
+export function getPhoenixBrowserRestClient(rpcUrl) {
+  return getPhoenixReadClient(PHOENIX_DIRECT_API_URL, rpcUrl);
+}
+
+export function getPhoenixProxyRestClient(rpcUrl) {
+  return getPhoenixReadClient(PHOENIX_PROXY_API_URL, rpcUrl);
 }
 
 export function disposePhoenixClient(client) {
