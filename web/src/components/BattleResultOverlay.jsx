@@ -15,6 +15,22 @@ const UNIT_IMAGES = { Knight: knightImg, Mage: mageImg, Archer: archerImg, Range
 
 const fmt = (n) => (n || 0).toLocaleString().replace(/,/g, ' ');
 
+function isDemonKingTroopName(name) {
+  return String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '') === 'demonking'
+    || String(name || '').trim().startsWith('DemonKing:');
+}
+
+function battleErrorMessage(result) {
+  const raw = String(result?.message || result?.error || result?.reason || 'Battle result was not recorded.').trim();
+  if (/already attacked this player recently/i.test(raw)) {
+    return 'This opponent was already on cooldown. No rewards were applied. Find a new opponent and attack again.';
+  }
+  if (/battle session is no longer active|session/i.test(raw)) {
+    return 'This battle session expired. No rewards were applied. Find a new opponent and attack again.';
+  }
+  return raw || 'Battle result was not recorded. Find a new opponent and attack again.';
+}
+
 function ShareButton({ isVictory, isReplay, isAiOnlineBattle, result }) {
   const { isInFrame, shareCast } = useFarcaster();
   const handleShare = useCallback(() => {
@@ -43,14 +59,19 @@ function BattleResultOverlay({ result, onClose }) {
 
   const isVictory = result.type === 'victory';
   const isReplay = result.type === 'replay_end';
+  const isError = result.type === 'error' || !!result.error;
   const isAiOnlineBattle = !!result.ai_online_battle;
-  const casualties = Object.entries(result.casualties || {}).filter(([, c]) => c > 0);
+  const casualties = isError
+    ? []
+    : Object.entries(result.casualties || {}).filter(([name, c]) => !isDemonKingTroopName(name) && c > 0);
   const totalCasualties = casualties.reduce((sum, [, c]) => sum + c, 0);
   const totalReinforceCost = totalCasualties * 50;
   const hasLootObject = !!result.loot && typeof result.loot === 'object';
   const hasLootValue = hasLootObject && ['gold', 'wood', 'ore'].some((key) => Number(result.loot?.[key] || 0) > 0);
   const showLootPanel = isVictory && hasLootObject && (hasLootValue || isAiOnlineBattle);
-  const subtitle = isReplay
+  const subtitle = isError
+    ? battleErrorMessage(result)
+    : isReplay
     ? (result.reason || 'Replay finished')
     : isAiOnlineBattle
       ? (isVictory ? 'Battle complete. Loot and losses are below.' : 'Battle ended. Losses are below.')
@@ -67,15 +88,24 @@ function BattleResultOverlay({ result, onClose }) {
         <div style={styles.titleGroup}>
           <div style={styles.glowBackground}></div>
           <div style={styles.titleText}>
-            {isReplay ? 'REPLAY END' : isVictory ? 'VICTORY' : 'DEFEAT'}
+            {isError ? (result.title || 'BATTLE ERROR') : isReplay ? 'REPLAY END' : isVictory ? 'VICTORY' : 'DEFEAT'}
           </div>
           <div style={styles.subtitleText}>
             {subtitle}
           </div>
         </div>
 
+        {isError && (
+          <div style={{ ...styles.panel, ...styles.errorPanel }}>
+            <div style={styles.panelTitle}>No rewards were applied</div>
+            <div style={styles.errorText}>
+              Your battle was rejected by the server. Return home and start a fresh raid.
+            </div>
+          </div>
+        )}
+
         {/* Loot Panel */}
-        {showLootPanel && (
+        {!isError && showLootPanel && (
           <div style={styles.panel}>
             <div style={styles.panelTitle}>You received</div>
             <div style={styles.resourceRow}>
@@ -87,7 +117,7 @@ function BattleResultOverlay({ result, onClose }) {
         )}
 
         {/* Defeat Panel */}
-        {!isVictory && !isReplay && !isAiOnlineBattle && (
+        {!isError && !isVictory && !isReplay && !isAiOnlineBattle && (
            <div style={styles.panel}>
             <div style={styles.panelTitle}>Better luck next time!</div>
             <div style={styles.subtitleText}>
@@ -104,7 +134,7 @@ function BattleResultOverlay({ result, onClose }) {
               {casualties.map(([name, count]) => (
                 <div key={name} className="loot-pop" style={{...styles.casualtyItem, animationDelay: '1.2s'}}>
                   <div style={styles.casualtyImgWrap}>
-                    <img src={UNIT_IMAGES[name]} alt={name} style={styles.casualtyImg} />
+                    {UNIT_IMAGES[name] && <img src={UNIT_IMAGES[name]} alt={name} style={styles.casualtyImg} />}
                     <div style={styles.casualtyCount}>x{count}</div>
                   </div>
                   <span style={styles.casualtyName}>{name}</span>
@@ -120,7 +150,7 @@ function BattleResultOverlay({ result, onClose }) {
 
         {/* Buttons */}
         <div style={{ display: 'flex', gap: 12 }}>
-          <ShareButton isVictory={isVictory} isReplay={isReplay} isAiOnlineBattle={isAiOnlineBattle} result={result} />
+          {!isError && <ShareButton isVictory={isVictory} isReplay={isReplay} isAiOnlineBattle={isAiOnlineBattle} result={result} />}
           <div style={styles.btnWrap} onClick={onClose}>
             <span style={styles.btnText}>Return</span>
           </div>
@@ -240,6 +270,18 @@ const styles = {
     fontSize: 16,
     fontWeight: 900,
     color: '#fff',
+    textShadow: textOutline,
+  },
+  errorPanel: {
+    background: 'linear-gradient(180deg, #5a2b24 0%, #3d1d19 100%)',
+    border: '3px solid #c66a4b',
+  },
+  errorText: {
+    color: '#fff7df',
+    fontSize: 14,
+    fontWeight: 800,
+    textAlign: 'center',
+    lineHeight: 1.4,
     textShadow: textOutline,
   },
   resourceRow: {

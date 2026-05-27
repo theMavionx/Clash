@@ -20,6 +20,11 @@ function shallowEqualObject(a, b) {
 
 const REPLAY_TELEMETRY_ENABLED = false;
 
+function isDemonKingTroopName(name) {
+  return String(name || '').trim().toLowerCase().replace(/[_\s-]/g, '') === 'demonking'
+    || String(name || '').trim().startsWith('DemonKing:');
+}
+
 function postReplayTelemetry(data, tokenOverride = null) {
   // Replay telemetry upload is intentionally disabled for now. Godot can still
   // collect local combat diagnostics, but the browser no longer posts the large
@@ -240,7 +245,7 @@ export function GodotProvider({ children }) {
           setBattleTimer(null);
           if (data.casualties) {
             const paidCasualties = Object.fromEntries(
-              Object.entries(data.casualties).filter(([name, count]) => name !== 'DemonKing' && count > 0),
+              Object.entries(data.casualties).filter(([name, count]) => !isDemonKingTroopName(name) && count > 0),
             );
             if (Object.values(paidCasualties).some(c => c > 0)) setPendingCasualties(paidCasualties);
           }

@@ -1237,10 +1237,16 @@ func _on_town_hall_destroyed() -> void:
 		var result: Dictionary = _submit_result
 		if not is_instance_valid(bs): return
 		if result.has("error"):
+			var error_message: String = str(result.get("error", "Battle result was not recorded.")).strip_edges()
+			var reason_message: String = str(result.get("reason", "")).strip_edges()
+			if reason_message != "":
+				error_message = ("%s %s" % [error_message, reason_message]).strip_edges()
 			if bridge:
 				bridge.send_to_react("battle_result", {
-					"type": "victory", "loot": {}, "casualties": casualties_early,
-					"error": result.get("error", "") + " " + result.get("reason", ""),
+					"type": "error",
+					"title": "Battle not recorded",
+					"message": error_message,
+					"reason": error_message,
 				})
 			return
 		if result.has("ships"):
