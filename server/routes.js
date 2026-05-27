@@ -9558,6 +9558,8 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
           ? "AND verified_source = 'risex_api'"
         : dex === 'nado'
           ? "AND verified_source = 'nado_api'"
+        : dex === 'phoenix'
+          ? "AND verified_source IN ('worker', 'tx')"
         : "AND verified_source = 'worker'";
     const hyperliquidWalletPrefix = dex === 'hyperliquid' && EVM_WALLET_RE.test(String(wallet || ''))
       ? `hyperliquid:${String(wallet).toLowerCase()}:%`
@@ -10095,6 +10097,8 @@ router.get('/trading/stats', auth, async (req, res) => {
               ? "AND verified_source = 'risex_api'"
             : dex === 'nado'
               ? "AND verified_source = 'nado_api'"
+            : dex === 'phoenix'
+              ? "AND verified_source IN ('worker', 'tx')"
             : "AND verified_source = 'worker'";
         const rows = fdb.prepare(`
           SELECT symbol, side, price, amount, notional_usd, order_type, status, created_at
@@ -11751,6 +11755,8 @@ router.get('/admin/stats', adminAuth, (req, res) => {
           ? "verified_source = 'nado_api'"
         : dex === 'decibel'
           ? "verified_source = 'server'"
+        : dex === 'phoenix'
+          ? "verified_source IN ('worker', 'tx')"
           : "verified_source = 'worker'";
       const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
       for (const dex of ACTIVITY_DEXES) {
@@ -12828,7 +12834,7 @@ function tournamentTradeSourceWhere(dex) {
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
-  if (dex === 'phoenix') return "verified_source = 'worker'";
+  if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'server')";
   return "verified_source = 'worker'";
 }

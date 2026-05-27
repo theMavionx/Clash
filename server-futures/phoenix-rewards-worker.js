@@ -1,10 +1,11 @@
-// Phoenix rewards indexer.
+// Phoenix rewards importer.
 //
-// Read-only poller: fetches verified fills from Phoenix's public API for
-// every registered Phoenix wallet and writes them into futures.db
-// trade_history with verified_source='worker'. The main game server then
-// credits gold from these rows; browser-reported Phoenix trades are never
-// trusted for rewards.
+// Primary production path is event-driven: after the browser submits a
+// Phoenix order transaction, it reports that tx signature here. We verify
+// on-chain that the transaction was signed by the player's wallet and invoked
+// the Phoenix program, then write a rewardable trade_history row. The old
+// wallet-history poller remains as an explicit emergency backfill only,
+// because polling every Phoenix wallet quickly hits upstream 429s.
 
 const Database = require('better-sqlite3');
 const path = require('path');
@@ -15,6 +16,16 @@ const POLL_MS = Number(process.env.PHOENIX_REWARDS_POLL_MS || 2 * 60 * 1000);
 const LOOKBACK_MS = Number(process.env.PHOENIX_REWARDS_LOOKBACK_MS || 7 * 24 * 60 * 60 * 1000);
 const PHOENIX_API_TIMEOUT_MS = Math.max(1000, Math.min(10_000, Number(process.env.PHOENIX_API_TIMEOUT_MS || 4500)));
 const PHOENIX_API_STALE_MS = Math.max(30_000, Math.min(10 * 60_000, Number(process.env.PHOENIX_API_STALE_MS || 2 * 60_000)));
+const PHOENIX_REWARDS_POLLING_ENABLED = /^(1|true|yes)$/i.test(String(
+  process.env.PHOENIX_REWARDS_WORKER
+  || process.env.PHOENIX_REWARDS_POLLING
+  || '',
+));
+const PHOENIX_PROGRAM_ID = process.env.PHOENIX_PROGRAM_ID || 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
+const PHOENIX_TX_REWARD_MAX_AGE_MS = Math.max(
+  60_000,
+  Number(process.env.PHOENIX_TX_REWARD_MAX_AGE_MS || 24 * 60 * 60_000),
+);
 const MAIN_DB_PATH = process.env.CLASH_MAIN_DB
   || path.join(__dirname, '..', 'server', 'clash.db');
 
@@ -22,9 +33,244 @@ let marketCache = null;
 let marketCacheAt = 0;
 const apiCache = new Map();
 const apiInflight = new Map();
+let solanaConnection = null;
 
 function isSolanaWallet(addr) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(addr || ''));
+  const text = String(addr || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) return false;
+  try {
+    const { PublicKey } = require('@solana/web3.js');
+    return new PublicKey(text).toBase58() === text;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSolanaWallet(addr) {
+  const text = String(addr || '').trim();
+  const { PublicKey } = require('@solana/web3.js');
+  return new PublicKey(text).toBase58();
+}
+
+function base58Decode(value) {
+  const mod = require('bs58');
+  const decoder = mod.decode || mod.default?.decode;
+  if (typeof decoder !== 'function') throw new Error('bs58 decoder unavailable');
+  return decoder(String(value || ''));
+}
+
+function isSolanaSignature(signature) {
+  try {
+    return base58Decode(signature).length === 64;
+  } catch {
+    return false;
+  }
+}
+
+function getSolanaConnection() {
+  if (solanaConnection) return solanaConnection;
+  // Reuse the already-configured Solana RPC selection used by Pacifica
+  // deposits. It resolves Alchemy/Helius/private RPC envs and fails loudly if
+  // production forgot to configure one.
+  solanaConnection = require('./deposit').connection;
+  return solanaConnection;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function txAccountKeyText(key) {
+  return String(key?.pubkey || key?.publicKey || key || '');
+}
+
+function txSignedByWallet(parsedTx, wallet) {
+  const keys = parsedTx?.transaction?.message?.accountKeys || [];
+  return keys.some((key, index) => {
+    const text = txAccountKeyText(key);
+    const signer = key?.signer === true || (index === 0 && key?.signer !== false);
+    return signer && text === wallet;
+  });
+}
+
+function collectTxProgramIds(parsedTx) {
+  const programs = new Set();
+  const keys = parsedTx?.transaction?.message?.accountKeys || [];
+  const keyAt = (index) => txAccountKeyText(keys[index]);
+  const addInstruction = (ix) => {
+    if (!ix) return;
+    const direct = ix.programId?.toString?.() || ix.programId || ix.programAddress || ix.program;
+    if (direct) programs.add(String(direct));
+    if (Number.isInteger(ix.programIdIndex)) {
+      const key = keyAt(ix.programIdIndex);
+      if (key) programs.add(key);
+    }
+  };
+  for (const ix of parsedTx?.transaction?.message?.instructions || []) addInstruction(ix);
+  for (const group of parsedTx?.meta?.innerInstructions || []) {
+    for (const ix of group?.instructions || []) addInstruction(ix);
+  }
+  for (const line of parsedTx?.meta?.logMessages || []) {
+    const match = String(line || '').match(/^Program ([1-9A-HJ-NP-Za-km-z]{32,44}) invoke/i);
+    if (match?.[1]) programs.add(match[1]);
+  }
+  return programs;
+}
+
+async function getParsedTransactionWithRetry(signature, attempts = 6, delayMs = 900) {
+  const conn = getSolanaConnection();
+  let last = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      last = await conn.getParsedTransaction(signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      });
+      if (last) return last;
+    } catch (e) {
+      if (i === attempts - 1) throw e;
+    }
+    await sleep(delayMs);
+  }
+  return last;
+}
+
+async function verifyPhoenixTradeTransaction({ wallet, signature }) {
+  if (!isSolanaSignature(signature)) {
+    throw new Error('invalid Solana tx signature');
+  }
+  const parsed = await getParsedTransactionWithRetry(signature);
+  if (!parsed) {
+    throw new Error('transaction not found yet');
+  }
+  if (parsed?.meta?.err) {
+    throw new Error('transaction failed on-chain');
+  }
+  const blockTimeMs = Number(parsed.blockTime || 0) > 0 ? Number(parsed.blockTime) * 1000 : 0;
+  if (blockTimeMs && Date.now() - blockTimeMs > PHOENIX_TX_REWARD_MAX_AGE_MS) {
+    throw new Error('transaction is too old for automatic rewards');
+  }
+  if (!txSignedByWallet(parsed, wallet)) {
+    throw new Error('transaction was not signed by this wallet');
+  }
+  const programs = collectTxProgramIds(parsed);
+  if (!programs.has(PHOENIX_PROGRAM_ID)) {
+    throw new Error('transaction did not invoke Phoenix');
+  }
+  return {
+    signature,
+    slot: parsed.slot || null,
+    blockTime: parsed.blockTime || null,
+    programs: Array.from(programs),
+  };
+}
+
+function normalizeRewardSymbol(symbol) {
+  const text = String(symbol || '').trim().toUpperCase();
+  if (!/^[A-Z0-9._/-]{2,40}$/.test(text)) return '';
+  return text;
+}
+
+function normalizeRewardSide(side, tradeKind) {
+  const s = String(side || '').toLowerCase();
+  const kind = String(tradeKind || '').toLowerCase();
+  if (kind === 'close') {
+    if (s.includes('short') || s === 'ask') return 'close_short';
+    return 'close_long';
+  }
+  if (s === 'bid' || s === 'buy' || s === 'long') return 'long';
+  if (s === 'ask' || s === 'sell' || s === 'short') return 'short';
+  if (s.includes('long')) return s.includes('close') ? 'close_long' : 'long';
+  if (s.includes('short')) return s.includes('close') ? 'close_short' : 'short';
+  return '';
+}
+
+function finitePositive(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function computeRewardNotional(details) {
+  const kind = String(details?.trade_kind || details?.tradeKind || '').toLowerCase();
+  const amount = finitePositive(details?.amount);
+  const leverage = finitePositive(details?.leverage) || 1;
+  const price = finitePositive(details?.price || details?.mark_price || details?.markPrice);
+  const supplied = finitePositive(details?.notional_usd || details?.notionalUsd);
+  const computed = kind === 'close'
+    ? (amount > 0 && price > 0 ? amount * price : 0)
+    : (amount > 0 ? amount * leverage : 0);
+
+  if (supplied > 0 && computed > 0) {
+    const drift = Math.abs(supplied - computed) / Math.max(computed, 1);
+    if (drift > 0.25) {
+      throw new Error('notional does not match trade inputs');
+    }
+  }
+  const notional = supplied > 0 ? supplied : computed;
+  if (!Number.isFinite(notional) || notional <= 0 || notional > 10_000_000) {
+    throw new Error('notional out of range');
+  }
+  return notional;
+}
+
+function phoenixTxTradeKey(wallet, signature, details) {
+  void details;
+  return `phoenix-tx:${wallet}:${signature}`;
+}
+
+async function importTransactionForPlayer(playerId, wallet, details = {}) {
+  let cleanWallet = '';
+  try {
+    cleanWallet = normalizeSolanaWallet(wallet);
+  } catch {
+    cleanWallet = '';
+  }
+  if (!isSolanaWallet(cleanWallet)) {
+    return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_solana_wallet' };
+  }
+  const signature = String(details.tx_hash || details.signature || details.hash || '').trim();
+  if (!isSolanaSignature(signature)) {
+    return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'invalid_tx_signature' };
+  }
+
+  const symbol = normalizeRewardSymbol(details.symbol);
+  const side = normalizeRewardSide(details.side, details.trade_kind || details.tradeKind);
+  const amount = finitePositive(details.amount);
+  if (!symbol || !side || amount <= 0) {
+    return { ok: false, imported: 0, skipped: 0, total: 0, reason: 'missing_trade_details' };
+  }
+  const clientOrderId = phoenixTxTradeKey(cleanWallet, signature, details);
+  const existing = db.db.prepare('SELECT id FROM trade_history WHERE client_order_id = ?').get(clientOrderId);
+  if (existing) {
+    return { ok: true, imported: 0, skipped: 1, total: 1, reason: 'duplicate_tx', tx_hash: signature };
+  }
+
+  const verified = await verifyPhoenixTradeTransaction({ wallet: cleanWallet, signature });
+  const notional = computeRewardNotional(details);
+  const price = finitePositive(details.price || details.mark_price || details.markPrice);
+  const orderType = String(details.order_type || details.orderType || 'market').toLowerCase();
+  const inserted = db.addTrade(playerId, {
+    symbol,
+    side,
+    orderType,
+    amount: String(amount),
+    price: price > 0 ? String(price) : null,
+    orderId: signature,
+    clientOrderId,
+    status: 'filled',
+    dex: 'phoenix',
+    notional_usd: notional,
+    verifiedSource: 'tx',
+  });
+
+  return {
+    ok: true,
+    imported: inserted?.id ? 1 : 0,
+    skipped: inserted?.id ? 0 : 1,
+    total: 1,
+    tx_hash: signature,
+    verified,
+  };
 }
 
 async function fetchJson(pathname, opts = {}) {
@@ -268,6 +514,11 @@ async function pollOnce(mainDb) {
 }
 
 function start() {
+  if (!PHOENIX_REWARDS_POLLING_ENABLED) {
+    console.log('[phoenix-rewards-worker] wallet-history polling disabled; using tx-based browser reports.');
+    return;
+  }
+
   let mainDb;
   try {
     mainDb = new Database(MAIN_DB_PATH, { readonly: true, fileMustExist: true });
@@ -292,4 +543,10 @@ function start() {
   console.log(`[phoenix-rewards-worker] started (polling every ${POLL_MS / 1000}s)`);
 }
 
-module.exports = { start, pollOnce, importFillsForPlayer, isSolanaWallet };
+module.exports = {
+  start,
+  pollOnce,
+  importFillsForPlayer,
+  importTransactionForPlayer,
+  isSolanaWallet,
+};

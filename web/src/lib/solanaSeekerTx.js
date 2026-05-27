@@ -203,6 +203,7 @@ export function buildSolanaWalletTxOptions({
   label = 'solana',
   venueLabel = 'Solana',
   log = defaultLog,
+  forceMobileVersionedTransaction = true,
 }) {
   const adapterName = solanaWalletAdapterName(solWallet) || 'wallet';
   const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
@@ -237,8 +238,10 @@ export function buildSolanaWalletTxOptions({
       ? null
       : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
     preferWalletSendTransaction: canSendSolanaTx,
-    forceVersionedTransaction: mobileWalletAdapter,
-    walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
+    forceVersionedTransaction: mobileWalletAdapter && forceMobileVersionedTransaction,
+    walletPathOverride: mobileWalletAdapter
+      ? (forceMobileVersionedTransaction ? 'mwa_protocol_sign_and_send_v0' : 'mwa_protocol_sign_and_send_legacy')
+      : null,
     label: `${label}.${adapterName}`,
   };
 }

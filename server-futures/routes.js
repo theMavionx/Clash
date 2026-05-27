@@ -1991,6 +1991,30 @@ router.post('/phoenix/import-fills', auth, async (req, res) => {
       return res.status(409).json({ error: 'wallet does not match player account' });
     }
 
+    const txHash = String(req.body?.tx_hash || req.body?.signature || req.body?.hash || '').trim();
+    if (txHash) {
+      const result = await phoenixRewards.importTransactionForPlayer(req.playerId, wallet, req.body || {});
+      if (result.imported > 0) {
+        console.log(`[phoenix] imported tx reward for player=${req.playerName} wallet=${wallet.slice(0, 8)}... tx=${txHash.slice(0, 8)}...`);
+      }
+      return res.json(result);
+    }
+
+    // The previous implementation fetched /trader/{wallet}/trades-history on
+    // every claim/poll. That endpoint is now intentionally not called from
+    // wallet-only imports because it rate-limits the whole server. The browser
+    // reports concrete tx signatures after successful Phoenix orders instead.
+    if (process.env.PHOENIX_ALLOW_HISTORY_IMPORT !== '1') {
+      return res.json({
+        ok: true,
+        imported: 0,
+        skipped: 0,
+        total: 0,
+        reason: 'tx_signature_required',
+        tx_import_required: true,
+      });
+    }
+
     const result = await phoenixRewards.importFillsForPlayer(req.playerId, wallet, {
       limit: 100,
       timeoutMs: PHOENIX_PROXY_TIMEOUT_MS,

@@ -24,6 +24,7 @@ import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
 import NftMarketplacePanel from './CustodialMarketplacePanel';
+import altarImg from '../assets/units/altar.png';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
 const SHOW_NFT_MINT_TAB = false;
@@ -2542,6 +2543,7 @@ function GameResourcesTab({
 const RESOURCE_PRODUCT_ICONS = {
   resource_pack_s: '/icons/resource-pack.png',
   resource_pack_m: '/icons/war-chest.png',
+  altar: altarImg,
 };
 
 function ResourceProductIcon({ product }) {

@@ -416,7 +416,7 @@ async function fetchPhoenixEarnings() {
         SELECT COUNT(*) AS n, COALESCE(SUM(notional_usd), 0) AS vol
         FROM trade_history
         WHERE dex = 'phoenix' AND status = 'filled'
-          AND verified_source = 'worker'
+          AND verified_source IN ('worker', 'tx')
       `).get();
       volume = Number(r?.vol) || 0;
       trades = Number(r?.n) || 0;
@@ -654,7 +654,7 @@ function tradeSourceWhereForAnalytics(dex) {
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
   if (dex === 'nado') return "verified_source = 'nado_api'";
-  if (dex === 'phoenix') return "verified_source = 'worker'";
+  if (dex === 'phoenix') return "verified_source IN ('worker', 'tx')";
   if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
   if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
   return "verified_source = 'worker'";

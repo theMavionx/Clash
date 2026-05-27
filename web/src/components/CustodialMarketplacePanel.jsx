@@ -19,16 +19,16 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
 const SORT_OPTIONS = [
-  { value: 'newest', label: 'Newest' },
-  { value: 'oldest', label: 'Oldest' },
-  { value: 'price_asc', label: 'Lowest' },
-  { value: 'price_desc', label: 'Highest' },
+  { value: 'newest', label: 'Newest', sub: 'Latest listings' },
+  { value: 'oldest', label: 'Oldest', sub: 'Earliest first' },
+  { value: 'price_asc', label: 'Lowest', sub: 'Floor first' },
+  { value: 'price_desc', label: 'Highest', sub: 'Top price' },
 ];
 const LEVEL_OPTIONS = [
-  { value: 'all', label: 'All' },
-  { value: '1', label: 'L1' },
-  { value: '2', label: 'L2' },
-  { value: '3', label: 'L3' },
+  { value: 'all', label: 'All', sub: 'Any level' },
+  { value: '1', label: 'L1', sub: 'Level 1' },
+  { value: '2', label: 'L2', sub: 'Level 2' },
+  { value: '3', label: 'L3', sub: 'Level 3' },
 ];
 function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
@@ -1108,20 +1108,63 @@ function ListingProgressModal({ flow, busy, onClose }) {
 }
 
 function FilterSelect({ label, value, setValue, options, disabled }) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value) || options[0];
+  const selectOption = (nextValue) => {
+    setValue(nextValue);
+    setOpen(false);
+  };
   return (
-    <label style={s.filterControl}>
-      <span style={s.filterLabel}>{label}</span>
-      <select
-        value={value}
+    <div
+      style={{ ...s.filterControl, ...(open ? s.filterControlOpen : null) }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setOpen(false);
+      }}
+    >
+      <button
+        type="button"
         disabled={disabled}
-        onChange={(event) => setValue(event.target.value)}
-        style={{ ...s.filterSelect, ...(disabled ? s.disabledBtn : null) }}
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          ...s.filterButton,
+          ...(open ? s.filterButtonOpen : null),
+          ...(disabled ? s.disabledBtn : null),
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-    </label>
+        <span style={s.filterTextWrap}>
+          <span style={s.filterLabel}>{label}</span>
+          <span style={s.filterValue}>{selected?.label}</span>
+        </span>
+        <span style={{ ...s.filterChevron, ...(open ? s.filterChevronOpen : null) }} />
+      </button>
+      {open && !disabled && (
+        <div style={s.filterMenu} role="listbox">
+          {options.map((option) => {
+            const active = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectOption(option.value)}
+                style={{ ...s.filterOption, ...(active ? s.filterOptionActive : null) }}
+              >
+                <span style={s.filterOptionLabel}>{option.label}</span>
+                <span style={s.filterOptionSub}>{option.sub}</span>
+                {active && <span style={s.filterOptionMark} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1295,10 +1338,22 @@ const s = {
   meta: { fontSize: 12, color: '#7a5a30', fontWeight: 800 },
   empty: { padding: 20, borderRadius: 10, border: '2px dashed #d4c8b0', background: '#fffaf0', color: '#5C3A21', textAlign: 'center', fontWeight: 800 },
   emptyInline: { padding: 12, color: '#7a5a30', fontWeight: 800, fontSize: 12 },
-  filterPanel: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
-  filterControl: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 },
-  filterLabel: { color: '#7a5a30', fontSize: 10, fontWeight: 900, textTransform: 'uppercase', lineHeight: 1 },
-  filterSelect: { width: '100%', minWidth: 0, height: 34, boxSizing: 'border-box', padding: '0 28px 0 9px', borderRadius: 8, border: '2px solid #bba882', background: '#fff6dc', color: '#5C3A21', fontSize: 12, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer', outline: 'none' },
+  filterPanel: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, padding: 7, borderRadius: 12, borderWidth: 2, borderStyle: 'solid', borderColor: '#d4c8b0', background: 'linear-gradient(180deg, #fffaf0 0%, #fff3d8 100%)', boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.7)' },
+  filterControl: { position: 'relative', minWidth: 0, zIndex: 1 },
+  filterControlOpen: { zIndex: 25 },
+  filterButton: { width: '100%', minWidth: 0, minHeight: 48, boxSizing: 'border-box', padding: '7px 34px 7px 10px', borderRadius: 10, borderWidth: 2, borderStyle: 'solid', borderColor: '#bba882', background: 'linear-gradient(180deg, #fff8e6 0%, #f7e8c4 100%)', color: '#5C3A21', fontFamily: 'inherit', cursor: 'pointer', outline: 'none', boxShadow: '0 2px 0 rgba(92,58,33,0.12), inset 0 1px 0 rgba(255,255,255,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', textAlign: 'left' },
+  filterButtonOpen: { borderColor: '#9f8759', background: 'linear-gradient(180deg, #ffdf80 0%, #f4c84f 100%)' },
+  filterTextWrap: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 },
+  filterLabel: { color: '#8d6f43', fontSize: 9, fontWeight: 900, textTransform: 'uppercase', lineHeight: 1, letterSpacing: 0 },
+  filterValue: { minWidth: 0, color: '#5C3A21', fontSize: 14, fontWeight: 900, lineHeight: 1.05, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  filterChevron: { position: 'absolute', right: 13, top: '50%', width: 8, height: 8, borderRightWidth: 2, borderRightStyle: 'solid', borderRightColor: '#5C3A21', borderBottomWidth: 2, borderBottomStyle: 'solid', borderBottomColor: '#5C3A21', transform: 'translateY(-65%) rotate(45deg)', transition: 'transform 0.14s ease' },
+  filterChevronOpen: { transform: 'translateY(-35%) rotate(225deg)' },
+  filterMenu: { position: 'absolute', top: 'calc(100% + 5px)', left: 0, right: 0, zIndex: 30, padding: 5, borderRadius: 10, borderWidth: 2, borderStyle: 'solid', borderColor: '#9f8759', background: '#fff8e6', boxShadow: '0 10px 18px rgba(65,42,20,0.24), inset 0 1px 0 rgba(255,255,255,0.75)', display: 'flex', flexDirection: 'column', gap: 4 },
+  filterOption: { position: 'relative', width: '100%', minHeight: 40, padding: '6px 28px 6px 8px', borderRadius: 8, borderWidth: 0, background: 'transparent', color: '#5C3A21', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 2 },
+  filterOptionActive: { background: '#ffdc75', boxShadow: 'inset 0 0 0 2px #d0a63f' },
+  filterOptionLabel: { fontSize: 13, fontWeight: 900, lineHeight: 1 },
+  filterOptionSub: { fontSize: 10, fontWeight: 800, color: '#8d6f43', lineHeight: 1.05 },
+  filterOptionMark: { position: 'absolute', right: 9, top: '50%', width: 9, height: 5, borderLeftWidth: 2, borderLeftStyle: 'solid', borderLeftColor: '#5C3A21', borderBottomWidth: 2, borderBottomStyle: 'solid', borderBottomColor: '#5C3A21', transform: 'translateY(-65%) rotate(-45deg)' },
   grid: { width: '100%', minWidth: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 },
   gridMobile: { width: '100%', minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 },
   card: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', boxSizing: 'border-box' },

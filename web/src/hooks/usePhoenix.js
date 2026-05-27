@@ -1485,6 +1485,41 @@ export function usePhoenix() {
     });
   }, [client, connection, walletAddr, walletMismatch, walletMismatchMessage]);
 
+  const reportPhoenixTradeTx = useCallback(async (details = {}) => {
+    if (!walletAddr || walletMismatch) return null;
+    const signature = String(details.signature || details.tx_hash || details.hash || '').trim();
+    if (!signature) return null;
+    const token = tokenRef.current || window._playerToken;
+    if (!token) {
+      console.warn('[Phoenix rewards] tx report skipped - no player token');
+      return null;
+    }
+    let last = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const res = await fetch(`${GAME_API}/futures/phoenix/import-fills?dex=phoenix`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-token': token },
+          body: JSON.stringify({
+            wallet: walletAddr,
+            tx_hash: signature,
+            ...details,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        last = data;
+        if (res.ok && data?.ok !== false) return data;
+        console.warn('[Phoenix rewards] tx import failed', res.status, data);
+        if (res.status < 500 && data?.reason !== 'transaction_not_found') return data;
+      } catch (e) {
+        last = { ok: false, error: e?.message || String(e) };
+        console.warn('[Phoenix rewards] tx import request failed', e?.message || e);
+      }
+      await sleep(1500 + attempt * 2500);
+    }
+    return last;
+  }, [walletAddr, walletMismatch]);
+
   const claimGold = useCallback(async (opts = {}) => {
     if (!walletAddr) return null;
     if (walletMismatch) return null;
@@ -1497,12 +1532,12 @@ export function usePhoenix() {
     lastClaimAtRef.current = now;
 
     const promise = (async () => {
-      if (opts.importFills !== false) {
+      if (opts.importFills === true && (opts.tx_hash || opts.signature || opts.hash)) {
         try {
           const importRes = await fetch(`${GAME_API}/futures/phoenix/import-fills?dex=phoenix`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-token': token },
-            body: JSON.stringify({ wallet: walletAddr }),
+            body: JSON.stringify({ wallet: walletAddr, ...opts }),
           });
           const importData = await importRes.json().catch(() => ({}));
           if (!importRes.ok) {
@@ -1554,7 +1589,7 @@ export function usePhoenix() {
     if (!isActiveDex || !walletAddr || walletMismatch) return undefined;
     const fire = () => {
       const fn = claimGoldRef.current;
-      if (typeof fn === 'function') fn({ importFills: true });
+      if (typeof fn === 'function') fn({ importFills: false });
     };
     const first = setTimeout(fire, 10_000);
     const iv = setInterval(fire, 45_000);
@@ -2651,8 +2686,18 @@ export function usePhoenix() {
         });
         applyOptimisticMarginUse(amount);
         refreshTraderStateSoon([250, 1_000, 3_500, 8_000]);
-        setTimeout(() => claimGold({ force: true }), 3000);
-        setTimeout(() => claimGold({ force: true }), 12000);
+        void reportPhoenixTradeTx({
+          signature,
+          symbol: phx,
+          side: sideEnum === Side.Bid ? 'long' : 'short',
+          amount,
+          leverage,
+          notional_usd: Number(amount) * Number(leverage || 1),
+          price: mark,
+          order_type: 'market',
+          trade_kind: 'open',
+        }).then(() => claimGold({ force: true, importFills: false }));
+        setTimeout(() => claimGold({ force: true, importFills: false }), 12_000);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix market order failed';
@@ -2672,7 +2717,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [activate, applyOptimisticMarginUse, buildBaseUnitsFromMargin, claimGold, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const placeLimitOrder = useCallback(async (symbol, side, price, amount, _tif = 'GTC', leverage = 1) => {
     void _tif;
@@ -2772,8 +2817,18 @@ export function usePhoenix() {
           return sendIxs(ix, 'phoenix.close', { computeUnitLimit: PHOENIX_ORDER_COMPUTE_UNIT_LIMIT });
         });
         refreshTraderStateSoon();
-        setTimeout(() => claimGold({ force: true }), 3000);
-        setTimeout(() => claimGold({ force: true }), 12000);
+        void reportPhoenixTradeTx({
+          signature,
+          symbol: phx,
+          side: positionSide === 'bid' ? 'close_long' : 'close_short',
+          amount: baseUnits,
+          leverage: 1,
+          notional_usd: Number(baseUnits) * Number(mark || 0),
+          price: mark,
+          order_type: 'market',
+          trade_kind: 'close',
+        }).then(() => claimGold({ force: true, importFills: false }));
+        setTimeout(() => claimGold({ force: true, importFills: false }), 12_000);
         return { success: true, signature };
       } catch (e) {
         const msg = e?.message || 'Phoenix close failed';
@@ -2783,7 +2838,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [claimGold, positions, refreshTraderStateSoon, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
+  }, [claimGold, positions, refreshTraderStateSoon, reportPhoenixTradeTx, runOnce, sendIxs, walletAddr, walletMismatch, walletMismatchMessage, withFreshPhoenixMetadataRetry]);
 
   const cancelOrder = useCallback(async (symbol, orderId) => {
     if (!walletAddr) return { error: 'Wallet not connected' };

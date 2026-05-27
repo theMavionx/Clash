@@ -305,6 +305,8 @@ async function fetchWalletTrades(player, opts = {}) {
             ? "AND verified_source = 'risex_api'"
           : dexFilter === 'nado'
             ? "AND verified_source = 'nado_api'"
+          : dexFilter === 'phoenix'
+            ? "AND verified_source IN ('worker', 'tx')"
           : "AND verified_source = 'worker'";
       const settleWhere = opts.includeUnsettled
         ? ''

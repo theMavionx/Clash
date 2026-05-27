@@ -590,6 +590,42 @@ function solanaCustodyKeypair() {
   return Keypair.fromSecretKey(parseSolanaSecretKey(raw));
 }
 
+function solanaCustodyAddress() {
+  try { return solanaCustodyKeypair()?.publicKey?.toBase58?.() || null; } catch { return null; }
+}
+
+function configuredSolanaRevenueTreasury(ctx = {}) {
+  const sol = ctx.gameShopSolanaConfig?.() || {};
+  const solDeployment = deploymentOf('solana') || {};
+  return firstEnv(
+    'MARKETPLACE_SOLANA_USDC_TREASURY',
+    'CUSTODIAL_MARKETPLACE_SOLANA_TREASURY',
+    'GAME_SHOP_SOLANA_TREASURY',
+    'NFT_SOLANA_TREASURY',
+    'NFT_BRIDGE_SOLANA_TREASURY'
+  )
+    || sol.treasury
+    || solDeployment.treasury
+    || solDeployment.owner
+    || null;
+}
+
+function solanaMarketplacePaymentTreasury(ctx = {}) {
+  const explicitPaymentTreasury = firstEnv(
+    'MARKETPLACE_SOLANA_PAYMENT_TREASURY',
+    'CUSTODIAL_MARKETPLACE_SOLANA_PAYMENT_TREASURY'
+  );
+  if (explicitPaymentTreasury) return normalizeSolanaPubkey(explicitPaymentTreasury, 'Solana USDC payment treasury');
+
+  const signerAddress = solanaCustodyAddress();
+  if (signerAddress && envFlag('CUSTODIAL_MARKETPLACE_SOLANA_SIGNER_ESCROW', true)) {
+    return signerAddress;
+  }
+
+  const revenueTreasury = configuredSolanaRevenueTreasury(ctx);
+  return revenueTreasury ? normalizeSolanaPubkey(revenueTreasury, 'Solana USDC treasury') : null;
+}
+
 async function evmCustodyAddress(ctx) {
   const explicit = process.env.MARKETPLACE_EVM_NFT_VAULT || process.env.CUSTODIAL_MARKETPLACE_EVM_VAULT || null;
   const legacyTreasury = ctx.gameShopEvmConfig?.('base')?.treasury || null;
@@ -763,27 +799,21 @@ function paymentConfigs(ctx) {
     };
   }
   const sol = ctx.gameShopSolanaConfig?.() || {};
-  const solDeployment = deploymentOf('solana') || {};
-  const solanaTreasury = firstEnv(
-    'MARKETPLACE_SOLANA_USDC_TREASURY',
-    'CUSTODIAL_MARKETPLACE_SOLANA_TREASURY',
-    'GAME_SHOP_SOLANA_TREASURY',
-    'NFT_SOLANA_TREASURY',
-    'NFT_BRIDGE_SOLANA_TREASURY'
-  )
-    || sol.treasury
-    || solDeployment.treasury
-    || solDeployment.owner
-    || null;
+  const solanaPaymentTreasury = solanaMarketplacePaymentTreasury(ctx);
+  const solanaRevenueTreasuryRaw = configuredSolanaRevenueTreasury(ctx);
+  const solanaRevenueTreasury = solanaRevenueTreasuryRaw
+    ? normalizeSolanaPubkey(solanaRevenueTreasuryRaw, 'Solana USDC revenue treasury')
+    : null;
   payments.solana = {
     chain: 'solana',
     label: 'Solana',
     token: 'usdc',
     tokenAddress: normalizeSolanaPubkey(process.env.MARKETPLACE_SOLANA_USDC_MINT || sol.usdcMint || SOLANA_USDC_MINT, 'Solana USDC mint'),
     decimals: 6,
-    treasury: solanaTreasury ? normalizeSolanaPubkey(solanaTreasury, 'Solana USDC treasury') : null,
+    treasury: solanaPaymentTreasury,
+    revenueTreasury: solanaRevenueTreasury,
     rpcUrl: null,
-    ready: !!solanaTreasury,
+    ready: !!solanaPaymentTreasury,
   };
   const apt = ctx.gameShopAptosConfig?.() || {};
   const aptDeployment = deploymentOf('aptos') || {};
@@ -1511,7 +1541,7 @@ async function payoutEvmUsdc({ chain, to, amount, ctx }) {
   return hash;
 }
 
-async function payoutSolanaUsdc({ to, amount, ctx }) {
+async function payoutSolanaUsdc({ to, amount, ctx, order = null }) {
   const signer = solanaCustodyKeypair();
   if (!signer) throw httpError(503, 'Solana payout signer is not configured');
   const config = paymentConfigs(ctx).solana;
@@ -1528,10 +1558,85 @@ async function payoutSolanaUsdc({ to, amount, ctx }) {
   const destOwner = new PublicKey(normalizeSolanaPubkey(to, 'Seller payout wallet'));
   const srcAta = getAssociatedTokenAddressSync(mintPk, signer.publicKey, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
   const destAta = getAssociatedTokenAddressSync(mintPk, destOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID);
-  const tx = new Transaction().add(
-    createAssociatedTokenAccountIdempotentInstruction(signer.publicKey, destAta, destOwner, mintPk, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID),
-    createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, BigInt(amount), 6, [], TOKEN_PROGRAM_ID),
-  );
+  const sellerAmount = BigInt(String(amount || '0'));
+  if (sellerAmount <= 0n) throw httpError(400, 'Solana payout amount must be greater than zero');
+
+  const signerAddress = signer.publicKey.toBase58();
+  const orderPaymentTreasury = order?.payment_chain === 'solana' && order?.payment_treasury
+    ? normalizeSolanaPubkey(order.payment_treasury, 'Solana payment treasury')
+    : null;
+  if (orderPaymentTreasury && orderPaymentTreasury !== signerAddress) {
+    throw httpError(
+      409,
+      `Solana payment was received by ${orderPaymentTreasury}, but automatic payout signer is ${signerAddress}. Configure Solana payment treasury to the signer escrow or provide a treasury signer.`
+    );
+  }
+
+  const revenueOwnerRaw = config.revenueTreasury || configuredSolanaRevenueTreasury(ctx);
+  const revenueOwner = revenueOwnerRaw
+    ? new PublicKey(normalizeSolanaPubkey(revenueOwnerRaw, 'Solana USDC revenue treasury'))
+    : null;
+  const feeRoyalty = BigInt(String(order?.fee_usdc_units || '0')) + BigInt(String(order?.royalty_usdc_units || '0'));
+  const paidAmount = order?.payment_chain === 'solana' ? BigInt(String(order?.payment_amount_usdc_units || '0')) : 0n;
+  const priceAmount = BigInt(String(order?.price_usdc_units || '0'));
+  const paymentSalt = paidAmount > priceAmount ? paidAmount - priceAmount : 0n;
+  const revenueAmount = revenueOwner && revenueOwner.toBase58() !== signerAddress && order?.payment_chain === 'solana'
+    ? feeRoyalty + paymentSalt
+    : 0n;
+  const requiredSourceAmount = sellerAmount + revenueAmount;
+
+  const revenueAta = revenueAmount > 0n
+    ? getAssociatedTokenAddressSync(mintPk, revenueOwner, false, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID)
+    : null;
+  const [srcInfo, destInfo, revenueInfo, signerLamports, tokenRentLamports] = await Promise.all([
+    conn.getAccountInfo(srcAta, 'confirmed'),
+    conn.getAccountInfo(destAta, 'confirmed'),
+    revenueAta ? conn.getAccountInfo(revenueAta, 'confirmed') : Promise.resolve(null),
+    conn.getBalance(signer.publicKey, 'confirmed'),
+    conn.getMinimumBalanceForRentExemption(165),
+  ]);
+  if (!srcInfo) throw httpError(409, `Solana payout source USDC account is missing for ${signerAddress}`);
+  let sourceUsdc = 0n;
+  try {
+    sourceUsdc = BigInt((await conn.getTokenAccountBalance(srcAta, 'confirmed')).value.amount || '0');
+  } catch {
+    sourceUsdc = 0n;
+  }
+  if (sourceUsdc < requiredSourceAmount) {
+    throw httpError(
+      409,
+      `Solana payout treasury has insufficient USDC: need ${formatUnits(requiredSourceAmount, 6)}, available ${formatUnits(sourceUsdc, 6)}`
+    );
+  }
+  const rentNeeded = (destInfo ? 0 : tokenRentLamports) + (revenueAta && !revenueInfo ? tokenRentLamports : 0);
+  if (signerLamports < rentNeeded + 10_000) {
+    throw httpError(
+      409,
+      `Solana payout treasury needs SOL for recipient token accounts: need about ${formatUnits(String(rentNeeded + 10_000), 9)} SOL`
+    );
+  }
+
+  const tx = new Transaction();
+  tx.add(createAssociatedTokenAccountIdempotentInstruction(
+    signer.publicKey,
+    destAta,
+    destOwner,
+    mintPk,
+    TOKEN_PROGRAM_ID,
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  ));
+  tx.add(createTransferCheckedInstruction(srcAta, mintPk, destAta, signer.publicKey, sellerAmount, 6, [], TOKEN_PROGRAM_ID));
+  if (revenueAmount > 0n && revenueAta) {
+    tx.add(createAssociatedTokenAccountIdempotentInstruction(
+      signer.publicKey,
+      revenueAta,
+      revenueOwner,
+      mintPk,
+      TOKEN_PROGRAM_ID,
+      ASSOCIATED_TOKEN_PROGRAM_ID
+    ));
+    tx.add(createTransferCheckedInstruction(srcAta, mintPk, revenueAta, signer.publicKey, revenueAmount, 6, [], TOKEN_PROGRAM_ID));
+  }
   return sendAndConfirmFresh(conn, tx, [signer], 'Custodial marketplace seller payout');
 }
 
@@ -1562,7 +1667,7 @@ async function maybeAutoPayout(order, ctx, actorPlayerId) {
   const chain = String(fresh.seller_payout_chain || '').toLowerCase();
   let txHash;
   if (isEvmChain(chain)) txHash = await payoutEvmUsdc({ chain, to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx });
-  else if (chain === 'solana') txHash = await payoutSolanaUsdc({ to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx });
+  else if (chain === 'solana') txHash = await payoutSolanaUsdc({ to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx, order: fresh });
   else if (chain === 'aptos') txHash = await payoutAptosUsdc({ to: fresh.seller_payout_address, amount: fresh.seller_amount_usdc_units, ctx });
   else return fresh;
   gameDb.db.prepare(`

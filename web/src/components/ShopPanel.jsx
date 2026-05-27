@@ -16,6 +16,9 @@ import imgTombstone from '../assets/buildings/tombstone.png';
 import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgMageTower from '../assets/buildings/magetower.png';
+import imgAltar from '../assets/units/altar.png';
+
+const ALTAR_PRICE_LABEL = '$15.00';
 
 const TABS = [
   { id: 'Economy', label: 'Economy' },
@@ -48,7 +51,7 @@ const CATEGORY_MAP = {
   archer_tower: 'Defense',
   archertower: 'Defense',
   mage_tower: 'Defense',
-  altar: 'Defense',
+  altar: 'Economy',
   port: 'Military',
   town_hall: 'Economy',
 };
@@ -66,6 +69,7 @@ const THUMBNAIL_MAP = {
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
   storage: imgStorage,
+  altar: imgAltar,
 };
 
 const THUMBNAIL_SCALE_MAP = {
@@ -75,6 +79,7 @@ const THUMBNAIL_SCALE_MAP = {
   archer_tower: 1.4,
   archertower: 1.4,
   mage_tower: 1.2,
+  altar: 1.28,
 };
 
 const getCategory = (id) => CATEGORY_MAP[id] || 'Economy';
@@ -262,6 +267,7 @@ function ShopPanel({ onClose }) {
           <div style={{ ...styles.cardScroll, padding: isMobile ? '16px' : '20px 24px' }}>
             {filteredBuildings.map(([id, def, status]) => {
               const disabled = !status.onchainLocked && (status.locked || status.maxed || !status.canAfford);
+              const thumbnail = THUMBNAIL_MAP[id];
               return (
               <div
                 key={id}
@@ -285,11 +291,31 @@ function ShopPanel({ onClose }) {
                 )}
 
                 {status.onchainLocked ? (
-                  <div style={styles.lockOverlay}>
-                    <span style={styles.lockIcon}>ON</span>
-                    <span style={styles.lockName}>{def.name}</span>
-                    <span style={styles.lockText}>Buy onchain</span>
-                  </div>
+                  <>
+                    <div style={{ ...styles.cardImgTop, ...styles.onchainCardImgTop }}>
+                      <div style={styles.iconHighlight} />
+                      {thumbnail ? (
+                        <img
+                          src={thumbnail}
+                          style={{
+                            ...styles.thumbnail,
+                            ...styles.onchainThumbnail,
+                            transform: `scale(${THUMBNAIL_SCALE_MAP[id] || 1})`,
+                          }}
+                          alt={def.name}
+                        />
+                      ) : (
+                        <div style={styles.placeholderBox}>рџЏ </div>
+                      )}
+                    </div>
+
+                    <div style={styles.cardInfo}>
+                      <div style={styles.cardName}>{def.name}</div>
+                      <div style={styles.cardDesc}>{DESC_MAP[id] || 'Unlock in Game Resources'}</div>
+                      <div style={styles.onchainPrice}>{id === 'altar' ? ALTAR_PRICE_LABEL : 'Onchain'}</div>
+                      <div style={styles.onchainCta}>Buy onchain</div>
+                    </div>
+                  </>
                 ) : status.locked ? (
                   <div style={styles.lockOverlay}>
                     <span style={styles.lockIcon}>🔒</span>
@@ -300,9 +326,9 @@ function ShopPanel({ onClose }) {
                 <>
                 <div style={styles.cardImgTop}>
                   <div style={styles.iconHighlight} />
-                  {THUMBNAIL_MAP[id] ? (
+                  {thumbnail ? (
                     <img
-                      src={THUMBNAIL_MAP[id]}
+                      src={thumbnail}
                       style={{
                         ...styles.thumbnail,
                         transform: `scale(${THUMBNAIL_SCALE_MAP[id] || 1})`,
@@ -435,6 +461,14 @@ const styles = {
     zIndex: 1,
     filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.4))',
   },
+  onchainCardImgTop: {
+    height: 'clamp(104px, 30vw, 132px)',
+    marginTop: 8,
+  },
+  onchainThumbnail: {
+    width: 'clamp(88px, 27vw, 130px)',
+    height: 'clamp(88px, 27vw, 130px)',
+  },
   placeholderBox: {
     fontSize: 44,
     zIndex: 1,
@@ -479,6 +513,26 @@ const styles = {
   },
   lockText: {
     fontSize: 11, fontWeight: 700, color: '#a3906a',
+  },
+  onchainPrice: {
+    marginTop: 'auto',
+    fontSize: 'clamp(15px, 4vw, 18px)',
+    fontWeight: 900,
+    color: '#5C3A21',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+    lineHeight: 1.1,
+  },
+  onchainCta: {
+    margin: '5px auto 0',
+    padding: '4px 10px',
+    borderRadius: 8,
+    background: '#58b9d8',
+    color: '#fdf8e7',
+    fontSize: 10,
+    fontWeight: 900,
+    textTransform: 'uppercase',
+    letterSpacing: 0,
+    boxShadow: '0 2px 0 #2f7f98',
   },
   cardInfo: {
     padding: '4px 8px 8px 8px',
