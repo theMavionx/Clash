@@ -10,6 +10,7 @@ import {
   fetchMyCustodialOrders,
   formatCustodialUsdc,
   payCustodialOrder,
+  releaseCustodialReservation,
 } from '../lib/custodialMarketplace';
 import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
@@ -53,6 +54,21 @@ function walletForChain(chain, { evmAddress, solAddress, aptosAddress }) {
   if (chain === 'solana') return solAddress || '';
   if (chain === 'aptos') return aptosAddress || '';
   return '';
+}
+
+function reservationDeadlineMs(order) {
+  const value = Number(order?.reservation?.deadline || order?.payment?.deadline || 0);
+  return Number.isFinite(value) && value > 0 ? value * 1000 : 0;
+}
+
+function formatReservationTime(order) {
+  const ms = reservationDeadlineMs(order);
+  if (!ms) return 'soon';
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function isPaymentPreSubmitError(message) {
+  return /reject|denied|cancel|signature verification failed|missing signature|cannot sign|wallet cannot|not enough|insufficient|connect .*wallet|failed to sign/i.test(String(message || ''));
 }
 
 export default function CustodialMarketplacePanel({
@@ -236,6 +252,14 @@ export default function CustodialMarketplacePanel({
     }
   }, [aptosWallet, evmAddress, onConnectAptos, onConnectBase, onConnectSolana, onOpenEvmModal]);
 
+  const openBuyModal = useCallback((order) => {
+    if (!order) return;
+    addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
+    setBuyTarget(order);
+    if (order.paymentChain && supportedPayments.includes(order.paymentChain)) setPaymentChain(order.paymentChain);
+    if (order.buyerDestChain && supportedDestinations.includes(order.buyerDestChain)) setDeliveryChain(order.buyerDestChain);
+  }, [supportedDestinations, supportedPayments]);
+
   const handleCreateListing = useCallback(async () => {
     if (!sessionToken) { setNotice('Game session is not ready.'); return; }
     if (!ready) { setNotice('Marketplace vaults are not ready on the server.'); return; }
@@ -324,12 +348,41 @@ export default function CustodialMarketplacePanel({
       await Promise.all([loadListings(), loadOrders()]);
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
-      setNotice(msg.slice(0, 240));
+      if (isPaymentPreSubmitError(msg)) {
+        try {
+          await releaseCustodialReservation({
+            token: sessionToken,
+            orderId: buyTarget.id,
+            reason: msg.slice(0, 140),
+          });
+          await Promise.all([loadListings(), loadOrders()]);
+          setNotice(`${msg.slice(0, 180)} Reservation released.`);
+        } catch {
+          setNotice(msg.slice(0, 240));
+        }
+      } else {
+        setNotice(msg.slice(0, 240));
+      }
       addClientBreadcrumb('marketplace.custodial.buy.failed', { orderId: buyTarget?.id, message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
   }, [aptosWallet, buyTarget, connectForChain, deliveryChain, evmWallet, loadListings, loadOrders, paymentChain, sessionToken, solWallet, walletMap]);
+
+  const handleReleaseReservation = useCallback(async (orderId) => {
+    if (!sessionToken) return;
+    setBusy(`release:${orderId}`);
+    setNotice(null);
+    try {
+      await releaseCustodialReservation({ token: sessionToken, orderId, reason: 'buyer_released_from_orders' });
+      setNotice('Reservation released.');
+      await Promise.all([loadListings(), loadOrders()]);
+    } catch (err) {
+      setNotice((err?.message || 'Release failed').slice(0, 240));
+    } finally {
+      setBusy(null);
+    }
+  }, [loadListings, loadOrders, sessionToken]);
 
   const handleCancel = useCallback(async (orderId) => {
     if (!sessionToken) return;
@@ -371,8 +424,8 @@ export default function CustodialMarketplacePanel({
           loading={loading}
           walletMap={walletMap}
           onBuy={(order) => {
-            addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id, assetChain: order?.assetChain });
-            setBuyTarget(order);
+            addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
+            openBuyModal(order);
           }}
           onOwnListing={(order) => {
             addClientBreadcrumb('marketplace.custodial.buy.own_listing_click', { orderId: order?.id, assetChain: order?.assetChain }, 'info');
@@ -399,7 +452,17 @@ export default function CustodialMarketplacePanel({
           onRefresh={loadOwned}
         />
       )}
-      {view === 'orders' && <OrdersView orders={orders} loading={loading} walletMap={walletMap} busy={busy} onCancel={handleCancel} />}
+      {view === 'orders' && (
+        <OrdersView
+          orders={orders}
+          loading={loading}
+          walletMap={walletMap}
+          busy={busy}
+          onCancel={handleCancel}
+          onResumeBuy={openBuyModal}
+          onReleaseReservation={handleReleaseReservation}
+        />
+      )}
 
       {buyTarget && canUsePortal && createPortal((
         <div style={s.modalOverlay} onClick={busy === 'buy' ? undefined : () => setBuyTarget(null)}>
@@ -575,31 +638,57 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
   );
 }
 
-function OrdersView({ orders, loading, walletMap, busy, onCancel }) {
+function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, onReleaseReservation }) {
   if (loading) return <div style={s.meta}>Loading orders...</div>;
   if (!orders.length) return <div style={s.empty}>No marketplace orders yet.</div>;
   return (
     <div style={s.orderList}>
       {orders.map((order) => {
         const ownWallet = walletForChain(order.assetChain, walletMap);
+        const buyerPaymentWallet = walletForChain(order.paymentChain, walletMap);
         const isSeller = ownWallet && String(order.sellerWallet || '').toLowerCase() === String(ownWallet || '').toLowerCase();
-        const canCancel = isSeller && ['awaiting_deposit', 'active', 'reserved'].includes(order.status);
+        const isBuyer = buyerPaymentWallet && String(order.buyerWallet || '').toLowerCase() === String(buyerPaymentWallet || '').toLowerCase();
+        const reservationExpired = order.status === 'reserved' && reservationDeadlineMs(order) > 0 && reservationDeadlineMs(order) <= Date.now();
+        const canCancel = isSeller && (['awaiting_deposit', 'active'].includes(order.status) || reservationExpired);
+        const canResume = order.status === 'reserved' && isBuyer;
+        const canRelease = canResume;
+        const buyerLabel = order.buyerPlayerName
+          || order.reservation?.buyerPlayerName
+          || shortAddr(order.buyerWallet || order.reservation?.buyerWallet || order.buyerPlayerId, 5, 4);
+        const reservedLine = order.status === 'reserved'
+          ? (isBuyer
+              ? `Reserved for you until ${formatReservationTime(order)}.`
+              : `Purchase in progress${buyerLabel ? ` by ${buyerLabel}` : ''} until ${formatReservationTime(order)}.`)
+          : null;
         return (
           <div key={order.id} style={s.orderRow}>
             <img src={orderImage(order)} alt="" style={s.orderImg} />
             <div style={s.orderMain}>
               <b>{orderPrice(order)}</b>
               <span>{shortAddr(order.assetId, 6, 5)} - {order.status}</span>
+              {reservedLine && <span style={s.orderReserved}>{reservedLine}</span>}
               {order.paymentTxHash && <span>payment {shortAddr(order.paymentTxHash, 8, 6)}</span>}
               {order.deliveryTxHash && <span>delivery {shortAddr(order.deliveryTxHash, 8, 6)}</span>}
               {order.payoutTxHash && <span>payout {shortAddr(order.payoutTxHash, 8, 6)}</span>}
               {order.error && <span style={s.orderError}>{order.error}</span>}
             </div>
-            {canCancel && (
-              <button type="button" onClick={() => onCancel(order.id)} disabled={busy === `cancel:${order.id}`} style={s.smallBtn}>
-                {busy === `cancel:${order.id}` ? 'Cancelling...' : 'Cancel'}
-              </button>
-            )}
+            <div style={s.orderActions}>
+              {canResume && (
+                <button type="button" onClick={() => onResumeBuy(order)} disabled={busy === 'buy'} style={s.smallBtn}>
+                  Pay
+                </button>
+              )}
+              {canRelease && (
+                <button type="button" onClick={() => onReleaseReservation(order.id)} disabled={busy === `release:${order.id}`} style={s.smallBtn}>
+                  {busy === `release:${order.id}` ? 'Releasing...' : 'Release'}
+                </button>
+              )}
+              {canCancel && (
+                <button type="button" onClick={() => onCancel(order.id)} disabled={busy === `cancel:${order.id}`} style={s.smallBtn}>
+                  {busy === `cancel:${order.id}` ? 'Cancelling...' : 'Cancel'}
+                </button>
+              )}
+            </div>
           </div>
         );
       })}
@@ -649,6 +738,8 @@ const s = {
   orderRow: { display: 'flex', alignItems: 'center', gap: 9, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc' },
   orderImg: { width: 54, height: 54, objectFit: 'cover', borderRadius: 8, border: '1px solid #d4c8b0' },
   orderMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#5C3A21', fontWeight: 700 },
+  orderActions: { display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'stretch' },
+  orderReserved: { color: '#7a5a30', fontWeight: 900 },
   orderError: { color: '#a12a1e', fontWeight: 900 },
   modalOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 },
   modal: { width: 380, maxWidth: '94vw', padding: 12, borderRadius: 14, border: '4px solid #d4c8b0', background: '#fdf8e7', display: 'flex', flexDirection: 'column', gap: 10 },

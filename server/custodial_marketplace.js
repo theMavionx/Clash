@@ -194,6 +194,11 @@ function getOrder(orderId) {
   return gameDb.db.prepare('SELECT * FROM custodial_marketplace_orders WHERE id = ?').get(String(orderId || '')) || null;
 }
 
+function playerNameById(playerId) {
+  if (!playerId) return null;
+  return gameDb.db.prepare('SELECT name FROM players WHERE id = ?').get(String(playerId))?.name || null;
+}
+
 function getOpenOrderByAsset(assetChain, assetId) {
   return gameDb.db.prepare(`
     SELECT * FROM custodial_marketplace_orders
@@ -317,6 +322,7 @@ function publicOrder(row, { includePrivate = false } = {}) {
   if (!row) return null;
   const meta = safeJsonParse(row.metadata_json, {});
   const paymentDecimals = Number(row.payment_decimals || meta.paymentDecimals || 6);
+  const buyerPlayerName = includePrivate ? playerNameById(row.buyer_player_id) : null;
   const out = {
     id: row.id,
     status: row.status,
@@ -345,6 +351,8 @@ function publicOrder(row, { includePrivate = false } = {}) {
     paymentDecimals,
     paymentLabel: row.payment_label || 'USDC',
     paymentTreasury: row.payment_treasury,
+    buyerPlayerId: includePrivate ? row.buyer_player_id : undefined,
+    buyerPlayerName: buyerPlayerName || undefined,
     buyerWallet: includePrivate ? row.buyer_wallet : undefined,
     buyerDestChain: row.buyer_dest_chain,
     buyerDestAddress: row.buyer_dest_address,
@@ -363,6 +371,17 @@ function publicOrder(row, { includePrivate = false } = {}) {
     updatedAt: row.updated_at,
     metadata: meta,
   };
+  if (row.status === 'reserved') {
+    out.reservation = {
+      buyerPlayerId: includePrivate ? row.buyer_player_id : undefined,
+      buyerPlayerName: buyerPlayerName || undefined,
+      buyerWallet: includePrivate ? row.buyer_wallet : undefined,
+      destChain: row.buyer_dest_chain,
+      destAddress: includePrivate ? row.buyer_dest_address : undefined,
+      deadline: row.payment_deadline,
+      expiresInSeconds: row.payment_deadline ? Math.max(0, Number(row.payment_deadline) - nowSec()) : null,
+    };
+  }
   if (row.status === 'awaiting_deposit') {
     out.deposit = { chain: row.vault_chain, assetId: row.asset_id, vaultAddress: row.vault_address };
   }
@@ -1562,7 +1581,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
         limit,
         offset,
         stats: {
-          listedCount: Number(activeStats.listed_count || total || 0),
+          listedCount: Number(activeStats.listed_count || 0),
           volumeUsdcUnits: String(salesStats.volume_usdc_units || '0'),
           floorUsdcUnits: activeStats.floor_usdc_units == null ? null : String(activeStats.floor_usdc_units),
         },
@@ -1574,6 +1593,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
 
   router.get('/marketplace/custodial/orders/mine', auth, (req, res) => {
     try {
+      releaseExpiredReservations();
       const rows = gameDb.db.prepare(`
         SELECT * FROM custodial_marketplace_orders
         WHERE seller_player_id = ? OR buyer_player_id = ?
@@ -1732,7 +1752,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const destChain = normalizeChain(req.body?.destChain || req.body?.destinationChain || paymentChain, 'destinationChain');
       if (!config.supportedDestinationChains.includes(destChain)) throw httpError(400, 'Unsupported destination chain');
       const destAddress = normalizeAddressForChain(destChain, req.body?.destAddress || req.body?.destinationAddress || buyerWallet, 'Destination wallet');
-      const ttlSeconds = Math.max(60, Math.min(1800, Number(process.env.CUSTODIAL_MARKETPLACE_PAYMENT_TTL_SECONDS || 900)));
+      const ttlSeconds = Math.max(60, Math.min(300, Number(process.env.CUSTODIAL_MARKETPLACE_PAYMENT_TTL_SECONDS || 300)));
       const result = gameDb.db.transaction(() => {
         const order = getOrder(req.params.id);
         if (!order) throw httpError(404, 'Listing not found');
@@ -1792,6 +1812,41 @@ function mountCustodialMarketplace(router, ctx = {}) {
       res.json({ success: true, order: publicOrder(result, { includePrivate: true }) });
     } catch (err) {
       res.status(err?.status || 500).json({ error: (err?.message || 'buy intent failed').slice(0, 240) });
+    }
+  });
+
+  router.post('/marketplace/custodial/orders/:id/release-reservation', auth, (req, res) => {
+    try {
+      const order = getOrder(req.params.id);
+      requireOrderBuyer(order, req.player.id);
+      if (order.status !== 'reserved') {
+        return res.json({ success: true, alreadyReleased: true, order: publicOrder(order, { includePrivate: true }) });
+      }
+      const reason = String(req.body?.reason || 'buyer_released').slice(0, 160);
+      gameDb.db.transaction(() => {
+        gameDb.db.prepare(`
+          UPDATE custodial_marketplace_orders
+             SET status = 'active',
+                 buyer_player_id = NULL,
+                 buyer_wallet = NULL,
+                 buyer_dest_chain = NULL,
+                 buyer_dest_address = NULL,
+                 payment_amount_usdc_units = NULL,
+                 payment_nonce = NULL,
+                 payment_deadline = NULL,
+                 error = NULL,
+                 updated_at = datetime('now')
+           WHERE id = ? AND status = 'reserved' AND buyer_player_id = ?
+        `).run(order.id, req.player.id);
+        insertEvent(order.id, 'reservation_released', {
+          actorPlayerId: req.player.id,
+          data: { reason, releasedAt: nowSec() },
+        });
+      })();
+      res.set('Cache-Control', 'no-store');
+      res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
+    } catch (err) {
+      res.status(err?.status || 500).json({ error: (err?.message || 'release reservation failed').slice(0, 240) });
     }
   });
 

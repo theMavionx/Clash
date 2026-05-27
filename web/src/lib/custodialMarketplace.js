@@ -108,6 +108,37 @@ async function sendSolanaMobileProtocolTransaction({ transaction, options, expec
   });
 }
 
+function solanaWalletTxOptions({ solWallet, owner, PublicKey, label }) {
+  const adapterName = walletAdapterName(solWallet) || 'wallet';
+  const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
+  const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function' || mobileWalletAdapter;
+  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
+  if (!canSendSolanaTx && !canSignSolanaTx) {
+    throw new Error('This Solana wallet cannot sign transactions');
+  }
+  return {
+    sendTransaction: canSendSolanaTx
+      ? (tx, conn, opts) => (
+          mobileWalletAdapter
+            ? sendSolanaMobileProtocolTransaction({
+                transaction: tx,
+                options: opts,
+                expectedAddress: owner,
+                PublicKey,
+              })
+            : solWallet.sendTransaction(tx, conn, opts)
+        )
+      : null,
+    signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
+      ? null
+      : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
+    preferWalletSendTransaction: canSendSolanaTx,
+    forceVersionedTransaction: mobileWalletAdapter,
+    walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
+    label: `${label}.${adapterName}`,
+  };
+}
+
 export async function fetchCustodialMarketplaceConfig({ signal } = {}) {
   return apiJson('/api/marketplace/custodial/config', { signal });
 }
@@ -174,6 +205,14 @@ export async function confirmCustodialPayment({ token, orderId, txHash }) {
     method: 'POST',
     token,
     body: { txHash },
+  });
+}
+
+export async function releaseCustodialReservation({ token, orderId, reason = 'payment_not_submitted' }) {
+  return apiJson(`/api/marketplace/custodial/orders/${encodeURIComponent(orderId)}/release-reservation`, {
+    method: 'POST',
+    token,
+    body: { reason },
   });
 }
 
@@ -304,10 +343,6 @@ export async function payCustodialOrderOnSolana({
   const sourceAta = await splToken.getAssociatedTokenAddress(mintPk, ownerPk, false, splToken.TOKEN_PROGRAM_ID);
   const treasuryAta = await splToken.getAssociatedTokenAddress(mintPk, treasuryPk, false, splToken.TOKEN_PROGRAM_ID);
   const amount = BigInt(payment.amountTokenUnits);
-  const adapterName = walletAdapterName(solWallet) || 'wallet';
-  const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
-  const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function' || mobileWalletAdapter;
-  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
   const instructions = [
     splToken.createAssociatedTokenAccountIdempotentInstruction(
       ownerPk,
@@ -332,27 +367,14 @@ export async function payCustodialOrderOnSolana({
     instructions,
     ownerPk,
     connection,
-    sendTransaction: canSendSolanaTx
-      ? (tx, conn, opts) => (
-          mobileWalletAdapter
-            ? sendSolanaMobileProtocolTransaction({
-                transaction: tx,
-                options: opts,
-                expectedAddress: owner,
-                PublicKey,
-              })
-            : solWallet.sendTransaction(tx, conn, opts)
-        )
-      : null,
-    signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
-      ? null
-      : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
+    ...solanaWalletTxOptions({
+      solWallet,
+      owner,
+      PublicKey,
+      label: 'custodial_marketplace.payment_solana',
+    }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
-    preferWalletSendTransaction: canSendSolanaTx,
-    forceVersionedTransaction: mobileWalletAdapter,
-    walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
-    label: `custodial_marketplace.payment_solana.${adapterName}`,
   });
   const confirmed = await confirmCustodialPayment({ token, orderId, txHash });
   return { intent, txHash, confirmed };
@@ -452,9 +474,6 @@ export async function depositToken2022NftToCustody({
   if (!token) throw new Error('Game session is not ready');
   const owner = solWallet?.publicKey?.toBase58?.();
   if (!owner) throw new Error('Solana wallet is not connected');
-  if (typeof solWallet?.sendTransaction !== 'function' && typeof solWallet?.signTransaction !== 'function') {
-    throw new Error('This Solana wallet cannot sign transactions');
-  }
   if (!order?.assetId || !order?.vaultAddress) throw new Error('Listing deposit data is incomplete');
   if (nft?.standard && nft.standard !== 'token2022') {
     throw new Error('Automatic custody deposit currently supports Token-2022 Demon King NFTs only');
@@ -507,11 +526,14 @@ export async function depositToken2022NftToCustody({
     instructions,
     ownerPk,
     connection,
-    sendTransaction: solWallet.sendTransaction ? (tx, conn, opts) => solWallet.sendTransaction(tx, conn, opts) : null,
-    signTransaction: solWallet.signTransaction ? (tx) => solWallet.signTransaction(tx) : null,
+    ...solanaWalletTxOptions({
+      solWallet,
+      owner,
+      PublicKey,
+      label: 'custodial_marketplace.deposit_solana_token2022',
+    }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
-    label: 'custodial_marketplace.deposit_solana',
   });
   const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash });
   return { txHash, confirmed };
@@ -525,30 +547,31 @@ export async function depositCoreNftToCustody({
   if (!token) throw new Error('Game session is not ready');
   const owner = solWallet?.publicKey?.toBase58?.();
   if (!owner) throw new Error('Solana wallet is not connected');
-  if (typeof solWallet?.signTransaction !== 'function') {
-    throw new Error('This Solana wallet cannot sign transactions');
-  }
   if (!order?.assetId || !order?.vaultAddress) throw new Error('Listing deposit data is incomplete');
 
   const [
     { createUmi },
-    { publicKey },
+    { publicKey, createNoopSigner },
     { mplCore, fetchAsset, fetchCollection, transfer },
-    { walletAdapterIdentity },
-    { base58 },
-    { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl },
+    { toWeb3JsInstruction },
+    { Connection, PublicKey },
+    { DEFAULT_SOLANA_RPC_URL, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl, createSolanaConnection },
+    { sendSolanaTransactionWithRetry },
   ] = await Promise.all([
     import('@metaplex-foundation/umi-bundle-defaults'),
     import('@metaplex-foundation/umi'),
     import('@metaplex-foundation/mpl-core'),
-    import('@metaplex-foundation/umi-signer-wallet-adapters'),
-    import('@metaplex-foundation/umi/serializers'),
+    import('@metaplex-foundation/umi-web3js-adapters'),
+    import('@solana/web3.js'),
     import('./solanaRpc'),
+    import('./solanaTx'),
   ]);
 
   const rpcProbe = await selectFreshSolanaRpcUrl(undefined, { timeoutMs: 2500 }).catch(() => ({ selected: null }));
   const rpcUrl = solanaBatchSafeRpcUrl(rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL);
-  const umi = createUmi(rpcUrl).use(mplCore()).use(walletAdapterIdentity(solWallet));
+  const umi = createUmi(rpcUrl).use(mplCore());
+  const ownerPk = new PublicKey(owner);
+  const ownerSigner = createNoopSigner(publicKey(owner));
   const asset = await fetchAsset(umi, publicKey(order.assetId));
   const updateAuthority = asset?.updateAuthority;
   const collectionAddress = updateAuthority?.__kind === 'Collection'
@@ -560,14 +583,25 @@ export async function depositCoreNftToCustody({
   const builder = transfer(umi, {
     asset,
     ...(collection ? { collection } : {}),
-    authority: umi.identity,
+    payer: ownerSigner,
+    authority: ownerSigner,
     newOwner: publicKey(order.vaultAddress),
   });
-  const result = await builder.sendAndConfirm(umi, {
-    send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
-    confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
+  const instructions = builder.getInstructions().map(toWeb3JsInstruction);
+  const connection = createSolanaConnection(Connection, rpcUrl, 'confirmed');
+  const txHash = await sendSolanaTransactionWithRetry({
+    instructions,
+    ownerPk,
+    connection,
+    ...solanaWalletTxOptions({
+      solWallet,
+      owner,
+      PublicKey,
+      label: 'custodial_marketplace.deposit_solana_core',
+    }),
+    maxAttempts: 4,
+    priorityFeeMicroLamports: 250_000,
   });
-  const txHash = base58.deserialize(result.signature)[0];
   const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash });
   return { txHash, confirmed };
 }
