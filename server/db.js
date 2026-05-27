@@ -1212,16 +1212,18 @@ const stmts = {
   // error message ("all bases under shield, try again later") cover both
   // genuinely shielded targets and these orphan accounts, so the player
   // never lands in an unwinnable empty raid.
-  // The 24h personal cooldown excludes any defender this attacker has
-  // already lost to or surrendered against in the past day. Without it the
-  // matchmaker keeps re-pairing the player against the same base that just
-  // beat them (defeat doesn't grant the defender a shield), turning Find
-  // Enemy into a frustration loop. The two `?` placeholders both bind to
-  // the calling player's id (self-exclusion + cooldown subquery scope).
+  // Personal cooldowns exclude defenders this attacker just beat, lost to,
+  // or surrendered against. Without this, the matchmaker can re-pair a
+  // player with a base that /attack/result will later reject.
   findEnemyCandidates: db.prepare(`
     SELECT id, name, trophies, level FROM players
     WHERE id != ?
       AND (shield_until IS NULL OR shield_until < datetime('now'))
+      AND NOT (
+        last_attacked_by = ?
+        AND last_attacked_at IS NOT NULL
+        AND datetime(last_attacked_at, '+1 hour') > datetime('now')
+      )
       AND NOT EXISTS (
         SELECT 1 FROM battle_sessions s
         WHERE s.defender_id = players.id
@@ -3313,6 +3315,21 @@ function battleShieldInfo(player) {
   };
 }
 
+function battleAttackCooldownInfo(defender, attackerId) {
+  if (!defender?.last_attacked_at || defender.last_attacked_by !== attackerId) return null;
+  const lastAttack = new Date(`${defender.last_attacked_at}Z`);
+  const cooldownEnd = new Date(lastAttack.getTime() + ATTACK_COOLDOWN_HOURS * 3600000);
+  const remainingMs = cooldownEnd.getTime() - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
+  return {
+    reason: 'recent_successful_attack_1h',
+    last_attacked_at: defender.last_attacked_at,
+    cooldown_until: sqliteDateFromMs(cooldownEnd.getTime()),
+    remaining_ms: remainingMs,
+    remaining_minutes: Math.max(1, Math.ceil(remainingMs / 60_000)),
+  };
+}
+
 function publicBattleTarget(player) {
   return player ? {
     id: player.id,
@@ -3331,7 +3348,7 @@ function findEnemy(playerId) {
   // Find Enemy again, the newest target replaces the previous lock.
   stmts.cancelBattleSessionsForAttacker.run(playerId);
   const myStrength = getBaseStrength(playerId);
-  const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId);
+  const rawCandidates = stmts.findEnemyCandidates.all(playerId, playerId, playerId, playerId);
   const matchFilter = filterTournamentAttackCandidates(playerId, rawCandidates);
   const candidates = matchFilter.candidates;
   // Friendly user-facing message — same wording for "everybody is shielded"
@@ -3430,6 +3447,15 @@ function resolveNamedBattleTarget(playerId, rawTargetName) {
       error: `${target.name} is under shield for about ${shield.remaining_hours}h.`,
       target: publicBattleTarget(target),
       shield,
+    };
+  }
+
+  const attackCooldown = battleAttackCooldownInfo(target, playerId);
+  if (attackCooldown) {
+    return {
+      error: `You already attacked ${target.name} recently. Try another target for about ${attackCooldown.remaining_minutes}m.`,
+      target: publicBattleTarget(target),
+      cooldown: attackCooldown,
     };
   }
 
@@ -3741,11 +3767,7 @@ const _battleVictoryTxn = db.transaction((attackerId, defenderId, battleSessionI
   }
 
   // Check cooldown — can't attack same player twice within cooldown
-  if (defender.last_attacked_by === attackerId && defender.last_attacked_at) {
-    const lastAttack = new Date(defender.last_attacked_at + 'Z');
-    const cooldownEnd = new Date(lastAttack.getTime() + ATTACK_COOLDOWN_HOURS * 3600000);
-    if (cooldownEnd > new Date()) return { error: 'Already attacked this player recently' };
-  }
+  if (battleAttackCooldownInfo(defender, attackerId)) return { error: 'Already attacked this player recently' };
 
   // Calculate loot — 30% of defender's resources (floored to whole numbers)
   const lootGold = Math.floor((defender.gold || 0) * LOOT_PERCENT);
