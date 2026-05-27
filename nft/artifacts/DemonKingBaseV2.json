@@ -2834,7 +2834,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 5582,
+        "astId": 7859,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "_guardStatus",
         "offset": 0,
@@ -2842,7 +2842,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5615,
+        "astId": 7892,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "__gap",
         "offset": 0,
@@ -2850,7 +2850,7 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 2415,
+        "astId": 4692,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "maxSupply",
         "offset": 0,
@@ -2858,7 +2858,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2417,
+        "astId": 4694,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "maxPerTx",
         "offset": 0,
@@ -2866,7 +2866,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2419,
+        "astId": 4696,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "mintPrice",
         "offset": 0,
@@ -2874,7 +2874,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2421,
+        "astId": 4698,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "totalMinted",
         "offset": 0,
@@ -2882,7 +2882,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 2423,
+        "astId": 4700,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "saleActive",
         "offset": 0,
@@ -2890,7 +2890,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 2425,
+        "astId": 4702,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "baseTokenURI",
         "offset": 0,
@@ -2898,7 +2898,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 2427,
+        "astId": 4704,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "contractMetadataURI",
         "offset": 0,
@@ -2906,7 +2906,7 @@
         "type": "t_string_storage"
       },
       {
-        "astId": 2431,
+        "astId": 4708,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "authorizedMinters",
         "offset": 0,
@@ -2914,7 +2914,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 2998,
+        "astId": 5275,
         "contract": "DemonKingBaseV2.sol:DemonKingBaseV2",
         "label": "__gap",
         "offset": 0,

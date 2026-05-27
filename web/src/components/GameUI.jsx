@@ -10,7 +10,7 @@ import ErrorToast from './ErrorToast';
 import FpsTracker from './FpsTracker';
 import EnemyHeader from './EnemyHeader';
 import BattleResultOverlay from './BattleResultOverlay';
-import TutorialOverlay from './TutorialOverlay';
+import TutorialOverlay, { FLAG_ARMY, FLAG_ATTACK, FLAG_TRADE, FLAG_VIDEO } from './TutorialOverlay';
 import NftGoldBoostButton from './NftGoldBoostButton';
 import { useSend, useUI, useSelectedBuilding, useTutorial, usePlayer } from '../hooks/useGodot';
 import { useAgentActions } from '../hooks/useAgentActions';
@@ -42,6 +42,8 @@ export default function GameUI() {
   const { isSolanaMobile, ready: solanaMobileReady } = useSolanaMobile();
   const { handle: seekerHandle } = useSkrHandle(player?.wallet);
   const seekerMarkRef = useRef('');
+  const guideAudioMutedRef = useRef(false);
+  const guideAudioRestoreTimerRef = useRef(null);
   useAgentActions();
 
   const [showTroops, setShowTroops] = useState(false);
@@ -60,12 +62,47 @@ export default function GameUI() {
     sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
   }, [ready, sendToGodot]);
 
+  useEffect(() => {
+    if (!ready) return undefined;
+    if (tutorialPhase) {
+      if (guideAudioRestoreTimerRef.current) {
+        clearTimeout(guideAudioRestoreTimerRef.current);
+        guideAudioRestoreTimerRef.current = null;
+      }
+      if (!guideAudioMutedRef.current) {
+        guideAudioMutedRef.current = true;
+        sendToGodot('set_sound_enabled', { enabled: false });
+      }
+      return undefined;
+    }
+    if (guideAudioMutedRef.current && !guideAudioRestoreTimerRef.current) {
+      guideAudioRestoreTimerRef.current = setTimeout(() => {
+        guideAudioRestoreTimerRef.current = null;
+        if (!guideAudioMutedRef.current) return;
+        guideAudioMutedRef.current = false;
+        sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
+      }, 750);
+    }
+    return undefined;
+  }, [ready, sendToGodot, tutorialPhase]);
+
+  useEffect(() => () => {
+    if (guideAudioRestoreTimerRef.current) {
+      clearTimeout(guideAudioRestoreTimerRef.current);
+      guideAudioRestoreTimerRef.current = null;
+    }
+    if (guideAudioMutedRef.current) {
+      guideAudioMutedRef.current = false;
+      sendToGodot('set_sound_enabled', { enabled: readSoundEnabled() });
+    }
+  }, [sendToGodot]);
+
   // Trigger attack tutorial on first enemy mode
   useEffect(() => {
-    if (enemyMode?.active && tutorialFlags !== null && !(tutorialFlags & 4)) {
+    if (enemyMode?.active && tutorialFlags !== null && !(tutorialFlags & FLAG_ATTACK)) {
       setTutorialPhase('attack');
     }
-  }, [enemyMode?.active]);
+  }, [enemyMode?.active, setTutorialPhase, tutorialFlags]);
 
   // Pause island when heavy overlay panels are open (futures, shop, barn, profile).
   // AiChatPanel is intentionally excluded — on desktop it's a non-blocking
@@ -148,10 +185,12 @@ export default function GameUI() {
     }
     // Auto-advance to next uncompleted phase after short delay
     setTimeout(() => {
-      if (!(newFlags & 2)) setTutorialPhase('army');
-      else if (!(newFlags & 8)) setTutorialPhase('trade');
+      if (flag === FLAG_ATTACK || enemyMode?.active) return;
+      if (!(newFlags & FLAG_ARMY)) setTutorialPhase('army');
+      else if (!(newFlags & FLAG_TRADE)) setTutorialPhase('trade');
+      else if (!(newFlags & FLAG_VIDEO)) setTutorialPhase('video');
     }, 500);
-  }, [tutorialFlags, setTutorialFlags, setTutorialPhase]);
+  }, [enemyMode?.active, tutorialFlags, setTutorialFlags, setTutorialPhase]);
 
   const handleTutorialSkip = useCallback((flag) => {
     // Skip marks as complete too

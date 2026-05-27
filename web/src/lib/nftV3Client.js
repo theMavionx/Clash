@@ -61,19 +61,31 @@ function normalizeNftLevel(level) {
   return [1, 2, 3].includes(n) ? n : 1;
 }
 
-export function nftLevelImageUrl(level, id = null) {
+export function normalizeNftCollectionSlug(value) {
+  const slug = String(value || 'demonking')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug || slug === 'demonking' || slug === 'demon-king') return 'demonking';
+  return slug;
+}
+
+export function nftLevelImageUrl(level, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   if (NFT_USE_TOKEN_IMAGE_PATHS && id != null && id !== '') {
     return `${NFT_IMAGE_BASE_URL}/${lvl}/${encodeURIComponent(String(id))}.jpg`;
   }
   return `${NFT_IMAGE_BASE_URL}/${lvl}/default.jpg`;
 }
 
-function normalizeNftImageUrl(url, level = 1, id = null) {
+function normalizeNftImageUrl(url, level = 1, id = null, collection = 'demonking') {
   const lvl = normalizeNftLevel(level);
-  const fallback = `${LOCAL_NFT_IMAGE_BASE_URL}/${lvl}/default.jpg`;
+  const fallback = nftLevelImageUrl(lvl, id, collection);
   const text = String(url || '').trim();
-  if (!text) return nftLevelImageUrl(level, id);
+  if (!text) return fallback;
   try {
     const parsed = new URL(text, globalThis?.location?.origin || 'http://localhost');
     const legacyHost = LEGACY_NFT_IMAGE_HOSTS.has(parsed.hostname.toLowerCase());
@@ -85,12 +97,13 @@ function normalizeNftImageUrl(url, level = 1, id = null) {
   }
 }
 
-function normalizeNftPayloadImages(payload) {
+function normalizeNftPayloadImages(payload, collection = null) {
   if (!payload || typeof payload !== 'object') return payload;
+  const collectionSlug = normalizeNftCollectionSlug(collection || payload.collection);
   const tokens = Array.isArray(payload.tokens)
     ? payload.tokens.map((token) => ({
         ...token,
-        imageUrl: normalizeNftImageUrl(token?.imageUrl, token?.level, token?.tokenId || token?.id || token?.asset || token?.mint),
+        imageUrl: normalizeNftImageUrl(token?.imageUrl, token?.level, token?.tokenId || token?.id || token?.asset || token?.mint, collectionSlug),
       }))
     : payload.tokens;
   return { ...payload, tokens };
@@ -156,6 +169,13 @@ const EVM_OWNED_ABI = [
   {
     type: 'function',
     name: 'tokenLevel',
+    stateMutability: 'view',
+    inputs: [{ name: 'tokenId', type: 'uint256' }],
+    outputs: [{ type: 'uint8' }],
+  },
+  {
+    type: 'function',
+    name: 'getLevel',
     stateMutability: 'view',
     inputs: [{ name: 'tokenId', type: 'uint256' }],
     outputs: [{ type: 'uint8' }],
@@ -490,6 +510,7 @@ export async function upgradeAptosNft({ aptosWallet, owner, tokenId, tokenAddres
 // ====================================================================
 
 export async function bridgeInit({
+  collection = 'demonking',
   sourceChain,
   destChain,
   sourceTokenId,
@@ -504,6 +525,7 @@ export async function bridgeInit({
   const r = await fetch('/api/bridge/init', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
+      collection: normalizeNftCollectionSlug(collection),
       sourceChain,
       destChain,
       sourceTokenId,
@@ -521,10 +543,10 @@ export async function bridgeInit({
   return j;
 }
 
-export async function bridgeConfirm({ sourceChain, destChain, burnTxHash, destAddress }) {
+export async function bridgeConfirm({ collection = 'demonking', sourceChain, destChain, burnTxHash, destAddress }) {
   const r = await fetch('/api/bridge/confirm', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sourceChain, destChain, burnTxHash, destAddress }),
+    body: JSON.stringify({ collection: normalizeNftCollectionSlug(collection), sourceChain, destChain, burnTxHash, destAddress }),
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error(j.error || `bridge/confirm failed (${r.status})`), { status: r.status, body: j });
@@ -534,10 +556,10 @@ export async function bridgeConfirm({ sourceChain, destChain, burnTxHash, destAd
 // /bridge/relay — server submits the destination mint itself. Player only
 // signs the source burn; everything after that is server-side, so no
 // wallet-drop / out-of-gas / dismissed-prompt risk between burn and mint.
-export async function bridgeRelay({ sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }) {
+export async function bridgeRelay({ collection = 'demonking', sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }) {
   const r = await fetch('/api/bridge/relay', {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }),
+    body: JSON.stringify({ collection: normalizeNftCollectionSlug(collection), sourceChain, destChain, burnTxHash, destAddress, batchId, batchIndex, batchTotal }),
   });
   const j = await r.json();
   if (!r.ok) throw Object.assign(new Error(j.error || `bridge/relay failed (${r.status})`), { status: r.status, body: j });
@@ -715,8 +737,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs, label, outerSignal
   }
 }
 
-function ownedCacheKey(chain, address) {
-  return `${OWNED_CACHE_PREFIX}${String(chain || '').toLowerCase()}:${String(address || '').toLowerCase()}`;
+function ownedCacheKey(collection, chain, address) {
+  return `${OWNED_CACHE_PREFIX}${normalizeNftCollectionSlug(collection)}:${String(chain || '').toLowerCase()}:${String(address || '').toLowerCase()}`;
 }
 
 function readOwnedCache(key) {
@@ -1183,7 +1205,9 @@ async function fetchOwnedNftsBrowserEvm({ chain, address, signal }) {
     }));
     const levelRows = await withTimeout(client.multicall({ contracts: levelCalls, allowFailure: true }),
       OWNED_EVM_RPC_TIMEOUT_MS, `${chain} level scan`, signal);
-    levels = levelRows.map((row) => (row?.status === 'success' ? Number(row.result) || 1 : 1));
+    const failed = levelRows.filter((row) => row?.status !== 'success').length;
+    if (failed) throw new Error(`${chain} level scan failed for ${failed} NFT(s)`);
+    levels = levelRows.map((row) => Number(row.result) || 1);
   }
 
   const tokens = ownedIds.map((id, idx) => evmOwnedToken(chain, id, levels[idx] || 1));
@@ -1221,10 +1245,11 @@ async function solanaDasRpc(url, method, params, signal) {
 
 function isSolanaCollectionAsset(asset) {
   const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
-  return grouping.some((row) => (
+  if (grouping.some((row) => (
     String(row?.group_key || row?.key || '').toLowerCase() === 'collection'
     && String(row?.group_value || row?.value || '') === SOLANA_NFT_COLLECTION
-  ));
+  ))) return true;
+  return solanaCoreAssetLooksRelevant(asset) || solanaDasToken2022LooksRelevant(asset);
 }
 
 function solanaAttributeLists(asset) {
@@ -1368,7 +1393,12 @@ function solanaCoreAssetId(asset) {
 }
 
 function solanaCoreAssetCollection(asset) {
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = publicKeyString(group?.group_value || group?.value);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
   const ua = asset?.updateAuthority;
+  if (ua?.type === 'Collection') return publicKeyString(ua.address);
   if (ua?.__kind === 'Collection') return publicKeyString(ua.fields?.[0]);
   const candidates = [
     asset?.collection?.publicKey,
@@ -1385,11 +1415,10 @@ function solanaCoreAssetCollection(asset) {
 
 function solanaCoreAssetLooksRelevant(asset) {
   if (solanaCoreAssetCollection(asset) === SOLANA_NFT_COLLECTION) return true;
-  const name = String(asset?.name || '').toLowerCase();
-  const uri = String(asset?.uri || '').toLowerCase();
+  const name = String(asset?.name || asset?.content?.metadata?.name || '').toLowerCase();
+  const uri = String(asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '').toLowerCase();
   const attrs = solanaAttributeLists(asset).flat();
-  return name.includes('demon king')
-    || uri.includes('/api/nft/solana/')
+  return (name.includes('demon king') && uri.includes('/api/nft/solana/'))
     || attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
 }
 
@@ -1398,10 +1427,42 @@ function solanaCoreAssetToken(asset) {
   const level = solanaAssetLevel(asset);
   return {
     asset: id,
+    mint: id,
+    tokenId: id,
     level,
-    name: asset?.name || 'Demon King',
+    name: asset?.name || asset?.content?.metadata?.name || 'Demon King',
     imageUrl: nftLevelImageUrl(level, id || 'solana'),
+    uri: asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '',
     chain: 'solana',
+    standard: 'mpl-core',
+  };
+}
+
+function solanaDasToken2022LooksRelevant(asset) {
+  if (asset?.interface === 'MplCoreAsset') return false;
+  const name = String(asset?.content?.metadata?.name || asset?.name || '').toLowerCase();
+  const uri = String(asset?.content?.json_uri || asset?.uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  return name.includes('demon king')
+    && (
+      uri.includes('/api/nft/solana/token2022/')
+      || uri.includes('/api/nft/solana/')
+      || uri.includes('demon-king-token2022')
+    );
+}
+
+function solanaDasToken2022Token(asset) {
+  const mint = String(asset?.id || '');
+  const level = solanaAssetLevel(asset);
+  return {
+    asset: mint,
+    mint,
+    tokenId: mint,
+    level,
+    name: asset?.content?.metadata?.name || `Demon King L${level}`,
+    imageUrl: solanaAssetImage(asset, level),
+    uri: asset?.content?.json_uri || asset?.uri || '',
+    chain: 'solana',
+    standard: 'token2022',
   };
 }
 
@@ -1426,14 +1487,8 @@ async function fetchOwnedNftsFromSolanaDasEndpoint(url, address, signal) {
     total = Number(result.total) || items.length;
     for (const asset of items) {
       if (!isSolanaCollectionAsset(asset)) continue;
-      const level = solanaAssetLevel(asset);
-      tokens.push({
-        asset: String(asset.id),
-        level,
-        name: asset?.content?.metadata?.name || 'Demon King',
-        imageUrl: solanaAssetImage(asset, level),
-        chain: 'solana',
-      });
+      if (asset?.interface === 'MplCoreAsset') tokens.push(solanaCoreAssetToken(asset));
+      else if (solanaDasToken2022LooksRelevant(asset)) tokens.push(solanaDasToken2022Token(asset));
     }
     if (items.length < limit || (Number(result.total) && page * limit >= Number(result.total))) break;
     page += 1;
@@ -1626,8 +1681,12 @@ async function fetchOwnedNftsBrowserSolana({ address, signal }) {
   return null;
 }
 
-async function fetchOwnedNftsFromServer({ chain, address, signal }) {
-  const r = await fetchWithTimeout(`/api/nft/owned/${encodeURIComponent(chain)}/${encodeURIComponent(address)}`, {
+async function fetchOwnedNftsFromServer({ collection = 'demonking', chain, address, signal }) {
+  const collectionSlug = normalizeNftCollectionSlug(collection);
+  const url = collectionSlug === 'demonking'
+    ? `/api/nft/demon-king/owned/${encodeURIComponent(chain)}/${encodeURIComponent(address)}`
+    : `/api/nft/${encodeURIComponent(collectionSlug)}/owned/${encodeURIComponent(chain)}/${encodeURIComponent(address)}`;
+  const r = await fetchWithTimeout(url, {
     cache: 'no-store',
   }, OWNED_SERVER_FALLBACK_TIMEOUT_MS, 'server owned NFT lookup', signal);
   const j = await r.json().catch(() => ({}));
@@ -1635,23 +1694,40 @@ async function fetchOwnedNftsFromServer({ chain, address, signal }) {
   return { ...j, source: j.source || 'server' };
 }
 
-export async function fetchOwnedNfts({ chain, address, signal } = {}) {
+export async function fetchOwnedNfts({ collection = 'demonking', chain, address, signal } = {}) {
   if (!chain || !address) throw new Error('chain + address required');
+  const collectionSlug = normalizeNftCollectionSlug(collection);
   const chainKey = String(chain).toLowerCase();
-  const key = ownedCacheKey(chainKey, address);
+  const key = ownedCacheKey(collectionSlug, chainKey, address);
   const cached = readOwnedCache(key);
   if (cached) return cached;
+
+  if (chainKey === 'solana') {
+    try {
+      const value = normalizeNftPayloadImages(
+        await fetchOwnedNftsFromServer({ collection: collectionSlug, chain: chainKey, address, signal }),
+        collectionSlug,
+      );
+      writeOwnedCache(key, value);
+      return value;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      throw new Error(err?.message || 'Solana NFT ownership lookup failed');
+    }
+  }
 
   let browserError = null;
   try {
     let direct = null;
-    if (EVM_OWNED_CONFIG[chainKey]) {
+    if (collectionSlug !== 'demonking') {
+      direct = null;
+    } else if (EVM_OWNED_CONFIG[chainKey]) {
       direct = await fetchOwnedNftsBrowserEvm({ chain: chainKey, address, signal });
     } else if (chainKey === 'solana') {
       direct = await fetchOwnedNftsBrowserSolana({ address, signal });
     }
     if (direct && (chainKey !== 'solana' || (direct.tokens || []).length > 0)) {
-      const value = normalizeNftPayloadImages(direct);
+      const value = normalizeNftPayloadImages(direct, collectionSlug);
       writeOwnedCache(key, value);
       return value;
     }
@@ -1661,7 +1737,7 @@ export async function fetchOwnedNfts({ chain, address, signal } = {}) {
   }
 
   try {
-    const fallback = normalizeNftPayloadImages(await fetchOwnedNftsFromServer({ chain: chainKey, address, signal }));
+    const fallback = normalizeNftPayloadImages(await fetchOwnedNftsFromServer({ collection: collectionSlug, chain: chainKey, address, signal }), collectionSlug);
     writeOwnedCache(key, fallback);
     return fallback;
   } catch (err) {

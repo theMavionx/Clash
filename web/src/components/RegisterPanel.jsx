@@ -628,7 +628,9 @@ const S = {
   },
   spinner: {
     width: 44, height: 44, borderRadius: '50%',
-    border: '4px solid rgba(55,125,159,0.2)',
+    borderWidth: 4,
+    borderStyle: 'solid',
+    borderColor: 'rgba(55,125,159,0.2)',
     borderTopColor: '#F57F17',
     animation: 'rp-spin 0.9s linear infinite',
   },

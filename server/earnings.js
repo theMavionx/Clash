@@ -85,6 +85,11 @@ const DECIBEL_REST = 'https://api.mainnet.aptoslabs.com/decibel';
 const DECIBEL_BUILDER_ADDR = '0xc82aea3965cd4f0731baf1e9a28cea65b0697911aea346577e6488d542653332';
 const DECIBEL_BUILDER_SUBACCOUNT = '0xfa4d46a481f5bc95de01a629ec95b7876e946ebe1e86374284d899ac4366984a';
 const DECIBEL_API_KEY = process.env.DECIBEL_API_KEY || process.env.APTOS_NODE_API_KEY;
+const DECIBEL_BUILDER_FEE_BPS = Number(
+  process.env.DECIBEL_BUILDER_FEE_BPS
+  || process.env.VITE_DECIBEL_BUILDER_FEE_BPS
+  || 5,
+) || 5;
 
 async function fetchDecibelEarnings() {
   if (!DECIBEL_API_KEY) {
@@ -247,6 +252,7 @@ const GMX_REFERRAL_STORAGE = '0xe6fab3F0c7199b0d34d7FbE83394fc0e0D06e99d';
 const GMX_AFFILIATE = (process.env.GMX_AFFILIATE_ADDR ||
   '0x412A02Ba415e5969596E6f0A35f9439760a3468F').toLowerCase();
 const GMX_AVG_FEE_BPS = Number(process.env.GMX_AVG_FEE_BPS) || 5; // 0.05%/side
+const GMX_AFFILIATE_SHARE_BPS = Number(process.env.GMX_AFFILIATE_SHARE_BPS) || 500; // 5% of fees
 
 async function fetchGmxEarnings() {
   // 1. Tier index for our affiliate wallet — referrerTiers(address).
@@ -576,6 +582,501 @@ async function fetchHyperliquidEarnings() {
   };
 }
 
+// Revenue analytics for admin: fast local stats by time window and by
+// tournament. Exact cumulative readers above stay authoritative where a DEX
+// exposes them; this section focuses on comparable volume x rate reporting.
+const ANALYTICS_DEXES = [
+  { key: 'pacifica', label: 'Pacifica' },
+  { key: 'decibel', label: 'Decibel' },
+  { key: 'avantis', label: 'Avantis' },
+  { key: 'gmx', label: 'GMX' },
+  { key: 'phoenix', label: 'Phoenix' },
+  { key: 'monad', label: 'Perpl' },
+  { key: 'hyperliquid', label: 'Hyperliquid' },
+  { key: 'risex', label: 'RISE' },
+  { key: 'nado', label: 'Nado' },
+];
+
+const ANALYTICS_WINDOWS = [
+  { key: '24h', label: '24h', sqlite: '-24 hours' },
+  { key: '7d', label: '7d', sqlite: '-7 days' },
+  { key: '30d', label: '30d', sqlite: '-30 days' },
+  { key: 'all', label: 'All time', sqlite: null },
+];
+
+const RISEX_BUILDER_FEE_BPS = Number(process.env.RISEX_BUILDER_FEE_BPS) || 0;
+const NADO_BUILDER_FEE_BPS = Number(process.env.NADO_BUILDER_FEE_BPS) || 0;
+
+function safeNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function roundUsd(value) {
+  const n = safeNumber(value);
+  return Math.round(n * 1_000_000) / 1_000_000;
+}
+
+function parseDateMs(value) {
+  if (!value) return null;
+  const s = String(value).trim();
+  const ms = Date.parse(s.includes('T') ? s : `${s.replace(' ', 'T')}Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function parseJsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function decibelFeeBpsForDate(value) {
+  const ms = parseDateMs(value);
+  if (!ms) return DECIBEL_BUILDER_FEE_BPS;
+  const schedule = [
+    ['2026-05-23T00:00:00Z', DECIBEL_BUILDER_FEE_BPS],
+    ['2026-05-17T00:00:00Z', 10],
+    ['2026-05-10T00:00:00Z', 2],
+    ['2026-05-02T00:00:00Z', 1],
+  ];
+  for (const [from, bps] of schedule) {
+    if (ms >= Date.parse(from)) return bps;
+  }
+  return DECIBEL_BUILDER_FEE_BPS;
+}
+
+function tradeSourceWhereForAnalytics(dex) {
+  if (dex === 'decibel') return "verified_source = 'server'";
+  if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
+  if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
+  if (dex === 'risex') return "verified_source = 'risex_api'";
+  if (dex === 'nado') return "verified_source = 'nado_api'";
+  if (dex === 'phoenix') return "verified_source = 'worker'";
+  if (dex === 'gmx') return "verified_source IN ('worker', 'client', 'server')";
+  if (dex === 'avantis') return "verified_source IN ('worker', 'client')";
+  return "verified_source = 'worker'";
+}
+
+function revenueModelForDex(dex, dateForRate = null) {
+  if (dex === 'pacifica') {
+    return {
+      configured: true,
+      rate: null,
+      rate_label: 'local builder fee sum',
+      model: 'local_exact_fee_sum',
+      source_detail: 'player_trades_fee_sum',
+    };
+  }
+  if (dex === 'decibel') {
+    const bps = decibelFeeBpsForDate(dateForRate);
+    return {
+      configured: true,
+      rate: bps / 10000,
+      rate_label: `${bps} bps builder fee`,
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: 'single_builder_fee',
+      source_detail: 'app_volume_x_decibel_bps',
+    };
+  }
+  if (dex === 'phoenix') {
+    const bps = Math.max(0, PHOENIX_FLIGHT_BUILDER_FEE_BPS);
+    return {
+      configured: true,
+      rate: bps / 10000,
+      rate_label: `${bps} bps builder fee`,
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: 'single_builder_fee',
+      source_detail: 'local_volume_x_phoenix_bps',
+    };
+  }
+  if (dex === 'hyperliquid') {
+    const bps = Math.max(0, Math.min(100, HYPERLIQUID_BUILDER_FEE_TENTH_BPS)) / 10;
+    return {
+      configured: !!HYPERLIQUID_BUILDER_ADDRESS,
+      rate: bps / 10000,
+      rate_label: HYPERLIQUID_BUILDER_ADDRESS ? `${bps} bps builder fee` : `${bps} bps estimate only`,
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: 'single_builder_fee',
+      source_detail: HYPERLIQUID_BUILDER_ADDRESS ? 'local_volume_x_hyperliquid_bps' : 'hyperliquid_builder_not_configured',
+    };
+  }
+  if (dex === 'avantis') {
+    return {
+      configured: true,
+      rate: (AVANTIS_AVG_FEE_BPS / 10000) * (AVANTIS_REBATE_BPS / 10000),
+      rate_label: `${AVANTIS_AVG_FEE_BPS} bps fee x ${AVANTIS_REBATE_BPS} bps rebate`,
+      fee_per_side_bps: AVANTIS_AVG_FEE_BPS,
+      rebate_bps: AVANTIS_REBATE_BPS,
+      model: 'volume_x_fee_x_rebate',
+      source_detail: 'local_volume_x_avantis_rate',
+    };
+  }
+  if (dex === 'gmx') {
+    return {
+      configured: true,
+      rate: (GMX_AVG_FEE_BPS / 10000) * (GMX_AFFILIATE_SHARE_BPS / 10000),
+      rate_label: `${GMX_AVG_FEE_BPS} bps fee x ${GMX_AFFILIATE_SHARE_BPS} bps rebate`,
+      fee_per_side_bps: GMX_AVG_FEE_BPS,
+      rebate_bps: GMX_AFFILIATE_SHARE_BPS,
+      model: 'volume_x_fee_x_rebate',
+      source_detail: 'local_volume_x_gmx_rate',
+    };
+  }
+  if (dex === 'monad') {
+    const bps = Math.max(0, PERPL_BUILDER_FEE_BPS);
+    return {
+      configured: false,
+      rate: bps / 10000,
+      rate_label: `${bps} bps hypothetical`,
+      builder_fee_bps: bps,
+      builder_fee_pct: bps / 100,
+      model: 'builder_fee_not_configured',
+      source_detail: 'perpl_builder_fee_not_configured',
+    };
+  }
+  if (dex === 'risex') {
+    const bps = Math.max(0, RISEX_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee` : 'not configured',
+      builder_fee_bps: bps,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_risex_bps' : 'risex_builder_not_configured',
+    };
+  }
+  if (dex === 'nado') {
+    const bps = Math.max(0, NADO_BUILDER_FEE_BPS);
+    return {
+      configured: bps > 0,
+      rate: bps / 10000,
+      rate_label: bps > 0 ? `${bps} bps builder fee` : 'not configured',
+      builder_fee_bps: bps,
+      model: bps > 0 ? 'single_builder_fee' : 'builder_fee_not_configured',
+      source_detail: bps > 0 ? 'local_volume_x_nado_bps' : 'nado_builder_not_configured',
+    };
+  }
+  return {
+    configured: false,
+    rate: 0,
+    rate_label: 'not configured',
+    model: 'builder_fee_not_configured',
+    source_detail: 'unknown_builder_not_configured',
+  };
+}
+
+function estimateRevenue(dex, volumeUsd, dateForRate = null) {
+  const volume = safeNumber(volumeUsd);
+  const model = revenueModelForDex(dex, dateForRate);
+  const estimated = model.rate == null ? 0 : volume * safeNumber(model.rate);
+  const earned = model.configured ? estimated : 0;
+  return {
+    ...model,
+    earned_usd: roundUsd(earned),
+    estimated_fee_usd: roundUsd(estimated),
+  };
+}
+
+function readPacificaWindowStats(mainDb, windowDef) {
+  if (!mainDb) return { trades: 0, volume_usd: 0, earned_usd: 0 };
+  try {
+    const exists = mainDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'player_trades'").get();
+    if (!exists) return { trades: 0, volume_usd: 0, earned_usd: 0 };
+    const where = windowDef.sqlite ? "WHERE created_at >= datetime('now', ?)" : '';
+    const params = windowDef.sqlite ? [windowDef.sqlite] : [];
+    const row = mainDb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COALESCE(SUM(ABS(CAST(price AS REAL) * CAST(amount AS REAL))), 0) AS volume_usd,
+             COALESCE(SUM(CAST(fee AS REAL)), 0) AS earned_usd
+      FROM player_trades
+      ${where}
+    `).get(...params);
+    return {
+      trades: safeNumber(row?.trades),
+      volume_usd: roundUsd(row?.volume_usd),
+      earned_usd: roundUsd(row?.earned_usd),
+    };
+  } catch {
+    return { trades: 0, volume_usd: 0, earned_usd: 0 };
+  }
+}
+
+function readPacificaEffectiveRate(mainDb) {
+  if (!mainDb) return null;
+  try {
+    const exists = mainDb.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'player_trades'").get();
+    if (!exists) return null;
+    const row = mainDb.prepare(`
+      SELECT COALESCE(SUM(ABS(CAST(price AS REAL) * CAST(amount AS REAL))), 0) AS volume_usd,
+             COALESCE(SUM(CAST(fee AS REAL)), 0) AS fee_usd
+      FROM player_trades
+    `).get();
+    const volume = safeNumber(row?.volume_usd);
+    const fee = safeNumber(row?.fee_usd);
+    if (volume <= 0 || fee <= 0) return null;
+    return fee / volume;
+  } catch {
+    return null;
+  }
+}
+
+function readFuturesWindowStats(fdb, dex, windowDef) {
+  if (!fdb) return { trades: 0, volume_usd: 0 };
+  const where = [
+    'dex = ?',
+    "status = 'filled'",
+    tradeSourceWhereForAnalytics(dex),
+  ];
+  const params = [dex];
+  if (windowDef.sqlite) {
+    where.push("created_at >= datetime('now', ?)");
+    params.push(windowDef.sqlite);
+  }
+  try {
+    const row = fdb.prepare(`
+      SELECT COUNT(*) AS trades,
+             COALESCE(SUM(
+               CASE
+                 WHEN COALESCE(notional_usd, 0) > 0 THEN notional_usd
+                 ELSE ABS(CAST(amount AS REAL) * CAST(price AS REAL))
+               END
+             ), 0) AS volume_usd
+      FROM trade_history
+      WHERE ${where.join(' AND ')}
+    `).get(...params);
+    return {
+      trades: safeNumber(row?.trades),
+      volume_usd: roundUsd(row?.volume_usd),
+    };
+  } catch {
+    return { trades: 0, volume_usd: 0 };
+  }
+}
+
+function readWindowRevenueAnalytics(mainDb) {
+  const Db = loadSqlite();
+  let fdb = null;
+  if (Db && FS.existsSync(FUTURES_DB)) {
+    try {
+      fdb = new Db(FUTURES_DB, { readonly: true, fileMustExist: true });
+      try { fdb.pragma('journal_mode = WAL'); } catch {}
+    } catch {
+      fdb = null;
+    }
+  }
+  try {
+    return ANALYTICS_WINDOWS.map((windowDef) => {
+      const dexes = {};
+      let totalVolume = 0;
+      let totalEarned = 0;
+      let totalEstimated = 0;
+      let totalTrades = 0;
+      for (const { key } of ANALYTICS_DEXES) {
+        if (key === 'pacifica') {
+          const stats = readPacificaWindowStats(mainDb, windowDef);
+          const model = revenueModelForDex(key);
+          dexes[key] = {
+            ...model,
+            trades: stats.trades,
+            volume_usd: stats.volume_usd,
+            earned_usd: stats.earned_usd,
+            estimated_fee_usd: stats.earned_usd,
+          };
+        } else {
+          const stats = readFuturesWindowStats(fdb, key, windowDef);
+          dexes[key] = {
+            trades: stats.trades,
+            volume_usd: stats.volume_usd,
+            ...estimateRevenue(key, stats.volume_usd),
+          };
+        }
+        totalVolume += safeNumber(dexes[key].volume_usd);
+        totalEarned += safeNumber(dexes[key].earned_usd);
+        totalEstimated += safeNumber(dexes[key].estimated_fee_usd);
+        totalTrades += safeNumber(dexes[key].trades);
+      }
+      return {
+        key: windowDef.key,
+        label: windowDef.label,
+        dexes,
+        total_trades: totalTrades,
+        total_volume_usd: roundUsd(totalVolume),
+        total_earned_usd: roundUsd(totalEarned),
+        total_estimated_fee_usd: roundUsd(totalEstimated),
+      };
+    });
+  } finally {
+    if (fdb) fdb.close();
+  }
+}
+
+function tournamentPhase(row, nowMs = Date.now()) {
+  const startMs = parseDateMs(row?.start_at);
+  const endMs = parseDateMs(row?.end_at);
+  if (startMs && nowMs < startMs) return 'upcoming';
+  if (endMs && nowMs > endMs) return 'ended';
+  return row?.status === 'draft' ? 'draft' : 'active';
+}
+
+function readTournamentRevenueAnalytics(mainDb, limit = 120) {
+  if (!mainDb) return [];
+  let tournaments = [];
+  try {
+    tournaments = mainDb.prepare(`
+      SELECT id, name, dex, dex_scope, eligible_dexes, mode, start_at, end_at, status, created_at
+      FROM tournaments
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(500, Number(limit) || 120)));
+  } catch {
+    return [];
+  }
+  if (!tournaments.length) return [];
+
+  const ids = tournaments.map(t => t.id);
+  const placeholders = ids.map(() => '?').join(',');
+  const byId = new Map(tournaments.map(t => [Number(t.id), t]));
+  const participantBreakdown = new Map();
+  const playersByTournament = new Map();
+  const creditBreakdown = new Map();
+  const pacificaEffectiveRate = readPacificaEffectiveRate(mainDb);
+
+  try {
+    const rows = mainDb.prepare(`
+      SELECT tournament_id,
+             COALESCE(NULLIF(team_dex, ''), '') AS team_dex,
+             COUNT(*) AS players,
+             COALESCE(SUM(trades_count), 0) AS trades,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd
+      FROM tournament_participants
+      WHERE left_at IS NULL AND tournament_id IN (${placeholders})
+      GROUP BY tournament_id, COALESCE(NULLIF(team_dex, ''), '')
+    `).all(...ids);
+    for (const row of rows) {
+      const tid = Number(row.tournament_id);
+      const t = byId.get(tid) || {};
+      const dex = String(row.team_dex || t.dex || '').toLowerCase() || 'unknown';
+      if (!participantBreakdown.has(tid)) participantBreakdown.set(tid, new Map());
+      const map = participantBreakdown.get(tid);
+      const prev = map.get(dex) || { dex, players: 0, trades: 0, volume_usd: 0 };
+      prev.players += safeNumber(row.players);
+      prev.trades += safeNumber(row.trades);
+      prev.volume_usd += safeNumber(row.volume_usd);
+      map.set(dex, prev);
+      playersByTournament.set(tid, safeNumber(playersByTournament.get(tid)) + safeNumber(row.players));
+    }
+  } catch {}
+
+  try {
+    const rows = mainDb.prepare(`
+      SELECT tournament_id,
+             LOWER(COALESCE(NULLIF(dex, ''), 'unknown')) AS dex,
+             COALESCE(SUM(trades_count), 0) AS trades,
+             COALESCE(SUM(volume_usd), 0) AS volume_usd
+      FROM tournament_trade_credits
+      WHERE tournament_id IN (${placeholders})
+      GROUP BY tournament_id, LOWER(COALESCE(NULLIF(dex, ''), 'unknown'))
+    `).all(...ids);
+    for (const row of rows) {
+      const tid = Number(row.tournament_id);
+      const dex = String(row.dex || '').toLowerCase() || 'unknown';
+      if (!creditBreakdown.has(tid)) creditBreakdown.set(tid, new Map());
+      const map = creditBreakdown.get(tid);
+      map.set(dex, {
+        dex,
+        players: null,
+        trades: safeNumber(row.trades),
+        volume_usd: safeNumber(row.volume_usd),
+      });
+    }
+  } catch {}
+
+  return tournaments.map((t) => {
+    const tid = Number(t.id);
+    const creditMap = creditBreakdown.get(tid);
+    const participantMap = participantBreakdown.get(tid);
+    const useCredits = creditMap && Array.from(creditMap.values()).some(r => safeNumber(r.volume_usd) > 0 || safeNumber(r.trades) > 0);
+    const sourceMap = useCredits ? creditMap : participantMap;
+    const sourceDetail = useCredits ? 'tournament_trade_credits' : 'tournament_participants';
+    const breakdown = Array.from((sourceMap || new Map()).values()).map((row) => {
+      const dex = String(row.dex || t.dex || '').toLowerCase() || 'unknown';
+      const rateDate = t.end_at || t.start_at || t.created_at;
+      let estimate;
+      if (dex === 'pacifica') {
+        const projected = pacificaEffectiveRate == null ? 0 : safeNumber(row.volume_usd) * pacificaEffectiveRate;
+        estimate = {
+          ...revenueModelForDex(dex),
+          configured: pacificaEffectiveRate != null,
+          earned_usd: roundUsd(projected),
+          estimated_fee_usd: roundUsd(projected),
+          rate_label: pacificaEffectiveRate == null
+            ? 'local fee rate unavailable'
+            : `${(pacificaEffectiveRate * 100).toFixed(4)}% avg local fee`,
+          model: pacificaEffectiveRate == null ? 'local_fee_rate_unavailable' : 'tournament_volume_x_avg_local_fee',
+          source_detail: pacificaEffectiveRate == null ? 'pacifica_fee_rate_unavailable' : 'pacifica_avg_local_fee_rate',
+        };
+      } else {
+        estimate = estimateRevenue(dex, row.volume_usd, rateDate);
+      }
+      return {
+        dex,
+        players: row.players == null ? null : safeNumber(row.players),
+        trades: safeNumber(row.trades),
+        volume_usd: roundUsd(row.volume_usd),
+        earned_usd: estimate.earned_usd,
+        estimated_fee_usd: estimate.estimated_fee_usd,
+        rate_label: estimate.rate_label,
+        model: estimate.model,
+        configured: !!estimate.configured,
+        source_detail: estimate.source_detail,
+      };
+    });
+    const totals = breakdown.reduce((acc, row) => {
+      acc.trades += safeNumber(row.trades);
+      acc.volume_usd += safeNumber(row.volume_usd);
+      acc.earned_usd += safeNumber(row.earned_usd);
+      acc.estimated_fee_usd += safeNumber(row.estimated_fee_usd);
+      return acc;
+    }, { trades: 0, volume_usd: 0, earned_usd: 0, estimated_fee_usd: 0 });
+    const eligible = parseJsonArray(t.eligible_dexes).map(v => String(v || '').toLowerCase()).filter(Boolean);
+    return {
+      id: tid,
+      name: t.name,
+      dex: t.dex,
+      dex_scope: t.dex_scope,
+      eligible_dexes: eligible.length ? eligible : [t.dex],
+      mode: t.mode,
+      status: t.status,
+      phase: tournamentPhase(t),
+      start_at: t.start_at,
+      end_at: t.end_at,
+      players: safeNumber(playersByTournament.get(tid)),
+      trades: totals.trades,
+      volume_usd: roundUsd(totals.volume_usd),
+      earned_usd: roundUsd(totals.earned_usd),
+      estimated_fee_usd: roundUsd(totals.estimated_fee_usd),
+      source_detail: sourceDetail,
+      breakdown,
+    };
+  });
+}
+
+async function fetchRevenueAnalytics({ mainDb = null, tournamentLimit = 120 } = {}) {
+  return {
+    dexes: ANALYTICS_DEXES,
+    windows: readWindowRevenueAnalytics(mainDb),
+    tournaments: readTournamentRevenueAnalytics(mainDb, tournamentLimit),
+    last_updated: new Date().toISOString(),
+    note: 'Window stats use local credited/indexed trade volume. Decibel is app-only (verified_source=server). DEXes without configured builder/referrer fees show earned_usd=0 and keep hypothetical estimates separate.',
+  };
+}
+
 const CACHE_TTL_MS = 60 * 1000;
 let _cache = null;
 let _cacheAt = 0;
@@ -617,4 +1118,4 @@ async function fetchAllEarnings({ force = false } = {}) {
   return { ...out, cached: false, age_ms: 0 };
 }
 
-module.exports = { fetchAllEarnings };
+module.exports = { fetchAllEarnings, fetchRevenueAnalytics };

@@ -308,7 +308,9 @@ const S = {
   // (thumbArrow style removed — SVG handles its own sizing/colour now)
   spinner: {
     width: 22, height: 22,
-    border: '3px solid rgba(255,255,255,0.35)',
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: 'rgba(255,255,255,0.35)',
     borderTopColor: '#fff',
     borderRadius: '50%',
   },

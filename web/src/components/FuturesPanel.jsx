@@ -621,7 +621,9 @@ const hlGateStyles = {
   // it animates the same way as the legacy big-circle spinner used to.
   spinner: {
     width: 12, height: 12, borderRadius: '50%',
-    border: '2px solid rgba(92,58,33,0.25)',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: 'rgba(92,58,33,0.25)',
     borderTopColor: '#5C3A21',
     animation: 'act-spin 0.9s linear infinite',
   },
@@ -2566,7 +2568,9 @@ function FuturesPanel() {
               width: 76,
               height: 76,
               borderRadius: '50%',
-              border: '6px solid #E7D9BF',
+              borderWidth: 6,
+              borderStyle: 'solid',
+              borderColor: '#E7D9BF',
               borderTopColor: venueColor,
               boxShadow: `0 5px 0 ${venueShadow}, 0 8px 16px rgba(0,0,0,0.22)`,
               animation: 'wallet-spin 0.85s linear infinite',
@@ -3672,7 +3676,9 @@ function FuturesPanel() {
                   width: 42,
                   height: 42,
                   borderRadius: '50%',
-                  border: '5px solid rgba(249,115,22,0.22)',
+                  borderWidth: 5,
+                  borderStyle: 'solid',
+                  borderColor: 'rgba(249,115,22,0.22)',
                   borderTopColor: DEX_CONFIG.phoenix.color,
                   animation: 'wallet-spin 0.85s linear infinite',
                 }} />
@@ -5823,7 +5829,9 @@ const S = {
   },
   closeLoadingSpinner: {
     width: 12, height: 12, borderRadius: '50%',
-    border: '2px solid rgba(255,255,255,0.42)',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: 'rgba(255,255,255,0.42)',
     borderTopColor: '#fff',
     animation: 'futures-close-spin 0.75s linear infinite',
     flexShrink: 0,

@@ -1,0 +1,32 @@
+{
+  "collectionSlug": "voidspore",
+  "chain": "aptos",
+  "network": "mainnet",
+  "module": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627::voidspore",
+  "admin": "0x00d733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "collection": "0xb7385f12d64966cca5fa402a89fed46ec25b1bad0d3d1da5177e651d6f2036c4",
+  "resourceAccount": "0xc1dfdbbd4a6409939b0d5c4c255fda43cefd60b95a4948d190f4a88129b7a504",
+  "treasury": "0xd733ea87112a03b470922bf3bfc62e9948fe254926f1c1a11eef4e406b4627",
+  "usdcMetadata": "0xbae207659db88bea0cbead6da0ed00aac12edcdda169e591cd41c94180b46f3b",
+  "quoteSignerPubkey": "0xb7d726f4c0d3bf6ad099cc0e0afdd5c875ea90b361d15354bc4a184571acce8b",
+  "mintUsdPriceE6": "5500000",
+  "upgradeUsdPriceE6": "8900000",
+  "maxSupply": 555,
+  "maxPerTx": 10,
+  "totalMinted": "0",
+  "saleActive": true,
+  "bridgeFeeOctas": "21000000",
+  "publishTxHash": "0xabc5f4321459e313f12542fd0e71b0cd9feb2094bf253c6899449babf7cb2aed",
+  "initializeTxHash": "0x7a70ef258bc51f316a13fb59db6e95d753f27090e934b80f97a44f9dd0a574a0",
+  "initBurnStatsTxHash": "0xad0e6ac48ae5c181475a86d28aa9e20108586fc0ac813ad206ea83060badf02e",
+  "bridgeFeeTxHash": "0x17acffb81a36c251c2d4bf33b947c047ca507c67c02998884bb9cdc789bd9df1",
+  "saleActivateTxHash": "0x165e7c2a294a2593f222210a446355d748ab7c6a3e4ccb5c0ffb23a84134829b",
+  "fullMeshBridge": true,
+  "aptosPaymentMint": true,
+  "aptosCliVersion": "9.2.0",
+  "metadata": {
+    "collectionUri": "https://clashofperps.fun/api/nft/voidspore/aptos/collection",
+    "tokenUriBase": "https://clashofperps.fun/api/nft/voidspore/aptos/"
+  },
+  "deployedAt": "2026-05-27T12:27:49.572Z"
+}

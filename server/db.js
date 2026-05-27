@@ -199,6 +199,96 @@ try {
   `);
 } catch (e) { console.warn('[db] marketplace_listings migration:', e.message); }
 
+// Server-custodial NFT marketplace. This is separate from the legacy
+// on-chain marketplace indexer above: listings are backed by server custody,
+// verified treasury payments, and an append-only event log.
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS custodial_marketplace_orders (
+      id                         TEXT PRIMARY KEY,
+      status                     TEXT NOT NULL DEFAULT 'awaiting_deposit',
+      seller_player_id           TEXT REFERENCES players(id) ON DELETE SET NULL,
+      seller_wallet              TEXT NOT NULL,
+      seller_payout_chain        TEXT NOT NULL DEFAULT 'solana',
+      seller_payout_address      TEXT NOT NULL,
+      asset_chain                TEXT NOT NULL DEFAULT 'solana',
+      asset_id                   TEXT NOT NULL,
+      asset_standard             TEXT,
+      asset_collection           TEXT,
+      level                      INTEGER NOT NULL DEFAULT 1,
+      price_usdc_units           TEXT NOT NULL,
+      fee_bps                    INTEGER NOT NULL DEFAULT 0,
+      fee_usdc_units             TEXT NOT NULL DEFAULT '0',
+      seller_amount_usdc_units   TEXT NOT NULL,
+      payment_chain              TEXT NOT NULL DEFAULT 'base',
+      payment_token              TEXT NOT NULL DEFAULT 'usdc',
+      payment_token_address      TEXT,
+      payment_decimals           INTEGER NOT NULL DEFAULT 6,
+      payment_label              TEXT NOT NULL DEFAULT 'USDC',
+      payment_treasury           TEXT,
+      payment_amount_usdc_units  TEXT,
+      payment_nonce              TEXT,
+      payment_deadline           INTEGER,
+      buyer_player_id            TEXT REFERENCES players(id) ON DELETE SET NULL,
+      buyer_wallet               TEXT,
+      buyer_dest_chain           TEXT,
+      buyer_dest_address         TEXT,
+      vault_chain                TEXT NOT NULL DEFAULT 'solana',
+      vault_address              TEXT NOT NULL,
+      deposit_tx_hash            TEXT,
+      deposit_verified_at        TEXT,
+      payment_tx_hash            TEXT,
+      payment_verified_at        TEXT,
+      delivery_tx_hash           TEXT,
+      delivered_at               TEXT,
+      payout_tx_hash             TEXT,
+      paid_out_at                TEXT,
+      cancel_tx_hash             TEXT,
+      cancelled_at               TEXT,
+      error                      TEXT,
+      metadata_json              TEXT NOT NULL DEFAULT '{}',
+      created_at                 TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at                 TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_status
+      ON custodial_marketplace_orders(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_seller
+      ON custodial_marketplace_orders(seller_player_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_buyer
+      ON custodial_marketplace_orders(buyer_player_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_asset
+      ON custodial_marketplace_orders(asset_chain, asset_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_custodial_marketplace_active_asset
+      ON custodial_marketplace_orders(asset_chain, asset_id)
+      WHERE status IN ('awaiting_deposit', 'active', 'reserved', 'paid', 'delivering');
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_custodial_marketplace_deposit_tx
+      ON custodial_marketplace_orders(deposit_tx_hash)
+      WHERE deposit_tx_hash IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_custodial_marketplace_payment_tx
+      ON custodial_marketplace_orders(payment_tx_hash)
+      WHERE payment_tx_hash IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS custodial_marketplace_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id        TEXT NOT NULL REFERENCES custodial_marketplace_orders(id) ON DELETE CASCADE,
+      event_type      TEXT NOT NULL,
+      actor_player_id TEXT REFERENCES players(id) ON DELETE SET NULL,
+      tx_hash         TEXT,
+      data_json       TEXT NOT NULL DEFAULT '{}',
+      created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_events_order
+      ON custodial_marketplace_events(order_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_custodial_marketplace_events_recent
+      ON custodial_marketplace_events(created_at DESC);
+  `);
+} catch (e) { console.warn('[db] custodial_marketplace migration:', e.message); }
+
+try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN payment_decimals INTEGER NOT NULL DEFAULT 6`); }
+catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace payment_decimals migration:', e.message); }
+try { db.exec(`ALTER TABLE custodial_marketplace_orders ADD COLUMN payment_label TEXT NOT NULL DEFAULT 'USDC'`); }
+catch (e) { if (!/duplicate column/i.test(String(e?.message || ''))) console.warn('[db] custodial_marketplace payment_label migration:', e.message); }
+
 // Cross-chain bridge ledger. One row per consumed (sourceRef, destChain) tuple
 // so the orchestrator can refuse to re-sign / re-mint receipts for an asset
 // that has already been bridged. EVM and Aptos destinations also enforce
@@ -1992,8 +2082,17 @@ function tournamentFirstDailyPoolDay(t) {
 function tournamentLastClosedDailyPoolDay(t, now = new Date()) {
   const yesterday = previousUtcDay(now);
   const endMs = sqlDateMs(t.end_at);
-  if (!endMs) return yesterday;
+  const nowMs = now.getTime();
+  if (!endMs) {
+    if (String(t?.status || '').toLowerCase() === 'ended') {
+      const row = db.prepare('SELECT MAX(day_utc) AS day_utc FROM tournament_daily_activity WHERE tournament_id = ?')
+        .get(t.id || t.tournament_id);
+      return row?.day_utc || addUtcDays(tournamentFirstDailyPoolDay(t), -1);
+    }
+    return yesterday;
+  }
   const endDay = utcDayFromMs(endMs - 1);
+  if (endMs <= nowMs) return endDay;
   return endDay < yesterday ? endDay : yesterday;
 }
 
@@ -2097,6 +2196,23 @@ function awardPendingTournamentDailyPools(options = {}) {
     }
   }
   return { ok: true, processed: results.length, results };
+}
+
+function awardTournamentFinalDailyPoolDay(tournamentId, options = {}) {
+  const tid = Number(tournamentId);
+  if (!Number.isFinite(tid) || tid <= 0) return { ok: false, error: 'invalid tournament id' };
+  const now = options.now instanceof Date ? options.now : new Date();
+  const t = db.prepare('SELECT * FROM tournaments WHERE id = ?').get(tid);
+  if (!t) return { ok: false, error: 'tournament not found' };
+  if (!isDailyPoolTournament(t)) return { ok: true, skipped: true, reason: 'not_daily_pool', tournament_id: tid };
+  const endMs = sqlDateMs(t.end_at);
+  const nowMs = now.getTime();
+  const finalDay = endMs && endMs <= nowMs ? utcDayFromMs(endMs - 1) : utcDayFromMs(nowMs);
+  const firstDay = tournamentFirstDailyPoolDay(t);
+  if (firstDay > finalDay) {
+    return { ok: true, skipped: true, reason: 'no_awardable_day', tournament_id: tid, day_utc: finalDay };
+  }
+  return awardTournamentDailyPoolDay(tid, finalDay, options);
 }
 
 function seedTournamentDailyPoolBaseline(tournamentId) {
@@ -3993,6 +4109,7 @@ module.exports = {
   recordTournamentTrade,
   recordTournamentTradeRows,
   awardTournamentDailyPoolDay,
+  awardTournamentFinalDailyPoolDay,
   awardPendingTournamentDailyPools,
   seedTournamentDailyPoolBaseline,
   getResourceCaps,

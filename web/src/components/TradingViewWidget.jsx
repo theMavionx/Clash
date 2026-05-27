@@ -474,7 +474,7 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
         {loading && (
           <div style={{position: 'absolute', inset: 0, zIndex: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(253, 248, 231, 0.7)'}}>
-            <div style={{width: 40, height: 40, border: '5px solid #d4c8b0', borderTopColor: '#5C3A21', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>
+            <div style={{width: 40, height: 40, borderWidth: 5, borderStyle: 'solid', borderColor: '#d4c8b0', borderTopColor: '#5C3A21', borderRadius: '50%', animation: 'tv-spin 1s linear infinite'}}></div>
             <style dangerouslySetInnerHTML={{__html: `@keyframes tv-spin { to { transform: rotate(360deg); } }`}} />
           </div>
         )}

@@ -2165,7 +2165,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 5582,
+        "astId": 7859,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "_guardStatus",
         "offset": 0,
@@ -2173,7 +2173,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5615,
+        "astId": 7892,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "__gap",
         "offset": 0,
@@ -2181,15 +2181,15 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 1649,
+        "astId": 3926,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "nft",
         "offset": 0,
         "slot": "50",
-        "type": "t_contract(IDemonKingBaseV2)1612"
+        "type": "t_contract(IDemonKingBaseV2)3889"
       },
       {
-        "astId": 1651,
+        "astId": 3928,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "quoteSigner",
         "offset": 0,
@@ -2197,7 +2197,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1653,
+        "astId": 3930,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "saleActive",
         "offset": 20,
@@ -2205,7 +2205,7 @@
         "type": "t_bool"
       },
       {
-        "astId": 1655,
+        "astId": 3932,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "maxPerTx",
         "offset": 0,
@@ -2213,7 +2213,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1657,
+        "astId": 3934,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "usdcToken",
         "offset": 0,
@@ -2221,7 +2221,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1659,
+        "astId": 3936,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "clashToken",
         "offset": 0,
@@ -2229,7 +2229,7 @@
         "type": "t_address"
       },
       {
-        "astId": 1661,
+        "astId": 3938,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "baseUsdPriceE6",
         "offset": 0,
@@ -2237,7 +2237,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1663,
+        "astId": 3940,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "clashUsdPriceE6",
         "offset": 0,
@@ -2245,7 +2245,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 1667,
+        "astId": 3944,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "paymentTokenAllowed",
         "offset": 0,
@@ -2253,7 +2253,7 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 1671,
+        "astId": 3948,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "usedQuote",
         "offset": 0,
@@ -2261,7 +2261,7 @@
         "type": "t_mapping(t_bytes32,t_bool)"
       },
       {
-        "astId": 2373,
+        "astId": 4650,
         "contract": "DemonKingBaseShopV2.sol:DemonKingBaseShopV2",
         "label": "__gap",
         "offset": 0,
@@ -2297,7 +2297,7 @@
         "label": "bytes32",
         "numberOfBytes": "32"
       },
-      "t_contract(IDemonKingBaseV2)1612": {
+      "t_contract(IDemonKingBaseV2)3889": {
         "encoding": "inplace",
         "label": "contract IDemonKingBaseV2",
         "numberOfBytes": "20"

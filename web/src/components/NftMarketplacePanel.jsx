@@ -926,6 +926,6 @@ const s = {
     border: '1px solid #f0c4a0',
     display: 'flex', alignItems: 'center', gap: 6,
   },
-  noticeOk: { background: '#e8f5e0', color: '#2e6b1a', borderColor: '#b0d4a0' },
+  noticeOk: { background: '#e8f5e0', color: '#2e6b1a', border: '1px solid #b0d4a0' },
   noticeLink: { color: 'inherit', fontWeight: 800, textDecoration: 'underline' },
 };

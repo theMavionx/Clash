@@ -414,6 +414,7 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="tab" onclick="switchTab('stats')">Stats</div>
     <div class="tab" onclick="switchTab('earnings')">Earnings</div>
     <div class="tab" onclick="switchTab('shop')">Shop</div>
+    <div class="tab" onclick="switchTab('marketplace')">Marketplace</div>
     <div class="tab" onclick="switchTab('nft')">NFT / Bridge</div>
   </div>
 
@@ -746,6 +747,20 @@ app.get('/api/admin/panel', (req, res) => {
     <div class="stats" id="earningsTotals"></div>
     <div id="earningsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:8px"></div>
     <div id="earningsMeta" style="color:#6b7280;font-size:12px;margin-top:14px"></div>
+    <h3 style="color:#f59e0b;font-size:16px;margin:24px 0 10px">Revenue by Exchange</h3>
+    <div class="stats" id="revenueAnalyticsTotals"></div>
+    <div style="overflow:auto;margin-top:10px">
+      <table style="font-size:12px;min-width:980px"><thead><tr>
+        <th>DEX</th><th>24h</th><th>7d</th><th>30d</th><th>All</th><th>Model</th>
+      </tr></thead><tbody id="revenueDexWindowBody"></tbody></table>
+    </div>
+    <h3 style="color:#f59e0b;font-size:16px;margin:24px 0 10px">Tournament Revenue</h3>
+    <div id="revenueTournamentMeta" style="color:#6b7280;font-size:12px;margin-bottom:8px"></div>
+    <div style="overflow:auto">
+      <table style="font-size:12px;min-width:1080px"><thead><tr>
+        <th>ID</th><th>Tournament</th><th>DEX</th><th>Status</th><th>Period</th><th>Players</th><th>Trades</th><th>Volume</th><th>Earned</th><th>Estimate</th><th>Source</th>
+      </tr></thead><tbody id="revenueTournamentBody"></tbody></table>
+    </div>
     <div style="margin-top:18px;padding:12px 14px;background:#0f172a;border:1px solid #1e293b;border-radius:8px;font-size:12px;color:#94a3b8;line-height:1.5">
       <strong style="color:#cbd5e1">Source per DEX:</strong><br>
       • <strong>Pacifica</strong> — sum <code style="color:#fbbf24">builder_fee</code> from <code>/api/v1/builder/trades?builder_code=clashofperps</code> (exact USDC rebate per trade; cumulative).<br>
@@ -827,6 +842,67 @@ app.get('/api/admin/panel', (req, res) => {
     <table><thead><tr>
       <th>Time</th><th>Player</th><th>Product</th><th>Price</th><th>Payer (Base)</th><th>Tx</th>
     </tr></thead><tbody id="shopRecentBody"></tbody></table>
+  </div>
+
+  <div class="panel" id="tab-marketplace">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap">
+      <div>
+        <h2 style="color:#f59e0b;font-size:20px">Custodial Marketplace</h2>
+        <div style="color:#6b7280;font-size:12px;margin-top:3px">All cross-chain NFT listings, sales, settlement status, and errors.</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="marketplaceOrderFilter" onchange="renderMarketplace()" style="padding:6px 10px;background:#1f2937;border:1px solid #4b5563;border-radius:6px;color:#e5e7eb;font-size:13px">
+          <option value="all">All orders</option>
+          <option value="open">Open / pending</option>
+          <option value="errors">Errors only</option>
+          <option value="awaiting_deposit">Awaiting deposit</option>
+          <option value="active">Active</option>
+          <option value="reserved">Reserved</option>
+          <option value="paid">Paid</option>
+          <option value="delivering">Delivering</option>
+          <option value="delivered">Delivered</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <button class="btn" onclick="loadMarketplace()">Refresh</button>
+      </div>
+    </div>
+    <div class="stats" id="marketplaceSummary"></div>
+
+    <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px">
+      <div style="flex:1;min-width:360px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">By status</h3>
+        <table><thead><tr>
+          <th>Status</th><th>Orders</th><th>Open</th><th>Sales</th><th>Sales vol</th><th>Errors</th><th>Latest</th>
+        </tr></thead><tbody id="marketplaceStatusBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:360px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">NFT chain</h3>
+        <table><thead><tr>
+          <th>Chain</th><th>Orders</th><th>Open</th><th>Sales</th><th>Volume</th><th>Errors</th><th>Latest</th>
+        </tr></thead><tbody id="marketplaceAssetChainBody"></tbody></table>
+      </div>
+      <div style="flex:1;min-width:360px">
+        <h3 style="color:#9ca3af;font-size:13px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.5px">Payment chain</h3>
+        <table><thead><tr>
+          <th>Chain</th><th>Orders</th><th>Open</th><th>Sales</th><th>Volume</th><th>Errors</th><th>Latest</th>
+        </tr></thead><tbody id="marketplacePaymentChainBody"></tbody></table>
+      </div>
+    </div>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Marketplace Errors</h2>
+    <table><thead><tr>
+      <th>Updated</th><th>Order</th><th>Status</th><th>Asset</th><th>Payment</th><th>Error</th><th>Actions</th>
+    </tr></thead><tbody id="marketplaceErrorsBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent Orders</h2>
+    <table><thead><tr>
+      <th>Updated</th><th>Order</th><th>Status</th><th>Asset</th><th>Seller</th><th>Buyer</th><th>Price</th><th>Payment</th><th>Delivery / Payout</th><th>Error</th><th>Actions</th>
+    </tr></thead><tbody id="marketplaceOrdersBody"></tbody></table>
+
+    <h2 style="color:#f59e0b;font-size:16px;margin:24px 0 8px">Recent Events</h2>
+    <table><thead><tr>
+      <th>Time</th><th>Event</th><th>Order</th><th>Status</th><th>Asset</th><th>Tx</th><th>Data</th>
+    </tr></thead><tbody id="marketplaceEventsBody"></tbody></table>
   </div>
 
   <div class="panel" id="tab-nft">
@@ -1028,6 +1104,19 @@ async function loadAll() {
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function fmtAdminTime(t) { return t ? new Date(String(t).replace(' ', 'T') + 'Z').toLocaleString() : '-'; }
+function fmtAdminUsd(v, maxDigits = 2) {
+  const n = Number(v) || 0;
+  return '$' + n.toLocaleString(undefined, {
+    minimumFractionDigits: maxDigits === 0 ? 0 : 2,
+    maximumFractionDigits: maxDigits,
+  });
+}
+function fmtAdminCompactUsd(v) {
+  const n = Number(v) || 0;
+  if (Math.abs(n) >= 1000000) return '$' + (n / 1000000).toFixed(2) + 'M';
+  if (Math.abs(n) >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+  return fmtAdminUsd(n, 0);
+}
 
 function renderPlayers() {
   const shielded   = players.filter(p => p.shield_active).length;
@@ -2895,11 +2984,111 @@ function renderElfaStats() {
   }).join('') || '<tr><td colspan="4" style="text-align:center;color:#6b7280;padding:12px">No errors</td></tr>';
 }
 
+function renderRevenueAnalytics(data) {
+  const totalsEl = document.getElementById('revenueAnalyticsTotals');
+  const dexBody = document.getElementById('revenueDexWindowBody');
+  const tnBody = document.getElementById('revenueTournamentBody');
+  const tnMeta = document.getElementById('revenueTournamentMeta');
+  if (!totalsEl || !dexBody || !tnBody || !tnMeta) return;
+  if (!data || data.error) {
+    totalsEl.innerHTML = '<div class="stat" style="border-color:#ef4444"><div class="v" style="color:#fca5a5">Failed</div><div class="l">' + esc(data?.error || 'analytics unavailable') + '</div></div>';
+    dexBody.innerHTML = '<tr><td colspan="6" style="color:#fca5a5;text-align:center;padding:18px">Revenue analytics unavailable</td></tr>';
+    tnBody.innerHTML = '<tr><td colspan="11" style="color:#fca5a5;text-align:center;padding:18px">Tournament analytics unavailable</td></tr>';
+    tnMeta.textContent = '';
+    return;
+  }
+
+  const windows = Array.isArray(data.windows) ? data.windows : [];
+  const byWindow = Object.fromEntries(windows.map(w => [w.key, w]));
+  const w24 = byWindow['24h'] || {};
+  const w30 = byWindow['30d'] || {};
+  const wall = byWindow.all || {};
+  const stat = (value, label, color = '#e8b830') =>
+    '<div class="stat"><div class="v" style="color:' + color + '">' + value + '</div><div class="l">' + label + '</div></div>';
+  totalsEl.innerHTML =
+    stat(fmtAdminUsd(w24.total_earned_usd), '24h earned', '#4ade80') +
+    stat(fmtAdminUsd(w30.total_earned_usd), '30d earned', '#4ade80') +
+    stat(fmtAdminUsd(wall.total_earned_usd), 'All earned', '#4ade80') +
+    stat(fmtAdminCompactUsd(w30.total_volume_usd), '30d volume', '#38bdf8') +
+    stat((Number(w30.total_trades) || 0).toLocaleString(), '30d trades', '#fbbf24');
+
+  const dexes = Array.isArray(data.dexes) && data.dexes.length ? data.dexes : [
+    { key: 'pacifica', label: 'Pacifica' },
+    { key: 'decibel', label: 'Decibel' },
+    { key: 'avantis', label: 'Avantis' },
+    { key: 'gmx', label: 'GMX' },
+    { key: 'phoenix', label: 'Phoenix' },
+    { key: 'monad', label: 'Perpl' },
+    { key: 'hyperliquid', label: 'Hyperliquid' },
+    { key: 'risex', label: 'RISE' },
+    { key: 'nado', label: 'Nado' },
+  ];
+  const windowKeys = ['24h', '7d', '30d', 'all'];
+  const revenueCell = (row) => {
+    if (!row) return '<td style="color:#6b7280">-</td>';
+    const earned = Number(row.earned_usd) || 0;
+    const estimate = Number(row.estimated_fee_usd) || 0;
+    const volume = Number(row.volume_usd) || 0;
+    const trades = Number(row.trades) || 0;
+    const estimateLine = Math.abs(estimate - earned) > 0.0001 && estimate > 0
+      ? '<div style="font-size:10px;color:#fbbf24">hyp ' + fmtAdminUsd(estimate, 2) + '</div>'
+      : '';
+    return '<td><strong style="color:#4ade80">' + fmtAdminUsd(earned, 2) + '</strong>' +
+      '<div style="font-size:10px;color:#94a3b8">' + fmtAdminCompactUsd(volume) + ' vol / ' + trades.toLocaleString() + ' trades</div>' +
+      estimateLine + '</td>';
+  };
+  dexBody.innerHTML = dexes.map((dex) => {
+    const allRow = byWindow.all?.dexes?.[dex.key] || {};
+    const configured = allRow.configured !== false;
+    const modelColor = configured ? '#94a3b8' : '#fca5a5';
+    return '<tr>' +
+      '<td><strong>' + esc(dex.label || dex.key) + '</strong><div class="mono" style="font-size:10px;color:#64748b">' + esc(dex.key) + '</div></td>' +
+      windowKeys.map(k => revenueCell(byWindow[k]?.dexes?.[dex.key])).join('') +
+      '<td style="color:' + modelColor + ';font-size:11px">' + esc(allRow.rate_label || allRow.model || '-') + '</td>' +
+      '</tr>';
+  }).join('') || '<tr><td colspan="6" style="color:#6b7280;text-align:center;padding:18px">No DEX analytics yet</td></tr>';
+
+  const tournaments = Array.isArray(data.tournaments) ? data.tournaments : [];
+  tnMeta.textContent = 'Updated ' + (data.last_updated || '') + '. ' + (data.note || '');
+  tnBody.innerHTML = tournaments.map((row) => {
+    const breakdown = Array.isArray(row.breakdown) ? row.breakdown : [];
+    const dexText = breakdown.length > 1
+      ? breakdown.map(b => esc(String(b.dex || '').toUpperCase()) + ' ' + fmtAdminCompactUsd(b.volume_usd)).join('<br>')
+      : esc(String(row.dex || breakdown[0]?.dex || '-').toUpperCase());
+    const rateText = breakdown.length
+      ? breakdown.map(b => esc(String(b.dex || '').toUpperCase()) + ': ' + esc(b.rate_label || b.model || '-')).join('<br>')
+      : esc(row.source_detail || '-');
+    const period = fmtAdminTime(row.start_at) + ' - ' + (row.end_at ? fmtAdminTime(row.end_at) : 'open');
+    const estimate = Number(row.estimated_fee_usd) || 0;
+    const earned = Number(row.earned_usd) || 0;
+    const estimateCell = Math.abs(estimate - earned) > 0.0001
+      ? '<span style="color:#fbbf24">' + fmtAdminUsd(estimate, 2) + '</span>'
+      : '<span style="color:#94a3b8">same</span>';
+    return '<tr>' +
+      '<td class="mono">' + row.id + '</td>' +
+      '<td><strong>' + esc(row.name || '-') + '</strong><div style="font-size:10px;color:#64748b">' + esc(row.mode || '') + ' / ' + esc(row.dex_scope || '') + '</div></td>' +
+      '<td>' + dexText + '</td>' +
+      '<td><span class="badge">' + esc(row.phase || row.status || '-') + '</span></td>' +
+      '<td style="font-size:11px;color:#94a3b8">' + esc(period) + '</td>' +
+      '<td>' + (Number(row.players) || 0).toLocaleString() + '</td>' +
+      '<td>' + (Number(row.trades) || 0).toLocaleString() + '</td>' +
+      '<td style="color:#38bdf8;font-weight:800">' + fmtAdminCompactUsd(row.volume_usd) + '</td>' +
+      '<td style="color:#4ade80;font-weight:800">' + fmtAdminUsd(earned, 2) + '</td>' +
+      '<td>' + estimateCell + '</td>' +
+      '<td style="font-size:10px;color:#94a3b8">' + esc(row.source_detail || '-') + '<div>' + rateText + '</div></td>' +
+      '</tr>';
+  }).join('') || '<tr><td colspan="11" style="color:#6b7280;text-align:center;padding:18px">No tournaments yet</td></tr>';
+}
+
 async function loadEarnings(force) {
   const meta = document.getElementById('earningsMeta');
   meta.textContent = 'Reading on-chain' + (force ? ' (forced refresh)' : '') + '…';
   try {
-    const data = await api('/admin/earnings' + (force ? '?force=1' : ''));
+    const [data, analytics] = await Promise.all([
+      api('/admin/earnings' + (force ? '?force=1' : '')),
+      api('/admin/revenue-analytics').catch((e) => ({ error: e?.message || String(e) })),
+    ]);
+    renderRevenueAnalytics(analytics);
     const dexes = [
       ['pacifica', 'Pacifica', '#a78bfa', '#7C3AED'],
       ['decibel',  'Decibel',  '#facc15', '#facc15'],
@@ -3241,6 +3430,228 @@ async function saveAiChatSettings() {
   }
 }
 
+let marketplaceCache = null;
+
+function marketUsdc(units) {
+  const raw = Number(units || 0);
+  return fmtAdminUsd(raw / 1000000, 2);
+}
+
+function marketShort(value, head = 8, tail = 5) {
+  const s = String(value || '');
+  if (!s) return '-';
+  return s.length > head + tail + 3 ? s.slice(0, head) + '...' + s.slice(-tail) : s;
+}
+
+function marketChainLabel(chain) {
+  return ({
+    base: 'Base',
+    arbitrum: 'Arbitrum',
+    monad: 'Monad',
+    aptos: 'Aptos',
+    solana: 'Solana',
+    unknown: 'Unknown',
+  }[String(chain || '').toLowerCase()] || chain || '-');
+}
+
+function marketChainBadge(chain) {
+  const c = String(chain || 'unknown').toLowerCase();
+  const colors = {
+    base: '#2563eb',
+    arbitrum: '#1d4ed8',
+    monad: '#7c3aed',
+    aptos: '#374151',
+    solana: '#059669',
+    unknown: '#4b5563',
+  };
+  return '<span class="badge" style="background:' + (colors[c] || '#4b5563') + ';color:#fff">' + esc(marketChainLabel(c)) + '</span>';
+}
+
+function marketStatusBadge(status) {
+  const s = String(status || 'unknown').toLowerCase();
+  const styles = {
+    awaiting_deposit: 'background:#713f12;color:#fde68a',
+    active: 'background:#064e3b;color:#86efac',
+    reserved: 'background:#1e3a5f;color:#bfdbfe',
+    paid: 'background:#78350f;color:#fbbf24',
+    delivering: 'background:#581c87;color:#ddd6fe',
+    delivered: 'background:#14532d;color:#bbf7d0',
+    cancelled: 'background:#374151;color:#9ca3af',
+    unknown: 'background:#4b5563;color:#d1d5db',
+  };
+  return '<span class="badge" style="' + (styles[s] || styles.unknown) + '">' + esc(s) + '</span>';
+}
+
+function marketExplorerUrl(chain, hash) {
+  const h = String(hash || '');
+  if (!h) return null;
+  const c = String(chain || '').toLowerCase();
+  if (c === 'base') return 'https://basescan.org/tx/' + h;
+  if (c === 'arbitrum') return 'https://arbiscan.io/tx/' + h;
+  if (c === 'monad') return 'https://testnet.monadexplorer.com/tx/' + h;
+  if (c === 'solana') return 'https://solscan.io/tx/' + h;
+  if (c === 'aptos') return 'https://explorer.aptoslabs.com/txn/' + h + '?network=mainnet';
+  return null;
+}
+
+function marketTxLink(chain, hash) {
+  if (!hash) return '<span style="color:#6b7280">-</span>';
+  const label = '<code class="mono">' + esc(marketShort(hash, 10, 6)) + '</code>';
+  const url = marketExplorerUrl(chain, hash);
+  return url ? '<a href="' + esc(url) + '" target="_blank" style="color:#fbbf24">' + label + '</a>' : label;
+}
+
+function marketWallet(value) {
+  if (!value) return '<span style="color:#6b7280">-</span>';
+  return '<code class="mono" title="' + esc(value) + '">' + esc(marketShort(value, 8, 5)) + '</code>';
+}
+
+function marketAssetCell(order) {
+  return marketChainBadge(order.assetChain) +
+    '<div class="mono" title="' + esc(order.assetId || '') + '" style="margin-top:4px;color:#cbd5e1">' + esc(marketShort(order.assetId, 10, 6)) + '</div>' +
+    '<div style="font-size:10px;color:#64748b">L' + (order.level || 1) + ' ' + esc(order.assetStandard || '') + '</div>';
+}
+
+function marketPaymentCell(order) {
+  const payment = order.payment || {};
+  return marketChainBadge(order.paymentChain || payment.chain) +
+    '<div style="font-size:11px;color:#4ade80;margin-top:4px">' + esc(payment.amountFormatted || order.priceUsdc || '-') + ' ' + esc(order.paymentLabel || payment.label || 'USDC') + '</div>' +
+    (order.paymentTxHash ? '<div>' + marketTxLink(order.paymentChain || payment.chain, order.paymentTxHash) + '</div>' : '');
+}
+
+function marketErrorCell(order) {
+  if (!order.error) return '<span style="color:#6b7280">-</span>';
+  return '<div class="log-msg" style="color:#fca5a5;max-width:360px">' + esc(order.error) + '</div>';
+}
+
+function marketActions(order) {
+  const id = encodeURIComponent(String(order.id || ''));
+  const parts = [];
+  if (order.status === 'paid' || order.status === 'delivering') {
+    parts.push('<button class="btn" onclick="settleMarketplaceOrder(decodeURIComponent(\\'' + id + '\\'))">Auto settle</button>');
+  }
+  if (order.status === 'delivered' && !order.payoutTxHash) {
+    parts.push('<button class="btn" onclick="payoutMarketplaceOrder(decodeURIComponent(\\'' + id + '\\'))">Auto payout</button>');
+  }
+  return parts.join(' ') || '<span style="color:#6b7280">-</span>';
+}
+
+function renderMarketplaceGroupRows(rows, bodyId, emptyText) {
+  document.getElementById(bodyId).innerHTML = (rows || []).length === 0
+    ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:18px">' + esc(emptyText) + '</td></tr>'
+    : rows.map((row) => '<tr class="' + ((row.errors || 0) ? 'log-row-warn' : '') + '">' +
+        '<td>' + (row.status ? marketStatusBadge(row.status) : marketChainBadge(row.chain)) + '</td>' +
+        '<td style="font-weight:800">' + (row.orders || 0) + '</td>' +
+        '<td>' + (row.openOrders || 0) + '</td>' +
+        '<td>' + (row.sales || 0) + '</td>' +
+        '<td style="color:#4ade80;font-weight:700">' + marketUsdc(row.salesVolumeUsdcUnits) + '</td>' +
+        '<td style="color:' + ((row.errors || 0) ? '#fca5a5' : '#6b7280') + '">' + (row.errors || 0) + '</td>' +
+        '<td class="mono" style="font-size:11px;color:#9ca3af">' + esc(fmtAdminTime(row.latestAt)) + '</td>' +
+      '</tr>').join('');
+}
+
+function renderMarketplace() {
+  const data = marketplaceCache;
+  if (!data) return;
+  const s = data.summary || {};
+  document.getElementById('marketplaceSummary').innerHTML =
+    '<div class="stat"><div class="v">' + (s.totalOrders || 0) + '</div><div class="l">Total orders</div></div>' +
+    '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + (s.deliveredOrders || 0) + '</div><div class="l">Delivered sales</div></div>' +
+    '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + marketUsdc(s.salesVolumeUsdcUnits) + '</div><div class="l">Sales volume</div></div>' +
+    '<div class="stat"><div class="v">' + (s.activeListings || 0) + '</div><div class="l">Active listings</div></div>' +
+    '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + ((s.reservedOrders || 0) + (s.paidOrders || 0) + (s.deliveringOrders || 0)) + '</div><div class="l">Pending buyers</div></div>' +
+    '<div class="stat" style="border-color:' + ((s.errorOrders || 0) ? '#ef4444' : '#22c55e') + '"><div class="v" style="color:' + ((s.errorOrders || 0) ? '#f87171' : '#4ade80') + '">' + (s.errorOrders || 0) + '</div><div class="l">Orders with errors</div></div>' +
+    '<div class="stat"><div class="v">' + marketUsdc(s.feeUsdcUnits) + '</div><div class="l">Fees earned</div></div>' +
+    '<div class="stat" style="border-color:#38bdf8"><div class="v" style="color:#38bdf8">' + marketUsdc(s.payoutDueUsdcUnits) + '</div><div class="l">Payout due</div></div>' +
+    '<div class="stat"><div class="v">' + (s.sales24h || 0) + '</div><div class="l">Sales 24h</div></div>' +
+    '<div class="stat"><div class="v" style="font-size:14px;color:#9ca3af">' + esc(fmtAdminTime(s.latestAt)) + '</div><div class="l">Latest update</div></div>';
+
+  renderMarketplaceGroupRows(data.byStatus, 'marketplaceStatusBody', 'No marketplace status data');
+  renderMarketplaceGroupRows(data.byAssetChain, 'marketplaceAssetChainBody', 'No asset chain data');
+  renderMarketplaceGroupRows(data.byPaymentChain, 'marketplacePaymentChainBody', 'No payment chain data');
+
+  const errors = data.recentErrors || [];
+  document.getElementById('marketplaceErrorsBody').innerHTML = errors.length === 0
+    ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:24px">No marketplace errors</td></tr>'
+    : errors.map((order) => '<tr class="log-row-error">' +
+        '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtAdminTime(order.updatedAt)) + '</td>' +
+        '<td><code class="mono">' + esc(marketShort(order.id, 8, 6)) + '</code></td>' +
+        '<td>' + marketStatusBadge(order.status) + '</td>' +
+        '<td>' + marketAssetCell(order) + '</td>' +
+        '<td>' + marketPaymentCell(order) + '</td>' +
+        '<td>' + marketErrorCell(order) + '</td>' +
+        '<td>' + marketActions(order) + '</td>' +
+      '</tr>').join('');
+
+  const filterEl = document.getElementById('marketplaceOrderFilter');
+  const filter = filterEl ? String(filterEl.value || 'all') : 'all';
+  let orders = data.recentOrders || [];
+  if (filter === 'errors') orders = orders.filter((order) => !!order.error);
+  else if (filter === 'open') orders = orders.filter((order) => !['delivered', 'cancelled'].includes(String(order.status || '').toLowerCase()));
+  else if (filter !== 'all') orders = orders.filter((order) => String(order.status || '').toLowerCase() === filter);
+
+  document.getElementById('marketplaceOrdersBody').innerHTML = orders.length === 0
+    ? '<tr><td colspan="11" style="color:#6b7280;text-align:center;padding:24px">No orders for this filter</td></tr>'
+    : orders.map((order) => '<tr class="' + (order.error ? 'log-row-error' : '') + '">' +
+        '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtAdminTime(order.updatedAt)) + '</td>' +
+        '<td><code class="mono" title="' + esc(order.id || '') + '">' + esc(marketShort(order.id, 8, 6)) + '</code></td>' +
+        '<td>' + marketStatusBadge(order.status) + '</td>' +
+        '<td>' + marketAssetCell(order) + '</td>' +
+        '<td>' + marketChainBadge(order.sellerPayoutChain || order.assetChain) + '<div>' + marketWallet(order.sellerWallet) + '</div></td>' +
+        '<td>' + marketChainBadge(order.buyerDestChain || order.paymentChain) + '<div>' + marketWallet(order.buyerWallet || order.buyerDestAddress) + '</div></td>' +
+        '<td style="color:#4ade80;font-weight:700">' + marketUsdc(order.priceUsdcUnits) + '<div style="font-size:10px;color:#64748b">fee ' + marketUsdc(order.feeUsdcUnits) + '</div></td>' +
+        '<td>' + marketPaymentCell(order) + '</td>' +
+        '<td><div>Delivery: ' + marketTxLink(order.buyerDestChain || order.assetChain, order.deliveryTxHash) + '</div><div style="margin-top:4px">Payout: ' + marketTxLink(order.sellerPayoutChain, order.payoutTxHash) + '</div></td>' +
+        '<td>' + marketErrorCell(order) + '</td>' +
+        '<td>' + marketActions(order) + '</td>' +
+      '</tr>').join('');
+
+  const events = data.recentEvents || [];
+  document.getElementById('marketplaceEventsBody').innerHTML = events.length === 0
+    ? '<tr><td colspan="7" style="color:#6b7280;text-align:center;padding:24px">No marketplace events</td></tr>'
+    : events.map((event) => {
+        const order = event.order || {};
+        const dataText = JSON.stringify(event.data || {});
+        return '<tr class="' + (String(event.type || '').includes('failed') ? 'log-row-error' : 'log-row-info') + '">' +
+          '<td class="mono" style="font-size:11px;color:#9ca3af;white-space:nowrap">' + esc(fmtAdminTime(event.createdAt)) + '</td>' +
+          '<td><span class="badge">' + esc(event.type || '-') + '</span></td>' +
+          '<td><code class="mono">' + esc(marketShort(event.orderId, 8, 6)) + '</code></td>' +
+          '<td>' + marketStatusBadge(order.status) + '</td>' +
+          '<td>' + marketChainBadge(order.assetChain) + '<div class="mono" style="font-size:10px;color:#94a3b8">' + esc(marketShort(order.assetId, 8, 6)) + '</div></td>' +
+          '<td>' + marketTxLink(order.paymentChain || order.assetChain, event.txHash) + '</td>' +
+          '<td><div class="log-msg" style="max-width:420px;color:#cbd5e1">' + esc(dataText) + '</div></td>' +
+        '</tr>';
+      }).join('');
+}
+
+async function loadMarketplace() {
+  try {
+    const data = await api('/admin/marketplace/custodial/stats?limit=500');
+    if (data?.error) throw new Error(data.error);
+    marketplaceCache = data;
+    renderMarketplace();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('marketplaceSummary').innerHTML = '<div style="color:#ef4444">Marketplace stats failed: ' + esc(e?.message || String(e)) + '</div>';
+    ['marketplaceStatusBody', 'marketplaceAssetChainBody', 'marketplacePaymentChainBody', 'marketplaceErrorsBody', 'marketplaceOrdersBody', 'marketplaceEventsBody'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<tr><td style="color:#ef4444">Unavailable</td></tr>';
+    });
+  }
+}
+
+async function settleMarketplaceOrder(id) {
+  if (!confirm('Run automatic marketplace delivery for this order?')) return;
+  await apiPost('/admin/marketplace/custodial/orders/' + encodeURIComponent(id) + '/settle', { mode: 'auto' });
+  await loadMarketplace();
+}
+
+async function payoutMarketplaceOrder(id) {
+  if (!confirm('Run automatic seller payout for this order?')) return;
+  await apiPost('/admin/marketplace/custodial/orders/' + encodeURIComponent(id) + '/payout', { mode: 'auto' });
+  await loadMarketplace();
+}
+
 async function loadNftAnalytics() {
   try {
     const data = await api('/admin/nft-analytics');
@@ -3410,6 +3821,7 @@ switchTab = function(name) {
   if (name === 'elfa') loadElfa();
   if (name === 'earnings') loadEarnings();
   if (name === 'shop') loadShop();
+  if (name === 'marketplace') loadMarketplace();
   if (name === 'nft') loadNftAnalytics();
 };
 

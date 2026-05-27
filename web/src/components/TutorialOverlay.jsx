@@ -5,6 +5,9 @@ const FLAG_BASE = 1;    // welcome, TH, buildings, resources
 const FLAG_ARMY = 2;    // port, ship, barn, load troops
 const FLAG_ATTACK = 4;  // first attack guide (cannon, energy, ships)
 const FLAG_TRADE = 8;   // trading intro
+const FLAG_VIDEO = 16;  // YouTube video guide
+
+const VIDEO_GUIDE_URL = 'https://www.youtube.com/embed/1FbKK5EgU8U?si=DzO5imbvYI0IorpV&rel=0&modestbranding=1&playsinline=1';
 
 // ── Step definitions ──────────────────────────────────────────────
 const BASE_STEPS = [
@@ -34,6 +37,10 @@ const TRADE_STEPS = [
 ];
 
 // ── Component ─────────────────────────────────────────────────────
+const VIDEO_STEPS = [
+  { title: 'Clash of Perps Guide', text: 'Watch the quick guide here. When you are done, tap Done and this guide will not show again.', icon: '>', videoUrl: VIDEO_GUIDE_URL, cta: 'Done' },
+];
+
 function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
   const [stepIdx, setStepIdx] = useState(0);
   const [spotlightRect, setSpotlightRect] = useState(null);
@@ -43,12 +50,14 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
     : phase === 'army' ? ARMY_STEPS
     : phase === 'attack' ? ATTACK_STEPS
     : phase === 'trade' ? TRADE_STEPS
+    : phase === 'video' ? VIDEO_STEPS
     : [];
 
   const flag = phase === 'base' ? FLAG_BASE
     : phase === 'army' ? FLAG_ARMY
     : phase === 'attack' ? FLAG_ATTACK
     : phase === 'trade' ? FLAG_TRADE
+    : phase === 'video' ? FLAG_VIDEO
     : 0;
 
   // All hooks must be declared BEFORE any conditional return (Rules of Hooks).
@@ -59,6 +68,8 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
   const skip = (tutorialFlags & flag) !== 0 || steps.length === 0;
   const step = skip ? null : steps[stepIdx];
   const isLast = !skip && stepIdx === steps.length - 1;
+  const isVideoPhase = phase === 'video';
+  const hasVideo = !!step?.videoUrl;
 
   // Find spotlight target. Clears when no step or no target.
   // setState inside is DOM→React layout sync (external-boundary read), not
@@ -104,21 +115,35 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
     : undefined;
 
   return (
-    <div ref={overlayRef} style={{...S.overlay, clipPath}}>
-      {/* Step indicator */}
-      <div style={S.stepDots}>
-        {steps.map((_, i) => (
-          <div key={i} style={{...S.dot, ...(i === stepIdx ? S.dotActive : {})}} />
-        ))}
-      </div>
+    <div ref={overlayRef} style={{...S.overlay, ...(hasVideo ? S.overlayVideo : {}), clipPath: hasVideo ? undefined : clipPath}}>
+      {!isVideoPhase && (
+        <div style={S.stepDots}>
+          {steps.map((_, i) => (
+            <div key={i} style={{...S.dot, ...(i === stepIdx ? S.dotActive : {})}} />
+          ))}
+        </div>
+      )}
 
       {/* Card */}
-      <div style={S.card}>
-        <div style={S.iconCircle}>
-          <span style={S.icon}>{step.icon}</span>
-        </div>
-        <h2 style={S.title}>{step.title}</h2>
-        <p style={S.text}>{step.text}</p>
+      <div style={{...S.card, ...(isVideoPhase ? S.videoModal : {}), ...(hasVideo ? S.cardVideo : {})}}>
+        {!isVideoPhase && (
+          <div style={S.iconCircle}>
+            <span style={S.icon}>{step.icon}</span>
+          </div>
+        )}
+        <h2 style={{...S.title, ...(isVideoPhase ? S.videoTitle : {})}}>{step.title}</h2>
+        <p style={{...S.text, ...(isVideoPhase ? S.videoText : {})}}>{step.text}</p>
+        {hasVideo && (
+          <div style={S.videoWrap}>
+            <iframe
+              title="Clash of Perps video guide"
+              src={step.videoUrl}
+              style={S.videoFrame}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
+          </div>
+        )}
         <div style={S.buttons}>
           <button 
             style={S.skipBtn} 
@@ -138,16 +163,16 @@ function TutorialOverlay({ tutorialFlags, phase, onComplete, onSkip }) {
             onMouseDown={e => e.currentTarget.style.transform = 'scale(0.96)'}
             onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
           >
-            {isLast ? 'Got it!' : 'Next'}
+            {step.cta || (isLast ? 'Got it!' : 'Next')}
           </button>
         </div>
-        <div style={S.counter}>{stepIdx + 1} / {steps.length}</div>
+        {!isVideoPhase && <div style={S.counter}>{stepIdx + 1} / {steps.length}</div>}
       </div>
     </div>
   );
 }
 
-export { FLAG_BASE, FLAG_ARMY, FLAG_ATTACK, FLAG_TRADE };
+export { FLAG_BASE, FLAG_ARMY, FLAG_ATTACK, FLAG_TRADE, FLAG_VIDEO };
 export default memo(TutorialOverlay);
 
 // ── Styles ────────────────────────────────────────────────────────
@@ -160,6 +185,13 @@ const S = {
     zIndex: 250, pointerEvents: 'all',
     paddingBottom: 24,
     animation: 'fadeIn 0.3s ease',
+  },
+  overlayVideo: {
+    justifyContent: 'center',
+    paddingTop: 8,
+    paddingRight: 4,
+    paddingBottom: 8,
+    paddingLeft: 4,
   },
   stepDots: {
     position: 'absolute', top: 20,
@@ -185,6 +217,15 @@ const S = {
     boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
     animation: 'panelRise 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
   },
+  cardVideo: {
+    maxWidth: 860,
+  },
+  videoModal: {
+    width: 'min(900px, calc(100vw - 8px))',
+    maxHeight: 'calc(100vh - 16px)',
+    padding: '14px 12px 12px',
+    borderRadius: 16,
+  },
   iconCircle: {
     width: 64, height: 64, borderRadius: '50%',
     background: '#e8dfc8',
@@ -199,11 +240,35 @@ const S = {
     color: '#5C3A21', textAlign: 'center',
     fontFamily: '"Inter","Segoe UI",sans-serif',
   },
+  videoTitle: {
+    marginTop: 4,
+  },
   text: {
     margin: '0 0 20px', fontSize: 15, fontWeight: 600,
     color: '#77573d', textAlign: 'center',
     lineHeight: 1.5, maxWidth: 300,
     fontFamily: '"Inter","Segoe UI",sans-serif',
+  },
+  videoText: {
+    maxWidth: 520,
+    marginBottom: 14,
+  },
+  videoWrap: {
+    width: '100%',
+    aspectRatio: '16 / 9',
+    maxHeight: 'min(62vh, 520px)',
+    overflow: 'hidden',
+    borderRadius: 12,
+    border: '3px solid #d4c8b0',
+    background: '#1f1a14',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), 0 8px 20px rgba(0,0,0,0.28)',
+    marginBottom: 16,
+  },
+  videoFrame: {
+    width: '100%',
+    height: '100%',
+    border: 0,
+    display: 'block',
   },
   buttons: {
     display: 'flex', gap: 12, width: '100%',

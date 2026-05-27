@@ -134,7 +134,8 @@ async function readNftLevelCached(chainKey, tokenId) {
       level = Math.max(1, Math.min(3, Number(raw) || 1));
     }
   } catch {
-    // V2 contracts don't have tokenLevel → falls back to L1.
+    // Metadata endpoint only: if the V3 level read is temporarily unavailable,
+    // serve the L1 image instead of failing token metadata rendering.
   }
   _nftLevelCache.set(key, { level, at: now });
   return level;
@@ -313,6 +314,387 @@ function nftHiddenMetadata(req, chain) {
   }, chain);
 }
 
+const NFT_COLLECTION_CHAIN_LABELS = {
+  base: 'Base',
+  arbitrum: 'Arbitrum',
+  monad: 'Monad',
+  aptos: 'Aptos',
+  solana: 'Solana',
+};
+
+const NFT_COLLECTION_PRESETS = {
+  voidspore: {
+    slug: 'voidspore',
+    envKey: 'VOIDSPORE',
+    name: 'Voidspore',
+    symbol: 'VOID',
+    character: 'Voidspore',
+    description: 'Voidspore from Clash of Perps.',
+    maxSupply: 555,
+    images: {
+      1: 'L1.png',
+      2: 'L2.png',
+      3: 'L3.jpg',
+    },
+  },
+};
+
+function normalizeCollectionSlug(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function collectionEnv(envKey, keys, fallback = '') {
+  for (const key of keys) {
+    if (!key) continue;
+    const fullKey = key.includes('%s') ? key.replace('%s', envKey) : key;
+    if (process.env[fullKey] != null && process.env[fullKey] !== '') return process.env[fullKey];
+  }
+  return fallback;
+}
+
+function nftCollectionConfig(slugRaw) {
+  const slug = normalizeCollectionSlug(slugRaw);
+  const preset = NFT_COLLECTION_PRESETS[slug];
+  if (!preset) return null;
+  const envKey = preset.envKey;
+  return {
+    ...preset,
+    name: collectionEnv(envKey, ['NFT_%s_NAME', 'NFT_COLLECTION_NAME'], preset.name),
+    symbol: collectionEnv(envKey, ['NFT_%s_SYMBOL', 'NFT_COLLECTION_SYMBOL'], preset.symbol),
+    description: collectionEnv(envKey, ['NFT_%s_DESCRIPTION', 'NFT_COLLECTION_DESCRIPTION'], preset.description),
+    maxSupply: Number(collectionEnv(envKey, ['NFT_%s_GLOBAL_SUPPLY_CAP', 'NFT_%s_MAX_SUPPLY', 'NFT_COLLECTION_GLOBAL_SUPPLY_CAP'], preset.maxSupply)),
+    externalUrl: collectionEnv(envKey, ['NFT_%s_EXTERNAL_URL', 'NFT_COLLECTION_EXTERNAL_URL'], ''),
+  };
+}
+
+function nftCollectionDeployment(slug, chainKey) {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${slug}-${chainKey}-mainnet.json`)) || {};
+}
+
+function nftCollectionImagePath(collection, level) {
+  const lvl = normalizeNftLevel(level);
+  return path.join(__dirname, 'public', 'nft', collection.slug, collection.images[lvl]);
+}
+
+function nftCollectionImageMime(filePath) {
+  return path.extname(filePath).toLowerCase() === '.png' ? 'image/png' : 'image/jpeg';
+}
+
+function nftCollectionImageUrl(req, collection, level) {
+  const lvl = normalizeNftLevel(level);
+  return `${nftPublicBase(req)}/api/nft/${collection.slug}/image/${lvl}`;
+}
+
+function nftCollectionExternalUrl(req, collection) {
+  return collection.externalUrl || `${nftPublicBase(req)}/`;
+}
+
+function nftCollectionSellerFeeBasisPoints(collection, chainKey) {
+  const dep = nftCollectionDeployment(collection.slug, chainKey);
+  return Number(collectionEnv(collection.envKey, [
+    `NFT_${collection.envKey}_${String(chainKey || '').toUpperCase()}_ROYALTY_BPS`,
+    'NFT_%s_ROYALTY_BPS',
+    'NFT_COLLECTION_ROYALTY_BPS',
+  ], dep.royaltyBps ?? (chainKey === 'solana' ? 250 : 250)));
+}
+
+function nftCollectionFeeRecipient(collection, chainKey) {
+  const dep = nftCollectionDeployment(collection.slug, chainKey);
+  return collectionEnv(collection.envKey, [
+    `NFT_${collection.envKey}_${String(chainKey || '').toUpperCase()}_ROYALTY_RECEIVER`,
+    `NFT_${collection.envKey}_${String(chainKey || '').toUpperCase()}_TREASURY`,
+    'NFT_%s_ROYALTY_RECEIVER',
+    'NFT_%s_TREASURY',
+    'NFT_COLLECTION_ROYALTY_RECEIVER',
+    'NFT_COLLECTION_TREASURY',
+  ], dep.royaltyReceiver || dep.treasury || '');
+}
+
+function attachCollectionRoyaltyMetadata(metadata, collection, chainKey) {
+  const fee = nftCollectionSellerFeeBasisPoints(collection, chainKey);
+  const recipient = nftCollectionFeeRecipient(collection, chainKey);
+  if (Number.isFinite(fee) && fee > 0) metadata.seller_fee_basis_points = fee;
+  if (recipient) metadata.fee_recipient = recipient;
+  return metadata;
+}
+
+async function readCollectionNftLevelCached(collection, chainKey, tokenId) {
+  if (!['base', 'arbitrum', 'monad'].includes(chainKey)) return 1;
+  const key = `${collection.slug}:${chainKey}:${tokenId}`;
+  const hit = _nftLevelCache.get(key);
+  const now = Date.now();
+  if (hit && now - hit.at < 60_000) return hit.level;
+
+  let level = 1;
+  try {
+    const dep = nftCollectionDeployment(collection.slug, chainKey);
+    const addr = dep.proxy || dep.contract;
+    if (addr) {
+      const { createPublicClient, http, getAddress } = await import('viem');
+      const rpcMap = {
+        base: process.env[`NFT_${collection.envKey}_BASE_RPC_URL`] || process.env.NFT_BASE_RPC_URL || process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+        arbitrum: process.env[`NFT_${collection.envKey}_ARBITRUM_RPC_URL`] || process.env.NFT_ARBITRUM_RPC_URL || process.env.ARBITRUM_RPC_URL || 'https://arb1.arbitrum.io/rpc',
+        monad: process.env[`NFT_${collection.envKey}_MONAD_RPC_URL`] || process.env.NFT_MONAD_RPC_URL || process.env.MONAD_RPC_URL || 'https://rpc.monad.xyz',
+      };
+      const client = createPublicClient({ transport: http(rpcMap[chainKey]) });
+      const raw = await client.readContract({
+        address: getAddress(addr),
+        abi: [{ name: 'tokenLevel', type: 'function', stateMutability: 'view',
+                inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }],
+        functionName: 'tokenLevel',
+        args: [BigInt(tokenId)],
+      });
+      level = normalizeNftLevel(raw);
+    }
+  } catch {
+    level = 1;
+  }
+
+  _nftLevelCache.set(key, { level, at: now });
+  return level;
+}
+
+function nftCollectionShopDeployment(collection, chainKey) {
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${collection.slug}-${chainKey}-shop-mainnet.json`)) || {};
+}
+
+function nftCollectionChainHasDeployment(collection, chainKey) {
+  const dep = nftCollectionDeployment(collection.slug, chainKey);
+  if (chainKey === 'solana') return !!(dep.collection || dep.candyMachine);
+  if (chainKey === 'aptos') return !!(dep.module && dep.collection);
+  return !!(dep.proxy || dep.contract);
+}
+
+async function readCollectionEvmMintedCount(collection, chainKey) {
+  const dep = nftCollectionDeployment(collection.slug, chainKey);
+  const contractAddr = process.env[`NFT_${collection.envKey}_${String(chainKey).toUpperCase()}_CONTRACT`]
+    || dep.proxy
+    || dep.contract;
+  if (!contractAddr) return null;
+  try {
+    const { createPublicClient, http } = await import('viem');
+    const viemChains = await import('viem/chains');
+    const monadChain = {
+      id: 143,
+      name: 'Monad',
+      nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
+      rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
+    };
+    const chain = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad: monadChain }[chainKey];
+    const rpcUrl = process.env[`NFT_${collection.envKey}_${String(chainKey).toUpperCase()}_RPC_URL`]
+      || GAME_SHOP_EVM_CHAINS[chainKey]?.rpcUrl?.()
+      || 'https://mainnet.base.org';
+    const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+    return await readEvmCurrentSupplyOrTotalMinted({
+      address: contractAddr,
+      publicClient,
+      chainKey,
+      deployment: dep,
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function readCollectionSolanaMintedCount(collection) {
+  const dep = nftCollectionDeployment(collection.slug, 'solana');
+  const collectionAddr = dep.collection;
+  if (!collectionAddr) return null;
+  try {
+    const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+    const { mplCore, fetchCollection } = await import('@metaplex-foundation/mpl-core');
+    const { publicKey } = await import('@metaplex-foundation/umi');
+    const col = await withSolanaRpcFallback(async (rpcUrl) => {
+      const umi = createUmi(rpcUrl).use(mplCore());
+      return fetchCollection(umi, publicKey(collectionAddr));
+    }, {
+      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([dep.rpcUrl])),
+      label: `${collection.slug} Solana collection supply read`,
+    });
+    if (Number.isFinite(Number(col.currentSize))) return Number(col.currentSize);
+    const minted = Number(col.numMinted ?? 0);
+    const burned = Number(col.numBurned ?? 0);
+    return Math.max(0, minted - burned);
+  } catch {
+    try {
+      const r = await readSolanaNftSupply(dep);
+      return Number.isFinite(r?.totalMinted) ? r.totalMinted : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function readCollectionAptosMintedCount(collection) {
+  const dep = nftCollectionDeployment(collection.slug, 'aptos');
+  if (!dep?.module) return null;
+  try {
+    const { Aptos, AptosConfig, Network } = await import('@aptos-labs/ts-sdk');
+    const fullnode = process.env.NFT_APTOS_RPC_URL || process.env.APTOS_RPC_URL || 'https://fullnode.mainnet.aptoslabs.com/v1';
+    const aptos = new Aptos(new AptosConfig({ network: Network.MAINNET, fullnode }));
+    const result = await aptos.view({
+      payload: { function: `${dep.module}::current_supply`, functionArguments: [] },
+    });
+    return Number(result?.[0] || 0);
+  } catch {
+    return Number.isFinite(Number(dep.totalMinted)) ? Number(dep.totalMinted) : null;
+  }
+}
+
+async function readCollectionGlobalSupply(collection) {
+  const [base, arbitrum, monad, aptos, solana] = await Promise.all([
+    readCollectionEvmMintedCount(collection, 'base'),
+    readCollectionEvmMintedCount(collection, 'arbitrum'),
+    readCollectionEvmMintedCount(collection, 'monad'),
+    readCollectionAptosMintedCount(collection),
+    readCollectionSolanaMintedCount(collection),
+  ]);
+  const raw = { base, arbitrum, monad, aptos, solana };
+  const perChain = {
+    base: Number.isFinite(Number(base)) ? Number(base) : 0,
+    arbitrum: Number.isFinite(Number(arbitrum)) ? Number(arbitrum) : 0,
+    monad: Number.isFinite(Number(monad)) ? Number(monad) : 0,
+    aptos: Number.isFinite(Number(aptos)) ? Number(aptos) : 0,
+    solana: Number.isFinite(Number(solana)) ? Number(solana) : 0,
+  };
+  const unknownChains = Object.entries(raw)
+    .filter(([chain, value]) => value == null && nftCollectionChainHasDeployment(collection, chain))
+    .map(([chain]) => chain);
+  const total = Object.values(perChain).reduce((sum, value) => sum + value, 0);
+  return {
+    collection: collection.slug,
+    total,
+    cap: collection.maxSupply,
+    remaining: Math.max(0, collection.maxSupply - total),
+    perChain,
+    unknownChains,
+  };
+}
+
+async function assertCollectionGlobalSupplyAvailable(collection, quantity) {
+  const supply = await readCollectionGlobalSupply(collection);
+  if (supply.unknownChains?.length) {
+    const err = new Error(`Supply temporarily unavailable for ${supply.unknownChains.join(', ')}. Try again shortly.`);
+    err.status = 503;
+    throw err;
+  }
+  const wanted = Number(quantity) || 1;
+  if (supply.total + wanted > collection.maxSupply) {
+    const err = new Error(`Sold out: only ${Math.max(0, collection.maxSupply - supply.total)} of ${collection.maxSupply} ${collection.name} NFTs remain across all chains`);
+    err.status = 409;
+    throw err;
+  }
+  return supply;
+}
+
+function nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level) {
+  const lvl = normalizeNftLevel(level);
+  const chain = NFT_COLLECTION_CHAIN_LABELS[chainKey] || chainKey;
+  const imageUrl = nftCollectionImageUrl(req, collection, lvl);
+  const idValue = /^\d+$/.test(String(tokenId)) ? Number(tokenId) : String(tokenId);
+  return attachCollectionRoyaltyMetadata({
+    name: `${collection.name} #${tokenId}`,
+    symbol: collection.symbol,
+    description: collection.description,
+    image: imageUrl,
+    external_url: nftCollectionExternalUrl(req, collection),
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Collection', value: collection.name },
+      { trait_type: 'Character', value: collection.character },
+      { trait_type: 'Chain', value: chain },
+      { trait_type: 'Edition', value: idValue },
+      { trait_type: 'Level', value: lvl, display_type: 'number' },
+      { trait_type: 'Stars', value: lvl, display_type: 'number' },
+      { trait_type: 'Max Supply', value: collection.maxSupply },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, lvl)) }],
+    },
+  }, collection, chainKey);
+}
+
+function nftCollectionHiddenMetadata(req, collection, chainKey) {
+  const imageUrl = nftCollectionImageUrl(req, collection, 1);
+  const chain = NFT_COLLECTION_CHAIN_LABELS[chainKey] || chainKey;
+  return attachCollectionRoyaltyMetadata({
+    name: collection.name,
+    symbol: collection.symbol,
+    description: collection.description,
+    image: imageUrl,
+    external_url: nftCollectionExternalUrl(req, collection),
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Collection', value: collection.name },
+      { trait_type: 'Character', value: collection.character },
+      { trait_type: 'Chain', value: chain },
+      { trait_type: 'Max Supply', value: collection.maxSupply },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: imageUrl, type: nftCollectionImageMime(nftCollectionImagePath(collection, 1)) }],
+    },
+  }, collection, chainKey);
+}
+
+function sendNftCollectionImage(req, res, levelRaw = 1) {
+  const collection = nftCollectionConfig(req.params.collectionSlug);
+  if (!collection) return res.status(404).json({ error: 'collection not found' });
+  const level = normalizeNftLevel(levelRaw);
+  const filePath = nftCollectionImagePath(collection, level);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: `level ${level} image missing` });
+  res.set('Cache-Control', process.env.NFT_IMAGE_CACHE || 'public, max-age=300');
+  res.type(nftCollectionImageMime(filePath));
+  return res.sendFile(filePath);
+}
+
+function sendNftCollectionContractMetadata(req, res) {
+  const collection = nftCollectionConfig(req.params.collectionSlug);
+  const chainKey = String(req.params.chain || '').toLowerCase();
+  if (!collection || !NFT_COLLECTION_CHAIN_LABELS[chainKey]) return res.status(404).json({ error: 'collection not found' });
+  const imageUrl = nftCollectionImageUrl(req, collection, 1);
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  return res.json({
+    name: collection.name,
+    symbol: collection.symbol,
+    description: collection.description,
+    image: imageUrl,
+    external_link: nftCollectionExternalUrl(req, collection),
+    seller_fee_basis_points: nftCollectionSellerFeeBasisPoints(collection, chainKey),
+    fee_recipient: nftCollectionFeeRecipient(collection, chainKey),
+  });
+}
+
+function sendNftCollectionCollectionMetadata(req, res) {
+  const collection = nftCollectionConfig(req.params.collectionSlug);
+  const chainKey = String(req.params.chain || '').toLowerCase();
+  if (!collection || !NFT_COLLECTION_CHAIN_LABELS[chainKey]) return res.status(404).json({ error: 'collection not found' });
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  return res.json(nftCollectionHiddenMetadata(req, collection, chainKey));
+}
+
+async function sendNftCollectionTokenMetadata(req, res, rawTokenId) {
+  const collection = nftCollectionConfig(req.params.collectionSlug);
+  const chainKey = String(req.params.chain || '').toLowerCase();
+  if (!collection || !NFT_COLLECTION_CHAIN_LABELS[chainKey]) return res.status(404).json({ error: 'collection not found' });
+
+  const tokenId = String(rawTokenId || '').replace(/\.json$/i, '');
+  const isSolanaAsset = chainKey === 'solana' && SOLANA_WALLET_RE.test(tokenId);
+  if (!/^\d+$/.test(tokenId) && !isSolanaAsset) return res.status(400).json({ error: 'bad token id' });
+  if (/^\d+$/.test(tokenId)) {
+    const id = Number(tokenId);
+    if (id < 1 || id > collection.maxSupply) return res.status(404).json({ error: 'token metadata not found' });
+  }
+
+  let level = normalizeNftLevel(req.query.level || 1);
+  if (/^\d+$/.test(tokenId)) {
+    level = await readCollectionNftLevelCached(collection, chainKey, tokenId);
+  }
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  return res.json(nftCollectionTokenMetadata(req, collection, chainKey, tokenId, level));
+}
+
 function sendSolanaToken2022Metadata(req, res) {
   const mint = String(req.params.mint || '').trim();
   if (!SOLANA_WALLET_RE.test(mint)) return res.status(400).json({ error: 'bad mint' });
@@ -334,6 +716,34 @@ function sendSolanaToken2022Metadata(req, res) {
       { trait_type: 'Collection', value: solanaToken2022CollectionId() },
       { trait_type: 'Level', value: level, display_type: 'number' },
       { trait_type: 'Stars', value: level, display_type: 'number' },
+      { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
+    ],
+    properties: {
+      category: 'image',
+      files: [{ uri: imageUrl, type: 'image/jpeg' }],
+    },
+  }, 'Solana'));
+}
+
+function sendSolanaBridgedCoreMetadata(req, res) {
+  const level = normalizeNftLevel(req.query.level || 1);
+  const imageUrl = nftImageUrl(req, level);
+  const sourceRef = String(req.query.src || '').slice(0, 80);
+  res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
+  res.json(attachRoyaltyMetadata({
+    name: `${process.env.NFT_NAME || 'Demon King'} L${level}`,
+    symbol: process.env.NFT_SYMBOL || 'DMNK',
+    description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
+    image: imageUrl,
+    external_url: process.env.NFT_EXTERNAL_URL || `${nftPublicBase(req)}/`,
+    attributes: [
+      { trait_type: 'Game', value: 'Clash of Perps' },
+      { trait_type: 'Character', value: 'Demon King' },
+      { trait_type: 'Chain', value: 'Solana' },
+      { trait_type: 'Standard', value: 'Metaplex Core' },
+      { trait_type: 'Level', value: level, display_type: 'number' },
+      { trait_type: 'Stars', value: level, display_type: 'number' },
+      ...(sourceRef ? [{ trait_type: 'Bridge Source', value: sourceRef }] : []),
       { trait_type: 'Max Supply', value: NFT_METADATA_SUPPLY_LABEL },
     ],
     properties: {
@@ -455,16 +865,11 @@ function sendAptosCollectionMetadata(req, res) {
 }
 
 function nftBaseShopDeployment() {
-  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-v2-mainnet.json'))
-    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-mainnet.json'))
-    || {};
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-shop-v2-mainnet.json')) || {};
 }
 
 function nftBaseDeployment() {
-  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v3-mainnet.json'))
-    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v2-mainnet.json'))
-    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-mainnet.json'))
-    || {};
+  return readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'base-v3-mainnet.json')) || {};
 }
 
 function decimalToUnits(value, decimals) {
@@ -2232,8 +2637,7 @@ async function readEvmGenericNftMintedCount(chainKey) {
   // For Arbitrum/Monad — same V3 contract pattern as Base. Prefers V3.2+
   // currentSupply() so bridge round-trips net to zero; falls back to
   // totalMinted() on older impls.
-  const deployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`))
-    || readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-mainnet.json`)) || {};
+  const deployment = readJsonIfExists(path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`)) || {};
   const contractAddr = process.env[`NFT_${chainKey.toUpperCase()}_CONTRACT`] || deployment.proxy || deployment.contract;
   if (!contractAddr) return null;
   try {
@@ -2733,7 +3137,7 @@ function evmNftShopDeployment(chainKey) {
 }
 
 // Generic EVM NFT quote for any chain where we've deployed
-// DemonKingBaseV2 + DemonKingBaseShopV2 (Arbitrum, Monad — Base stays on
+// DemonKingBase V3 proxy + DemonKingBaseShopV2 (Arbitrum, Monad — Base stays on
 // its dedicated route for back-compat with the client). The flow + EIP-712
 // signing payload are identical to Base's; only the chainId, verifying
 // contract, and USDC mint differ per chain.
@@ -2869,6 +3273,332 @@ router.post('/nft/evm/quote', async (req, res) => {
 // backwards compatibility; APT uses the payment-aware entrypoint added in the
 // v3.3 module upgrade.
 // ────────────────────────────────────────────────────────────────────
+router.get('/nft/:collectionSlug/mint/config', async (req, res) => {
+  try {
+    const collection = nftCollectionConfig(req.params.collectionSlug);
+    if (!collection) return res.status(404).json({ error: 'collection not found' });
+    const supply = await readCollectionGlobalSupply(collection).catch(() => null);
+    const evm = {};
+    for (const chainKey of ['base', 'arbitrum', 'monad']) {
+      const dep = nftCollectionDeployment(collection.slug, chainKey);
+      const shop = nftCollectionShopDeployment(collection, chainKey);
+      evm[chainKey] = {
+        chainId: GAME_SHOP_EVM_CHAINS[chainKey]?.chainId || null,
+        nft: dep.proxy || dep.contract || null,
+        shop: shop.shop || shop.proxy || null,
+        saleActive: !!shop.saleActive,
+        usdcToken: shop.usdcToken || null,
+        clashToken: shop.clashToken || null,
+        clashReady: !!shop.clashToken && !/^0x0{40}$/i.test(String(shop.clashToken)),
+        baseUsdPriceE6: String(shop.baseUsdPriceE6 || '5500000'),
+        clashUsdPriceE6: String(shop.clashUsdPriceE6 || '4000000'),
+        supply: supply ? {
+          totalMinted: Number(supply.perChain?.[chainKey] || 0),
+          maxSupply: collection.maxSupply,
+          remaining: Math.max(0, collection.maxSupply - Number(supply.perChain?.[chainKey] || 0)),
+        } : null,
+      };
+    }
+    const aptos = nftCollectionDeployment(collection.slug, 'aptos');
+    const solana = nftCollectionDeployment(collection.slug, 'solana');
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      collection: {
+        slug: collection.slug,
+        name: collection.name,
+        symbol: collection.symbol,
+        maxSupply: collection.maxSupply,
+      },
+      metadata: {
+        image: `${nftPublicBase(req)}/api/nft/${collection.slug}/image/1`,
+        baseTokenUri: `${nftPublicBase(req)}/api/nft/${collection.slug}/base/`,
+        solanaCollectionUri: `${nftPublicBase(req)}/api/nft/${collection.slug}/solana/collection`,
+        solanaHiddenUri: `${nftPublicBase(req)}/api/nft/${collection.slug}/solana/hidden`,
+      },
+      global: supply,
+      evm,
+      aptos: {
+        module: aptos.module || null,
+        collection: aptos.collection || null,
+        resourceAccount: aptos.resourceAccount || null,
+        saleActive: !!aptos.saleActive,
+        usdcMetadata: aptos.usdcMetadata || null,
+        aptMetadata: '0x000000000000000000000000000000000000000000000000000000000000000a',
+        mintUsdPriceE6: String(aptos.mintUsdPriceE6 || '5500000'),
+        supply: supply ? {
+          totalMinted: Number(supply.perChain?.aptos || 0),
+          maxSupply: collection.maxSupply,
+          remaining: Math.max(0, collection.maxSupply - Number(supply.perChain?.aptos || 0)),
+        } : null,
+      },
+      solana: {
+        collection: solana.collection || null,
+        candyMachine: solana.candyMachine || null,
+        candyGuard: solana.candyGuard || null,
+        saleActive: !!solana.saleActive,
+        paymentGroups: solana.paymentGroups || solana.groups || null,
+        priceLamports: solana.priceLamports || null,
+        supply: supply ? {
+          totalMinted: Number(supply.perChain?.solana || 0),
+          maxSupply: collection.maxSupply,
+          remaining: Math.max(0, collection.maxSupply - Number(supply.perChain?.solana || 0)),
+        } : null,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err?.message || 'config failed').slice(0, 180) });
+  }
+});
+
+async function handleAptosNftQuote(req, res, collection = null) {
+  try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT quote requests. Try again shortly.' });
+    }
+
+    const aptosDeploy = collection
+      ? nftCollectionDeployment(collection.slug, 'aptos')
+      : readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json'));
+    const label = collection?.name || 'Aptos NFT';
+    if (!aptosDeploy?.module) {
+      return res.status(503).json({ error: `${label} Aptos module not deployed` });
+    }
+    const requireActive = collection
+      ? (process.env[`NFT_${collection.envKey}_APTOS_REQUIRE_ACTIVE_QUOTE`] === '1'
+        || process.env[`NFT_${collection.envKey}_REQUIRE_ACTIVE_QUOTE`] === '1'
+        || process.env.NFT_COLLECTION_REQUIRE_ACTIVE_QUOTE === '1')
+      : process.env.NFT_APTOS_REQUIRE_ACTIVE_QUOTE === '1';
+    if (!aptosDeploy.saleActive && requireActive) {
+      return res.status(423).json({ error: `${label} Aptos sale is not active` });
+    }
+    const { signAptosMintQuote, signAptosMintQuotePayment } = require('./bridge_helpers');
+
+    const buyerRaw = String(req.body?.buyer || '').trim();
+    if (!/^0x[0-9a-fA-F]{1,64}$/.test(buyerRaw)) {
+      return res.status(400).json({ error: 'buyer must be a 0x-prefixed Aptos address' });
+    }
+    const buyer = '0x' + buyerRaw.replace(/^0x/, '').padStart(64, '0').toLowerCase();
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
+    const payment = String(req.body?.payment || 'usdc').toLowerCase();
+    if (payment !== 'usdc' && payment !== 'apt') {
+      return res.status(400).json({ error: 'Unsupported Aptos NFT payment (use usdc or apt)' });
+    }
+
+    if (collection) {
+      await assertCollectionGlobalSupplyAvailable(collection, Number(quantity));
+    } else {
+      await assertGlobalSupplyAvailable(Number(quantity));
+    }
+
+    const usdPriceE6 = BigInt(aptosDeploy.mintUsdPriceE6 || (collection ? '5500000' : '8900000'));
+    const usdAmount = unitsToDecimalString(usdPriceE6 * quantity, 6);
+    const aptMetadata = '0x000000000000000000000000000000000000000000000000000000000000000a';
+    let decimals;
+    let paymentMetadata;
+    let unitPrice;
+    let totalAmount;
+    let priceSource;
+    if (payment === 'usdc') {
+      if (!aptosDeploy.usdcMetadata) {
+        return res.status(503).json({ error: 'Aptos USDC metadata is not configured' });
+      }
+      decimals = 6;
+      paymentMetadata = aptosDeploy.usdcMetadata;
+      unitPrice = usdPriceE6;
+      totalAmount = unitPrice * quantity;
+      priceSource = 'USDC 1:1 USD';
+    } else {
+      decimals = 8;
+      paymentMetadata = aptMetadata;
+      const aptUsd = await fetchNftUsdPrice('apt').catch(() => null);
+      if (!aptUsd) return res.status(503).json({ error: 'APT price unavailable; try USDC' });
+      totalAmount = usdToNativeUnits(usdAmount, aptUsd, decimals);
+      unitPrice = totalAmount / quantity;
+      priceSource = `APT/USD ${aptUsd}`;
+    }
+
+    const ttlSeconds = Math.max(60, Math.min(900, Number(process.env.NFT_APTOS_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+    const nonce = '0x' + crypto.randomBytes(16).toString('hex');
+    const accountHash = '0x';
+
+    const signature = payment === 'usdc'
+      ? await signAptosMintQuote({ buyerAddress: buyer, usdcAmount: totalAmount, quantity, nonce, deadline, accountHash })
+      : await signAptosMintQuotePayment({ buyerAddress: buyer, paymentMetadata, paymentAmount: totalAmount, quantity, nonce, deadline, accountHash });
+
+    const functionId = payment === 'usdc'
+      ? `${aptosDeploy.module}::mint_with_quote`
+      : `${aptosDeploy.module}::mint_with_quote_payment`;
+    const functionArguments = payment === 'usdc'
+      ? [totalAmount.toString(), quantity.toString(), nonce, deadline.toString(), accountHash, signature]
+      : [paymentMetadata, totalAmount.toString(), quantity.toString(), nonce, deadline.toString(), accountHash, signature];
+
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      collection: collection?.slug || 'demonking',
+      chain: 'aptos',
+      chainId: 1,
+      module: aptosDeploy.module,
+      shop: aptosDeploy.module,
+      usdcMetadata: aptosDeploy.usdcMetadata,
+      aptMetadata,
+      payment,
+      paymentMetadata,
+      decimals,
+      priceSource,
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: totalAmount.toString(),
+      totalFormatted: unitsToDecimalString(totalAmount, decimals),
+      usdPriceE6: usdPriceE6.toString(),
+      callData: { functionId, typeArguments: [], functionArguments },
+      signature,
+      nonce,
+      deadline: deadline.toString(),
+    });
+  } catch (err) {
+    const message = err?.message || 'aptos quote failed';
+    const status = err?.status === 409 ? 409 : /address|chain|collection/i.test(message) ? 400 : 500;
+    return res.status(status).json({ error: message.slice(0, 180) });
+  }
+}
+
+router.post('/nft/:collectionSlug/:chain/quote', async (req, res) => {
+  try {
+    const rate = checkNftQuoteRateLimit(req);
+    if (!rate.ok) {
+      res.set('Retry-After', String(rate.retryAfterSec));
+      return res.status(429).json({ error: 'Too many NFT quote requests. Try again shortly.' });
+    }
+
+    const collection = nftCollectionConfig(req.params.collectionSlug);
+    const chainKey = String(req.params.chain || '').toLowerCase();
+    if (collection && chainKey === 'aptos') {
+      return handleAptosNftQuote(req, res, collection);
+    }
+    const evmConfig = GAME_SHOP_EVM_CHAINS[chainKey];
+    if (!collection || !evmConfig) return res.status(404).json({ error: 'collection or chain not found' });
+
+    const shopDeployment = nftCollectionShopDeployment(collection, chainKey);
+    const shopAddress = shopDeployment.shop || shopDeployment.proxy;
+    if (!shopAddress) return res.status(503).json({ error: `${collection.name} ${chainKey} shop is not deployed yet` });
+    const requireActive = process.env[`NFT_${collection.envKey}_REQUIRE_ACTIVE_QUOTE`] === '1'
+      || process.env.NFT_COLLECTION_REQUIRE_ACTIVE_QUOTE === '1';
+    if (!shopDeployment.saleActive && requireActive) {
+      return res.status(423).json({ error: `${collection.name} ${chainKey} sale is not active` });
+    }
+
+    const { getAddress, zeroAddress } = await import('viem');
+    const buyer = getAddress(String(req.body?.buyer || ''));
+    const payment = String(req.body?.payment || '').toLowerCase();
+    const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, 10));
+    await assertCollectionGlobalSupplyAvailable(collection, Number(quantity));
+
+    const ttlSeconds = Math.max(30, Math.min(900, Number(process.env.NFT_COLLECTION_QUOTE_TTL_SECONDS || process.env.NFT_EVM_QUOTE_TTL_SECONDS || 300)));
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + ttlSeconds);
+    const nonce = BigInt(`0x${crypto.randomBytes(16).toString('hex')}`);
+
+    const baseUsdPriceE6 = BigInt(shopDeployment.baseUsdPriceE6 || '5500000');
+    const clashUsdPriceE6 = BigInt(shopDeployment.clashUsdPriceE6 || '4000000');
+    let paymentToken = zeroAddress;
+    let unitPrice = 0n;
+    let decimals = 18;
+    let usdPriceE6 = baseUsdPriceE6;
+    let priceSource = 'fixed';
+
+    const nativeSpec = evmConfig.payments?.[evmConfig.nativeSymbol.toLowerCase()];
+    if (payment === 'native' || payment === evmConfig.nativeSymbol.toLowerCase()) {
+      paymentToken = zeroAddress;
+      decimals = nativeSpec?.decimals ?? evmConfig.nativeDecimals ?? 18;
+      const assetUsd = await fetchNftUsdPrice(nativeSpec?.oracleAsset || 'eth');
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), assetUsd, decimals);
+      priceSource = `${evmConfig.nativeSymbol}/USD ${assetUsd}`;
+    } else if (payment === 'usdc') {
+      if (!shopDeployment.usdcToken || /^0x0{40}$/i.test(shopDeployment.usdcToken)) {
+        return res.status(400).json({ error: 'USDC payment not configured for this collection/chain' });
+      }
+      paymentToken = getAddress(shopDeployment.usdcToken);
+      decimals = Number(process.env[`NFT_${collection.envKey}_${chainKey.toUpperCase()}_USDC_DECIMALS`]
+        || process.env[`NFT_${chainKey.toUpperCase()}_USDC_DECIMALS`]
+        || evmConfig.payments?.usdc?.decimals
+        || 6);
+      unitPrice = usdPriceE6 * 10n ** BigInt(Math.max(0, decimals - 6));
+      priceSource = 'USDC 1:1 USD';
+    } else if (payment === 'cop' || payment === 'clash') {
+      if (!shopDeployment.clashToken || /^0x0{40}$/i.test(shopDeployment.clashToken)) {
+        return res.status(409).json({ error: 'CoP payment not configured for this collection/chain' });
+      }
+      const clashUsd = await fetchClashUsdPrice({ clashToken: shopDeployment.clashToken });
+      paymentToken = getAddress(shopDeployment.clashToken);
+      decimals = Number(process.env[`NFT_${collection.envKey}_${chainKey.toUpperCase()}_CLASH_DECIMALS`]
+        || process.env[`NFT_${chainKey.toUpperCase()}_CLASH_DECIMALS`]
+        || process.env.NFT_BASE_CLASH_DECIMALS
+        || 18);
+      usdPriceE6 = clashUsdPriceE6;
+      unitPrice = usdToNativeUnits(unitsToDecimalString(usdPriceE6, 6), clashUsd.price, decimals);
+      priceSource = `CoP/USD ${clashUsd.price} (${clashUsd.source})`;
+    } else {
+      return res.status(400).json({ error: `Unsupported payment for ${collection.name} ${chainKey}: ${payment}` });
+    }
+
+    const account = await parseNftEvmAccount();
+    const domain = {
+      name: shopDeployment.eip712Name || `ClashCollectionShop:${collection.slug}:${chainKey}`,
+      version: shopDeployment.eip712Version || '1',
+      chainId: evmConfig.chainId,
+      verifyingContract: getAddress(shopAddress),
+    };
+    const types = {
+      MintQuote: [
+        { name: 'buyer', type: 'address' },
+        { name: 'paymentToken', type: 'address' },
+        { name: 'unitPrice', type: 'uint256' },
+        { name: 'quantity', type: 'uint256' },
+        { name: 'usdPriceE6', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    };
+    const message = { buyer, paymentToken, unitPrice, quantity, usdPriceE6, nonce, deadline };
+    const signature = await account.signTypedData({ domain, types, primaryType: 'MintQuote', message });
+    const total = unitPrice * quantity;
+
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      collection: collection.slug,
+      chain: chainKey,
+      chainId: evmConfig.chainId,
+      shop: getAddress(shopAddress),
+      payment,
+      priceSource,
+      decimals,
+      quantity: quantity.toString(),
+      unitPrice: unitPrice.toString(),
+      unitPriceFormatted: unitsToDecimalString(unitPrice, decimals),
+      total: total.toString(),
+      totalFormatted: unitsToDecimalString(total, decimals),
+      usdPriceE6: usdPriceE6.toString(),
+      quote: {
+        buyer,
+        paymentToken,
+        unitPrice: unitPrice.toString(),
+        quantity: quantity.toString(),
+        usdPriceE6: usdPriceE6.toString(),
+        nonce: nonce.toString(),
+        deadline: deadline.toString(),
+      },
+      signature,
+    });
+  } catch (err) {
+    const message = err?.message || 'quote failed';
+    const status = err?.status === 409 ? 409 : /address|chain|collection/i.test(message) ? 400 : 500;
+    return res.status(status).json({ error: message.slice(0, 180) });
+  }
+});
+
 router.post('/nft/aptos/quote', async (req, res) => {
   try {
     const rate = checkNftQuoteRateLimit(req);
@@ -3082,10 +3812,31 @@ router.get('/nft/solana/hidden.json', (req, res) => {
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
   res.json(nftHiddenMetadata(req, 'Solana'));
 });
+router.get('/nft/solana/bridged', sendSolanaBridgedCoreMetadata);
+router.get('/nft/solana/bridged.json', sendSolanaBridgedCoreMetadata);
 router.get('/nft/solana/token2022/:mint', sendSolanaToken2022Metadata);
 router.get('/nft/solana/token2022/:mint.json', sendSolanaToken2022Metadata);
 router.get('/nft/solana/:tokenId', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
 router.get('/nft/solana/:tokenId.json', (req, res) => sendNftMetadata(req, res, 'Solana', req.params.tokenId));
+
+router.get('/nft/:collectionSlug/image', (req, res) => sendNftCollectionImage(req, res, 1));
+router.get('/nft/:collectionSlug/image/:level', (req, res) => sendNftCollectionImage(req, res, req.params.level));
+router.get('/nft/:collectionSlug/:chain/contract', sendNftCollectionContractMetadata);
+router.get('/nft/:collectionSlug/:chain/contract.json', sendNftCollectionContractMetadata);
+router.get('/nft/:collectionSlug/:chain/collection', sendNftCollectionCollectionMetadata);
+router.get('/nft/:collectionSlug/:chain/collection.json', sendNftCollectionCollectionMetadata);
+router.get('/nft/:collectionSlug/:chain/hidden', sendNftCollectionCollectionMetadata);
+router.get('/nft/:collectionSlug/:chain/hidden.json', sendNftCollectionCollectionMetadata);
+router.get('/nft/:collectionSlug/:chain/bridged', (req, res) => sendNftCollectionTokenMetadata(req, res, req.query.asset || req.query.id || '1'));
+router.get('/nft/:collectionSlug/:chain/bridged.json', (req, res) => sendNftCollectionTokenMetadata(req, res, req.query.asset || req.query.id || '1'));
+router.get('/nft/:collectionSlug/:chain/:tokenId', (req, res, next) => {
+  if (String(req.params.collectionSlug || '').toLowerCase() === 'owned') return next();
+  return sendNftCollectionTokenMetadata(req, res, req.params.tokenId);
+});
+router.get('/nft/:collectionSlug/:chain/:tokenId.json', (req, res, next) => {
+  if (String(req.params.collectionSlug || '').toLowerCase() === 'owned') return next();
+  return sendNftCollectionTokenMetadata(req, res, req.params.tokenId);
+});
 
 // ---------- Game shop: utility resources granted server-side ----------
 router.get('/shop/config', async (req, res) => {
@@ -7805,6 +8556,7 @@ router.post('/buildings/:id/unload-troops', auth, (req, res) => {
 // Bit 1 (2):  army tutorial (port, ship, troops)
 // Bit 2 (4):  attack tutorial (first battle guide)
 // Bit 3 (8):  trading tutorial
+// Bit 4 (16): YouTube video guide
 
 // GET current tutorial state
 router.get('/tutorial', auth, (req, res) => {
@@ -7812,10 +8564,10 @@ router.get('/tutorial', auth, (req, res) => {
   res.json({ tutorial_flags: player?.tutorial_flags || 0 });
 });
 
-// POST mark a tutorial phase as complete (flag is a bitmask: 1,2,4,8)
+// POST mark a tutorial phase as complete (flag is a bitmask: 1,2,4,8,16)
 router.post('/tutorial/complete', auth, (req, res) => {
   const { flag } = req.body;
-  if (!Number.isInteger(flag) || flag < 1 || flag > 15) return res.status(400).json({ error: 'Invalid flag' });
+  if (!Number.isInteger(flag) || flag < 1 || flag > 31) return res.status(400).json({ error: 'Invalid flag' });
   const player = db.db.prepare('SELECT tutorial_flags FROM players WHERE id = ?').get(req.player.id);
   const current = player?.tutorial_flags || 0;
   const updated = current | flag;
@@ -7896,70 +8648,6 @@ function volumeGoldForDex(dex, usdVolume) {
   if (!Number.isFinite(volume) || volume <= 0) return 0;
   const rate = dex === 'decibel' ? GOLD_PER_USD_VOLUME_DECIBEL : GOLD_PER_USD_VOLUME;
   return Math.floor(volume * rate);
-}
-
-function decibelTradeMs(row) {
-  const ms = Date.parse(`${String(row?.created_at || '').replace(' ', 'T')}Z`);
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function decibelTradesProbablyDuplicate(a, b) {
-  if (!a || !b) return false;
-  if (String(a.symbol || '').toUpperCase() !== String(b.symbol || '').toUpperCase()) return false;
-  if (String(a.side || '').toLowerCase() !== String(b.side || '').toLowerCase()) return false;
-  const av = Number(a.notional_usd);
-  const bv = Number(b.notional_usd);
-  if (!Number.isFinite(av) || !Number.isFinite(bv) || av <= 0 || bv <= 0) return false;
-  const drift = Math.abs(av - bv) / Math.max(av, bv, 1);
-  if (drift > 0.35) return false;
-  const ams = decibelTradeMs(a);
-  const bms = decibelTradeMs(b);
-  return ams > 0 && bms > 0 && Math.abs(ams - bms) <= 5 * 60 * 1000;
-}
-
-function isDecibelLimitFillRewardRow(row) {
-  return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
-}
-
-function isDecibelCloseRewardRow(row) {
-  return String(row?.side || '').toLowerCase().startsWith('close_');
-}
-
-function canFuzzyDedupeDecibelRewardRows(candidate, row) {
-  const candidateSource = String(candidate?.verified_source || '');
-  const rowSource = String(row?.verified_source || '');
-  const candidateIsLimitFill = isDecibelLimitFillRewardRow(candidate);
-  const rowIsLimitFill = isDecibelLimitFillRewardRow(row);
-
-  if (candidateIsLimitFill && rowIsLimitFill) return false;
-  if (candidateSource === 'server' && rowSource === 'server') return false;
-  if (candidateSource !== rowSource) return true;
-  return candidateSource === 'worker' && candidateIsLimitFill !== rowIsLimitFill;
-}
-
-function markDuplicateDecibelWorkerTrades(fdb, playerId, lastTradeId, rows) {
-  if (!rows?.length) return rows || [];
-  const maxId = rows.reduce((m, row) => Math.max(m, Number(row.id) || 0), Number(lastTradeId || 0));
-  const context = fdb.prepare(`
-    SELECT id, symbol, side, notional_usd, verified_source, client_order_id, created_at
-    FROM trade_history
-    WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
-      AND verified_source IN ('server', 'worker')
-      AND id <= ? AND id >= ?
-    ORDER BY id ASC
-  `).all(playerId, maxId, Math.max(0, Number(lastTradeId || 0) - 250));
-  return rows.map((row) => {
-    const duplicate = context.some((candidate) => {
-      if (Number(candidate.id) >= Number(row.id)) return false;
-      if (!canFuzzyDedupeDecibelRewardRows(candidate, row)) return false;
-      if (isDecibelCloseRewardRow(row) && isDecibelCloseRewardRow(candidate)) {
-        return decibelTradesProbablyDuplicate(candidate, row);
-      }
-      if (row.verified_source !== 'worker') return false;
-      return decibelTradesProbablyDuplicate(candidate, row);
-    });
-    return duplicate ? { ...row, reward_duplicate: 1 } : row;
-  });
 }
 
 function sqliteUtcMs(value) {
@@ -8803,7 +9491,7 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
     let hyperliquidWalletRowsAvailable = 0;
     const rewardSettleDelaySql = `-${TRADE_REWARD_SETTLE_DELAY_SECONDS} seconds`;
     const sourceWhere = dex === 'decibel'
-      ? "AND verified_source IN ('server', 'worker')"
+      ? "AND verified_source = 'server'"
       : dex === 'monad'
         ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
         : dex === 'hyperliquid'
@@ -8817,11 +9505,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       ? `hyperliquid:${String(wallet).toLowerCase()}:%`
       : null;
     try {
-      // Avantis/GMX stay worker-only. Decibel uses server rows for immediate
-      // market/close claims and worker rows for later limit-order fills. The
-      // worker can also see the same market position a few seconds after the
-      // server row, so duplicate worker rows are filtered below while still
-      // advancing the cursor.
+      // Avantis/GMX stay worker-only. Decibel rewards count only trades routed
+      // through the Clash app/server signer; worker rows may include external
+      // Decibel activity and therefore cannot drive rewards or tournament volume.
       if (hyperliquidWalletPrefix) {
         // Hyperliquid fill client_order_id is wallet-scoped. This fallback
         // lets a user keep rewards if the same EVM wallet was re-registered
@@ -8863,14 +9549,6 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold] ${dex} verified trade query failed:`, e.message);
       return res.json({ gold: 0, reason: 'Futures trade verifier unavailable - try again later', dex });
     }
-    if (dex === 'decibel' && newTrades.length) {
-      try {
-        newTrades = markDuplicateDecibelWorkerTrades(fdb, req.player.id, reward.last_trade_id || 0, newTrades);
-      } catch (e) {
-        console.warn('[claim-gold decibel] duplicate worker filter failed:', e.message);
-      }
-    }
-
     let settlingTrades = { n: 0, first_at: null };
     try {
       if (hyperliquidWalletPrefix) {
@@ -8900,35 +9578,9 @@ router.post('/trading/claim-gold', auth, async (req, res) => {
       console.warn(`[claim-gold ${dex}] settling trade query failed:`, e.message);
     }
 
-    let decibelPnlRows = [];
-    if (dex === 'decibel') {
-      try {
-        decibelPnlRows = fdb.prepare(`
-          SELECT id, symbol, side, amount, notional_usd, pnl, status, verified_source, client_order_id, created_at
-          FROM trade_history
-          WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
-            AND verified_source = 'worker'
-            AND side IN ('close_long', 'close_short')
-            AND pnl IS NOT NULL AND pnl != ''
-            AND notional_usd >= 10
-          ORDER BY id ASC
-          LIMIT 1000
-        `).all(req.player.id);
-      } catch (e) {
-        console.warn('[claim-gold decibel] delayed PnL sync query failed:', e.message);
-      }
-    }
-    const syncDecibelTournamentPnl = () => {
-      if (dex !== 'decibel' || !decibelPnlRows.length) {
-        return { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
-      }
-      return db.recordTournamentTradeRows(req.player.id, decibelPnlRows, {
-        source: 'trade_history_decibel_pnl',
-        count: false,
-        volume: false,
-        pnl: true,
-      });
-    };
+    // Decibel worker rows can include external Decibel activity, so tournament
+    // PnL sync is disabled in app-only accounting mode.
+    const syncDecibelTournamentPnl = () => ({ credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 });
     const settlingPayload = () => {
       const firstMs = sqliteUtcMs(settlingTrades.first_at);
       const readyAt = firstMs ? firstMs + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000 : Date.now() + TRADE_REWARD_SETTLE_DELAY_SECONDS * 1000;
@@ -9376,7 +10028,7 @@ router.get('/trading/stats', auth, async (req, res) => {
     if (fdb) {
       try {
         const sourceClause = dex === 'decibel'
-          ? "AND verified_source IN ('worker', 'server')"
+          ? "AND verified_source = 'server'"
           : dex === 'monad'
             ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
             : dex === 'hyperliquid'
@@ -11040,7 +11692,7 @@ router.get('/admin/stats', adminAuth, (req, res) => {
         : dex === 'nado'
           ? "verified_source = 'nado_api'"
         : dex === 'decibel'
-          ? "verified_source IN ('worker', 'server')"
+          ? "verified_source = 'server'"
           : "verified_source = 'worker'";
       const nameLookup = db.db.prepare('SELECT name, wallet FROM players WHERE id = ?');
       for (const dex of ACTIVITY_DEXES) {
@@ -12113,7 +12765,7 @@ function tournamentRowToPublic(t, options = {}) {
 }
 
 function tournamentTradeSourceWhere(dex) {
-  if (dex === 'decibel') return "verified_source IN ('server', 'worker')";
+  if (dex === 'decibel') return "verified_source = 'server'";
   if (dex === 'monad') return "verified_source IN ('perpl_api', 'perpl_ws')";
   if (dex === 'hyperliquid') return "verified_source = 'hyperliquid_api'";
   if (dex === 'risex') return "verified_source = 'risex_api'";
@@ -12140,40 +12792,16 @@ function syncFuturesTournamentRows(playerId, dex) {
       ORDER BY id ASC
       LIMIT 2000
     `).all(playerId, normalizedDex);
-    if (normalizedDex === 'decibel' && rows.length) {
-      rows = markDuplicateDecibelWorkerTrades(fdb, playerId, 0, rows)
-        .filter(row => !row.reward_duplicate);
-    }
     const main = db.recordTournamentTradeRows(playerId, rows, {
       source: 'trade_history',
       dex: normalizedDex,
       count: true,
       volume: true,
-      // Decibel worker close PnL is credited through trade_history_decibel_pnl
-      // so worker limit fills can add volume without double-counting PnL.
+      // Decibel counts app/server-signed rows only. Worker close PnL is not
+      // app-attributable, so it is intentionally excluded here.
       pnl: normalizedDex !== 'decibel',
     });
-    let pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
-    if (normalizedDex === 'decibel') {
-      const pnlRows = fdb.prepare(`
-        SELECT id, symbol, side, amount, notional_usd, pnl, status, created_at, dex
-        FROM trade_history
-        WHERE player_id = ? AND dex = 'decibel' AND status = 'filled'
-          AND verified_source = 'worker'
-          AND side IN ('close_long', 'close_short')
-          AND pnl IS NOT NULL AND pnl != ''
-          AND notional_usd >= 10
-        ORDER BY id ASC
-        LIMIT 2000
-      `).all(playerId);
-      pnl = db.recordTournamentTradeRows(playerId, pnlRows, {
-        source: 'trade_history_decibel_pnl',
-        dex: normalizedDex,
-        count: false,
-        volume: false,
-        pnl: true,
-      });
-    }
+    const pnl = { credited_rows: 0, trades_count: 0, volume_usd: 0, pnl_usd: 0 };
     return { ok: true, rows: rows.length, main, pnl };
   } catch (e) {
     console.warn(`[tournament-sync ${normalizedDex}] failed for player=${String(playerId).slice(0, 8)}:`, e.message);
@@ -13170,8 +13798,24 @@ router.patch('/admin/tournaments/:id', adminAuth, (req, res) => {
 router.post('/admin/tournaments/:id/end', adminAuth, (req, res) => {
   const tid = parseInt(req.params.id, 10);
   if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
-  db.db.prepare("UPDATE tournaments SET status = 'ended' WHERE id = ?").run(tid);
-  res.json({ ok: true });
+  const endedAt = nowSql();
+  db.db.prepare(`
+    UPDATE tournaments
+       SET status = 'ended',
+           end_at = CASE
+             WHEN end_at IS NULL OR end_at = '' OR end_at > ? THEN ?
+             ELSE end_at
+           END
+     WHERE id = ?
+  `).run(endedAt, endedAt, tid);
+  let daily_pool_result = null;
+  try {
+    daily_pool_result = db.awardTournamentFinalDailyPoolDay(tid);
+  } catch (err) {
+    console.warn('[tournament daily pool final award]', err?.message || err);
+    daily_pool_result = { ok: false, error: (err?.message || 'daily award failed').slice(0, 180) };
+  }
+  res.json({ ok: true, daily_pool_result });
 });
 
 router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => {
@@ -13180,12 +13824,29 @@ router.post('/admin/tournaments/:id/daily-points/run', adminAuth, (req, res) => 
   try {
     const now = new Date();
     const yesterdayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1)).toISOString().slice(0, 10);
-    const result = db.awardTournamentDailyPoolDay(tid, req.body?.day || req.query?.day || yesterdayUtc, {
+    const explicitDay = req.body?.day || req.query?.day;
+    const options = {
+      force: parseBool(req.body?.force || req.query?.force),
+    };
+    const result = explicitDay
+      ? db.awardTournamentDailyPoolDay(tid, explicitDay, options)
+      : db.awardTournamentDailyPoolDay(tid, yesterdayUtc, options);
+    res.json(result);
+  } catch (err) {
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily award failed').slice(0, 180) });
+  }
+});
+
+router.post('/admin/tournaments/:id/daily-points/finalize', adminAuth, (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  if (!Number.isFinite(tid)) return res.status(400).json({ error: 'invalid id' });
+  try {
+    const result = db.awardTournamentFinalDailyPoolDay(tid, {
       force: parseBool(req.body?.force || req.query?.force),
     });
     res.json(result);
   } catch (err) {
-    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily award failed').slice(0, 180) });
+    res.status(err?.status || 500).json({ ok: false, error: (err?.message || 'daily final award failed').slice(0, 180) });
   }
 });
 
@@ -13527,11 +14188,43 @@ router.get('/admin/earnings', adminAuth, async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// Admin: local revenue analytics by DEX window and by tournament.
+router.get('/admin/revenue-analytics', adminAuth, async (req, res) => {
+  try {
+    const tournamentLimit = Math.max(1, Math.min(500, parseInt(req.query.tournaments, 10) || 120));
+    const data = await earnings.fetchRevenueAnalytics({
+      mainDb: db.db,
+      tournamentLimit,
+    });
+    res.json(data);
+  } catch (e) {
+    console.warn('[earnings] revenue analytics failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // V3 NFT endpoints (upgrade quotes, bridge orchestration, state reads).
 // Implementation lives in ./nft_v3_endpoints.js — mounted onto this same
 // router so all V3 routes share rate limits, logging, and the global
 // supply gate context.
 // ─────────────────────────────────────────────────────────────────────
+// Server-custodial marketplace: no new Solana program, uses server custody
+// plus verified treasury payments.
+try {
+  const { mountCustodialMarketplace } = require('./custodial_marketplace');
+  mountCustodialMarketplace(router, {
+    auth,
+    adminAuth,
+    parseNftEvmAccount,
+    gameShopEvmConfig,
+    gameShopAptosConfig,
+    gameShopSolanaConfig,
+    logError,
+  });
+} catch (err) {
+  console.warn('[custodial-marketplace] failed to mount endpoints:', err?.message || err);
+}
+
 try {
   const { mountNftV3Endpoints } = require('./nft_v3_endpoints');
   mountNftV3Endpoints(router, {

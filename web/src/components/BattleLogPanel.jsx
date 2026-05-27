@@ -280,7 +280,12 @@ const S = {
   },
   empty: { textAlign: 'center', padding: 40, color: '#a3906a', fontWeight: 700, fontSize: 14 },
   card: {
-    background: '#e8dfc8', border: '3px solid #d4c8b0', borderRadius: 12, padding: '10px 12px',
+    background: '#e8dfc8',
+    borderWidth: 3,
+    borderStyle: 'solid',
+    borderColor: '#d4c8b0',
+    borderRadius: 12,
+    padding: '10px 12px',
     cursor: 'pointer', transition: 'background 0.15s',
   },
   cardRow: { display: 'flex', alignItems: 'center', gap: 10 },

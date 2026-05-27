@@ -1,6 +1,13 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from './solanaRpc';
 
+export const NFT_SALE_COLLECTION = 'mystery';
+
+function nftCollectionPath(collection = NFT_SALE_COLLECTION) {
+  const slug = String(collection || NFT_SALE_COLLECTION).trim() || NFT_SALE_COLLECTION;
+  return `/api/nft/${encodeURIComponent(slug)}`;
+}
+
 export const NFT_SHOP_ABI = [
   {
     name: 'mintWithQuote',
@@ -26,14 +33,14 @@ export const NFT_SHOP_ABI = [
   },
 ];
 
-export async function fetchNftMintConfig() {
-  const response = await fetch('/api/nft/mint/config', { cache: 'no-store' });
+export async function fetchNftMintConfig({ collection = NFT_SALE_COLLECTION } = {}) {
+  const response = await fetch(`${nftCollectionPath(collection)}/mint/config`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`NFT config failed (${response.status})`);
   return response.json();
 }
 
-export async function fetchBaseMintQuote({ buyer, payment, quantity = 1 }) {
-  const response = await fetch('/api/nft/base/quote', {
+export async function fetchBaseMintQuote({ buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
+  const response = await fetch(`${nftCollectionPath(collection)}/base/quote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ buyer, payment, quantity }),
@@ -62,11 +69,11 @@ export async function ensureErc20Allowance({ publicClient, walletClient, token, 
   return hash;
 }
 
-export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1 }) {
+export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
   if (!evmWallet?.provider || !buyer) throw new Error('Base wallet is not connected');
   await evmWallet.ensureChain(BASE_CHAIN_ID);
 
-  const quoteResponse = await fetchBaseMintQuote({ buyer, payment, quantity });
+  const quoteResponse = await fetchBaseMintQuote({ buyer, payment, quantity, collection });
   const quote = normalizeQuote(quoteResponse.quote);
   const shop = quoteResponse.shop;
   const publicClient = evmWallet.getPublicClient(BASE_CHAIN_ID);
@@ -99,30 +106,28 @@ export async function mintBaseNft({ evmWallet, buyer, payment, quantity = 1 }) {
   return { hash, receipt, quote: quoteResponse };
 }
 
-// Mint on Arbitrum or Monad. The server-side `/nft/evm/quote` returns the
-// same shape as Base — buyer + signature + quote payload — so this helper
-// mirrors mintBaseNft but parametrises the chain. Aptos is not supported
-// here (no Aptos NFT mint endpoint yet — bridge only).
+// Mint on Arbitrum or Monad. Collection quote endpoints return the same
+// shape as Base, so this helper mirrors mintBaseNft but parametrises the chain.
 const EVM_NFT_CHAIN_IDS = { arbitrum: 42161, monad: 143 };
 
-export async function fetchEvmMintQuote({ chain, buyer, payment, quantity = 1 }) {
-  const response = await fetch('/api/nft/evm/quote', {
+export async function fetchEvmMintQuote({ chain, buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
+  const response = await fetch(`${nftCollectionPath(collection)}/${encodeURIComponent(chain)}/quote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chain, buyer, payment, quantity }),
+    body: JSON.stringify({ buyer, payment, quantity }),
   });
   const json = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(json?.error || `Quote failed (${response.status})`);
   return json;
 }
 
-export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 1 }) {
+export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 1, collection = NFT_SALE_COLLECTION }) {
   const chainId = EVM_NFT_CHAIN_IDS[chain];
   if (!chainId) throw new Error(`mintEvmNft: unsupported chain "${chain}"`);
   if (!evmWallet?.provider || !buyer) throw new Error(`${chain} wallet is not connected`);
   await evmWallet.ensureChain(chainId);
 
-  const quoteResponse = await fetchEvmMintQuote({ chain, buyer, payment, quantity });
+  const quoteResponse = await fetchEvmMintQuote({ chain, buyer, payment, quantity, collection });
   const quote = normalizeQuote(quoteResponse.quote);
   const shop = quoteResponse.shop;
   const publicClient = evmWallet.getPublicClient(chainId);
@@ -165,8 +170,11 @@ export async function mintEvmNft({ evmWallet, chain, buyer, payment, quantity = 
 // as the buyer). The server returns vector<u8> fields as hex for JSON
 // readability; convert them to byte arrays before handing them to the Aptos
 // wallet adapter so Move receives the exact bytes the server signed.
-export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc' }) {
-  const response = await fetch('/api/nft/aptos/quote', {
+export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc', collection = NFT_SALE_COLLECTION }) {
+  const path = collection && collection !== 'demonking'
+    ? `${nftCollectionPath(collection)}/aptos/quote`
+    : '/api/nft/aptos/quote';
+  const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ buyer, quantity, payment }),
@@ -176,9 +184,9 @@ export async function fetchAptosMintQuote({ buyer, quantity = 1, payment = 'usdc
   return json;
 }
 
-export async function mintAptosNft({ aptosWallet, buyer, quantity = 1, payment = 'usdc' }) {
+export async function mintAptosNft({ aptosWallet, buyer, quantity = 1, payment = 'usdc', collection = NFT_SALE_COLLECTION }) {
   if (!aptosWallet || !buyer) throw new Error('Aptos wallet is not connected');
-  const quote = await fetchAptosMintQuote({ buyer, quantity, payment });
+  const quote = await fetchAptosMintQuote({ buyer, quantity, payment, collection });
   const functionArguments = normalizeAptosMintFunctionArguments(quote);
 
   const result = await aptosWallet.loginSignAndSubmit({

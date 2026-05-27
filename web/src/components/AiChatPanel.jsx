@@ -5083,7 +5083,9 @@ const topUpStyles = {
   // modal's, driven by the local `.hermes-step-spinner` class.
   spinner: {
     width: 12, height: 12, borderRadius: '50%',
-    border: '2px solid rgba(92,58,33,0.25)',
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: 'rgba(92,58,33,0.25)',
     borderTopColor: '#5C3A21',
     display: 'inline-block',
   },

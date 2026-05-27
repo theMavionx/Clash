@@ -1,24 +1,28 @@
 {
-  "generatedAt": "2026-05-16T06:29:01.293Z",
-  "levels": [
-    {
-      "level": 1,
-      "stars": "1★",
-      "defaultPath": "/cdn/nft/1/default.jpg",
-      "perTokenPathPattern": "/cdn/nft/1/<tokenId>.jpg"
-    },
-    {
-      "level": 2,
-      "stars": "2★",
-      "defaultPath": "/cdn/nft/2/default.jpg",
-      "perTokenPathPattern": "/cdn/nft/2/<tokenId>.jpg"
-    },
-    {
-      "level": 3,
-      "stars": "3★",
-      "defaultPath": "/cdn/nft/3/default.jpg",
-      "perTokenPathPattern": "/cdn/nft/3/<tokenId>.jpg"
+  "generatedAt": "2026-05-27T00:00:00.000Z",
+  "collections": {
+    "demonking": {
+      "levels": [
+        {
+          "level": 1,
+          "stars": 1,
+          "defaultPath": "/cdn/nft/1/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/1/<tokenId>.jpg"
+        },
+        {
+          "level": 2,
+          "stars": 2,
+          "defaultPath": "/cdn/nft/2/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/2/<tokenId>.jpg"
+        },
+        {
+          "level": 3,
+          "stars": 3,
+          "defaultPath": "/cdn/nft/3/default.jpg",
+          "perTokenPathPattern": "/cdn/nft/3/<tokenId>.jpg"
+        }
+      ]
     }
-  ],
-  "note": "Per-token unique art is optional. When `<tokenId>.jpg` does not exist, Nginx falls back to `default.jpg` for that level via try_files. The on-chain `tokenLevel(id)` determines which level's art is served."
+  },
+  "note": "Per-token unique art is optional. Collection metadata endpoints decide the final level image from the on-chain level when available."
 }

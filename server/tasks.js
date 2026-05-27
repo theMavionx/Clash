@@ -139,65 +139,6 @@ function matchesSide(tradeSide, wantSide) {
   return true;
 }
 
-function decibelTradeMs(row) {
-  const ms = Date.parse(`${String(row?.created_at || '').replace(' ', 'T')}Z`);
-  return Number.isFinite(ms) ? ms : 0;
-}
-
-function decibelTradesProbablyDuplicate(a, b) {
-  if (!a || !b) return false;
-  if (String(a.symbol || '').toUpperCase() !== String(b.symbol || '').toUpperCase()) return false;
-  if (String(a.side || '').toLowerCase() !== String(b.side || '').toLowerCase()) return false;
-  const av = Number(a.notional_usd);
-  const bv = Number(b.notional_usd);
-  if (!Number.isFinite(av) || !Number.isFinite(bv) || av <= 0 || bv <= 0) return false;
-  const drift = Math.abs(av - bv) / Math.max(av, bv, 1);
-  if (drift > 0.35) return false;
-  const ams = decibelTradeMs(a);
-  const bms = decibelTradeMs(b);
-  return ams > 0 && bms > 0 && Math.abs(ams - bms) <= 5 * 60 * 1000;
-}
-
-function isDecibelLimitFillTaskRow(row) {
-  return String(row?.client_order_id || '').startsWith('decibel:limit-fill:');
-}
-
-function isDecibelCloseTaskRow(row) {
-  return String(row?.side || '').toLowerCase().startsWith('close_');
-}
-
-function canFuzzyDedupeDecibelTaskRows(candidate, row) {
-  const candidateSource = String(candidate?.verified_source || '');
-  const rowSource = String(row?.verified_source || '');
-  const candidateIsLimitFill = isDecibelLimitFillTaskRow(candidate);
-  const rowIsLimitFill = isDecibelLimitFillTaskRow(row);
-
-  if (candidateIsLimitFill && rowIsLimitFill) return false;
-  if (candidateSource === 'server' && rowSource === 'server') return false;
-  if (candidateSource !== rowSource) return true;
-  return candidateSource === 'worker' && candidateIsLimitFill !== rowIsLimitFill;
-}
-
-function filterDuplicateDecibelTaskRows(rows) {
-  if (!Array.isArray(rows) || rows.length === 0) return rows || [];
-  const kept = [];
-  for (const row of rows) {
-    const duplicate = kept.some((candidate) => {
-      if (!canFuzzyDedupeDecibelTaskRows(candidate, row)) return false;
-      if (isDecibelCloseTaskRow(row) && isDecibelCloseTaskRow(candidate)) {
-        return decibelTradesProbablyDuplicate(candidate, row);
-      }
-      if (row.verified_source === 'worker') {
-        return decibelTradesProbablyDuplicate(candidate, row);
-      }
-      return false;
-    });
-    if (duplicate) continue;
-    kept.push(row);
-  }
-  return kept;
-}
-
 // ---------- Snapshots ----------
 // Captured when the player starts (or auto-starts) a task.
 async function buildSnapshot(player, task) {
@@ -352,11 +293,10 @@ async function fetchWalletTrades(player, opts = {}) {
     try {
       // Filter by player_id AND dex so a legacy row from another DEX on the
       // same player_id can't leak into a different verifier.
-      // Avantis/GMX stay worker-only. Decibel uses server rows for immediate
-      // market/close fills and worker rows for delayed limit fills. Worker can
-      // later see the same market fill, so Decibel rows are deduped below.
+      // Decibel quest progress counts only trades routed through the Clash
+      // app/server signer. Worker rows can include external Decibel activity.
       const sourceWhere = dexFilter === 'decibel'
-        ? "AND verified_source IN ('server', 'worker')"
+        ? "AND verified_source = 'server'"
         : dexFilter === 'monad'
           ? "AND verified_source IN ('perpl_api', 'perpl_ws')"
           : dexFilter === 'hyperliquid'
@@ -380,9 +320,6 @@ async function fetchWalletTrades(player, opts = {}) {
           ${settleWhere}
         ORDER BY id ASC
       `).all(player.id, dexFilter, ...settleParams);
-      if (dexFilter === 'decibel') {
-        rows = filterDuplicateDecibelTaskRows(rows);
-      }
       return rows.map(r => {
         const notional = Number(r.notional_usd) || 0;
         const price = Number(r.price) > 0 ? Number(r.price) : (notional > 0 ? notional : 1);

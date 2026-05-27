@@ -23,17 +23,22 @@ import { executeUpgrade, fetchNftState, fetchUpgradeQuote, nftLevelImageUrl, res
 import { openSolanaWallet } from '../lib/solanaWalletUi';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import NftBridgePanel from './NftBridgePanel';
-import NftMarketplacePanel from './NftMarketplacePanel';
+import NftMarketplacePanel from './CustodialMarketplacePanel';
 
 const demonKingImg = '/cdn/nft/1/default.jpg';
+const SHOW_NFT_MINT_TAB = false;
+const SALE_NFT_PUBLIC_REVEAL = false;
+const SALE_NFT_NAME = '???';
+const SALE_NFT_IMG = null;
+const SALE_NFT_DISPLAY_SUPPLY_CAP = 555;
+const SALE_NFT_MINT_SOLD_OUT = false;
+const SALE_NFT_MINT_LOCKED = !SALE_NFT_PUBLIC_REVEAL;
 const copLogoImg = '/icons/icon-192.png';
 const nftBasePublicClient = createPublicClient({ chain: base, transport: http(BASE_PRIMARY_RPC_URL) });
 const nftArbitrumPublicClient = createPublicClient({ chain: arbitrum, transport: http() });
 const nftMonadPublicClient = createPublicClient({ chain: monadChain, transport: http() });
 const PRIVY_ENABLED = !!import.meta.env.VITE_PRIVY_APP_ID;
 const MAX_BATCH_QUANTITY = 10;
-const DEMON_KING_MINT_SOLD_OUT = true;
-const DEMON_KING_DISPLAY_SUPPLY_CAP = 333;
 
 const EVM_CHAIN_ID_BY_NFT_CHAIN = {
   base: BASE_CHAIN_ID,
@@ -83,7 +88,7 @@ function chainLogo(chain) { return CHAIN_LOGO_SRC[chain] || null; }
 
 const SHOP_TABS = [
   { id: 'resources',   label: 'Game Resources', mobileLabel: 'Resources' },
-  { id: 'nft',         label: 'NFT',            mobileLabel: 'NFT' },
+  ...(SHOW_NFT_MINT_TAB ? [{ id: 'nft', label: 'NFT', mobileLabel: 'NFT' }] : []),
   { id: 'marketplace', label: 'Marketplace',    mobileLabel: 'Market' },
 ];
 
@@ -94,30 +99,30 @@ const CHAIN_OPTIONS = [
 
 const PAYMENT_OPTIONS = {
   base: [
-    { id: 'base-clash', chain: 'base', method: 'CoP', price: '$5.00', token: 'CoP', requiresClash: true },
-    { id: 'base-eth', chain: 'base', method: 'ETH', price: '$8.90', token: 'ETH' },
-    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$8.90', token: 'USDC' },
+    { id: 'base-clash', chain: 'base', method: 'CoP', price: '$4.00', token: 'CoP', requiresClash: true },
+    { id: 'base-eth', chain: 'base', method: 'ETH', price: '$5.50', token: 'ETH' },
+    { id: 'base-usdc', chain: 'base', method: 'USDC', price: '$5.50', token: 'USDC' },
   ],
   solana: [
-    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$8.90', token: 'SOL' },
-    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$8.90', token: 'SKR', requiresSkr: true },
+    { id: 'sol-usdc', chain: 'solana', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'sol-sol', chain: 'solana', method: 'SOL', price: '$5.50', token: 'SOL' },
+    { id: 'sol-skr', chain: 'solana', method: 'SKR', price: '$5.00', token: 'SKR', requiresSkr: true },
   ],
   // Arbitrum + Monad shops are deployed and saleActive — direct mint with
   // USDC or the chain's native token works via the server's /nft/evm/quote
   // endpoint. Aptos mirrors that shape with USDC/APT quotes signed by the
   // server and submitted through the Aptos wallet adapter.
   arbitrum: [
-    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$8.90', token: 'ETH' },
+    { id: 'arb-usdc', chain: 'arbitrum', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'arb-eth',  chain: 'arbitrum', method: 'ETH',  price: '$5.50', token: 'ETH' },
   ],
   monad: [
-    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$8.90', token: 'MON' },
+    { id: 'monad-usdc', chain: 'monad', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'monad-mon',  chain: 'monad', method: 'MON',  price: '$5.50', token: 'MON' },
   ],
   aptos: [
-    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$8.90', token: 'USDC' },
-    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$8.90', token: 'APT' },
+    { id: 'aptos-usdc', chain: 'aptos', method: 'USDC', price: '$5.50', token: 'USDC' },
+    { id: 'aptos-apt',  chain: 'aptos', method: 'APT',  price: '$5.50', token: 'APT' },
   ],
 };
 
@@ -291,10 +296,11 @@ function formatUsdAmount(value) {
 }
 
 function getSupplyInfo(config, chain) {
-  const chainConfig = config?.[chain] || {};
+  const chainConfig = config?.[chain] || config?.evm?.[chain] || {};
+  const globalSupply = config?.global || {};
   const supply = chainConfig.supply || {};
-  const maxSupply = countOrNull(supply.maxSupply ?? chainConfig.maxSupply) || 250;
-  const mintedFromRpc = countOrNull(supply.totalMinted);
+  const maxSupply = countOrNull(supply.maxSupply ?? chainConfig.maxSupply ?? globalSupply.cap) || SALE_NFT_DISPLAY_SUPPLY_CAP;
+  const mintedFromRpc = countOrNull(supply.totalMinted ?? supply.total ?? globalSupply.perChain?.[chain]);
   const remainingFromRpc = countOrNull(supply.remaining);
   const totalMinted = mintedFromRpc ?? (
     remainingFromRpc == null ? null : Math.max(0, maxSupply - remainingFromRpc)
@@ -307,7 +313,7 @@ function getSupplyInfo(config, chain) {
     : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
   return {
     chain,
-    title: chain === 'solana' ? 'Solana Genesis' : 'Base Genesis',
+    title: `${chain === 'solana' ? 'Solana' : chain === 'arbitrum' ? 'Arbitrum' : chain === 'monad' ? 'Monad' : 'Base'} ${SALE_NFT_NAME}`,
     totalMinted,
     maxSupply,
     remaining,
@@ -325,21 +331,21 @@ function getSupplyInfo(config, chain) {
 function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   // Server-side global: authoritative — sums minted across all 5 chains.
   if (globalSupply && Number.isFinite(globalSupply.cap)) {
-    const maxSupply = Number(globalSupply.cap) || 333;
-    const totalMinted = countOrNull(globalSupply.totalMinted);
+    const maxSupply = Number(globalSupply.cap) || SALE_NFT_DISPLAY_SUPPLY_CAP;
+    const totalMinted = countOrNull(globalSupply.totalMinted ?? globalSupply.total);
     const remaining = countOrNull(globalSupply.remaining)
       ?? (totalMinted == null ? null : Math.max(0, maxSupply - totalMinted));
     const progress = totalMinted == null || maxSupply <= 0 ? 0
       : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
     return {
-      title: 'Total Genesis',
+      title: `${SALE_NFT_NAME} Supply`,
       totalMinted, maxSupply, remaining, progress,
       loaded: totalMinted != null,
       perChain: globalSupply.perChain || null,
     };
   }
   // Legacy fallback — base + solana only.
-  const maxSupply = (countOrNull(baseSupply?.maxSupply) || 0) + (countOrNull(solanaSupply?.maxSupply) || 0);
+  const maxSupply = SALE_NFT_DISPLAY_SUPPLY_CAP;
   const baseMinted = countOrNull(baseSupply?.totalMinted);
   const solanaMinted = countOrNull(solanaSupply?.totalMinted);
   const baseRemaining = countOrNull(baseSupply?.remaining);
@@ -348,9 +354,9 @@ function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
   const remaining = baseRemaining == null && solanaRemaining == null ? null : (baseRemaining || 0) + (solanaRemaining || 0);
   const progress = totalMinted == null || maxSupply <= 0 ? 0 : Math.min(100, Math.max(0, (totalMinted / maxSupply) * 100));
   return {
-    title: 'Total Genesis',
+    title: `${SALE_NFT_NAME} Supply`,
     totalMinted,
-    maxSupply: maxSupply || 333,
+    maxSupply,
     remaining,
     progress,
     loaded: baseSupply?.loaded || solanaSupply?.loaded,
@@ -360,13 +366,25 @@ function getTotalSupplyInfo(globalSupply, baseSupply, solanaSupply) {
 function getSoldOutDisplaySupplyInfo(supply) {
   return {
     ...(supply || {}),
-    title: supply?.title || 'Total Genesis',
-    totalMinted: DEMON_KING_DISPLAY_SUPPLY_CAP,
-    maxSupply: DEMON_KING_DISPLAY_SUPPLY_CAP,
+    title: supply?.title || `${SALE_NFT_NAME} Supply`,
+    totalMinted: SALE_NFT_DISPLAY_SUPPLY_CAP,
+    maxSupply: SALE_NFT_DISPLAY_SUPPLY_CAP,
     remaining: 0,
     progress: 100,
     loaded: true,
-    fractionLabel: `${DEMON_KING_DISPLAY_SUPPLY_CAP}/${DEMON_KING_DISPLAY_SUPPLY_CAP}`,
+    fractionLabel: `${SALE_NFT_DISPLAY_SUPPLY_CAP}/${SALE_NFT_DISPLAY_SUPPLY_CAP}`,
+  };
+}
+
+function getMysterySupplyInfo() {
+  return {
+    title: '???',
+    totalMinted: null,
+    maxSupply: null,
+    remaining: null,
+    progress: 0,
+    loaded: true,
+    masked: true,
   };
 }
 
@@ -407,14 +425,16 @@ function writeStoredShopChain(chain) {
   try { localStorage.setItem(SHOP_CHAIN_STORAGE_KEY, chain); } catch { /* storage disabled */ }
 }
 
-const DEX_TO_MARKETPLACE_CHAIN = {
-  gmx: 'arbitrum',
-  hyperliquid: 'arbitrum',
-};
-
 function marketplaceChainForDex(dex) {
-  return DEX_TO_MARKETPLACE_CHAIN[dex] || 'base';
+  void dex;
+  return 'base';
 }
+
+const DEFAULT_MARKETPLACE_STATS = {
+  listedLabel: '0',
+  volumeLabel: '$0',
+  floorLabel: '-',
+};
 
 function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = null }) {
   const { dex } = useDex();
@@ -433,7 +453,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const { isInFrame } = useFarcaster();
   const { isMobile: panelMobile } = useLayout();
 
-  const [activeShopTab, setActiveShopTab] = useState('nft');
+  const [activeShopTab, setActiveShopTab] = useState(SHOW_NFT_MINT_TAB ? 'nft' : 'resources');
   // Skip the legacy chain-picker step on open — the player's chain comes
   // from their chosen DEX (see [[shop-auto-chain]]). They can still re-pick
   // a chain via the top-right chip which calls handleBackToChains.
@@ -461,6 +481,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const [mintResult, setMintResult] = useState(null);
   const [shopPurchaseStatus, setShopPurchaseStatus] = useState('idle');
   const [shopPurchaseResult, setShopPurchaseResult] = useState(null);
+  const [marketplaceStats, setMarketplaceStats] = useState(DEFAULT_MARKETPLACE_STATS);
 
   const localEvmWallet = useMemo(
     () => makeNftEvmWallet(nftEvmWallet?.provider, nftEvmWallet?.address),
@@ -560,21 +581,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     }
   }, [shopChain, shopPayment]);
   const paymentOptions = useMemo(() => {
-    const baseOptions = PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
-    const solanaGroups = mintConfig?.solana?.paymentGroups || mintConfig?.solana?.groups || {};
-    // While the mint config is still syncing (mintConfig === null) we
-    // can't yet know whether CoP/SKR rails are wired up — treating them
-    // as "SOON" during this loading window flashes a misleading badge.
-    // Only mark them unavailable once we actually have a config back
-    // and its readiness flag is false.
-    const configLoaded = !!mintConfig;
-    return baseOptions.map((option) => ({
-      ...option,
-      soon: option.requiresClash ? (configLoaded && !mintConfig?.base?.clashReady)
-        : option.requiresSkr ? (configLoaded && !solanaGroups?.skr)
-          : !!option.soon,
-    }));
-  }, [mintConfig, mintConfig?.base?.clashReady, mintConfig?.solana?.groups, mintConfig?.solana?.paymentGroups, selectedChain]);
+    return PAYMENT_OPTIONS[selectedChain] || PAYMENT_OPTIONS.base;
+  }, [selectedChain]);
   const selected = useMemo(
     () => paymentOptions.find((option) => option.id === selectedPayment) || paymentOptions[0],
     [paymentOptions, selectedPayment],
@@ -586,14 +594,22 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
     [mintConfig?.global, baseSupplyInfo, solanaSupplyInfo],
   );
   const displayedTotalSupplyInfo = useMemo(
-    () => DEMON_KING_MINT_SOLD_OUT ? getSoldOutDisplaySupplyInfo(totalSupplyInfo) : totalSupplyInfo,
+    () => SALE_NFT_MINT_LOCKED
+      ? getMysterySupplyInfo()
+      : SALE_NFT_MINT_SOLD_OUT
+        ? getSoldOutDisplaySupplyInfo(totalSupplyInfo)
+        : totalSupplyInfo,
     [totalSupplyInfo],
   );
-  const supplyInfo = selectedChain === 'solana' ? solanaSupplyInfo : baseSupplyInfo;
+  const supplyInfo = useMemo(() => getSupplyInfo(mintConfig, selectedChain), [mintConfig, selectedChain]);
   const solanaConfigured = !!mintConfig?.solana?.candyMachine;
   const solanaSaleActive = !!mintConfig?.solana?.saleActive;
 
   const refreshMintConfig = useCallback(async ({ apply = true, log = true } = {}) => {
+    if (SALE_NFT_MINT_LOCKED) {
+      if (apply) setMintConfig(null);
+      return null;
+    }
     try {
       const config = await fetchNftMintConfig();
       if (apply) setMintConfig(config);
@@ -778,7 +794,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
   const handleBaseReady = useCallback(() => handleEvmReady('base'), [handleEvmReady]);
   const handleShopChainReady = useCallback(() => handleEvmReady(shopChain), [handleEvmReady, shopChain]);
-  const handleMarketplaceReady = useCallback(() => handleEvmReady(marketplaceChain), [handleEvmReady, marketplaceChain]);
+  const handleMarketplaceReady = useCallback((chain = marketplaceChain) => handleEvmReady(chain || marketplaceChain), [handleEvmReady, marketplaceChain]);
   const handleBridgeEvmModal = useCallback((targetChain = 'base') => {
     const chainKey = EVM_CHAIN_ID_BY_NFT_CHAIN[targetChain] ? targetChain : 'base';
     setEvmModalTargetOverride(chainKey);
@@ -814,15 +830,15 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
   const handlePrimary = useCallback(() => {
     const quantity = clampQuantity(mintQuantity);
-    if (DEMON_KING_MINT_SOLD_OUT) {
-      setNotice('Demon King fresh mint is sold out. Bridge and upgrades remain available.');
+    if (SALE_NFT_MINT_LOCKED) {
+      setNotice('???');
       return;
     }
-    if (selected.soon) {
-      setNotice('CoP mint opens after token launch.');
+    if (SALE_NFT_MINT_SOLD_OUT) {
+      setNotice(`${SALE_NFT_NAME} fresh mint is sold out.`);
       return;
     }
-    // Chains without a direct mint endpoint (Arbitrum/Monad/Aptos) render
+    // Chains without a direct mint endpoint render
     // a single bridge-placeholder payment option. Mint button just opens
     // the bridge view so the player can pull an NFT in from Base/Solana.
     if (selected.bridgeOnly) {
@@ -840,7 +856,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
-        afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: ['base'], force: true }),
+        afterMint: null,
         dex,
         quantity,
       });
@@ -856,7 +872,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
-        afterMint: () => syncDemonKingNfts({ wallet: solAddress, chains: ['solana'], force: true }),
+        afterMint: null,
         dex,
         quantity,
       });
@@ -875,7 +891,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
-        afterMint: () => syncDemonKingNfts({ wallet: evmAddress, chains: [selected.chain], force: true }),
+        afterMint: null,
         dex,
         quantity,
       });
@@ -891,7 +907,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
         setMintStatus,
         setMintResult,
         refreshMintConfig,
-        afterMint: () => syncDemonKingNfts({ wallet: aptosAddress, chains: ['aptos'], force: true }),
+        afterMint: null,
         dex,
         quantity,
       });
@@ -1069,7 +1085,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
 
   const primaryState = getPrimaryState({
     selected,
-    soldOut: DEMON_KING_MINT_SOLD_OUT,
+    soldOut: SALE_NFT_MINT_SOLD_OUT || SALE_NFT_MINT_LOCKED,
     evmAddress,
     evmOnBase,
     solAddress,
@@ -1092,8 +1108,9 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const evmModalTargetLabel = SHOP_CHAIN_LABEL[evmModalTargetEvmChain] || 'Base';
 
   const contextLine = getContextLine(dex);
-  const demonKingMintSoldOut = DEMON_KING_MINT_SOLD_OUT;
-  const canSwitchPaymentChain = activeShopTab === 'resources' || activeShopTab === 'nft';
+  const saleMintSoldOut = SALE_NFT_MINT_SOLD_OUT;
+  const saleMintLocked = SALE_NFT_MINT_LOCKED;
+  const canSwitchPaymentChain = activeShopTab === 'resources' || (SHOW_NFT_MINT_TAB && activeShopTab === 'nft' && !saleMintLocked);
   const activePaymentChain = activeShopTab === 'resources'
     ? shopChain
     : activeShopTab === 'marketplace'
@@ -1102,10 +1119,12 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const activePaymentChainLabel = SHOP_CHAIN_LABEL[activePaymentChain] || 'Base';
   const chainSwitchReadiness = activeShopTab === 'resources'
     ? shopReadiness
-    : SHOP_CHAIN_CHOICES.reduce((acc, chain) => {
-        acc[chain.id] = NFT_MINT_SUPPORTED.has(chain.id);
-        return acc;
-      }, {});
+    : SHOW_NFT_MINT_TAB
+      ? SHOP_CHAIN_CHOICES.reduce((acc, chain) => {
+          acc[chain.id] = NFT_MINT_SUPPORTED.has(chain.id);
+          return acc;
+        }, {})
+      : {};
 
   const handleDismissSuccess = useCallback(() => {
     setMintStatus('idle');
@@ -1227,7 +1246,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 );
               })}
             </div>
-            {/* Slider viewport — three tab bodies sit side-by-side in a
+            {/* Slider viewport — visible tab bodies sit side-by-side in a
                 flex track and we slide via transform: translateX(). The
                 viewport clips overflow so only the active tab is visible;
                 each slide owns its own vertical scroll so the panel size
@@ -1316,6 +1335,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 </div>
 
                 {/* ─── NFT slide (index 1) ─────────────────────────── */}
+                {SHOW_NFT_MINT_TAB ? (
                 <div
                   className="shop-scroll"
                   style={styles.slide}
@@ -1325,41 +1345,33 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   <div style={styles.topRow}>
                     <div style={styles.heroFrame}>
                       <div style={styles.heroGlow} />
-                      <img src={demonKingImg} alt="Demon King" style={styles.heroImg} />
+                      {SALE_NFT_PUBLIC_REVEAL
+                        ? <img src={SALE_NFT_IMG} alt={SALE_NFT_NAME} style={styles.heroImg} />
+                        : <MysteryNftArt />}
                     </div>
                     <div style={styles.summary}>
-                      <span style={styles.heroName}>Demon King</span>
+                      <span style={styles.heroName}>{SALE_NFT_NAME}</span>
                       <span style={styles.editionTag}>
-                        Genesis supply {formatCount(displayedTotalSupplyInfo.maxSupply)}
+                        Genesis supply {saleMintLocked ? '???' : formatCount(displayedTotalSupplyInfo.maxSupply)}
                       </span>
-                      {demonKingMintSoldOut && (
+                      {saleMintSoldOut && (
                         <span style={styles.soldOutPill}>SOLD OUT</span>
-                      )}
-                      {view === 'shop' && (
-                        <button
-                          type="button"
-                          onClick={() => { setView('bridge'); setNotice(null); }}
-                          style={styles.heroBridgeBtn}
-                          title="Bridge NFT between chains"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M7 7h12l-3-3" />
-                            <path d="M17 17H5l3 3" />
-                          </svg>
-                          <span>Bridge</span>
-                        </button>
                       )}
                     </div>
                   </div>
 
                   <SupplyProgress supply={displayedTotalSupplyInfo} />
-                  {demonKingMintSoldOut && (
+                  {saleMintSoldOut && (
                     <div style={styles.soldOutBox}>
-                      Demon King fresh mint is sold out. Existing NFTs can still be bridged or upgraded.
+                      {SALE_NFT_NAME} fresh mint is sold out.
                     </div>
                   )}
 
-                  {NFT_MINT_SUPPORTED.has(selectedChain) ? (
+                  {saleMintLocked ? (
+                    <div style={styles.mysteryLockedBox}>
+                      <span style={styles.mysteryLockedMark}>???</span>
+                    </div>
+                  ) : NFT_MINT_SUPPORTED.has(selectedChain) ? (
                     <>
                       <div style={styles.options}>
                         {paymentOptions.map((option) => {
@@ -1369,11 +1381,11 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                               key={option.id}
                               type="button"
                               onClick={() => { setSelectedPayment(option.id); setNotice(null); }}
-                              disabled={demonKingMintSoldOut || option.soon}
+                              disabled={saleMintSoldOut}
                               style={{
                                 ...styles.optionBtn,
                                 ...(active ? styles.optionBtnActive : null),
-                                ...((demonKingMintSoldOut || option.soon) ? styles.optionBtnDisabled : null),
+                                ...(saleMintSoldOut ? styles.optionBtnDisabled : null),
                               }}
                             >
                               <span style={styles.optionBadge}>
@@ -1390,9 +1402,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                                 )}
                               </span>
                               <span style={styles.optionPrice}>{option.price}</span>
-                              {demonKingMintSoldOut
-                                ? <span style={styles.soonBadge}>SOLD OUT</span>
-                                : option.soon && <span style={styles.soonBadge}>SOON</span>}
+                              {saleMintSoldOut && <span style={styles.soonBadge}>SOLD OUT</span>}
                             </button>
                           );
                         })}
@@ -1403,21 +1413,21 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         value={mintQuantity}
                         onChange={setMintQuantity}
                         max={MAX_BATCH_QUANTITY}
-                        disabled={demonKingMintSoldOut || !!busy}
+                        disabled={saleMintSoldOut || !!busy}
                       />
 
                       <button
                         style={{
                           ...styles.mintBtn,
                           ...(primaryState.ready ? styles.mintBtnReady : null),
-                          ...((demonKingMintSoldOut || selected.soon) ? styles.mintBtnDisabled : null),
-                          cursor: busy || demonKingMintSoldOut || selected.soon ? 'not-allowed' : 'pointer',
+                          ...(saleMintSoldOut ? styles.mintBtnDisabled : null),
+                          cursor: busy || saleMintSoldOut ? 'not-allowed' : 'pointer',
                         }}
                         onClick={handlePrimary}
-                        disabled={!!busy || demonKingMintSoldOut || selected.soon}
+                        disabled={!!busy || saleMintSoldOut}
                       >
                         <span style={styles.mintBtnGlyph}>
-                          {!demonKingMintSoldOut && tokenLogo(selected.token)
+                          {!saleMintSoldOut && tokenLogo(selected.token)
                             ? <img src={tokenLogo(selected.token)} alt={selected.token} style={styles.mintBtnGlyphImg} />
                             : primaryState.glyph}
                         </span>
@@ -1430,30 +1440,32 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '8px 4px' }}>
                       <div style={{ fontSize: 13, color: '#5C3A21', lineHeight: 1.4 }}>
-                        Fresh mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
-                        Mint on Base or Solana, then use the bridge to move the NFT to your chain — the level is preserved.
+                        {SALE_NFT_NAME} mint isn't live on <b>{selectedChain.charAt(0).toUpperCase() + selectedChain.slice(1)}</b> yet.
+                        Use Base, Solana, Arbitrum, or Monad for this drop.
                       </div>
                       <button
                         type="button"
-                        onClick={() => setView('bridge')}
+                        onClick={() => {
+                          setSelectedChain('base');
+                          setSelectedPayment(defaultPaymentForChain('base'));
+                          setNotice(null);
+                        }}
                         style={{
                           padding: '10px 14px', borderRadius: 12, fontSize: 14, fontWeight: 800,
                           background: '#7ce04a', border: '2px solid #4a8f2c', color: '#1a3d0a',
                           cursor: 'pointer',
                         }}
                       >
-                        Open bridge →
+                        Switch to Base
                       </button>
                     </div>
                   )}
                 </div>
+                ) : null}
 
-                {/* ─── Marketplace slide (index 2) ─────────────────────
-                    Marketplace UI is built and contracts are deployed but
-                    we're still verifying flows on mainnet. The full panel
-                    renders behind a dim overlay so the player can preview
-                    what's coming while interactions are blocked. Remove the
-                    `comingSoonOverlay` block when the marketplace ships. */}
+                {/* ─── Marketplace slide ───────────────────────────────
+                    Server-custodial marketplace: all-chain NFT escrow,
+                    USDC payment, server settlement. */}
                 <div
                   className="shop-scroll"
                   style={{ ...styles.slide, position: 'relative' }}
@@ -1464,14 +1476,28 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     <div style={styles.heroFrame}>
                       <div style={styles.heroGlow} />
                       <img
-                        src="/icons/marketplace.svg"
-                        alt="Marketplace"
-                        style={styles.marketHeroImg}
+                        src={demonKingImg}
+                        alt="Demon King"
+                        style={styles.heroImg}
                       />
                     </div>
                     <div style={styles.summary}>
                       <span style={styles.heroName}>Marketplace</span>
-                      <span style={styles.editionTag}>Player-to-player trading on {SHOP_CHAIN_LABEL[marketplaceChain] || 'Base'}</span>
+                      <span style={styles.editionTag}>List from any chain. Buy with USDC.</span>
+                      <div style={styles.marketStats} aria-label="Marketplace stats">
+                        <div style={styles.marketStat}>
+                          <span style={styles.marketStatLabel}>Listed</span>
+                          <b style={styles.marketStatValue}>{marketplaceStats.listedLabel}</b>
+                        </div>
+                        <div style={styles.marketStat}>
+                          <span style={styles.marketStatLabel}>Volume</span>
+                          <b style={styles.marketStatValue}>{marketplaceStats.volumeLabel}</b>
+                        </div>
+                        <div style={styles.marketStat}>
+                          <span style={styles.marketStatLabel}>Floor</span>
+                          <b style={styles.marketStatValue}>{marketplaceStats.floorLabel}</b>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <NftMarketplacePanel
@@ -1480,20 +1506,16 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     evmWallet={evmWallet}
                     evmOnBase={evmOnMarketplaceChain}
                     onConnectBase={handleMarketplaceReady}
-                    onOpenEvmModal={() => setEvmModalOpen(true)}
+                    onOpenEvmModal={handleBridgeEvmModal}
+                    onConnectSolana={handleSolanaReady}
+                    onConnectAptos={() => aptosWallet?.connect?.()}
+                    solWallet={solWallet}
+                    solAddress={solAddress}
+                    aptosWallet={aptosWallet}
+                    aptosAddress={aptosAddress}
+                    sessionToken={sessionToken}
+                    onStatsChange={setMarketplaceStats}
                   />
-
-                  {/* Coming-soon dim layer. Position is sticky-via-absolute
-                      to the slide root (`position: relative` above) so the
-                      overlay covers all scrolled content. */}
-                  <div style={styles.comingSoonOverlay} aria-hidden>
-                    <div style={styles.comingSoonBadge}>IN TESTING</div>
-                    <div style={styles.comingSoonTitle}>Marketplace coming soon</div>
-                    <div style={styles.comingSoonSub}>
-                      We're still verifying flows on mainnet. List / buy will
-                      open once mainnet testing wraps up.
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
@@ -2606,7 +2628,7 @@ async function handleBaseMint({ selected, evmAddress, evmWallet, setBusy, setNot
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
     void afterMint?.().catch((err) => {
-      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+      addClientBreadcrumb('nft.sale_after_mint_failed', {
         dex,
         chain: 'base',
         message: err?.message || String(err),
@@ -2649,7 +2671,7 @@ async function handleEvmMint({ selected, chain, evmAddress, evmWallet, setBusy, 
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
     void afterMint?.().catch((err) => {
-      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+      addClientBreadcrumb('nft.sale_after_mint_failed', {
         dex,
         chain,
         message: err?.message || String(err),
@@ -2689,7 +2711,7 @@ async function handleAptosMint({ selected, aptosWallet, setBusy, setNotice, setM
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
     void afterMint?.().catch((err) => {
-      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+      addClientBreadcrumb('nft.sale_after_mint_failed', {
         dex,
         chain: 'aptos',
         message: err?.message || String(err),
@@ -2751,7 +2773,7 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
     setMintStatus?.('success');
     void refreshMintConfig?.({ log: false });
     void afterMint?.().catch((err) => {
-      addClientBreadcrumb('nft.demon_king_sync_after_mint_failed', {
+      addClientBreadcrumb('nft.sale_after_mint_failed', {
         dex,
         chain: 'solana',
         message: err?.message || String(err),
@@ -2769,7 +2791,6 @@ async function handleSolanaMint({ selected, solWallet, config, setBusy, setNotic
 
 function getPrimaryState({ selected, soldOut = false, evmAddress, evmOnBase, solAddress, aptosAddress, preparingPrivySolWallet, solanaConfigured, solanaSaleActive, busy }) {
   if (soldOut) return { label: 'SOLD OUT', glyph: '!', ready: false };
-  if (selected?.soon) return { label: 'CoP soon', glyph: 'C', ready: false };
   if (busy === 'mint') return { label: 'Minting...', glyph: '...', ready: false };
   if (busy === selected.chain) return { label: 'Preparing...', glyph: '...', ready: false };
   // Bridge-only fallback (no direct mint endpoint on this chain). Used if
@@ -2828,7 +2849,34 @@ function WalletStatus({ label, value, hint, tone, onDisconnect }) {
   );
 }
 
+function MysteryNftArt() {
+  return (
+    <div style={styles.mysteryHeroArt} aria-label="???">
+      <span style={styles.mysteryHeroMark}>?</span>
+      <span style={{ ...styles.mysteryHeroMark, ...styles.mysteryHeroMarkSmall, left: 18, top: 20 }}>?</span>
+      <span style={{ ...styles.mysteryHeroMark, ...styles.mysteryHeroMarkSmall, right: 18, bottom: 18 }}>?</span>
+    </div>
+  );
+}
+
 function SupplyProgress({ supply }) {
+  if (supply?.masked) {
+    return (
+      <div style={styles.supplyBox}>
+        <div style={styles.supplyTop}>
+          <span style={styles.supplyTitle}>???</span>
+          <span style={styles.supplyRemaining}>???</span>
+        </div>
+        <div style={styles.progressTrack}>
+          <div style={{ ...styles.progressFill, width: '18%' }} />
+        </div>
+        <div style={styles.supplyMeta}>
+          <span>???</span>
+          <span>???</span>
+        </div>
+      </div>
+    );
+  }
   const loaded = !!supply?.loaded;
   const barWidth = loaded ? Math.max(2, Math.min(100, supply.progress)) : 12;
   const remainingText = loaded ? `${formatCount(supply.remaining)} left` : 'Checking chain';
@@ -2897,7 +2945,7 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
   const pending = status === 'pending';
   const success = status === 'success';
   const quantity = clampQuantity(result?.quantity || 1);
-  const mintLabel = quantity > 1 ? `${quantity} Demon Kings` : 'Demon King';
+  const mintLabel = quantity > 1 ? `${quantity} ${SALE_NFT_NAME}s` : SALE_NFT_NAME;
   return (
     <div style={overlayStyles.root}>
       {/* Backdrop вЂ” soft cream wash with a moving radial sheen so it feels
@@ -2940,7 +2988,9 @@ function MintProgressOverlay({ status, result, chainLabel, onDismiss }) {
             style={overlayStyles.card}
             className={success ? 'nft-mint-card-spin' : 'nft-mint-card-pulse'}
           >
-            <img src={demonKingImg} alt="Demon King" style={overlayStyles.cardImg} />
+            {SALE_NFT_PUBLIC_REVEAL
+              ? <img src={SALE_NFT_IMG} alt={SALE_NFT_NAME} style={overlayStyles.cardImg} />
+              : <div style={overlayStyles.cardQuestion}>?</div>}
             {success && <div style={overlayStyles.cardShine} className="nft-mint-card-shine" />}
           </div>
 
@@ -3194,6 +3244,18 @@ const overlayStyles = {
     objectFit: 'contain',
     filter: 'drop-shadow(0 8px 14px rgba(0,0,0,0.55))',
   },
+  cardQuestion: {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#5C3A21',
+    fontSize: 82,
+    fontWeight: 900,
+    lineHeight: 1,
+    textShadow: '0 5px 0 rgba(255,255,255,0.45), 0 12px 18px rgba(0,0,0,0.32)',
+  },
   cardBare: {
     background: 'transparent',
     border: 'none',
@@ -3224,7 +3286,9 @@ const overlayStyles = {
     position: 'absolute',
     width: 178, height: 178,
     borderRadius: '50%',
-    border: '4px solid transparent',
+    borderWidth: 4,
+    borderStyle: 'solid',
+    borderColor: 'transparent',
     borderTopColor: '#5C3A21',
     borderRightColor: '#5C3A21',
     boxShadow: '0 0 18px rgba(92,58,33,0.35)',
@@ -3892,6 +3956,29 @@ const styles = {
   // is a monochrome game-icons.net "shop" SVG painted in the parchment
   // brown so it reads as part of the panel rather than a stock image.
   // Inset padding keeps the line-art from kissing the frame border.
+  mysteryHeroArt: {
+    position: 'relative',
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'radial-gradient(circle at 50% 38%, #fff7df 0%, #d8c190 62%, #8b6b3f 100%)',
+  },
+  mysteryHeroMark: {
+    position: 'relative',
+    zIndex: 1,
+    color: '#5C3A21',
+    fontSize: 70,
+    fontWeight: 900,
+    lineHeight: 1,
+    textShadow: '0 4px 0 rgba(255,255,255,0.45), 0 8px 12px rgba(0,0,0,0.28)',
+  },
+  mysteryHeroMarkSmall: {
+    position: 'absolute',
+    fontSize: 28,
+    opacity: 0.72,
+  },
   marketHeroImg: {
     position: 'relative',
     width: '76%', height: '76%',
@@ -3912,6 +3999,44 @@ const styles = {
   editionTag: {
     fontSize: 11, fontWeight: 900, color: '#8b6b3f',
     textTransform: 'uppercase', letterSpacing: 0,
+  },
+  marketStats: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 7,
+    maxWidth: 360,
+    marginTop: 4,
+  },
+  marketStat: {
+    minWidth: 0,
+    minHeight: 44,
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: 1,
+    padding: '6px 8px',
+    borderRadius: 9,
+    border: '2px solid #d4c8b0',
+    background: '#fff8df',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(92,58,33,0.12)',
+  },
+  marketStatLabel: {
+    fontSize: 9,
+    fontWeight: 900,
+    color: '#9b7c4a',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    lineHeight: 1,
+  },
+  marketStatValue: {
+    minWidth: 0,
+    color: '#5C3A21',
+    fontSize: 15,
+    fontWeight: 900,
+    lineHeight: 1.05,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   soldOutPill: {
     display: 'inline-flex',
@@ -3939,6 +4064,22 @@ const styles = {
     lineHeight: 1.35,
     textAlign: 'center',
     padding: '10px 12px',
+  },
+  mysteryLockedBox: {
+    minHeight: 106,
+    borderRadius: 8,
+    border: '2px dashed #8b6b3f',
+    background: 'linear-gradient(180deg, #fff8df 0%, #eadbb6 100%)',
+    color: '#5C3A21',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.65)',
+  },
+  mysteryLockedMark: {
+    fontSize: 30,
+    fontWeight: 900,
+    letterSpacing: 0,
   },
   contextChip: {
     alignSelf: 'flex-start',

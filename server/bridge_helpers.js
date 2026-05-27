@@ -45,15 +45,34 @@ function readJsonIfExists(p) {
   catch { return null; }
 }
 
-function v3DeploymentPath(chainKey) {
+function normalizeBridgeCollectionSlug(value) {
+  const slug = String(value || 'demonking')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!slug || slug === 'demonking' || slug === 'demon-king') return 'demonking';
+  if (slug === 'voidspore') return 'voidspore';
+  return slug;
+}
+
+function v3DeploymentPath(chainKey, collectionSlug = 'demonking') {
+  const collection = normalizeBridgeCollectionSlug(collectionSlug);
+  if (collection !== 'demonking') {
+    if (EVM_CHAINS.has(chainKey) || chainKey === 'aptos' || chainKey === 'solana') {
+      return path.join(NFT_ROOT, 'deployments', `${collection}-${chainKey}-mainnet.json`);
+    }
+    return null;
+  }
   if (EVM_CHAINS.has(chainKey)) return path.join(NFT_ROOT, 'deployments', `${chainKey}-v3-mainnet.json`);
   if (chainKey === 'aptos')      return path.join(NFT_ROOT, 'deployments', 'aptos-mainnet.json');
   if (chainKey === 'solana')     return path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json');
   return null;
 }
 
-function deploymentOf(chainKey) {
-  const p = v3DeploymentPath(chainKey);
+function deploymentOf(chainKey, collectionSlug = 'demonking') {
+  const p = v3DeploymentPath(chainKey, collectionSlug);
   return p ? readJsonIfExists(p) : null;
 }
 
@@ -158,12 +177,14 @@ function aptosFullnodeBase() {
 
 // Verify an Aptos bridge-burn transaction. Returns { tokenAddress, owner,
 // level, destinationChainId, tokenIndex } or null if not found / wrong shape.
-async function verifyAptosBurnTx(txHash) {
-  const dep = deploymentOf('aptos') || {};
+async function verifyAptosBurnTx(txHash, options = {}) {
+  const collectionSlug = normalizeBridgeCollectionSlug(options.collection || options.collectionSlug);
+  const dep = deploymentOf('aptos', collectionSlug) || {};
   const expectedModule = String(dep.module || '').split('::');
   const expectedPublisher = normalizeAptosAddress(expectedModule[0] || dep.admin);
+  const expectedModuleName = expectedModule[1] || (collectionSlug === 'voidspore' ? 'voidspore' : 'demon_king');
   const expectedType = expectedPublisher
-    ? `${expectedPublisher}::demon_king::BridgeBurnEvent`
+    ? `${expectedPublisher}::${expectedModuleName}::BridgeBurnEvent`
     : null;
   const url = `${aptosFullnodeBase()}/v1/transactions/by_hash/${txHash}`;
   const r = await fetch(url, {
@@ -175,7 +196,7 @@ async function verifyAptosBurnTx(txHash) {
   // Look for the BridgeBurnEvent emitted by OUR deployed module only.
   const burnEvent = (j.events || []).find((e) => {
     const normalized = normalizeAptosStructType(e.type);
-    return expectedType ? normalized === expectedType : normalized?.endsWith('::demon_king::BridgeBurnEvent');
+    return expectedType ? normalized === expectedType : normalized?.endsWith(`::${expectedModuleName}::BridgeBurnEvent`);
   });
   if (!burnEvent) return { error: 'no BridgeBurnEvent in tx' };
   const d = burnEvent.data || {};
@@ -484,10 +505,14 @@ function solanaAssetOwner(asset) {
 }
 
 function solanaAssetCollection(asset) {
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = String(group?.group_value || group?.value || '');
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
+  const ua = asset?.updateAuthority;
+  if (ua?.type === 'Collection') return String(ua.address || '');
+  if (ua?.__kind === 'Collection') return String(ua.fields?.[0] || '');
   const candidates = [
-    asset?.updateAuthority?.address,
-    asset?.updateAuthority?.publicKey,
-    asset?.updateAuthority,
     asset?.collection?.address,
     asset?.collection?.publicKey,
     asset?.collection,
@@ -501,9 +526,42 @@ function solanaAssetCollection(asset) {
 }
 
 function solanaAssetLevel(asset) {
-  const attr = asset?.attributes?.attributeList?.find((x) => String(x.key || '').toLowerCase() === 'level');
+  const attrs = [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
+  ].filter(Array.isArray).flat();
+  const attr = attrs.find((x) => String(x.key || x.trait_type || '').toLowerCase() === 'level');
   const level = Number(attr?.value || 1);
-  return [1, 2, 3].includes(level) ? level : 1;
+  if ([1, 2, 3].includes(level)) return level;
+  const text = `${asset?.name || ''} ${asset?.uri || ''} ${asset?.content?.metadata?.name || ''} ${asset?.content?.json_uri || ''}`;
+  const match = text.match(/\bL(?:evel)?\s*([123])\b/i);
+  return match ? Number(match[1]) : 1;
+}
+
+function solanaAssetUpdateAuthority(asset) {
+  const ua = asset?.updateAuthority;
+  if (ua?.type === 'Address') return String(ua.address || '');
+  if (ua?.__kind === 'Address') return String(ua.fields?.[0] || '');
+  return String(ua?.address || ua?.publicKey || '');
+}
+
+function solanaAssetLooksLikeLegacyBridge(asset, dep, collectionSlug) {
+  if (collectionSlug !== 'demonking') return false;
+  const authority = solanaAssetUpdateAuthority(asset);
+  const expectedAuthority = String(dep?.authority || '');
+  if (expectedAuthority && authority && authority !== expectedAuthority) return false;
+  const name = String(asset?.name || asset?.content?.metadata?.name || '').toLowerCase();
+  const uri = String(asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  const attrs = [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
+  ].filter(Array.isArray).flat();
+  return (name.includes('demon king') && uri.includes('/api/nft/solana/'))
+    || attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
 }
 
 function bridgeBadRequest(message) {
@@ -559,53 +617,57 @@ async function solanaAccountDescriptor(assetPubkey) {
   return { exists: false, owner: '', parsedType: null, parsedInfo: null };
 }
 
-async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
-  const dep = deploymentOf('solana');
-  if (!dep?.collection) throw new Error('Solana collection not configured');
+async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
+  const collectionSlug = normalizeBridgeCollectionSlug(opts.collection || opts.collectionSlug);
+  const collectionLabel = collectionSlug === 'voidspore' ? 'Voidspore' : 'Demon King';
+  const dep = deploymentOf('solana', collectionSlug);
+  if (!dep?.collection) throw new Error(`${collectionLabel} Solana collection not configured`);
   const sourceAsset = normalizeSolanaPubkey(assetPubkey, 'Solana source asset');
   const sourceOwner = expectedOwner ? normalizeSolanaPubkey(expectedOwner, 'Solana source owner') : '';
-  try {
-    const { getToken2022NftInfo } = require('./solana_token2022_nft');
-    let token2022Err = null;
-    for (const connection of solanaConnections()) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        return await getToken2022NftInfo({
-          mint: sourceAsset,
-          expectedOwner: sourceOwner,
-          connection,
-          collectionPubkey: dep.collection,
-        });
-      } catch (err) {
-        token2022Err = err;
+  if (collectionSlug === 'demonking') {
+    try {
+      const { getToken2022NftInfo } = require('./solana_token2022_nft');
+      let token2022Err = null;
+      for (const connection of solanaConnections()) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          return await getToken2022NftInfo({
+            mint: sourceAsset,
+            expectedOwner: sourceOwner,
+            connection,
+            collectionPubkey: dep.collection,
+          });
+        } catch (err) {
+          token2022Err = err;
+        }
       }
-    }
-    throw token2022Err || new Error('Token-2022 read failed');
-  } catch (err) {
-    const msg = String(err?.message || err);
-    const account = await solanaAccountDescriptor(sourceAsset);
-    if (!account.exists) {
-      const migrated = solanaMigratedCoreAsset(sourceAsset);
-      if (migrated) {
-        const replacement = migrated.newMint || migrated.mint || migrated.assetAddress || 'the migrated Token-2022 mint';
-        throw bridgeBadRequest(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
+      throw token2022Err || new Error('Token-2022 read failed');
+    } catch (err) {
+      const msg = String(err?.message || err);
+      const account = await solanaAccountDescriptor(sourceAsset);
+      if (!account.exists) {
+        const migrated = solanaMigratedCoreAsset(sourceAsset);
+        if (migrated) {
+          const replacement = migrated.newMint || migrated.mint || migrated.assetAddress || 'the migrated Token-2022 mint';
+          throw bridgeBadRequest(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
+        }
+        throw bridgeBadRequest(`Solana source asset was not found. Use the current ${collectionLabel} mint/asset address from the NFT picker.`);
       }
-      throw bridgeBadRequest('Solana source asset was not found. Use the current Demon King mint/asset address from the NFT picker.');
+      const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
+      if (account.owner === TOKEN_2022_PROGRAM_ID.toBase58()) {
+        const isTokenAccount = String(account.parsedType || '').toLowerCase() === 'account';
+        const hint = isTokenAccount && account.parsedInfo?.mint
+          ? ` Use mint ${account.parsedInfo.mint} instead of the token account.`
+          : '';
+        throw bridgeBadRequest(`${msg}.${hint}`.slice(0, 240));
+      }
+      if (account.owner && account.owner !== SOLANA_MPL_CORE_PROGRAM) {
+        throw bridgeBadRequest(`Solana source address is not a ${collectionLabel} NFT asset. Use the NFT mint/asset address, not a wallet, token account, or transaction signature.`);
+      }
+      if (!new RegExp(`Token-2022|token|mint|owner|1-of-1|${collectionLabel.replace(/\s+/g, '\\s+')}`, 'i').test(msg)) throw err;
     }
-    const { TOKEN_2022_PROGRAM_ID } = require('@solana/spl-token');
-    if (account.owner === TOKEN_2022_PROGRAM_ID.toBase58()) {
-      const isTokenAccount = String(account.parsedType || '').toLowerCase() === 'account';
-      const hint = isTokenAccount && account.parsedInfo?.mint
-        ? ` Use mint ${account.parsedInfo.mint} instead of the token account.`
-        : '';
-      throw bridgeBadRequest(`${msg}.${hint}`.slice(0, 240));
-    }
-    if (account.owner && account.owner !== SOLANA_MPL_CORE_PROGRAM) {
-      throw bridgeBadRequest('Solana source address is not a Demon King NFT asset. Use the NFT mint/asset address, not a wallet, token account, or transaction signature.');
-    }
-    if (!/Token-2022|token|mint|owner|1-of-1|Demon King/i.test(msg)) throw err;
   }
-  const migrated = solanaMigratedCoreAsset(sourceAsset);
+  const migrated = collectionSlug === 'demonking' ? solanaMigratedCoreAsset(sourceAsset) : null;
   if (migrated) {
     const replacement = migrated.newMint || migrated.mint || migrated.assetAddress || 'the migrated Token-2022 mint';
     throw bridgeBadRequest(`This legacy Solana Core NFT was migrated. Use replacement mint ${replacement}`);
@@ -618,14 +680,16 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
     asset = await withSolanaRpcFallback(async (rpc) => {
       const umi = createUmi(rpc).use(mplCore());
       return fetchAsset(umi, publicKey(sourceAsset));
-    }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls()), label: 'Solana bridge source asset read' });
+    }, { urls: solanaRpcUrls(), label: 'Solana bridge source asset read' });
   } catch {
-    throw bridgeBadRequest('Solana source asset is not a Demon King NFT or was not found. Use the current mint/asset address from the NFT picker.');
+    throw bridgeBadRequest(`Solana source asset is not a ${collectionLabel} NFT or was not found. Use the current mint/asset address from the NFT picker.`);
   }
   const owner = solanaAssetOwner(asset);
   const collection = solanaAssetCollection(asset);
-  if (String(collection) !== String(dep.collection)) {
-    throw bridgeBadRequest('Solana asset is not in the Demon King collection');
+  const collectionMatches = String(collection) === String(dep.collection);
+  const acceptedLegacyBridge = !collection && solanaAssetLooksLikeLegacyBridge(asset, dep, collectionSlug);
+  if (!collectionMatches && !acceptedLegacyBridge) {
+    throw bridgeBadRequest(`Solana asset is not in the ${collectionLabel} collection`);
   }
   if (sourceOwner && String(owner) !== String(sourceOwner)) {
     throw bridgeBadRequest('Solana source wallet is not the asset owner');
@@ -634,7 +698,8 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner) {
     standard: 'mpl-core',
     asset: sourceAsset,
     owner,
-    collection,
+    collection: collection || dep.collection,
+    legacyCollectionless: acceptedLegacyBridge || undefined,
     level: solanaAssetLevel(asset),
   };
 }
@@ -698,6 +763,7 @@ async function verifySolanaToken2022Burn({ conn, allIxs, asset, owner }) {
 // Returns { asset, level, destinationChainId, destAddress } or { error }.
 async function verifySolanaBurnTx(txSig, opts = {}) {
   try {
+    const collectionSlug = normalizeBridgeCollectionSlug(opts.collection || opts.collectionSlug);
     const { Connection } = require('@solana/web3.js');
     const { conn, parsed } = await withSolanaRpcFallback(async (rpc) => {
       const connection = createSolanaConnection(Connection, rpc, 'confirmed');
@@ -725,7 +791,7 @@ async function verifySolanaBurnTx(txSig, opts = {}) {
     const destAddress = normalizeDestAddrForChainId(parsedMemo.destAddress, destinationChainId);
     if (!destAddress) return { error: `memo destAddress malformed for chainId ${destinationChainId}` };
 
-    const solanaDeploy = deploymentOf('solana');
+    const solanaDeploy = deploymentOf('solana', collectionSlug);
     const expectedCollection = solanaDeploy?.collection;
     if (!parsedMemo.legacy && expectedCollection && collection !== expectedCollection) {
       return { error: 'memo collection does not match deployment collection' };
@@ -840,9 +906,10 @@ function normalizeDestAddrForChainId(raw, chainId) {
 
 async function buildSourceRef(sourceChain, params) {
   const { keccak256, encodeAbiParameters, getAddress } = await import('viem');
+  const collectionSlug = normalizeBridgeCollectionSlug(params?.collection || params?.collectionSlug);
   if (EVM_CHAINS.has(sourceChain)) {
     // EVM: keccak256(abi.encode("EVM", chainId, contract, tokenId))
-    const deploy = deploymentOf(sourceChain);
+    const deploy = deploymentOf(sourceChain, collectionSlug);
     const contract = getAddress(deploy.proxy);
     return keccak256(encodeAbiParameters(
       [{ type: 'string' }, { type: 'uint256' }, { type: 'address' }, { type: 'uint256' }],
@@ -915,6 +982,7 @@ module.exports = {
   NON_EVM_CHAINS,
   ALL_CHAINS,
   deploymentOf,
+  normalizeBridgeCollectionSlug,
   normalizeAptosAddress,
   aptosPrimaryFungibleStoreAddress,
   aptosNativeFeePaidOctas,

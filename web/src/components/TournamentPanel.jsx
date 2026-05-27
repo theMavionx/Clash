@@ -1082,7 +1082,12 @@ const S = {
   dailyList: { display: 'flex', flexDirection: 'column', gap: 5 },
   dailyPlayerRow: {
     display: 'grid', gridTemplateColumns: '24px minmax(0, 1fr) max-content',
-    alignItems: 'center', gap: 6, border: '2px solid #d4c8b0', borderRadius: 10,
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 2,
+    borderStyle: 'solid',
+    borderColor: '#d4c8b0',
+    borderRadius: 10,
     padding: '5px 7px',
   },
   dailyPlayerRank: {

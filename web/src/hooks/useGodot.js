@@ -9,6 +9,11 @@ const SelectedBuildingContext = createContext(null);
 const UIContext = createContext(null);
 const TutorialContext = createContext(null);
 
+const TUTORIAL_FLAG_BASE = 1;
+const TUTORIAL_FLAG_ARMY = 2;
+const TUTORIAL_FLAG_TRADE = 8;
+const TUTORIAL_FLAG_VIDEO = 16;
+
 function shallowEqualObject(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -79,7 +84,7 @@ export function GodotProvider({ children }) {
   const resourceCapsRef = useRef({ gold: 10000, wood: 10000, ore: 10000 });
   const errorTimerRef = useRef(null);
   const [tutorialFlags, setTutorialFlags] = useState(0xFF); // default all done, server overrides
-  const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|null
+  const [tutorialPhase, setTutorialPhase] = useState(null); // 'base'|'army'|'attack'|'trade'|'video'|null
   // Remember the token the last fetch was keyed on — re-fetch when it changes
   // (logout→register, account switch, session swap). A boolean "fetched once"
   // flag would miss these transitions and leave a fresh account with the
@@ -142,9 +147,10 @@ export function GodotProvider({ children }) {
                     if (tutorialTokenRef.current !== tokenForFetch) return;
                     const flags = res.tutorial_flags ?? 0xFF;
                     setTutorialFlags(flags);
-                    if (!(flags & 1)) setTutorialPhase('base');
-                    else if (!(flags & 2)) setTutorialPhase('army');
-                    else if (!(flags & 8)) setTutorialPhase('trade');
+                    if (!(flags & TUTORIAL_FLAG_BASE)) setTutorialPhase('base');
+                    else if (!(flags & TUTORIAL_FLAG_ARMY)) setTutorialPhase('army');
+                    else if (!(flags & TUTORIAL_FLAG_TRADE)) setTutorialPhase('trade');
+                    else if (!(flags & TUTORIAL_FLAG_VIDEO)) setTutorialPhase('video');
                     else setTutorialPhase(null);
                   }).catch(() => {});
               };

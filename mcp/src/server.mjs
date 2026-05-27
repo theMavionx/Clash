@@ -85,7 +85,7 @@ const PYTH_BENCHMARKS_URL = 'https://benchmarks.pyth.network/v1/shims/tradingvie
 const BINANCE_KLINES_URL = 'https://api.binance.com/api/v3/klines';
 const AVANTIS_MARKET_SCAN_CACHE_MS = 30_000;
 let avantisMarketScanCache = { key: '', ts: 0, data: null };
-const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 10;
+const DEFAULT_DECIBEL_BUILDER_FEE_BPS = 5;
 const DECIBEL_BUILDER_FEE_BPS_RAW = Number(process.env.DECIBEL_BUILDER_FEE_BPS || DEFAULT_DECIBEL_BUILDER_FEE_BPS);
 const DECIBEL_BUILDER_FEE_BPS = Number.isFinite(DECIBEL_BUILDER_FEE_BPS_RAW) && DECIBEL_BUILDER_FEE_BPS_RAW > 0
   ? DECIBEL_BUILDER_FEE_BPS_RAW

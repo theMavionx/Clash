@@ -5,6 +5,9 @@ Two independent 250-supply drops:
 - Base: ERC-721 contract `DemonKingBase`.
 - Solana: Metaplex Core Candy Machine with Sol Payment guard.
 
+For the prepared reusable 555-supply model for a new collection, see
+[`NEW_COLLECTION.md`](NEW_COLLECTION.md).
+
 ## Required Env
 
 Keep secrets in `web/.env` or root `.env`; never commit them.

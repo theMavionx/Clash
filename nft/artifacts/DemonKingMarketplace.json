@@ -1931,7 +1931,7 @@
   "storageLayout": {
     "storage": [
       {
-        "astId": 5582,
+        "astId": 7859,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "_guardStatus",
         "offset": 0,
@@ -1939,7 +1939,7 @@
         "type": "t_uint256"
       },
       {
-        "astId": 5615,
+        "astId": 7892,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "__gap",
         "offset": 0,
@@ -1947,15 +1947,15 @@
         "type": "t_array(t_uint256)49_storage"
       },
       {
-        "astId": 4592,
+        "astId": 6869,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "demonKing",
         "offset": 0,
         "slot": "50",
-        "type": "t_contract(IERC721)11554"
+        "type": "t_contract(IERC721)13831"
       },
       {
-        "astId": 4594,
+        "astId": 6871,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "treasury",
         "offset": 0,
@@ -1963,7 +1963,7 @@
         "type": "t_address"
       },
       {
-        "astId": 4596,
+        "astId": 6873,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "defaultRoyaltyBps",
         "offset": 20,
@@ -1971,7 +1971,7 @@
         "type": "t_uint16"
       },
       {
-        "astId": 4600,
+        "astId": 6877,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "acceptedPaymentToken",
         "offset": 0,
@@ -1979,15 +1979,15 @@
         "type": "t_mapping(t_address,t_bool)"
       },
       {
-        "astId": 4618,
+        "astId": 6895,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "listings",
         "offset": 0,
         "slot": "53",
-        "type": "t_mapping(t_uint256,t_struct(Listing)4613_storage)"
+        "type": "t_mapping(t_uint256,t_struct(Listing)6890_storage)"
       },
       {
-        "astId": 4622,
+        "astId": 6899,
         "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
         "label": "__gap",
         "offset": 0,
@@ -2018,7 +2018,7 @@
         "label": "bool",
         "numberOfBytes": "1"
       },
-      "t_contract(IERC721)11554": {
+      "t_contract(IERC721)13831": {
         "encoding": "inplace",
         "label": "contract IERC721",
         "numberOfBytes": "20"
@@ -2030,19 +2030,19 @@
         "numberOfBytes": "32",
         "value": "t_bool"
       },
-      "t_mapping(t_uint256,t_struct(Listing)4613_storage)": {
+      "t_mapping(t_uint256,t_struct(Listing)6890_storage)": {
         "encoding": "mapping",
         "key": "t_uint256",
         "label": "mapping(uint256 => struct DemonKingMarketplace.Listing)",
         "numberOfBytes": "32",
-        "value": "t_struct(Listing)4613_storage"
+        "value": "t_struct(Listing)6890_storage"
       },
-      "t_struct(Listing)4613_storage": {
+      "t_struct(Listing)6890_storage": {
         "encoding": "inplace",
         "label": "struct DemonKingMarketplace.Listing",
         "members": [
           {
-            "astId": 4602,
+            "astId": 6879,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "seller",
             "offset": 0,
@@ -2050,7 +2050,7 @@
             "type": "t_address"
           },
           {
-            "astId": 4604,
+            "astId": 6881,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "paymentToken",
             "offset": 0,
@@ -2058,7 +2058,7 @@
             "type": "t_address"
           },
           {
-            "astId": 4606,
+            "astId": 6883,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "price",
             "offset": 0,
@@ -2066,7 +2066,7 @@
             "type": "t_uint256"
           },
           {
-            "astId": 4608,
+            "astId": 6885,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "createdAt",
             "offset": 0,
@@ -2074,7 +2074,7 @@
             "type": "t_uint64"
           },
           {
-            "astId": 4610,
+            "astId": 6887,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "expiresAt",
             "offset": 8,
@@ -2082,7 +2082,7 @@
             "type": "t_uint64"
           },
           {
-            "astId": 4612,
+            "astId": 6889,
             "contract": "DemonKingMarketplace.sol:DemonKingMarketplace",
             "label": "active",
             "offset": 16,

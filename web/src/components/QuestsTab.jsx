@@ -292,7 +292,9 @@ function QuestsTab({ markets = [] }) {
       <div style={{...S.empty, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12}}>
         <div style={{
           width: 36, height: 36, borderRadius: '50%',
-          border: '3px solid rgba(92,58,33,0.15)',
+          borderWidth: 3,
+          borderStyle: 'solid',
+          borderColor: 'rgba(92,58,33,0.15)',
           borderTopColor: '#e8b830',
           animation: 'qt-spin 0.9s linear infinite',
         }} />

@@ -25,6 +25,13 @@ const {
 } = require('./solana_rpc');
 
 const NFT_ROOT = path.resolve(__dirname, '..', 'nft');
+const {
+  deploymentOf: bridgeHelperDeploymentOf,
+  getSolanaBridgeAssetInfo: bridgeHelperGetSolanaBridgeAssetInfo,
+  normalizeBridgeCollectionSlug: normalizeBridgeCollectionSlugValue,
+} = require('./bridge_helpers');
+const deploymentOf = bridgeHelperDeploymentOf;
+const normalizeBridgeCollectionSlug = normalizeBridgeCollectionSlugValue;
 
 // 30s in-memory cache for /nft/owned/:chain/:address results. The bridge
 // wizard polls this endpoint each time the player flips source chains and
@@ -52,6 +59,13 @@ function makeRateLimiter(maxPerMinute) {
 function readJsonIfExists(p) {
   try { return fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : null; }
   catch { return null; }
+}
+
+function solanaCoreAssetWasMigrated(assetId) {
+  const migration = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-token2022-migration-mainnet.json')) || {};
+  const entries = Array.isArray(migration.entries) ? migration.entries : [];
+  const wanted = String(assetId || '');
+  return !!wanted && entries.some((entry) => String(entry.oldAsset || entry.asset || '') === wanted);
 }
 
 function normalizeNftLevel(level) {
@@ -152,6 +166,10 @@ function solanaCoreAssetId(asset) {
 }
 
 function solanaCoreAssetCollection(asset) {
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = publicKeyText(group?.group_value || group?.value);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
   const ua = asset?.updateAuthority;
   if (ua?.type === 'Collection') return publicKeyText(ua.address);
   if (ua?.__kind === 'Collection') return publicKeyText(ua.fields?.[0]);
@@ -166,20 +184,35 @@ function solanaCoreAssetLevel(asset) {
   const attrs = [
     asset?.attributes?.attributeList,
     asset?.plugins?.attributes?.attributeList,
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
   ].filter(Array.isArray).flat();
   const levelAttr = attrs.find((row) => String(row?.key || row?.trait_type || '').toLowerCase() === 'level');
   const level = Number(levelAttr?.value);
+  if ([1, 2, 3].includes(level)) return level;
+  const text = `${asset?.name || ''} ${asset?.uri || ''} ${asset?.content?.metadata?.name || ''} ${asset?.content?.json_uri || ''}`;
+  const nameLevel = text.match(/\bL(?:evel)?\s*([123])\b/i);
+  if (nameLevel) return Number(nameLevel[1]);
   return normalizeNftLevel(level || 1);
 }
 
 function solanaCoreAssetToken(asset) {
   const assetId = solanaCoreAssetId(asset);
   const level = solanaCoreAssetLevel(asset);
+  const imageUrl = String(
+    asset?.content?.links?.image
+    || asset?.content?.files?.find?.((file) => String(file?.mime || file?.type || '').startsWith('image/') || file?.uri)?.uri
+    || ''
+  );
+  const uri = asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '';
   return {
     asset: assetId,
+    mint: assetId,
+    tokenId: assetId,
     level,
-    name: asset?.name || `Demon King L${level}`,
-    imageUrl: nftLevelImageUrl(level, assetId),
+    name: asset?.name || asset?.content?.metadata?.name || `Demon King L${level}`,
+    imageUrl: imageUrl || nftLevelImageUrl(level, assetId),
+    uri,
     chain: 'solana',
     standard: 'mpl-core',
   };
@@ -187,9 +220,136 @@ function solanaCoreAssetToken(asset) {
 
 function solanaCoreAssetLooksRelevant(asset, collection) {
   if (solanaCoreAssetCollection(asset) === collection) return true;
-  const name = String(asset?.name || '').toLowerCase();
-  const uri = String(asset?.uri || '').toLowerCase();
-  return name.includes('demon king') && uri.includes('/api/nft/solana/');
+  const name = String(asset?.name || asset?.content?.metadata?.name || '').toLowerCase();
+  const uri = String(asset?.uri || asset?.content?.json_uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  const attrs = [
+    asset?.attributes?.attributeList,
+    asset?.plugins?.attributes?.attributeList,
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
+  ].filter(Array.isArray).flat();
+  return (name.includes('demon king') && uri.includes('/api/nft/solana/'))
+    || attrs.some((attr) => String(attr?.key || attr?.trait_type || '').toLowerCase() === 'sourceref');
+}
+
+async function solanaDasRpc(url, method, params, timeoutMs = 10_000) {
+  const response = await timeoutPromise(fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  }), timeoutMs, `Solana DAS ${method}`);
+  const text = await response.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok || !json || json.error) {
+    const msg = json?.error?.message || text || `HTTP ${response.status}`;
+    throw new Error(`Solana DAS ${method} failed: ${String(msg).slice(0, 240)}`);
+  }
+  return json.result;
+}
+
+function solanaDasToken2022LooksRelevant(asset) {
+  if (asset?.interface === 'MplCoreAsset') return false;
+  const name = String(asset?.content?.metadata?.name || asset?.name || '').toLowerCase();
+  const uri = String(asset?.content?.json_uri || asset?.uri || asset?.content?.metadata?.uri || '').toLowerCase();
+  const attrs = [
+    asset?.content?.metadata?.attributes,
+    asset?.content?.metadata?.properties?.attributes,
+  ].filter(Array.isArray).flat();
+  return name.includes('demon king')
+    && (
+      uri.includes('/api/nft/solana/token2022/')
+      || uri.includes('/api/nft/solana/')
+      || attrs.some((attr) => String(attr?.value || '').toLowerCase().includes('demon-king-token2022'))
+    );
+}
+
+function solanaDasToken2022Token(asset) {
+  const mint = String(asset?.id || '');
+  const level = solanaCoreAssetLevel(asset);
+  const imageUrl = String(
+    asset?.content?.links?.image
+    || asset?.content?.files?.find?.((file) => String(file?.mime || file?.type || '').startsWith('image/') || file?.uri)?.uri
+    || ''
+  );
+  return {
+    asset: mint,
+    mint,
+    tokenId: mint,
+    level,
+    name: asset?.content?.metadata?.name || `Demon King L${level}`,
+    imageUrl: imageUrl || nftLevelImageUrl(level, mint),
+    uri: asset?.content?.json_uri || asset?.uri || '',
+    chain: 'solana',
+    standard: 'token2022',
+  };
+}
+
+async function listOwnedSolanaDemonKingNftsFromDas(ownerRaw, collection) {
+  let lastErr = null;
+  for (const rpc of solanaRpcUrls()) {
+    try {
+      const tokens = [];
+      let page = 1;
+      while (page <= 5) {
+        const result = await solanaDasRpc(rpc, 'getAssetsByOwner', {
+          ownerAddress: ownerRaw,
+          page,
+          limit: 1000,
+          displayOptions: {
+            showCollectionMetadata: true,
+            showFungible: false,
+            showNativeBalance: false,
+            showUnverifiedCollections: true,
+          },
+        });
+        const items = Array.isArray(result?.items) ? result.items : [];
+        for (const asset of items) {
+          if (publicKeyText(asset?.ownership?.owner) !== ownerRaw) continue;
+          let token = null;
+          if (asset?.interface === 'MplCoreAsset') {
+            const assetId = solanaCoreAssetId(asset);
+            if (!assetId || solanaCoreAssetWasMigrated(assetId)) continue;
+            if (!solanaCoreAssetLooksRelevant(asset, collection)) continue;
+            token = solanaCoreAssetToken(asset);
+          } else if (solanaDasToken2022LooksRelevant(asset)) {
+            token = solanaDasToken2022Token(asset);
+          }
+          if (!token) continue;
+          try {
+            const info = await bridgeHelperGetSolanaBridgeAssetInfo(token.tokenId || token.asset || token.mint, ownerRaw);
+            tokens.push({
+              ...token,
+              standard: info.standard || token.standard,
+              tokenAccount: info.tokenAccount || token.tokenAccount,
+              level: normalizeNftLevel(info.level || token.level),
+              collection: info.collection || token.collection,
+              legacyCollectionless: info.legacyCollectionless || undefined,
+            });
+          } catch {
+            // DAS can keep stale burned/migrated Solana assets visible for a
+            // while. If the bridge verifier cannot read and validate it, the
+            // marketplace cannot list it, so keep it out of the owned list.
+          }
+        }
+        const total = Number(result?.total) || items.length;
+        if (items.length < 1000 || page * 1000 >= total) break;
+        page += 1;
+      }
+      return {
+        chain: 'solana',
+        owner: ownerRaw,
+        collection,
+        total: tokens.length,
+        tokens,
+        source: 'server-solana-das',
+      };
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) throw lastErr;
+  return null;
 }
 
 async function listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, collection) {
@@ -239,6 +399,7 @@ async function listOwnedSolanaCoreNftsFromRecentMints(ownerRaw, collection) {
       const settled = await timeoutPromise(Promise.allSettled([...candidateAssets].map(async (assetId) => {
         const asset = await fetchAsset(umi, publicKey(assetId));
         if (publicKeyText(asset?.owner) !== ownerRaw) return null;
+        if (solanaCoreAssetWasMigrated(assetId)) return null;
         if (!solanaCoreAssetLooksRelevant(asset, collection)) return null;
         return solanaCoreAssetToken(asset);
       })), 8_000, 'Solana recent Core asset fetch');
@@ -533,11 +694,21 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
   }
 
   const levels = [];
+  const failedLevelIds = [];
   for (let i = 0; i < mine.length; i += chunkSize) {
     const contracts = mine.slice(i, i + chunkSize)
       .map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
     const levelResults = await tryRpcs((client) => client.multicall({ contracts, allowFailure: true }));
-    levels.push(...levelResults.map((r) => (r?.status === 'success' ? Number(r.result) : 1)));
+    levels.push(...levelResults.map((r, offset) => {
+      if (r?.status === 'success') return Number(r.result);
+      failedLevelIds.push(String(mine[i + offset]));
+      return null;
+    }));
+  }
+  if (failedLevelIds.length) {
+    const err = new Error(`${chainKey} V3 level read failed for ${failedLevelIds.length} owned NFT(s)`);
+    err.status = 502;
+    throw err;
   }
 
   const tokens = mine.map((id, i) => ({
@@ -547,6 +718,210 @@ async function listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options = {}) {
     imageUrl: nftLevelImageUrl(levels[i], id.toString()),
   }));
   const body = { chain: chainKey, owner, contract: proxy, total: tokens.length, tokens, source: 'server-evm-demon-king' };
+  _ownedNftCache.set(cacheKey, { at: Date.now(), body });
+  return body;
+}
+
+function collectionLevelImageUrl(collectionSlug, level, id = null) {
+  const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
+  if (slug === 'voidspore') {
+    const lvl = normalizeNftLevel(level);
+    const ext = lvl === 3 ? 'jpg' : 'png';
+    return `/cdn/nft/voidspore/${lvl}/default.${ext}`;
+  }
+  return nftLevelImageUrl(level, id);
+}
+
+function collectionDisplayName(collectionSlug) {
+  return normalizeBridgeCollectionSlugValue(collectionSlug) === 'voidspore' ? 'Voidspore' : 'Demon King';
+}
+
+async function listOwnedEvmCollectionNfts(collectionSlugRaw, chainKey, ownerRaw, options = {}) {
+  const collectionSlug = normalizeBridgeCollectionSlugValue(collectionSlugRaw);
+  if (collectionSlug === 'demonking') return listOwnedEvmDemonKingNfts(chainKey, ownerRaw, options);
+  if (!SUPPORTED_EVM_CHAINS[chainKey]) throw new Error(`Unsupported EVM NFT chain: ${chainKey}`);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(ownerRaw || ''))) {
+    const err = new Error('EVM address malformed');
+    err.status = 400;
+    throw err;
+  }
+
+  const { createPublicClient, getAddress, http, defineChain } = await import('viem');
+  const viemChains = await import('viem/chains');
+  const monad = defineChain({
+    id: 143,
+    name: 'Monad',
+    nativeCurrency: { name: 'Monad', symbol: 'MON', decimals: 18 },
+    rpcUrls: { default: { http: ['https://rpc.monad.xyz'] } },
+    contracts: { multicall3: { address: '0xcA11bde05977b3631167028862bE2a173976CA11' } },
+  });
+  const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[chainKey];
+  const deployment = bridgeHelperDeploymentOf(chainKey, collectionSlug);
+  if (!deployment?.proxy && !deployment?.contract) {
+    const err = new Error(`${collectionDisplayName(collectionSlug)} ${chainKey} is not deployed`);
+    err.status = 503;
+    throw err;
+  }
+
+  const owner = getAddress(ownerRaw);
+  const proxy = getAddress(deployment.proxy || deployment.contract);
+  const cacheKey = `${collectionSlug}:evm:${chainKey}:${owner.toLowerCase()}`;
+  const cached = _ownedNftCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
+    return cached.body;
+  }
+
+  const envKey = collectionSlug.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  const envRpc1 = process.env[`NFT_${envKey}_${chainKey.toUpperCase()}_RPC_URL`];
+  const envRpc2 = process.env[`NFT_${chainKey.toUpperCase()}_RPC_URL`];
+  const envRpc3 = process.env[`${chainKey.toUpperCase()}_RPC_URL`];
+  const publicAlts = {
+    base: ['https://mainnet.base.org', 'https://base.llamarpc.com', 'https://base-rpc.publicnode.com'],
+    arbitrum: ['https://arb1.arbitrum.io/rpc', 'https://arbitrum.llamarpc.com', 'https://arbitrum-one.publicnode.com'],
+    monad: ['https://rpc.monad.xyz'],
+  }[chainKey] || [];
+  const rpcs = [envRpc1, envRpc2, envRpc3, deployment.rpcUrl, ...publicAlts].filter(Boolean);
+
+  async function tryRpcs(fn) {
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (const rpc of rpcs) {
+        try {
+          const client = createPublicClient({ chain: chainViem, transport: http(rpc) });
+          return await timeoutPromise(fn(client), 12_000, `${collectionSlug} ${chainKey} owned NFT scan`);
+        } catch (e) { lastErr = e; }
+      }
+      await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+    }
+    throw lastErr || new Error(`${chainKey} RPC unavailable`);
+  }
+
+  const totalMinted = await tryRpcs((client) => client.readContract({
+    address: proxy,
+    abi: [{ name: 'totalMinted', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] }],
+    functionName: 'totalMinted',
+  }));
+  const total = Math.max(0, Number(totalMinted) || 0);
+  const ids = Array.from({ length: total }, (_, i) => BigInt(i + 1));
+  const ownerAbi = [{ name: 'ownerOf', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'address' }] }];
+  const levelAbi = [{ name: 'tokenLevel', type: 'function', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint8' }] }];
+  const ownerResults = [];
+  const chunkSize = 80;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const contracts = ids.slice(i, i + chunkSize)
+      .map((id) => ({ address: proxy, abi: ownerAbi, functionName: 'ownerOf', args: [id] }));
+    ownerResults.push(...await tryRpcs((client) => client.multicall({ contracts, allowFailure: true })));
+  }
+
+  const mine = [];
+  for (let i = 0; i < total; i++) {
+    const r = ownerResults[i];
+    if (r?.status === 'success' && r.result && getAddress(r.result) === owner) mine.push(BigInt(i + 1));
+  }
+
+  const levels = [];
+  const failedLevelIds = [];
+  for (let i = 0; i < mine.length; i += chunkSize) {
+    const contracts = mine.slice(i, i + chunkSize)
+      .map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
+    const levelResults = await tryRpcs((client) => client.multicall({ contracts, allowFailure: true }));
+    levels.push(...levelResults.map((r, offset) => {
+      if (r?.status === 'success') return Number(r.result);
+      failedLevelIds.push(String(mine[i + offset]));
+      return null;
+    }));
+  }
+  if (failedLevelIds.length) {
+    const err = new Error(`${collectionDisplayName(collectionSlug)} ${chainKey} level read failed for ${failedLevelIds.length} owned NFT(s)`);
+    err.status = 502;
+    throw err;
+  }
+
+  const tokens = mine.map((id, i) => ({
+    chain: chainKey,
+    tokenId: id.toString(),
+    level: normalizeNftLevel(levels[i]),
+    name: `${collectionDisplayName(collectionSlug)} #${id.toString()}`,
+    imageUrl: collectionLevelImageUrl(collectionSlug, levels[i], id.toString()),
+  }));
+  const body = { collection: collectionSlug, chain: chainKey, owner, contract: proxy, total: tokens.length, tokens, source: `server-evm-${collectionSlug}` };
+  _ownedNftCache.set(cacheKey, { at: Date.now(), body });
+  return body;
+}
+
+function solanaCoreAssetLooksLikeCollection(asset, collectionSlug, collectionAddress) {
+  if (solanaCoreAssetCollection(asset) === collectionAddress) return true;
+  const slug = normalizeBridgeCollectionSlugValue(collectionSlug);
+  const name = String(asset?.name || '').toLowerCase();
+  const uri = String(asset?.uri || '').toLowerCase();
+  if (slug === 'voidspore') return name.includes('voidspore') || uri.includes('/api/nft/voidspore/solana/');
+  return solanaCoreAssetLooksRelevant(asset, collectionAddress);
+}
+
+function solanaCoreCollectionToken(asset, collectionSlug) {
+  const assetId = solanaCoreAssetId(asset);
+  const level = solanaCoreAssetLevel(asset);
+  return {
+    asset: assetId,
+    mint: assetId,
+    tokenId: assetId,
+    level,
+    name: asset?.name || `${collectionDisplayName(collectionSlug)} L${level}`,
+    imageUrl: collectionLevelImageUrl(collectionSlug, level, assetId),
+    chain: 'solana',
+    standard: 'mpl-core',
+  };
+}
+
+async function listOwnedSolanaCollectionNfts(collectionSlugRaw, ownerRaw, options = {}) {
+  const collectionSlug = normalizeBridgeCollectionSlugValue(collectionSlugRaw);
+  if (collectionSlug === 'demonking') return listOwnedSolanaDemonKingNfts(ownerRaw, options);
+  const dep = bridgeHelperDeploymentOf('solana', collectionSlug);
+  if (!dep?.collection) {
+    const err = new Error(`${collectionDisplayName(collectionSlug)} Solana collection is not deployed`);
+    err.status = 503;
+    throw err;
+  }
+  const owner = String(ownerRaw || '').trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(owner)) {
+    const err = new Error('Solana address malformed');
+    err.status = 400;
+    throw err;
+  }
+
+  const cacheKey = `${collectionSlug}:solana:${owner}`;
+  const cached = _ownedNftCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
+    return cached.body;
+  }
+
+  const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
+  const { mplCore, fetchAssetsByOwner } = await import('@metaplex-foundation/mpl-core');
+  const { publicKey } = await import('@metaplex-foundation/umi');
+  const assets = await withSolanaRpcFallback(async (rpc) => {
+    const umi = createUmi(rpc).use(mplCore());
+    return timeoutPromise(
+      fetchAssetsByOwner(umi, publicKey(owner), { skipDerivePlugins: true }),
+      12_000,
+      `${collectionDisplayName(collectionSlug)} Solana owner scan ${rpc}`,
+    );
+  }, { urls: solanaNonHeliusRpcUrls(solanaRpcUrls([dep.rpcUrl])), label: `${collectionDisplayName(collectionSlug)} Solana owner scan` });
+
+  const tokens = assets
+    .filter((asset) => publicKeyText(asset.owner) === owner)
+    .filter((asset) => solanaCoreAssetLooksLikeCollection(asset, collectionSlug, dep.collection))
+    .map((asset) => solanaCoreCollectionToken(asset, collectionSlug))
+    .filter((token) => token.asset);
+
+  const body = {
+    collection: collectionSlug,
+    chain: 'solana',
+    owner,
+    collectionAddress: dep.collection,
+    total: tokens.length,
+    tokens,
+    source: `server-solana-${collectionSlug}`,
+  };
   _ownedNftCache.set(cacheKey, { at: Date.now(), body });
   return body;
 }
@@ -566,7 +941,7 @@ function normalizeSolanaDemonKingToken(token = {}) {
   };
 }
 
-function normalizeAptosDemonKingToken(token = {}) {
+function normalizeAptosCollectionToken(token = {}, collectionSlug = 'demonking') {
   const tokenId = String(token.tokenId || token.tokenAddress || token.asset || token.id || '').trim();
   if (!tokenId) return null;
   const level = normalizeNftLevel(token.level);
@@ -576,15 +951,20 @@ function normalizeAptosDemonKingToken(token = {}) {
     tokenId,
     tokenAddress: token.tokenAddress || tokenId,
     level,
-    imageUrl: token.imageUrl || nftLevelImageUrl(level, tokenId),
+    imageUrl: token.imageUrl || collectionLevelImageUrl(collectionSlug, level, tokenId),
   };
 }
 
-async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
+function normalizeAptosDemonKingToken(token = {}) {
+  return normalizeAptosCollectionToken(token, 'demonking');
+}
+
+async function listOwnedAptosCollectionNfts(collectionSlugRaw, ownerRaw, options = {}) {
   const { deploymentOf, normalizeAptosAddress } = require('./bridge_helpers');
-  const dep = deploymentOf('aptos');
+  const collectionSlug = normalizeBridgeCollectionSlugValue(collectionSlugRaw);
+  const dep = deploymentOf('aptos', collectionSlug);
   if (!dep?.collection) {
-    const err = new Error('Aptos not deployed');
+    const err = new Error(`${collectionDisplayName(collectionSlug)} Aptos not deployed`);
     err.status = 503;
     throw err;
   }
@@ -595,7 +975,7 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
     throw err;
   }
 
-  const cacheKey = `aptos:${owner}`;
+  const cacheKey = `${collectionSlug}:aptos:${owner}`;
   const cached = _ownedNftCache.get(cacheKey);
   if (!options.force && cached && Date.now() - cached.at < DEMON_KING_OWNED_MEMORY_TTL_MS) {
     return cached.body;
@@ -616,7 +996,7 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
     method: 'POST',
     headers,
     body: JSON.stringify({ query, variables: { owner, collection: dep.collection } }),
-  }), 12_000, 'Aptos Demon King owner scan');
+  }), 12_000, `${collectionDisplayName(collectionSlug)} Aptos owner scan`);
   const json = await response.json().catch(() => ({}));
   if (!response.ok || json?.errors?.length) {
     const err = new Error(json?.errors?.[0]?.message || `Aptos indexer ${response.status}`);
@@ -629,7 +1009,7 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
     let level = 1;
     const props = parseMaybeJsonObject(row.current_token_data?.token_properties);
     if (props?.level != null) level = Number(props.level);
-    const tokenName = row.current_token_data?.token_name || `Demon King ${row.token_data_id}`;
+    const tokenName = row.current_token_data?.token_name || `${collectionDisplayName(collectionSlug)} ${row.token_data_id}`;
     const tokenUri = row.current_token_data?.token_uri || '';
     const displayId = String(
       props.token_index
@@ -640,7 +1020,7 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
       || demonKingDisplayIdFromText(tokenUri)
       || ''
     ).replace(/^#/, '');
-    return normalizeAptosDemonKingToken({
+    return normalizeAptosCollectionToken({
       tokenId: row.token_data_id,
       tokenAddress: row.token_data_id,
       level,
@@ -648,9 +1028,9 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
       uri: tokenUri,
       displayId,
       tokenIndex: displayId,
-      imageUrl: nftLevelImageUrl(level, row.token_data_id),
+      imageUrl: collectionLevelImageUrl(collectionSlug, level, row.token_data_id),
       standard: 'aptos-token-v2',
-    });
+    }, collectionSlug);
   }).filter(Boolean);
 
   const body = {
@@ -659,10 +1039,14 @@ async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
     collection: dep.collection,
     total: tokens.length,
     tokens,
-    source: 'server-aptos-demon-king',
+    source: `server-aptos-${collectionSlug}`,
   };
   _ownedNftCache.set(cacheKey, { at: Date.now(), body });
   return body;
+}
+
+async function listOwnedAptosDemonKingNfts(ownerRaw, options = {}) {
+  return listOwnedAptosCollectionNfts('demonking', ownerRaw, options);
 }
 
 async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
@@ -688,6 +1072,8 @@ async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
 
   let token2022Body = null;
   let token2022Error = null;
+  const tokenRows = [];
+  const sources = [];
   try {
     token2022Body = await listOwnedSolanaToken2022Nfts(owner);
     if (token2022Body.tokens.length) {
@@ -695,8 +1081,8 @@ async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
         ...token2022Body,
         tokens: token2022Body.tokens.map(normalizeSolanaDemonKingToken).filter(Boolean),
       };
-      _ownedNftCache.set(cacheKey, { at: Date.now(), body: token2022Body });
-      return token2022Body;
+      tokenRows.push(...token2022Body.tokens);
+      sources.push(token2022Body.source || 'server-solana-token2022');
     }
   } catch (err) {
     token2022Error = err;
@@ -710,8 +1096,17 @@ async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
         ...recentCoreBody,
         tokens: recentCoreBody.tokens.map(normalizeSolanaDemonKingToken).filter(Boolean),
       };
-      _ownedNftCache.set(cacheKey, { at: Date.now(), body: recentCoreBody });
-      return recentCoreBody;
+      tokenRows.push(...recentCoreBody.tokens);
+      sources.push(recentCoreBody.source || 'server-solana-recent-core');
+    }
+  } catch {}
+
+  try {
+    const dasBody = await listOwnedSolanaDemonKingNftsFromDas(owner, dep.collection);
+    if (dasBody?.tokens?.length) {
+      const dasTokens = dasBody.tokens.map(normalizeSolanaDemonKingToken).filter(Boolean);
+      tokenRows.push(...dasTokens);
+      sources.push(dasBody.source || 'server-solana-das');
     }
   } catch {}
 
@@ -729,20 +1124,36 @@ async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
       );
     }, { urls: solanaOwnedRpcUrls(), label: 'Solana Core owner scan' });
   } catch (err) {
-    const fallback = recentCoreBody || token2022Body;
-    if (fallback) {
-      _ownedNftCache.set(cacheKey, { at: Date.now(), body: fallback });
-      return fallback;
-    }
-    throw token2022Error || err;
+    if (!tokenRows.length) throw token2022Error || err;
   }
 
-  const tokens = assets
+  const coreTokens = assets
     .filter((asset) => publicKeyText(asset.owner) === owner)
+    .filter((asset) => !solanaCoreAssetWasMigrated(solanaCoreAssetId(asset)))
     .filter((asset) => solanaCoreAssetLooksRelevant(asset, dep.collection))
     .map(solanaCoreAssetToken)
     .map(normalizeSolanaDemonKingToken)
     .filter(Boolean);
+  if (coreTokens.length) {
+    tokenRows.push(...coreTokens);
+    sources.push('server-solana-core');
+  }
+
+  const tokensById = new Map();
+  for (const token of tokenRows) {
+    const normalized = normalizeSolanaDemonKingToken(token);
+    if (!normalized) continue;
+    const key = normalized.tokenId;
+    const prev = tokensById.get(key) || {};
+    tokensById.set(key, {
+      ...prev,
+      ...normalized,
+      standard: normalized.standard || prev.standard,
+      tokenAccount: normalized.tokenAccount || prev.tokenAccount,
+      uri: normalized.uri || prev.uri,
+    });
+  }
+  const tokens = [...tokensById.values()];
 
   const body = {
     chain: 'solana',
@@ -750,7 +1161,7 @@ async function listOwnedSolanaDemonKingNfts(ownerRaw, options = {}) {
     collection: dep.collection,
     total: tokens.length,
     tokens,
-    source: 'server-solana-demon-king',
+    source: sources.length ? Array.from(new Set(sources)).join('+') : 'server-solana-demon-king',
     token2022Error: token2022Error ? (token2022Error?.message || String(token2022Error)).slice(0, 160) : undefined,
   };
   _ownedNftCache.set(cacheKey, { at: Date.now(), body });
@@ -1295,6 +1706,48 @@ function mountNftV3Endpoints(router, ctx) {
   //   - Aptos: query the indexer/REST API for tokens by owner under our
   //     collection. Falls back gracefully if the indexer is unavailable.
   //   - Solana: Token-2022 owner scan first, then legacy Core collection scan.
+  async function handleCollectionOwnedLookup(req, res, defaultCollectionSlug = null) {
+    try {
+      const ip = req.ip || 'unknown';
+      const rl = readLimit(ip);
+      if (!rl.ok) return res.status(429).json({ error: 'rate limited' });
+
+      const collectionSlug = normalizeBridgeCollectionSlug(defaultCollectionSlug || req.params.collectionSlug);
+      if (!BRIDGE_COLLECTIONS[collectionSlug]) return res.status(404).json({ error: 'collection not found' });
+      const collection = BRIDGE_COLLECTIONS[collectionSlug];
+      const chainKey = String(req.params.chain || '').toLowerCase();
+      const ownerRaw = String(req.params.address || '').trim();
+      if (!chainKey || !ownerRaw) return res.status(400).json({ error: 'chain + address required' });
+      ensureBridgeChainSupported(collection, chainKey, 'source');
+
+      let body;
+      if (SUPPORTED_EVM_CHAINS[chainKey]) {
+        body = await listOwnedEvmCollectionNfts(collectionSlug, chainKey, ownerRaw);
+      } else if (chainKey === 'solana') {
+        body = await listOwnedSolanaCollectionNfts(collectionSlug, ownerRaw);
+      } else if (chainKey === 'aptos') {
+        body = await listOwnedAptosCollectionNfts(collectionSlug, ownerRaw);
+      } else {
+        return res.status(400).json({ error: `${collection.label} is not configured on ${chainKey}` });
+      }
+      res.set('Cache-Control', 'public, max-age=10');
+      return res.json(body);
+    } catch (err) {
+      ctx.logError?.('nft-collection-owned', err);
+      return res.status(err?.status || 500).json({ error: (err?.message || 'owned lookup failed').slice(0, 200) });
+    }
+  }
+
+  router.get('/nft/demon-king/owned/:chain/:address', (req, res) => (
+    handleCollectionOwnedLookup(req, res, 'demonking')
+  ));
+  router.get('/nft/demonking/owned/:chain/:address', (req, res) => (
+    handleCollectionOwnedLookup(req, res, 'demonking')
+  ));
+  router.get('/nft/:collectionSlug/owned/:chain/:address', (req, res) => (
+    handleCollectionOwnedLookup(req, res)
+  ));
+
   router.get('/nft/owned/:chain/:address', async (req, res) => {
     try {
       const ip = req.ip || 'unknown';
@@ -1378,7 +1831,15 @@ function mountNftV3Endpoints(router, ctx) {
         if (mine.length > 0) {
           const levelCalls = mine.map((id) => ({ address: proxy, abi: levelAbi, functionName: 'tokenLevel', args: [id] }));
           const levelResults = await tryRpcs((client) => client.multicall({ contracts: levelCalls, allowFailure: true }));
-          levels = levelResults.map((r) => (r?.status === 'success' ? Number(r.result) : 1));
+          const failedLevelIds = [];
+          levels = levelResults.map((r, i) => {
+            if (r?.status === 'success') return Number(r.result);
+            failedLevelIds.push(String(mine[i]));
+            return null;
+          });
+          if (failedLevelIds.length) {
+            return res.status(502).json({ error: `${chainKey} V3 level read failed for ${failedLevelIds.length} owned NFT(s)` });
+          }
         }
         const tokens = mine.map((id, i) => ({
           tokenId: id.toString(),
@@ -1504,6 +1965,7 @@ function mountNftV3Endpoints(router, ctx) {
         }
         const tokens = assets
           .filter((a) => publicKeyText(a.owner) === ownerRaw)
+          .filter((a) => !solanaCoreAssetWasMigrated(solanaCoreAssetId(a)))
           .filter((a) => solanaCoreAssetLooksRelevant(a, dep.collection))
           .map(solanaCoreAssetToken);
         if (!tokens.length && recentCoreBody) {
@@ -1695,7 +2157,7 @@ function mountNftV3Endpoints(router, ctx) {
   // Same-chain bridges are rejected.
 
   const bridgeHelpers = require('./bridge_helpers');
-  const { CHAIN_IDS, EVM_CHAINS, ALL_CHAINS, deploymentOf,
+  const { CHAIN_IDS, EVM_CHAINS, ALL_CHAINS, deploymentOf, normalizeBridgeCollectionSlug,
           normalizeAptosAddress,
           aptosAccount, signAptosBridgeReceipt, verifyAptosBurnTx,
           verifySolanaBurnTx, buildSourceRef,
@@ -1764,6 +2226,53 @@ function mountNftV3Endpoints(router, ctx) {
     arbitrum: { chainId: 42161, name: 'DemonKingArbitrum' },
     monad:    { chainId: 143,   name: 'DemonKingMonad'    },
   };
+
+  const BRIDGE_COLLECTIONS = {
+    demonking: {
+      slug: 'demonking',
+      label: 'Demon King',
+      evmEip712Version: '3',
+      chains: new Set(ALL_CHAINS),
+    },
+    voidspore: {
+      slug: 'voidspore',
+      label: 'Voidspore',
+      evmEip712Version: '1',
+      chains: new Set(['base', 'arbitrum', 'monad', 'aptos', 'solana']),
+    },
+  };
+
+  function bridgeCollectionFromReq(req) {
+    const slug = normalizeBridgeCollectionSlug(req.body?.collection || req.query?.collection);
+    return BRIDGE_COLLECTIONS[slug] || null;
+  }
+
+  function bridgeCollectionChainList(collection) {
+    return [...(collection?.chains || [])].join('|');
+  }
+
+  function ensureBridgeChainSupported(collection, chainKey, role) {
+    if (!collection?.chains?.has(chainKey)) {
+      const err = new Error(`${collection?.label || 'NFT'} ${role} chain is not supported. Use ${bridgeCollectionChainList(collection)}.`);
+      err.status = 400;
+      throw err;
+    }
+  }
+
+  function bridgeDeploymentOf(chainKey, collectionSlug) {
+    return deploymentOf(chainKey, collectionSlug);
+  }
+
+  function evmDestSpec(chainKey, collectionSlug, deployment = null) {
+    const baseSpec = EVM_DEST_DOMAIN[chainKey];
+    if (!baseSpec) return null;
+    if (normalizeBridgeCollectionSlug(collectionSlug) === 'demonking') return baseSpec;
+    return {
+      chainId: baseSpec.chainId,
+      name: deployment?.eip712Name || `ClashCollection:${collectionSlug}:${chainKey}`,
+      version: deployment?.eip712Version || '1',
+    };
+  }
 
   // Lightweight per-chain destAddress normalizer. Aligns the API boundary
   // with the actual on-chain shape and keeps bridge memo/receipt data stable.
@@ -2033,6 +2542,9 @@ function mountNftV3Endpoints(router, ctx) {
       }
 
       const { getAddress, isAddress } = await import('viem');
+      const collection = bridgeCollectionFromReq(req);
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const tokenIdRaw  = req.body?.sourceTokenId;
@@ -2042,25 +2554,29 @@ function mountNftV3Endpoints(router, ctx) {
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
       if (!ALL_CHAINS.includes(destChain)) return res.status(400).json({ error: 'Unsupported destChain. Use base|arbitrum|monad|aptos|solana.' });
       if (!ALL_CHAINS.includes(sourceChain)) return res.status(400).json({ error: 'Unsupported sourceChain. Use base|arbitrum|monad|aptos|solana.' });
-      const destSpec = EVM_DEST_DOMAIN[destChain];  // null for non-EVM
+      ensureBridgeChainSupported(collection, sourceChain, 'source');
+      ensureBridgeChainSupported(collection, destChain, 'destination');
+      const destSpec = evmDestSpec(destChain, collectionSlug);  // null for non-EVM
       if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
 
       // Source = EVM (Base/Arbitrum/Monad): instruct user to call bridgeBurn.
-      if (EVM_DEST_DOMAIN[sourceChain]) {
+      if (EVM_CHAINS.has(sourceChain)) {
         if (tokenIdRaw === undefined) return res.status(400).json({ error: 'sourceTokenId required' });
-        const sourceDeployment = v3Deployment(sourceChain);
-        if (!sourceDeployment?.proxy) return res.status(503).json({ error: `${sourceChain} V3 not deployed yet` });
+        const sourceDeployment = bridgeDeploymentOf(sourceChain, collectionSlug);
+        if (!sourceDeployment?.proxy && !sourceDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${sourceChain} contract not deployed yet` });
+        const sourceProxy = sourceDeployment.proxy || sourceDeployment.contract;
         // destChainId works for ALL destinations (EVM uses block.chainid, Aptos/Solana
         // use the synthetic ids from CHAIN_IDS). EVM dest emits the value into the
         // BridgeBurn event verbatim; the orchestrator's /bridge/confirm cross-checks it.
         const destChainId = destSpec ? destSpec.chainId : CHAIN_IDS[destChain];
-        const bridgeFee = await quoteNativeBridgeFee(sourceChain, sourceDeployment.proxy);
+        const bridgeFee = await quoteNativeBridgeFee(sourceChain, sourceProxy);
         return res.json({
+          collection: collectionSlug,
           mode: 'evm-burn',
           sourceChain,
-          sourceContract: getAddress(sourceDeployment.proxy),
+          sourceContract: getAddress(sourceProxy),
           sourceChainId: EVM_DEST_DOMAIN[sourceChain].chainId,
           burn: {
             functionName: 'bridgeBurn',
@@ -2078,11 +2594,12 @@ function mountNftV3Endpoints(router, ctx) {
 
       // Source = Aptos: instruct user to call bridge_burn on the Move module.
       if (sourceChain === 'aptos') {
-        const aptosDeploy = deploymentOf('aptos');
+        const aptosDeploy = bridgeDeploymentOf('aptos', collectionSlug);
         if (!aptosDeploy?.module) return res.status(503).json({ error: 'Aptos module not deployed' });
         if (!req.body?.sourceTokenAddress) return res.status(400).json({ error: 'sourceTokenAddress required (Aptos token object address)' });
         const bridgeFee = await quoteNativeBridgeFee('aptos');
         return res.json({
+          collection: collectionSlug,
           mode: 'aptos-burn',
           sourceChain,
           sourceModule: aptosDeploy.module,
@@ -2103,9 +2620,9 @@ function mountNftV3Endpoints(router, ctx) {
       if (sourceChain === 'solana') {
         if (!req.body?.sourceAsset) return res.status(400).json({ error: 'sourceAsset required (Solana asset pubkey)' });
         if (!sourceOwner) return res.status(400).json({ error: 'sourceOwner required for Solana bridge' });
-        const assetInfo = await getSolanaBridgeAssetInfo(String(req.body.sourceAsset), sourceOwner);
+        const assetInfo = await getSolanaBridgeAssetInfo(String(req.body.sourceAsset), sourceOwner, { collection: collectionSlug });
         const bridgeFee = await quoteNativeBridgeFee('solana');
-        const solanaDeploy = deploymentOf('solana');
+        const solanaDeploy = bridgeDeploymentOf('solana', collectionSlug);
         const feeTreasury = process.env.NFT_BRIDGE_SOLANA_TREASURY
           || process.env.NFT_SOLANA_TREASURY
           || solanaDeploy?.treasury
@@ -2123,6 +2640,7 @@ function mountNftV3Endpoints(router, ctx) {
           feeLamports: bridgeFee.amount,
         });
         return res.json({
+          collection: collectionSlug,
           mode: 'solana-burn',
           sourceChain,
           sourceChainId: CHAIN_IDS.solana,
@@ -2162,6 +2680,9 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(429).json({ error: 'rate limited', retryable: true, retryAfterSec: rl.retryAfterSec });
       }
 
+      const collection = bridgeCollectionFromReq(req);
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const burnTxHash  = String(req.body?.burnTxHash  || '');
@@ -2171,6 +2692,8 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(400).json({ error: 'Unsupported chain. Use base|arbitrum|monad|aptos|solana.' });
       }
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
+      ensureBridgeChainSupported(collection, sourceChain, 'source');
+      ensureBridgeChainSupported(collection, destChain, 'destination');
       if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
@@ -2181,8 +2704,9 @@ function mountNftV3Endpoints(router, ctx) {
       let burned;
       if (EVM_CHAINS.has(sourceChain)) {
         const { createPublicClient, getAddress, http, keccak256 } = await import('viem');
-        const sourceDeployment = deploymentOf(sourceChain);
-        if (!sourceDeployment?.proxy) return res.status(503).json({ error: `${sourceChain} V3 not deployed` });
+        const sourceDeployment = bridgeDeploymentOf(sourceChain, collectionSlug);
+        if (!sourceDeployment?.proxy && !sourceDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${sourceChain} contract not deployed` });
+        const sourceProxyAddress = sourceDeployment.proxy || sourceDeployment.contract;
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'EVM burnTxHash malformed' });
         const client = createPublicClient({ transport: http(evmRpc(sourceChain, process.env)) });
         const txRcp = await client.getTransactionReceipt({ hash: burnTxHash });
@@ -2197,7 +2721,7 @@ function mountNftV3Endpoints(router, ctx) {
           });
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
-        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceDeployment.proxy);
+        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
         const feePaid = BigInt(sourceTx?.value || 0);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
@@ -2205,7 +2729,7 @@ function mountNftV3Endpoints(router, ctx) {
             bridgeFee: bridgeFeeJson(requiredFee),
           });
         }
-        const sourceProxy = getAddress(sourceDeployment.proxy).toLowerCase();
+        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
@@ -2222,7 +2746,7 @@ function mountNftV3Endpoints(router, ctx) {
         };
       } else if (sourceChain === 'aptos') {
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'Aptos burnTxHash malformed' });
-        const r = await verifyAptosBurnTx(burnTxHash);
+        const r = await verifyAptosBurnTx(burnTxHash, { collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
         const requiredFee = await quoteNativeBridgeFee('aptos');
         const feePaid = BigInt(r.feePaidOctas || 0);
@@ -2243,7 +2767,7 @@ function mountNftV3Endpoints(router, ctx) {
           bridgeFeeRequiredOctas: requiredFee.amount.toString(),
         };
       } else if (sourceChain === 'solana') {
-        const r = await verifySolanaBurnTx(burnTxHash, { allowLegacy: !!grandfatheredBridge });
+        const r = await verifySolanaBurnTx(burnTxHash, { allowLegacy: !!grandfatheredBridge, collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Solana verify: ${r.error}` });
         burned = {
           kind: 'solana',
@@ -2279,6 +2803,7 @@ function mountNftV3Endpoints(router, ctx) {
         : burned.kind === 'aptos'
         ? { tokenAddress: burned.tokenAddress }
         : { asset: burned.asset };
+      sourceRefParams.collection = collectionSlug;
       const sourceRef = await buildSourceRef(sourceChain, sourceRefParams);
 
       // Refuse re-issuing receipts/mints for an already-consumed (sourceRef,
@@ -2302,10 +2827,11 @@ function mountNftV3Endpoints(router, ctx) {
         try {
           if (EVM_CHAINS.has(destChain)) {
             const { createPublicClient, getAddress, http } = await import('viem');
-            const destDeployment = deploymentOf(destChain);
+            const destDeployment = bridgeDeploymentOf(destChain, collectionSlug);
+            const destProxyAddress = destDeployment?.proxy || destDeployment?.contract;
             const client = createPublicClient({ transport: http(evmRpc(destChain, process.env)) });
             const consumed = await client.readContract({
-              address: getAddress(destDeployment.proxy), abi: NFT_V3_ABI,
+              address: getAddress(destProxyAddress), abi: NFT_V3_ABI,
               functionName: 'usedBridgeRefs', args: [sourceRef],
             });
             stillUnused = !consumed;
@@ -2316,9 +2842,10 @@ function mountNftV3Endpoints(router, ctx) {
             // safe from a correctness standpoint.
             stillUnused = true;
           } else if (destChain === 'solana') {
-            const recovered = await recoverSolanaBridgeMintRecord(sourceRef);
+            const recovered = await recoverSolanaBridgeMintRecord(sourceRef, collectionSlug);
             if (recovered) {
               return res.json({
+                collection: collectionSlug,
                 mode: 'solana-mint-existing',
                 sourceChain, destChain,
                 burned: jsonable(burned),
@@ -2358,16 +2885,17 @@ function mountNftV3Endpoints(router, ctx) {
       if (EVM_CHAINS.has(destChain)) {
         // EVM destination: sign EIP-712 BridgeReceipt for the V3 contract.
         const { getAddress } = await import('viem');
-        const destDeployment = deploymentOf(destChain);
-        if (!destDeployment?.proxy) return res.status(503).json({ error: `${destChain} V3 not deployed` });
-        const destSpec = EVM_DEST_DOMAIN[destChain];
+        const destDeployment = bridgeDeploymentOf(destChain, collectionSlug);
+        if (!destDeployment?.proxy && !destDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${destChain} contract not deployed` });
+        const destProxyAddress = destDeployment.proxy || destDeployment.contract;
+        const destSpec = evmDestSpec(destChain, collectionSlug, destDeployment);
         const account = await ctx.parseNftEvmAccount();
         const signature = await account.signTypedData({
           domain: {
             name: destDeployment.eip712Name || destSpec.name,
-            version: destDeployment.eip712Version || '3',
+            version: destDeployment.eip712Version || destSpec.version || collection.evmEip712Version,
             chainId: destSpec.chainId,
-            verifyingContract: getAddress(destDeployment.proxy),
+            verifyingContract: getAddress(destProxyAddress),
           },
           types: {
             BridgeReceipt: [
@@ -2404,12 +2932,13 @@ function mountNftV3Endpoints(router, ctx) {
           throw err;
         }
         return res.json({
+          collection: collectionSlug,
           mode: 'evm-receipt',
           sourceChain, destChain,
           burned: jsonable(burned),
           sourceRef,
           destinationChainId: destSpec.chainId,
-          destContract: getAddress(destDeployment.proxy),
+          destContract: getAddress(destProxyAddress),
           deadline: deadline.toString(),
           signature,
           callData: {
@@ -2422,7 +2951,7 @@ function mountNftV3Endpoints(router, ctx) {
       if (destChain === 'aptos') {
         // Aptos destination: ed25519-sign for the Move bridge_mint function.
         if (!aptosAccount()) return res.status(503).json({ error: 'Aptos signer not configured' });
-        const aptosDeploy = deploymentOf('aptos');
+        const aptosDeploy = bridgeDeploymentOf('aptos', collectionSlug);
         if (!aptosDeploy?.module) return res.status(503).json({ error: 'Aptos module not deployed' });
         const signature = await signAptosBridgeReceipt({
           to: destAddress,
@@ -2443,6 +2972,7 @@ function mountNftV3Endpoints(router, ctx) {
           throw err;
         }
         return res.json({
+          collection: collectionSlug,
           mode: 'aptos-receipt',
           sourceChain, destChain,
           burned: jsonable(burned),
@@ -2484,7 +3014,7 @@ function mountNftV3Endpoints(router, ctx) {
         }
         try {
           const mintRes = await mintSolanaAssetForBridge({
-            recipient: destAddress, level: burned.level, sourceRef,
+            recipient: destAddress, level: burned.level, sourceRef, collection: collectionSlug,
           });
           // Record dest tx + asset address for post-mortem.
           try {
@@ -2493,6 +3023,7 @@ function mountNftV3Endpoints(router, ctx) {
               .run(`${mintRes.assetAddress}@${mintRes.txSig}`, sourceRef);
           } catch { /* best-effort */ }
           return res.json({
+            collection: collectionSlug,
             mode: 'solana-mint',
             sourceChain, destChain,
             burned: jsonable(burned),
@@ -2555,6 +3086,9 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(429).json({ error: 'rate limited', retryable: true, retryAfterSec: rl.retryAfterSec });
       }
 
+      const collection = bridgeCollectionFromReq(req);
+      if (!collection) return res.status(400).json({ error: 'Unsupported NFT collection. Use demonking or voidspore.' });
+      const collectionSlug = collection.slug;
       const sourceChain = String(req.body?.sourceChain || '').toLowerCase();
       const destChain   = String(req.body?.destChain   || '').toLowerCase();
       const burnTxHash  = String(req.body?.burnTxHash  || '');
@@ -2564,6 +3098,8 @@ function mountNftV3Endpoints(router, ctx) {
         return res.status(400).json({ error: 'Unsupported chain' });
       }
       if (sourceChain === destChain) return res.status(400).json({ error: 'sourceChain == destChain' });
+      ensureBridgeChainSupported(collection, sourceChain, 'source');
+      ensureBridgeChainSupported(collection, destChain, 'destination');
       if (!destAddress) {
         return res.status(400).json({ error: `destAddress malformed for chain "${destChain}"` });
       }
@@ -2574,8 +3110,9 @@ function mountNftV3Endpoints(router, ctx) {
       let burned;
       if (EVM_CHAINS.has(sourceChain)) {
         const { createPublicClient, getAddress, http, keccak256 } = await import('viem');
-        const sourceDeployment = deploymentOf(sourceChain);
-        if (!sourceDeployment?.proxy) return res.status(503).json({ error: `${sourceChain} V3 not deployed` });
+        const sourceDeployment = bridgeDeploymentOf(sourceChain, collectionSlug);
+        if (!sourceDeployment?.proxy && !sourceDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${sourceChain} contract not deployed` });
+        const sourceProxyAddress = sourceDeployment.proxy || sourceDeployment.contract;
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'EVM burnTxHash malformed' });
         const client = createPublicClient({ transport: http(evmRpc(sourceChain, process.env)) });
         const txRcp = await client.getTransactionReceipt({ hash: burnTxHash });
@@ -2590,7 +3127,7 @@ function mountNftV3Endpoints(router, ctx) {
           });
         }
         const sourceTx = await client.getTransaction({ hash: burnTxHash });
-        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceDeployment.proxy);
+        const requiredFee = await quoteNativeBridgeFee(sourceChain, sourceProxyAddress);
         const feePaid = BigInt(sourceTx?.value || 0);
         if (!grandfatheredBridge && feePaid < requiredFee.amount) {
           return res.status(402).json({
@@ -2598,7 +3135,7 @@ function mountNftV3Endpoints(router, ctx) {
             bridgeFee: bridgeFeeJson(requiredFee),
           });
         }
-        const sourceProxy = getAddress(sourceDeployment.proxy).toLowerCase();
+        const sourceProxy = getAddress(sourceProxyAddress).toLowerCase();
         const burnTopic = keccak256(new TextEncoder().encode('BridgeBurn(uint256,address,uint8,uint256)'));
         const log = txRcp.logs.find((l) => l.address.toLowerCase() === sourceProxy && l.topics[0] === burnTopic);
         if (!log) return res.status(404).json({ error: 'BridgeBurn event not in tx logs' });
@@ -2614,7 +3151,7 @@ function mountNftV3Endpoints(router, ctx) {
         };
       } else if (sourceChain === 'aptos') {
         if (!/^0x[0-9a-fA-F]{64}$/.test(burnTxHash)) return res.status(400).json({ error: 'Aptos burnTxHash malformed' });
-        const r = await verifyAptosBurnTx(burnTxHash);
+        const r = await verifyAptosBurnTx(burnTxHash, { collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Aptos verify: ${r.error}` });
         const requiredFee = await quoteNativeBridgeFee('aptos');
         const feePaid = BigInt(r.feePaidOctas || 0);
@@ -2628,7 +3165,7 @@ function mountNftV3Endpoints(router, ctx) {
           level: r.level, destinationChainId: r.destinationChainId,
           feePaidOctas: feePaid.toString(), bridgeFeeRequiredOctas: requiredFee.amount.toString() };
       } else if (sourceChain === 'solana') {
-        const r = await verifySolanaBurnTx(burnTxHash, { allowLegacy: !!grandfatheredBridge });
+        const r = await verifySolanaBurnTx(burnTxHash, { allowLegacy: !!grandfatheredBridge, collection: collectionSlug });
         if (r.error) return res.status(404).json({ error: `Solana verify: ${r.error}` });
         if (String(r.destAddress).toLowerCase() !== String(destAddress).toLowerCase()) {
           return res.status(409).json({ error: `Memo destAddress (${r.destAddress}) != requested (${destAddress})` });
@@ -2655,6 +3192,7 @@ function mountNftV3Endpoints(router, ctx) {
         : burned.kind === 'aptos'
         ? { tokenAddress: burned.tokenAddress }
         : { asset: burned.asset };
+      sourceRefParams.collection = collectionSlug;
       const sourceRef = await buildSourceRef(sourceChain, sourceRefParams);
 
       const prior = findUsedBridgeRef(sourceRef, destChain);
@@ -2664,6 +3202,7 @@ function mountNftV3Endpoints(router, ctx) {
             ? String(prior.dest_tx_or_asset).split('@')
             : [null, prior.dest_tx_or_asset];
           return res.json({
+            collection: collectionSlug,
             mode: 'relay-existing',
             sourceChain,
             destChain,
@@ -2683,18 +3222,20 @@ function mountNftV3Endpoints(router, ctx) {
         try {
           if (EVM_CHAINS.has(destChain)) {
             const { createPublicClient, getAddress, http } = await import('viem');
-            const destDeployment = deploymentOf(destChain);
+            const destDeployment = bridgeDeploymentOf(destChain, collectionSlug);
+            const destProxyAddress = destDeployment?.proxy || destDeployment?.contract;
             const client = createPublicClient({ transport: http(evmRpc(destChain, process.env)) });
             const consumed = await client.readContract({
-              address: getAddress(destDeployment.proxy), abi: NFT_V3_ABI,
+              address: getAddress(destProxyAddress), abi: NFT_V3_ABI,
               functionName: 'usedBridgeRefs', args: [sourceRef],
             });
             stillUnused = !consumed;
           } else if (destChain === 'aptos') { stillUnused = true; }
           else if (destChain === 'solana') {
-            const recovered = await recoverSolanaBridgeMintRecord(sourceRef);
+            const recovered = await recoverSolanaBridgeMintRecord(sourceRef, collectionSlug);
             if (recovered) {
               return res.json({
+                collection: collectionSlug,
                 mode: 'relay-existing',
                 sourceChain,
                 destChain,
@@ -2758,9 +3299,10 @@ function mountNftV3Endpoints(router, ctx) {
           const monad = defineChain({ id:143, name:'Monad', nativeCurrency:{name:'Monad',symbol:'MON',decimals:18}, rpcUrls:{default:{http:['https://rpc.monad.xyz']}} });
           const chainViem = { base: viemChains.base, arbitrum: viemChains.arbitrum, monad }[destChain];
 
-          const destDeployment = deploymentOf(destChain);
-          if (!destDeployment?.proxy) return res.status(503).json({ error: `${destChain} V3 not deployed` });
-          const destSpec = EVM_DEST_DOMAIN[destChain];
+          const destDeployment = bridgeDeploymentOf(destChain, collectionSlug);
+          if (!destDeployment?.proxy && !destDeployment?.contract) return res.status(503).json({ error: `${collection.label} ${destChain} contract not deployed` });
+          const destProxyAddress = destDeployment.proxy || destDeployment.contract;
+          const destSpec = evmDestSpec(destChain, collectionSlug, destDeployment);
 
           // Reuse the ctx.parseNftEvmAccount() viem account for BOTH the
           // EIP-712 signature AND the on-chain submission. Same key signs
@@ -2769,9 +3311,9 @@ function mountNftV3Endpoints(router, ctx) {
           const signature = await account.signTypedData({
             domain: {
               name: destDeployment.eip712Name || destSpec.name,
-              version: destDeployment.eip712Version || '3',
+              version: destDeployment.eip712Version || destSpec.version || collection.evmEip712Version,
               chainId: destSpec.chainId,
-              verifyingContract: getAddress(destDeployment.proxy),
+              verifyingContract: getAddress(destProxyAddress),
             },
             types: {
               BridgeReceipt: [
@@ -2791,7 +3333,7 @@ function mountNftV3Endpoints(router, ctx) {
           const walletClient = createWalletClient({ account, chain: chainViem, transport: http(evmRpc(destChain, process.env)) });
 
           const hash = await walletClient.writeContract({
-            address: getAddress(destDeployment.proxy),
+            address: getAddress(destProxyAddress),
             abi: [{
               type: 'function', name: 'bridgeMint', stateMutability: 'nonpayable',
               inputs: [
@@ -2809,9 +3351,10 @@ function mountNftV3Endpoints(router, ctx) {
               WHERE source_ref = ? AND dest_chain = ?`).run(hash, sourceRef, destChain);
           } catch { /* best-effort */ }
           return res.json({
+            collection: collectionSlug,
             mode: 'relay-evm', sourceChain, destChain,
             burned: jsonable(burned), sourceRef,
-            destChainId: destSpec.chainId, destContract: getAddress(destDeployment.proxy),
+            destChainId: destSpec.chainId, destContract: getAddress(destProxyAddress),
             destAddress: getAddress(destAddress), level: burned.level,
             destTxHash: hash, gasUsed: rcp.gasUsed?.toString?.() || null,
           });
@@ -2822,7 +3365,7 @@ function mountNftV3Endpoints(router, ctx) {
           // The server's key is BOTH the quote signer AND the submitter:
           // first it signs the BCS payload (verified inside the Move
           // module), then it submits the entry function via Aptos SDK.
-          const aptosDeploy = deploymentOf('aptos');
+          const aptosDeploy = bridgeDeploymentOf('aptos', collectionSlug);
           if (!aptosDeploy?.module) return res.status(503).json({ error: 'Aptos not deployed' });
           if (!aptosAccount()) return res.status(503).json({ error: 'Aptos signer not configured' });
           const signature = await require('./bridge_helpers').signAptosBridgeReceipt({
@@ -2859,6 +3402,7 @@ function mountNftV3Endpoints(router, ctx) {
               WHERE source_ref = ? AND dest_chain = ?`).run(submitted.hash, sourceRef, destChain);
           } catch { /* best-effort */ }
           return res.json({
+            collection: collectionSlug,
             mode: 'relay-aptos', sourceChain, destChain,
             burned: jsonable(burned), sourceRef,
             destAddress, level: burned.level,
@@ -2869,7 +3413,7 @@ function mountNftV3Endpoints(router, ctx) {
         if (destChain === 'solana') {
           // Solana already had the relay pattern; just call its helper.
           const mintRes = await mintSolanaAssetForBridge({
-            recipient: destAddress, level: burned.level, sourceRef,
+            recipient: destAddress, level: burned.level, sourceRef, collection: collectionSlug,
           });
           try {
             bridgeDb?.prepare(`UPDATE used_bridge_refs SET dest_tx_or_asset = ?
@@ -2877,6 +3421,7 @@ function mountNftV3Endpoints(router, ctx) {
               .run(`${mintRes.assetAddress}@${mintRes.txSig}`, sourceRef, destChain);
           } catch { /* best-effort */ }
           return res.json({
+            collection: collectionSlug,
             mode: 'relay-solana', sourceChain, destChain,
             burned: jsonable(burned), sourceRef,
             destAddress, level: burned.level,
@@ -2898,9 +3443,13 @@ function mountNftV3Endpoints(router, ctx) {
   });
 
   // ── Solana mint helper for bridge-into-Solana. Server-mediated. ────
-  async function mintSolanaAssetForBridge({ recipient, level, sourceRef }) {
-    const mintStandard = String(process.env.NFT_SOLANA_MINT_STANDARD || 'token2022').toLowerCase();
-    const solanaDeploy = deploymentOf('solana');
+  async function mintSolanaAssetForBridge({ recipient, level, sourceRef, collection = 'demonking' }) {
+    const collectionSlug = normalizeBridgeCollectionSlug(collection);
+    const collectionLabel = collectionSlug === 'voidspore' ? 'Voidspore' : 'Demon King';
+    const mintStandard = collectionSlug === 'demonking'
+      ? String(process.env.NFT_SOLANA_MINT_STANDARD || 'mpl-core').toLowerCase()
+      : 'mpl-core';
+    const solanaDeploy = deploymentOf('solana', collectionSlug);
     if (mintStandard !== 'mpl-core' && mintStandard !== 'core') {
       const rawKey = process.env.SOLANA_NFT_KEY || process.env.NFT_SOLANA_KEY || process.env.NFT_KEY;
       if (!rawKey) throw new Error('Solana authority key missing (SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY)');
@@ -2928,7 +3477,7 @@ function mountNftV3Endpoints(router, ctx) {
     }
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { generateSigner, keypairIdentity, publicKey } = await import('@metaplex-foundation/umi');
-    const { mplCore, create: createAsset } = await import('@metaplex-foundation/mpl-core');
+    const { mplCore, create: createAsset, fetchCollection } = await import('@metaplex-foundation/mpl-core');
 
     // Authority key = the same Solana key used by the candy-machine deploy.
     // Accept SOLANA_NFT_KEY / NFT_SOLANA_KEY / NFT_KEY in any of the formats
@@ -2948,18 +3497,27 @@ function mountNftV3Endpoints(router, ctx) {
       const umi = createUmi(rpc).use(mplCore());
       const authKeypair = umi.eddsa.createKeypairFromSecretKey(secretBytes);
       umi.use(keypairIdentity(authKeypair));
+      const collectionAccount = await fetchCollection(umi, publicKey(solanaDeploy.collection));
       let lastErr;
       for (let attempt = 1; attempt <= 3; attempt++) {
         const asset = generateSigner(umi);
+        const normalizedLevel = Math.max(1, Math.min(3, Number(level || 1) || 1));
+        const metadataPath = collectionSlug === 'demonking'
+          ? '/api/nft/solana/bridged'
+          : `/api/nft/${collectionSlug}/solana/bridged`;
+        const metadataUrl = new URL(metadataPath, `${(process.env.NFT_PUBLIC_BASE_URL || 'https://clashofperps.fun').replace(/\/+$/, '')}/`);
+        metadataUrl.searchParams.set('level', String(normalizedLevel));
+        metadataUrl.searchParams.set('src', String(sourceRef || '').slice(0, 80));
         const ix = createAsset(umi, {
           asset,
-          collection: publicKey(solanaDeploy.collection),
-          name: `Demon King (bridged)`,
-          uri: `${(process.env.NFT_PUBLIC_BASE_URL || 'https://clashofperps.fun').replace(/\/+$/, '')}/api/nft/solana/bridged`,
+          collection: collectionAccount,
+          authority: umi.identity,
+          name: `${collectionLabel} L${normalizedLevel}`,
+          uri: metadataUrl.toString(),
           owner: publicKey(recipient),
           plugins: [
             { type: 'Attributes', attributeList: [
-              { key: 'level',     value: String(level) },
+              { key: 'level',     value: String(normalizedLevel) },
               { key: 'sourceRef', value: String(sourceRef) },
             ]},
           ],
@@ -2970,7 +3528,7 @@ function mountNftV3Endpoints(router, ctx) {
             confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
           });
           const txSig = base58.deserialize(sig.signature)[0];
-          return { assetAddress: asset.publicKey.toString(), txSig };
+          return { assetAddress: asset.publicKey.toString(), txSig, standard: 'mpl-core' };
         } catch (err) {
           lastErr = err;
           const msg = String(err?.message || err);
@@ -2986,7 +3544,7 @@ function mountNftV3Endpoints(router, ctx) {
               const s = await conn.getSignatureStatuses([probeSig]);
               const v = s?.value?.[0];
               if (v?.confirmationStatus === 'confirmed' || v?.confirmationStatus === 'finalized') {
-                return { assetAddress: asset.publicKey.toString(), txSig: probeSig };
+                return { assetAddress: asset.publicKey.toString(), txSig: probeSig, standard: 'mpl-core' };
               }
               if (v?.err) break;
             }
@@ -2997,13 +3555,14 @@ function mountNftV3Endpoints(router, ctx) {
       }
       throw lastErr;
     }, {
-      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
+      urls: solanaRpcUrls([solanaDeploy.rpcUrl]),
       label: 'Solana bridge mint',
     });
   }
 
-  async function recoverSolanaBridgeMintRecord(sourceRef) {
-    const solanaDeploy = deploymentOf('solana');
+  async function recoverSolanaBridgeMintRecord(sourceRef, collection = 'demonking') {
+    const collectionSlug = normalizeBridgeCollectionSlug(collection);
+    const solanaDeploy = deploymentOf('solana', collectionSlug);
     if (!solanaDeploy?.collection) return null;
     const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
     const { mplCore, fetchAssetsByCollection } = await import('@metaplex-foundation/mpl-core');
@@ -3013,7 +3572,7 @@ function mountNftV3Endpoints(router, ctx) {
       const umi = createUmi(rpc).use(mplCore());
       return fetchAssetsByCollection(umi, publicKey(solanaDeploy.collection));
     }, {
-      urls: solanaNonHeliusRpcUrls(solanaRpcUrls([solanaDeploy.rpcUrl])),
+      urls: solanaRpcUrls([solanaDeploy.rpcUrl]),
       label: 'Solana bridge mint recovery',
     });
     const wanted = String(sourceRef || '').toLowerCase();
