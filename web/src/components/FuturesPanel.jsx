@@ -207,11 +207,15 @@ function humanizeTradeError(message) {
   if (/RISEX_BRIDGE_REQUIRED|RISEx .*deposit.*1000|exactly 1000|first-time deposit|faucet/i.test(text)) {
     return 'Use the RISEx bridge deposit flow. The 1000 USDC faucet endpoint is test-token only.';
   }
-  // Phoenix returns `{"error":"invalid_invite_code"}` for bad/used/expired codes.
+  // Phoenix returns `{"error":"invalid_invite_code"}` or
+  // `{"error":"invalid_referral_code"}` for bad/used/expired codes.
   // Check this before the generic "not registered" branch so a wrong code
   // doesn't get reported as "enter a code" (which is what the user already did).
+  if (/invalid_referral_code|referral[_\s-]?code[_\s-]?(invalid|expired|used|exhausted)|invalid referral/i.test(text)) {
+    return 'That Phoenix referral code is invalid, already used, or expired. Check the code and try again.';
+  }
   if (/invalid_invite_code|invite[_\s-]?code[_\s-]?(invalid|expired|used|exhausted)|invalid invite/i.test(text)) {
-    return 'That Phoenix code is invalid, already used, or expired. Check the code and try again.';
+    return 'That Phoenix access code is invalid, already used, or expired. Check the code and try again.';
   }
   if (/Too Many Requests|rate[_\s-]?limit|\b429\b/i.test(text)) {
     return 'Phoenix is rate-limiting requests. Wait a few seconds, then try again.';
@@ -3633,7 +3637,7 @@ function FuturesPanel() {
   // ==================== PHOENIX SETUP GATE ====================
   if (dex === 'phoenix' && hasWallet && setupVerified !== true) {
     const whitelisted = inviteStatus?.whitelisted === true;
-    const checkingInvite = setupVerified === null || inviteStatus?.checking;
+    const checkingInvite = inviteStatus?.whitelisted == null && (setupVerified === null || inviteStatus?.checking);
     const needsCode = inviteStatus?.whitelisted === false;
     return (
       <>
