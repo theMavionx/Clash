@@ -3,16 +3,6 @@ import { ensureErc20Allowance } from './nftMint';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
 import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
 
-// 40% allowance headroom: enough cushion for CoP/USD price drift between the
-// pre-flight quote and the actual purchase quote (typical drift on a small
-// pool is a few %, but 40% absorbs the rare wick) so the user only has to
-// sign one approve per session even if the price moves notably.
-const ALLOWANCE_BUFFER_NUM = 140n;
-const ALLOWANCE_BUFFER_DEN = 100n;
-function withAllowanceBuffer(amount) {
-  return (amount * ALLOWANCE_BUFFER_NUM) / ALLOWANCE_BUFFER_DEN;
-}
-
 function formatCopAmount(units, decimals = 18) {
   // Render a uint256 token amount with up to 4 fractional digits, trimmed.
   // Used only in user-facing balance error messages so we don't expose the
@@ -119,7 +109,7 @@ export async function buyGameShopItem({ evmWallet, buyer, token, sku, quantity =
   // "purchaseWithQuote reverted" once safeTransferFrom fails on-chain.
   await assertCopBalance({ publicClient, token: paymentToken, buyer, required: sizingTotal });
 
-  const approveAmount = withAllowanceBuffer(sizingTotal);
+  const approveAmount = sizingTotal;
   await ensureErc20Allowance({
     publicClient,
     walletClient,
@@ -142,9 +132,9 @@ export async function buyGameShopItem({ evmWallet, buyer, token, sku, quantity =
       // moved against the user since the pre-flight quote, especially after
       // a slow approve. Cheaper than letting the contract revert.
       await assertCopBalance({ publicClient, token: fresh.quote.paymentToken, buyer, required: freshTotal });
-      // Top up allowance if the new quote is somehow bigger than what we
-      // approved (price moved >40% since pre-flight). ensureErc20Allowance
-      // is a no-op when current allowance already covers it.
+      // Top up allowance if the fresh quote is bigger than the pre-flight
+      // one. This keeps wallet prompts aligned with the actual purchase
+      // amount instead of showing a padded approval as if it were the price.
       if (freshTotal > approveAmount) {
         await ensureErc20Allowance({
           publicClient,
@@ -152,7 +142,7 @@ export async function buyGameShopItem({ evmWallet, buyer, token, sku, quantity =
           token: fresh.quote.paymentToken,
           owner: buyer,
           spender: fresh.shop,
-          amount: withAllowanceBuffer(freshTotal),
+          amount: freshTotal,
         });
       }
       const quote = normalizeShopQuote(fresh.quote);

@@ -1780,7 +1780,7 @@ const GAME_SHOP_PRODUCTS = {
     subtitle: 'Get up to a 40% boost to all resources; base up to 40% stronger; up to +10 trophies per attack',
     kind: 'altar',
     usdPriceE6: '15000000',
-    copUsdPriceE6: '15000000',
+    copDiscountBps: 2000,
     boosts: { resourcesPct: 40, basePct: 40, trophyPerAttack: 10 },
     maxQuantity: 1,
   },
@@ -1819,28 +1819,6 @@ const GAME_SHOP_PRODUCTS = {
   },
 };
 
-function gameShopProductsForClient() {
-  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => ({
-    id: product.id,
-    sku: product.sku,
-    skuBytes32: skuToBytes32(product.sku),
-    title: product.title,
-    subtitle: product.subtitle,
-    kind: product.kind,
-    usdPriceE6: product.usdPriceE6,
-    priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
-    copUsdPriceE6: product.copUsdPriceE6 || null,
-    copPriceUsd: product.copUsdPriceE6 ? unitsToDecimalString(BigInt(product.copUsdPriceE6), 6) : null,
-    durationHours: product.durationHours || null,
-    rewards: product.rewards || null,
-    boosts: product.boosts || null,
-    messageCredits: product.messageCredits || null,
-    copBonusCredits: product.copBonusCredits || null,
-    dailyLimit: product.dailyLimit || null,
-    maxQuantity: product.maxQuantity,
-  }));
-}
-
 function getGameShopCopDiscountBps(product) {
   if (product && product.copUsdPriceE6) return null;
   if (product && product.copDiscountBps != null) {
@@ -1857,6 +1835,34 @@ function gameShopUsdPriceE6ForPayment(product, { chain = '', payment = '' } = {}
     return (base * (10_000n - discountBps)) / 10_000n;
   }
   return base;
+}
+
+function gameShopProductsForClient() {
+  return Object.values(GAME_SHOP_PRODUCTS).filter((product) => !product.hidden).map((product) => {
+    const copDiscountBps = getGameShopCopDiscountBps(product);
+    const copUsdPriceE6 = gameShopUsdPriceE6ForPayment(product, { chain: 'base', payment: 'cop' });
+    const hasCopPrice = product.copUsdPriceE6 || copDiscountBps != null;
+    return {
+      id: product.id,
+      sku: product.sku,
+      skuBytes32: skuToBytes32(product.sku),
+      title: product.title,
+      subtitle: product.subtitle,
+      kind: product.kind,
+      usdPriceE6: product.usdPriceE6,
+      priceUsd: unitsToDecimalString(BigInt(product.usdPriceE6), 6),
+      copUsdPriceE6: hasCopPrice ? copUsdPriceE6.toString() : null,
+      copPriceUsd: hasCopPrice ? unitsToDecimalString(copUsdPriceE6, 6) : null,
+      copDiscountBps,
+      durationHours: product.durationHours || null,
+      rewards: product.rewards || null,
+      boosts: product.boosts || null,
+      messageCredits: product.messageCredits || null,
+      copBonusCredits: product.copBonusCredits || null,
+      dailyLimit: product.dailyLimit || null,
+      maxQuantity: product.maxQuantity,
+    };
+  });
 }
 
 function skuToBytes32(sku) {
