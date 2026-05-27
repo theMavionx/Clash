@@ -47,6 +47,40 @@ function isTransientDepositVerifyError(err) {
     && /not confirmed|not found|not the nft owner|custody vault|transfer to custody|rpc/i.test(message);
 }
 
+function publicKeyString(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.toBase58 === 'function') return value.toBase58();
+  if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
+  return '';
+}
+
+function solanaCoreAssetCollection(asset) {
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = publicKeyString(group?.group_value || group?.value);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
+  const updateAuthority = asset?.updateAuthority;
+  if (updateAuthority?.type === 'Collection') return publicKeyString(updateAuthority.address);
+  if (updateAuthority?.__kind === 'Collection') {
+    const fromFields = Array.isArray(updateAuthority.fields)
+      ? updateAuthority.fields[0]
+      : updateAuthority.fields;
+    return publicKeyString(fromFields?.address || fromFields?.publicKey || fromFields);
+  }
+  const candidates = [
+    asset?.collection?.publicKey,
+    asset?.collection?.address,
+    asset?.collection,
+    asset?.collectionAddress,
+  ];
+  for (const candidate of candidates) {
+    const value = publicKeyString(candidate);
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) return value;
+  }
+  return '';
+}
+
 export function formatCustodialUnits(units, decimals = 6) {
   const raw = BigInt(String(units || '0'));
   const d = Math.max(0, Number(decimals) || 0);
@@ -539,10 +573,7 @@ export async function depositCoreNftToCustody({
   const ownerPk = new PublicKey(owner);
   const ownerSigner = createNoopSigner(publicKey(owner));
   const asset = await fetchAsset(umi, publicKey(order.assetId));
-  const updateAuthority = asset?.updateAuthority;
-  const collectionAddress = updateAuthority?.__kind === 'Collection'
-    ? String(updateAuthority.fields?.[0] || '')
-    : '';
+  const collectionAddress = solanaCoreAssetCollection(asset);
   const collection = collectionAddress
     ? await fetchCollection(umi, publicKey(collectionAddress)).catch(() => null)
     : null;

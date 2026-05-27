@@ -1222,10 +1222,36 @@ async function withSolanaCoreUmi(label, fn) {
 }
 
 function solanaCoreCollectionFromAsset(asset) {
+  const publicKeyString = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value.toBase58 === 'function') return value.toBase58();
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
+    return '';
+  };
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = publicKeyString(group?.group_value || group?.value);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
   const updateAuthority = asset?.updateAuthority;
-  return updateAuthority?.__kind === 'Collection'
-    ? String(updateAuthority.fields?.[0] || '')
-    : '';
+  if (updateAuthority?.type === 'Collection') return publicKeyString(updateAuthority.address);
+  if (updateAuthority?.__kind === 'Collection') {
+    const fromFields = Array.isArray(updateAuthority.fields)
+      ? updateAuthority.fields[0]
+      : updateAuthority.fields;
+    return publicKeyString(fromFields?.address || fromFields?.publicKey || fromFields);
+  }
+  const candidates = [
+    asset?.collection?.publicKey,
+    asset?.collection?.address,
+    asset?.collection,
+    asset?.collectionAddress,
+  ];
+  for (const candidate of candidates) {
+    const value = publicKeyString(candidate);
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) return value;
+  }
+  return '';
 }
 
 async function fetchSolanaCoreAssetAndCollection(umi, assetId) {

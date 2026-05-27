@@ -93,6 +93,40 @@ function bridgeReadTransport(chainKey) {
   return http();
 }
 
+function publicKeyString(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.toBase58 === 'function') return value.toBase58();
+  if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
+  return '';
+}
+
+function solanaCoreAssetCollection(asset) {
+  const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
+  const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
+  const groupValue = publicKeyString(group?.group_value || group?.value);
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
+  const updateAuthority = asset?.updateAuthority;
+  if (updateAuthority?.type === 'Collection') return publicKeyString(updateAuthority.address);
+  if (updateAuthority?.__kind === 'Collection') {
+    const fromFields = Array.isArray(updateAuthority.fields)
+      ? updateAuthority.fields[0]
+      : updateAuthority.fields;
+    return publicKeyString(fromFields?.address || fromFields?.publicKey || fromFields);
+  }
+  const candidates = [
+    asset?.collection?.publicKey,
+    asset?.collection?.address,
+    asset?.collection,
+    asset?.collectionAddress,
+  ];
+  for (const candidate of candidates) {
+    const value = publicKeyString(candidate);
+    if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value)) return value;
+  }
+  return '';
+}
+
 // Minimum ABI for the V3 contract's bridgeBurn call. The full ABI lives
 // on the server; the client only needs this one function.
 const V3_BURN_ABI = [{
@@ -548,10 +582,7 @@ export default function NftBridgePanel({
 
       const memoText = initRes.burn.requiredMemo;
       const asset = await fetchAsset(umi, publicKey(initRes.burn.asset));
-      const updateAuthority = asset?.updateAuthority;
-      const updateAuthorityCollection = updateAuthority?.__kind === 'Collection'
-        ? String(updateAuthority.fields?.[0] || '')
-        : '';
+      const updateAuthorityCollection = solanaCoreAssetCollection(asset);
       let collection = null;
       if (initRes.burn.collection && updateAuthorityCollection === String(initRes.burn.collection)) {
         collection = await fetchCollection(umi, publicKey(initRes.burn.collection));
