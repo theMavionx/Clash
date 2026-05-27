@@ -36,24 +36,18 @@ const TROOP_STATS = {
     4: { hp: 560, damage: 80, atkSpeed: 0.76, moveSpeed: 0.55, range: 0.95, melee: false, projSpeed: 3.0, shootDelay: 0.4 },
   },
   demon_king: {
-    1: { hp: 2400, damage: 220, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    2: { hp: 3200, damage: 300, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
-    3: { hp: 4300, damage: 410, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    1: { hp: 1080, damage: 140, atkSpeed: 1.25, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    2: { hp: 1170, damage: 139, atkSpeed: 1.15, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
+    3: { hp: 1260, damage: 137, atkSpeed: 1.05, moveSpeed: 0.38, range: 0.32, melee: true, hitDelay: 0.4 },
   },
 };
 
 // Demon King is a 2-slot NFT troop that scales from the player's best normal troops.
+// L1 is +20%, L2 +30%, L3 +40% over two best troop slots by HP and DPS.
 const NORMAL_TROOP_TYPES = ['knight', 'mage', 'barbarian', 'archer', 'ranger'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
-const DEMON_KING_MIN_STATS_BY_LEVEL = {
-  1: { hp: 2400, damage: 220 },
-  2: { hp: 3200, damage: 300 },
-  3: { hp: 4300, damage: 410 },
-};
-const DEMON_KING_NFT_LEVEL_MULT = { 1: 1.0, 2: 1.1, 3: 1.2 };
-const DEMON_KING_DAMAGE_BASE_ATK_SPEED = 1.25;
+const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
-const DEMON_KING_POWER_OVER_TWO_TROOPS = 1.3;
 
 const TROOP_TYPE_DISPLAY_KEYS = {
   knight: 'Knight',
@@ -95,14 +89,13 @@ function computeDemonKingStats(troopLevels = {}, demonLevel = 1) {
   }
 
   const atkSpeed = DEMON_KING_ATK_SPEED_BY_LEVEL[clampedLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-  const nftMult = DEMON_KING_NFT_LEVEL_MULT[clampedLevel] || 1;
-  const minStats = DEMON_KING_MIN_STATS_BY_LEVEL[clampedLevel] || DEMON_KING_MIN_STATS_BY_LEVEL[1];
-  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
-  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+  const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[clampedLevel] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
+  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * powerMult;
+  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
 
   return {
-    hp: Math.max(minStats.hp, Math.ceil(targetHp)),
-    damage: Math.max(minStats.damage, Math.ceil(targetDps * DEMON_KING_DAMAGE_BASE_ATK_SPEED)),
+    hp: Math.ceil(targetHp),
+    damage: Math.ceil(targetDps * atkSpeed),
     atkSpeed,
     moveSpeed: 0.38,
     range: 0.32,

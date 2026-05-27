@@ -425,13 +425,27 @@ async function getToken2022NftInfo({ mint, expectedOwner, connection = null, col
   if (!mintInfo || Number(mintInfo.decimals) !== 0 || BigInt(mintInfo.supply) !== 1n) {
     throw new Error('Solana Token-2022 mint is not a 1-of-1 NFT');
   }
-  const tokenAccount = (accounts.value || []).find((row) => {
+  let tokenAccount = (accounts.value || []).find((row) => {
     const parsed = row?.account?.data?.parsed?.info;
     return String(parsed?.mint || '') === mintPk.toBase58()
       && String(parsed?.owner || '') === ownerPk.toBase58()
       && String(parsed?.tokenAmount?.amount || '') === '1'
       && Number(parsed?.tokenAmount?.decimals) === 0;
   });
+  if (!tokenAccount) {
+    const largest = await conn.getTokenLargestAccounts(mintPk, 'confirmed').catch(() => null);
+    const holder = (largest?.value || []).find((row) => String(row?.amount || '') === '1' && Number(row?.decimals) === 0);
+    if (holder?.address) {
+      const holderAccount = await conn.getParsedAccountInfo(holder.address, 'confirmed').catch(() => null);
+      const parsed = holderAccount?.value?.data?.parsed?.info;
+      const actualOwner = String(parsed?.owner || '');
+      if (actualOwner === ownerPk.toBase58()) {
+        tokenAccount = { pubkey: holder.address, account: holderAccount.value };
+      } else if (actualOwner) {
+        throw new Error(`Solana source wallet is not the asset owner (on-chain owner ${actualOwner})`);
+      }
+    }
+  }
   if (!tokenAccount) throw new Error('Solana source wallet does not own this Token-2022 NFT');
   return {
     standard: 'token2022',

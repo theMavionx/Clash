@@ -59,7 +59,7 @@ function formatCompactUsdc(units) {
 }
 
 function tokenAssetId(token) {
-  return String(token?.tokenId || token?.tokenAddress || token?.asset || token?.mint || token?.id || '').trim();
+  return String(token?.tokenId || token?.tokenAddress || token?.assetId || token?.asset || token?.mint || token?.id || '').trim();
 }
 
 function walletForChain(chain, { evmAddress, solAddress, aptosAddress }) {
@@ -90,6 +90,12 @@ const PURCHASE_STEPS = [
   { key: 'transfer', label: 'Transfer' },
   { key: 'received', label: 'NFT received' },
 ];
+const LISTING_STEPS = [
+  { key: 'details', label: 'Listing details' },
+  { key: 'transfer', label: 'Transfer to escrow' },
+  { key: 'verify', label: 'Server verification' },
+  { key: 'listed', label: 'Listed for sale' },
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,6 +120,17 @@ function ownedTokenMatchesOrder(token, order) {
 }
 
 function mergePurchaseFlow(prev, patch) {
+  return {
+    ...(prev || {}),
+    ...patch,
+    steps: {
+      ...(prev?.steps || {}),
+      ...(patch.steps || {}),
+    },
+  };
+}
+
+function mergeListingFlow(prev, patch) {
   return {
     ...(prev || {}),
     ...patch,
@@ -170,6 +187,7 @@ export default function CustodialMarketplacePanel({
   const [paymentChain, setPaymentChain] = useState('base');
   const [deliveryChain, setDeliveryChain] = useState('base');
   const [purchaseFlow, setPurchaseFlow] = useState(null);
+  const [listingFlow, setListingFlow] = useState(null);
   const [browseSort, setBrowseSort] = useState('newest');
   const [browseLevel, setBrowseLevel] = useState('all');
 
@@ -181,6 +199,12 @@ export default function CustodialMarketplacePanel({
   const compact = useCompactMarketplaceLayout();
   const selectedNft = useMemo(() => owned.find((nft) => `${nft.chain}:${tokenAssetId(nft)}` === selectedAsset) || null, [owned, selectedAsset]);
   const walletMap = useMemo(() => ({ evmAddress, solAddress, aptosAddress }), [aptosAddress, evmAddress, solAddress]);
+  const ownedNftForOrder = useCallback((order) => {
+    const chain = String(order?.assetChain || '').toLowerCase();
+    const assetId = tokenAssetId(order);
+    if (!chain || !assetId) return null;
+    return owned.find((nft) => String(nft.chain || '').toLowerCase() === chain && tokenAssetId(nft) === assetId) || null;
+  }, [owned]);
   const stats = useMemo(() => {
     const volumeUnits = remoteStats?.volumeUsdcUnits != null
       ? usdcUnitsBigInt(remoteStats.volumeUsdcUnits)
@@ -334,6 +358,53 @@ export default function CustodialMarketplacePanel({
     setPurchaseFlow((prev) => mergePurchaseFlow(prev, patch));
   }, []);
 
+  const updateListingFlow = useCallback((patch) => {
+    setListingFlow((prev) => mergeListingFlow(prev, patch));
+  }, []);
+
+  const failListingFlow = useCallback((message, order = null) => {
+    setListingFlow((prev) => {
+      const steps = prev?.steps || {};
+      const failedStep = steps.verify === 'active'
+        ? 'verify'
+        : steps.transfer === 'active'
+          ? 'transfer'
+          : 'details';
+      return mergeListingFlow(prev, {
+        order: order || prev?.order,
+        steps: { [failedStep]: 'error' },
+        message: null,
+        error: String(message || '').slice(0, 240),
+      });
+    });
+  }, []);
+
+  const waitForListingActive = useCallback(async ({ order, txHash }) => {
+    let latestOrder = order;
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      if (latestOrder?.status === 'active') return latestOrder;
+      if (sessionToken && latestOrder?.id) {
+        try {
+          const json = await fetchCustodialOrder({ token: sessionToken, orderId: latestOrder.id });
+          if (json?.order) latestOrder = json.order;
+        } catch {
+          // Listing verification can lag right after a wallet tx; keep polling.
+        }
+      }
+      if (latestOrder?.status === 'active') return latestOrder;
+      updateListingFlow({
+        order: latestOrder,
+        txHash,
+        steps: { transfer: txHash ? 'complete' : 'active', verify: 'active' },
+        message: 'Waiting for the server to verify escrow custody and publish the listing.',
+      });
+      await sleep(attempt < 5 ? 1500 : 3000);
+    }
+    const err = new Error('NFT transfer was submitted, but the listing is still waiting for server verification. Check My orders in a moment.');
+    err.order = latestOrder;
+    throw err;
+  }, [sessionToken, updateListingFlow]);
+
   const waitForPurchasedNftReceipt = useCallback(async ({ order, destChain, destAddress }) => {
     let latestOrder = order;
     for (let attempt = 0; attempt < 36; attempt += 1) {
@@ -388,6 +459,87 @@ export default function CustodialMarketplacePanel({
     if (order.buyerDestChain && supportedDestinations.includes(order.buyerDestChain)) setDeliveryChain(order.buyerDestChain);
   }, [supportedDestinations, supportedPayments, walletMap]);
 
+  const depositListingOrder = useCallback(async (order, nftOverride = null, { trackFlow = true } = {}) => {
+    if (!sessionToken) throw new Error('Game session is not ready.');
+    const assetChain = order?.assetChain || nftOverride?.chain;
+    const sellerWallet = walletForChain(assetChain, walletMap);
+    if (!sellerWallet) throw new Error(`Connect ${CHAIN_LABEL[assetChain] || assetChain} wallet to transfer this NFT.`);
+    const nft = nftOverride || ownedNftForOrder(order) || null;
+    if (trackFlow) {
+      updateListingFlow({
+        open: true,
+        order,
+        nft,
+        txHash: null,
+        steps: { details: 'complete', transfer: 'active', verify: 'pending', listed: 'pending' },
+        message: `Confirm the NFT transfer to marketplace escrow on ${CHAIN_LABEL[assetChain] || assetChain}.`,
+        error: null,
+      });
+    }
+    const deposited = await depositNftToCustody({
+      evmWallet,
+      solWallet,
+      aptosWallet,
+      token: sessionToken,
+      order,
+      nft,
+      owner: sellerWallet,
+    });
+    const confirmedOrder = deposited?.confirmed?.order || order;
+    if (trackFlow) {
+      updateListingFlow({
+        order: confirmedOrder,
+        txHash: deposited?.txHash,
+        steps: { transfer: 'complete', verify: 'active' },
+        message: 'Escrow transfer confirmed. Verifying the listing on the server.',
+      });
+    }
+    const activeOrder = trackFlow
+      ? await waitForListingActive({ order: confirmedOrder, txHash: deposited?.txHash })
+      : confirmedOrder;
+    if (trackFlow) {
+      updateListingFlow({
+        order: activeOrder,
+        txHash: deposited?.txHash,
+        steps: { details: 'complete', transfer: 'complete', verify: 'complete', listed: 'complete' },
+        message: 'Your NFT is live in the marketplace.',
+      });
+    }
+    addClientBreadcrumb('marketplace.custodial.deposit.success', {
+      orderId: order?.id,
+      assetChain,
+      txHash: deposited?.txHash,
+    });
+    return { ...deposited, order: activeOrder };
+  }, [aptosWallet, evmWallet, ownedNftForOrder, sessionToken, solWallet, updateListingFlow, waitForListingActive, walletMap]);
+
+  const handleDepositPending = useCallback(async (order) => {
+    if (!order?.id) return;
+    setBusy(`deposit:${order.id}`);
+    setNotice(null);
+    setListingFlow({
+      open: true,
+      order,
+      nft: ownedNftForOrder(order) || null,
+      txHash: null,
+      steps: { details: 'complete', transfer: 'active', verify: 'pending', listed: 'pending' },
+      message: 'Resume listing by transferring the NFT to marketplace escrow.',
+      error: null,
+    });
+    try {
+      const deposited = await depositListingOrder(order);
+      setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+      await Promise.all([loadListings(), loadOrders(), loadOwned()]);
+    } catch (err) {
+      const msg = err?.shortMessage || err?.message || String(err);
+      failListingFlow(msg, err?.order || order);
+      setNotice(msg.slice(0, 240));
+      addClientBreadcrumb('marketplace.custodial.deposit.failed', { orderId: order?.id, message: msg }, 'warn');
+    } finally {
+      setBusy(null);
+    }
+  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, ownedNftForOrder]);
+
   const handleCreateListing = useCallback(async () => {
     if (!sessionToken) { setNotice('Game session is not ready.'); return; }
     if (!ready) { setNotice('Marketplace vaults are not ready on the server.'); return; }
@@ -401,31 +553,78 @@ export default function CustodialMarketplacePanel({
     if (!payoutAddress) { setNotice(`Connect ${CHAIN_LABEL[payoutChain] || payoutChain} wallet for payout.`); return; }
     setBusy('list');
     setNotice(null);
+    setListingFlow({
+      open: true,
+      order: null,
+      nft: selectedNft,
+      priceUsdc: priceInput,
+      assetChain,
+      sellerPayoutChain: payoutChain,
+      txHash: null,
+      steps: { details: 'active', transfer: 'pending', verify: 'pending', listed: 'pending' },
+      message: 'Creating listing details on the server.',
+      error: null,
+    });
     try {
-      const created = await createCustodialListing({
-        token: sessionToken,
-        assetChain,
-        assetId,
-        sellerWallet,
-        sellerPayoutChain: payoutChain,
-        sellerPayoutAddress: payoutAddress,
-        priceUsdc: priceInput,
-      });
-      const order = created.order;
-      if (order?.status === 'awaiting_deposit' && !created.resumed && !created.alreadyListed) {
-        const deposited = await depositNftToCustody({
-          evmWallet,
-          solWallet,
-          aptosWallet,
+      let created;
+      try {
+        created = await createCustodialListing({
           token: sessionToken,
-          order,
-          nft: selectedNft,
-          owner: sellerWallet,
+          assetChain,
+          assetId,
+          sellerWallet,
+          sellerPayoutChain: payoutChain,
+          sellerPayoutAddress: payoutAddress,
+          priceUsdc: priceInput,
         });
+        updateListingFlow({
+          order: created?.order || null,
+          steps: { details: 'complete', transfer: 'active' },
+          message: created?.order?.status === 'awaiting_deposit'
+            ? 'Listing created. Confirm the NFT transfer to escrow.'
+            : 'Listing details verified.',
+        });
+      } catch (err) {
+        const pendingOrder = err?.body?.order;
+        if (Number(err?.status) === 409 && pendingOrder?.status === 'awaiting_deposit') {
+          updateListingFlow({
+            order: pendingOrder,
+            steps: { details: 'complete', transfer: 'active' },
+            message: 'Existing listing found. Continue by transferring the NFT to escrow.',
+          });
+          const deposited = await depositListingOrder(pendingOrder, selectedNft);
+          setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+          setPriceInput('');
+          setView('orders');
+          await Promise.all([loadListings(), loadOrders(), loadOwned()]);
+          return;
+        }
+        throw err;
+      }
+      const order = created.order;
+      if (order?.status === 'awaiting_deposit' && !created.resumed) {
+        const deposited = await depositListingOrder(order, selectedNft);
         setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+      } else if (created.recovered) {
+        updateListingFlow({
+          order,
+          steps: { details: 'complete', transfer: 'complete', verify: 'complete', listed: 'complete' },
+          message: 'Listing recovered. Escrow custody is already verified.',
+        });
+        setNotice('Listing recovered. NFT custody is already verified.');
       } else if (created.resumed) {
+        updateListingFlow({
+          order,
+          steps: { details: 'complete', transfer: 'complete', verify: 'complete', listed: 'complete' },
+          message: 'Listing resumed. Escrow custody is already verified.',
+        });
         setNotice('Listing resumed. NFT custody is already verified.');
       } else {
+        updateListingFlow({
+          order,
+          steps: { details: 'complete', transfer: 'complete', verify: 'complete', listed: 'complete' },
+          message: 'This NFT is already live in the marketplace.',
+        });
         setNotice('This NFT is already listed.');
       }
       addClientBreadcrumb('marketplace.custodial.list.success', { orderId: created.order?.id, assetChain, assetId });
@@ -434,12 +633,13 @@ export default function CustodialMarketplacePanel({
       await Promise.all([loadListings(), loadOrders(), loadOwned()]);
     } catch (err) {
       const msg = err?.shortMessage || err?.message || String(err);
+      failListingFlow(msg, err?.order || null);
       setNotice(msg.slice(0, 240));
       addClientBreadcrumb('marketplace.custodial.list.failed', { message: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [aptosWallet, evmWallet, loadListings, loadOrders, loadOwned, priceInput, ready, selectedNft, sessionToken, solWallet, supportedPayments, walletMap]);
+  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, priceInput, ready, selectedNft, sessionToken, supportedPayments, updateListingFlow, walletMap]);
 
   const handleBuy = useCallback(async () => {
     if (!buyTarget) return;
@@ -673,6 +873,7 @@ export default function CustodialMarketplacePanel({
           busy={busy}
           onCancel={handleCancel}
           onResumeBuy={openBuyModal}
+          onDeposit={handleDepositPending}
           onReleaseReservation={handleReleaseReservation}
         />
       )}
@@ -733,6 +934,17 @@ export default function CustodialMarketplacePanel({
             if (busy === 'buy') return;
             setPurchaseFlow(null);
             if (purchaseFlow?.steps?.received === 'complete') setBuyTarget(null);
+          }}
+        />
+      ), document.body)}
+
+      {listingFlow?.open && canUsePortal && createPortal((
+        <ListingProgressModal
+          flow={listingFlow}
+          busy={busy === 'list' || String(busy || '').startsWith('deposit:')}
+          onClose={() => {
+            if (busy === 'list' || String(busy || '').startsWith('deposit:')) return;
+            setListingFlow(null);
           }}
         />
       ), document.body)}
@@ -838,42 +1050,86 @@ function PurchaseProgressModal({ flow, busy, onClose }) {
   );
 }
 
-function FilterButton({ active, disabled, children, onClick }) {
+function listingImage(flow) {
+  const nft = flow?.nft || {};
+  if (nft.imageUrl) return nft.imageUrl;
+  return orderImage(flow?.order || nft);
+}
+
+function listingPrice(flow) {
+  if (flow?.order?.priceUsdcUnits != null) return orderPrice(flow.order);
+  const price = String(flow?.priceUsdc || '').trim();
+  return price ? `${price} USDC` : 'USDC price';
+}
+
+function ListingProgressModal({ flow, busy, onClose }) {
+  const order = flow?.order || {};
+  const txHash = flow?.txHash || order.depositTxHash;
+  const assetChain = order.assetChain || flow?.assetChain || flow?.nft?.chain;
+  const payoutChain = order.sellerPayoutChain || flow?.sellerPayoutChain;
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      style={{ ...s.filterBtn, ...(active ? s.filterBtnActive : null), ...(disabled ? s.disabledBtn : null) }}
-    >
-      {children}
-    </button>
+    <div style={s.modalOverlay} onClick={busy ? undefined : onClose}>
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={s.modalHeader}>
+          <span style={s.modalTitle}>Listing progress</span>
+          <button type="button" style={s.closeBtn} onClick={onClose} disabled={busy}>x</button>
+        </div>
+        <div style={s.progressHead}>
+          <img src={listingImage(flow)} alt="" style={s.progressImg} />
+          <div style={s.progressMeta}>
+            <b>{listingPrice(flow)}</b>
+            <span>From {CHAIN_LABEL[assetChain] || assetChain || '-'}</span>
+            <span>Payout on {CHAIN_LABEL[payoutChain] || payoutChain || '-'}</span>
+          </div>
+        </div>
+        <div style={s.stepList}>
+          {LISTING_STEPS.map((step) => {
+            const status = flow?.steps?.[step.key] || 'pending';
+            return (
+              <div key={step.key} style={{ ...s.stepRow, ...(status === 'active' ? s.stepRowActive : null), ...(status === 'error' ? s.stepRowError : null) }}>
+                <span style={{ ...s.stepDot, ...(status === 'complete' ? s.stepDotDone : null), ...(status === 'active' ? s.stepDotActive : null), ...(status === 'error' ? s.stepDotError : null) }}>
+                  {stepGlyph(status)}
+                </span>
+                <span>{step.label}</span>
+              </div>
+            );
+          })}
+        </div>
+        {flow?.message && <div style={s.progressMessage}>{flow.message}</div>}
+        {flow?.error && <div style={s.progressError}>{flow.error}</div>}
+        <div style={s.progressLinks}>
+          {order.id && <span>order {shortAddr(order.id, 8, 6)}</span>}
+          {txHash && <span>escrow tx {shortAddr(txHash, 8, 6)}</span>}
+          {(order.assetId || tokenAssetId(flow?.nft)) && <span>NFT {shortAddr(order.assetId || tokenAssetId(flow?.nft), 8, 6)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterSelect({ label, value, setValue, options, disabled }) {
+  return (
+    <label style={s.filterControl}>
+      <span style={s.filterLabel}>{label}</span>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(event) => setValue(event.target.value)}
+        style={{ ...s.filterSelect, ...(disabled ? s.disabledBtn : null) }}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
 function BrowseFilters({ sort, setSort, level, setLevel, loading }) {
   return (
     <div style={s.filterPanel}>
-      <div style={s.filterRow}>
-        <span style={s.filterLabel}>Sort</span>
-        <div style={s.filterChips}>
-          {SORT_OPTIONS.map((option) => (
-            <FilterButton key={option.value} active={sort === option.value} disabled={loading} onClick={() => setSort(option.value)}>
-              {option.label}
-            </FilterButton>
-          ))}
-        </div>
-      </div>
-      <div style={s.filterRow}>
-        <span style={s.filterLabel}>Level</span>
-        <div style={s.filterChips}>
-          {LEVEL_OPTIONS.map((option) => (
-            <FilterButton key={option.value} active={level === option.value} disabled={loading} onClick={() => setLevel(option.value)}>
-              {option.label}
-            </FilterButton>
-          ))}
-        </div>
-      </div>
+      <FilterSelect label="Sort" value={sort} setValue={setSort} options={SORT_OPTIONS} disabled={loading} />
+      <FilterSelect label="Level" value={level} setValue={setLevel} options={LEVEL_OPTIONS} disabled={loading} />
     </div>
   );
 }
@@ -894,7 +1150,10 @@ function BrowseView({ listings, loading, walletMap, compact, sort, setSort, leve
                   <span style={s.level}>L{order.level || 1}</span>
                 </div>
                 <div style={s.cardBody}>
-                  <div style={s.cardLine}><b>{shortAddr(order.assetId, compact ? 5 : 4, 4)}</b><span>{orderPrice(order)}</span></div>
+                  <div style={s.cardLine}>
+                    <b style={s.cardAsset}>{shortAddr(order.assetId, compact ? 5 : 4, 4)}</b>
+                    <span style={s.cardPrice}>{orderPrice(order)}</span>
+                  </div>
                   <div style={s.cardSub}>Seller {shortAddr(order.sellerWallet, compact ? 6 : 4, 4)}</div>
                   <button type="button" onClick={() => (isOwn ? onOwnListing(order) : onBuy(order))} style={{ ...s.cardBtn, ...(compact ? s.cardBtnMobile : null), ...(isOwn ? s.manageBtn : null) }}>
                     {isOwn ? 'Manage' : 'Buy'}
@@ -958,7 +1217,7 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
   );
 }
 
-function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, onReleaseReservation }) {
+function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, onDeposit, onReleaseReservation }) {
   if (loading) return <div style={s.meta}>Loading orders...</div>;
   if (!orders.length) return <div style={s.empty}>No marketplace orders yet.</div>;
   return (
@@ -970,6 +1229,7 @@ function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, o
         const isBuyer = buyerPaymentWallet && String(order.buyerWallet || '').toLowerCase() === String(buyerPaymentWallet || '').toLowerCase();
         const reservationExpired = order.status === 'reserved' && reservationDeadlineMs(order) > 0 && reservationDeadlineMs(order) <= Date.now();
         const canCancel = isSeller && (['awaiting_deposit', 'active'].includes(order.status) || reservationExpired);
+        const canDeposit = isSeller && order.status === 'awaiting_deposit';
         const canResume = order.status === 'reserved' && isBuyer;
         const canRelease = canResume;
         const buyerLabel = order.buyerPlayerName
@@ -993,6 +1253,11 @@ function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, o
               {order.error && <span style={s.orderError}>{order.error}</span>}
             </div>
             <div style={s.orderActions}>
+              {canDeposit && (
+                <button type="button" onClick={() => onDeposit(order)} disabled={busy === `deposit:${order.id}`} style={s.smallBtn}>
+                  {busy === `deposit:${order.id}` ? 'Opening...' : 'Transfer'}
+                </button>
+              )}
               {canResume && (
                 <button type="button" onClick={() => onResumeBuy(order)} disabled={busy === 'buy'} style={s.smallBtn}>
                   Pay
@@ -1017,36 +1282,36 @@ function OrdersView({ orders, loading, walletMap, busy, onCancel, onResumeBuy, o
 }
 
 const s = {
-  root: { display: 'flex', flexDirection: 'column', gap: 10 },
-  stack: { display: 'flex', flexDirection: 'column', gap: 10 },
+  root: { width: '100%', maxWidth: '100%', minWidth: 0, overflowX: 'hidden', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10 },
+  stack: { width: '100%', maxWidth: '100%', minWidth: 0, overflowX: 'hidden', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10 },
   readyBanner: { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', padding: 10, borderRadius: 10, background: '#e8f5e0', border: '2px solid #9cc98c', color: '#254d18' },
   warnBanner: { display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', padding: 10, borderRadius: 10, background: '#fff0e0', border: '2px solid #e6b36a', color: '#67410f' },
   bannerTitle: { fontSize: 13, fontWeight: 900 },
   bannerSub: { fontSize: 11, fontWeight: 700, opacity: 0.9 },
   refreshBtn: { padding: '7px 10px', borderRadius: 8, border: '2px solid #9f8759', background: '#fff6dc', color: '#5C3A21', fontWeight: 900, cursor: 'pointer' },
-  tabs: { display: 'flex', gap: 6 },
-  tab: { flex: 1, padding: '8px 10px', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontWeight: 900, cursor: 'pointer' },
+  tabs: { display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, width: '100%', minWidth: 0 },
+  tab: { minWidth: 0, padding: '8px 8px', borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
   tabActive: { background: '#ffd97a', border: '2px solid #9f8759' },
   meta: { fontSize: 12, color: '#7a5a30', fontWeight: 800 },
   empty: { padding: 20, borderRadius: 10, border: '2px dashed #d4c8b0', background: '#fffaf0', color: '#5C3A21', textAlign: 'center', fontWeight: 800 },
   emptyInline: { padding: 12, color: '#7a5a30', fontWeight: 800, fontSize: 12 },
-  filterPanel: { display: 'flex', flexDirection: 'column', gap: 6, padding: 7, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
-  filterRow: { display: 'grid', gridTemplateColumns: '46px 1fr', alignItems: 'center', gap: 6 },
-  filterLabel: { color: '#7a5a30', fontSize: 11, fontWeight: 900, textTransform: 'uppercase' },
-  filterChips: { display: 'flex', gap: 5, overflowX: 'auto', scrollbarWidth: 'thin', paddingBottom: 1 },
-  filterBtn: { flex: '0 0 auto', minWidth: 52, minHeight: 30, padding: '5px 8px', borderRadius: 8, border: '2px solid #d4c8b0', background: '#fff6dc', color: '#5C3A21', fontSize: 11, fontWeight: 900, cursor: 'pointer', whiteSpace: 'nowrap' },
-  filterBtnActive: { border: '2px solid #9f8759', background: '#ffd97a' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 },
-  gridMobile: { display: 'grid', gridTemplateColumns: '1fr', gap: 8 },
-  card: { display: 'flex', flexDirection: 'column', gap: 5, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc' },
-  cardMobile: { display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', alignItems: 'stretch', gap: 8, padding: 7, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', minHeight: 110 },
+  filterPanel: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff8e6' },
+  filterControl: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 },
+  filterLabel: { color: '#7a5a30', fontSize: 10, fontWeight: 900, textTransform: 'uppercase', lineHeight: 1 },
+  filterSelect: { width: '100%', minWidth: 0, height: 34, boxSizing: 'border-box', padding: '0 28px 0 9px', borderRadius: 8, border: '2px solid #bba882', background: '#fff6dc', color: '#5C3A21', fontSize: 12, fontWeight: 900, fontFamily: 'inherit', cursor: 'pointer', outline: 'none' },
+  grid: { width: '100%', minWidth: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10 },
+  gridMobile: { width: '100%', minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 8 },
+  card: { minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', boxSizing: 'border-box' },
+  cardMobile: { width: '100%', minWidth: 0, boxSizing: 'border-box', display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', alignItems: 'stretch', gap: 8, padding: 7, borderRadius: 10, border: '2px solid #d4c8b0', background: '#fff6dc', minHeight: 104 },
   cardBody: { minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 5 },
-  imgWrap: { position: 'relative', aspectRatio: '1 / 1', borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
-  imgWrapMobile: { position: 'relative', width: 92, height: 92, borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
+  imgWrap: { position: 'relative', aspectRatio: '1 / 1', boxSizing: 'border-box', borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
+  imgWrapMobile: { position: 'relative', width: 86, height: 86, boxSizing: 'border-box', borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
   img: { width: '100%', height: '100%', objectFit: 'cover' },
   level: { position: 'absolute', top: 4, right: 4, padding: '2px 5px', borderRadius: 5, background: '#5C3A21', color: '#fff7df', fontSize: 10, fontWeight: 900 },
-  cardLine: { display: 'flex', justifyContent: 'space-between', gap: 4, fontSize: 12, color: '#5C3A21' },
-  cardSub: { fontSize: 10, color: '#7a5a30', fontWeight: 700 },
+  cardLine: { minWidth: 0, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, fontSize: 12, color: '#5C3A21' },
+  cardAsset: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  cardPrice: { flex: '0 0 auto', whiteSpace: 'nowrap', textAlign: 'right' },
+  cardSub: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10, color: '#7a5a30', fontWeight: 700 },
   cardBtn: { padding: '7px 10px', borderRadius: 8, border: '2px solid #4a8f2c', background: '#7ce04a', color: '#1a3d0a', fontWeight: 900, cursor: 'pointer' },
   cardBtnMobile: { minHeight: 34, padding: '7px 8px' },
   manageBtn: { border: '2px solid #9f8759', background: '#fff6dc', color: '#5C3A21' },

@@ -2263,6 +2263,7 @@ const TH_MAX_COUNT = {
   sawmill:      [1, 2, 3, 3],
   barn:         [1, 1, 1, 1],
   port:         [1, 2, 5, 5],
+  altar:        [1, 1, 1, 1],
   archer_tower: [1, 2, 3, 3],
   tombstone:    [0, 1, 3, 3],  // unlocked at TH2
   turret:       [0, 0, 3, 3],  // unlocked at TH3
@@ -2307,6 +2308,14 @@ const BUILDING_DEFS = {
     hp_levels: [1800, 3200, 5500, 8500],
     cost: { gold: 500, wood: 1200, ore: 1000 },
     max_count: 2,
+  },
+  altar: {
+    size: [3, 3], max_level: 1,
+    hp_levels: [900],
+    cost: { gold: 0, wood: 0, ore: 0 },
+    max_count: 1,
+    requires_purchase: true,
+    shop_sku: 'altar',
   },
   sawmill: {
     size: [3, 3], max_level: 4,
@@ -3021,9 +3030,35 @@ function hasTownHall(playerId) {
   return stmts.getBuildings.all(playerId).some((b) => b.type === 'town_hall');
 }
 
+function hasUtilityPurchase(playerId, utility) {
+  if (!playerId || !utility) return false;
+  const row = db.prepare(`
+    SELECT 1
+    FROM utility_purchases
+    WHERE player_id = ? AND utility = ?
+    LIMIT 1
+  `).get(playerId, utility);
+  return !!row;
+}
+
+function getShopEntitlements(playerId) {
+  const altar = hasUtilityPurchase(playerId, 'altar');
+  return { altar };
+}
+
+function getBuildingUnlocks(playerId) {
+  return {
+    altar: hasUtilityPurchase(playerId, 'altar'),
+  };
+}
+
 function placeBuilding(playerId, type, gridX, gridZ, gridIndex = 0) {
   const def = BUILDING_DEFS[type];
   if (!def) return { error: `Unknown building type: ${type}` };
+
+  if (def.requires_purchase && !hasUtilityPurchase(playerId, def.shop_sku || type)) {
+    return { error: `${type} requires an on-chain purchase first` };
+  }
 
   if (type !== 'town_hall' && !hasTownHall(playerId)) {
     return { error: 'Build Town Hall first!' };
@@ -3800,6 +3835,8 @@ function getFullPlayerState(playerId) {
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
     resource_caps: getResourceCaps(playerId),
+    shop_entitlements: getShopEntitlements(playerId),
+    building_unlocks: getBuildingUnlocks(playerId),
   };
 }
 
@@ -4077,6 +4114,9 @@ module.exports = {
   addResources,
   canAfford,
   subtractResources,
+  hasUtilityPurchase,
+  getShopEntitlements,
+  getBuildingUnlocks,
   getBuildingUpgradeCost,
   canPlaceBuildingAt,
   findOpenBuildingSlots,

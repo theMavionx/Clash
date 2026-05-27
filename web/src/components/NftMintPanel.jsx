@@ -295,6 +295,29 @@ function formatUsdAmount(value) {
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
 }
 
+function shopUnitUsd(product, chain, payment) {
+  const baseUsd = Number(product?.priceUsd || 0);
+  if (chain === 'base' && payment === 'cop') {
+    const copUsd = product?.copPriceUsd != null ? Number(product.copPriceUsd) : baseUsd * 0.8;
+    return Number.isFinite(copUsd) ? copUsd : baseUsd;
+  }
+  return Number.isFinite(baseUsd) ? baseUsd : 0;
+}
+
+function isShopDiscounted(product, chain, payment) {
+  const baseUsd = Number(product?.priceUsd || 0);
+  return chain === 'base' && payment === 'cop' && shopUnitUsd(product, chain, payment) < baseUsd;
+}
+
+function formatBoosts(boosts) {
+  if (!boosts) return '';
+  const parts = [];
+  if (boosts.resourcesPct) parts.push(`+${boosts.resourcesPct}% resources`);
+  if (boosts.basePct) parts.push(`+${boosts.basePct}% base`);
+  if (boosts.trophyPerAttack) parts.push(`up to +${boosts.trophyPerAttack} trophies/attack`);
+  return parts.join(' / ');
+}
+
 function getSupplyInfo(config, chain) {
   const chainConfig = config?.[chain] || config?.evm?.[chain] || {};
   const globalSupply = config?.global || {};
@@ -1030,6 +1053,17 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
       if (grant.shield_until) {
         window.onGodotMessage?.({ action: 'state', data: { shield_until: grant.shield_until } });
       }
+      if (grant.building_unlocks || grant.shop_entitlements || grant.altar) {
+        const entitlementPatch = {
+          shop_entitlements: grant.shop_entitlements || {},
+          building_unlocks: grant.building_unlocks || {},
+          altar: grant.altar || null,
+        };
+        window.onGodotMessage?.({ action: 'state', data: entitlementPatch });
+        try {
+          window.godotBridge?.(JSON.stringify({ action: 'set_shop_unlocks', data: entitlementPatch }));
+        } catch {}
+      }
       // Stash the per-resource delta on the result so the success popup's
       // "Done" handler can fire the fly-to-bar animation. We deliberately
       // DON'T fly here — the burst would happen behind the success overlay
@@ -1326,6 +1360,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     aptosAddress={aptosWallet?.address || null}
                     busy={busy}
                     quantities={shopQuantities}
+                    ownedProducts={{ ...(player?.shop_entitlements || {}), ...(player?.building_unlocks || {}) }}
                     onQuantityChange={handleShopQuantityChange}
                     onConnectBase={handleShopChainReady}
                     onConnectSolana={handleSolanaReady}
@@ -1468,12 +1503,16 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                     USDC payment, server settlement. */}
                 <div
                   className="shop-scroll"
-                  style={{ ...styles.slide, position: 'relative' }}
+                  style={{
+                    ...styles.slide,
+                    ...(panelMobile ? styles.slideMobile : null),
+                    position: 'relative',
+                  }}
                   aria-hidden={activeShopTab !== 'marketplace'}
                   inert={activeShopTab !== 'marketplace' ? true : undefined}
                 >
-                  <div style={styles.topRow}>
-                    <div style={styles.heroFrame}>
+                  <div style={{ ...styles.topRow, ...(panelMobile ? styles.topRowMarketplaceMobile : null) }}>
+                    <div style={{ ...styles.heroFrame, ...(panelMobile ? styles.marketHeroFrameMobile : null) }}>
                       <div style={styles.heroGlow} />
                       <img
                         src={demonKingImg}
@@ -1481,21 +1520,21 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                         style={styles.heroImg}
                       />
                     </div>
-                    <div style={styles.summary}>
-                      <span style={styles.heroName}>Marketplace</span>
-                      <span style={styles.editionTag}>List from any chain. Buy with USDC.</span>
-                      <div style={styles.marketStats} aria-label="Marketplace stats">
-                        <div style={styles.marketStat}>
+                    <div style={{ ...styles.summary, ...(panelMobile ? styles.marketSummaryMobile : null) }}>
+                      <span style={{ ...styles.heroName, ...(panelMobile ? styles.marketHeroNameMobile : null) }}>Marketplace</span>
+                      <span style={{ ...styles.editionTag, ...(panelMobile ? styles.marketEditionTagMobile : null) }}>List from any chain. Buy with USDC.</span>
+                      <div style={{ ...styles.marketStats, ...(panelMobile ? styles.marketStatsMobile : null) }} aria-label="Marketplace stats">
+                        <div style={{ ...styles.marketStat, ...(panelMobile ? styles.marketStatMobile : null) }}>
                           <span style={styles.marketStatLabel}>Listed</span>
-                          <b style={styles.marketStatValue}>{marketplaceStats.listedLabel}</b>
+                          <b style={{ ...styles.marketStatValue, ...(panelMobile ? styles.marketStatValueMobile : null) }}>{marketplaceStats.listedLabel}</b>
                         </div>
-                        <div style={styles.marketStat}>
+                        <div style={{ ...styles.marketStat, ...(panelMobile ? styles.marketStatMobile : null) }}>
                           <span style={styles.marketStatLabel}>Volume</span>
-                          <b style={styles.marketStatValue}>{marketplaceStats.volumeLabel}</b>
+                          <b style={{ ...styles.marketStatValue, ...(panelMobile ? styles.marketStatValueMobile : null) }}>{marketplaceStats.volumeLabel}</b>
                         </div>
-                        <div style={styles.marketStat}>
+                        <div style={{ ...styles.marketStat, ...(panelMobile ? styles.marketStatMobile : null) }}>
                           <span style={styles.marketStatLabel}>Floor</span>
-                          <b style={styles.marketStatValue}>{marketplaceStats.floorLabel}</b>
+                          <b style={{ ...styles.marketStatValue, ...(panelMobile ? styles.marketStatValueMobile : null) }}>{marketplaceStats.floorLabel}</b>
                         </div>
                       </div>
                     </div>
@@ -2310,6 +2349,7 @@ function GameResourcesTab({
   aptosAddress,
   busy,
   quantities,
+  ownedProducts,
   onQuantityChange,
   onConnectBase,
   onConnectSolana,
@@ -2399,15 +2439,20 @@ function GameResourcesTab({
       <div style={styles.resourceGrid}>
         {products.map((product) => {
           const isBusy = busy === `shop:${product.id}`;
-          const discounted = chain === 'base' && payment === 'cop';
+          const discounted = isShopDiscounted(product, chain, payment);
           const quantity = clampQuantity(quantities?.[product.id] || 1, product.maxQuantity || MAX_BATCH_QUANTITY);
-          const unitUsd = Number(product.priceUsd || 0) * (discounted ? 0.8 : 1);
+          const owned = product.kind === 'altar' && !!(ownedProducts?.altar || ownedProducts?.[product.id] || ownedProducts?.[product.sku]);
+          const unitUsd = shopUnitUsd(product, chain, payment);
           const priceUsd = formatUsdAmount(unitUsd * quantity);
           const displayRewards = multiplyRewards(product.rewards, quantity);
+          const displayBoosts = formatBoosts(product.boosts);
+          const canChangeQuantity = (product.maxQuantity || MAX_BATCH_QUANTITY) > 1;
           const actionLabel = walletPreparing
             ? (isMobile ? 'Preparing' : 'Preparing wallet...')
             : !walletConnected
             ? connectLabel
+            : owned
+              ? 'Owned'
             : isBusy
               ? (isMobile ? 'Buying' : 'Buying...')
               : (isMobile ? `Buy x${quantity}` : `Buy x${quantity} with ${paymentLabel}`);
@@ -2422,8 +2467,8 @@ function GameResourcesTab({
           const buyBtnStyle = {
             ...styles.resourceBuyBtn,
             ...(isMobile ? styles.resourceBuyBtnMobile : null),
-            ...((ready && walletConnected) ? styles.resourceBuyBtnReady : null),
-            ...((!ready || walletPreparing) ? styles.resourceBuyBtnDisabled : null),
+            ...((ready && walletConnected && !owned) ? styles.resourceBuyBtnReady : null),
+            ...((!ready || walletPreparing || owned) ? styles.resourceBuyBtnDisabled : null),
           };
           const infoStyle = isMobile
             ? { ...styles.resourceInfo, ...styles.resourceInfoMobile }
@@ -2443,19 +2488,22 @@ function GameResourcesTab({
                   </span>
                   {product.durationHours && <span style={styles.resourceMeta}>{product.durationHours}h</span>}
                   {displayRewards && <span style={styles.resourceMeta}>{formatRewards(displayRewards)}</span>}
+                  {displayBoosts && <span style={styles.resourceMeta}>{displayBoosts}</span>}
                 </div>
-                <QuantityStepper
-                  value={quantity}
-                  onChange={(next) => onQuantityChange?.(product.id, next, product.maxQuantity || MAX_BATCH_QUANTITY)}
-                  max={product.maxQuantity || MAX_BATCH_QUANTITY}
-                  disabled={!!busy}
-                  compact
-                />
+                {canChangeQuantity && (
+                  <QuantityStepper
+                    value={quantity}
+                    onChange={(next) => onQuantityChange?.(product.id, next, product.maxQuantity || MAX_BATCH_QUANTITY)}
+                    max={product.maxQuantity || MAX_BATCH_QUANTITY}
+                    disabled={!!busy}
+                    compact
+                  />
+                )}
               </div>
               <button
                 type="button"
                 style={buyBtnStyle}
-                disabled={!ready || !!busy || walletPreparing}
+                disabled={!ready || !!busy || walletPreparing || owned}
                 onClick={() => {
                   if (!walletConnected) connectForChain();
                   else onBuy(product);
@@ -2485,6 +2533,7 @@ function ResourceProductIcon({ product }) {
   // the visual weight of the chest/pack PNGs which fill the 92px wrap at
   // 128% — a 76px shield reads roughly the same on the row.
   if (product.kind === 'shield') return <ShieldGlyph size={76} />;
+  if (product.kind === 'altar') return <AltarGlyph size={78} />;
   return <ResourceGlyph size={76} />;
 }
 
@@ -2537,6 +2586,20 @@ function ResourceGlyph({ size = 48 }) {
       <path d="M15 24 L32 34 L49 24" stroke="#6b3d12" strokeWidth="3" strokeLinejoin="round" />
       <path d="M32 34 V54" stroke="#6b3d12" strokeWidth="3" />
       <path d="M25 20 L41 29" stroke="rgba(255,255,255,0.45)" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AltarGlyph({ size = 48 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" fill="none">
+      <ellipse cx="32" cy="51" rx="21" ry="7" fill="#6c4b82" opacity="0.35" />
+      <path d="M18 43 L46 43 L50 51 L14 51 Z" fill="#7d5b8f" stroke="#3d244d" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M22 28 L42 28 L46 43 L18 43 Z" fill="#9b79ad" stroke="#3d244d" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M26 17 L38 17 L42 28 L22 28 Z" fill="#c4a0d7" stroke="#3d244d" strokeWidth="3" strokeLinejoin="round" />
+      <path d="M32 7 C38 14 38 19 32 24 C26 19 26 14 32 7 Z" fill="#56d8ff" stroke="#126579" strokeWidth="3" />
+      <path d="M32 13 C35 17 35 19 32 22" stroke="rgba(255,255,255,0.75)" strokeWidth="2" strokeLinecap="round" />
+      <path d="M21 36 H43" stroke="rgba(255,255,255,0.4)" strokeWidth="3" strokeLinecap="round" />
     </svg>
   );
 }
@@ -3051,6 +3114,7 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
   const grant = result?.grant;
   const customIcon = product ? RESOURCE_PRODUCT_ICONS[product.id] : null;
   const isShield = product?.kind === 'shield';
+  const isAltar = product?.kind === 'altar';
   const chain = result?.chain || 'base';
   const chainLabel = SHOP_CHAIN_LABEL[chain] || chain;
   const paymentLabel = result?.paymentLabel || getShopPaymentLabel(chain, result?.payment);
@@ -3065,6 +3129,9 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
       successDetail = until
         ? `Base protected until ${until.toLocaleString()}`
         : `Your base is protected for ${(product.durationHours || 24) * quantity}h.`;
+    } else if (isAltar) {
+      successHeadline = 'Altar Activated';
+      successDetail = product.subtitle || 'Resource and base boosts are now active.';
     } else if (grant?.resources) {
       const rewards = multiplyRewards(product.rewards, quantity) || {};
       const parts = [];
@@ -3121,6 +3188,10 @@ function ShopPurchaseOverlay({ status, result, onDismiss }) {
             ) : isShield ? (
               <div style={overlayStyles.cardGlyph}>
                 <ShieldGlyph size={130} />
+              </div>
+            ) : isAltar ? (
+              <div style={overlayStyles.cardGlyph}>
+                <AltarGlyph size={132} />
               </div>
             ) : (
               <div style={overlayStyles.cardGlyph}>
@@ -3841,8 +3912,11 @@ const styles = {
   slide: {
     flex: '0 0 100%',
     minWidth: 0,
+    width: '100%',
     height: '100%',
     overflowY: 'auto',
+    overflowX: 'hidden',
+    boxSizing: 'border-box',
     padding: '0 16px',
     display: 'flex', flexDirection: 'column', gap: 10,
     // Firefox-specific scrollbar tint — thumb/track colors. WebKit-based
@@ -3850,6 +3924,10 @@ const styles = {
     // MINT_ANIM_CSS so they match the parchment palette across engines.
     scrollbarWidth: 'thin',
     scrollbarColor: '#bba882 #fdf8e7',
+  },
+  slideMobile: {
+    padding: '0 10px',
+    overflowX: 'hidden',
   },
   // ── Marketplace "coming soon" overlay ─────────────────────────────
   // Fixed (relative to the slide) dim layer that covers the entire
@@ -3922,6 +4000,14 @@ const styles = {
     gridTemplateColumns: '120px 1fr',
     gap: 12,
     alignItems: 'center',
+    width: '100%',
+    minWidth: 0,
+    boxSizing: 'border-box',
+  },
+  topRowMarketplaceMobile: {
+    gridTemplateColumns: '72px minmax(0, 1fr)',
+    gap: 8,
+    alignItems: 'center',
   },
   topRowResources: {
     display: 'flex',
@@ -3934,12 +4020,21 @@ const styles = {
   heroFrame: {
     position: 'relative',
     width: 120, height: 120,
+    boxSizing: 'border-box',
     borderRadius: 18,
     background: 'radial-gradient(circle at 50% 35%, #f3e6c4 0%, #d8c190 60%, #b89a64 100%)',
     border: '5px solid #d4c8b0',
     boxShadow: 'inset 0 4px 10px rgba(0,0,0,0.18), 0 8px 18px rgba(0,0,0,0.28)',
     overflow: 'hidden',
     display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  marketHeroFrameMobile: {
+    width: 72,
+    height: 72,
+    boxSizing: 'border-box',
+    borderRadius: 14,
+    border: '3px solid #d4c8b0',
+    boxShadow: 'inset 0 3px 7px rgba(0,0,0,0.18), 0 5px 12px rgba(0,0,0,0.24)',
   },
   heroGlow: {
     position: 'absolute', inset: -4,
@@ -3991,14 +4086,29 @@ const styles = {
     flexDirection: 'column',
     gap: 6,
   },
+  marketSummaryMobile: {
+    minWidth: 0,
+    gap: 4,
+  },
   heroName: {
     fontSize: 22, fontWeight: 900, color: '#5C3A21',
     letterSpacing: 0,
     lineHeight: 1,
   },
+  marketHeroNameMobile: {
+    fontSize: 20,
+    lineHeight: 1.05,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   editionTag: {
     fontSize: 11, fontWeight: 900, color: '#8b6b3f',
     textTransform: 'uppercase', letterSpacing: 0,
+  },
+  marketEditionTagMobile: {
+    fontSize: 10,
+    lineHeight: 1.1,
   },
   marketStats: {
     display: 'grid',
@@ -4007,8 +4117,16 @@ const styles = {
     maxWidth: 360,
     marginTop: 4,
   },
+  marketStatsMobile: {
+    width: '100%',
+    maxWidth: 'none',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 5,
+    marginTop: 2,
+  },
   marketStat: {
     minWidth: 0,
+    boxSizing: 'border-box',
     minHeight: 44,
     display: 'flex',
     flexDirection: 'column',
@@ -4019,6 +4137,11 @@ const styles = {
     border: '2px solid #d4c8b0',
     background: '#fff8df',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.55), 0 2px 5px rgba(92,58,33,0.12)',
+  },
+  marketStatMobile: {
+    minHeight: 38,
+    padding: '5px 6px',
+    borderRadius: 8,
   },
   marketStatLabel: {
     fontSize: 9,
@@ -4037,6 +4160,9 @@ const styles = {
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
+  },
+  marketStatValueMobile: {
+    fontSize: 14,
   },
   soldOutPill: {
     display: 'inline-flex',

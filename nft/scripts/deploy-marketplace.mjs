@@ -88,7 +88,7 @@ if (onChainId !== spec.chain.id) {
 const balance = await publicClient.getBalance({ address: account.address });
 const treasury = getAddress(env.NFT_MARKETPLACE_TREASURY || env.NFT_ROYALTY_RECEIVER || TREASURY);
 const fallbackRoyaltyBps = Number(env.NFT_MARKETPLACE_FALLBACK_ROYALTY_BPS || '250');
-const platformFeeBps = Number(env.NFT_MARKETPLACE_FEE_BPS || env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100');
+const platformFeeBps = Number(env.NFT_MARKETPLACE_FEE_BPS || env.CUSTODIAL_MARKETPLACE_FEE_BPS || '250');
 const usdcToken = getAddress(env[`NFT_${chainKey.toUpperCase()}_USDC_TOKEN`] || spec.usdcDefault);
 const copTokenRaw = env[`NFT_${chainKey.toUpperCase()}_CLASH_TOKEN`] || env.NFT_CLASH_TOKEN || env.GAME_SHOP_COP_TOKEN || '';
 const copToken = copTokenRaw && /^0x[0-9a-fA-F]{40}$/.test(copTokenRaw) ? getAddress(copTokenRaw) : null;

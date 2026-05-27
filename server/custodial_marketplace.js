@@ -162,7 +162,7 @@ function envFlag(name, defaultValue = false) {
 }
 
 function marketplaceFeeBps() {
-  return Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '100') || 0));
+  return Math.max(0, Math.min(2000, Number(process.env.CUSTODIAL_MARKETPLACE_FEE_BPS || '250') || 0));
 }
 
 function marketplaceRoyaltyBps() {
@@ -210,6 +210,19 @@ function getOpenOrderByAsset(assetChain, assetId) {
   `).get(assetChain, assetId) || null;
 }
 
+function getRecoverableCustodiedOrderByAsset(assetChain, assetId, sellerPlayerId, sellerWallet) {
+  return gameDb.db.prepare(`
+    SELECT * FROM custodial_marketplace_orders
+    WHERE asset_chain = ?
+      AND asset_id = ?
+      AND status = 'cancelled'
+      AND seller_player_id = ?
+      AND lower(seller_wallet) = lower(?)
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `).get(assetChain, assetId, sellerPlayerId, sellerWallet) || null;
+}
+
 function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
   gameDb.db.transaction(() => {
     gameDb.db.prepare(`
@@ -226,11 +239,110 @@ function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, 
   return getOrder(order.id);
 }
 
+function recoverCustodiedListing(order, {
+  actorPlayerId,
+  sellerWallet,
+  payoutChain,
+  payoutAddress,
+  vault,
+  assetInfo,
+  priceUnits,
+  fee,
+  royalty,
+  sellerAmount,
+  feeBps,
+  royaltyBps,
+  metadata,
+}) {
+  gameDb.db.transaction(() => {
+    gameDb.db.prepare(`
+      UPDATE custodial_marketplace_orders
+         SET status = 'active',
+             seller_wallet = ?,
+             seller_payout_chain = ?,
+             seller_payout_address = ?,
+             asset_standard = ?,
+             asset_collection = ?,
+             level = ?,
+             price_usdc_units = ?,
+             fee_bps = ?,
+             fee_usdc_units = ?,
+             royalty_bps = ?,
+             royalty_usdc_units = ?,
+             seller_amount_usdc_units = ?,
+             payment_chain = 'base',
+             payment_token = 'usdc',
+             payment_token_address = NULL,
+             payment_decimals = 6,
+             payment_label = 'USDC',
+             payment_treasury = NULL,
+             payment_amount_usdc_units = NULL,
+             payment_nonce = NULL,
+             payment_deadline = NULL,
+             buyer_player_id = NULL,
+             buyer_wallet = NULL,
+             buyer_dest_chain = NULL,
+             buyer_dest_address = NULL,
+             vault_chain = ?,
+             vault_address = ?,
+             deposit_verified_at = COALESCE(deposit_verified_at, datetime('now')),
+             cancelled_at = NULL,
+             cancel_tx_hash = NULL,
+             error = NULL,
+             metadata_json = ?,
+             updated_at = datetime('now')
+       WHERE id = ?
+    `).run(
+      sellerWallet,
+      payoutChain,
+      payoutAddress,
+      assetInfo.standard || null,
+      assetInfo.collection || null,
+      Number(assetInfo.level || 1),
+      priceUnits.toString(),
+      feeBps,
+      fee.toString(),
+      royaltyBps,
+      royalty.toString(),
+      sellerAmount.toString(),
+      order.asset_chain,
+      vault.address,
+      JSON.stringify(metadata || {}),
+      order.id,
+    );
+    insertEvent(order.id, 'listing_recovered_from_cancelled_deposit', {
+      actorPlayerId,
+      data: {
+        assetChain: order.asset_chain,
+        assetId: order.asset_id,
+        sellerWallet,
+        priceUsdcUnits: priceUnits.toString(),
+        vault: vault.address,
+      },
+    });
+  })();
+  return getOrder(order.id);
+}
+
 async function activateOrderIfVaultOwnsAsset(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
   if (!order) return null;
   if (order.status === 'active') return order;
   if (order.status !== 'awaiting_deposit') return null;
-  await verifyAssetOwner(order.asset_chain, order.asset_id, order.vault_address);
+  let txVerifyError = null;
+  if (txHash && isEvmChain(order.asset_chain)) {
+    try {
+      await verifyEvmNftDepositTx(order, txHash);
+      return markOrderDepositVerified(order, { actorPlayerId, txHash, eventType });
+    } catch (err) {
+      txVerifyError = err;
+    }
+  }
+  try {
+    await verifyAssetOwner(order.asset_chain, order.asset_id, order.vault_address);
+  } catch (err) {
+    if (txVerifyError) throw txVerifyError;
+    throw err;
+  }
   return markOrderDepositVerified(order, { actorPlayerId, txHash, eventType });
 }
 
@@ -783,6 +895,52 @@ async function verifyEvmAsset(chain, assetId, expectedOwner) {
     throw httpError(409, `${shortLabel(chain)} NFT contract does not expose a supported level reader`);
   }
   return { chain, standard: 'erc721-v3', asset: String(tokenId), owner: owner.toLowerCase(), collection: contract, level };
+}
+
+function evmTopicAddress(topic, label = 'EVM topic address') {
+  const raw = String(topic || '').toLowerCase();
+  if (!/^0x[0-9a-f]{64}$/.test(raw)) throw httpError(400, `${label} is malformed`);
+  return `0x${raw.slice(-40)}`;
+}
+
+function evmTopicUint(topic, label = 'EVM topic uint') {
+  const raw = String(topic || '');
+  if (!/^0x[0-9a-fA-F]{64}$/.test(raw)) throw httpError(400, `${label} is malformed`);
+  return BigInt(raw);
+}
+
+async function verifyEvmNftDepositTx(order, txHash) {
+  if (!order || !isEvmChain(order.asset_chain)) throw httpError(400, 'EVM deposit order required');
+  if (!/^0x[0-9a-fA-F]{64}$/.test(String(txHash || ''))) throw httpError(400, 'Bad deposit transaction hash');
+  const receipt = await rpcCall(evmRpcUrl(order.asset_chain), 'eth_getTransactionReceipt', [txHash]);
+  if (!receipt) throw httpError(400, 'Deposit tx not found or not confirmed yet');
+  if (receipt.status !== '0x1') throw httpError(400, 'Deposit tx failed on-chain');
+
+  const dep = deploymentOf(order.asset_chain);
+  const contract = normalizeEvmAddress(order.asset_collection || dep?.proxy, 'NFT contract');
+  const seller = normalizeEvmAddress(order.seller_wallet, 'Seller wallet');
+  const vault = normalizeEvmAddress(order.vault_address, 'Vault wallet');
+  const tokenId = BigInt(String(order.asset_id));
+  let matchingWrongDirection = null;
+
+  for (const log of receipt.logs || []) {
+    if (String(log.address || '').toLowerCase() !== contract) continue;
+    if (String(log.topics?.[0] || '').toLowerCase() !== TRANSFER_TOPIC) continue;
+    if (!log.topics?.[1] || !log.topics?.[2] || !log.topics?.[3]) continue;
+    const from = evmTopicAddress(log.topics[1], 'Transfer from');
+    const to = evmTopicAddress(log.topics[2], 'Transfer to');
+    const movedTokenId = evmTopicUint(log.topics[3], 'Transfer tokenId');
+    if (movedTokenId !== tokenId) continue;
+    if (from === seller && to === vault) {
+      return { receipt, transfer: { from, to, tokenId: tokenId.toString(), blockNumber: receipt.blockNumber } };
+    }
+    matchingWrongDirection = { from, to, tokenId: tokenId.toString() };
+  }
+
+  if (matchingWrongDirection) {
+    throw httpError(403, `${shortLabel(order.asset_chain)} NFT transfer did not move this token from seller to custody vault`);
+  }
+  throw httpError(400, `${shortLabel(order.asset_chain)} NFT transfer to custody vault not found in tx`);
 }
 
 async function aptosFetchTx(txHash) {
@@ -1765,7 +1923,42 @@ function mountCustodialMarketplace(router, ctx = {}) {
         }
         return res.json({ success: true, alreadyListed: true, order: publicOrder(existing, { includePrivate: true }) });
       }
-      const assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
+      let assetInfo = null;
+      try {
+        assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
+      } catch (err) {
+        if (Number(err?.status) === 403) {
+          const recoverable = getRecoverableCustodiedOrderByAsset(assetChain, assetId, req.player.id, sellerWallet);
+          if (recoverable) {
+            const vaultInfo = await verifyAssetOwner(assetChain, assetId, vault.address).catch(() => null);
+            if (vaultInfo) {
+              const metadata = {
+                assetInfo: vaultInfo,
+                createdIp: req.ip || null,
+                note: String(req.body?.note || '').slice(0, 200),
+                recoveredFromCancelledOrder: true,
+              };
+              const recovered = recoverCustodiedListing(recoverable, {
+                actorPlayerId: req.player.id,
+                sellerWallet,
+                payoutChain,
+                payoutAddress,
+                vault,
+                assetInfo: vaultInfo,
+                priceUnits,
+                fee,
+                royalty,
+                sellerAmount,
+                feeBps: config.feeBps,
+                royaltyBps: config.royaltyBps,
+                metadata,
+              });
+              return res.json({ success: true, recovered: true, order: publicOrder(recovered, { includePrivate: true }) });
+            }
+          }
+        }
+        throw err;
+      }
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
       gameDb.db.transaction(() => {

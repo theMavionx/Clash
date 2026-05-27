@@ -1,7 +1,8 @@
 extends BaseTroop
 ## DemonKing — premium heavy melee, occupies 2 ship slots.
-## Designed as a premium 2-slot heavy melee unit. Level 1 is intentionally
-## stronger than two level 4 Knights on HP, hit damage, and DPS.
+## Designed as a premium 2-slot heavy melee unit that scales from the
+## player's strongest normal troops: L1 is +20%, L2 +30%, L3 +40% over two
+## best troop slots by HP and DPS.
 ##
 ## Mesh: Model/Characters/Model/DemonKing_Body.fbx — actually a copy of
 ## DemonKing_RunFWD.fbx. We use an anim-FBX as the body because every anim
@@ -56,19 +57,12 @@ const DEMON_KING_ATK_SPEED_BY_LEVEL: Dictionary = {
 	2: 1.15,
 	3: 1.05,
 }
-const DEMON_KING_MIN_STATS_BY_LEVEL: Dictionary = {
-	1: {"hp": 2400, "damage": 220},
-	2: {"hp": 3200, "damage": 300},
-	3: {"hp": 4300, "damage": 410},
+const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL: Dictionary = {
+	1: 1.2,
+	2: 1.3,
+	3: 1.4,
 }
-const DEMON_KING_NFT_LEVEL_MULT: Dictionary = {
-	1: 1.0,
-	2: 1.1,
-	3: 1.2,
-}
-const DEMON_KING_DAMAGE_BASE_ATK_SPEED: float = 1.25
 const DEMON_KING_SLOT_COUNT: float = 2.0
-const DEMON_KING_POWER_OVER_TWO_TROOPS: float = 1.3
 
 const DEMON_ANIM_FILES: Array = [
 	"res://Model/Characters/Animations/DemonKing/DemonKing_Attack01.fbx",
@@ -219,13 +213,12 @@ static func _compute_dynamic_stats(demon_level: int, levels: Dictionary) -> Dict
 
 	var clamped_level: int = clampi(demon_level, 1, DEMON_KING_ATK_SPEED_BY_LEVEL.size())
 	var atk: float = float(DEMON_KING_ATK_SPEED_BY_LEVEL[clamped_level])
-	var nft_mult: float = float(DEMON_KING_NFT_LEVEL_MULT.get(clamped_level, 1.0))
-	var target_hp: float = best_hp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nft_mult
-	var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nft_mult
-	var min_stats: Dictionary = DEMON_KING_MIN_STATS_BY_LEVEL[clamped_level]
+	var power_mult: float = float(DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL.get(clamped_level, 1.2))
+	var target_hp: float = best_hp * DEMON_KING_SLOT_COUNT * power_mult
+	var target_dps: float = best_dps * DEMON_KING_SLOT_COUNT * power_mult
 	return {
-		"hp": maxi(int(min_stats.hp), int(ceil(target_hp))),
-		"damage": maxi(int(min_stats.damage), int(ceil(target_dps * DEMON_KING_DAMAGE_BASE_ATK_SPEED))),
+		"hp": int(ceil(target_hp)),
+		"damage": int(ceil(target_dps * atk)),
 		"atk_speed": atk,
 	}
 

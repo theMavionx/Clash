@@ -1773,6 +1773,17 @@ const GAME_SHOP_PRODUCTS = {
     rewards: { gold: 7500, wood: 7500, ore: 7500 },
     maxQuantity: 3,
   },
+  altar: {
+    id: 'altar',
+    sku: 'altar',
+    title: 'Altar',
+    subtitle: 'Отримай до 40% бусту всіх ресурсів; база на до 40% сильніша; до +10 трофеїв за кожну атаку',
+    kind: 'altar',
+    usdPriceE6: '15000000',
+    copUsdPriceE6: '15000000',
+    boosts: { resourcesPct: 40, basePct: 40, trophyPerAttack: 10 },
+    maxQuantity: 1,
+  },
   ai_messages_100: {
     id: 'ai_messages_100',
     sku: 'ai_messages_100',
@@ -1822,6 +1833,7 @@ function gameShopProductsForClient() {
     copPriceUsd: product.copUsdPriceE6 ? unitsToDecimalString(BigInt(product.copUsdPriceE6), 6) : null,
     durationHours: product.durationHours || null,
     rewards: product.rewards || null,
+    boosts: product.boosts || null,
     messageCredits: product.messageCredits || null,
     copBonusCredits: product.copBonusCredits || null,
     dailyLimit: product.dailyLimit || null,
@@ -2085,6 +2097,19 @@ function applyGameShopProduct(playerId, product, quantity, context = {}) {
     );
     return { resources };
   }
+  if (product.kind === 'altar') {
+    const boosts = product.boosts || {};
+    return {
+      altar: {
+        active: true,
+        resources_boost_pct: boosts.resourcesPct || 40,
+        base_boost_pct: boosts.basePct || 40,
+        trophy_boost_per_attack: boosts.trophyPerAttack || 10,
+      },
+      shop_entitlements: { altar: true },
+      building_unlocks: { altar: true },
+    };
+  }
   if (product.kind === 'ai_messages') {
     const paidWithCop = String(context.payment || '').toLowerCase() === 'cop';
     const unitCredits = paidWithCop && product.copBonusCredits
@@ -2107,6 +2132,21 @@ function applyGameShopProduct(playerId, product, quantity, context = {}) {
       quantity,
     });
     return { ai_subscription: { lifetime_daily_limit: product.dailyLimit || 100 }, ai_quota: quota };
+  }
+  return {};
+}
+
+function isOwnedGameShopProduct(playerId, product) {
+  if (!playerId || !product) return false;
+  if (product.kind === 'altar') return db.hasUtilityPurchase(playerId, product.sku || product.id);
+  return false;
+}
+
+function ownedGameShopGrant(playerId, utility) {
+  const product = GAME_SHOP_PRODUCTS[utility];
+  if (!product || !isOwnedGameShopProduct(playerId, product)) return {};
+  if (product.kind === 'altar') {
+    return applyGameShopProduct(playerId, product, 1, { ownedSnapshot: true });
   }
   return {};
 }
@@ -3949,6 +3989,9 @@ router.post('/shop/base/quote', auth, async (req, res) => {
     const sku = String(req.body?.sku || '').trim();
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isOwnedGameShopProduct(req.player.id, product)) {
+      return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
+    }
     const quantity = BigInt(parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10));
     const paymentToken = getAddress(config.copToken);
     const decimals = Number(process.env.GAME_SHOP_COP_DECIMALS || process.env.NFT_BASE_CLASH_DECIMALS || 18);
@@ -4048,6 +4091,7 @@ router.post('/shop/base/redeem', auth, async (req, res) => {
         product: GAME_SHOP_PRODUCTS[existing.utility] || null,
         shield_until: existing.shield_until || null,
         resources: db.getResources(req.player.id),
+        ...ownedGameShopGrant(req.player.id, existing.utility),
       });
     }
 
@@ -4395,6 +4439,7 @@ router.post('/shop/solana/redeem', auth, async (req, res) => {
         product: GAME_SHOP_PRODUCTS[existing.utility] || null,
         shield_until: existing.shield_until || null,
         resources: db.getResources(req.player.id),
+        ...ownedGameShopGrant(req.player.id, existing.utility),
       });
     }
 
@@ -4651,6 +4696,9 @@ router.post('/shop/solana/quote', auth, async (req, res) => {
     const sku = String(req.body?.sku || '').trim();
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isOwnedGameShopProduct(req.player.id, product)) {
+      return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
+    }
 
     const payment = String(req.body?.payment || 'usdc').toLowerCase();
     if (payment !== 'usdc' && payment !== 'sol' && payment !== 'skr') {
@@ -4815,6 +4863,9 @@ router.post('/shop/evm/quote', auth, async (req, res) => {
     const sku = String(req.body?.sku || '').trim();
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isOwnedGameShopProduct(req.player.id, product)) {
+      return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
+    }
     const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
 
     // Total USD owed for this SKU * quantity. Both USDC (stable, 1:1) and
@@ -4914,6 +4965,7 @@ router.post('/shop/evm/redeem', auth, async (req, res) => {
         product: GAME_SHOP_PRODUCTS[existing.utility] || null,
         shield_until: existing.shield_until || null,
         resources: db.getResources(req.player.id),
+        ...ownedGameShopGrant(req.player.id, existing.utility),
       });
     }
 
@@ -5119,6 +5171,9 @@ router.post('/shop/aptos/quote', auth, async (req, res) => {
     const sku = String(req.body?.sku || '').trim();
     const product = GAME_SHOP_PRODUCTS[sku];
     if (!product) return res.status(400).json({ error: 'Unknown shop item' });
+    if (isOwnedGameShopProduct(req.player.id, product)) {
+      return res.status(409).json({ error: `${product.title || product.sku} already purchased` });
+    }
     const quantity = parsePositiveInteger(req.body?.quantity, 1, product.maxQuantity || 10);
 
     const payment = String(req.body?.payment || 'usdc').toLowerCase();
@@ -5218,6 +5273,7 @@ router.post('/shop/aptos/redeem', auth, async (req, res) => {
         product: GAME_SHOP_PRODUCTS[existing.utility] || null,
         shield_until: existing.shield_until || null,
         resources: db.getResources(req.player.id),
+        ...ownedGameShopGrant(req.player.id, existing.utility),
       });
     }
 

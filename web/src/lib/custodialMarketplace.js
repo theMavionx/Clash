@@ -1,4 +1,5 @@
 import { getAddress } from 'viem';
+import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
 
 export const CUSTODIAL_EVM_CHAIN_IDS = {
   base: 8453,
@@ -35,6 +36,17 @@ async function apiJson(url, { method = 'GET', token, body, signal } = {}) {
   return json;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientDepositVerifyError(err) {
+  const status = Number(err?.status || 0);
+  const message = String(err?.body?.error || err?.message || '').toLowerCase();
+  return [400, 403, 409, 502, 503].includes(status)
+    && /not confirmed|not found|not the nft owner|custody vault|transfer to custody|rpc/i.test(message);
+}
+
 export function formatCustodialUnits(units, decimals = 6) {
   const raw = BigInt(String(units || '0'));
   const d = Math.max(0, Number(decimals) || 0);
@@ -46,97 +58,6 @@ export function formatCustodialUnits(units, decimals = 6) {
 
 export function formatCustodialUsdc(units) {
   return formatCustodialUnits(units, 6);
-}
-
-function walletAdapterName(solWallet) {
-  return String(
-    solWallet?.wallet?.adapter?.name
-    || solWallet?.adapter?.name
-    || solWallet?.wallet?.name
-    || solWallet?.walletClientType
-    || '',
-  );
-}
-
-function isMobileWalletAdapter(solWallet) {
-  return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
-}
-
-function base64AddressToBase58(address, PublicKey) {
-  if (!address) return null;
-  try {
-    const decode = typeof atob === 'function'
-      ? (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
-      : (value) => Uint8Array.from(Buffer.from(value, 'base64'));
-    return new PublicKey(decode(address)).toBase58();
-  } catch {
-    return null;
-  }
-}
-
-function solanaMobileAppIdentity() {
-  const origin = typeof window !== 'undefined' && window.location?.origin
-    ? window.location.origin
-    : 'https://clashofperps.fun';
-  return {
-    name: 'Clash of Perps',
-    uri: origin,
-    icon: '/icons/icon-512.png',
-  };
-}
-
-async function sendSolanaMobileProtocolTransaction({ transaction, options, expectedAddress, PublicKey }) {
-  const { transact } = await import('@solana-mobile/mobile-wallet-adapter-protocol-web3js');
-  return transact(async (wallet) => {
-    const authorization = await wallet.authorize({
-      chain: 'solana:mainnet',
-      identity: solanaMobileAppIdentity(),
-      features: ['solana:signAndSendTransactions'],
-    });
-    const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address, PublicKey);
-    if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
-      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but the connected marketplace wallet is ${expectedAddress}`);
-    }
-    const [signature] = await wallet.signAndSendTransactions({
-      auth_token: authorization.auth_token,
-      transactions: [transaction],
-      commitment: options?.preflightCommitment || 'confirmed',
-      skipPreflight: !!options?.skipPreflight,
-      maxRetries: options?.maxRetries,
-    });
-    return signature;
-  });
-}
-
-function solanaWalletTxOptions({ solWallet, owner, PublicKey, label }) {
-  const adapterName = walletAdapterName(solWallet) || 'wallet';
-  const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
-  const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function' || mobileWalletAdapter;
-  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
-  if (!canSendSolanaTx && !canSignSolanaTx) {
-    throw new Error('This Solana wallet cannot sign transactions');
-  }
-  return {
-    sendTransaction: canSendSolanaTx
-      ? (tx, conn, opts) => (
-          mobileWalletAdapter
-            ? sendSolanaMobileProtocolTransaction({
-                transaction: tx,
-                options: opts,
-                expectedAddress: owner,
-                PublicKey,
-              })
-            : solWallet.sendTransaction(tx, conn, opts)
-        )
-      : null,
-    signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
-      ? null
-      : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
-    preferWalletSendTransaction: canSendSolanaTx,
-    forceVersionedTransaction: mobileWalletAdapter,
-    walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
-    label: `${label}.${adapterName}`,
-  };
 }
 
 export async function fetchCustodialMarketplaceConfig({ signal } = {}) {
@@ -176,11 +97,21 @@ export async function createCustodialListing({
 }
 
 export async function confirmCustodialDeposit({ token, orderId, txHash }) {
-  return apiJson(`/api/marketplace/custodial/listings/${encodeURIComponent(orderId)}/deposit`, {
-    method: 'POST',
-    token,
-    body: { txHash },
-  });
+  let lastError = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return await apiJson(`/api/marketplace/custodial/listings/${encodeURIComponent(orderId)}/deposit`, {
+        method: 'POST',
+        token,
+        body: { txHash },
+      });
+    } catch (err) {
+      lastError = err;
+      if (!txHash || !isTransientDepositVerifyError(err) || attempt >= 7) throw err;
+      await sleep(1200 + attempt * 500);
+    }
+  }
+  throw lastError || new Error('Deposit verification failed');
 }
 
 export async function cancelCustodialListing({ token, orderId }) {
@@ -385,11 +316,11 @@ export async function payCustodialOrderOnSolana({
     instructions,
     ownerPk,
     connection,
-    ...solanaWalletTxOptions({
+    ...buildSolanaWalletTxOptions({
       solWallet,
       owner,
-      PublicKey,
       label: 'custodial_marketplace.payment_solana',
+      venueLabel: 'Marketplace',
     }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
@@ -556,11 +487,11 @@ export async function depositToken2022NftToCustody({
     instructions,
     ownerPk,
     connection,
-    ...solanaWalletTxOptions({
+    ...buildSolanaWalletTxOptions({
       solWallet,
       owner,
-      PublicKey,
       label: 'custodial_marketplace.deposit_solana_token2022',
+      venueLabel: 'Marketplace',
     }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
@@ -623,11 +554,11 @@ export async function depositCoreNftToCustody({
     instructions,
     ownerPk,
     connection,
-    ...solanaWalletTxOptions({
+    ...buildSolanaWalletTxOptions({
       solWallet,
       owner,
-      PublicKey,
       label: 'custodial_marketplace.deposit_solana_core',
+      venueLabel: 'Marketplace',
     }),
     maxAttempts: 4,
     priorityFeeMicroLamports: 250_000,
@@ -670,8 +601,9 @@ export async function depositNftToCustody({
   owner,
 }) {
   const chain = order?.assetChain || nft?.chain;
+  const standard = nft?.standard || order?.assetStandard;
   if (CUSTODIAL_EVM_CHAIN_IDS[chain]) return depositEvmNftToCustody({ evmWallet, token, order, owner });
-  if (chain === 'solana' && nft?.standard === 'token2022') return depositToken2022NftToCustody({ solWallet, token, order, nft });
+  if (chain === 'solana' && standard === 'token2022') return depositToken2022NftToCustody({ solWallet, token, order, nft });
   if (chain === 'solana') return depositCoreNftToCustody({ solWallet, token, order, nft });
   if (chain === 'aptos') return depositAptosNftToCustody({ aptosWallet, token, order });
   throw new Error(`Unsupported NFT chain ${chain || ''}`);

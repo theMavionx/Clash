@@ -35,6 +35,7 @@ const DESC_MAP = {
   archer_tower: 'Ranged defense',
   archertower: 'Ranged defense',
   mage_tower: 'Casts splash magic at enemies',
+  altar: 'Onchain base boost',
 };
 
 const CATEGORY_MAP = {
@@ -47,6 +48,7 @@ const CATEGORY_MAP = {
   archer_tower: 'Defense',
   archertower: 'Defense',
   mage_tower: 'Defense',
+  altar: 'Defense',
   port: 'Military',
   town_hall: 'Economy',
 };
@@ -140,7 +142,7 @@ const stopPropagation = (e) => e.stopPropagation();
 function ShopPanel({ onClose }) {
   const { sendToGodot } = useSend();
   const { buildingDefs } = useBuildingDefs();
-  const { playerState } = usePlayer();
+  const playerState = usePlayer() || {};
   const resources = useResources();
   const { isMobile } = useLayout();
 
@@ -151,6 +153,9 @@ function ShopPanel({ onClose }) {
   const thUnlock = buildingDefs?.th_unlock || {};
   const thMaxCounts = buildingDefs?.th_max_counts || {};
   const hasTownHall = (placedCounts.town_hall || 0) > 0;
+  const buildingUnlocks = playerState?.building_unlocks || {};
+  const shopEntitlements = playerState?.shop_entitlements || {};
+  const isAltarUnlocked = !!(buildingUnlocks.altar || shopEntitlements.altar || playerState?.altar?.active);
 
   // Build list with status: available, maxed, locked, unaffordable
   const filteredBuildings = useMemo(
@@ -171,8 +176,17 @@ function ShopPanel({ onClose }) {
         const canAfford = (resources.gold || 0) >= (cost.gold || 0) &&
                           (resources.wood || 0) >= (cost.wood || 0) &&
                           (resources.ore || 0) >= (cost.ore || 0);
-        const lockReason = needsTownHall ? 'Build Town Hall first' : needsBasics ? 'Build Mine & Sawmill first' : (locked ? `Unlocks at TH ${unlockAt}` : null);
-        return [id, def, { placed, maxCount, locked, maxed, canAfford, unlockAt, lockReason }];
+        const requiresOnchain = id === 'altar' || !!def.requires_purchase;
+        const onchainUnlocked = !requiresOnchain || isAltarUnlocked;
+        const onchainLocked = requiresOnchain && !onchainUnlocked;
+        const lockReason = onchainLocked
+          ? 'Buy onchain first'
+          : needsTownHall
+            ? 'Build Town Hall first'
+            : needsBasics
+              ? 'Build Mine & Sawmill first'
+              : (locked ? `Unlocks at TH ${unlockAt}` : null);
+        return [id, def, { placed, maxCount, locked, maxed, canAfford, unlockAt, lockReason, requiresOnchain, onchainUnlocked, onchainLocked }];
       })
       .sort((a, b) => {
         if (a[0] === 'town_hall') return -1;
@@ -182,8 +196,15 @@ function ShopPanel({ onClose }) {
         const sb = b[2].locked ? 2 : b[2].maxed ? 1 : 0;
         return sa - sb;
       }),
-    [buildings, activeTab, placedCounts, thLevel, thUnlock, thMaxCounts, resources, hasTownHall]
+    [buildings, activeTab, placedCounts, thLevel, thUnlock, thMaxCounts, resources, hasTownHall, isAltarUnlocked]
   );
+
+  const handleOpenOnchainShop = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('clash-open-nft-shop', {
+      detail: { view: 'shop', product: 'altar' },
+    }));
+    onClose?.();
+  }, [onClose]);
 
   const handlePlacement = useCallback((id) => {
     sendToGodot('start_placement', { building_id: id });
@@ -240,17 +261,21 @@ function ShopPanel({ onClose }) {
         <div style={styles.cardArea} className="grad-scrollbar">
           <div style={{ ...styles.cardScroll, padding: isMobile ? '16px' : '20px 24px' }}>
             {filteredBuildings.map(([id, def, status]) => {
-              const disabled = status.locked || status.maxed || !status.canAfford;
+              const disabled = !status.onchainLocked && (status.locked || status.maxed || !status.canAfford);
               return (
               <div
                 key={id}
                 style={{
                   ...styles.card,
-                  ...(status.locked ? styles.cardLocked : {}),
+                  ...(status.locked && !status.onchainLocked ? styles.cardLocked : {}),
+                  ...(status.onchainLocked ? styles.cardOnchainLocked : {}),
                   ...(status.maxed ? styles.cardMaxed : {}),
                   ...(!status.canAfford && !status.locked && !status.maxed ? styles.cardUnaffordable : {}),
                 }}
-                onClick={() => !disabled && handlePlacement(id)}
+                onClick={() => {
+                  if (status.onchainLocked) handleOpenOnchainShop();
+                  else if (!disabled) handlePlacement(id);
+                }}
               >
                 {/* Count badge */}
                 {!status.locked && status.maxCount < 99 && (
@@ -259,7 +284,13 @@ function ShopPanel({ onClose }) {
                   </div>
                 )}
 
-                {status.locked ? (
+                {status.onchainLocked ? (
+                  <div style={styles.lockOverlay}>
+                    <span style={styles.lockIcon}>ON</span>
+                    <span style={styles.lockName}>{def.name}</span>
+                    <span style={styles.lockText}>Buy onchain</span>
+                  </div>
+                ) : status.locked ? (
                   <div style={styles.lockOverlay}>
                     <span style={styles.lockIcon}>🔒</span>
                     <span style={styles.lockName}>{def.name}</span>
@@ -414,6 +445,12 @@ const styles = {
     filter: 'grayscale(1)',
     cursor: 'default',
     pointerEvents: 'none',
+  },
+  cardOnchainLocked: {
+    opacity: 0.82,
+    border: '3px solid #58b9d8',
+    boxShadow: '0 0 0 2px rgba(86,216,255,0.22), 0 6px 12px rgba(0,0,0,0.15)',
+    cursor: 'pointer',
   },
   cardMaxed: {
     opacity: 0.5,

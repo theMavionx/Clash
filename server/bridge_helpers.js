@@ -675,32 +675,54 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
   const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
   const { mplCore, fetchAsset } = await import('@metaplex-foundation/mpl-core');
   const { publicKey } = await import('@metaplex-foundation/umi');
-  let asset;
-  try {
-    asset = await withSolanaRpcFallback(async (rpc) => {
+  const rpcUrls = solanaRpcUrls();
+  const reads = [];
+  const errors = [];
+  for (const rpc of rpcUrls) {
+    try {
       const umi = createUmi(rpc).use(mplCore());
-      return fetchAsset(umi, publicKey(sourceAsset));
-    }, { urls: solanaRpcUrls(), label: 'Solana bridge source asset read' });
-  } catch {
+      // eslint-disable-next-line no-await-in-loop
+      const asset = await fetchAsset(umi, publicKey(sourceAsset));
+      const owner = solanaAssetOwner(asset);
+      const collection = solanaAssetCollection(asset);
+      const collectionMatches = String(collection) === String(dep.collection);
+      const acceptedLegacyBridge = !collection && solanaAssetLooksLikeLegacyBridge(asset, dep, collectionSlug);
+      reads.push({
+        rpc,
+        asset,
+        owner,
+        collection,
+        collectionMatches,
+        acceptedLegacyBridge,
+      });
+    } catch (err) {
+      errors.push({ rpc, message: err?.message || String(err) });
+    }
+  }
+  if (!reads.length) {
+    const err = errors[0]?.message || '';
+    if (err) console.warn(`[bridge] Solana source asset read failed across ${rpcUrls.length} RPC(s): ${err}`);
     throw bridgeBadRequest(`Solana source asset is not a ${collectionLabel} NFT or was not found. Use the current mint/asset address from the NFT picker.`);
   }
-  const owner = solanaAssetOwner(asset);
-  const collection = solanaAssetCollection(asset);
-  const collectionMatches = String(collection) === String(dep.collection);
-  const acceptedLegacyBridge = !collection && solanaAssetLooksLikeLegacyBridge(asset, dep, collectionSlug);
-  if (!collectionMatches && !acceptedLegacyBridge) {
+  const collectionReads = reads.filter((row) => row.collectionMatches || row.acceptedLegacyBridge);
+  if (!collectionReads.length) {
     throw bridgeBadRequest(`Solana asset is not in the ${collectionLabel} collection`);
   }
-  if (sourceOwner && String(owner) !== String(sourceOwner)) {
-    throw bridgeBadRequest('Solana source wallet is not the asset owner');
+  const selected = sourceOwner
+    ? collectionReads.find((row) => String(row.owner) === String(sourceOwner))
+    : collectionReads[0];
+  if (!selected) {
+    const owners = [...new Set(collectionReads.map((row) => String(row.owner || '')).filter(Boolean))].slice(0, 3);
+    const suffix = owners.length ? ` (on-chain owner ${owners.join(', ')})` : '';
+    throw bridgeBadRequest(`Solana source wallet is not the asset owner${suffix}`);
   }
   return {
     standard: 'mpl-core',
     asset: sourceAsset,
-    owner,
-    collection: collection || dep.collection,
-    legacyCollectionless: acceptedLegacyBridge || undefined,
-    level: solanaAssetLevel(asset),
+    owner: selected.owner,
+    collection: selected.collection || dep.collection,
+    legacyCollectionless: selected.acceptedLegacyBridge || undefined,
+    level: solanaAssetLevel(selected.asset),
   };
 }
 

@@ -29,6 +29,8 @@ import { useAptosWallet } from '../contexts/AptosWalletContext';
 import { bridgeInit, bridgeRelay, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from '../lib/solanaRpc';
+import { sendSolanaTransactionWithRetry } from '../lib/solanaTx';
+import { buildSolanaWalletTxOptions } from '../lib/solanaSeekerTx';
 
 // Chain logos live in web/public/tokens — same dir we already use for
 // trading-pair token icons. Using real brand marks instead of emoji
@@ -120,10 +122,6 @@ function shortAddr(s, head = 6, tail = 4) {
   return s.length <= head + tail + 1 ? s : `${s.slice(0, head)}…${s.slice(-tail)}`;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function shortNftRef(value, head = 6, tail = 5) {
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -187,56 +185,12 @@ function nftPickerLabel(nft, chainKey, fallbackInput = '') {
   return `#${raw}`;
 }
 
-function isSolanaExpiryError(err) {
-  const msg = String(err?.message || err || '');
-  return /block height exceeded|expired/i.test(msg);
-}
-
-function extractSolanaSignatureFromError(err) {
-  if (err?.signature) return String(err.signature);
-  const msg = String(err?.message || err || '');
-  return msg.match(/[1-9A-HJ-NP-Za-km-z]{80,100}/)?.[0] || '';
-}
-
 function isToken2022SolanaBurn(burn) {
   const program = String(burn?.program || burn?.standard || '').toLowerCase();
   return program.includes('token-2022')
     || program.includes('token2022')
     || !!burn?.tokenAccount
     || (burn?.mint && burn?.mint === burn?.asset);
-}
-
-async function waitForSolanaLateLanding(connection, signature, label = 'Solana transaction') {
-  for (let attempt = 0; attempt < 15; attempt += 1) {
-    const statusRes = await connection.getSignatureStatuses([signature], {
-      searchTransactionHistory: true,
-    }).catch(() => null);
-    const status = statusRes?.value?.[0];
-    if (status?.err) {
-      throw new Error(`${label} failed: ${JSON.stringify(status.err)}`);
-    }
-    if (status && ['confirmed', 'finalized'].includes(status.confirmationStatus)) {
-      return true;
-    }
-    await sleep(2000);
-  }
-  return false;
-}
-
-async function confirmSolanaSignatureOrRecover(connection, confirmation, label) {
-  try {
-    const confirmed = await connection.confirmTransaction(confirmation, 'confirmed');
-    if (confirmed.value?.err) {
-      throw new Error(`${label} failed: ${JSON.stringify(confirmed.value.err)}`);
-    }
-    return true;
-  } catch (err) {
-    if (isSolanaExpiryError(err)) {
-      const landed = await waitForSolanaLateLanding(connection, confirmation.signature, label);
-      if (landed) return true;
-    }
-    throw err;
-  }
 }
 
 export default function NftBridgePanel({
@@ -500,7 +454,7 @@ export default function NftBridgePanel({
       // EVM-only majority of users.
       if (isToken2022SolanaBurn(initRes.burn)) {
         const [
-          { Connection, PublicKey, SystemProgram, Transaction, TransactionInstruction },
+          { Connection, PublicKey, SystemProgram, TransactionInstruction },
           {
             ASSOCIATED_TOKEN_PROGRAM_ID,
             TOKEN_2022_PROGRAM_ID,
@@ -512,9 +466,7 @@ export default function NftBridgePanel({
           import('@solana/web3.js'),
           import('@solana/spl-token'),
         ]);
-        if (!solWallet?.publicKey || typeof solWallet.signTransaction !== 'function') {
-          throw new Error('Solana wallet cannot sign transactions');
-        }
+        if (!solWallet?.publicKey) throw new Error('Solana wallet is not connected');
         const ownerPk = solWallet.publicKey;
         const mintPk = new PublicKey(initRes.burn.mint || initRes.burn.asset);
         const tokenAccountPk = initRes.burn.tokenAccount
@@ -526,7 +478,7 @@ export default function NftBridgePanel({
             TOKEN_2022_PROGRAM_ID,
             ASSOCIATED_TOKEN_PROGRAM_ID,
           );
-        const tx = new Transaction().add(
+        const instructions = [
           createBurnCheckedInstruction(
             tokenAccountPk,
             mintPk,
@@ -536,6 +488,8 @@ export default function NftBridgePanel({
             [],
             TOKEN_2022_PROGRAM_ID,
           ),
+        ];
+        instructions.push(
           createCloseAccountInstruction(
             tokenAccountPk,
             ownerPk,
@@ -547,13 +501,13 @@ export default function NftBridgePanel({
         const feeLamports = BigInt(initRes.bridgeFee?.amount || '0');
         if (feeLamports > 0n) {
           if (!initRes.feeTreasury) throw new Error('Solana bridge fee treasury is not configured');
-          tx.add(SystemProgram.transfer({
+          instructions.push(SystemProgram.transfer({
             fromPubkey: ownerPk,
             toPubkey: new PublicKey(initRes.feeTreasury),
             lamports: Number(feeLamports),
           }));
         }
-        tx.add(new TransactionInstruction({
+        instructions.push(new TransactionInstruction({
           programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
           keys: [],
           data: Buffer.from(initRes.burn.requiredMemo, 'utf8'),
@@ -561,37 +515,36 @@ export default function NftBridgePanel({
 
         const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
         const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
-        const latest = await conn.getLatestBlockhash('confirmed');
-        tx.feePayer = ownerPk;
-        tx.recentBlockhash = latest.blockhash;
-        const signed = await solWallet.signTransaction(tx);
-        const signature = await conn.sendRawTransaction(signed.serialize(), {
+        return sendSolanaTransactionWithRetry({
+          instructions,
+          ownerPk,
+          connection: conn,
+          ...buildSolanaWalletTxOptions({
+            solWallet,
+            owner: ownerPk.toBase58(),
+            label: 'bridge.burn_solana_token2022',
+            venueLabel: 'Bridge',
+          }),
+          maxAttempts: 4,
+          priorityFeeMicroLamports: 250_000,
           skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 5,
         });
-        await confirmSolanaSignatureOrRecover(conn, {
-          signature,
-          blockhash: latest.blockhash,
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        }, 'Solana Token-2022 burn');
-        return signature;
       }
 
       const { createUmi } = await import('@metaplex-foundation/umi-bundle-defaults');
-      const { publicKey, transactionBuilder } = await import('@metaplex-foundation/umi');
+      const { publicKey, createNoopSigner, signerIdentity } = await import('@metaplex-foundation/umi');
       const { mplCore, burn, fetchAsset, fetchCollection } = await import('@metaplex-foundation/mpl-core');
-      const { fromWeb3JsInstruction } = await import('@metaplex-foundation/umi-web3js-adapters');
+      const { toWeb3JsInstruction } = await import('@metaplex-foundation/umi-web3js-adapters');
       const { Connection, PublicKey, SystemProgram, TransactionInstruction } = await import('@solana/web3.js');
 
       const coreRpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
       const coreRpcUrl = solanaBatchSafeRpcUrl(coreRpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL);
       const umi = createUmi(coreRpcUrl).use(mplCore());
-      // We can't use a keypairIdentity here because the user wallet is a
-      // browser extension — instead, use the wallet adapter's signer.
-      // umi-signer-wallet-adapters is the canonical glue.
-      const { walletAdapterIdentity } = await import('@metaplex-foundation/umi-signer-wallet-adapters');
-      umi.use(walletAdapterIdentity(solWallet));
+      const ownerAddress = solWallet?.publicKey?.toBase58?.() || solAddress;
+      if (!ownerAddress) throw new Error('Solana wallet is not connected');
+      const ownerPk = new PublicKey(ownerAddress);
+      const ownerSigner = createNoopSigner(publicKey(ownerAddress));
+      umi.use(signerIdentity(ownerSigner, true));
 
       const memoText = initRes.burn.requiredMemo;
       const asset = await fetchAsset(umi, publicKey(initRes.burn.asset));
@@ -604,39 +557,36 @@ export default function NftBridgePanel({
         collection = await fetchCollection(umi, publicKey(initRes.burn.collection));
       }
       const burnIx = burn(umi, collection ? { asset, collection } : { asset });
-      const memoIx = fromWeb3JsInstruction(new TransactionInstruction({
-        programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
-        keys: [], data: Buffer.from(memoText, 'utf8'),
-      }));
-      let built = transactionBuilder().add(burnIx);
+      const instructions = burnIx.getInstructions().map(toWeb3JsInstruction);
       const feeLamports = BigInt(initRes.bridgeFee?.amount || '0');
       if (feeLamports > 0n) {
         if (!initRes.feeTreasury) throw new Error('Solana bridge fee treasury is not configured');
-        const feeIx = fromWeb3JsInstruction(SystemProgram.transfer({
-          fromPubkey: new PublicKey(solAddress),
+        instructions.push(SystemProgram.transfer({
+          fromPubkey: ownerPk,
           toPubkey: new PublicKey(initRes.feeTreasury),
           lamports: Number(feeLamports),
         }));
-        built = built.add({ bytesCreatedOnChain: 0, instruction: feeIx, signers: [] });
       }
-      built = built.add({ bytesCreatedOnChain: 0, instruction: memoIx, signers: [] });
-      const { base58 } = await import('@metaplex-foundation/umi/serializers');
-      try {
-        const sigRes = await built.sendAndConfirm(umi, {
-          send: { skipPreflight: true, commitment: 'processed', maxRetries: 5 },
-          confirm: { commitment: 'confirmed', strategy: { type: 'blockhash' } },
-        });
-        return base58.deserialize(sigRes.signature)[0];
-      } catch (err) {
-        const signature = extractSolanaSignatureFromError(err);
-        if (signature && isSolanaExpiryError(err)) {
-          const rpcProbe = await selectFreshSolanaRpcUrl().catch(() => ({ selected: null }));
-          const conn = createSolanaConnection(Connection, rpcProbe.selected?.url || DEFAULT_SOLANA_RPC_URL, 'confirmed');
-          const landed = await waitForSolanaLateLanding(conn, signature, 'Solana Core burn');
-          if (landed) return signature;
-        }
-        throw err;
-      }
+      instructions.push(new TransactionInstruction({
+        programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr'),
+        keys: [],
+        data: Buffer.from(memoText, 'utf8'),
+      }));
+      const conn = createSolanaConnection(Connection, coreRpcUrl, 'confirmed');
+      return sendSolanaTransactionWithRetry({
+        instructions,
+        ownerPk,
+        connection: conn,
+        ...buildSolanaWalletTxOptions({
+          solWallet,
+          owner: ownerAddress,
+          label: 'bridge.burn_solana_core',
+          venueLabel: 'Bridge',
+        }),
+        maxAttempts: 4,
+        priorityFeeMicroLamports: 250_000,
+        skipPreflight: false,
+      });
     }
     throw new Error(`Unsupported source kind ${kind}`);
   }, [sourceChain, evmAddress, solAddress, tradingEvmWallet, aptosWallet, solWallet]);

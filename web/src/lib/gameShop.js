@@ -1,6 +1,7 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
 import { ensureErc20Allowance } from './nftMint';
 import { addClientBreadcrumb, reportClientEvent } from './clientLogger';
+import { buildSolanaWalletTxOptions } from './solanaSeekerTx';
 
 // 40% allowance headroom: enough cushion for CoP/USD price drift between the
 // pre-flight quote and the actual purchase quote (typical drift on a small
@@ -265,20 +266,6 @@ function uniqueStrings(values) {
   return out;
 }
 
-function walletAdapterName(solWallet) {
-  return String(
-    solWallet?.wallet?.adapter?.name
-    || solWallet?.adapter?.name
-    || solWallet?.wallet?.name
-    || solWallet?.walletClientType
-    || '',
-  );
-}
-
-function isMobileWalletAdapter(solWallet) {
-  return /Mobile Wallet Adapter/i.test(walletAdapterName(solWallet));
-}
-
 function shortShopAddress(address) {
   const text = String(address || '');
   return text.length > 14 ? `${text.slice(0, 6)}...${text.slice(-4)}` : text || null;
@@ -302,83 +289,6 @@ function solanaShopErrorData(error, extra = {}) {
     stack: error?.stack || null,
     ...extra,
   };
-}
-
-function solanaMobileAppIdentity() {
-  const origin = typeof window !== 'undefined' && window.location?.origin
-    ? window.location.origin
-    : 'https://clashofperps.fun';
-  return {
-    name: 'Clash of Perps',
-    uri: origin,
-    icon: '/icons/icon-512.png',
-  };
-}
-
-function base64AddressToBase58(address, PublicKey) {
-  if (!address) return null;
-  try {
-    const decode = typeof atob === 'function'
-      ? (value) => Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
-      : (value) => Uint8Array.from(Buffer.from(value, 'base64'));
-    return new PublicKey(decode(address)).toBase58();
-  } catch {
-    return null;
-  }
-}
-
-async function sendSolanaMobileProtocolTransaction({ transaction, options, expectedAddress, PublicKey }) {
-  const { transact } = await import('@solana-mobile/mobile-wallet-adapter-protocol-web3js');
-  solanaShopLog('mwa_protocol_open', {
-    expected_wallet: shortShopAddress(expectedAddress),
-    tx_version: transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy',
-    skip_preflight: !!options?.skipPreflight,
-    max_retries: options?.maxRetries ?? null,
-  });
-  return transact(async (wallet) => {
-    const capabilities = await wallet.getCapabilities().catch((err) => {
-      solanaShopLog('mwa_capabilities_failed', solanaShopErrorData(err), 'warn');
-      return null;
-    });
-    solanaShopLog('mwa_capabilities', {
-      supports_sign_and_send: capabilities?.supports_sign_and_send_transactions ?? null,
-      max_transactions_per_request: capabilities?.max_transactions_per_request ?? null,
-      supported_transaction_versions: capabilities?.supported_transaction_versions || null,
-      features: Array.isArray(capabilities?.features) ? capabilities.features.slice(0, 12) : null,
-    });
-
-    const authorization = await wallet.authorize({
-      chain: 'solana:mainnet',
-      identity: solanaMobileAppIdentity(),
-      features: ['solana:signAndSendTransactions'],
-    });
-    const authorizedAddress = base64AddressToBase58(authorization?.accounts?.[0]?.address, PublicKey);
-    solanaShopLog('mwa_authorized', {
-      expected_wallet: shortShopAddress(expectedAddress),
-      authorized_wallet: shortShopAddress(authorizedAddress),
-      account_count: Array.isArray(authorization?.accounts) ? authorization.accounts.length : null,
-      has_auth_token: !!authorization?.auth_token,
-      wallet_uri_base: authorization?.wallet_uri_base || null,
-    });
-    if (expectedAddress && authorizedAddress && authorizedAddress !== expectedAddress) {
-      throw new Error(`Mobile wallet authorized ${authorizedAddress}, but the connected shop wallet is ${expectedAddress}`);
-    }
-    solanaShopLog('mwa_sign_and_send_start', {
-      tx_version: transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy',
-      commitment: options?.preflightCommitment || 'confirmed',
-      skip_preflight: !!options?.skipPreflight,
-      max_retries: options?.maxRetries ?? null,
-    });
-    const [signature] = await wallet.signAndSendTransactions({
-      auth_token: authorization.auth_token,
-      transactions: [transaction],
-      commitment: options?.preflightCommitment || 'confirmed',
-      skipPreflight: !!options?.skipPreflight,
-      maxRetries: options?.maxRetries,
-    });
-    solanaShopLog('mwa_sign_and_send_ok', { sig: shortShopAddress(signature) });
-    return signature;
-  });
 }
 
 async function withSolanaRpcFallback({ Connection, createSolanaConnection, primaryConnection, rpcUrls, task }) {
@@ -559,11 +469,19 @@ export async function buySolanaShopItem({
   if (!token) throw new Error('Game session is not ready');
   const address = solWallet?.publicKey?.toBase58?.() || buyer;
   if (!address) throw new Error('Solana wallet is not connected');
-  const canSendSolanaTx = typeof solWallet?.sendTransaction === 'function';
-  const canSignSolanaTx = typeof solWallet?.signTransaction === 'function';
-  if (!canSendSolanaTx && !canSignSolanaTx) throw new Error('This Solana wallet cannot sign transactions');
-  const adapterName = walletAdapterName(solWallet) || 'wallet';
-  const mobileWalletAdapter = isMobileWalletAdapter(solWallet);
+  const walletTxOptions = buildSolanaWalletTxOptions({
+    solWallet,
+    owner: address,
+    label: `shop.${payment}`,
+    venueLabel: 'Shop',
+    log: solanaShopLog,
+  });
+  const {
+    adapterName,
+    mobileWalletAdapter,
+    canSendSolanaTx,
+    canSignSolanaTx,
+  } = walletTxOptions;
   const shopTrace = {
     wallet: shortShopAddress(address),
     adapter: adapterName,
@@ -786,35 +704,10 @@ export async function buySolanaShopItem({
       instructions,
       ownerPk: buyerPk,
       connection,
-      sendTransaction: canSendSolanaTx
-        ? (tx, conn, opts) => (
-            mobileWalletAdapter
-              ? sendSolanaMobileProtocolTransaction({
-                  transaction: tx,
-                  options: opts,
-                  expectedAddress: address,
-                  PublicKey,
-                })
-              : solWallet.sendTransaction(tx, conn, opts)
-          )
-        : null,
-      // Prefer adapter sendTransaction for browser/mobile wallets: it signs
-      // and submits through the wallet in one path, avoiding the Seeker/Phantom
-      // "Missing signature for public key" failure seen when signTransaction
-      // returns an unsigned legacy tx.
-      signTransaction: canSendSolanaTx && solWallet?.source !== 'privy'
-        ? null
-        : (canSignSolanaTx ? (tx) => solWallet.signTransaction(tx) : null),
+      ...walletTxOptions,
       maxAttempts: 4,
       priorityFeeMicroLamports: 250_000,
       skipPreflight: false,
-      // The Solana Mobile Wallet Adapter serializes legacy Transaction with
-      // requireAllSignatures=true before Seed Vault signs it. Versioned v0
-      // transactions serialize unsigned cleanly and let MWA add the user's
-      // signature inside signAndSendTransaction.
-      forceVersionedTransaction: mobileWalletAdapter,
-      walletPathOverride: mobileWalletAdapter ? 'mwa_protocol_sign_and_send' : null,
-      label: `shop.${payment}.${adapterName}`,
     });
   } catch (err) {
     const payload = solanaShopErrorData(err, {

@@ -251,25 +251,18 @@ const TROOP_STATS = {
   DemonKing: {
     display: "Demon King",
     stats: {
-      1: { hp: 2400, damage: 220, atk_speed: 1.25 },
-      2: { hp: 3200, damage: 300, atk_speed: 1.15 },
-      3: { hp: 4300, damage: 410, atk_speed: 1.05 },
+      1: { hp: 1080, damage: 140, atk_speed: 1.25 },
+      2: { hp: 1170, damage: 139, atk_speed: 1.15 },
+      3: { hp: 1260, damage: 137, atk_speed: 1.05 },
     },
-    maxStats: { hp: 4300, damage: 410, atk_speed: 1.25 }
+    maxStats: { hp: 1260, damage: 137, atk_speed: 1.05 }
   }
 };
 
 const NORMAL_TROOP_NAMES = ['Knight', 'Mage', 'Barbarian', 'Archer', 'Ranger'];
 const DEMON_KING_ATK_SPEED_BY_LEVEL = { 1: 1.25, 2: 1.15, 3: 1.05 };
-const DEMON_KING_MIN_STATS_BY_LEVEL = {
-  1: { hp: 2400, damage: 220 },
-  2: { hp: 3200, damage: 300 },
-  3: { hp: 4300, damage: 410 },
-};
-const DEMON_KING_NFT_LEVEL_MULT = { 1: 1.0, 2: 1.1, 3: 1.2 };
-const DEMON_KING_DAMAGE_BASE_ATK_SPEED = 1.25;
+const DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL = { 1: 1.2, 2: 1.3, 3: 1.4 };
 const DEMON_KING_SLOT_COUNT = 2;
-const DEMON_KING_POWER_OVER_TWO_TROOPS = 1.3;
 
 function clampLevel(value, min, max) {
   const n = Number(value);
@@ -300,13 +293,12 @@ function computeDemonKingStats(level, troopLevels = {}) {
   }
 
   const atk_speed = DEMON_KING_ATK_SPEED_BY_LEVEL[demonLevel] || DEMON_KING_ATK_SPEED_BY_LEVEL[1];
-  const nftMult = DEMON_KING_NFT_LEVEL_MULT[demonLevel] || 1;
-  const minStats = DEMON_KING_MIN_STATS_BY_LEVEL[demonLevel] || DEMON_KING_MIN_STATS_BY_LEVEL[1];
-  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
-  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * DEMON_KING_POWER_OVER_TWO_TROOPS * nftMult;
+  const powerMult = DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[demonLevel] || DEMON_KING_POWER_OVER_TWO_TROOPS_BY_LEVEL[1];
+  const targetHp = bestHp * DEMON_KING_SLOT_COUNT * powerMult;
+  const targetDps = bestDps * DEMON_KING_SLOT_COUNT * powerMult;
   return {
-    hp: Math.max(minStats.hp, Math.ceil(targetHp)),
-    damage: Math.max(minStats.damage, Math.ceil(targetDps * DEMON_KING_DAMAGE_BASE_ATK_SPEED)),
+    hp: Math.ceil(targetHp),
+    damage: Math.ceil(targetDps * atk_speed),
     atk_speed,
   };
 }

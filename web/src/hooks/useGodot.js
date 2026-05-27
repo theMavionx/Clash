@@ -162,20 +162,34 @@ export function GodotProvider({ children }) {
               if (window.requestIdleCallback) window.requestIdleCallback(doFetch, { timeout: 800 });
               else setTimeout(doFetch, 500);
             }
-            // Hydrate shield_until from server (Godot bridge doesn't push it).
-            // Without this, the shield indicator would only appear after a
-            // purchase in the current session and disappear on reload.
+            // Hydrate server-only purchase/entitlement state. Godot's bridge
+            // boot payload is intentionally small, so paid utility unlocks
+            // such as the Altar come from /api/state and are pushed back into
+            // Godot for client-side placement gating.
             const shieldFetchToken = data.token;
             fetch('/api/state', { headers: { 'x-token': shieldFetchToken } })
               .then(r => r.ok ? r.json() : null)
               .then(state => {
-                if (!state || !state.shield_until) return;
+                if (!state) return;
                 if (window._playerToken !== shieldFetchToken) return;
+                const entitlementPatch = {
+                  shield_until: state.shield_until || null,
+                  shop_entitlements: state.shop_entitlements || {},
+                  building_unlocks: state.building_unlocks || {},
+                  altar: state.altar || null,
+                };
                 setPlayerState(prev => {
                   if (!prev) return prev;
-                  if (prev.shield_until === state.shield_until) return prev;
-                  return { ...prev, shield_until: state.shield_until };
+                  const sameShield = prev.shield_until === entitlementPatch.shield_until;
+                  const sameShop = JSON.stringify(prev.shop_entitlements || {}) === JSON.stringify(entitlementPatch.shop_entitlements);
+                  const sameUnlocks = JSON.stringify(prev.building_unlocks || {}) === JSON.stringify(entitlementPatch.building_unlocks);
+                  const sameAltar = JSON.stringify(prev.altar || null) === JSON.stringify(entitlementPatch.altar);
+                  if (sameShield && sameShop && sameUnlocks && sameAltar) return prev;
+                  return { ...prev, ...entitlementPatch };
                 });
+                try {
+                  window.godotBridge?.(JSON.stringify({ action: 'set_shop_unlocks', data: entitlementPatch }));
+                } catch {}
               })
               .catch(() => {});
           }

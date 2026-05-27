@@ -156,6 +156,8 @@ func _send_initial_state() -> void:
 				"cost": d.get("cost", {}),
 				"hp_levels": d.get("hp_levels", []),
 				"max_count": effective_max,
+				"requires_purchase": d.get("requires_purchase", false),
+				"shop_sku": d.get("shop_sku", ""),
 			}
 		var troop_defs := {}
 		for key in bs.troop_defs:
@@ -225,6 +227,10 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			# purchase visually.
 			if bs and data is Dictionary:
 				bs._apply_resources_from_server(data)
+		"set_shop_unlocks":
+			for bsys in _bs_cache:
+				if is_instance_valid(bsys) and bsys.has_method("_set_shop_unlocks"):
+					bsys._set_shop_unlocks(data)
 		"open_shop":
 			if bs:
 				send_to_react("shop_toggled", {"open": true})

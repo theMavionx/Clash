@@ -1,5 +1,9 @@
 import { BASE_CHAIN_ID, ERC20_ABI } from './avantisContract';
 import { DEFAULT_SOLANA_RPC_URL, createSolanaConnection, selectFreshSolanaRpcUrl, solanaBatchSafeRpcUrl } from './solanaRpc';
+import {
+  isSolanaMobileWalletAdapter,
+  signSolanaMobileProtocolTransaction,
+} from './solanaSeekerTx';
 
 export const NFT_SALE_COLLECTION = 'mystery';
 
@@ -245,7 +249,8 @@ function aptosHexVectorArg(value, label, expectedLength = null) {
 export async function mintSolanaNft({ solWallet, config, payment }) {
   const address = solWallet?.publicKey?.toBase58?.();
   if (!address) throw new Error('Solana wallet is not connected');
-  if (!solWallet?.signTransaction) throw new Error('This Solana wallet cannot sign transactions');
+  const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
+  if (!mobileWalletAdapter && !solWallet?.signTransaction) throw new Error('This Solana wallet cannot sign transactions');
   if (!config?.candyMachine || !config?.candyGuard || !config?.collection) {
     throw new Error('Solana Candy Machine is not configured');
   }
@@ -292,6 +297,7 @@ export async function mintSolanaNft({ solWallet, config, payment }) {
     wallet: solWallet,
     toWeb3JsTransaction,
     fromWeb3JsTransaction,
+    mobileWalletAdapter,
   });
 
   const mintArgs = group === 'sol'
@@ -502,11 +508,18 @@ function normalizeQuote(quote) {
   };
 }
 
-function createSolanaWalletSigner({ publicKey, wallet, toWeb3JsTransaction, fromWeb3JsTransaction }) {
+function createSolanaWalletSigner({ publicKey, wallet, toWeb3JsTransaction, fromWeb3JsTransaction, mobileWalletAdapter = false }) {
   const walletPublicKey = publicKey(wallet.publicKey.toBase58());
   const signTransaction = async (transaction) => {
     const web3Transaction = toWeb3JsTransaction(transaction);
-    const signed = await wallet.signTransaction(web3Transaction);
+    const signed = mobileWalletAdapter
+      ? await signSolanaMobileProtocolTransaction({
+          transaction: web3Transaction,
+          expectedAddress: wallet.publicKey.toBase58(),
+          label: 'nft.mint.sign',
+          venueLabel: 'NFT Mint',
+        })
+      : await wallet.signTransaction(web3Transaction);
     return fromWeb3JsTransaction(signed);
   };
 
@@ -518,7 +531,7 @@ function createSolanaWalletSigner({ publicKey, wallet, toWeb3JsTransaction, from
     },
     signTransaction,
     signAllTransactions: async (transactions) => {
-      if (wallet.signAllTransactions) {
+      if (!mobileWalletAdapter && wallet.signAllTransactions) {
         const signed = await wallet.signAllTransactions(transactions.map(toWeb3JsTransaction));
         return signed.map(fromWeb3JsTransaction);
       }

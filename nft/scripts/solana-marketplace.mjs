@@ -234,7 +234,7 @@ if (command === 'pda') {
   }
   console.log(JSON.stringify(out, null, 2));
 } else if (command === 'init' || command === 'update-config') {
-  const feeBps = Number(args['fee-bps'] || env.NFT_SOLANA_MARKETPLACE_FEE_BPS || 100);
+  const feeBps = Number(args['fee-bps'] || env.NFT_SOLANA_MARKETPLACE_FEE_BPS || 250);
   const treasury = pubkey(args.treasury || env.NFT_SOLANA_MARKETPLACE_TREASURY || env.NFT_SOLANA_TREASURY || deployment.treasury, 'treasury');
   const collection = pubkey(args.collection || env.NFT_SOLANA_COLLECTION || deployment.collection, 'collection');
   const data = Buffer.concat([Buffer.from([command === 'init' ? 0 : 1]), u16le(feeBps)]);

@@ -543,9 +543,11 @@ function ActionButtons({ onOpenBattleLog }) {
     const thUnlock = buildingDefs?.th_unlock || {};
     const thLevel = buildingDefs?.th_level || 1;
     const hasTownHall = (placed.town_hall || 0) > 0;
+    const altarUnlocked = !!(player?.building_unlocks?.altar || player?.shop_entitlements?.altar || player?.altar?.active);
     let count = 0;
     for (const [id, def] of Object.entries(defs)) {
       if (id === 'flag') continue;
+      if (id === 'altar' && !altarUnlocked) continue;
       if (!hasTownHall && id !== 'town_hall') continue;
       // Check TH unlock
       const unlockAt = thUnlock[id];
@@ -562,7 +564,7 @@ function ActionButtons({ onOpenBattleLog }) {
       }
     }
     return count;
-  }, [buildingDefs, resources]);
+  }, [buildingDefs, resources, player?.altar?.active, player?.building_unlocks?.altar, player?.shop_entitlements?.altar]);
 
   const [showSurrender, setShowSurrender] = useState(false);
   useEffect(() => {

@@ -108,7 +108,9 @@ var building_defs: Dictionary = {
 		"model_rotation_y": 0.0,
 		"hp_levels": [900],
 		"cost": {},
-		"test_only": true,
+		"max_count": 1,
+		"requires_purchase": true,
+		"shop_sku": "altar",
 		"hp_bar_height": 0.45,
 		"albedo_texture": "res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_BaseMap.png",
 		"emission_texture": "res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_Emissive.png",
@@ -276,6 +278,7 @@ const TH_MAX_COUNT: Dictionary = {
 	"sawmill": [1, 2, 3, 3],
 	"barn": [1, 1, 1, 1],
 	"port": [1, 2, 5, 5],
+	"altar": [1, 1, 1, 1],
 	"archer_tower": [1, 2, 3, 3],
 	"tombstone": [0, 1, 3, 3],
 	"turret": [0, 0, 3, 3],
@@ -312,6 +315,38 @@ func _is_building_unlocked(building_id: String) -> bool:
 	if not TH_UNLOCK.has(building_id):
 		return true
 	return _get_th_level() >= TH_UNLOCK[building_id]
+
+
+func _set_shop_unlocks(data: Dictionary) -> void:
+	var next_unlocks: Dictionary = {}
+	var building_unlock_data: Variant = data.get("building_unlocks", {})
+	if building_unlock_data is Dictionary:
+		var building_unlocks: Dictionary = building_unlock_data
+		for key in building_unlocks.keys():
+			next_unlocks[String(key)] = bool(building_unlocks.get(key, false))
+	var shop_entitlement_data: Variant = data.get("shop_entitlements", {})
+	if shop_entitlement_data is Dictionary:
+		var shop_entitlements: Dictionary = shop_entitlement_data
+		for key in shop_entitlements.keys():
+			next_unlocks[String(key)] = bool(shop_entitlements.get(key, false))
+	var altar_data: Variant = data.get("altar", null)
+	if altar_data is Dictionary:
+		var altar_unlock: Dictionary = altar_data
+		if bool(altar_unlock.get("active", false)):
+			next_unlocks["altar"] = true
+	elif altar_data is bool and altar_data == true:
+		next_unlocks["altar"] = true
+	shop_unlocks = next_unlocks
+
+
+func _has_required_purchase(building_id: String) -> bool:
+	if test_mode:
+		return true
+	var def: Dictionary = building_defs.get(building_id, {})
+	if not bool(def.get("requires_purchase", false)):
+		return true
+	var sku: String = String(def.get("shop_sku", building_id))
+	return bool(shop_unlocks.get(building_id, false)) or bool(shop_unlocks.get(sku, false))
 
 func _can_upgrade_th() -> Dictionary:
 	## Returns {"can": bool, "missing": []} for TH upgrade readiness
@@ -426,6 +461,7 @@ var ghost: Node3D = null
 var ghost_material: StandardMaterial3D = null
 var current_grid_pos: Vector2i = Vector2i.ZERO
 var grid_visual: MeshInstance3D = null
+var shop_unlocks: Dictionary = {}
 
 # ── Selection State ───────────────────────────────────────────
 var selected_building: Dictionary = {}
@@ -438,6 +474,7 @@ var _cel_shader: Shader
 static var _scene_res_cache: Dictionary = {}
 static var _turret_script_res: Script = null
 static var _mage_tower_script_res: Script = null
+static var _altar_effect_script_res: Script = null
 
 
 static func _load_packed_scene_resource(path: String) -> PackedScene:
@@ -466,6 +503,15 @@ static func _load_script_resource(path: String) -> Script:
 	if not ResourceLoader.exists(path, "Script"):
 		return null
 	return ResourceLoader.load(path, "Script") as Script
+
+
+func _attach_altar_effect(model: Node) -> void:
+	if model == null or not (model is Node3D):
+		return
+	if _altar_effect_script_res == null:
+		_altar_effect_script_res = _load_script_resource("res://scripts/altar_effect.gd")
+	if _altar_effect_script_res != null:
+		(model as Node3D).set_script(_altar_effect_script_res)
 
 # ── Ship node cache ───────────────────────────────────────────
 var _ship_attack_node: Node3D = null
@@ -1869,6 +1915,7 @@ func _reveal_initial_cover() -> void:
 
 
 func _apply_server_state(state: Dictionary) -> void:
+	_set_shop_unlocks(state)
 	_apply_resources_from_server(state)
 	var net = _net
 	if net and state.has("trophies"):
@@ -2017,6 +2064,8 @@ func _load_buildings_from_server(server_buildings: Array) -> void:
 					var mine_cart_script := _load_script_resource("res://scripts/mine_cart.gd")
 					if mine_cart_script != null:
 						model.set_script(mine_cart_script)
+				elif building_type == "altar":
+					_attach_altar_effect(model)
 				node.add_child(model)
 				_apply_cel_shader(model)
 				_apply_building_albedo(model, def)
@@ -2289,6 +2338,7 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 	if _battle and _battle.has_method("reset"):
 		_battle.reset()
 	# Apply full state from server (resources, buildings, troops)
+	_set_shop_unlocks(player_data)
 	if player_data.has("gold"):
 		resources.gold = player_data.gold
 	if player_data.has("wood"):
@@ -2366,6 +2416,9 @@ func _start_placement(building_id: String) -> void:
 	if not _is_building_unlocked(building_id):
 		var unlock_at: int = int(TH_UNLOCK.get(building_id, 1))
 		_show_error("%s unlocks at Town Hall level %d" % [building_defs.get(building_id, {}).get("name", building_id), unlock_at])
+		return
+	if not _has_required_purchase(building_id):
+		_show_error("%s requires an on-chain purchase first" % [building_defs.get(building_id, {}).get("name", building_id)])
 		return
 	is_shop_open = false
 	if shop_panel:
@@ -2732,6 +2785,8 @@ func _create_placed_building(def: Dictionary) -> Node3D:
 			model.set_meta("building_visual_model", true)
 			model.rotation_degrees.y = def.get("model_rotation_y", 270.0)
 			model.position = def.get("model_offset", Vector3.ZERO)
+			if current_building_id == "altar":
+				_attach_altar_effect(model)
 			node.add_child(model)
 			_apply_cel_shader(model)
 			_apply_building_albedo(model, def)
