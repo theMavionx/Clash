@@ -1,7 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries, LineSeries } from 'lightweight-charts';
 import { getReadClient } from '../lib/decibel';
-import { phoenixCandlesRoute, phoenixFetch } from '../lib/phoenixClient';
+import {
+  createPhoenixPublicWsClient,
+  phoenixCandlesRoute,
+  phoenixFetch,
+  phoenixSymbol as normalizePhoenixSymbol,
+} from '../lib/phoenixClient';
 
 const PACIFICA_API = 'https://api.pacifica.fi/api/v1';
 // Pyth Benchmarks serves historical candles in TradingView UDF format for
@@ -158,6 +163,25 @@ function normalizeDecibelCandles(rows) {
   }))
     .filter(c => c.time && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close))
     .sort((a, b) => a.time - b.time);
+}
+
+function normalizePhoenixCandle(row) {
+  if (!row) return null;
+  const c = row.candle || row;
+  const next = {
+    time: unixSeconds(c.time ?? c.t ?? c.timestamp),
+    open: Number(c.open ?? c.o),
+    high: Number(c.high ?? c.h),
+    low: Number(c.low ?? c.l),
+    close: Number(c.close ?? c.c),
+  };
+  return next.time
+    && Number.isFinite(next.open)
+    && Number.isFinite(next.high)
+    && Number.isFinite(next.low)
+    && Number.isFinite(next.close)
+    ? next
+    : null;
 }
 
 function fmtLineUsd(value) {
@@ -334,16 +358,14 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
       try {
         let candles = [];
         if (dex === 'phoenix') {
-          const json = await phoenixFetch(phoenixCandlesRoute(symbol, { timeframe: interval, limit: 500 }));
-          const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.value) ? json.value : [];
-          if (cancelled) return;
-          candles = rows.map(c => ({
-            time: Math.floor(Number(c.time || c.t || 0) / 1000),
-            open: Number(c.open ?? c.o),
-            high: Number(c.high ?? c.h),
-            low: Number(c.low ?? c.l),
-            close: Number(c.close ?? c.c),
-          })).filter(c => c.time && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+          try {
+            const json = await phoenixFetch(phoenixCandlesRoute(symbol, { timeframe: interval, limit: 500 }));
+            const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.value) ? json.value : [];
+            if (cancelled) return;
+            candles = rows.map(normalizePhoenixCandle).filter(Boolean);
+          } catch {
+            candles = await loadPythCandles(tf, now, start).catch(() => []);
+          }
         } else if (dex === 'decibel') {
           try {
             candles = await fetchDecibelCandles(symbol, interval, start, now);
@@ -376,15 +398,51 @@ function TradingViewWidget({ symbol = 'BTC', pythSymbol = null, positions = [], 
           chartRef.current.timeScale().fitContent();
           chartRef.current.priceScale('right').applyOptions({ autoScale: true });
         }
-      } catch {} finally {
+      } catch {
+        const fallback = flatCandlesFromPrice(currentPriceRef.current, now, tf);
+        if (!cancelled && fallback.length && seriesRef.current) {
+          seriesRef.current.setData(fallback);
+        }
+      } finally {
         if (!cancelled) setLoading(false);
       }
     }
 
     load();
+    if (dex === 'phoenix') {
+      return () => { cancelled = true; };
+    }
     const iv = window.setInterval(load, 30000);
     return () => { cancelled = true; window.clearInterval(iv); };
   }, [symbol, pythSymbol, interval, dex]);
+
+  useEffect(() => {
+    if (dex !== 'phoenix' || !seriesRef.current) return undefined;
+    let cancelled = false;
+    const controller = new AbortController();
+    const streams = createPhoenixPublicWsClient();
+    const phxSymbol = normalizePhoenixSymbol(symbol);
+
+    (async () => {
+      try {
+        for await (const update of streams.candles(phxSymbol, interval, controller.signal)) {
+          if (cancelled) break;
+          const candle = normalizePhoenixCandle(update);
+          if (!candle || !seriesRef.current) continue;
+          seriesRef.current.update(candle);
+        }
+      } catch (error) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          console.warn('[Phoenix] candle WS failed; static chart remains visible', error?.message || error);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [symbol, interval, dex]);
 
   // Store currentPrice in a ref so price-line effect doesn't re-run on every tick
   const currentPriceRef = useRef(currentPrice);

@@ -9,13 +9,13 @@ function defaultPhoenixApiUrl() {
   return path;
 }
 
-export const PHOENIX_API_URL =
-  import.meta.env.VITE_PHOENIX_BROWSER_API_URL || defaultPhoenixApiUrl();
-
 export const PHOENIX_PROXY_API_URL = defaultPhoenixApiUrl();
 
 export const PHOENIX_DIRECT_API_URL =
   import.meta.env.VITE_PHOENIX_DIRECT_API_URL || 'https://perp-api.phoenix.trade';
+
+export const PHOENIX_API_URL =
+  import.meta.env.VITE_PHOENIX_BROWSER_API_URL || PHOENIX_DIRECT_API_URL;
 
 export const PHOENIX_WS_URL =
   import.meta.env.VITE_PHOENIX_BROWSER_WS_URL || 'wss://perp-api.phoenix.trade/v1/ws';
@@ -38,7 +38,48 @@ const EXCHANGE_METADATA_RPC_POLL_INTERVAL_MS = 0;
 
 const clients = new Map();
 const readClients = new Map();
+const fetchCache = new Map();
+const fetchInflight = new Map();
 let publicWsClient = null;
+
+function trimTrailingSlash(value) {
+  return String(value || '').replace(/\/+$/, '');
+}
+
+function phoenixFetchCacheTtl(path, method) {
+  if (String(method || 'GET').toUpperCase() !== 'GET') return 0;
+  const pathname = String(path || '').split('?')[0];
+  if (/^\/v1\/candles\//.test(pathname)) return 25_000;
+  if (/^\/(?:exchange|v1\/exchange)(?:\/|$)/.test(pathname)) return 12 * 60 * 60_000;
+  if (/^\/v1\/funding\/overview(?:\?|$)/.test(path)) return 10_000;
+  if (/^\/trader\/[^/]+\/(?:trades-history|funding-history)(?:\?|$)/.test(pathname)) return 15_000;
+  return 0;
+}
+
+function clonePhoenixData(data) {
+  if (data == null || typeof data !== 'object') return data;
+  try {
+    return JSON.parse(JSON.stringify(data));
+  } catch {
+    return data;
+  }
+}
+
+async function fetchPhoenixJson(baseUrl, path, options = {}) {
+  const res = await fetch(`${trimTrailingSlash(baseUrl)}${path}`, options);
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) {
+    const msg = data?.message || data?.error || text || `Phoenix API error ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.data = data;
+    err.url = `${trimTrailingSlash(baseUrl)}${path}`;
+    throw err;
+  }
+  return data;
+}
 
 export function isPhoenixFlightEnabled() {
   return PHOENIX_FLIGHT_ENABLED && !!PHOENIX_FLIGHT_BUILDER_AUTHORITY;
@@ -177,15 +218,61 @@ export function phoenixSymbol(symbol) {
 }
 
 export async function phoenixFetch(path, options = {}) {
-  const res = await fetch(`${PHOENIX_API_URL}${path}`, options);
-  const text = await res.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; } catch {}
-  if (!res.ok) {
-    const msg = data?.message || data?.error || text || `Phoenix API error ${res.status}`;
-    throw new Error(msg);
+  const method = String(options.method || 'GET').toUpperCase();
+  const hasBody = options.body != null;
+  const hasAbortSignal = !!options.signal;
+  const ttl = phoenixFetchCacheTtl(path, method);
+  const cacheKey = `${method}:${path}:${hasBody ? String(options.body) : ''}`;
+  const now = Date.now();
+  const cached = ttl > 0 ? fetchCache.get(cacheKey) : null;
+  if (cached && now - cached.at < ttl) return clonePhoenixData(cached.data);
+
+  if (!hasAbortSignal && ttl > 0 && fetchInflight.has(cacheKey)) {
+    return clonePhoenixData(await fetchInflight.get(cacheKey));
   }
-  return data;
+
+  const run = async () => {
+    let directError = null;
+    try {
+      return await fetchPhoenixJson(PHOENIX_DIRECT_API_URL, path, options);
+    } catch (error) {
+      if (error?.name === 'AbortError') throw error;
+      directError = error;
+      // Browser direct is the default path. Only fall back to our server proxy
+      // when direct CORS/network/rate-limit fails, so proxy limits are shared
+      // far less often across all players.
+      try {
+        const data = await fetchPhoenixJson(PHOENIX_PROXY_API_URL, path, options);
+        if (directError?.status === 429) {
+          console.info('[Phoenix] direct API rate-limited; recovered through proxy cache', { path });
+        }
+        return data;
+      } catch (proxyError) {
+        if (directError?.status === 429) throw directError;
+        proxyError.directError = directError;
+        throw proxyError;
+      }
+    }
+  };
+
+  const promise = run().then(data => {
+    if (ttl > 0 && data && !data.rate_limited) {
+      fetchCache.set(cacheKey, { at: Date.now(), data: clonePhoenixData(data) });
+      if (fetchCache.size > 200) {
+        const cutoff = Date.now() - 12 * 60 * 60_000;
+        for (const [key, value] of fetchCache) {
+          if (value.at < cutoff) fetchCache.delete(key);
+        }
+      }
+    }
+    return data;
+  });
+
+  if (!hasAbortSignal && ttl > 0) {
+    fetchInflight.set(cacheKey, promise.finally(() => fetchInflight.delete(cacheKey)));
+  }
+
+  return clonePhoenixData(await promise);
 }
 
 export function asPhoenixArray(value) {

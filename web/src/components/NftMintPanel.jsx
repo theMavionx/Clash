@@ -1144,6 +1144,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const contextLine = getContextLine(dex);
   const saleMintSoldOut = SALE_NFT_MINT_SOLD_OUT;
   const saleMintLocked = SALE_NFT_MINT_LOCKED;
+  const marketplaceFullScroll = view === 'shop' && activeShopTab === 'marketplace';
   const canSwitchPaymentChain = activeShopTab === 'resources' || (SHOW_NFT_MINT_TAB && activeShopTab === 'nft' && !saleMintLocked);
   const activePaymentChain = activeShopTab === 'resources'
     ? shopChain
@@ -1224,7 +1225,13 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
             </button>
           </div>
 
-          <div style={styles.body}>
+          <div
+            className={marketplaceFullScroll ? 'shop-scroll' : undefined}
+            style={{
+              ...styles.body,
+              ...(marketplaceFullScroll ? styles.bodyMarketplaceScroll : null),
+            }}
+          >
             {view === 'upgrade' ? (
               <DemonKingUpgradePanel
                 initialRequest={initialUpgradeRequest}
@@ -1325,17 +1332,26 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 onSelect={handleSwitchPanelChain}
               />
             )}
-            <div style={styles.sliderViewport}>
+            <div style={{
+              ...styles.sliderViewport,
+              ...(marketplaceFullScroll ? styles.sliderViewportMarketplaceScroll : null),
+            }}>
               <div
                 style={{
                   ...styles.sliderTrack,
-                  transform: `translateX(-${SHOP_TABS.findIndex((t) => t.id === activeShopTab) * 100}%)`,
+                  ...(marketplaceFullScroll ? styles.sliderTrackMarketplaceScroll : null),
+                  transform: marketplaceFullScroll
+                    ? 'none'
+                    : `translateX(-${SHOP_TABS.findIndex((t) => t.id === activeShopTab) * 100}%)`,
                 }}
               >
                 {/* ─── Resources slide (index 0) ───────────────────── */}
                 <div
                   className="shop-scroll"
-                  style={styles.slide}
+                  style={{
+                    ...styles.slide,
+                    ...(marketplaceFullScroll ? styles.slideHiddenForMarketplaceScroll : null),
+                  }}
                   aria-hidden={activeShopTab !== 'resources'}
                   inert={activeShopTab !== 'resources' ? true : undefined}
                 >
@@ -1373,7 +1389,10 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                 {SHOW_NFT_MINT_TAB ? (
                 <div
                   className="shop-scroll"
-                  style={styles.slide}
+                  style={{
+                    ...styles.slide,
+                    ...(marketplaceFullScroll ? styles.slideHiddenForMarketplaceScroll : null),
+                  }}
                   aria-hidden={activeShopTab !== 'nft'}
                   inert={activeShopTab !== 'nft' ? true : undefined}
                 >
@@ -1506,6 +1525,7 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
                   style={{
                     ...styles.slide,
                     ...(panelMobile ? styles.slideMobile : null),
+                    ...(marketplaceFullScroll ? styles.marketplaceSlideFullScroll : null),
                     position: 'relative',
                   }}
                   aria-hidden={activeShopTab !== 'marketplace'}
@@ -3890,6 +3910,12 @@ const styles = {
     // scroll independently — the body itself never scrolls.
     overflow: 'hidden',
   },
+  bodyMarketplaceScroll: {
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    scrollbarWidth: 'thin',
+    scrollbarColor: '#bba882 #fdf8e7',
+  },
   // ── Tab slider ────────────────────────────────────────────────────
   // Viewport clips the wider track; the track holds all three slides
   // side-by-side and translates between them. Each slide scrolls its
@@ -3903,11 +3929,23 @@ const styles = {
     // edge instead of a narrow strip in the middle.
     margin: '0 -16px',
   },
+  sliderViewportMarketplaceScroll: {
+    flex: '0 0 auto',
+    minHeight: 'auto',
+    height: 'auto',
+    overflow: 'visible',
+  },
   sliderTrack: {
     display: 'flex',
     width: '100%', height: '100%',
     transition: 'transform 320ms cubic-bezier(0.32, 0.72, 0, 1)',
     willChange: 'transform',
+  },
+  sliderTrackMarketplaceScroll: {
+    display: 'block',
+    height: 'auto',
+    transition: 'none',
+    willChange: 'auto',
   },
   slide: {
     flex: '0 0 100%',
@@ -3924,6 +3962,16 @@ const styles = {
     // MINT_ANIM_CSS so they match the parchment palette across engines.
     scrollbarWidth: 'thin',
     scrollbarColor: '#bba882 #fdf8e7',
+  },
+  slideHiddenForMarketplaceScroll: {
+    display: 'none',
+  },
+  marketplaceSlideFullScroll: {
+    flex: '0 0 auto',
+    height: 'auto',
+    minHeight: 0,
+    overflowY: 'visible',
+    scrollbarWidth: 'auto',
   },
   slideMobile: {
     padding: '0 10px',

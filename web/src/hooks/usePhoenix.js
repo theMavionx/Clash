@@ -10,6 +10,8 @@ import {
   createPhoenixPublicWsClient,
   createPhoenixTransactionClient,
   disposePhoenixClient,
+  PHOENIX_DIRECT_API_URL,
+  PHOENIX_PROXY_API_URL,
   getPhoenixBrowserRestClient,
   getPhoenixClient,
   getPhoenixProxyRestClient,
@@ -643,6 +645,15 @@ function pricesFromFundingOverview(markets, fundingOverview) {
     .filter(Boolean);
 }
 
+function phoenixSoftRateLimitedPayload(value) {
+  return !!(
+    value
+    && typeof value === 'object'
+    && value.rate_limited
+    && /phoenix_proxy_soft_429/i.test(String(value.source || ''))
+  );
+}
+
 function priceRowFromMarketStats(update, market = {}) {
   const symbol = phoenixSymbol(update?.symbol);
   const stats = update?.stats || {};
@@ -1211,18 +1222,35 @@ export function usePhoenix() {
 
     if (cached) disposeTransactionClient();
     const promise = (async () => {
-      const next = createPhoenixTransactionClient(endpoint, { disableFlight });
-      try {
-        await next.exchange?.ready?.();
-        txClientRef.current = next;
-        txClientEndpointRef.current = endpoint;
-        txClientFlightDisabledRef.current = disableFlight;
-        txClientReadyAtRef.current = Date.now();
-        return next;
-      } catch (e) {
-        disposePhoenixClient(next);
-        throw e;
+      const apiUrls = [
+        { name: 'browser', apiUrl: PHOENIX_DIRECT_API_URL },
+        { name: 'proxy', apiUrl: PHOENIX_PROXY_API_URL },
+      ];
+      const errors = [];
+      for (const source of apiUrls) {
+        const next = createPhoenixTransactionClient(endpoint, {
+          disableFlight,
+          apiUrl: source.apiUrl,
+        });
+        try {
+          await next.exchange?.ready?.();
+          if (errors.length) {
+            console.info('[Phoenix] transaction metadata recovered through fallback', {
+              source: source.name,
+              previous: errors.map(row => `${row.name}: ${row.message}`).slice(0, 2),
+            });
+          }
+          txClientRef.current = next;
+          txClientEndpointRef.current = endpoint;
+          txClientFlightDisabledRef.current = disableFlight;
+          txClientReadyAtRef.current = Date.now();
+          return next;
+        } catch (e) {
+          disposePhoenixClient(next);
+          errors.push({ name: source.name, message: e?.message || String(e) });
+        }
       }
+      throw new Error(errors.map(row => `${row.name}: ${row.message}`).join(' | ') || 'Phoenix metadata client failed');
     })();
     txClientInFlightRef.current = promise;
     try {
@@ -1678,7 +1706,13 @@ export function usePhoenix() {
     try {
       // One overview request returns markPrice for all markets. Avoid the old
       // N-markets -> N `/v1/market/{symbol}/stats` burst that quickly hit 429.
-      const overview = await client.api.funding().getFundingOverview({ perMarketLimit: 2 });
+      const overview = await readPhoenixRestFallback('funding-overview', restClient => (
+        restClient.api.funding().getFundingOverview({ perMarketLimit: 2 })
+      ));
+      if (phoenixSoftRateLimitedPayload(overview)) {
+        priceBackoffUntilRef.current = Date.now() + PHOENIX_PRICE_RATE_LIMIT_BACKOFF_MS;
+        return pricesRef.current;
+      }
       return applyPriceRows(pricesFromFundingOverview(marketList, overview));
     } catch (e) {
       const text = String(e?.message || e || '');
@@ -1687,18 +1721,32 @@ export function usePhoenix() {
       }
       return pricesRef.current;
     }
-  }, [applyPriceRows, client, isActiveDex]);
+  }, [applyPriceRows, isActiveDex, readPhoenixRestFallback]);
 
   const fetchMarkets = useCallback(async () => {
     if (!isActiveDex) return [];
     try {
-      const raw = await client.api.markets().getMarkets();
+      const raw = await readPhoenixRestFallback('markets', restClient => (
+        restClient.api.markets().getMarkets()
+      ));
+      if (phoenixSoftRateLimitedPayload(raw)) {
+        return marketsRef.current;
+      }
       const baseList = asPhoenixArray(raw).map(normalizeMarket).filter(Boolean);
+      if (!baseList.length && marketsRef.current.length) {
+        return marketsRef.current;
+      }
       let list = baseList;
       let overview = null;
       try {
-        overview = await client.api.funding().getFundingOverview({ perMarketLimit: 2 });
-        list = enrichMarketsWithFunding(baseList, overview);
+        overview = await readPhoenixRestFallback('funding-overview', restClient => (
+          restClient.api.funding().getFundingOverview({ perMarketLimit: 2 })
+        ));
+        if (!phoenixSoftRateLimitedPayload(overview)) {
+          list = enrichMarketsWithFunding(baseList, overview);
+        } else {
+          overview = null;
+        }
       } catch (e) {
         const text = String(e?.message || e || '');
         if (/429|Too Many Requests/i.test(text) || Number(e?.status) === 429) {
@@ -1717,10 +1765,14 @@ export function usePhoenix() {
       if (overview) fetchPrices(list, { overview });
       return list;
     } catch (e) {
-      setError(e?.message || 'Could not load Phoenix markets');
-      return [];
+      if (marketsRef.current.length) return marketsRef.current;
+      const text = String(e?.message || e || '');
+      setError(/429|Too Many Requests/i.test(text)
+        ? 'Phoenix market data is rate-limited right now. Live WS prices will continue when available.'
+        : e?.message || 'Could not load Phoenix markets');
+      return marketsRef.current;
     }
-  }, [client, fetchPrices, isActiveDex, setPhoenixAccount]);
+  }, [fetchPrices, isActiveDex, readPhoenixRestFallback, setPhoenixAccount]);
 
   useEffect(() => {
     if (!isActiveDex) return undefined;

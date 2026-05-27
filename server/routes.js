@@ -1777,7 +1777,7 @@ const GAME_SHOP_PRODUCTS = {
     id: 'altar',
     sku: 'altar',
     title: 'Altar',
-    subtitle: 'Отримай до 40% бусту всіх ресурсів; база на до 40% сильніша; до +10 трофеїв за кожну атаку',
+    subtitle: 'Get up to a 40% boost to all resources; base up to 40% stronger; up to +10 trophies per attack',
     kind: 'altar',
     usdPriceE6: '15000000',
     copUsdPriceE6: '15000000',
