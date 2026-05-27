@@ -97,6 +97,22 @@ var building_defs: Dictionary = {
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
+	"altar": {
+		"name": "Altar",
+		"cells": Vector2i(3, 3),
+		"color": Color(0.45, 0.25, 0.55, 0.5),
+		"height": 0.35,
+		"scene": "res://Model/Altar/Models/Stylized_Altar.fbx",
+		"model_scale": 0.21,
+		"model_offset": Vector3(0, -0.04, 0),
+		"model_rotation_y": 0.0,
+		"hp_levels": [900],
+		"cost": {},
+		"test_only": true,
+		"hp_bar_height": 0.45,
+		"albedo_texture": "res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_BaseMap.png",
+		"emission_texture": "res://Model/Altar/Textures/UnityHD/Stylized_Altar_MAT_Emissive.png",
+	},
 	"storage": {
 		"name": "Storage",
 		"cells": Vector2i(4, 5),
