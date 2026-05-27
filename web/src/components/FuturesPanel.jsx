@@ -58,6 +58,7 @@ const PACIFICA_AGENT_REQUIRED_MESSAGE = 'Enable 1-tap trading, then try again. P
 const PHOENIX_MARKET_SLIPPAGE_RATE = 0.02;
 const PHOENIX_DEFAULT_TAKER_FEE_RATE = 0.00035;
 const PHOENIX_FEE_BUFFER_RATE = 0.0001;
+const PHOENIX_DEFAULT_REFERRAL_CODE = 'MVWG4BTW';
 
 function decimalPlaces(value) {
   const text = String(value || '');
@@ -1594,12 +1595,22 @@ function FuturesPanel() {
   const [sizePct, setSizePct] = useState(0);
   const [depositAmt, setDepositAmt] = useState('');
   const [perplAccessCode, setPerplAccessCode] = useState('');
-  const [phoenixInviteCode, setPhoenixInviteCode] = useState('');
-  const [phoenixInviteKind, setPhoenixInviteKind] = useState('access');
+  const [phoenixInviteCode, setPhoenixInviteCode] = useState(PHOENIX_DEFAULT_REFERRAL_CODE);
+  const [phoenixInviteKind, setPhoenixInviteKind] = useState('referral');
   const [risexInviteCode, setRisexInviteCode] = useState('');
   const [withdrawAmt, setWithdrawAmt] = useState('');
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
+
+  useEffect(() => {
+    if (dex !== 'phoenix') return;
+    if (phoenixInviteKind === 'referral' && !phoenixInviteCode.trim()) {
+      setPhoenixInviteCode(PHOENIX_DEFAULT_REFERRAL_CODE);
+    }
+    if (phoenixInviteKind === 'access' && phoenixInviteCode.trim() === PHOENIX_DEFAULT_REFERRAL_CODE) {
+      setPhoenixInviteCode('');
+    }
+  }, [dex, phoenixInviteCode, phoenixInviteKind]);
   // Share-trade modal — shown automatically after a successful close in
   // Basic mode and on demand via the 📤 button next to open positions.
   // Holds a SNAPSHOT of the position because the live `positions` array
@@ -3667,8 +3678,8 @@ function FuturesPanel() {
               <div style={{width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 8}}>
                 <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8}}>
                   {[
-                    ['access', 'Access code'],
                     ['referral', 'Referral code'],
+                    ['access', 'Access code'],
                   ].map(([kind, label]) => (
                     <button
                       key={kind}
@@ -3711,11 +3722,14 @@ function FuturesPanel() {
               }}
               disabled={loading || checkingInvite}
               onClick={async () => {
+                const inviteCode = phoenixInviteKind === 'referral'
+                  ? (phoenixInviteCode.trim() || PHOENIX_DEFAULT_REFERRAL_CODE)
+                  : phoenixInviteCode;
                 const ok = await activate({
-                  inviteCode: phoenixInviteCode,
+                  inviteCode,
                   inviteKind: phoenixInviteKind,
                 });
-                if (ok) setPhoenixInviteCode('');
+                if (ok) setPhoenixInviteCode(PHOENIX_DEFAULT_REFERRAL_CODE);
               }}
             >
               {loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX'}

@@ -1343,6 +1343,27 @@ export function usePhoenix() {
     ))
   ), [readPhoenixRestFallback]);
 
+  const checkInviteWalletWithFallback = useCallback((authority) => (
+    readPhoenixRestFallback('invite-check', restClient => (
+      restClient.api.invite().checkWallet(authority)
+    ))
+  ), [readPhoenixRestFallback]);
+
+  const activateInviteCodeWithFallback = useCallback((authority, code) => (
+    readPhoenixRestFallback('invite-activate', restClient => (
+      restClient.api.invite().activateInvite({ authority, code })
+    ))
+  ), [readPhoenixRestFallback]);
+
+  const activateInviteReferralWithFallback = useCallback((authority, referralCode) => (
+    readPhoenixRestFallback('invite-activate-referral', restClient => (
+      restClient.api.invite().activateInviteWithReferral({
+        authority,
+        referral_code: referralCode,
+      })
+    ))
+  ), [readPhoenixRestFallback]);
+
   const sendIxs = useCallback((instructions, label = 'phoenix', options = {}) => {
     if (!ownerPk) throw new Error('Wallet not connected');
     if (walletMismatch) throw new Error(walletMismatchMessage || 'Wrong Solana wallet');
@@ -2172,16 +2193,22 @@ export function usePhoenix() {
         autoReferralAttempt: attempt,
         codeUsed: PHOENIX_AUTO_REFERRAL_CODE,
       }));
+      let activation = null;
       try {
-        await client.api.invite().activateInviteWithReferral({
-          authority: walletAddr,
-          referral_code: PHOENIX_AUTO_REFERRAL_CODE,
-        });
+        activation = await activateInviteReferralWithFallback(walletAddr, PHOENIX_AUTO_REFERRAL_CODE);
       } catch (err) {
         lastError = err;
       }
+      if (activation?.trader_pda) {
+        return {
+          whitelisted: true,
+          invite_code_used: PHOENIX_AUTO_REFERRAL_CODE,
+          autoReferral: true,
+          trader_pda: activation.trader_pda,
+        };
+      }
 
-      const check = await client.api.invite().checkWallet(walletAddr).catch((err) => {
+      const check = await checkInviteWalletWithFallback(walletAddr).catch((err) => {
         lastError = err;
         return null;
       });
@@ -2195,12 +2222,13 @@ export function usePhoenix() {
       }
       if (attempt < PHOENIX_AUTO_REFERRAL_ATTEMPTS) await sleep(700);
     }
+    autoReferralAttemptedRef.current.delete(cacheKey);
     return {
       whitelisted: false,
       autoReferralFailed: true,
       error: lastError?.message || null,
     };
-  }, [client, walletAddr, walletMismatch]);
+  }, [activateInviteReferralWithFallback, checkInviteWalletWithFallback, walletAddr, walletMismatch]);
 
   const checkInviteStatus = useCallback(async () => {
     if (!isActiveDex || !walletAddr || walletMismatch) {
@@ -2219,7 +2247,7 @@ export function usePhoenix() {
       setInviteStatus(prev => ({ ...prev, checking: true }));
     }
     try {
-      const check = await client.api.invite().checkWallet(walletAddr);
+      const check = await checkInviteWalletWithFallback(walletAddr);
       if (check?.whitelisted) {
         cachePhoenixAccess(walletAddr, {
           source: 'invite_check',
@@ -2258,7 +2286,7 @@ export function usePhoenix() {
       setInviteStatus(prev => ({ ...prev, checking: false }));
       return null;
     }
-  }, [client, isActiveDex, tryAutoReferralAccess, walletAddr, walletMismatch]);
+  }, [checkInviteWalletWithFallback, isActiveDex, tryAutoReferralAccess, walletAddr, walletMismatch]);
 
   const activate = useCallback(async (inviteOptions = {}) => {
     if (!walletAddr) {
@@ -2274,12 +2302,12 @@ export function usePhoenix() {
       || inviteOptions?.inviteCode
       || inviteOptions?.accessCode
       || inviteOptions?.referralCode
-      || ''
+      || PHOENIX_AUTO_REFERRAL_CODE
     ).trim();
     const inviteKind = String(
       inviteOptions?.inviteKind
       || inviteOptions?.codeType
-      || (inviteOptions?.referralCode ? 'referral' : 'access')
+      || (inviteOptions?.accessCode ? 'access' : 'referral')
     ).toLowerCase();
     return runOnce(`activate:${walletAddr}:${inviteKind}:${inviteCode}`, async () => {
       setLoading(true);
@@ -2290,9 +2318,9 @@ export function usePhoenix() {
           if (!check?.whitelisted) {
             if (inviteCode) {
               if (inviteKind === 'referral') {
-                await client.api.invite().activateInviteWithReferral({ authority: walletAddr, referral_code: inviteCode });
+                await activateInviteReferralWithFallback(walletAddr, inviteCode);
               } else {
-                await client.api.invite().activateInvite({ authority: walletAddr, code: inviteCode });
+                await activateInviteCodeWithFallback(walletAddr, inviteCode);
               }
               cachePhoenixAccess(walletAddr, { source: 'activate_invite', codeUsed: inviteCode, inviteKind });
               setInviteStatus({ checking: false, whitelisted: true, codeUsed: inviteCode });
@@ -2342,7 +2370,7 @@ export function usePhoenix() {
         setLoading(false);
       }
     });
-  }, [checkInviteStatus, client, getTransactionClient, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
+  }, [activateInviteCodeWithFallback, activateInviteReferralWithFallback, checkInviteStatus, getTransactionClient, runOnce, sendIxs, waitForTraderState, walletAddr, walletMismatch, walletMismatchMessage]);
 
   useEffect(() => {
     if (!isActiveDex || !walletAddr || walletMismatch || traderRegistered) return undefined;
