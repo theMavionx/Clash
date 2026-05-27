@@ -232,13 +232,44 @@ function nftImageUrl(req, level) {
   return process.env.NFT_IMAGE_URL || `${nftPublicBase(req)}/api/nft/image`;
 }
 
+function nftSellerFeeBasisPoints(chain) {
+  if (String(chain || '').toLowerCase() === 'solana') {
+    return Number(process.env.NFT_SOLANA_SELLER_FEE_BASIS_POINTS
+      || process.env.NFT_SOLANA_ROYALTY_BPS
+      || process.env.NFT_SELLER_FEE_BASIS_POINTS
+      || 250);
+  }
+  return Number(process.env.NFT_SELLER_FEE_BASIS_POINTS || 0);
+}
+
+function nftFeeRecipient(chain) {
+  if (String(chain || '').toLowerCase() === 'solana') {
+    const dep = readJsonIfExists(path.join(NFT_ROOT, 'deployments', 'solana-mainnet.json')) || {};
+    return process.env.NFT_SOLANA_FEE_RECIPIENT
+      || process.env.NFT_SOLANA_ROYALTY_TREASURY
+      || process.env.NFT_SOLANA_TREASURY
+      || dep.royaltyTreasury
+      || dep.treasury
+      || '';
+  }
+  return process.env.NFT_FEE_RECIPIENT || '';
+}
+
+function attachRoyaltyMetadata(metadata, chain) {
+  const fee = nftSellerFeeBasisPoints(chain);
+  const recipient = nftFeeRecipient(chain);
+  if (Number.isFinite(fee) && fee > 0) metadata.seller_fee_basis_points = fee;
+  if (recipient) metadata.fee_recipient = recipient;
+  return metadata;
+}
+
 function nftTokenMetadata(req, chain, tokenId, level) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
   const id = Number(tokenId);
   const lvl = normalizeNftLevel(level);
   const imageUrl = nftImageUrl(req, lvl);
-  return {
+  return attachRoyaltyMetadata({
     name: `${name} #${id}`,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description,
@@ -257,13 +288,13 @@ function nftTokenMetadata(req, chain, tokenId, level) {
       category: 'image',
       files: [{ uri: imageUrl, type: 'image/jpeg' }],
     },
-  };
+  }, chain);
 }
 
 function nftHiddenMetadata(req, chain) {
   const name = process.env.NFT_NAME || 'Demon King';
   const description = process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.';
-  return {
+  return attachRoyaltyMetadata({
     name,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description,
@@ -279,7 +310,7 @@ function nftHiddenMetadata(req, chain) {
       category: 'image',
       files: [{ uri: nftImageUrl(req), type: 'image/png' }],
     },
-  };
+  }, chain);
 }
 
 function sendSolanaToken2022Metadata(req, res) {
@@ -289,7 +320,7 @@ function sendSolanaToken2022Metadata(req, res) {
   const imageUrl = nftImageUrl(req, level, mint);
   const name = `${process.env.NFT_NAME || 'Demon King'} L${level}`;
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
-  res.json({
+  res.json(attachRoyaltyMetadata({
     name,
     symbol: solanaToken2022Symbol(),
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
@@ -309,7 +340,7 @@ function sendSolanaToken2022Metadata(req, res) {
       category: 'image',
       files: [{ uri: imageUrl, type: 'image/jpeg' }],
     },
-  });
+  }, 'Solana'));
 }
 
 async function sendNftMetadata(req, res, chain, rawTokenId) {
@@ -580,17 +611,28 @@ async function fetchSplTokenUsdPrice(mint) {
   if (!r.ok) throw new Error(`DexScreener ${r.status}`);
   const json = await r.json();
   const pairs = Array.isArray(json?.pairs) ? json.pairs : [];
-  // Prefer Solana pairs against USDC/USDT (deep stable liquidity gives the
-  // cleanest spot read). Min-liquidity floor stops a 100-USDC pool from
-  // dictating the price of a multi-million-USD market.
+  // Prefer Solana pairs against stable/native quote tokens. DexScreener can
+  // surface unrelated memecoin quote pools with a bogus USD price and high
+  // reported liquidity; those must not price shop payments.
   const minLiquidityUsd = Math.max(0, Number(process.env.NFT_SPL_MIN_LIQUIDITY_USD || 5_000));
+  const allowedQuoteSymbols = new Set(
+    String(process.env.NFT_SPL_ALLOWED_QUOTE_SYMBOLS || 'USDC,USDT,SOL,WSOL')
+      .split(',')
+      .map((symbol) => symbol.trim().toUpperCase())
+      .filter(Boolean),
+  );
   const best = pairs
     .filter((p) => String(p?.chainId || '').toLowerCase() === 'solana'
       && String(p?.baseToken?.address || '').toLowerCase() === mint.toLowerCase()
+      && allowedQuoteSymbols.has(String(p?.quoteToken?.symbol || '').toUpperCase())
       && Number(p?.priceUsd) > 0
       && Number(p?.liquidity?.usd || 0) >= minLiquidityUsd)
     .sort((a, b) => Number(b?.liquidity?.usd || 0) - Number(a?.liquidity?.usd || 0))[0];
-  if (!best) throw new Error(`No deep DexScreener pair for mint ${mint} (min $${minLiquidityUsd} liquidity)`);
+  if (!best) {
+    throw new Error(
+      `No deep DexScreener pair for mint ${mint} with quote ${[...allowedQuoteSymbols].join('/')} (min $${minLiquidityUsd} liquidity)`,
+    );
+  }
   const value = String(best.priceUsd);
   _splTokenPriceCache.set(mint, { value, expiresAt: now + 60_000 });
   return value;
@@ -3016,7 +3058,7 @@ router.get('/nft/aptos/:tokenId.json', async (req, res) => { await sendAptosNftM
 router.get('/nft/solana/collection', (req, res) => {
   const name = process.env.NFT_NAME || 'Demon King';
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');
-  res.json({
+  res.json(attachRoyaltyMetadata({
     name,
     symbol: process.env.NFT_SYMBOL || 'DMNK',
     description: process.env.NFT_DESCRIPTION || 'Demon King from Clash of Perps.',
@@ -3030,7 +3072,7 @@ router.get('/nft/solana/collection', (req, res) => {
       category: 'image',
       files: [{ uri: nftImageUrl(req), type: 'image/png' }],
     },
-  });
+  }, 'Solana'));
 });
 router.get('/nft/solana/hidden', (req, res) => {
   res.set('Cache-Control', process.env.NFT_METADATA_CACHE || 'public, max-age=60');

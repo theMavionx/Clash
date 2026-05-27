@@ -43,8 +43,6 @@ const PHOENIX_TPSL_OPTIMISTIC_TTL_MS = 45_000;
 const PHOENIX_ACCESS_CACHE_PREFIX = 'clash:phoenix:access:v1';
 const PHOENIX_SETUP_CACHE_PREFIX = 'clash:phoenix:setup:v1';
 const PHOENIX_ACCESS_CACHE_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-const PHOENIX_AUTO_REFERRAL_CODE = 'MVWG4BTW';
-const PHOENIX_AUTO_REFERRAL_ATTEMPTS = 2;
 const PHOENIX_PROGRAM_ID = 'EtrnLzgbS7nMMy5fbD42kXiUzGg8XQzJ972Xtk1cjWih';
 const LIGHTHOUSE_PROGRAM_ID = 'L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95';
 
@@ -1065,8 +1063,6 @@ export function usePhoenix() {
   const txClientReadyAtRef = useRef(0);
   const txClientInFlightRef = useRef(null);
   const sessionKeyRef = useRef(null);
-  const autoReferralAttemptedRef = useRef(new Set());
-
   useEffect(() => {
     tokenRef.current = player?.token || null;
   }, [player?.token]);
@@ -2177,59 +2173,6 @@ export function usePhoenix() {
     });
   }, [setPhoenixAccount]);
 
-  const tryAutoReferralAccess = useCallback(async () => {
-    if (!walletAddr || walletMismatch) return null;
-    const cacheKey = phoenixCacheWallet(walletAddr);
-    if (!cacheKey || autoReferralAttemptedRef.current.has(cacheKey)) return null;
-    autoReferralAttemptedRef.current.add(cacheKey);
-
-    let lastError = null;
-    for (let attempt = 1; attempt <= PHOENIX_AUTO_REFERRAL_ATTEMPTS; attempt += 1) {
-      setInviteStatus(prev => ({
-        ...prev,
-        checking: true,
-        whitelisted: prev?.whitelisted === true ? true : null,
-        autoReferral: true,
-        autoReferralAttempt: attempt,
-        codeUsed: PHOENIX_AUTO_REFERRAL_CODE,
-      }));
-      let activation = null;
-      try {
-        activation = await activateInviteReferralWithFallback(walletAddr, PHOENIX_AUTO_REFERRAL_CODE);
-      } catch (err) {
-        lastError = err;
-      }
-      if (activation?.trader_pda) {
-        return {
-          whitelisted: true,
-          invite_code_used: PHOENIX_AUTO_REFERRAL_CODE,
-          autoReferral: true,
-          trader_pda: activation.trader_pda,
-        };
-      }
-
-      const check = await checkInviteWalletWithFallback(walletAddr).catch((err) => {
-        lastError = err;
-        return null;
-      });
-      if (check?.whitelisted) {
-        return {
-          ...check,
-          whitelisted: true,
-          invite_code_used: check?.invite_code_used || PHOENIX_AUTO_REFERRAL_CODE,
-          autoReferral: true,
-        };
-      }
-      if (attempt < PHOENIX_AUTO_REFERRAL_ATTEMPTS) await sleep(700);
-    }
-    autoReferralAttemptedRef.current.delete(cacheKey);
-    return {
-      whitelisted: false,
-      autoReferralFailed: true,
-      error: lastError?.message || null,
-    };
-  }, [activateInviteReferralWithFallback, checkInviteWalletWithFallback, walletAddr, walletMismatch]);
-
   const checkInviteStatus = useCallback(async () => {
     if (!isActiveDex || !walletAddr || walletMismatch) {
       setInviteStatus({ checking: false, whitelisted: null, codeUsed: null });
@@ -2254,23 +2197,6 @@ export function usePhoenix() {
           codeUsed: check?.invite_code_used || null,
         });
       } else if (!accessCache) {
-        const autoCheck = await tryAutoReferralAccess();
-        if (autoCheck?.whitelisted) {
-          cachePhoenixAccess(walletAddr, {
-            source: 'auto_referral_code',
-            codeUsed: autoCheck?.invite_code_used || PHOENIX_AUTO_REFERRAL_CODE,
-            inviteKind: 'referral',
-          });
-          const next = {
-            checking: false,
-            whitelisted: true,
-            codeUsed: autoCheck?.invite_code_used || PHOENIX_AUTO_REFERRAL_CODE,
-            inviteKind: 'referral',
-            autoReferral: true,
-          };
-          setInviteStatus(next);
-          return autoCheck;
-        }
         clearPhoenixAccess(walletAddr);
       }
       const next = {
@@ -2278,7 +2204,6 @@ export function usePhoenix() {
         whitelisted: accessCache ? true : !!check?.whitelisted,
         codeUsed: check?.invite_code_used || null,
         cached: !!accessCache && !check?.whitelisted,
-        autoReferralFailed: !accessCache && !check?.whitelisted ? true : undefined,
       };
       setInviteStatus(next);
       return check;
@@ -2286,7 +2211,7 @@ export function usePhoenix() {
       setInviteStatus(prev => ({ ...prev, checking: false }));
       return null;
     }
-  }, [checkInviteWalletWithFallback, isActiveDex, tryAutoReferralAccess, walletAddr, walletMismatch]);
+  }, [checkInviteWalletWithFallback, isActiveDex, walletAddr, walletMismatch]);
 
   const activate = useCallback(async (inviteOptions = {}) => {
     if (!walletAddr) {
@@ -2302,7 +2227,7 @@ export function usePhoenix() {
       || inviteOptions?.inviteCode
       || inviteOptions?.accessCode
       || inviteOptions?.referralCode
-      || PHOENIX_AUTO_REFERRAL_CODE
+      || ''
     ).trim();
     const inviteKind = String(
       inviteOptions?.inviteKind
@@ -2330,7 +2255,6 @@ export function usePhoenix() {
                 ...prev,
                 checking: false,
                 whitelisted: false,
-                autoReferralFailed: true,
               }));
               throw new Error('Phoenix access code required');
             }

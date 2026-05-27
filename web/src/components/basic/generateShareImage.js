@@ -77,6 +77,7 @@ function fmtPrice(n) {
  */
 export async function generateShareImage(trade) {
   const isWin = Number(trade.pnlUsd) >= 0;
+  const showUsdPnl = trade.isOpen !== false;
 
   // Pick background — win.jpg for green trades, lose.jpg for red.
   // win.jpg may not exist yet (placeholder until designer ships it); we
@@ -151,13 +152,15 @@ export async function generateShareImage(trade) {
   ctx.fillStyle = isWin ? '#4caf50' : '#ef5350';
   ctx.fillText(fmtPct(trade.pnlPct), LEFT_X, y);
 
-  // ---- PnL in USD (slightly smaller, same colour) ----
-  y += 60;
-  ctx.font = '700 44px "Inter", "Segoe UI", sans-serif';
-  ctx.fillText(fmtUsd(trade.pnlUsd), LEFT_X, y);
+  if (showUsdPnl) {
+    // ---- PnL in USD (slightly smaller, same colour) ----
+    y += 60;
+    ctx.font = '700 44px "Inter", "Segoe UI", sans-serif';
+    ctx.fillText(fmtUsd(trade.pnlUsd), LEFT_X, y);
+  }
 
   // ---- Entry / Exit prices ----
-  y += 70;
+  y += showUsdPnl ? 70 : 100;
   ctx.font = '500 28px "Inter", "Segoe UI", sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.85)';
 

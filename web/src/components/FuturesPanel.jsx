@@ -3658,7 +3658,7 @@ function FuturesPanel() {
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
               {whitelisted
                 ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to trade.'
-                : 'Phoenix requires an access code before the trader account can be created.'}
+                : 'Phoenix requires a referral or access code before the trader account can be created.'}
             </div>
             {checkingInvite ? (
               <div style={{width: '100%', maxWidth: 360, minHeight: 108, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10}}>

@@ -44,6 +44,9 @@ npm run quote:base-shop -- cop 0xBuyer 1
 npm run set-price:base
 npm run sale:base -- open
 npm run deploy:solana
+npm run config:solana:royalties
+npm run build:solana:marketplace
+npm run marketplace:solana -- pda
 npm run set-payments:solana
 npm run set-price:solana
 npm run sale:solana -- open
@@ -103,3 +106,46 @@ chain. If unique per-token on-chain names/URIs are required later, run with
 `NFT_SOLANA_USE_CONFIG_LINES=1` or `NFT_SOLANA_METADATA_MODE=config-lines`;
 that older mode needs roughly `0.43 SOL` in rent-exempt Candy Machine accounts
 before fees.
+
+## Solana Royalties
+
+The Solana collection uses a Metaplex Core collection-level `Royalties` plugin.
+Run this after deploying the collection, or whenever the treasury changes:
+
+```bash
+npm run config:solana:royalties -- --bps=250
+```
+
+The script defaults to 250 bps (2.5%) and sends 100% of royalties to
+`NFT_SOLANA_TREASURY` or the treasury saved in `deployments/solana-mainnet.json`.
+It also updates Solana metadata JSON with `seller_fee_basis_points` and
+`fee_recipient`.
+
+## Solana Marketplace
+
+`nft/solana/marketplace` is a native Solana program for fixed-price Metaplex
+Core asset listings. It keeps assets in the seller wallet until purchase. The
+seller grants the listing PDA a Core `TransferDelegate`, and the program signs
+with that PDA only when a valid listing is bought.
+
+The marketplace fee is separate from collection royalties. Configure our market
+fee to 100 bps (1%):
+
+```bash
+npm run build:solana:marketplace
+# deploy the SBF program with Solana CLI, then set:
+# NFT_SOLANA_MARKETPLACE_PROGRAM_ID=<deployed_program_id>
+npm run marketplace:solana -- init --fee-bps=100
+```
+
+Common admin/operator commands:
+
+```bash
+npm run marketplace:solana -- pda --asset=<core_asset_pubkey>
+npm run marketplace:solana -- list --asset=<core_asset_pubkey> --price-lamports=100000000
+npm run marketplace:solana -- buy --asset=<core_asset_pubkey> --seller=<seller_pubkey>
+npm run marketplace:solana -- cancel --asset=<core_asset_pubkey>
+```
+
+For SPL-token listings, pass `--payment-mint=<mint>` on `list` and pass
+`--buyer-token`, `--seller-token`, and `--treasury-token` on `buy`.

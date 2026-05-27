@@ -17,6 +17,11 @@
   "collectionUri": "https://clashofperps.fun/api/nft/solana/collection",
   "hiddenUri": "https://clashofperps.fun/api/nft/solana/hidden",
   "hiddenHash": "ae38cd9677a6e4540bf6f8bd9c5b2a233dd31561c6ecc5854cf3a3d04f5bf8d3",
+  "royaltyBps": 250,
+  "royaltyTreasury": "4dJVN3sQSCjeypkc8knCaRQmeT68upDQwZY7a9s8qjHA",
+  "royaltyRuleSet": "None",
+  "royaltyTx": "4tafxnyD6dqyWgEmER97eRJYWqNDGPbfCbJutiRHvfukhLyT5A7E6ruq4g9wReaxRXZQcEHKTJAEWAiHGpAcLNgo",
+  "royaltyUpdatedAt": "2026-05-27T06:30:33.378Z",
   "deployedAt": "2026-05-13T12:52:36.764Z",
   "paymentGroups": {
     "sol": {
@@ -44,5 +49,5 @@
       "destinationAta": "9knHyBvV69L6zXqNnKitJJKJ5jbAW7ExsiiWDPy1vc7i"
     }
   },
-  "updatedAt": "2026-05-17T08:10:36.266Z"
+  "updatedAt": "2026-05-27T06:30:33.378Z"
 }
