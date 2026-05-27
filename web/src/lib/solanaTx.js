@@ -96,26 +96,34 @@ function isPhoenixTpslDiagnostic(label, type) {
     && /^(attempt_start|signed|confirmed|status_ok|status_poll|rebroadcast|late_status_check)$/i.test(String(type || ''));
 }
 
-function isMarketplaceSeekerListingDiagnostic(label, type) {
-  return /^custodial_marketplace\.deposit_solana/i.test(String(label || ''))
+function seekerNftDiagnosticNamespace(label) {
+  const text = String(label || '');
+  if (/^custodial_marketplace\.deposit_solana/i.test(text)) return 'marketplace.seeker.tx';
+  if (/^bridge\.burn_solana/i.test(text)) return 'bridge.seeker.tx';
+  return '';
+}
+
+function isSeekerNftDiagnostic(label, type) {
+  return !!seekerNftDiagnosticNamespace(label)
     && /^(attempt_start|attempt_error|signed|confirmed|status_ok|rebroadcast|late_status_check)$/i.test(String(type || ''));
 }
 
 function logTx(label, type, data = {}, level = 'info') {
-  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type) && !isMarketplaceSeekerListingDiagnostic(label, type)) return;
+  if (level === 'info' && !isPhoenixTpslDiagnostic(label, type) && !isSeekerNftDiagnostic(label, type)) return;
   const payload = { label, ...data };
   if (/^phoenix\.tpsl(?:\.setup)?$/i.test(String(label || '')) && payload.signature_short && !payload.txid_short) {
     payload.txid_short = payload.signature_short;
   }
-  const reportMarketplaceSeeker = isMarketplaceSeekerListingDiagnostic(label, type)
+  const seekerNftNamespace = seekerNftDiagnosticNamespace(label);
+  const reportSeekerNft = seekerNftNamespace
     && /^(attempt_start|attempt_error|signed|confirmed)$/i.test(String(type || ''));
   try { addClientBreadcrumb(`solana_tx.${type}`, payload, level); } catch {}
-  if (reportMarketplaceSeeker) {
+  if (reportSeekerNft) {
     try {
-      reportClientEvent(`marketplace.seeker.tx.${type}`, payload, {
+      reportClientEvent(`${seekerNftNamespace}.${type}`, payload, {
         level,
-        source: 'marketplace.seeker.tx',
-        message: `marketplace.seeker.tx.${type}`,
+        source: seekerNftNamespace,
+        message: `${seekerNftNamespace}.${type}`,
       });
     } catch {}
   }

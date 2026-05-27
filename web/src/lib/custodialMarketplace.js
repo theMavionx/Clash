@@ -543,6 +543,7 @@ export async function depositCoreNftToCustody({
   solWallet,
   token,
   order,
+  nft = null,
 }) {
   if (!token) throw new Error('Game session is not ready');
   const owner = solWallet?.publicKey?.toBase58?.();
@@ -573,9 +574,20 @@ export async function depositCoreNftToCustody({
   const ownerPk = new PublicKey(owner);
   const ownerSigner = createNoopSigner(publicKey(owner));
   const asset = await fetchAsset(umi, publicKey(order.assetId));
-  const collectionAddress = solanaCoreAssetCollection(asset);
+  const onChainOwner = publicKeyString(asset?.owner);
+  if (onChainOwner && onChainOwner !== owner) {
+    if (order.vaultAddress && onChainOwner === String(order.vaultAddress)) {
+      const confirmed = await confirmCustodialDeposit({ token, orderId: order.id, txHash: null });
+      return { txHash: null, confirmed, alreadyInCustody: true };
+    }
+    throw new Error(`Solana source wallet is not the asset owner (expected ${owner}, on-chain owner ${onChainOwner})`);
+  }
+  const collectionAddress = solanaCoreAssetCollection(asset)
+    || String(order.assetCollection || order.asset_collection || nft?.collection || nft?.collectionAddress || '').trim();
   const collection = collectionAddress
-    ? await fetchCollection(umi, publicKey(collectionAddress)).catch(() => null)
+    ? await fetchCollection(umi, publicKey(collectionAddress)).catch((err) => {
+      throw new Error(`Solana Core collection ${collectionAddress} could not be loaded for marketplace escrow transfer: ${err?.message || err}`);
+    })
     : null;
   const builder = transfer(umi, {
     asset,

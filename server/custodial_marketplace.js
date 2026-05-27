@@ -1260,7 +1260,9 @@ async function fetchSolanaCoreAssetAndCollection(umi, assetId) {
   const asset = await fetchAsset(umi, publicKey(assetId));
   const collectionAddress = solanaCoreCollectionFromAsset(asset);
   const collection = collectionAddress
-    ? await fetchCollection(umi, publicKey(collectionAddress)).catch(() => null)
+    ? await fetchCollection(umi, publicKey(collectionAddress)).catch((err) => {
+      throw httpError(502, `Solana Core collection ${collectionAddress} could not be loaded: ${err?.message || err}`);
+    })
     : null;
   return { asset, collection };
 }

@@ -504,14 +504,25 @@ function solanaAssetOwner(asset) {
   return String(asset?.owner || asset?.ownerAddress || '');
 }
 
+function solanaPublicKeyString(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value.toBase58 === 'function') return value.toBase58();
+  if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) return value.toString();
+  return '';
+}
+
 function solanaAssetCollection(asset) {
   const grouping = Array.isArray(asset?.grouping) ? asset.grouping : [];
   const group = grouping.find((row) => String(row?.group_key || row?.key || '').toLowerCase() === 'collection');
-  const groupValue = String(group?.group_value || group?.value || '');
+  const groupValue = solanaPublicKeyString(group?.group_value || group?.value);
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(groupValue)) return groupValue;
   const ua = asset?.updateAuthority;
-  if (ua?.type === 'Collection') return String(ua.address || '');
-  if (ua?.__kind === 'Collection') return String(ua.fields?.[0] || '');
+  if (ua?.type === 'Collection') return solanaPublicKeyString(ua.address);
+  if (ua?.__kind === 'Collection') {
+    const fromFields = Array.isArray(ua.fields) ? ua.fields[0] : ua.fields;
+    return solanaPublicKeyString(fromFields?.address || fromFields?.publicKey || fromFields);
+  }
   const candidates = [
     asset?.collection?.address,
     asset?.collection?.publicKey,
@@ -519,7 +530,7 @@ function solanaAssetCollection(asset) {
     asset?.collectionAddress,
   ];
   for (const c of candidates) {
-    const s = String(c || '');
+    const s = solanaPublicKeyString(c);
     if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s)) return s;
   }
   return '';

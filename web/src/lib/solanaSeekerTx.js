@@ -65,8 +65,8 @@ function base64AddressToBase58(address) {
   }
 }
 
-const MARKETPLACE_SEEKER_LABEL_RE = /^custodial_marketplace\.deposit_solana/i;
-const MARKETPLACE_SEEKER_REPORT_TYPES = new Set([
+const SEEKER_NFT_LABEL_RE = /^(custodial_marketplace\.deposit_solana|bridge\.burn_solana)/i;
+const SEEKER_NFT_REPORT_TYPES = new Set([
   'mwa_open',
   'mwa_capabilities_failed',
   'mwa_capabilities',
@@ -78,17 +78,24 @@ const MARKETPLACE_SEEKER_REPORT_TYPES = new Set([
   'mwa_signed_fallback_sent',
 ]);
 
-function shouldReportMarketplaceSeekerLog(type, data = {}) {
-  return MARKETPLACE_SEEKER_REPORT_TYPES.has(type)
-    && MARKETPLACE_SEEKER_LABEL_RE.test(String(data?.label || ''));
+function seekerNftLogNamespace(label) {
+  return /^bridge\.burn_solana/i.test(String(label || ''))
+    ? 'bridge.seeker'
+    : 'marketplace.seeker';
+}
+
+function shouldReportSeekerNftLog(type, data = {}) {
+  return SEEKER_NFT_REPORT_TYPES.has(type)
+    && SEEKER_NFT_LABEL_RE.test(String(data?.label || ''));
 }
 
 function defaultLog(type, data = {}, level = 'info') {
-  if (shouldReportMarketplaceSeekerLog(type, data)) {
-    reportClientEvent(`marketplace.seeker.${type}`, data, {
+  if (shouldReportSeekerNftLog(type, data)) {
+    const namespace = seekerNftLogNamespace(data?.label);
+    reportClientEvent(`${namespace}.${type}`, data, {
       level,
-      source: 'marketplace.seeker',
-      message: `marketplace.seeker.${type}`,
+      source: namespace,
+      message: `${namespace}.${type}`,
     });
   } else {
     addClientBreadcrumb(`solana.seeker.${type}`, data, level);

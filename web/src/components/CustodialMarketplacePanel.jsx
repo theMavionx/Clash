@@ -42,6 +42,12 @@ function shortAddr(value, head = 5, tail = 4) {
   return s.length <= head + tail + 3 ? s : `${s.slice(0, head)}...${s.slice(-tail)}`;
 }
 
+function listedNotice(deposited) {
+  return deposited?.txHash
+    ? `Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`
+    : 'Listed. Escrow custody is already verified.';
+}
+
 function rawErrorMessage(err) {
   return err?.shortMessage || err?.message || String(err || '');
 }
@@ -688,7 +694,7 @@ export default function CustodialMarketplacePanel({
     });
     try {
       const deposited = await depositListingOrder(order);
-      setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+      setNotice(listedNotice(deposited));
       await Promise.all([loadListings(), loadOrders(), loadOwned()]);
     } catch (err) {
       const msg = listingErrorMessage(err, solWallet);
@@ -825,7 +831,7 @@ export default function CustodialMarketplacePanel({
             message: 'Existing listing found. Continue by transferring the NFT to escrow.',
           });
           const deposited = await depositListingOrder(pendingOrder, selectedNft);
-          setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+          setNotice(listedNotice(deposited));
           setPriceInput('');
           setView('orders');
           await Promise.all([loadListings(), loadOrders(), loadOwned()]);
@@ -836,7 +842,7 @@ export default function CustodialMarketplacePanel({
       const order = created.order;
       if (order?.status === 'awaiting_deposit' && !created.resumed) {
         const deposited = await depositListingOrder(order, selectedNft);
-        setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+        setNotice(listedNotice(deposited));
       } else if (created.recovered) {
         updateListingFlow({
           order,

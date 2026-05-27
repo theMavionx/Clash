@@ -582,10 +582,25 @@ export default function NftBridgePanel({
 
       const memoText = initRes.burn.requiredMemo;
       const asset = await fetchAsset(umi, publicKey(initRes.burn.asset));
-      const updateAuthorityCollection = solanaCoreAssetCollection(asset);
+      const onChainOwner = publicKeyString(asset?.owner);
+      if (onChainOwner && onChainOwner !== ownerAddress) {
+        throw new Error(`Solana source wallet is not the asset owner (expected ${ownerAddress}, on-chain owner ${onChainOwner})`);
+      }
+      const assetCollection = solanaCoreAssetCollection(asset);
+      const signedCollection = String(initRes.burn.collection || '').trim();
+      const collectionAddress = signedCollection || assetCollection;
       let collection = null;
-      if (initRes.burn.collection && updateAuthorityCollection === String(initRes.burn.collection)) {
-        collection = await fetchCollection(umi, publicKey(initRes.burn.collection));
+      if (signedCollection && assetCollection && signedCollection !== assetCollection) {
+        addClientBreadcrumb('bridge.solana_core_collection_mismatch', {
+          asset: initRes.burn.asset,
+          signedCollection,
+          assetCollection,
+        }, 'warn');
+      }
+      if (collectionAddress) {
+        collection = await fetchCollection(umi, publicKey(collectionAddress)).catch((err) => {
+          throw new Error(`Solana Core collection ${collectionAddress} could not be loaded for bridge burn: ${err?.message || err}`);
+        });
       }
       const burnIx = burn(umi, collection ? { asset, collection } : { asset });
       const instructions = burnIx.getInstructions().map(toWeb3JsInstruction);
