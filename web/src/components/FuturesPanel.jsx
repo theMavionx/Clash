@@ -1606,15 +1606,13 @@ function FuturesPanel() {
   const [withdrawTo, setWithdrawTo] = useState('');
   const [fullscreen, setFullscreen] = useState(window.innerWidth < 600);
 
-  useEffect(() => {
-    if (dex !== 'phoenix') return;
-    if (phoenixInviteKind === 'referral' && !phoenixInviteCode.trim()) {
-      setPhoenixInviteCode(PHOENIX_DEFAULT_REFERRAL_CODE);
-    }
-    if (phoenixInviteKind === 'access' && phoenixInviteCode.trim() === PHOENIX_DEFAULT_REFERRAL_CODE) {
-      setPhoenixInviteCode('');
-    }
-  }, [dex, phoenixInviteCode, phoenixInviteKind]);
+  const selectPhoenixInviteKind = useCallback((kind) => {
+    setPhoenixInviteKind(kind);
+    setPhoenixInviteCode(prev => {
+      if (kind === 'access' && prev.trim() === PHOENIX_DEFAULT_REFERRAL_CODE) return '';
+      return prev;
+    });
+  }, []);
   // Share-trade modal — shown automatically after a successful close in
   // Basic mode and on demand via the 📤 button next to open positions.
   // Holds a SNAPSHOT of the position because the live `positions` array
@@ -3637,7 +3635,9 @@ function FuturesPanel() {
   // ==================== PHOENIX SETUP GATE ====================
   if (dex === 'phoenix' && hasWallet && setupVerified !== true) {
     const whitelisted = inviteStatus?.whitelisted === true;
-    const checkingInvite = inviteStatus?.whitelisted == null && (setupVerified === null || inviteStatus?.checking);
+    const waitingForPhoenixState = setupVerified === null;
+    const restoringPhoenixSetup = !!inviteStatus?.setupCached && waitingForPhoenixState;
+    const checkingInvite = waitingForPhoenixState || (inviteStatus?.whitelisted == null && inviteStatus?.checking);
     const needsCode = inviteStatus?.whitelisted === false;
     return (
       <>
@@ -3657,10 +3657,12 @@ function FuturesPanel() {
           <div style={{...S.body, alignItems: 'center', justifyContent: 'center', gap: 14, textAlign: 'center', padding: 24}}>
             <img src={DEX_CONFIG.phoenix.logo} alt="" style={{width: 64, height: 64, objectFit: 'contain'}} />
             <div style={{color: '#5C3A21', fontSize: 19, fontWeight: 900}}>
-              {checkingInvite ? 'Checking Phoenix access' : whitelisted ? 'Create your Phoenix account' : 'Enter your Phoenix code'}
+              {checkingInvite ? (waitingForPhoenixState ? 'Loading Phoenix account' : 'Checking Phoenix access') : whitelisted ? 'Create your Phoenix account' : 'Enter your Phoenix code'}
             </div>
             <div style={{color: '#8a7252', fontSize: 12, fontWeight: 700, maxWidth: 360, lineHeight: 1.45}}>
-              {whitelisted
+              {waitingForPhoenixState
+                ? (restoringPhoenixSetup ? 'This wallet has a cached Phoenix account. Loading live state now.' : 'Checking live Phoenix trader state before asking for a code.')
+                : whitelisted
                 ? 'This wallet is allowlisted. Create the on-chain trader account, then deposit USDC to trade.'
                 : 'Phoenix requires a referral or access code before the trader account can be created.'}
             </div>
@@ -3675,7 +3677,7 @@ function FuturesPanel() {
                   animation: 'wallet-spin 0.85s linear infinite',
                 }} />
                 <div style={{fontSize: 12, color: '#8a7252', fontWeight: 800}}>
-                  Checking wallet allowlist...
+                  {waitingForPhoenixState ? 'Loading trader account...' : 'Checking wallet allowlist...'}
                 </div>
               </div>
             ) : !whitelisted && (
@@ -3688,7 +3690,7 @@ function FuturesPanel() {
                     <button
                       key={kind}
                       type="button"
-                      onClick={() => setPhoenixInviteKind(kind)}
+                      onClick={() => selectPhoenixInviteKind(kind)}
                       style={{
                         ...S.btnSmall,
                         background: phoenixInviteKind === kind ? DEX_CONFIG.phoenix.color : '#F7EBD2',
@@ -3726,14 +3728,12 @@ function FuturesPanel() {
               }}
               disabled={loading || checkingInvite}
               onClick={async () => {
-                const inviteCode = phoenixInviteKind === 'referral'
-                  ? (phoenixInviteCode.trim() || PHOENIX_DEFAULT_REFERRAL_CODE)
-                  : phoenixInviteCode;
+                const inviteCode = phoenixInviteCode.trim();
                 const ok = await activate({
                   inviteCode,
                   inviteKind: phoenixInviteKind,
                 });
-                if (ok) setPhoenixInviteCode(PHOENIX_DEFAULT_REFERRAL_CODE);
+                if (ok && phoenixInviteKind === 'access') setPhoenixInviteCode('');
               }}
             >
               {loading || checkingInvite ? 'PLEASE WAIT...' : whitelisted ? 'CREATE ACCOUNT' : 'ACTIVATE PHOENIX'}
