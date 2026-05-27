@@ -16,8 +16,6 @@ import { addClientBreadcrumb } from '../lib/clientLogger';
 
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
-const CHAIN_BADGE = { base: 'BASE', arbitrum: 'ARB', monad: 'MON', solana: 'SOL', aptos: 'APT' };
-
 function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
   if (!s) return '';
@@ -97,7 +95,7 @@ export default function CustodialMarketplacePanel({
   const stats = useMemo(() => {
     const volumeUnits = remoteStats?.volumeUsdcUnits != null
       ? usdcUnitsBigInt(remoteStats.volumeUsdcUnits)
-      : listings.reduce((sum, order) => sum + usdcUnitsBigInt(order?.priceUsdcUnits), 0n);
+      : 0n;
     const prices = listings.map((order) => usdcUnitsBigInt(order?.priceUsdcUnits)).filter((price) => price > 0n);
     const floorUnits = remoteStats?.floorUsdcUnits != null
       ? usdcUnitsBigInt(remoteStats.floorUsdcUnits)
@@ -208,10 +206,15 @@ export default function CustodialMarketplacePanel({
   useEffect(() => { if (view === 'orders') loadOrders(); }, [view, loadOrders]);
   useEffect(() => { if (view === 'sell') loadOwned(); }, [view, loadOwned]);
   useEffect(() => {
-    if (buyTarget?.assetChain && supportedDestinations.includes(buyTarget.assetChain)) {
-      setDeliveryChain(buyTarget.assetChain);
-    }
-  }, [buyTarget, supportedDestinations]);
+    if (!buyTarget || !supportedDestinations.length) return;
+    const connected = supportedDestinations.find((chain) => walletForChain(chain, walletMap));
+    const fallback = connected || supportedDestinations[0];
+    setDeliveryChain((prev) => (
+      supportedDestinations.includes(prev) && walletForChain(prev, walletMap)
+        ? prev
+        : fallback
+    ));
+  }, [buyTarget, supportedDestinations, walletMap]);
 
   const connectForChain = useCallback(async (chain) => {
     try {
@@ -408,7 +411,6 @@ export default function CustodialMarketplacePanel({
             <img src={orderImage(buyTarget)} alt="" style={s.modalImg} />
             <div style={s.breakdown}>
               <span>Price</span><b>{orderPrice(buyTarget)}</b>
-              <span>Listed on</span><b>{CHAIN_LABEL[buyTarget.assetChain] || buyTarget.assetChain}</b>
               <span>Pay chain</span>
               <ChipRow
                 chains={supportedPayments}
@@ -454,19 +456,6 @@ export default function CustodialMarketplacePanel({
 
 function Tab({ label, active, onClick }) {
   return <button type="button" onClick={onClick} style={{ ...s.tab, ...(active ? s.tabActive : null) }}>{label}</button>;
-}
-
-function ChainBadge({ chain }) {
-  return <span style={s.chainBadge}>{CHAIN_BADGE[chain] || String(chain || '').toUpperCase()}</span>;
-}
-
-function StandardLabel({ standard }) {
-  const value = String(standard || '').toLowerCase();
-  if (!value) return null;
-  if (value.includes('mpl-core')) return <span style={s.standardLabel}>Core</span>;
-  if (value.includes('token2022')) return <span style={s.standardLabel}>Token-2022</span>;
-  if (value.includes('erc')) return <span style={s.standardLabel}>EVM</span>;
-  return <span style={s.standardLabel}>{standard}</span>;
 }
 
 function ChipRow({ chains, value, setValue, walletMap, onConnectChain, busy }) {
@@ -522,7 +511,6 @@ function BrowseView({ listings, loading, walletMap, onBuy, onOwnListing }) {
                 <div style={s.imgWrap}>
                   <img src={orderImage(order)} alt="" style={s.img} onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }} />
                   <span style={s.level}>L{order.level || 1}</span>
-                  <span style={s.chainBadgeFloat}><ChainBadge chain={order.assetChain} /></span>
                 </div>
                 <div style={s.cardLine}><b>{shortAddr(order.assetId, 4, 4)}</b><span>{orderPrice(order)}</span></div>
                 <div style={s.cardSub}>Seller {shortAddr(order.sellerWallet, 4, 4)}</div>
@@ -560,7 +548,7 @@ function SellView({ ready, config, owned, loading, supportedAssets, walletMap, s
             return (
               <button key={key} type="button" onClick={() => setSelectedAsset(key)} style={{ ...s.nftPick, ...(active ? s.nftPickActive : null) }}>
                 <img src={nft.imageUrl || nftLevelImageUrl(nft.level || 1, id)} alt="" style={s.nftPickImg} />
-                <span style={s.nftPickChain}><ChainBadge chain={nft.chain} /> <StandardLabel standard={nft.standard} /></span>
+                <span style={s.nftPickChain}>Level {nft.level || 1}</span>
                 <span>{shortAddr(id, 4, 4)}</span>
               </button>
             );
@@ -600,7 +588,7 @@ function OrdersView({ orders, loading, walletMap, busy, onCancel }) {
           <div key={order.id} style={s.orderRow}>
             <img src={orderImage(order)} alt="" style={s.orderImg} />
             <div style={s.orderMain}>
-              <b>{orderPrice(order)} <ChainBadge chain={order.assetChain} /></b>
+              <b>{orderPrice(order)}</b>
               <span>{shortAddr(order.assetId, 6, 5)} - {order.status}</span>
               {order.paymentTxHash && <span>payment {shortAddr(order.paymentTxHash, 8, 6)}</span>}
               {order.deliveryTxHash && <span>delivery {shortAddr(order.deliveryTxHash, 8, 6)}</span>}
@@ -638,9 +626,6 @@ const s = {
   imgWrap: { position: 'relative', aspectRatio: '1 / 1', borderRadius: 8, overflow: 'hidden', background: '#fff', border: '2px solid #d4c8b0' },
   img: { width: '100%', height: '100%', objectFit: 'cover' },
   level: { position: 'absolute', top: 4, right: 4, padding: '2px 5px', borderRadius: 5, background: '#5C3A21', color: '#fff7df', fontSize: 10, fontWeight: 900 },
-  chainBadgeFloat: { position: 'absolute', top: 4, left: 4 },
-  chainBadge: { display: 'inline-flex', alignItems: 'center', padding: '2px 5px', borderRadius: 5, background: '#2d5a85', color: '#fff', fontSize: 9, fontWeight: 900 },
-  standardLabel: { display: 'inline-flex', alignItems: 'center', padding: '2px 5px', borderRadius: 5, background: '#efe3c8', color: '#5C3A21', fontSize: 9, fontWeight: 900 },
   cardLine: { display: 'flex', justifyContent: 'space-between', gap: 4, fontSize: 12, color: '#5C3A21' },
   cardSub: { fontSize: 10, color: '#7a5a30', fontWeight: 700 },
   cardBtn: { padding: '7px 10px', borderRadius: 8, border: '2px solid #4a8f2c', background: '#7ce04a', color: '#1a3d0a', fontWeight: 900, cursor: 'pointer' },

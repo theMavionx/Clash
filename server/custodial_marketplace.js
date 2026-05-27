@@ -1541,14 +1541,20 @@ function mountCustodialMarketplace(router, ctx = {}) {
         LIMIT ? OFFSET ?
       `).all(...params, limit, offset);
       const total = gameDb.db.prepare(`SELECT COUNT(*) AS c FROM custodial_marketplace_orders ${sqlWhere}`).get(...params)?.c || 0;
-      const stats = gameDb.db.prepare(`
+      const assetStatsSql = assetChain ? 'AND asset_chain = ?' : '';
+      const assetStatsParams = assetChain ? [assetChain] : [];
+      const activeStats = gameDb.db.prepare(`
         SELECT
           COUNT(*) AS listed_count,
-          COALESCE(SUM(CAST(price_usdc_units AS INTEGER)), 0) AS volume_usdc_units,
           MIN(CAST(price_usdc_units AS INTEGER)) AS floor_usdc_units
         FROM custodial_marketplace_orders
-        ${sqlWhere}
-      `).get(...params) || {};
+        WHERE status = 'active' ${assetStatsSql}
+      `).get(...assetStatsParams) || {};
+      const salesStats = gameDb.db.prepare(`
+        SELECT COALESCE(SUM(CAST(price_usdc_units AS INTEGER)), 0) AS volume_usdc_units
+        FROM custodial_marketplace_orders
+        WHERE status = 'delivered' ${assetStatsSql}
+      `).get(...assetStatsParams) || {};
       res.set('Cache-Control', 'no-store');
       res.json({
         listings: rows.map((r) => publicOrder(r)),
@@ -1556,9 +1562,9 @@ function mountCustodialMarketplace(router, ctx = {}) {
         limit,
         offset,
         stats: {
-          listedCount: Number(stats.listed_count || total || 0),
-          volumeUsdcUnits: String(stats.volume_usdc_units || '0'),
-          floorUsdcUnits: stats.floor_usdc_units == null ? null : String(stats.floor_usdc_units),
+          listedCount: Number(activeStats.listed_count || total || 0),
+          volumeUsdcUnits: String(salesStats.volume_usdc_units || '0'),
+          floorUsdcUnits: activeStats.floor_usdc_units == null ? null : String(activeStats.floor_usdc_units),
         },
       });
     } catch (err) {
