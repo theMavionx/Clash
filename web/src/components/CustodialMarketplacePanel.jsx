@@ -256,9 +256,15 @@ export default function CustodialMarketplacePanel({
     if (!order) return;
     addClientBreadcrumb('marketplace.custodial.buy.open', { orderId: order?.id });
     setBuyTarget(order);
-    if (order.paymentChain && supportedPayments.includes(order.paymentChain)) setPaymentChain(order.paymentChain);
+    if (order.status === 'reserved' && order.paymentChain && supportedPayments.includes(order.paymentChain)) {
+      setPaymentChain(order.paymentChain);
+    } else {
+      const connectedPayment = supportedPayments.find((chain) => walletForChain(chain, walletMap));
+      const fallbackPayment = connectedPayment || supportedPayments[0];
+      if (fallbackPayment) setPaymentChain(fallbackPayment);
+    }
     if (order.buyerDestChain && supportedDestinations.includes(order.buyerDestChain)) setDeliveryChain(order.buyerDestChain);
-  }, [supportedDestinations, supportedPayments]);
+  }, [supportedDestinations, supportedPayments, walletMap]);
 
   const handleCreateListing = useCallback(async () => {
     if (!sessionToken) { setNotice('Game session is not ready.'); return; }

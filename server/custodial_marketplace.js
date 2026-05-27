@@ -289,6 +289,35 @@ function backfillOpenOrderFees() {
   if (changed) console.log(`[custodial-marketplace] backfilled marketplace fees for ${changed} open order(s)`);
 }
 
+function clearReleasedReservationPaymentState() {
+  const info = gameDb.db.prepare(`
+    UPDATE custodial_marketplace_orders
+       SET payment_chain = 'base',
+           payment_token = 'usdc',
+           payment_token_address = NULL,
+           payment_decimals = 6,
+           payment_label = 'USDC',
+           payment_treasury = NULL,
+           payment_amount_usdc_units = NULL,
+           payment_nonce = NULL,
+           payment_deadline = NULL,
+           buyer_wallet = NULL,
+           buyer_dest_chain = NULL,
+           buyer_dest_address = NULL,
+           error = NULL,
+           updated_at = datetime('now')
+     WHERE status = 'active'
+       AND buyer_player_id IS NULL
+       AND (
+         payment_amount_usdc_units IS NOT NULL
+         OR payment_deadline IS NOT NULL
+         OR payment_treasury IS NOT NULL
+       )
+  `).run();
+  if (info.changes) console.log(`[custodial-marketplace] cleared stale payment reservation state for ${info.changes} active order(s)`);
+  return info.changes || 0;
+}
+
 function listEvents(orderId) {
   return gameDb.db.prepare(`
     SELECT event_type, actor_player_id, tx_hash, data_json, created_at
@@ -1390,6 +1419,7 @@ function canCancelStatus(order) {
 }
 
 function releaseExpiredReservations() {
+  let changed = clearReleasedReservationPaymentState();
   const expired = gameDb.db.prepare(`
     SELECT id FROM custodial_marketplace_orders
     WHERE status = 'reserved'
@@ -1397,7 +1427,7 @@ function releaseExpiredReservations() {
       AND payment_deadline < ?
     LIMIT 200
   `).all(nowSec());
-  if (!expired.length) return 0;
+  if (!expired.length) return changed;
   gameDb.db.transaction(() => {
     const update = gameDb.db.prepare(`
       UPDATE custodial_marketplace_orders
@@ -1406,6 +1436,12 @@ function releaseExpiredReservations() {
              buyer_wallet = NULL,
              buyer_dest_chain = NULL,
              buyer_dest_address = NULL,
+             payment_chain = 'base',
+             payment_token = 'usdc',
+             payment_token_address = NULL,
+             payment_decimals = 6,
+             payment_label = 'USDC',
+             payment_treasury = NULL,
              payment_amount_usdc_units = NULL,
              payment_nonce = NULL,
              payment_deadline = NULL,
@@ -1418,7 +1454,8 @@ function releaseExpiredReservations() {
       insertEvent(row.id, 'reservation_expired', { data: { releasedAt: nowSec() } });
     }
   })();
-  return expired.length;
+  changed += expired.length;
+  return changed;
 }
 
 function settlementRetrySeconds() {
@@ -1518,6 +1555,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
   const adminAuth = ctx.adminAuth;
   if (!auth) throw new Error('auth middleware required');
   backfillOpenOrderFees();
+  clearReleasedReservationPaymentState();
   startSettlementWorker(ctx);
 
   router.get('/marketplace/custodial/config', async (req, res) => {
@@ -1831,6 +1869,12 @@ function mountCustodialMarketplace(router, ctx = {}) {
                  buyer_wallet = NULL,
                  buyer_dest_chain = NULL,
                  buyer_dest_address = NULL,
+                 payment_chain = 'base',
+                 payment_token = 'usdc',
+                 payment_token_address = NULL,
+                 payment_decimals = 6,
+                 payment_label = 'USDC',
+                 payment_treasury = NULL,
                  payment_amount_usdc_units = NULL,
                  payment_nonce = NULL,
                  payment_deadline = NULL,
