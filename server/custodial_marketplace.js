@@ -27,6 +27,7 @@ const APTOS_TOKEN_TYPE = '0x4::token::Token';
 const SOLANA_MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 let settlementWorkerStarted = false;
 let settlementWorkerRunning = false;
+let depositVerifierRunning = false;
 
 const EVM_CHAIN_META = {
   base: { chainId: 8453, label: 'Base', rpcEnv: ['MARKETPLACE_BASE_RPC_URL', 'GAME_SHOP_BASE_RPC_URL', 'BASE_RPC_URL', 'NFT_BASE_RPC_URL'], rpcDefault: 'https://mainnet.base.org' },
@@ -98,6 +99,23 @@ function normalizeAddressForChain(chain, value, label = 'wallet') {
   if (chain === 'solana') return normalizeSolanaPubkey(value, label);
   if (chain === 'aptos') return normalizeAptosWallet(value, label);
   throw httpError(400, `Unsupported chain ${chain}`);
+}
+
+function normalizeAssetIdForChain(chain, value, label = 'assetId') {
+  const raw = String(value || '').trim();
+  if (!raw) throw httpError(400, `${label} required`);
+  if (isEvmChain(chain)) {
+    try {
+      const tokenId = BigInt(raw);
+      if (tokenId < 0n) throw new Error('negative');
+      return tokenId.toString();
+    } catch {
+      throw httpError(400, `${label} is malformed`);
+    }
+  }
+  if (chain === 'solana') return normalizeSolanaPubkey(raw, label);
+  if (chain === 'aptos') return normalizeAptosWallet(raw, label);
+  return raw;
 }
 
 function parseUsdcUnits(value, label = 'USDC amount') {
@@ -174,6 +192,41 @@ function insertEvent(orderId, eventType, { actorPlayerId = null, txHash = null, 
 
 function getOrder(orderId) {
   return gameDb.db.prepare('SELECT * FROM custodial_marketplace_orders WHERE id = ?').get(String(orderId || '')) || null;
+}
+
+function getOpenOrderByAsset(assetChain, assetId) {
+  return gameDb.db.prepare(`
+    SELECT * FROM custodial_marketplace_orders
+    WHERE asset_chain = ?
+      AND asset_id = ?
+      AND status IN ('awaiting_deposit', 'active', 'reserved', 'paid', 'delivering')
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `).get(assetChain, assetId) || null;
+}
+
+function markOrderDepositVerified(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
+  gameDb.db.transaction(() => {
+    gameDb.db.prepare(`
+      UPDATE custodial_marketplace_orders
+         SET status = 'active',
+             deposit_tx_hash = COALESCE(?, deposit_tx_hash),
+             deposit_verified_at = COALESCE(deposit_verified_at, datetime('now')),
+             error = NULL,
+             updated_at = datetime('now')
+       WHERE id = ? AND status = 'awaiting_deposit'
+    `).run(txHash, order.id);
+    insertEvent(order.id, eventType, { actorPlayerId, txHash, data: { vault: order.vault_address } });
+  })();
+  return getOrder(order.id);
+}
+
+async function activateOrderIfVaultOwnsAsset(order, { actorPlayerId = null, txHash = null, eventType = 'deposit_verified' } = {}) {
+  if (!order) return null;
+  if (order.status === 'active') return order;
+  if (order.status !== 'awaiting_deposit') return null;
+  await verifyAssetOwner(order.asset_chain, order.asset_id, order.vault_address);
+  return markOrderDepositVerified(order, { actorPlayerId, txHash, eventType });
 }
 
 function backfillOpenOrderFees() {
@@ -1403,11 +1456,40 @@ async function runSettlementSweep(ctx) {
   }
 }
 
+async function runDepositVerificationSweep() {
+  if (depositVerifierRunning) return;
+  depositVerifierRunning = true;
+  try {
+    const rows = gameDb.db.prepare(`
+      SELECT * FROM custodial_marketplace_orders
+      WHERE status = 'awaiting_deposit'
+      ORDER BY updated_at ASC
+      LIMIT 50
+    `).all();
+    let verified = 0;
+    for (const row of rows) {
+      try {
+        const updated = await activateOrderIfVaultOwnsAsset(row, { eventType: 'deposit_auto_verified' });
+        if (updated?.status === 'active') verified += 1;
+      } catch (err) {
+        if (Number(err?.status) !== 403 && Number(err?.status) !== 400 && Number(err?.status) !== 404) {
+          console.warn(`[custodial-marketplace] deposit auto verify failed for ${row.id}:`, err?.message || err);
+        }
+      }
+    }
+    if (verified) console.log(`[custodial-marketplace] auto-verified ${verified} custodial deposit(s)`);
+  } finally {
+    depositVerifierRunning = false;
+  }
+}
+
 function startSettlementWorker(ctx) {
   if (settlementWorkerStarted || process.env.CUSTODIAL_MARKETPLACE_SETTLEMENT_WORKER === '0') return;
   settlementWorkerStarted = true;
   const intervalMs = Math.max(30_000, Math.min(15 * 60_000, Number(process.env.CUSTODIAL_MARKETPLACE_SETTLEMENT_INTERVAL_MS || 60_000) || 60_000));
+  setTimeout(() => runDepositVerificationSweep().catch(() => {}), 5_000).unref?.();
   setTimeout(() => runSettlementSweep(ctx).catch(() => {}), 10_000).unref?.();
+  setInterval(() => runDepositVerificationSweep().catch(() => {}), intervalMs).unref?.();
   setInterval(() => runSettlementSweep(ctx).catch(() => {}), intervalMs).unref?.();
   console.log(`[custodial-marketplace] settlement worker scheduled every ${intervalMs}ms`);
 }
@@ -1508,13 +1590,36 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const vault = config.vaults[assetChain];
       if (!vault?.address) throw httpError(503, `${shortLabel(assetChain)} custody vault is not configured`);
       const sellerWallet = normalizeAddressForChain(assetChain, req.body?.sellerWallet || req.body?.owner || req.player.wallet, 'Seller wallet');
-      const assetId = String(req.body?.assetId || req.body?.mint || req.body?.tokenId || req.body?.tokenAddress || '').trim();
-      if (!assetId) throw httpError(400, 'assetId required');
+      const assetId = normalizeAssetIdForChain(assetChain, req.body?.assetId || req.body?.mint || req.body?.tokenId || req.body?.tokenAddress || '', 'assetId');
       const payoutChain = normalizeChain(req.body?.sellerPayoutChain || assetChain, 'sellerPayoutChain');
       const payoutAddress = normalizeAddressForChain(payoutChain, req.body?.sellerPayoutAddress || sellerWallet, 'Seller payout wallet');
       const priceUnits = parseUsdcUnits(req.body?.priceUsdc ?? req.body?.price, 'Listing price');
       const { fee, royalty, sellerAmount } = quoteMarketplaceSplit(priceUnits, config.feeBps, config.royaltyBps);
       if (sellerAmount <= 0n) throw httpError(400, 'Listing price is too small after marketplace fee and royalty');
+      const existing = getOpenOrderByAsset(assetChain, assetId);
+      if (existing) {
+        if (String(existing.seller_player_id || '') !== String(req.player.id || '')) {
+          throw httpError(409, 'This NFT already has an active custodial listing');
+        }
+        if (existing.status === 'awaiting_deposit') {
+          try {
+            const activated = await activateOrderIfVaultOwnsAsset(existing, {
+              actorPlayerId: req.player.id,
+              eventType: 'deposit_verified_on_relist',
+            });
+            if (activated?.status === 'active') {
+              return res.json({ success: true, resumed: true, order: publicOrder(activated, { includePrivate: true }) });
+            }
+          } catch (err) {
+            if (Number(err?.status) !== 403) throw err;
+          }
+          return res.status(409).json({
+            error: 'This NFT already has a pending listing. Finish the custody transfer or cancel it from Orders.',
+            order: publicOrder(existing, { includePrivate: true }),
+          });
+        }
+        return res.json({ success: true, alreadyListed: true, order: publicOrder(existing, { includePrivate: true }) });
+      }
       const assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
@@ -1571,19 +1676,8 @@ function mountCustodialMarketplace(router, ctx = {}) {
       if (order.status === 'active') return res.json({ success: true, alreadyVerified: true, order: publicOrder(order, { includePrivate: true }) });
       if (order.status !== 'awaiting_deposit') throw httpError(409, `Listing is ${order.status}`);
       const txHash = String(req.body?.txHash || req.body?.txSignature || '').trim() || null;
-      await verifyAssetOwner(order.asset_chain, order.asset_id, order.vault_address);
-      gameDb.db.transaction(() => {
-        gameDb.db.prepare(`
-          UPDATE custodial_marketplace_orders
-             SET status = 'active',
-                 deposit_tx_hash = COALESCE(?, deposit_tx_hash),
-                 deposit_verified_at = datetime('now'),
-                 updated_at = datetime('now')
-           WHERE id = ? AND status = 'awaiting_deposit'
-        `).run(txHash, order.id);
-        insertEvent(order.id, 'deposit_verified', { actorPlayerId: req.player.id, txHash, data: { vault: order.vault_address } });
-      })();
-      res.json({ success: true, order: publicOrder(getOrder(order.id), { includePrivate: true }) });
+      const updated = await activateOrderIfVaultOwnsAsset(order, { actorPlayerId: req.player.id, txHash });
+      res.json({ success: true, order: publicOrder(updated || getOrder(order.id), { includePrivate: true }) });
     } catch (err) {
       const code = err?.code || '';
       res.status(err?.status || (code.includes('SQLITE_CONSTRAINT') ? 409 : 500)).json({ error: (err?.message || 'deposit verify failed').slice(0, 240) });

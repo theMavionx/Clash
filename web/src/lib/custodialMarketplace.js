@@ -31,7 +31,7 @@ async function apiJson(url, { method = 'GET', token, body, signal } = {}) {
     cache: 'no-store',
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error || `${url} failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(json?.error || `${url} failed (${res.status})`), { status: res.status, body: json });
   return json;
 }
 

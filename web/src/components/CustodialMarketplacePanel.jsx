@@ -256,16 +256,23 @@ export default function CustodialMarketplacePanel({
         sellerPayoutAddress: payoutAddress,
         priceUsdc: priceInput,
       });
-      const deposited = await depositNftToCustody({
-        evmWallet,
-        solWallet,
-        aptosWallet,
-        token: sessionToken,
-        order: created.order,
-        nft: selectedNft,
-        owner: sellerWallet,
-      });
-      setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+      const order = created.order;
+      if (order?.status === 'awaiting_deposit' && !created.resumed && !created.alreadyListed) {
+        const deposited = await depositNftToCustody({
+          evmWallet,
+          solWallet,
+          aptosWallet,
+          token: sessionToken,
+          order,
+          nft: selectedNft,
+          owner: sellerWallet,
+        });
+        setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
+      } else if (created.resumed) {
+        setNotice('Listing resumed. NFT custody is already verified.');
+      } else {
+        setNotice('This NFT is already listed.');
+      }
       addClientBreadcrumb('marketplace.custodial.list.success', { orderId: created.order?.id, assetChain, assetId });
       setPriceInput('');
       setView('orders');
