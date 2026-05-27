@@ -3209,6 +3209,7 @@ async function loadShop() {
       '<div class="stat"><div class="v">' + (s.total_purchases || 0) + '</div><div class="l">Total purchases</div></div>' +
       '<div class="stat" style="border-color:#22c55e"><div class="v" style="color:#4ade80">' + fmtUsd(s.total_revenue_usd) + '</div><div class="l">Total revenue</div></div>' +
       '<div class="stat" style="border-color:#0ea5e9"><div class="v" style="color:#38bdf8">' + (s.unique_buyers || 0) + '</div><div class="l">Unique buyers</div></div>' +
+      '<div class="stat" style="border-color:#f59e0b"><div class="v" style="color:#fbbf24">' + (s.altar_purchases || 0) + '</div><div class="l">Altar bought</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_1h_purchases || 0) + '</div><div class="l">1h purchases</div></div>' +
       '<div class="stat"><div class="v">' + (s.last_24h_purchases || 0) + '</div><div class="l">24h purchases</div></div>' +
       '<div class="stat"><div class="v" style="color:#4ade80">' + fmtUsd(s.last_24h_revenue_usd) + '</div><div class="l">24h revenue</div></div>' +

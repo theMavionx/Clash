@@ -93,6 +93,10 @@ const SHOP_TABS = [
   { id: 'marketplace', label: 'Marketplace',    mobileLabel: 'Market' },
 ];
 
+const GAME_RESOURCE_PRODUCT_PRIORITY = {
+  altar: 0,
+};
+
 const CHAIN_OPTIONS = [
   { id: 'base', title: 'Base', subtitle: 'ETH / USDC / CoP', badge: 'EVM' },
   { id: 'solana', title: 'Solana', subtitle: 'SOL / USDC / SKR', badge: 'SOL' },
@@ -534,6 +538,8 @@ function NftMintPanel({ onClose, initialView = 'shop', initialUpgradeRequest = n
   const sessionToken = player?.token || (typeof window !== 'undefined' ? window._playerToken : null);
   const gameProducts = (gameShopConfig?.products || []).filter((product) => (
     product.kind !== 'ai_messages' && product.kind !== 'ai_subscription'
+  )).sort((a, b) => (
+    (GAME_RESOURCE_PRODUCT_PRIORITY[a.id] ?? 10) - (GAME_RESOURCE_PRODUCT_PRIORITY[b.id] ?? 10)
   ));
   // Game resource purchases use their own chain selector. The player's DEX
   // only seeds the first choice; after that, the shop chain is independent.

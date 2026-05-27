@@ -407,14 +407,15 @@ async function completeExistingToken2022NftMint({
 
 async function getToken2022NftInfo({ mint, expectedOwner, connection = null, collectionPubkey = null } = {}) {
   if (!mint) throw new Error('mint required');
-  if (!expectedOwner) throw new Error('expectedOwner required');
   const conn = connection || createSolanaConnection(Connection, solanaRpcUrl(), 'confirmed');
   const mintPk = new PublicKey(mint);
-  const ownerPk = new PublicKey(expectedOwner);
+  const ownerPk = expectedOwner ? new PublicKey(expectedOwner) : null;
   const [meta, mintInfo, accounts] = await Promise.all([
     getTokenMetadata(conn, mintPk, 'confirmed', TOKEN_2022_PROGRAM_ID).catch(() => null),
     getMint(conn, mintPk, 'confirmed', TOKEN_2022_PROGRAM_ID).catch(() => null),
-    conn.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, 'confirmed'),
+    ownerPk
+      ? conn.getParsedTokenAccountsByOwner(ownerPk, { mint: mintPk }, 'confirmed')
+      : Promise.resolve({ value: [] }),
   ]);
   if (!token2022LooksLikeDemonKing(meta)) {
     throw new Error('Solana Token-2022 mint is not a Demon King NFT');
@@ -428,21 +429,27 @@ async function getToken2022NftInfo({ mint, expectedOwner, connection = null, col
   let tokenAccount = (accounts.value || []).find((row) => {
     const parsed = row?.account?.data?.parsed?.info;
     return String(parsed?.mint || '') === mintPk.toBase58()
-      && String(parsed?.owner || '') === ownerPk.toBase58()
+      && String(parsed?.owner || '') === ownerPk?.toBase58?.()
       && String(parsed?.tokenAmount?.amount || '') === '1'
       && Number(parsed?.tokenAmount?.decimals) === 0;
   });
+  let actualOwner = ownerPk?.toBase58?.() || '';
   if (!tokenAccount) {
     const largest = await conn.getTokenLargestAccounts(mintPk, 'confirmed').catch(() => null);
     const holder = (largest?.value || []).find((row) => String(row?.amount || '') === '1' && Number(row?.decimals) === 0);
     if (holder?.address) {
       const holderAccount = await conn.getParsedAccountInfo(holder.address, 'confirmed').catch(() => null);
       const parsed = holderAccount?.value?.data?.parsed?.info;
-      const actualOwner = String(parsed?.owner || '');
-      if (actualOwner === ownerPk.toBase58()) {
+      actualOwner = String(parsed?.owner || actualOwner || '');
+      if (!ownerPk || actualOwner === ownerPk.toBase58()) {
         tokenAccount = { pubkey: holder.address, account: holderAccount.value };
       } else if (actualOwner) {
-        throw new Error(`Solana source wallet is not the asset owner (on-chain owner ${actualOwner})`);
+        const err = new Error(`Solana source wallet is not the asset owner (expected ${ownerPk.toBase58()}, on-chain owner ${actualOwner})`);
+        err.status = 403;
+        err.code = 'SOLANA_OWNER_MISMATCH';
+        err.expectedOwner = ownerPk.toBase58();
+        err.actualOwner = actualOwner;
+        throw err;
       }
     }
   }
@@ -452,7 +459,7 @@ async function getToken2022NftInfo({ mint, expectedOwner, connection = null, col
     asset: mintPk.toBase58(),
     mint: mintPk.toBase58(),
     tokenAccount: tokenAccount.pubkey.toBase58(),
-    owner: ownerPk.toBase58(),
+    owner: actualOwner || ownerPk?.toBase58?.() || '',
     collection: collectionPubkey || mintPk.toBase58(),
     level: levelFromToken2022Metadata(meta),
     metadata: meta,

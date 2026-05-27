@@ -10636,6 +10636,13 @@ router.get('/admin/shop', adminAuth, (req, res) => {
         last_at: row.last_at,
       };
     });
+    const altarStats = bySkuEnriched.find((row) => row.sku === 'altar') || {
+      purchases: 0,
+      unique_buyers: 0,
+      revenue_usd: 0,
+      first_at: null,
+      last_at: null,
+    };
 
     // Per-player rollup. The buyer's display name comes from the players
     // table; players who deleted their account leave a NULL name and we
@@ -10706,6 +10713,11 @@ router.get('/admin/shop', adminAuth, (req, res) => {
         last_24h_purchases: windowed.h24 || 0,
         last_7d_purchases: windowed.d7 || 0,
         last_24h_revenue_usd: (Number(windowed.h24_usd_e6) || 0) / 1_000_000,
+        altar_purchases: altarStats.purchases || 0,
+        altar_unique_buyers: altarStats.unique_buyers || 0,
+        altar_revenue_usd: altarStats.revenue_usd || 0,
+        altar_first_at: altarStats.first_at || null,
+        altar_last_at: altarStats.last_at || null,
       },
       by_sku: bySkuEnriched,
       top_buyers: topBuyers,

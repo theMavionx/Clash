@@ -570,12 +570,26 @@ function bridgeBadRequest(message) {
   return err;
 }
 
+function bridgeForbidden(message) {
+  const err = new Error(message);
+  err.status = 403;
+  return err;
+}
+
 function normalizeSolanaPubkey(value, label) {
   try {
     const { PublicKey } = require('@solana/web3.js');
     return new PublicKey(String(value || '').trim()).toBase58();
   } catch {
     throw bridgeBadRequest(`${label || 'Solana public key'} is malformed`);
+  }
+}
+
+function normalizeSolanaPubkeySafe(value) {
+  try {
+    return normalizeSolanaPubkey(value, 'Solana public key');
+  } catch {
+    return '';
   }
 }
 
@@ -709,12 +723,12 @@ async function getSolanaBridgeAssetInfo(assetPubkey, expectedOwner, opts = {}) {
     throw bridgeBadRequest(`Solana asset is not in the ${collectionLabel} collection`);
   }
   const selected = sourceOwner
-    ? collectionReads.find((row) => String(row.owner) === String(sourceOwner))
+    ? collectionReads.find((row) => normalizeSolanaPubkeySafe(row.owner) === sourceOwner)
     : collectionReads[0];
   if (!selected) {
     const owners = [...new Set(collectionReads.map((row) => String(row.owner || '')).filter(Boolean))].slice(0, 3);
-    const suffix = owners.length ? ` (on-chain owner ${owners.join(', ')})` : '';
-    throw bridgeBadRequest(`Solana source wallet is not the asset owner${suffix}`);
+    const suffix = owners.length ? ` (expected ${sourceOwner}, on-chain owner ${owners.join(', ')})` : '';
+    throw bridgeForbidden(`Solana source wallet is not the asset owner${suffix}`);
   }
   return {
     standard: 'mpl-core',

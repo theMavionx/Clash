@@ -15,6 +15,7 @@ import {
 } from '../lib/custodialMarketplace';
 import { clearDemonKingNftCache, fetchOwnedNfts, nftLevelImageUrl } from '../lib/nftV3Client';
 import { addClientBreadcrumb } from '../lib/clientLogger';
+import { isSolanaMobileWalletAdapter } from '../lib/solanaSeekerTx';
 
 const PAGE_SIZE = 50;
 const CHAIN_LABEL = { base: 'Base', arbitrum: 'Arbitrum', monad: 'Monad', solana: 'Solana', aptos: 'Aptos' };
@@ -34,6 +35,24 @@ function shortAddr(value, head = 5, tail = 4) {
   const s = String(value || '');
   if (!s) return '';
   return s.length <= head + tail + 3 ? s : `${s.slice(0, head)}...${s.slice(-tail)}`;
+}
+
+function rawErrorMessage(err) {
+  return err?.shortMessage || err?.message || String(err || '');
+}
+
+function listingErrorMessage(err, solWallet) {
+  const base = rawErrorMessage(err);
+  const text = [
+    base,
+    err?.name,
+    err?.code,
+    err?.cause?.message,
+  ].filter(Boolean).join('\n');
+  if (!isSolanaMobileWalletAdapter(solWallet)) return base;
+  if (/user rejected|rejected the request|denied|cancelled|canceled|declined/i.test(text)) return base;
+  if (!/mobile wallet adapter|seeker|seed vault|local network|network access|wallet not found|browser not supported|unknown|simulate|simulation|signandsend|sign and send|authorization|association/i.test(text)) return base;
+  return 'Seeker wallet could not finish this Solana listing. Use Android Chrome/PWA, allow Local Network Access, and if the wallet shows Unknown, enable "I trust this site" before confirming.';
 }
 
 function orderImage(order) {
@@ -67,6 +86,19 @@ function walletForChain(chain, { evmAddress, solAddress, aptosAddress }) {
   if (chain === 'solana') return solAddress || '';
   if (chain === 'aptos') return aptosAddress || '';
   return '';
+}
+
+function tokenOwnerHint(token) {
+  return String(token?.owner || token?.ownerAddress || token?.wallet || token?.ownerWallet || '').trim();
+}
+
+function chainAddressEqual(chain, a, b) {
+  const left = String(a || '').trim();
+  const right = String(b || '').trim();
+  if (!left || !right) return false;
+  return CUSTODIAL_EVM_CHAIN_IDS[chain] || chain === 'aptos'
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
 }
 
 function reservationDeadlineMs(order) {
@@ -288,7 +320,11 @@ export default function CustodialMarketplacePanel({
         const address = walletForChain(chain, walletMap);
         const json = await fetchOwnedNfts({ chain, address });
         return (Array.isArray(json?.tokens) ? json.tokens : [])
-          .map((token) => ({ ...token, chain: token.chain || chain }));
+          .map((token) => ({
+            ...token,
+            chain: token.chain || chain,
+            owner: tokenOwnerHint(token) || json?.owner || address,
+          }));
       }));
       const tokensByKey = new Map();
       const errors = [];
@@ -531,14 +567,14 @@ export default function CustodialMarketplacePanel({
       setNotice(`Listed. Custody tx ${shortAddr(deposited.txHash, 8, 6)} confirmed.`);
       await Promise.all([loadListings(), loadOrders(), loadOwned()]);
     } catch (err) {
-      const msg = err?.shortMessage || err?.message || String(err);
+      const msg = listingErrorMessage(err, solWallet);
       failListingFlow(msg, err?.order || order);
       setNotice(msg.slice(0, 240));
-      addClientBreadcrumb('marketplace.custodial.deposit.failed', { orderId: order?.id, message: msg }, 'warn');
+      addClientBreadcrumb('marketplace.custodial.deposit.failed', { orderId: order?.id, message: rawErrorMessage(err), displayed: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, ownedNftForOrder]);
+  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, ownedNftForOrder, solWallet]);
 
   const handleCreateListing = useCallback(async () => {
     if (!sessionToken) { setNotice('Game session is not ready.'); return; }
@@ -546,8 +582,14 @@ export default function CustodialMarketplacePanel({
     if (!selectedNft) { setNotice('Pick a Demon King NFT.'); return; }
     const assetChain = selectedNft.chain;
     const assetId = tokenAssetId(selectedNft);
-    const sellerWallet = walletForChain(assetChain, walletMap);
-    if (!sellerWallet) { setNotice(`Connect ${CHAIN_LABEL[assetChain] || assetChain} wallet to sell.`); return; }
+    const connectedSellerWallet = walletForChain(assetChain, walletMap);
+    if (!connectedSellerWallet) { setNotice(`Connect ${CHAIN_LABEL[assetChain] || assetChain} wallet to sell.`); return; }
+    const ownerHint = tokenOwnerHint(selectedNft);
+    if (ownerHint && !chainAddressEqual(assetChain, ownerHint, connectedSellerWallet)) {
+      setNotice(`Connected ${CHAIN_LABEL[assetChain] || assetChain} wallet ${shortAddr(connectedSellerWallet, 6, 4)} is not the NFT owner ${shortAddr(ownerHint, 6, 4)}.`);
+      return;
+    }
+    const sellerWallet = ownerHint || connectedSellerWallet;
     const payoutChain = supportedPayments.includes(assetChain) ? assetChain : supportedPayments[0] || 'base';
     const payoutAddress = walletForChain(payoutChain, walletMap);
     if (!payoutAddress) { setNotice(`Connect ${CHAIN_LABEL[payoutChain] || payoutChain} wallet for payout.`); return; }
@@ -632,14 +674,14 @@ export default function CustodialMarketplacePanel({
       setView('orders');
       await Promise.all([loadListings(), loadOrders(), loadOwned()]);
     } catch (err) {
-      const msg = err?.shortMessage || err?.message || String(err);
+      const msg = listingErrorMessage(err, solWallet);
       failListingFlow(msg, err?.order || null);
       setNotice(msg.slice(0, 240));
-      addClientBreadcrumb('marketplace.custodial.list.failed', { message: msg }, 'warn');
+      addClientBreadcrumb('marketplace.custodial.list.failed', { message: rawErrorMessage(err), displayed: msg }, 'warn');
     } finally {
       setBusy(null);
     }
-  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, priceInput, ready, selectedNft, sessionToken, supportedPayments, updateListingFlow, walletMap]);
+  }, [depositListingOrder, failListingFlow, loadListings, loadOrders, loadOwned, priceInput, ready, selectedNft, sessionToken, solWallet, supportedPayments, updateListingFlow, walletMap]);
 
   const handleBuy = useCallback(async () => {
     if (!buyTarget) return;

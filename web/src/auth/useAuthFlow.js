@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
+import { SolanaMobileWalletAdapterWalletName } from '@solana-mobile/wallet-standard-mobile';
 import { useSend, useUI } from '../hooks/useGodot';
 import { isDexAvailableInContext, useDex } from '../contexts/DexContext';
 import { useFarcaster, getFarcasterEthProvider } from '../hooks/useFarcaster';
@@ -206,11 +207,21 @@ export function useAuthFlow() {
     seekerAutoConnectTriedRef.current = true;
     if (privyEnabled) return;
     addClientBreadcrumb('wallet.connect_start', { source: 'seeker_mwa', dex });
-    // The adapter name is "Mobile Wallet Adapter". Stable across SDK
-    // versions and matches what `SolanaMobileWalletAdapter` registers as.
-    try { solWallet.select('Mobile Wallet Adapter'); } catch { /* noop */ }
+    const mwaNames = [
+      SolanaMobileWalletAdapterWalletName,
+      'Mobile Wallet Adapter',
+      'Remote Mobile Wallet Adapter',
+    ];
+    const availableMwa = mwaNames.find((name) => (
+      Array.isArray(solWallet.wallets)
+      && solWallet.wallets.some((wallet) => (
+        wallet?.adapter?.name === name
+        || wallet?.name === name
+      ))
+    )) || SolanaMobileWalletAdapterWalletName;
+    try { solWallet.select(availableMwa); } catch { /* noop */ }
     Promise.resolve(solWallet.connect()).then(() => {
-      addClientBreadcrumb('wallet.connect_success', { source: 'seeker_mwa', dex });
+      addClientBreadcrumb('wallet.connect_success', { source: 'seeker_mwa', dex, adapter: availableMwa });
     }).catch(e => {
       // User dismissed the Seed Vault prompt, or no MWA host actually
       // present (we trusted the readyState check but the device rejected).
@@ -219,6 +230,7 @@ export function useAuthFlow() {
       addClientBreadcrumb('wallet.connect_fail', {
         source: 'seeker_mwa',
         dex,
+        adapter: availableMwa,
         message: e?.message || String(e || ''),
       }, 'warn');
       console.warn('[useAuthFlow] Seeker auto-connect failed:', e?.message || e);

@@ -5,8 +5,14 @@ import {
   SolanaMobileWalletAdapter,
   createDefaultAuthorizationResultCache,
   createDefaultAddressSelector,
-  createDefaultWalletNotFoundHandler,
+  createDefaultWalletNotFoundHandler as createLegacyWalletNotFoundHandler,
 } from '@solana-mobile/wallet-adapter-mobile';
+import {
+  createDefaultAuthorizationCache,
+  createDefaultChainSelector,
+  createDefaultWalletNotFoundHandler as createStandardWalletNotFoundHandler,
+  registerMwa,
+} from '@solana-mobile/wallet-standard-mobile';
 import { farcasterDetectPromise } from '../hooks/useFarcaster';
 import { useSolanaMobile } from '../hooks/useSolanaMobile';
 import {
@@ -24,24 +30,73 @@ import {
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-// Mobile Wallet Adapter — registered for every session but only resolves
-// to "Installed" on Saga/Seeker (devices with the Solana Mobile Stack
-// intent handler). On every other host the adapter sits in NotDetected
-// state and never appears in the wallet picker, so plain Android / iOS /
-// desktop users see no behaviour change.
+const SEEKER_MWA_APP_IDENTITY = {
+  name: 'Clash of Perps',
+  uri: 'https://clashofperps.fun',
+  icon: '/icons/icon-512.png',
+};
+
+const standardWalletNotFoundHandler = createStandardWalletNotFoundHandler();
+const legacyWalletNotFoundHandler = createLegacyWalletNotFoundHandler();
+let seekerMwaStandardRegistration = null;
+
+async function handleStandardWalletNotFound(adapter) {
+  addClientBreadcrumb('wallet.mwa.not_found', {
+    source: 'wallet_standard',
+    adapter: adapter?.name || null,
+  }, 'warn');
+  return standardWalletNotFoundHandler(adapter);
+}
+
+async function handleLegacyWalletNotFound(adapter) {
+  addClientBreadcrumb('wallet.mwa.not_found', {
+    source: 'legacy_adapter',
+    adapter: adapter?.name || null,
+  }, 'warn');
+  return legacyWalletNotFoundHandler(adapter);
+}
+
+function ensureSeekerMwaStandardRegistered() {
+  if (seekerMwaStandardRegistration) return seekerMwaStandardRegistration;
+  try {
+    registerMwa({
+      appIdentity: SEEKER_MWA_APP_IDENTITY,
+      authorizationCache: createDefaultAuthorizationCache(),
+      chains: ['solana:mainnet'],
+      chainSelector: createDefaultChainSelector(),
+      onWalletNotFound: handleStandardWalletNotFound,
+    });
+    seekerMwaStandardRegistration = { ok: true };
+    addClientBreadcrumb('wallet.mwa.standard_registered', {
+      package: '@solana-mobile/wallet-standard-mobile',
+      legacy_fallback: true,
+    });
+  } catch (error) {
+    seekerMwaStandardRegistration = {
+      ok: false,
+      message: error?.message || String(error || ''),
+    };
+    addClientBreadcrumb('wallet.mwa.register_fail', {
+      message: seekerMwaStandardRegistration.message,
+      legacy_fallback: true,
+    }, 'warn');
+  }
+  return seekerMwaStandardRegistration;
+}
+
+// Mobile Wallet Adapter is registered after Saga/Seeker detection. Wallet
+// Standard is the preferred path; this legacy adapter stays in the wallet
+// list as a fallback and is filtered out automatically when the standard
+// wallet with the same name is present.
 //
 // `appIdentity` is what shows up in the Seed Vault confirmation popup
 // when the user first authorises the dapp — name + icon + uri.
 const SEEKER_MWA_ADAPTER = new SolanaMobileWalletAdapter({
   addressSelector: createDefaultAddressSelector(),
-  appIdentity: {
-    name: 'Clash of Perps',
-    uri: 'https://clashofperps.fun',
-    icon: '/icons/icon-512.png',
-  },
+  appIdentity: SEEKER_MWA_APP_IDENTITY,
   authorizationResultCache: createDefaultAuthorizationResultCache(),
   chain: 'solana:mainnet',
-  onWalletNotFound: createDefaultWalletNotFoundHandler(),
+  onWalletNotFound: handleLegacyWalletNotFound,
 });
 
 function useBestRpc() {
@@ -143,6 +198,17 @@ export default function WalletProvider({ children }) {
   // the picker fall through to wallet-standard wallets (Phantom, Backpack)
   // that auto-register themselves.
   const { isSolanaMobile, ready: smReady } = useSolanaMobile();
+  const [mwaReady, setMwaReady] = useState(false);
+
+  useEffect(() => {
+    if (!smReady || !isSolanaMobile) return;
+    const result = ensureSeekerMwaStandardRegistered();
+    addClientBreadcrumb('wallet.mwa.registration_ready', {
+      standard_ok: !!result?.ok,
+      legacy_fallback: true,
+    });
+    setMwaReady(true);
+  }, [smReady, isSolanaMobile]);
 
   const wallets = useMemo(() => (
     isSolanaMobile ? [SEEKER_MWA_ADAPTER] : []
@@ -189,7 +255,7 @@ export default function WalletProvider({ children }) {
 
   // Wait for BOTH detections so we don't briefly mount the provider with
   // the wrong wallet list and trigger a bogus autoConnect.
-  if (!fcReady || !smReady) return null;
+  if (!fcReady || !smReady || (isSolanaMobile && !mwaReady)) return null;
 
   return (
     <ConnectionProvider endpoint={rpc} config={rpcConfig}>

@@ -77,8 +77,66 @@ function txVersion(transaction) {
   return transaction?.version === 0 || transaction?.message?.version === 0 ? 'v0' : 'legacy';
 }
 
+function solanaMobileErrorText(error) {
+  return [
+    error?.name,
+    error?.code,
+    error?.message,
+    error?.cause?.name,
+    error?.cause?.code,
+    error?.cause?.message,
+  ].filter(Boolean).join('\n') || String(error || '');
+}
+
+function isUserRejectedSolanaMobileError(error) {
+  return /user rejected|rejected the request|denied|cancelled|canceled|declined/i
+    .test(solanaMobileErrorText(error));
+}
+
+function isSolanaMobileFallbackCandidate(error) {
+  const text = solanaMobileErrorText(error);
+  if (isUserRejectedSolanaMobileError(error)) return false;
+  if (/insufficient|simulation failed|custom program error|instruction error|blockhash|already processed/i.test(text)) return false;
+  return /walletconfig|walletnotready|not implemented|does not support|wallet not found|browser not supported|local network|network access|permission|association|authorization|failed to fetch|networkerror|websocket|signandsend/i
+    .test(text);
+}
+
+function firstTransactionSignatureBytes(transaction) {
+  const signature = transaction?.signature;
+  if (signature instanceof Uint8Array) return signature;
+  const first = transaction?.signatures?.[0];
+  if (first instanceof Uint8Array) return first;
+  if (first?.signature instanceof Uint8Array) return first.signature;
+  return null;
+}
+
+async function encodeBase58(bytes) {
+  const bs58 = await import('bs58');
+  return (bs58.default || bs58).encode(bytes);
+}
+
+async function sendSignedTransactionFallback({ signed, connection, options = {}, label, venueLabel, log }) {
+  if (!connection?.sendRawTransaction) throw new Error('Solana connection is not available for signed fallback');
+  const signatureBytes = firstTransactionSignatureBytes(signed);
+  if (!signatureBytes) throw new Error('Signed Solana transaction did not include a signature');
+  const signature = await encodeBase58(signatureBytes);
+  const raw = signed.serialize();
+  await connection.sendRawTransaction(raw, {
+    preflightCommitment: options?.preflightCommitment || 'confirmed',
+    skipPreflight: !!options?.skipPreflight,
+    maxRetries: options?.maxRetries,
+  });
+  log('mwa_signed_fallback_sent', {
+    label,
+    venue: venueLabel,
+    signature_short: shortSolanaAddress(signature),
+  }, 'warn');
+  return signature;
+}
+
 export async function sendSolanaMobileProtocolTransaction({
   transaction,
+  connection = null,
   options = {},
   expectedAddress,
   label = 'solana',
@@ -134,19 +192,51 @@ export async function sendSolanaMobileProtocolTransaction({
       throw new Error(`Mobile wallet authorized ${authorizedAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
     }
 
-    const [signature] = await wallet.signAndSendTransactions({
-      auth_token: authorization.auth_token,
-      transactions: [transaction],
-      commitment: options?.preflightCommitment || 'confirmed',
-      skipPreflight: !!options?.skipPreflight,
-      maxRetries: options?.maxRetries,
-    });
-    log('mwa_sign_and_send_ok', {
-      label,
-      venue: venueLabel,
-      signature_short: shortSolanaAddress(signature),
-    });
-    return signature;
+    try {
+      const [signature] = await wallet.signAndSendTransactions({
+        auth_token: authorization.auth_token,
+        transactions: [transaction],
+        commitment: options?.preflightCommitment || 'confirmed',
+        skipPreflight: !!options?.skipPreflight,
+        maxRetries: options?.maxRetries,
+      });
+      log('mwa_sign_and_send_ok', {
+        label,
+        venue: venueLabel,
+        signature_short: shortSolanaAddress(signature),
+      });
+      return signature;
+    } catch (error) {
+      log('mwa_sign_and_send_failed', {
+        label,
+        venue: venueLabel,
+        name: error?.name || null,
+        code: error?.code || error?.cause?.code || null,
+        message: error?.message || String(error || ''),
+        fallback_candidate: isSolanaMobileFallbackCandidate(error),
+      }, isSolanaMobileFallbackCandidate(error) ? 'warn' : 'error');
+      if (!connection || !isSolanaMobileFallbackCandidate(error)) throw error;
+
+      log('mwa_sign_fallback_start', {
+        label,
+        venue: venueLabel,
+        tx_version: txVersion(transaction),
+      }, 'warn');
+      const signAuthorization = await wallet.authorize({
+        chain: 'solana:mainnet',
+        identity: solanaMobileAppIdentity(),
+        features: ['solana:signTransactions'],
+      });
+      const signAddress = base64AddressToBase58(signAuthorization?.accounts?.[0]?.address);
+      if (expectedAddress && signAddress && signAddress !== expectedAddress) {
+        throw new Error(`Mobile wallet authorized ${signAddress}, but ${venueLabel} is connected to ${expectedAddress}`);
+      }
+      const [signed] = await wallet.signTransactions({
+        auth_token: signAuthorization.auth_token,
+        transactions: [transaction],
+      });
+      return sendSignedTransactionFallback({ signed, connection, options, label, venueLabel, log });
+    }
   });
 }
 
@@ -204,6 +294,8 @@ export function buildSolanaWalletTxOptions({
   venueLabel = 'Solana',
   log = defaultLog,
   forceMobileVersionedTransaction = true,
+  preferMobileAdapterSend = true,
+  allowMobileProtocolFallback = true,
 }) {
   const adapterName = solanaWalletAdapterName(solWallet) || 'wallet';
   const mobileWalletAdapter = isSolanaMobileWalletAdapter(solWallet);
@@ -219,18 +311,49 @@ export function buildSolanaWalletTxOptions({
     canSendSolanaTx,
     canSignSolanaTx,
     sendTransaction: canSendSolanaTx
-      ? (tx, conn, opts) => (
-          mobileWalletAdapter
+      ? async (tx, conn, opts) => {
+          if (mobileWalletAdapter && preferMobileAdapterSend && typeof solWallet?.sendTransaction === 'function') {
+            try {
+              log('mwa_adapter_send_start', {
+                label,
+                venue: venueLabel,
+                tx_version: txVersion(tx),
+                adapter: adapterName,
+              });
+              const signature = await solWallet.sendTransaction(tx, conn, opts);
+              log('mwa_adapter_send_ok', {
+                label,
+                venue: venueLabel,
+                adapter: adapterName,
+                signature_short: shortSolanaAddress(signature),
+              });
+              return signature;
+            } catch (error) {
+              const fallbackCandidate = allowMobileProtocolFallback && isSolanaMobileFallbackCandidate(error);
+              log('mwa_adapter_send_failed', {
+                label,
+                venue: venueLabel,
+                adapter: adapterName,
+                name: error?.name || null,
+                code: error?.code || error?.cause?.code || null,
+                message: error?.message || String(error || ''),
+                fallback_candidate: fallbackCandidate,
+              }, fallbackCandidate ? 'warn' : 'error');
+              if (!fallbackCandidate) throw error;
+            }
+          }
+          return mobileWalletAdapter
             ? sendSolanaMobileProtocolTransaction({
                 transaction: tx,
+                connection: conn,
                 options: opts,
                 expectedAddress: owner,
                 label,
                 venueLabel,
                 log,
               })
-            : solWallet.sendTransaction(tx, conn, opts)
-        )
+            : solWallet.sendTransaction(tx, conn, opts);
+        }
       : null,
     // Seeker/MWA must avoid the adapter raw-sign path. The protocol helper
     // serializes unsigned txs correctly and lets Seed Vault add the signature.
@@ -240,7 +363,7 @@ export function buildSolanaWalletTxOptions({
     preferWalletSendTransaction: canSendSolanaTx,
     forceVersionedTransaction: mobileWalletAdapter && forceMobileVersionedTransaction,
     walletPathOverride: mobileWalletAdapter
-      ? (forceMobileVersionedTransaction ? 'mwa_protocol_sign_and_send_v0' : 'mwa_protocol_sign_and_send_legacy')
+      ? (forceMobileVersionedTransaction ? 'mwa_sign_and_send_v0' : 'mwa_sign_and_send_legacy')
       : null,
     label: `${label}.${adapterName}`,
   };

@@ -101,6 +101,20 @@ function normalizeAddressForChain(chain, value, label = 'wallet') {
   throw httpError(400, `Unsupported chain ${chain}`);
 }
 
+function normalizeAddressForChainSafe(chain, value) {
+  try {
+    return normalizeAddressForChain(chain, value, 'wallet');
+  } catch {
+    return '';
+  }
+}
+
+function sameChainAddress(chain, a, b) {
+  const left = normalizeAddressForChainSafe(chain, a);
+  const right = normalizeAddressForChainSafe(chain, b);
+  return !!left && !!right && left === right;
+}
+
 function normalizeAssetIdForChain(chain, value, label = 'assetId') {
   const raw = String(value || '').trim();
   if (!raw) throw httpError(400, `${label} required`);
@@ -1997,7 +2011,7 @@ function mountCustodialMarketplace(router, ctx = {}) {
       const assetChain = normalizeChain(req.body?.assetChain || req.body?.chain || 'solana', 'assetChain');
       const vault = config.vaults[assetChain];
       if (!vault?.address) throw httpError(503, `${shortLabel(assetChain)} custody vault is not configured`);
-      const sellerWallet = normalizeAddressForChain(assetChain, req.body?.sellerWallet || req.body?.owner || req.player.wallet, 'Seller wallet');
+      let sellerWallet = normalizeAddressForChain(assetChain, req.body?.sellerWallet || req.body?.owner || req.player.wallet, 'Seller wallet');
       const assetId = normalizeAssetIdForChain(assetChain, req.body?.assetId || req.body?.mint || req.body?.tokenId || req.body?.tokenAddress || '', 'assetId');
       const payoutChain = normalizeChain(req.body?.sellerPayoutChain || assetChain, 'sellerPayoutChain');
       const payoutAddress = normalizeAddressForChain(payoutChain, req.body?.sellerPayoutAddress || sellerWallet, 'Seller payout wallet');
@@ -2032,37 +2046,55 @@ function mountCustodialMarketplace(router, ctx = {}) {
       try {
         assetInfo = await verifyAssetOwner(assetChain, assetId, sellerWallet);
       } catch (err) {
-        if (Number(err?.status) === 403) {
-          const recoverable = getRecoverableCustodiedOrderByAsset(assetChain, assetId, req.player.id, sellerWallet);
-          if (recoverable) {
-            const vaultInfo = await verifyAssetOwner(assetChain, assetId, vault.address).catch(() => null);
-            if (vaultInfo) {
-              const metadata = {
-                assetInfo: vaultInfo,
-                createdIp: req.ip || null,
-                note: String(req.body?.note || '').slice(0, 200),
-                recoveredFromCancelledOrder: true,
-              };
-              const recovered = recoverCustodiedListing(recoverable, {
-                actorPlayerId: req.player.id,
-                sellerWallet,
-                payoutChain,
-                payoutAddress,
-                vault,
-                assetInfo: vaultInfo,
-                priceUnits,
-                fee,
-                royalty,
-                sellerAmount,
-                feeBps: config.feeBps,
-                royaltyBps: config.royaltyBps,
-                metadata,
-              });
-              return res.json({ success: true, recovered: true, order: publicOrder(recovered, { includePrivate: true }) });
-            }
+        if (assetChain === 'solana') {
+          const onChainInfo = await verifyAssetOwner(assetChain, assetId, null).catch(() => null);
+          const onChainOwner = onChainInfo?.owner || '';
+          const playerWallet = normalizeAddressForChainSafe(assetChain, req.player?.wallet);
+          if (
+            onChainOwner
+            && (
+              sameChainAddress(assetChain, onChainOwner, sellerWallet)
+              || sameChainAddress(assetChain, onChainOwner, playerWallet)
+            )
+          ) {
+            console.warn(`[marketplace] corrected Solana seller wallet for ${shortId(assetId)} from ${shortId(sellerWallet)} to on-chain owner ${shortId(onChainOwner)}`);
+            sellerWallet = onChainOwner;
+            assetInfo = onChainInfo;
           }
         }
-        throw err;
+        if (!assetInfo) {
+          if (Number(err?.status) === 403) {
+            const recoverable = getRecoverableCustodiedOrderByAsset(assetChain, assetId, req.player.id, sellerWallet);
+            if (recoverable) {
+              const vaultInfo = await verifyAssetOwner(assetChain, assetId, vault.address).catch(() => null);
+              if (vaultInfo) {
+                const metadata = {
+                  assetInfo: vaultInfo,
+                  createdIp: req.ip || null,
+                  note: String(req.body?.note || '').slice(0, 200),
+                  recoveredFromCancelledOrder: true,
+                };
+                const recovered = recoverCustodiedListing(recoverable, {
+                  actorPlayerId: req.player.id,
+                  sellerWallet,
+                  payoutChain,
+                  payoutAddress,
+                  vault,
+                  assetInfo: vaultInfo,
+                  priceUnits,
+                  fee,
+                  royalty,
+                  sellerAmount,
+                  feeBps: config.feeBps,
+                  royaltyBps: config.royaltyBps,
+                  metadata,
+                });
+                return res.json({ success: true, recovered: true, order: publicOrder(recovered, { includePrivate: true }) });
+              }
+            }
+          }
+          throw err;
+        }
       }
       const id = crypto.randomUUID();
       const metadata = { assetInfo, createdIp: req.ip || null, note: String(req.body?.note || '').slice(0, 200) };
