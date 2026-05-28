@@ -1,6 +1,6 @@
 import { memo, useCallback, useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet as useSolWallet } from '@solana/wallet-adapter-react';
-import { useSend, useSelectedBuilding } from '../hooks/useGodot';
+import { usePlayer, useResources, useSend, useSelectedBuilding } from '../hooks/useGodot';
 import { useLayout } from '../hooks/useIsMobile';
 import { useEvmWallet } from '../contexts/EvmWalletContext';
 import { useAptosWallet } from '../contexts/AptosWalletContext';
@@ -22,6 +22,7 @@ import imgArcherTower from '../assets/buildings/archertower.png';
 import imgStorage from '../assets/buildings/storage.png';
 import imgShip from '../assets/buildings/shipsmall.png';
 import imgMageTower from '../assets/buildings/magetower.png';
+import imgAltar from '../assets/units/altar.png';
 
 import knightImg from '../assets/units/knight.png';
 import mageImg from '../assets/units/mage.png';
@@ -79,6 +80,7 @@ const THUMBNAIL_MAP = {
   archertower: imgArcherTower,
   mage_tower: imgMageTower,
   storage: imgStorage,
+  altar: imgAltar,
 };
 
 const DESC_MAP = {
@@ -95,6 +97,43 @@ const DESC_MAP = {
   mage_tower: 'Casts splash magic at groups of enemy troops.',
   residence: 'Residences produce gold.',
 };
+
+const ALTAR_SKILLS = {
+  prosperity: {
+    label: 'Prosperity',
+    title: 'Resource Blessing',
+    bonus: 'wood and ore production',
+    values: [10, 20, 30],
+    costs: [
+      { wood: 5000, ore: 5000, gold: 1250 },
+      { wood: 15000, ore: 15000, gold: 3750 },
+      { wood: 40000, ore: 40000, gold: 10000 },
+    ],
+  },
+  ward: {
+    label: 'Ward',
+    title: 'Stone Ward',
+    bonus: 'defense building HP',
+    values: [5, 10, 15],
+    costs: [
+      { wood: 7500, ore: 4000, gold: 1250 },
+      { wood: 22500, ore: 12500, gold: 3750 },
+      { wood: 60000, ore: 30000, gold: 10000 },
+    ],
+  },
+  conquest: {
+    label: 'Conquest',
+    title: 'Warrior Blood',
+    bonus: 'troop damage',
+    values: [4, 8, 12],
+    costs: [
+      { wood: 4000, ore: 7500, gold: 1250 },
+      { wood: 12500, ore: 22500, gold: 3750 },
+      { wood: 30000, ore: 60000, gold: 10000 },
+    ],
+  },
+};
+const ALTAR_SKILL_ORDER = ['prosperity', 'ward', 'conquest'];
 
 function troopBaseName(name) {
   const base = String(name || '').split(':')[0];
@@ -291,6 +330,8 @@ function demonKingDisplayLabel(value, tokens = []) {
 function BuildingInfoPanel({ onOpenTroops }) {
   const { sendToGodot } = useSend();
   const { selectedBuilding: building } = useSelectedBuilding();
+  const player = usePlayer();
+  const resources = useResources();
   const { isMobile } = useLayout();
   const evmWallet = useEvmWallet();
   const evmAddress = evmWallet?.address || null;
@@ -314,6 +355,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
   const [demonKingNfts, setDemonKingNfts] = useState([]);
   const [demonKingNftLoading, setDemonKingNftLoading] = useState(false);
   const [demonKingNftError, setDemonKingNftError] = useState(null);
+  const [altarTab, setAltarTab] = useState('prosperity');
+  const [altarLevels, setAltarLevels] = useState({ prosperity: 0, ward: 0, conquest: 0 });
+  const [altarBusy, setAltarBusy] = useState(false);
+  const [altarError, setAltarError] = useState('');
   const demonKingPortForceSyncRef = useRef(new Map());
 
   useEffect(() => {
@@ -323,6 +368,37 @@ function BuildingInfoPanel({ onOpenTroops }) {
       setView('ACTIONS');
     }
   }, [building?.id, building?.open_load_troops]);
+
+  useEffect(() => {
+    if (building?.altar_skills) {
+      setAltarLevels({
+        prosperity: Number(building.altar_skills.prosperity || 0),
+        ward: Number(building.altar_skills.ward || 0),
+        conquest: Number(building.altar_skills.conquest || 0),
+      });
+    }
+  }, [building?.altar_skills]);
+
+  useEffect(() => {
+    const token = player?.token || window._playerToken;
+    if (building?.id !== 'altar' || !token) return undefined;
+    const controller = new AbortController();
+    fetch('/api/altar/skills', {
+      headers: { 'x-token': token },
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!json?.levels || controller.signal.aborted) return;
+        setAltarLevels({
+          prosperity: Number(json.levels.prosperity || 0),
+          ward: Number(json.levels.ward || 0),
+          conquest: Number(json.levels.conquest || 0),
+        });
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [building?.id, player?.token]);
 
   // Reset optimistic troops when server data arrives. Compare full content
   // (not just length) so swaps also trigger a reset — otherwise a failed swap
@@ -408,6 +484,59 @@ function BuildingInfoPanel({ onOpenTroops }) {
     setView('ACTIONS'); // Close after upgrading
   }, [sendToGodot]);
 
+  const canAffordAltarCost = useCallback((cost = {}) => (
+    (resources?.gold || 0) >= (cost.gold || 0)
+    && (resources?.wood || 0) >= (cost.wood || 0)
+    && (resources?.ore || 0) >= (cost.ore || 0)
+  ), [resources]);
+
+  const handleAltarUpgrade = useCallback(async (skillId) => {
+    if (altarBusy) return;
+    const token = player?.token || window._playerToken;
+    if (!token) {
+      setAltarError('Login required');
+      return;
+    }
+    const current = Number(altarLevels[skillId] || 0);
+    const cost = ALTAR_SKILLS[skillId]?.costs?.[current] || {};
+    if (current >= 3) return;
+    if (!canAffordAltarCost(cost)) {
+      setAltarError('Not enough resources');
+    }
+    setAltarBusy(true);
+    setAltarError(canAffordAltarCost(cost) ? '' : 'Trying server upgrade...');
+    try {
+      const res = await fetch(`/api/altar/skills/${skillId}/upgrade`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-token': token },
+        body: '{}',
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+      if (json.resources) {
+        window.onGodotMessage?.({ action: 'resources', data: json.resources });
+        sendToGodot('set_resources', json.resources);
+      }
+      if (json.altar_skills) {
+        const nextLevels = {
+          prosperity: Number(json.altar_skills.prosperity || 0),
+          ward: Number(json.altar_skills.ward || 0),
+          conquest: Number(json.altar_skills.conquest || 0),
+        };
+        setAltarLevels(nextLevels);
+        sendToGodot('set_altar_skills', nextLevels);
+        window.onGodotMessage?.({
+          action: 'building_selected',
+          data: { ...building, altar_skills: nextLevels },
+        });
+      }
+    } catch (err) {
+      setAltarError((err?.message || 'Upgrade failed').slice(0, 120));
+    } finally {
+      setAltarBusy(false);
+    }
+  }, [altarBusy, altarLevels, building, canAffordAltarCost, player?.token, sendToGodot]);
+
   if (!building) return null;
 
   const isMaxLevel = building.level >= building.max_level;
@@ -419,7 +548,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
         <span style={styles.actionName}>{building.name}</span>
         <span style={styles.actionLevel}>Level {building.level}</span>
       </div>
-      {(building.is_enemy || isMaxLevel) && (
+      {(building.is_enemy || (isMaxLevel && building.id !== 'altar')) && (
         <button
           style={{ ...styles.circleBtn, ...styles.btnInfo }}
           onClick={() => setView('INFO')}
@@ -446,6 +575,22 @@ function BuildingInfoPanel({ onOpenTroops }) {
             <circle cx="9" cy="7" r="4"></circle>
             <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
             <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+        </button>
+      )}
+
+      {building.id === 'altar' && !building.is_enemy && (
+        <button
+          style={{ ...styles.circleBtn, ...styles.btnAltar }}
+          onClick={() => setView('ALTAR_SKILLS')}
+          onMouseOver={e => e.currentTarget.style.transform = 'scale(1.05)'}
+          onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
+          onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+          onMouseUp={e => e.currentTarget.style.transform = 'scale(1.05)'}
+        >
+          <svg width={isMobile ? 32 : 40} height={isMobile ? 32 : 40} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="19" x2="12" y2="5"></line>
+            <polyline points="5 12 12 5 19 12"></polyline>
           </svg>
         </button>
       )}
@@ -503,9 +648,11 @@ function BuildingInfoPanel({ onOpenTroops }) {
     </div>
   );
 
-  const renderModal = (title, level, leftContent, centerImg, rightContent, mainActionText, onMainAction) => (
+  const renderModal = (title, level, leftContent, centerImg, rightContent, mainActionText, onMainAction) => {
+    const isAltarModal = title === 'ALTAR';
+    return (
     <div style={{...LT.overlay, ...(isMobile ? { alignItems: 'stretch' } : {})}} onClick={handleDeselect}>
-      <div style={{...LT.panel, ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
+      <div style={{...LT.panel, ...(isAltarModal && !isMobile ? { width: 1010, maxWidth: '94vw' } : {}), ...(isMobile ? { width: '100vw', maxWidth: '100vw', height: '100%', maxHeight: 'none', borderRadius: 0 } : {})}} onClick={e => e.stopPropagation()}>
         {/* Header */}
         <div style={{...LT.header, height: isMobile ? 44 : 54}}>
           <span style={{...LT.headerTitle, fontSize: isMobile ? 18 : 24}}>{title}</span>
@@ -513,10 +660,10 @@ function BuildingInfoPanel({ onOpenTroops }) {
         </div>
 
         {/* Scrollable content area */}
-        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : 20, minHeight: 0, padding: isMobile ? '8px 12px' : undefined }}>
+        <div style={{ ...styles.contentLayout, marginTop: isMobile ? 8 : 12, flexDirection: isMobile ? 'column' : 'row', flexWrap: 'nowrap', gap: isMobile ? 12 : (isAltarModal ? 34 : 20), minHeight: 0, padding: isMobile ? '8px 12px' : undefined }}>
 
           {/* Image column (on mobile: first, smaller) */}
-          <div style={{ flex: isMobile ? 'none' : 1, display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
+          <div style={{ flex: isMobile ? 'none' : (isAltarModal ? '0 0 460px' : 1), display: 'flex', flexDirection: 'column', alignItems: 'center', ...isMobile && { order: 1 } }}>
              <div style={styles.characterWrapper}>
                {level && (
                  <div style={styles.upgradeBadge}>
@@ -526,14 +673,14 @@ function BuildingInfoPanel({ onOpenTroops }) {
                    </div>
                  </div>
                )}
-               <div style={{ ...styles.characterSphere, ...(isMobile ? { width: 110, height: 110 } : {})}}>
+               <div style={{ ...styles.characterSphere, ...(isAltarModal && !isMobile ? { width: 280, height: 280 } : {}), ...(isMobile ? { width: 110, height: 110 } : {})}}>
                   {centerImg}
                </div>
              </div>
           </div>
 
           {/* Stats & Cost column */}
-          <div style={{...styles.leftColumn, ...isMobile && { width: '100%', order: 2, marginTop: 4 }}}>
+          <div style={{...styles.leftColumn, ...(isAltarModal && !isMobile ? { width: 410 } : {}), ...isMobile && { width: '100%', order: 2, marginTop: 4 }}}>
              <h3 style={{...styles.sectionTitle, marginTop: 0, fontSize: isMobile ? 16 : undefined}}>Stats</h3>
              <div style={styles.statsContainer}>
                 {leftContent}
@@ -559,7 +706,8 @@ function BuildingInfoPanel({ onOpenTroops }) {
         )}
       </div>
     </div>
-  );
+    );
+  };
 
   const StatBox = ({ label, current, upgradeTo }) => (
     <div style={styles.statBox}>
@@ -651,6 +799,101 @@ function BuildingInfoPanel({ onOpenTroops }) {
       rightContent, 
       "Upgrade Now", 
       handleUpgrade
+    );
+  };
+
+  const AltarResourceCards = ({ cost = {} }) => (
+    <div style={styles.altarReqGrid}>
+      {['gold', 'ore', 'wood'].map((res) => {
+        const amt = Number(cost[res] || 0);
+        if (amt <= 0) return null;
+        const amountLabel = amt.toLocaleString().replace(/,/g, ' ');
+        return (
+          <div key={res} style={styles.altarReqBox}>
+            <img src={ICONS[res] || goldIcon} style={styles.altarReqIcon} alt={res} />
+            <span style={styles.altarReqAmt}>{amountLabel}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const formatCost = (cost = {}) => (
+    ['gold', 'ore', 'wood']
+      .filter((key) => Number(cost[key] || 0) > 0)
+      .map((key) => Number(cost[key]).toLocaleString())
+      .join(' / ')
+  );
+
+  const renderAltarSkills = () => {
+    const active = ALTAR_SKILLS[altarTab] || ALTAR_SKILLS.prosperity;
+    const current = Number(altarLevels[altarTab] || 0);
+    const nextCost = active.costs[current] || null;
+    const canAffordUpgrade = !!nextCost && canAffordAltarCost(nextCost);
+    const canClickUpgrade = current < 3 && nextCost && !altarBusy;
+
+    const leftContent = (
+      <>
+        <StatBox label="Health" current={building.max_hp || 900} />
+        <StatBox label="Level" current={building.level || 1} />
+      </>
+    );
+    const rightContent = (
+      <div style={styles.altarSkillPanel}>
+        <h3 style={{ ...styles.sectionTitle, marginBottom: 10 }}>Branches</h3>
+        <div style={{ ...styles.altarTabs, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
+          {ALTAR_SKILL_ORDER.map((skillId) => {
+            const selected = altarTab === skillId;
+            return (
+              <button
+                key={skillId}
+                style={{ ...styles.altarTab, ...(selected ? styles.altarTabActive : null) }}
+                onClick={() => { setAltarTab(skillId); setAltarError(''); }}
+              >
+                <span>{ALTAR_SKILLS[skillId].label}</span>
+                <b>Lv {Number(altarLevels[skillId] || 0)}/3</b>
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={styles.altarBranchInfo}>
+          <div style={styles.altarBranchTitle}>{active.title}</div>
+          <div style={styles.altarSubtext}>Current: +{current > 0 ? active.values[current - 1] : 0}% {active.bonus}</div>
+        </div>
+
+        <div style={{ ...styles.altarLevelGrid, ...(isMobile ? { gridTemplateColumns: '1fr' } : null) }}>
+          {[1, 2, 3].map((level) => {
+            const unlocked = level <= current;
+            return (
+              <div key={level} style={{ ...styles.altarLevelCard, ...(unlocked ? styles.altarLevelCardActive : null) }}>
+                <div style={styles.altarLevelTitle}>Lv{level}{unlocked ? ' ACTIVE' : ''}</div>
+                <div style={styles.altarBonus}>+{active.values[level - 1]}% {active.bonus}</div>
+                <AltarResourceCards cost={active.costs[level - 1]} />
+              </div>
+            );
+          })}
+        </div>
+
+        {altarError && <div style={styles.altarError}>{altarError}</div>}
+        <button
+          style={{ ...styles.actionBtn, width: '100%', marginTop: 14, opacity: canClickUpgrade ? (canAffordUpgrade ? 1 : 0.82) : 0.55 }}
+          disabled={!canClickUpgrade}
+          onClick={() => handleAltarUpgrade(altarTab)}
+        >
+          {current >= 3 ? 'MAX LEVEL' : altarBusy ? 'Upgrading...' : `Upgrade to Lv.${current + 1} (${formatCost(nextCost || {})})`}
+        </button>
+      </div>
+    );
+
+    return renderModal(
+      'ALTAR',
+      building.level,
+      leftContent,
+      buildingImg,
+      rightContent,
+      null,
+      null
     );
   };
 
@@ -969,6 +1212,7 @@ function BuildingInfoPanel({ onOpenTroops }) {
       {view === 'ACTIONS' && renderActions()}
       {view === 'INFO' && renderInfo()}
       {view === 'UPGRADE' && renderUpgrade()}
+      {view === 'ALTAR_SKILLS' && renderAltarSkills()}
       {view === 'BUY_SHIP' && renderBuyShip()}
       {view === 'LOAD_TROOPS' && renderLoadTroops()}
     </>
@@ -1040,6 +1284,11 @@ const styles = {
   btnTroops: {
     background: 'linear-gradient(180deg, #ffca28, #f57f17)',
     textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+  },
+  btnAltar: {
+    background: 'linear-gradient(180deg, #68d132, #3fa51f)',
+    textShadow: '0 2px 2px rgba(0,0,0,0.4)',
+    boxShadow: '0 6px 0 rgba(12, 71, 33, 0.55), 0 10px 18px rgba(0,0,0,0.45), inset 0 2px 0 rgba(255,255,255,0.38)',
   },
   iconLarge: {
     fontSize: 48,
@@ -1126,6 +1375,132 @@ const styles = {
     fontSize: 24,
     fontWeight: 900,
     color: '#479a1f',
+  },
+  altarTabs: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 8,
+    marginBottom: 12,
+  },
+  altarTab: {
+    border: '1px solid rgba(55, 125, 159, 0.28)',
+    borderRadius: 14,
+    background: 'rgba(0,0,0,0.05)',
+    color: '#1a3c4f',
+    padding: '9px 10px',
+    fontWeight: 900,
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+  },
+  altarTabActive: {
+    background: 'linear-gradient(180deg, #4aa6d3, #277ba5)',
+    color: '#fff',
+    boxShadow: '0 8px 18px rgba(39,123,165,0.24)',
+  },
+  altarSkillPanel: {
+    minWidth: 330,
+  },
+  altarBranchInfo: {
+    background: 'rgba(0,0,0,0.05)',
+    border: '1px solid rgba(0,0,0,0.1)',
+    borderRadius: 16,
+    padding: '12px 14px',
+    marginBottom: 12,
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.5)',
+  },
+  altarBranchTitle: {
+    color: '#1a3c4f',
+    fontSize: 17,
+    fontWeight: 900,
+    marginBottom: 4,
+  },
+  altarHeaderRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 16,
+    marginBottom: 14,
+  },
+  altarSubtext: {
+    color: '#1a3c4f',
+    fontSize: 14,
+    fontWeight: 800,
+  },
+  altarResourceHint: {
+    color: '#5f7280',
+    fontSize: 12,
+    fontWeight: 900,
+    textAlign: 'right',
+    lineHeight: 1.4,
+  },
+  altarLevelGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, minmax(104px, 1fr))',
+    gap: 10,
+  },
+  altarLevelCard: {
+    minHeight: 196,
+    borderRadius: 18,
+    padding: 10,
+    background: 'rgba(0,0,0,0.04)',
+    border: '1px solid rgba(0,0,0,0.12)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+  },
+  altarLevelCardActive: {
+    border: '2px solid #2f9e6f',
+    background: 'rgba(203, 245, 224, 0.48)',
+  },
+  altarLevelTitle: {
+    color: '#1a3c4f',
+    fontSize: 16,
+    fontWeight: 900,
+    marginBottom: 10,
+  },
+  altarBonus: {
+    color: '#377d9f',
+    fontSize: 13,
+    fontWeight: 900,
+    lineHeight: 1.3,
+    minHeight: 34,
+  },
+  altarReqGrid: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  altarReqBox: {
+    width: 78,
+    height: 70,
+    borderRadius: 16,
+    background: 'rgba(0,0,0,0.04)',
+    border: '1px solid rgba(0,0,0,0.11)',
+    boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.55)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  altarReqIcon: {
+    width: 34,
+    height: 30,
+    objectFit: 'contain',
+    filter: 'drop-shadow(0 2px 2px rgba(0,0,0,0.28))',
+  },
+  altarReqAmt: {
+    color: '#1a3c4f',
+    fontSize: 18,
+    fontWeight: 900,
+  },
+  altarError: {
+    marginTop: 12,
+    color: '#b42318',
+    fontWeight: 900,
+    textAlign: 'center',
   },
 
   centerColumn: {

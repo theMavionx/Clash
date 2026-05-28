@@ -98,6 +98,7 @@ var building_defs: Dictionary = {
 		"model_scales": [0.2, 0.225, 0.25, 0.275, 0.3],
 		"hp_levels": [900, 1600, 2800, 4500],
 		"cost": {"gold": 400, "wood": 1500, "ore": 1200},
+		"altar_ward_bonus": true,
 		"outline_aabb_include": ["Stand"],  # Only count Stand mesh for outline, ignore barrel
 	},
 	"altar": {
@@ -142,6 +143,7 @@ var building_defs: Dictionary = {
 		"model_offsets": [Vector3(0.11, 0, -0.02), Vector3(0.11, 0, -0.02), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)],
 		"hp_levels": [800, 1500, 2500, 3800, 5600],
 		"cost": {"gold": 400, "wood": 1500},
+		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
 		"tower_unit": {
 			"model": "res://Model/Characters/Model/Ranger.glb",
@@ -161,6 +163,7 @@ var building_defs: Dictionary = {
 		"hp_levels": [700, 1200, 2000],
 		"cost": {"gold": 2500, "ore": 4000},
 		"max_count": 2,
+		"altar_ward_bonus": true,
 		"hp_bar_height": 0.5,
 		# FBX ships no embedded texture (Unity .mat stripped) — applied at runtime
 		# via _apply_building_albedo. Violet palette + emission glow for the
@@ -181,6 +184,7 @@ var building_defs: Dictionary = {
 		"model_scales": [0.3, 0.3, 0.3, 0.1],
 		"hp_levels": [1000, 1500, 2000, 2700],
 		"cost": {"gold": 200, "ore": 800},
+		"altar_ward_bonus": true,
 	},
 	"flag": {
 		"name": "Flag",
@@ -557,6 +561,45 @@ var building_panel_hp: Label
 var building_panel_hp_bar: ProgressBar
 var building_panel_cost: Label
 var building_panel_upgrade_btn: Button
+var building_panel_altar_skills: VBoxContainer
+
+const ALTAR_SKILL_DEFS: Dictionary = {
+	"prosperity": {
+		"name": "Prosperity",
+		"title": "Resource Blessing",
+		"bonus_label": "wood and ore production",
+		"bonuses": [10, 20, 30],
+		"costs": [
+			{"wood": 5000, "ore": 5000, "gold": 1250},
+			{"wood": 15000, "ore": 15000, "gold": 3750},
+			{"wood": 40000, "ore": 40000, "gold": 10000},
+		],
+	},
+	"ward": {
+		"name": "Ward",
+		"title": "Stone Ward",
+		"bonus_label": "defense building HP",
+		"bonuses": [5, 10, 15],
+		"costs": [
+			{"wood": 7500, "ore": 4000, "gold": 1250},
+			{"wood": 22500, "ore": 12500, "gold": 3750},
+			{"wood": 60000, "ore": 30000, "gold": 10000},
+		],
+	},
+	"conquest": {
+		"name": "Conquest",
+		"title": "Warrior Blood",
+		"bonus_label": "troop damage",
+		"bonuses": [4, 8, 12],
+		"costs": [
+			{"wood": 4000, "ore": 7500, "gold": 1250},
+			{"wood": 12500, "ore": 22500, "gold": 3750},
+			{"wood": 30000, "ore": 60000, "gold": 10000},
+		],
+	},
+}
+const ALTAR_SKILL_ORDER: Array[String] = ["prosperity", "ward", "conquest"]
+var altar_skill_levels: Dictionary = {"prosperity": 0, "ward": 0, "conquest": 0}
 
 # ── Registration UI ──────────────────────────────────────────
 var register_panel: PanelContainer
@@ -1549,6 +1592,12 @@ func _create_building_panel() -> void:
 	building_panel_upgrade_btn.pressed.connect(_upgrade_selected)
 	bp_vbox.add_child(building_panel_upgrade_btn)
 
+	building_panel_altar_skills = VBoxContainer.new()
+	building_panel_altar_skills.visible = false
+	building_panel_altar_skills.add_theme_constant_override("separation", 8)
+	building_panel_altar_skills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bp_vbox.add_child(building_panel_altar_skills)
+
 
 func _style_button(btn: Button, normal_color: Color, hover_color: Color) -> void:
 	var normal = StyleBoxFlat.new()
@@ -1922,6 +1971,8 @@ func _reveal_initial_cover() -> void:
 func _apply_server_state(state: Dictionary) -> void:
 	_set_shop_unlocks(state)
 	_apply_resources_from_server(state)
+	if state.has("altar_skills") and state.altar_skills is Dictionary:
+		_load_altar_skill_levels_from_server(state.altar_skills)
 	var net = _net
 	if net and state.has("trophies"):
 		net.trophies = state.trophies
@@ -2351,11 +2402,40 @@ func _on_server_auth_ok(player_data: Dictionary) -> void:
 	if player_data.has("ore"):
 		resources.ore = player_data.ore
 	_update_resource_ui()
+	if player_data.has("altar_skills") and player_data.altar_skills is Dictionary:
+		_load_altar_skill_levels_from_server(player_data.altar_skills)
 	if player_data.has("buildings") and player_data.buildings is Array:
 		_load_buildings_from_server(player_data.buildings)
 	if player_data.has("troop_levels") and player_data.troop_levels is Array:
 		_load_troop_levels_from_server(player_data.troop_levels)
 	_update_player_name_label()
+
+
+func _load_altar_skill_levels_from_server(levels: Dictionary) -> void:
+	for skill_id in ALTAR_SKILL_ORDER:
+		altar_skill_levels[skill_id] = clampi(int(levels.get(skill_id, 0)), 0, 3)
+	_apply_altar_bonuses_to_buildings()
+
+
+func _get_altar_skill_bonus_pct(skill_id: String) -> int:
+	var def: Dictionary = ALTAR_SKILL_DEFS.get(skill_id, {})
+	var level: int = clampi(int(altar_skill_levels.get(skill_id, 0)), 0, int(def.get("bonuses", []).size()))
+	if level <= 0:
+		return 0
+	return int(def.get("bonuses", [])[level - 1])
+
+
+func _apply_altar_bonuses_to_buildings() -> void:
+	for b in placed_buildings:
+		var def: Dictionary = building_defs.get(b.get("id", ""), {})
+		if not bool(def.get("altar_ward_bonus", false)):
+			continue
+		var old_max: int = maxi(1, int(b.get("max_hp", _get_hp_for(def, int(b.get("level", 1))))))
+		var old_hp: int = maxi(0, int(b.get("hp", old_max)))
+		var new_max: int = _get_hp_for(def, int(b.get("level", 1)))
+		var ratio: float = 1.0 if old_hp >= old_max else clampf(float(old_hp) / float(old_max), 0.0, 1.0)
+		b["max_hp"] = new_max
+		b["hp"] = new_max if ratio >= 0.999 else maxi(1, roundi(float(new_max) * ratio))
 
 
 func _show_error(msg: String) -> void:
@@ -3297,6 +3377,7 @@ func _select_building(b: Dictionary) -> void:
 			"ship_capacity": bs_ship_level * 3,
 			"port_number": bs_port_number,
 			"troop_levels": troop_levels,
+			"altar_skills": altar_skill_levels,
 		})
 
 	# Range indicator for defense buildings
@@ -3328,6 +3409,8 @@ func _select_building(b: Dictionary) -> void:
 			building_panel_cost.visible = false
 		if building_panel_upgrade_btn:
 			building_panel_upgrade_btn.visible = false
+		if building_panel_altar_skills:
+			building_panel_altar_skills.visible = false
 		if building_panel:
 			building_panel.visible = true
 		return
@@ -3354,6 +3437,20 @@ func _select_building(b: Dictionary) -> void:
 			cam.zoom_blocked = true
 		return
 
+	if building_panel:
+		if b.id == "altar":
+			building_panel.custom_minimum_size = Vector2(640, 500)
+			building_panel.offset_left = -320
+			building_panel.offset_right = 320
+			building_panel.offset_top = -540
+			building_panel.offset_bottom = -20
+		else:
+			building_panel.custom_minimum_size = Vector2(400, 280)
+			building_panel.offset_left = -200
+			building_panel.offset_right = 200
+			building_panel.offset_top = -300
+			building_panel.offset_bottom = -20
+
 	if building_panel_title:
 		building_panel_title.text = "%s (Lv. %d)" % [def.name, level]
 	if building_panel_hp:
@@ -3366,6 +3463,10 @@ func _select_building(b: Dictionary) -> void:
 	if building_panel_upgrade_btn:
 		building_panel_upgrade_btn.visible = true
 	_update_upgrade_cost_label(def, level)
+	if building_panel_altar_skills:
+		building_panel_altar_skills.visible = false
+	if b.id == "altar":
+		_refresh_altar_skills_panel(level, hp, max_hp)
 	if building_panel:
 		building_panel.visible = true
 
@@ -3721,6 +3822,204 @@ func _update_upgrade_cost_label(def: Dictionary, current_level: int) -> void:
 	if upgrade_cost.has("ore"):
 		parts.append("Ore: %d" % upgrade_cost.ore)
 	building_panel_cost.text = "Upgrade: " + "  ".join(parts)
+
+
+func _refresh_altar_skills_panel(level: int, hp: int, max_hp: int) -> void:
+	if not building_panel_altar_skills:
+		return
+	if building_panel_upgrade_btn:
+		building_panel_upgrade_btn.visible = false
+	if building_panel_cost:
+		building_panel_cost.visible = false
+	if building_panel_hp:
+		building_panel_hp.text = "HP: %d / %d" % [hp, max_hp]
+	if building_panel_hp_bar:
+		building_panel_hp_bar.max_value = max_hp
+		building_panel_hp_bar.value = hp
+	if building_panel:
+		building_panel.custom_minimum_size = Vector2(640, 500)
+		building_panel.offset_left = -320
+		building_panel.offset_right = 320
+		building_panel.offset_top = -540
+		building_panel.offset_bottom = -20
+
+	for child in building_panel_altar_skills.get_children():
+		child.queue_free()
+	building_panel_altar_skills.visible = true
+
+	var summary = Label.new()
+	summary.text = "Choose an altar branch to upgrade. Each branch has 3 levels."
+	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	summary.add_theme_font_size_override("font_size", 13)
+	summary.add_theme_color_override("font_color", Color(0.78, 0.84, 0.92))
+	building_panel_altar_skills.add_child(summary)
+
+	var tabs = TabContainer.new()
+	tabs.custom_minimum_size = Vector2(0, 310)
+	tabs.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	building_panel_altar_skills.add_child(tabs)
+
+	for skill_id in ALTAR_SKILL_ORDER:
+		tabs.add_child(_create_altar_skill_tab(skill_id))
+
+
+func _create_altar_skill_tab(skill_id: String) -> Control:
+	var def: Dictionary = ALTAR_SKILL_DEFS.get(skill_id, {})
+	var current_level: int = int(altar_skill_levels.get(skill_id, 0))
+	var tab = VBoxContainer.new()
+	tab.name = str(def.get("name", skill_id))
+	tab.add_theme_constant_override("separation", 8)
+
+	var header = Label.new()
+	header.text = "%s - Lv.%d / 3" % [str(def.get("title", skill_id)), current_level]
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	header.add_theme_font_size_override("font_size", 18)
+	header.add_theme_color_override("font_color", Color(0.95, 0.88, 0.55))
+	tab.add_child(header)
+
+	var grid = GridContainer.new()
+	grid.columns = 3
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	tab.add_child(grid)
+
+	for i in range(3):
+		grid.add_child(_create_altar_level_card(skill_id, i + 1))
+
+	var next_level: int = current_level + 1
+	var upgrade_btn = Button.new()
+	upgrade_btn.custom_minimum_size = Vector2(0, 52)
+	if current_level >= 3:
+		upgrade_btn.text = "MAX LEVEL"
+		upgrade_btn.disabled = true
+		_style_button(upgrade_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+	else:
+		var cost: Dictionary = _get_altar_skill_cost(skill_id, next_level)
+		upgrade_btn.text = "Upgrade to Lv.%d - %s" % [next_level, _format_altar_cost(cost)]
+		upgrade_btn.disabled = not _can_afford(cost)
+		if upgrade_btn.disabled:
+			_style_button(upgrade_btn, Color(0.3, 0.3, 0.3), Color(0.35, 0.35, 0.35))
+		else:
+			_style_button(upgrade_btn, Color(0.18, 0.44, 0.58), Color(0.24, 0.54, 0.7))
+		upgrade_btn.pressed.connect(func(): _upgrade_altar_skill(skill_id))
+	tab.add_child(upgrade_btn)
+	return tab
+
+
+func _create_altar_level_card(skill_id: String, level: int) -> Control:
+	var def: Dictionary = ALTAR_SKILL_DEFS.get(skill_id, {})
+	var current_level: int = int(altar_skill_levels.get(skill_id, 0))
+	var card = PanelContainer.new()
+	card.custom_minimum_size = Vector2(190, 150)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.16, 0.18, 0.25, 0.96)
+	style.set_corner_radius_all(8)
+	style.set_border_width_all(2)
+	style.border_color = Color(0.35, 0.62, 0.76, 1.0) if level <= current_level else Color(0.28, 0.31, 0.42, 1.0)
+	card.add_theme_stylebox_override("panel", style)
+
+	var box = VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.add_child(box)
+
+	var title = Label.new()
+	title.text = "Lv%d%s" % [level, " ACTIVE" if level <= current_level else ""]
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_color_override("font_color", Color(0.62, 0.9, 0.72) if level <= current_level else Color.WHITE)
+	box.add_child(title)
+
+	var bonus = Label.new()
+	bonus.text = "+%d%% %s" % [int(def.get("bonuses", [0, 0, 0])[level - 1]), str(def.get("bonus_label", ""))]
+	bonus.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	bonus.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	bonus.add_theme_font_size_override("font_size", 13)
+	bonus.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
+	box.add_child(bonus)
+
+	var cost = Label.new()
+	cost.text = _format_altar_cost(_get_altar_skill_cost(skill_id, level))
+	cost.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	cost.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cost.add_theme_font_size_override("font_size", 12)
+	cost.add_theme_color_override("font_color", Color(0.95, 0.82, 0.48))
+	box.add_child(cost)
+	return card
+
+
+func _get_altar_skill_cost(skill_id: String, level: int) -> Dictionary:
+	var def: Dictionary = ALTAR_SKILL_DEFS.get(skill_id, {})
+	var costs: Array = def.get("costs", [])
+	if level < 1 or level > costs.size():
+		return {}
+	return (costs[level - 1] as Dictionary).duplicate()
+
+
+func _format_altar_cost(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	if int(cost.get("wood", 0)) > 0:
+		parts.append("%s wood" % _format_int(int(cost.get("wood", 0))))
+	if int(cost.get("ore", 0)) > 0:
+		parts.append("%s ore" % _format_int(int(cost.get("ore", 0))))
+	if int(cost.get("gold", 0)) > 0:
+		parts.append("%s gold" % _format_int(int(cost.get("gold", 0))))
+	return " / ".join(parts)
+
+
+func _format_int(value: int) -> String:
+	var s := str(value)
+	var out := ""
+	var count := 0
+	for i in range(s.length() - 1, -1, -1):
+		if count > 0 and count % 3 == 0:
+			out = "," + out
+		out = s.substr(i, 1) + out
+		count += 1
+	return out
+
+
+func _upgrade_altar_skill(skill_id: String) -> void:
+	if _server_busy:
+		return
+	var current_level: int = int(altar_skill_levels.get(skill_id, 0))
+	if current_level >= 3:
+		return
+	var cost: Dictionary = _get_altar_skill_cost(skill_id, current_level + 1)
+	if not _can_afford(cost):
+		_show_error("Not enough resources")
+		return
+	_server_busy = true
+	var net = _net
+	var result: Dictionary = {}
+	if test_mode or not net or not net.has_token():
+		for res_name in cost:
+			resources[res_name] = int(resources.get(res_name, 0)) - int(cost[res_name])
+		altar_skill_levels[skill_id] = current_level + 1
+		result = {"success": true}
+	else:
+		result = await net.upgrade_altar_skill(skill_id)
+		if result.has("resources"):
+			_apply_resources_from_server(result.resources)
+		if result.has("altar_skills") and result.altar_skills is Dictionary:
+			_load_altar_skill_levels_from_server(result.altar_skills)
+		elif result.has("skill_id") and result.has("level"):
+			altar_skill_levels[str(result.skill_id)] = int(result.level)
+	_server_busy = false
+	if result.has("error"):
+		_show_error(str(result.error))
+		return
+	_update_resource_ui()
+	_play_building_level_up_sfx()
+	if selected_building.get("id", "") == "altar":
+		_refresh_altar_skills_panel(
+			int(selected_building.get("level", 1)),
+			int(selected_building.get("hp", 0)),
+			int(selected_building.get("max_hp", 1))
+		)
 
 
 func _find_building_index_for_remove(b: Dictionary) -> int:
@@ -4332,10 +4631,15 @@ func _flash_building_hit(b: Dictionary) -> void:
 
 
 func _get_hp_for(def: Dictionary, level: int) -> int:
+	var hp: int = 1000
 	if def.has("hp_levels"):
 		var idx = clampi(level - 1, 0, def.hp_levels.size() - 1)
-		return def.hp_levels[idx]
-	return 1000
+		hp = int(def.hp_levels[idx])
+	if bool(def.get("altar_ward_bonus", false)):
+		var ward_pct: int = _get_altar_skill_bonus_pct("ward")
+		if ward_pct > 0:
+			hp = ceili(float(hp) * (1.0 + float(ward_pct) / 100.0))
+	return hp
 
 
 func _create_port_panel() -> void:

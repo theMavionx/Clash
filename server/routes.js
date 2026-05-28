@@ -7953,6 +7953,7 @@ router.post('/attack/result', auth, (req, res) => {
     gridConfig,
     gridConfigs,
     serverTroopLevels,
+    attackerAltarSkills: db.getAltarSkillLevels(req.player.id),
     debugTrace: BATTLE_DEBUG_TRACE,
   });
 
@@ -8094,6 +8095,23 @@ router.post('/troops/:type/upgrade', auth, async (req, res) => {
   const result = db.upgradeTroop(req.player.id, type, upgradeOptions);
   if (result.error) return res.status(result.status || 400).json(result);
   logEconomy('troop_upgrade', { player: req.player.id, troop: type, level: result.level });
+  res.json(result);
+});
+
+// ==================== ALTAR SKILLS ====================
+
+router.get('/altar/skills', auth, (req, res) => {
+  res.json({
+    levels: db.getAltarSkillLevels(req.player.id),
+    defs: db.ALTAR_SKILL_DEFS,
+  });
+});
+
+router.post('/altar/skills/:skillId/upgrade', auth, (req, res) => {
+  const skillId = String(req.params.skillId || '').trim();
+  const result = db.upgradeAltarSkill(req.player.id, skillId);
+  if (result.error) return res.status(400).json(result);
+  logEconomy('altar_skill_upgrade', { player: req.player.id, skill: skillId, level: result.level });
   res.json(result);
 });
 

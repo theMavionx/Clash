@@ -14,6 +14,7 @@ var hp: int = 100
 var max_hp: int = 100
 var damage: int = 10
 var atk_speed: float = 1.0
+var altar_damage_bonus_pct: int = 0
 
 enum State { INACTIVE, IDLE, RUNNING, ATTACKING, VICTORY }
 var state: State = State.INACTIVE
@@ -456,6 +457,7 @@ static func _get_camera_cached() -> Camera3D:
 
 func _ready() -> void:
 	_init_stats()
+	_apply_altar_damage_bonus()
 	max_hp = hp
 	_setup_attack_sfx()
 	_setup_animations()
@@ -477,8 +479,19 @@ func _init_stats() -> void:
 func upgrade_to(lvl: int) -> void:
 	level = lvl
 	_init_stats()
+	_apply_altar_damage_bonus()
 	max_hp = hp
 	_setup_attack_sfx()
+
+
+func set_altar_damage_bonus(pct: int) -> void:
+	altar_damage_bonus_pct = maxi(0, pct)
+
+
+func _apply_altar_damage_bonus() -> void:
+	if altar_damage_bonus_pct <= 0:
+		return
+	damage = maxi(1, roundi(float(damage) * (1.0 + float(altar_damage_bonus_pct) / 100.0)))
 
 
 ## Override to attach weapons via _attach_to_bone()

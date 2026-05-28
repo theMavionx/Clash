@@ -47,6 +47,13 @@ db.exec(`
     level      INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (player_id, troop_type)
   );
+
+  CREATE TABLE IF NOT EXISTS altar_skill_levels (
+    player_id TEXT NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+    skill_id  TEXT NOT NULL,
+    level     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (player_id, skill_id)
+  );
 `);
 
 // Safe migrations
@@ -1404,6 +1411,14 @@ const stmts = {
     ON CONFLICT(player_id, troop_type) DO UPDATE SET level = excluded.level
   `),
 
+  // Altar skill levels
+  getAltarSkillLevels: db.prepare(`SELECT skill_id, level FROM altar_skill_levels WHERE player_id = ?`),
+  upsertAltarSkillLevel: db.prepare(`
+    INSERT INTO altar_skill_levels (player_id, skill_id, level)
+    VALUES (?, ?, ?)
+    ON CONFLICT(player_id, skill_id) DO UPDATE SET level = excluded.level
+  `),
+
   // Trophies
   updateTrophies: db.prepare(`UPDATE players SET trophies = ? WHERE id = ?`),
   getTrophies: db.prepare(`SELECT trophies FROM players WHERE id = ?`),
@@ -2389,6 +2404,38 @@ const TROOP_DEFS = {
   demon_king: { max_level: 3, cost: [{ gold: 0, wood: 0, ore: 0 }, { gold: 0, wood: 0, ore: 0 }] },
 };
 
+const ALTAR_SKILL_DEFS = {
+  prosperity: {
+    max_level: 3,
+    bonuses: [10, 20, 30],
+    cost: [
+      { wood: 5000, ore: 5000, gold: 1250 },
+      { wood: 15000, ore: 15000, gold: 3750 },
+      { wood: 40000, ore: 40000, gold: 10000 },
+    ],
+  },
+  ward: {
+    max_level: 3,
+    bonuses: [5, 10, 15],
+    cost: [
+      { wood: 7500, ore: 4000, gold: 1250 },
+      { wood: 22500, ore: 12500, gold: 3750 },
+      { wood: 60000, ore: 30000, gold: 10000 },
+    ],
+  },
+  conquest: {
+    max_level: 3,
+    bonuses: [4, 8, 12],
+    cost: [
+      { wood: 4000, ore: 7500, gold: 1250 },
+      { wood: 12500, ore: 22500, gold: 3750 },
+      { wood: 30000, ore: 60000, gold: 10000 },
+    ],
+  },
+};
+
+const DEFENSE_BUILDING_TYPES = new Set(['turret', 'archer_tower', 'archertower', 'archtower', 'mage_tower', 'tombstone']);
+
 const DEMON_KING_UPGRADE_WINS = {
   2: 1000,
   3: 10000,
@@ -3193,7 +3240,7 @@ function moveBuilding(playerId, buildingId, gridX, gridZ, gridIndex = null) {
 }
 
 function getPlayerBuildings(playerId) {
-  return decorateBuildingsWithProduction(stmts.getBuildings.all(playerId));
+  return decorateBuildingsForPlayer(playerId, stmts.getBuildings.all(playerId));
 }
 
 function getBattleWins(playerId) {
@@ -3328,6 +3375,81 @@ function getTroopLevels(playerId) {
   return stmts.getTroopLevels.all(playerId);
 }
 
+function getAltarSkillLevels(playerId) {
+  const rows = stmts.getAltarSkillLevels.all(playerId);
+  const result = {};
+  for (const skillId of Object.keys(ALTAR_SKILL_DEFS)) result[skillId] = 0;
+  for (const row of rows) {
+    if (ALTAR_SKILL_DEFS[row.skill_id]) {
+      result[row.skill_id] = Math.max(0, Math.min(ALTAR_SKILL_DEFS[row.skill_id].max_level, Number(row.level) || 0));
+    }
+  }
+  return result;
+}
+
+function altarBonusPctFromLevels(levels, skillId) {
+  const def = ALTAR_SKILL_DEFS[skillId];
+  const level = Math.max(0, Math.min(def?.max_level || 0, Number(levels?.[skillId]) || 0));
+  return level > 0 ? Number(def.bonuses[level - 1]) || 0 : 0;
+}
+
+function getAltarBonusPct(playerId, skillId) {
+  return altarBonusPctFromLevels(getAltarSkillLevels(playerId), skillId);
+}
+
+function applyAltarBuildingBonuses(buildings, levels = {}) {
+  const wardPct = altarBonusPctFromLevels(levels, 'ward');
+  const hpMultiplier = 1 + wardPct / 100;
+  return buildings.map((building) => {
+    if (!DEFENSE_BUILDING_TYPES.has(building.type) || hpMultiplier <= 1) return building;
+    const baseMaxHp = Math.max(1, Number(building.max_hp) || Number(building.hp) || 1);
+    const baseHp = Math.max(0, Number(building.hp) || 0);
+    const boostedMaxHp = Math.ceil(baseMaxHp * hpMultiplier);
+    const boostedHp = baseHp >= baseMaxHp
+      ? boostedMaxHp
+      : Math.max(0, Math.min(boostedMaxHp, Math.ceil(baseHp * hpMultiplier)));
+    return {
+      ...building,
+      hp: boostedHp,
+      max_hp: boostedMaxHp,
+      base_hp: baseHp,
+      base_max_hp: baseMaxHp,
+      altar_ward_bonus_pct: wardPct,
+    };
+  });
+}
+
+function upgradeAltarSkill(playerId, skillId) {
+  const def = ALTAR_SKILL_DEFS[skillId];
+  if (!def) return { error: `Unknown altar skill: ${skillId}` };
+
+  const hasAltar = stmts.getBuildings.all(playerId).some(b => b.type === 'altar');
+  if (!hasAltar) return { error: 'Build an Altar first' };
+
+  const levels = getAltarSkillLevels(playerId);
+  const currentLevel = levels[skillId] || 0;
+  if (currentLevel >= def.max_level) return { error: 'Already at max level' };
+
+  const cost = def.cost[currentLevel];
+  if (!canAfford(playerId, cost.gold || 0, cost.wood || 0, cost.ore || 0)) {
+    return { error: 'Not enough resources', cost };
+  }
+
+  subtractResources(playerId, cost.gold || 0, cost.wood || 0, cost.ore || 0);
+  const newLevel = currentLevel + 1;
+  stmts.upsertAltarSkillLevel.run(playerId, skillId, newLevel);
+  return {
+    success: true,
+    skill_id: skillId,
+    level: newLevel,
+    current_level: newLevel,
+    bonus: def.bonuses[newLevel - 1],
+    cost,
+    altar_skills: getAltarSkillLevels(playerId),
+    resources: getResources(playerId),
+  };
+}
+
 function parseSqliteUtcDate(value) {
   if (!value) return null;
   const raw = String(value);
@@ -3336,14 +3458,17 @@ function parseSqliteUtcDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function getBuildingProductionSnapshot(building, now = new Date()) {
+function getBuildingProductionSnapshot(building, now = new Date(), altarLevels = null) {
   const prod = PRODUCTION_DEFS[building.type];
   if (!prod) return null;
   const lastCollected = parseSqliteUtcDate(building.last_collected_at) || parseSqliteUtcDate(building.created_at) || now;
   const elapsedMinutes = Math.max(0, (now - lastCollected) / 60000);
   const lvl = Math.max(1, Math.floor(Number(building.level) || 1));
   const lvlIdx = Math.min(lvl - 1, prod.rate.length - 1);
-  const ratePerMin = prod.rate[lvlIdx];
+  const levels = altarLevels || (building.player_id ? getAltarSkillLevels(building.player_id) : {});
+  const prosperityApplies = prod.resource === 'wood' || prod.resource === 'ore';
+  const prosperityPct = prosperityApplies ? altarBonusPctFromLevels(levels, 'prosperity') : 0;
+  const ratePerMin = prod.rate[lvlIdx] * (1 + prosperityPct / 100);
   const maxStored = prod.max[lvlIdx];
   const stored = Math.min(Math.floor(ratePerMin * elapsedMinutes), maxStored);
   return {
@@ -3351,30 +3476,35 @@ function getBuildingProductionSnapshot(building, now = new Date()) {
     stored,
     max: maxStored,
     rate_per_min: ratePerMin,
+    base_rate_per_min: prod.rate[lvlIdx],
+    altar_prosperity_bonus_pct: prosperityPct,
     elapsed_minutes: elapsedMinutes,
   };
 }
 
-function decorateBuildingsWithProduction(buildings) {
+function decorateBuildingsForPlayer(playerId, buildings) {
   const now = new Date();
-  return buildings.map((building) => {
-    const production = getBuildingProductionSnapshot(building, now);
-    if (!production) return building;
-    return {
+  const levels = getAltarSkillLevels(playerId);
+  const withProduction = buildings.map((building) => {
+    const production = getBuildingProductionSnapshot(building, now, levels);
+    return production ? {
       ...building,
       stored: production.stored,
       production_resource: production.resource,
       production_max: production.max,
       production_rate_per_min: production.rate_per_min,
-    };
+      production_base_rate_per_min: production.base_rate_per_min,
+      altar_prosperity_bonus_pct: production.altar_prosperity_bonus_pct,
+    } : building;
   });
+  return applyAltarBuildingBonuses(withProduction, levels);
 }
 
 function collectResources(playerId, buildingId) {
   const building = stmts.getBuildingById.get(buildingId, playerId);
   if (!building) return { error: 'Building not found' };
 
-  const production = getBuildingProductionSnapshot(building);
+  const production = getBuildingProductionSnapshot(building, new Date(), getAltarSkillLevels(playerId));
   if (!production) return { error: 'This building does not produce resources' };
 
   if (production.elapsed_minutes < 0.1) return { error: 'Nothing to collect yet' };
@@ -3403,9 +3533,10 @@ function collectResources(playerId, buildingId) {
 function getProductionStatus(playerId) {
   const buildings = stmts.getBuildings.all(playerId);
   const now = new Date();
+  const levels = getAltarSkillLevels(playerId);
   const result = [];
   for (const b of buildings) {
-    const production = getBuildingProductionSnapshot(b, now);
+    const production = getBuildingProductionSnapshot(b, now, levels);
     if (!production) continue;
     result.push({
       building_id: b.id,
@@ -3414,6 +3545,8 @@ function getProductionStatus(playerId) {
       stored: production.stored,
       max: production.max,
       rate_per_min: production.rate_per_min,
+      base_rate_per_min: production.base_rate_per_min,
+      altar_prosperity_bonus_pct: production.altar_prosperity_bonus_pct,
     });
   }
   return result;
@@ -3534,7 +3667,7 @@ function findEnemy(playerId) {
 
   // Repair enemy buildings before attack
   repairAllBuildings(best.id);
-  const buildings = stmts.getBuildings.all(best.id);
+  const buildings = getPlayerBuildings(best.id);
   const resources = getResources(best.id);
   const sessionId = uuidv4();
   const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
@@ -3696,7 +3829,7 @@ function findEnemyByName(playerId, rawTargetName) {
     // Same reservation/charge shape as random matchmaking, but against a
     // resolved player selected by name.
     repairAllBuildings(target.id);
-    const buildings = stmts.getBuildings.all(target.id);
+    const buildings = getPlayerBuildings(target.id);
     const resources = getResources(target.id);
     const sessionId = uuidv4();
     const reservedUntil = sqliteDateFromMs(Date.now() + BATTLE_RESERVATION_MINUTES * 60_000);
@@ -3834,6 +3967,7 @@ function getFullPlayerState(playerId) {
     ...safe,
     buildings: getPlayerBuildings(playerId),
     troop_levels: getTroopLevels(playerId),
+    altar_skills: getAltarSkillLevels(playerId),
     resource_caps: getResourceCaps(playerId),
     shop_entitlements: getShopEntitlements(playerId),
     building_unlocks: getBuildingUnlocks(playerId),
@@ -4094,6 +4228,7 @@ module.exports = {
   TH_UPGRADE_REQUIRES,
   GRID_SPECS,
   TROOP_DEFS,
+  ALTAR_SKILL_DEFS,
   registerPlayer,
   authenticatePlayer,
   createAiAgentKey,
@@ -4127,6 +4262,9 @@ module.exports = {
   getPlayerBuildings,
   upgradeTroop,
   getTroopLevels,
+  upgradeAltarSkill,
+  getAltarSkillLevels,
+  getAltarBonusPct,
   findEnemy,
   inspectEnemyByName,
   findEnemyByName,

@@ -330,6 +330,9 @@ func _server_troop_type(troop_type: String) -> String:
 func upgrade_troop(troop_type: String) -> Dictionary:
 	return await _http_post("/troops/%s/upgrade" % _server_troop_type(troop_type), {})
 
+func upgrade_altar_skill(skill_id: String) -> Dictionary:
+	return await _http_post("/altar/skills/%s/upgrade" % skill_id, {})
+
 # ── Matchmaking ───────────────────────────────────────────────
 
 func find_enemy() -> Dictionary:

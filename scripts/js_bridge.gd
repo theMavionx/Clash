@@ -227,6 +227,9 @@ func _handle_react_action(action: String, data: Dictionary) -> void:
 			# purchase visually.
 			if bs and data is Dictionary:
 				bs._apply_resources_from_server(data)
+		"set_altar_skills":
+			if bs and data is Dictionary and bs.has_method("_load_altar_skill_levels_from_server"):
+				bs._load_altar_skill_levels_from_server(data)
 		"set_shop_unlocks":
 			for bsys in _bs_cache:
 				if is_instance_valid(bsys) and bsys.has_method("_set_shop_unlocks"):

@@ -84,7 +84,10 @@ func _tick_production() -> void:
 		var max_arr: Array  = def.get("produce_max", [100])
 		var rate_idx: int   = clampi(lvl - 1, 0, rate_arr.size() - 1)
 		var max_idx: int    = clampi(lvl - 1, 0, max_arr.size() - 1)
-		var rate_per_sec: float = rate_arr[rate_idx] / 60.0
+		var resource_type: String = String(def.get("produces", ""))
+		var prosperity_applies: bool = resource_type == "wood" or resource_type == "ore"
+		var prosperity_pct: int = bs._get_altar_skill_bonus_pct("prosperity") if prosperity_applies and bs and bs.has_method("_get_altar_skill_bonus_pct") else 0
+		var rate_per_sec: float = (float(rate_arr[rate_idx]) * (1.0 + float(prosperity_pct) / 100.0)) / 60.0
 		var max_stored: float   = max_arr[max_idx]
 		var stored: float       = b.get("stored", 0.0)
 		stored = minf(stored + rate_per_sec, max_stored)
